@@ -1,5 +1,6 @@
 import { useParams } from "react-router"
 import { GetStartedCard } from "../components/GetStartedCard"
+import { GmToolsCard } from "../components/GmToolsCard"
 import { useContext } from "react"
 import { SessionContext } from "../context/SessionContext"
 import { CampaignSummaryBoundary } from "../layouts/CampaignSummaryBoundary"
@@ -43,6 +44,7 @@ export function CampaignHomePage() {
       {(summary) => (
         <>
           <HomePage summary={summary} />
+          <GmToolsCard campaignId={campaignId} />
           {isEmptyCampaign(summary) && canManage && (
             <GetStartedCard campaignId={campaignId} />
           )}

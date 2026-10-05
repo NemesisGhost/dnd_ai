@@ -48,6 +48,8 @@ import { CreateTimelinePage } from "./pages/CreateTimelinePage"
 import { TimelinePage } from "./pages/TimelinePage"
 import { TimelinesPage } from "./pages/TimelinesPage"
 import { WorldWorkspaceLayout } from "./layouts/WorldWorkspaceLayout"
+import { CreateCalendarPage } from "./pages/CreateCalendarPage"
+import { WorldTimesPage } from "./pages/WorldTimesPage"
 import { EditTimelinePage } from "./pages/EditTimelinePage"
 import { CreateTimelineBranchPage } from "./pages/CreateTimelineBranchPage"
 
@@ -160,6 +162,11 @@ function App() {
             />
 
             <Route
+              path="/worlds/:worldId/calendars/new"
+              element={<CreateCalendarPage />}
+            />
+
+            <Route
               path="/worlds/:worldId/timelines"
               element={<TimelinesPage />}
             />
@@ -262,6 +269,11 @@ function App() {
             <Route
               path="characters/:characterId/edit"
               element={<EditNpcPage />}
+            />
+
+            <Route
+              path="world-times"
+              element={<WorldTimesPage />}
             />
 
             <Route

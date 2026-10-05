@@ -102,6 +102,14 @@ function WorldOverview({ world, headingRef, refetch }: WorldOverviewProps) {
                         New timeline
                     </Link>
                 ) : null}
+                {available.has("create_calendar") ? (
+                    <Link
+                        className="authoring-button"
+                        to={`/worlds/${world.world_id}/calendars/new`}
+                    >
+                        New calendar
+                    </Link>
+                ) : null}
                 {available.has("create_campaign") ? (
                     <Link
                         className="authoring-button authoring-button--primary"
