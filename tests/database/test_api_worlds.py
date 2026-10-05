@@ -364,6 +364,7 @@ def test_world_detail_reports_rulesets_timelines_and_server_computed_actions(
         "archive",
         "create_timeline",
         "create_campaign",
+        "create_calendar",
     }
     assert detail["blocked_actions"] == [
         {"action": "restore", "reason": "lifecycle_transition_not_allowed"}
