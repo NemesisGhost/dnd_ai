@@ -1,6 +1,6 @@
+import { useState } from "react"
 import { Link } from "react-router"
 import { AudiencePreviewSection } from "../components/AudiencePreviewSection"
-import { DetailPanel } from "../components/DetailPanel"
 import { FactGrid } from "../components/FactGrid"
 import type {
     QuestDetail,
@@ -8,6 +8,8 @@ import type {
     QuestStage,
 } from "../types/quest"
 import { humanizeCode } from "../utils/humanize"
+import { STAGE_STATUS_LABEL, deriveStageStatus } from "../utils/stageOrder"
+import "../components/authoring/authoring.css"
 
 interface QuestDetailPageProps {
     campaignId: string
@@ -63,29 +65,62 @@ function ObjectiveCard({ objective }: { objective: QuestObjective }) {
     )
 }
 
+// A collapsible stage card. The roll-up status and "x of y" count are display
+// values derived from the server's objective statuses; nothing is stored or sent.
 function StagePanel({ stage }: { stage: QuestStage }) {
-    return (
-        <DetailPanel
-            title={`${stage.sequence_number}. ${stage.name}`}
-            description={humanizeCode(stage.stage_type)}
-            isEmpty={stage.objectives.length === 0}
-            emptyState={<p>No objectives are available for this stage.</p>}
-        >
-            {stage.description !== null && (
-                <p className="quest-detail__stage-description">
-                    {stage.description}
-                </p>
-            )}
+    const [expanded, setExpanded] = useState(true)
+    const bodyId = `stage-body-${stage.quest_stage_id}`
+    const { status, completed, total } = deriveStageStatus(
+        stage.objectives.map((o) => o.status_code),
+    )
+    const progress =
+        total === 0
+            ? "No objectives"
+            : `${completed} of ${total} objective${total === 1 ? "" : "s"} complete`
 
-            <div className="quest-detail__objective-grid">
-                {stage.objectives.map((objective) => (
-                    <ObjectiveCard
-                        key={objective.quest_objective_id}
-                        objective={objective}
-                    />
-                ))}
+    return (
+        <div className="quest-stage-card">
+            <h3 className="quest-stage-card__title">
+                <button
+                    type="button"
+                    className="quest-stage-card__toggle"
+                    aria-expanded={expanded}
+                    aria-controls={bodyId}
+                    onClick={() => setExpanded((open) => !open)}
+                >
+                    <span className="quest-stage-card__name">
+                        <span className="quest-stage-card__number">{stage.sequence_number}.</span>{" "}
+                        {stage.name}
+                    </span>
+                    <span className="quest-stage-card__summary">
+                        {STAGE_STATUS_LABEL[status]} · {progress} · {humanizeCode(stage.stage_type)}
+                    </span>
+                    <span className="quest-stage-card__chevron" aria-hidden="true">
+                        {expanded ? "Collapse −" : "Expand +"}
+                    </span>
+                </button>
+            </h3>
+            <div id={bodyId} className="quest-stage-card__body" hidden={!expanded}>
+                {stage.description !== null && (
+                    <p className="quest-detail__stage-description">{stage.description}</p>
+                )}
+                <p className="quest-stage-card__status-line">
+                    Stage progress: {STAGE_STATUS_LABEL[status]}, {progress}.
+                </p>
+                {stage.objectives.length === 0 ? (
+                    <p>No objectives are available for this stage.</p>
+                ) : (
+                    <div className="quest-detail__objective-grid">
+                        {stage.objectives.map((objective) => (
+                            <ObjectiveCard
+                                key={objective.quest_objective_id}
+                                objective={objective}
+                            />
+                        ))}
+                    </div>
+                )}
             </div>
-        </DetailPanel>
+        </div>
     )
 }
 
@@ -121,7 +156,7 @@ export function QuestDetailPage({
                 <h2 id="quest-stages-heading">Stages and Objectives</h2>
 
                 {stages.length > 0 ? (
-                    <div className="quest-detail__stage-grid">
+                    <div className="quest-detail__stage-list">
                         {stages.map((stage) => (
                             <StagePanel
                                 key={stage.quest_stage_id}

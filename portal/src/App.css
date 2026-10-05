@@ -2752,3 +2752,12 @@ a.app-header__title:focus-visible {
 .campaign-startup-form__error {
   color: var(--color-danger);
 }
+
+.quest-detail__stage-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-width: 64rem;
+  margin-top: 1rem;
+  min-width: 0;
+}

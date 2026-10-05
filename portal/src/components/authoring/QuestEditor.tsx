@@ -23,6 +23,7 @@ import {
     validateName,
 } from "../../utils/authoringValidation"
 import { statusDetail } from "../../utils/locationForm"
+import { reorderedStageIds, steppedStageIds } from "../../utils/stageOrder"
 import { useAnnounce } from "./announcer"
 import { ConfirmDialog } from "./ConfirmDialog"
 import { SelectField, TextAreaField, TextField } from "./fields"
@@ -230,6 +231,14 @@ export function QuestEditor({ campaignId, view, options, refreshing, refetch }: 
     const [removal, setRemoval] = useState<Removal | null>(null)
     const [errors, setErrors] = useState<FieldError[]>([])
     const [attempt, setAttempt] = useState(0)
+    // Presentation only: which stages the author collapsed, and the drag in
+    // progress. Neither is persisted or sent to the server.
+    const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
+    const [drag, setDrag] = useState<{
+        id: string
+        overId: string | null
+        after: boolean
+    } | null>(null)
     const pending = useRef<{ message: string; after: () => void; focusId: string | null } | null>(
         null,
     )
@@ -366,17 +375,32 @@ export function QuestEditor({ campaignId, view, options, refreshing, refetch }: 
         )
     }
 
-    function move(index: number, delta: -1 | 1) {
-        const ids = view.stages.map((s) => s.quest_stage_id)
-        const target = index + delta
-        if (target < 0 || target >= ids.length) return
-        ;[ids[index], ids[target]] = [ids[target]!, ids[index]!]
+    // One reorder path for the side buttons and for drag and drop: the full new
+    // stage order goes to the server with the loaded row version, and the page
+    // shows whatever order the authoritative refetch returns. Nothing is
+    // reordered optimistically, so a failure leaves the server's order on screen.
+    function reorder(ids: string[] | null, message: string, focusId: string) {
+        if (ids === null || busy) return
         send(
             { op: "reorder_stages", expected_row_version: view.row_version, stage_ids: ids },
-            delta < 0 ? "Stage moved up" : "Stage moved down",
+            message,
             () => {},
-            `stage-${view.stages[index]!.quest_stage_id}`,
+            focusId,
         )
+    }
+
+    function move(index: number, delta: -1 | 1) {
+        const ids = view.stages.map((s) => s.quest_stage_id)
+        reorder(
+            steppedStageIds(ids, index, delta),
+            delta < 0 ? "Stage moved up" : "Stage moved down",
+            `stage-${ids[index]!}`,
+        )
+    }
+
+    function dropStage(dragId: string, targetId: string, after: boolean) {
+        const ids = view.stages.map((s) => s.quest_stage_id)
+        reorder(reorderedStageIds(ids, dragId, targetId, after), "Stage moved", `stage-${dragId}`)
     }
 
     function confirmRemoval() {
@@ -538,79 +562,172 @@ export function QuestEditor({ campaignId, view, options, refreshing, refetch }: 
                         objective before it can be published.
                     </p>
                 ) : (
-                    <ol className="authoring-list">
-                        {view.stages.map((stage, index) => (
-                            <li key={stage.quest_stage_id} className="authoring-list__item">
-                                <div className="quest-stage">
-                                    <h3
-                                        id={`stage-${stage.quest_stage_id}`}
-                                        tabIndex={-1}
-                                    >
-                                        {stage.name}
-                                    </h3>
-                                    <p className="authoring-field__hint">
-                                        {label(options.stage_types, stage.stage_type)} stage
-                                    </p>
-                                    {stage.description ? <p>{stage.description}</p> : null}
-                                    {editable ? (
-                                        <div className="authoring-actions">
-                                            {can("update_stage") ? (
-                                                <button
-                                                    type="button"
-                                                    className="authoring-button"
-                                                    disabled={busy}
-                                                    aria-label={`Edit stage ${stage.name}`}
-                                                    onClick={() =>
-                                                        openPanel({
-                                                            kind: "stage",
-                                                            stageId: stage.quest_stage_id,
-                                                            values: stageValues(stage, options),
-                                                            initial: stageValues(stage, options),
-                                                        })
-                                                    }
-                                                >
-                                                    Edit stage
-                                                </button>
-                                            ) : null}
-                                            {can("reorder_stages") && index > 0 ? (
-                                                <button
-                                                    type="button"
-                                                    className="authoring-button"
-                                                    disabled={busy}
-                                                    onClick={() => move(index, -1)}
-
-                                                    aria-label={`Move up ${stage.name}`}
-                                                >
-                                                    Move up
-                                                </button>
-                                            ) : null}
-                                            {can("reorder_stages") &&
-                                            index < view.stages.length - 1 ? (
-                                                <button
-                                                    type="button"
-                                                    className="authoring-button"
-                                                    disabled={busy}
-                                                    onClick={() => move(index, 1)}
-
-                                                    aria-label={`Move down ${stage.name}`}
-                                                >
-                                                    Move down
-                                                </button>
-                                            ) : null}
-                                            {can("remove_stage") ? (
-                                                <button
-                                                    type="button"
-                                                    className="authoring-button authoring-button--danger"
-                                                    disabled={busy}
-                                                    onClick={() => setRemoval({ kind: "stage", stage })}
-
-                                                    aria-label={`Remove stage ${stage.name}`}
-                                                >
-                                                    Remove stage
-                                                </button>
-                                            ) : null}
-                                        </div>
+                    <ol className="quest-stage-list">
+                        {view.stages.map((stage, index) => {
+                            const stageId = stage.quest_stage_id
+                            const reorderable = editable && can("reorder_stages")
+                            // A stage holding an open form (and with it any validation or
+                            // stale-write notice) is never collapsed out from under the author.
+                            const hasPanel = panel !== null && panel.stageId === stageId
+                            const expanded = hasPanel || !collapsed.has(stageId)
+                            const bodyId = `stage-body-${stageId}`
+                            const requiredCount = stage.objectives.filter(
+                                (o) => o.requirement_level === "required",
+                            ).length
+                            const total = stage.objectives.length
+                            const wouldDrop =
+                                drag !== null &&
+                                drag.overId === stageId &&
+                                reorderedStageIds(
+                                    view.stages.map((s) => s.quest_stage_id),
+                                    drag.id,
+                                    stageId,
+                                    drag.after,
+                                ) !== null
+                            const rowClass = [
+                                "quest-stage-row",
+                                reorderable ? "" : "quest-stage-row--static",
+                                drag?.id === stageId ? "quest-stage-row--dragging" : "",
+                                wouldDrop
+                                    ? drag!.after
+                                        ? "quest-stage-row--drop-after"
+                                        : "quest-stage-row--drop-before"
+                                    : "",
+                            ]
+                                .filter(Boolean)
+                                .join(" ")
+                            return (
+                                <li
+                                    key={stageId}
+                                    className={rowClass}
+                                    onDragOver={(e) => {
+                                        if (drag === null || drag.id === stageId) return
+                                        e.preventDefault()
+                                        const rect = e.currentTarget.getBoundingClientRect()
+                                        const after = e.clientY >= rect.top + rect.height / 2
+                                        if (drag.overId !== stageId || drag.after !== after) {
+                                            setDrag({ ...drag, overId: stageId, after })
+                                        }
+                                    }}
+                                    onDrop={(e) => {
+                                        if (drag === null) return
+                                        e.preventDefault()
+                                        const { id, after } = drag
+                                        setDrag(null)
+                                        dropStage(id, stageId, after)
+                                    }}
+                                >
+                                    {reorderable ? (
+                                        <button
+                                            type="button"
+                                            className="authoring-button quest-stage-row__move"
+                                            disabled={busy || index === 0}
+                                            onClick={() => move(index, -1)}
+                                            aria-label={`Move up ${stage.name}`}
+                                        >
+                                            <span aria-hidden="true">▲</span> Up
+                                        </button>
                                     ) : null}
+                                    <div className="quest-stage-card">
+                                        <div
+                                            className="quest-stage-card__header"
+                                            draggable={reorderable && !busy}
+                                            onDragStart={(e) => {
+                                                e.dataTransfer.effectAllowed = "move"
+                                                e.dataTransfer.setData("text/plain", "")
+                                                const row = e.currentTarget.closest("li")
+                                                if (row) e.dataTransfer.setDragImage(row, 16, 16)
+                                                setDrag({ id: stageId, overId: null, after: false })
+                                            }}
+                                            onDragEnd={() => setDrag(null)}
+                                        >
+                                            {reorderable ? (
+                                                <span
+                                                    className="quest-stage-card__handle"
+                                                    aria-hidden="true"
+                                                    title="Drag to reorder"
+                                                >
+                                                    ⠿
+                                                </span>
+                                            ) : null}
+                                            <h3 className="quest-stage-card__title">
+                                                <button
+                                                    type="button"
+                                                    id={`stage-${stageId}`}
+                                                    className="quest-stage-card__toggle"
+                                                    aria-expanded={expanded}
+                                                    aria-controls={bodyId}
+                                                    onClick={() => {
+                                                        if (hasPanel) return
+                                                        setCollapsed((prev) => {
+                                                            const next = new Set(prev)
+                                                            if (next.has(stageId)) next.delete(stageId)
+                                                            else next.add(stageId)
+                                                            return next
+                                                        })
+                                                    }}
+                                                >
+                                                    <span className="quest-stage-card__name">
+                                                        <span className="quest-stage-card__number">
+                                                            {stage.sequence_number}.
+                                                        </span>{" "}
+                                                        {stage.name}
+                                                    </span>
+                                                    <span className="quest-stage-card__summary">
+                                                        {label(options.stage_types, stage.stage_type)} stage
+                                                        {" · "}
+                                                        {total === 0
+                                                            ? "No objectives yet"
+                                                            : `${total} objective${total === 1 ? "" : "s"}, ${requiredCount} required`}
+                                                    </span>
+                                                    <span
+                                                        className="quest-stage-card__chevron"
+                                                        aria-hidden="true"
+                                                    >
+                                                        {expanded ? "Collapse −" : "Expand +"}
+                                                    </span>
+                                                </button>
+                                            </h3>
+                                        </div>
+                                        <div
+                                            id={bodyId}
+                                            className="quest-stage-card__body"
+                                            hidden={!expanded}
+                                        >
+                                            {stage.description ? <p>{stage.description}</p> : null}
+                                            {editable ? (
+                                                <div className="authoring-actions">
+                                                    {can("update_stage") ? (
+                                                        <button
+                                                            type="button"
+                                                            className="authoring-button"
+                                                            disabled={busy}
+                                                            aria-label={`Edit stage ${stage.name}`}
+                                                            onClick={() =>
+                                                                openPanel({
+                                                                    kind: "stage",
+                                                                    stageId,
+                                                                    values: stageValues(stage, options),
+                                                                    initial: stageValues(stage, options),
+                                                                })
+                                                            }
+                                                        >
+                                                            Edit stage
+                                                        </button>
+                                                    ) : null}
+                                                    {can("remove_stage") ? (
+                                                        <button
+                                                            type="button"
+                                                            className="authoring-button authoring-button--danger"
+                                                            disabled={busy}
+                                                            onClick={() => setRemoval({ kind: "stage", stage })}
+                                                            aria-label={`Remove stage ${stage.name}`}
+                                                        >
+                                                            Remove stage
+                                                        </button>
+                                                    ) : null}
+                                                </div>
+                                            ) : null}
 
                                     {panel?.kind === "stage" && panel.stageId === stage.quest_stage_id ? (
                                         <StagePanel
@@ -630,11 +747,11 @@ export function QuestEditor({ campaignId, view, options, refreshing, refetch }: 
                                     {stage.objectives.length === 0 ? (
                                         <p className="authoring-note">No objectives in this stage.</p>
                                     ) : (
-                                        <ul className="authoring-list">
+                                        <ul className="quest-objective-list">
                                             {stage.objectives.map((objective) => (
                                                 <li
                                                     key={objective.quest_objective_id}
-                                                    className="authoring-list__item"
+                                                    className="quest-objective-list__item"
                                                 >
                                                     <div>
                                                         <h5
@@ -645,10 +762,12 @@ export function QuestEditor({ campaignId, view, options, refreshing, refetch }: 
                                                         </h5>
                                                         <p className="authoring-field__hint">
                                                             {objective.objective_type_label} ·{" "}
-                                                            {label(
-                                                                options.requirement_levels,
-                                                                objective.requirement_level,
-                                                            )}{" "}
+                                                            <strong>
+                                                                {label(
+                                                                    options.requirement_levels,
+                                                                    objective.requirement_level,
+                                                                )}
+                                                            </strong>{" "}
                                                             ·{" "}
                                                             {label(
                                                                 options.completion_modes,
@@ -787,9 +906,22 @@ export function QuestEditor({ campaignId, view, options, refreshing, refetch }: 
                                             onCancel={closePanel}
                                         />
                                     ) : null}
-                                </div>
-                            </li>
-                        ))}
+                                        </div>
+                                    </div>
+                                    {reorderable ? (
+                                        <button
+                                            type="button"
+                                            className="authoring-button quest-stage-row__move"
+                                            disabled={busy || index === view.stages.length - 1}
+                                            onClick={() => move(index, 1)}
+                                            aria-label={`Move down ${stage.name}`}
+                                        >
+                                            Down <span aria-hidden="true">▼</span>
+                                        </button>
+                                    ) : null}
+                                </li>
+                            )
+                        })}
                     </ol>
                 )}
                 {editable && can("add_stage") ? (
