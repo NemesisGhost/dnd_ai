@@ -135,3 +135,31 @@ def test_a_gm_sets_up_and_runs_a_campaign(
     s.publish(pc_id, pc["row_version"])
     assert s.player.get(f"/campaigns/{s.cid}/characters/{pc_id}").status_code == 200
     assert perspectives() == [pc_id]
+
+    # --- Step 5 (15.2B-2): a build, starting state, and the first activation ----------
+    options = s.gm.get(f"/campaigns/{s.cid}/authoring/character-build-options").json()
+    builds = f"/campaigns/{s.cid}/authoring/characters/{pc_id}/builds"
+    build = write(
+        builds,
+        {
+            "label": "Level 1 Fighter",
+            "ability_scores": [{"ability_id": options["abilities"][0]["id"], "score": 15}],
+            "class_levels": [
+                {"class_id": options["classes"][0]["id"], "subclass_id": None, "level": 1}
+            ],
+        },
+    )
+    write(
+        f"/campaigns/{s.cid}/authoring/characters/{pc_id}/state/initialize",
+        {"maximum_hit_points": 12},
+    )
+    activated = write(
+        f"{builds}/{build['character_build_id']}/activate",
+        {"expected_active_build_id": None},
+        status=200,
+    )
+    assert "event_id" not in activated  # the first activation is the administrative baseline
+    listing = s.gm.get(builds).json()
+    assert listing["active_build_id"] == build["character_build_id"]
+    assert listing["state"]["current_hit_points"] == 12
+    assert s.player.get(builds).status_code == 403
