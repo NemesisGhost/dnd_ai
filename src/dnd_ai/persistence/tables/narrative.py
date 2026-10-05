@@ -543,6 +543,15 @@ quests = Table(
         "story_arc_id", UUID(), ForeignKey("narrative.story_arcs.story_arc_id", ondelete="SET NULL")
     ),
     *_timestamps(),
+    # Added by revision 125 (Phase 15 checkpoint 15.2E-2a).
+    Column(
+        "gm_notes",
+        Text(),
+        comment=(
+            "GM-only planning text for the quest. Never shown to a player, never in an "
+            "audience-safe read, preview, or audit value."
+        ),
+    ),
     schema="narrative",
     comment=(
         "A structured narrative challenge or objective set (docs/DOMAIN_MODEL.md "
