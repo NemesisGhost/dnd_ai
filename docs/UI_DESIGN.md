@@ -426,7 +426,7 @@ Opening a knowledge card as a full detail surface requires an explicit detail ro
 
 The quest collection uses concise cards. The current list contract supplies a quest name and status, so list cards do not invent descriptions, objective counts, rewards, participants, or locations from data absent from that contract. Each card links to the established campaign-scoped quest detail route.
 
-The full quest detail surface visually continues the selected card and organizes the authorized contract into separately headed stage and objective regions. It preserves server-provided stage sequence and objective order; it does not alphabetize narrative progression. Stages are connected, independently collapsible cards whose collapsed summary shows a derived stage status and objective progress ([UI_STYLE_GUIDE.md §12.3](UI_STYLE_GUIDE.md#123-connected-collapsible-stage-cards)).
+The full quest detail surface visually continues the selected card and organizes the authorized contract into separately headed stage and objective regions. It preserves server-provided stage sequence and objective order; it does not alphabetize narrative progression. Stages are connected, independently collapsible cards whose collapsed summary counts the shown (audience-filtered) objectives that are complete, without claiming a whole-stage status ([UI_STYLE_GUIDE.md §12.3](UI_STYLE_GUIDE.md#123-connected-collapsible-stage-cards)).
 
 Player/observer sections:
 

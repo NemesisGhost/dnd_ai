@@ -8,7 +8,6 @@ import type {
     QuestStage,
 } from "../types/quest"
 import { humanizeCode } from "../utils/humanize"
-import { STAGE_STATUS_LABEL, deriveStageStatus } from "../utils/stageOrder"
 import "../components/authoring/authoring.css"
 
 interface QuestDetailPageProps {
@@ -65,18 +64,15 @@ function ObjectiveCard({ objective }: { objective: QuestObjective }) {
     )
 }
 
-// A collapsible stage card. The roll-up status and "x of y" count are display
-// values derived from the server's objective statuses; nothing is stored or sent.
+// A collapsible stage card. The objective list is audience-filtered, so the count
+// describes only the objectives shown; it is never a whole-stage status.
 function StagePanel({ stage }: { stage: QuestStage }) {
     const [expanded, setExpanded] = useState(true)
     const bodyId = `stage-body-${stage.quest_stage_id}`
-    const { status, completed, total } = deriveStageStatus(
-        stage.objectives.map((o) => o.status_code),
-    )
+    const total = stage.objectives.length
+    const completed = stage.objectives.filter((o) => o.status_code === "completed").length
     const progress =
-        total === 0
-            ? "No objectives"
-            : `${completed} of ${total} objective${total === 1 ? "" : "s"} complete`
+        total === 0 ? "No objectives shown" : `Shown objectives: ${completed} of ${total} complete`
 
     return (
         <div className="quest-stage-card">
@@ -93,7 +89,7 @@ function StagePanel({ stage }: { stage: QuestStage }) {
                         {stage.name}
                     </span>
                     <span className="quest-stage-card__summary">
-                        {STAGE_STATUS_LABEL[status]} · {progress} · {humanizeCode(stage.stage_type)}
+                        {progress} · {humanizeCode(stage.stage_type)}
                     </span>
                     <span className="quest-stage-card__chevron" aria-hidden="true">
                         {expanded ? "Collapse −" : "Expand +"}
@@ -105,10 +101,10 @@ function StagePanel({ stage }: { stage: QuestStage }) {
                     <p className="quest-detail__stage-description">{stage.description}</p>
                 )}
                 <p className="quest-stage-card__status-line">
-                    Stage progress: {STAGE_STATUS_LABEL[status]}, {progress}.
+                    {progress}.
                 </p>
                 {stage.objectives.length === 0 ? (
-                    <p>No objectives are available for this stage.</p>
+                    <p>No objectives are shown for this stage.</p>
                 ) : (
                     <div className="quest-detail__objective-grid">
                         {stage.objectives.map((objective) => (

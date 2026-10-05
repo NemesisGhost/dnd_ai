@@ -141,39 +141,61 @@ describe("QuestDetailPage", () => {
         ).toBeInTheDocument()
     })
 
-    it("summarises stage status and objective progress, and collapses each stage on its own", () => {
-        renderQuestDetail({
-            ...questFixture,
-            stages: [
-                {
-                    ...questFixture.stages[0]!,
-                    objectives: [
-                        { ...questFixture.stages[0]!.objectives[0]!, status_code: "completed" },
-                        {
-                            ...questFixture.stages[0]!.objectives[0]!,
-                            quest_objective_id: "objective-b",
-                            name: "Second objective",
-                            status_code: "active",
-                        },
-                    ],
-                },
-                { ...questFixture.stages[1]!, objectives: [] },
-            ],
-        })
+    const withStatuses = (statuses: (string | null)[]) => ({
+        ...questFixture,
+        stages: [
+            {
+                ...questFixture.stages[0]!,
+                objectives: statuses.map((status_code, i) => ({
+                    ...questFixture.stages[0]!.objectives[0]!,
+                    quest_objective_id: `objective-${i}`,
+                    name: `Objective ${i}`,
+                    status_code,
+                })),
+            },
+        ],
+    })
+    const stageButton = () => screen.getByRole("button", { name: /^2\. Second Returned Stage/ })
 
-        const first = screen.getByRole("button", { name: /^2\. Second Returned Stage/ })
-        expect(first).toHaveTextContent("In progress")
-        expect(first).toHaveTextContent("1 of 2 objectives complete")
-        const second = screen.getByRole("button", { name: /^1\. First Numbered Stage/ })
-        expect(second).toHaveTextContent("No objectives")
-        expect(first).toHaveAttribute("aria-expanded", "true")
+    it("counts only the shown objectives and never claims a whole-stage status", () => {
+        renderQuestDetail(withStatuses(["completed"]))
 
-        fireEvent.click(first)
-        expect(first).toHaveAttribute("aria-expanded", "false")
-        expect(second).toHaveAttribute("aria-expanded", "true")
-        expect(screen.getByText("Align the lens pylons")).not.toBeVisible()
-        fireEvent.click(first)
-        expect(screen.getByText("Align the lens pylons")).toBeVisible()
+        expect(stageButton()).toHaveTextContent("Shown objectives: 1 of 1 complete")
+        expect(screen.getByText("Shown objectives: 1 of 1 complete.")).toBeVisible()
+        expect(document.body.textContent).not.toMatch(/Stage progress|Not started|In progress/)
+        expect(stageButton().textContent).not.toMatch(/bCompleteb/)
+    })
+
+    it.each([["failed"], ["skipped"], ["superseded"]])(
+        "shows a %s objective's exact status and no stage-wide claim",
+        (code) => {
+            renderQuestDetail(withStatuses([code]))
+
+            expect(stageButton()).toHaveTextContent("Shown objectives: 0 of 1 complete")
+            expect(screen.getByText(code.charAt(0).toUpperCase() + code.slice(1))).toBeInTheDocument()
+            expect(document.body.textContent).not.toMatch(/Not started|In progress/)
+        },
+    )
+
+    it("counts mixed statuses and collapses without hiding the summary", () => {
+        renderQuestDetail(withStatuses(["completed", "active", "failed", null]))
+
+        expect(stageButton()).toHaveTextContent("Shown objectives: 1 of 4 complete")
+        expect(screen.getByText("Active")).toBeInTheDocument()
+        expect(screen.getByText("No status recorded")).toBeInTheDocument()
+
+        fireEvent.click(stageButton())
+        expect(stageButton()).toHaveAttribute("aria-expanded", "false")
+        expect(screen.getByText("Shown objectives: 1 of 4 complete.")).not.toBeVisible()
+        expect(stageButton()).toHaveTextContent("Shown objectives: 1 of 4 complete")
+    })
+
+    it("says no objectives are shown when none are returned", () => {
+        renderQuestDetail(withStatuses([]))
+
+        expect(stageButton()).toHaveTextContent("No objectives shown")
+        expect(screen.getByText("No objectives shown.")).toBeVisible()
+        expect(screen.getByText("No objectives are shown for this stage.")).toBeVisible()
     })
 
     it("renders objectives as expandable, keyboard-accessible disclosures", () => {
@@ -214,7 +236,7 @@ describe("QuestDetailPage", () => {
 
         expect(
             screen.getByText(
-                "No objectives are available for this stage.",
+                "No objectives are shown for this stage.",
             ),
         ).toBeInTheDocument()
     })

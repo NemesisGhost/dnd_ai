@@ -24,27 +24,3 @@ export function steppedStageIds(ids: string[], index: number, delta: -1 | 1): st
     ;[next[index], next[target]] = [next[target]!, next[index]!]
     return next
 }
-
-export type DerivedStageStatus = "not_started" | "in_progress" | "complete" | "no_objectives"
-
-// A display-only roll-up of the server's objective statuses: it is never
-// stored or sent, and the objective statuses themselves stay authoritative.
-export function deriveStageStatus(statusCodes: (string | null)[]): {
-    status: DerivedStageStatus
-    completed: number
-    total: number
-} {
-    const total = statusCodes.length
-    const completed = statusCodes.filter((s) => s === "completed").length
-    if (total === 0) return { status: "no_objectives", completed, total }
-    if (completed === total) return { status: "complete", completed, total }
-    const started = statusCodes.some((s) => s === "completed" || s === "active")
-    return { status: started ? "in_progress" : "not_started", completed, total }
-}
-
-export const STAGE_STATUS_LABEL: Record<DerivedStageStatus, string> = {
-    not_started: "Not started",
-    in_progress: "In progress",
-    complete: "Complete",
-    no_objectives: "No objectives",
-}
