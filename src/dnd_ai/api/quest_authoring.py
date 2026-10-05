@@ -64,6 +64,7 @@ from ._content_support import (
     clean_note,
     decode_name_cursor,
     reference_options_page,
+    write_receipt,
 )
 from ._shared import timeline_world_id
 from .access import require_campaign_capability
@@ -179,9 +180,8 @@ def _view_json(view: QuestAuthoringView, *, changed: bool | None = None) -> dict
 def _response(
     connection: Connection, result: ContentWriteResult, *, changed: bool
 ) -> dict[str, Any]:
-    view = get_quest_authoring(connection, world_id=result.world_id, quest_id=result.entity_id)
-    assert view is not None
-    return _view_json(view, changed=changed)
+    del connection
+    return write_receipt(result, "quest_id", changed=changed)
 
 
 def _run(

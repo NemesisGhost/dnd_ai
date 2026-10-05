@@ -61,6 +61,7 @@ from ._content_support import (
     clean_note,
     decode_name_cursor,
     reference_options_page,
+    write_receipt,
 )
 from ._shared import timeline_world_id
 from .access import require_campaign_capability
@@ -394,11 +395,8 @@ def update_organization_endpoint(
 def _organization_response(
     connection: Connection, result: ContentWriteResult, *, changed: bool
 ) -> dict[str, Any]:
-    view = get_organization_authoring(
-        connection, world_id=result.world_id, organization_id=result.entity_id
-    )
-    assert view is not None
-    return _organization_json(view, changed=changed)
+    del connection
+    return write_receipt(result, "organization_id", changed=changed)
 
 
 # --- Religions ---------------------------------------------------------------------------------
@@ -549,8 +547,5 @@ def update_religion_endpoint(
 def _religion_response(
     connection: Connection, result: ContentWriteResult, *, changed: bool
 ) -> dict[str, Any]:
-    view = get_religion_authoring(
-        connection, world_id=result.world_id, religion_id=result.entity_id
-    )
-    assert view is not None
-    return _religion_json(view, changed=changed)
+    del connection
+    return write_receipt(result, "religion_id", changed=changed)

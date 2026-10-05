@@ -15,6 +15,7 @@ from sqlalchemy import Connection
 
 from dnd_ai.commands._content import ContentWriteResult
 from dnd_ai.domain.access import AccessContext
+from dnd_ai.domain.data_classification import content_receipt
 from dnd_ai.queries.reference_options import ReferenceOptionRow
 
 from .audit import record_change_log
@@ -51,6 +52,20 @@ def audit_content_write(
         changed_fields=result.changed_fields or None,
         reason=reason,
         source_id=result.source_id,
+    )
+
+
+def write_receipt(result: ContentWriteResult, id_field: str, *, changed: bool) -> dict[str, Any]:
+    """The response and idempotency replay body of a typed authoring write: ids,
+    `row_version`, and flags only (never content). The portal refetches the
+    authoritative view after a write."""
+    return content_receipt(
+        id_field=id_field,
+        entity_id=result.entity_id,
+        row_version=result.row_version,
+        created=result.created,
+        changed=changed,
+        record_id=result.record_id,
     )
 
 

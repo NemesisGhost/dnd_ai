@@ -31,7 +31,7 @@ from ._authoring import (
     finish_campaign_idempotency,
     start_campaign_idempotency,
 )
-from ._content_support import audit_content_write, clean_note
+from ._content_support import audit_content_write, clean_note, write_receipt
 from ._shared import timeline_world_id
 from .access import require_campaign_capability
 from .correlation import get_request_correlation_id
@@ -105,9 +105,8 @@ def _view_json(view: NpcAuthoringView, *, changed: bool | None = None) -> dict[s
 def _response(
     connection: Connection, result: ContentWriteResult, *, changed: bool
 ) -> dict[str, Any]:
-    view = get_npc_authoring(connection, world_id=result.world_id, npc_id=result.entity_id)
-    assert view is not None
-    return _view_json(view, changed=changed)
+    del connection
+    return write_receipt(result, "npc_id", changed=changed)
 
 
 @router.get(_BASE + "/options")

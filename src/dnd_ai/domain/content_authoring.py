@@ -24,6 +24,7 @@ from .authoring import (
     normalize_description,
     normalize_name,
 )
+from .data_classification import audit_diff, audit_initial
 from .entity_lifecycle import (
     BLOCKED_ENTITY_ARCHIVED,
     BLOCKED_REVIEW_IN_PROGRESS,
@@ -49,8 +50,6 @@ _REVIEW_CANON_STATUSES = frozenset({CANON_PROPOSED, CANON_APPROVED})
 _REFERENCEABLE_CANON_STATUSES = frozenset(
     {CANON_DRAFT, CANON_PROPOSED, CANON_APPROVED, CANON_CANON}
 )
-
-AUDIT_VALUE_MAX_LENGTH = 1000
 
 
 def content_edit_blocked_reason(canon_status: str, lifecycle_status: str) -> str | None:
@@ -100,32 +99,23 @@ def evaluate_content_actions(
     return available, [BlockedAction(action=UPDATE, reason=reason), *blocked]
 
 
-# --- Bounded audit diff ---------------------------------------------------------
-
-
-def _bounded(value: object) -> object:
-    if isinstance(value, str) and len(value) > AUDIT_VALUE_MAX_LENGTH:
-        return {"value": value[:AUDIT_VALUE_MAX_LENGTH], "truncated": True}
-    return value
+# --- Audit diff (default deny; see dnd_ai.domain.data_classification) ------------
 
 
 def diff_fields(
     before: Mapping[str, object], after: Mapping[str, object]
 ) -> dict[str, dict[str, object]]:
     """`{field: {"from": old, "to": new}}` for every field whose value changed.
-    Free-text values are truncated to `AUDIT_VALUE_MAX_LENGTH` with a
-    `truncated` marker; reference fields are IDs and are passed as strings."""
-    changed: dict[str, dict[str, object]] = {}
-    for key, new_value in after.items():
-        old_value = before.get(key)
-        if old_value != new_value:
-            changed[key] = {"from": _bounded(old_value), "to": _bounded(new_value)}
-    return changed
+    Only structural fields (names, identifiers, enumerations, numbers) keep their
+    values; every other field records `{"redacted": true}`, so audit never holds
+    narrative content."""
+    return audit_diff(before, after)
 
 
 def initial_fields(values: Mapping[str, object]) -> dict[str, object]:
-    """Bounded initial values for a `created` audit row (non-null fields only)."""
-    return {key: _bounded(value) for key, value in values.items() if value is not None}
+    """Initial values for a `created` audit row (non-null fields only), with
+    content fields redacted."""
+    return audit_initial(values)
 
 
 # --- Typed field normalization --------------------------------------------------

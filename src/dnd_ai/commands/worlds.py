@@ -49,6 +49,7 @@ from dnd_ai.domain.authoring_policy import (
     raise_for_reason,
     world_blocked_reason,
 )
+from dnd_ai.domain.data_classification import audit_change
 from dnd_ai.domain.world_authority import (
     WORLD_MANAGE,
     WORLD_OWNER_ROLE,
@@ -283,7 +284,7 @@ def update_world(
     if clean_name != world.name:
         changed["name"] = {"from": world.name, "to": clean_name}
     if clean_description != world.description:
-        changed["description"] = {"from": world.description, "to": clean_description}
+        changed["description"] = audit_change("description", world.description, clean_description)
     if not changed:
         return WorldMutationResult(
             world_id=world_id,
