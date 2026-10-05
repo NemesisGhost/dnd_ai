@@ -1,9 +1,11 @@
 import { useState } from "react"
 import { Link } from "react-router"
+import { characterBuildsPath } from "../api/characterBuilds"
 import { npcAuthoringPath } from "../api/npcAuthoring"
 import { playerCharacterAuthoringPath } from "../api/playerCharacterAuthoring"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
+import type { CharacterBuilds } from "../types/characterBuilds"
 import type { PlayerCharacterAuthoringView } from "../types/npcAuthoring"
 import { AuthoringEditLink } from "./AuthoringEditLink"
 import { EntityLifecyclePanel } from "./EntityLifecyclePanel"
@@ -39,6 +41,7 @@ export function NpcAuthoringControls({ campaignId, characterId }: NpcAuthoringCo
                 detail={changes}
             />
             <PlayerAccessLink campaignId={campaignId} characterId={characterId} detail={changes} />
+            <BuildsLink campaignId={campaignId} characterId={characterId} />
             <EntityLifecyclePanel
                 campaignId={campaignId}
                 entityId={characterId}
@@ -91,6 +94,35 @@ function LoadedPlayerAccessLink({
                 to={`/app/${encodeURIComponent(campaignId)}/access?character=${encodeURIComponent(characterId)}`}
             >
                 Link a player
+            </Link>
+        </p>
+    )
+}
+
+// Editors get a link to a character's builds and starting state. The builds read
+// is a 404 for anything that is not an NPC or player character, so a bare
+// character shows no link, and a player sends no request at all.
+function BuildsLink({ campaignId, characterId }: NpcAuthoringControlsProps) {
+    if (!useCampaignCapability(campaignId, "canon.edit")) {
+        return null
+    }
+    return <LoadedBuildsLink campaignId={campaignId} characterId={characterId} />
+}
+
+function LoadedBuildsLink({ campaignId, characterId }: NpcAuthoringControlsProps) {
+    const { state } = useAuthoringResource<CharacterBuilds>(
+        characterBuildsPath(campaignId, characterId),
+    )
+    if (state.kind !== "ready") {
+        return null
+    }
+    return (
+        <p className="authoring-page__actions-row">
+            <Link
+                className="authoring-button"
+                to={`/app/${encodeURIComponent(campaignId)}/characters/${encodeURIComponent(characterId)}/builds`}
+            >
+                Builds and starting state
             </Link>
         </p>
     )

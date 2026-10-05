@@ -24,6 +24,7 @@ import {
   EditOrganizationPage,
 } from "./pages/OrganizationAuthoringPages"
 import { CreateKnowledgePage, EditKnowledgePage } from "./pages/KnowledgeAuthoringPages"
+import { CharacterBuildsPage, CreateCharacterBuildPage } from "./pages/CharacterBuildPages"
 import {
   ChooseCharacterTypePage,
   CreateNpcPage,
@@ -279,6 +280,16 @@ function App() {
             <Route
               path="characters/pc/new"
               element={<CreatePlayerCharacterPage />}
+            />
+
+            <Route
+              path="characters/:characterId/builds"
+              element={<CharacterBuildsPage />}
+            />
+
+            <Route
+              path="characters/:characterId/builds/new"
+              element={<CreateCharacterBuildPage />}
             />
 
             <Route
