@@ -269,6 +269,8 @@ A canonical definition should be superseded when:
 
 Supersession should retain a link from the old entity or definition version to the replacement.
 
+**Built (Phase 15, checkpoint 15.2R):** every real change to a typed definition (create, edit, quest stage/objective change) and every lifecycle transition writes a snapshot to `core.entity_revisions` (see DATABASE_MODEL §5.3a). Edits made before that checkpoint have no snapshot. There is no read path or comparison view until checkpoint 15.3C-2.
+
 ### 8.2 Historical corrections
 
 A historical correction does not erase the original event. Use one of:

@@ -199,6 +199,10 @@ Key columns:
 
 Entity rows are definition records. Timeline-specific conditions do not belong here.
 
+### 5.3a Definition revisions (Phase 15, revision 117)
+
+`core.entity_revisions` is the canonical, append-only, **GM-only** history of a typed definition: one full snapshot (`snapshot JSONB`) of the authored record per real change, keyed `UNIQUE (entity_id, row_version)` with `revision_kind` `created` / `updated` / `lifecycle` (a lifecycle revision holds the canon and lifecycle statuses). It is written in the same request transaction as the change, built from the authored record (the typed authoring views) and **never from `audit.change_log`**, which holds no narrative since checkpoint 15.2A-3. A revision cannot be updated (trigger, and the application roles hold no `UPDATE`/`DELETE`); it disappears only when its draft entity is deleted (foreign-key cascade). It is never player-visible and not readable by `app_read_only`. History begins at revision 117 (no backfill); the prior-version and comparison read paths arrive with checkpoint 15.3C-2.
+
 ### 5.4 Names, aliases and tags
 
 - `core.entity_names`
