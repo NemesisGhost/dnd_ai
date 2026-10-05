@@ -187,6 +187,7 @@ from .locations import (
 )
 from .narrative import (
     event_causes,
+    event_corrections,
     event_effects,
     event_locations,
     event_observations,
@@ -356,6 +357,7 @@ __all__ = [
     "entity_tags",
     "entity_types",
     "event_causes",
+    "event_corrections",
     "event_effects",
     "event_locations",
     "event_observations",

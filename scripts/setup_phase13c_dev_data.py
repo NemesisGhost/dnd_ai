@@ -2984,6 +2984,8 @@ def _ensure_session_event(
         assert isinstance(event_id, uuid.UUID)
         connection.execute(
             text("""
+                -- fixture events in states such as draft and voided, at fixed times, exercise audience visibility
+                -- authored-content-direct-insert: allowed
                 INSERT INTO narrative.events
                     (event_id, timeline_id, campaign_id, session_id, event_type_id,
                      event_status_id, world_time_id, details)
@@ -4990,6 +4992,8 @@ def _ensure_historical_event(
         )
         connection.execute(
             text("""
+                -- fixture events in states such as draft and voided, at fixed times, exercise audience visibility
+                -- authored-content-direct-insert: allowed
                 INSERT INTO narrative.events
                     (event_id, timeline_id, campaign_id, event_type_id, event_status_id,
                      world_time_id, details)
@@ -5008,6 +5012,8 @@ def _ensure_historical_event(
         for participant_name, role_code in fixture.participant_names:
             connection.execute(
                 text("""
+                    -- participants of the fixture events above
+                    -- authored-content-direct-insert: allowed
                     INSERT INTO narrative.event_participants
                         (event_id, participant_entity_id, participant_role_id)
                     VALUES (

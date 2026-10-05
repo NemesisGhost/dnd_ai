@@ -68,6 +68,7 @@ from .dungeon import router as dungeon_router
 from .encounters import router as encounters_router
 from .entity_lifecycle import router as entity_lifecycle_router
 from .errors import install_error_handlers
+from .event_corrections import router as event_corrections_router
 from .events import router as events_router
 from .foundry_pairing import router as foundry_pairing_router
 from .integration import router as integration_router
@@ -173,6 +174,7 @@ def create_app() -> FastAPI:
     app.include_router(encounters_router)
     app.include_router(entity_lifecycle_router)
     app.include_router(events_router)
+    app.include_router(event_corrections_router)
     app.include_router(foundry_pairing_router)
     app.include_router(integration_router)
     app.include_router(interactions_router)

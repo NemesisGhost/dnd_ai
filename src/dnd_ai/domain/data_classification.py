@@ -201,6 +201,7 @@ COLUMN_CLASSES: dict[str, DataClass] = {
     **_table("narrative.encounter_turns", {"notes": _G}),
     **_table("narrative.encounters", {"status": _S, "summary": _G}),
     **_table("narrative.event_causes", {"cause_description": _G}),
+    **_table("narrative.event_corrections", {"correction_kind": _S, "reason": _G}),
     **_table(
         "narrative.event_effects",
         {
@@ -332,6 +333,8 @@ AUDIT_STRUCTURAL_FIELDS: frozenset[str] = frozenset(
         "spell_count",
         "scheduled_for",
         "participation_role",
+        "event_status",
+        "correction_kind",
         "start_world_time_id",
         "end_world_time_id",
         "world_time_id",
