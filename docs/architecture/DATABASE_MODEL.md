@@ -647,7 +647,7 @@ erDiagram
 Primary tables — all built by **Phase 7 revision 073**:
 
 - `narrative.story_arcs` — not entity-rooted (the diagram's `is` relationship is `narrative.quests` only), same reasoning as `world.area_connections`/`interaction.interactions`: a world-scoped grouping record with no independent canonical identity.
-- `narrative.quests` — entity-rooted; the one CTI subtype in this domain.
+- `narrative.quests` — entity-rooted; the one CTI subtype in this domain. Since revision 125 (Phase 15.2E-2a) it carries `gm_notes` (GM-only planning text, at most 4000 characters, classified GM_ONLY and never audited in clear or shown to players). Dependencies, participants, outcomes and rewards are authored through quest commands; an outcome's `code` is a permanent slug unique per quest.
 - `narrative.quest_stages`
 - `narrative.quest_objectives` — target reuses the `knowledge_items`/`event_effects` at-most-one-typed-target pattern (`target_entity_id` or one of the four dungeon-domain non-entity columns). `world.locations` and `knowledge.knowledge_items` are both entity-rooted, so `target_entity_id` alone covers "reach a location" and "discover knowledge" objectives without a separate typed column for either. `completion_rule` (JSONB, structured completion-rule metadata — e.g. a quantity threshold) and `visibility_policy` (an inferred small vocabulary: visible/hidden_until_active/hidden_until_discovered/gm_only) were added by **Phase 7 revision 074**, docs/PLAN.md §14.1 naming both as distinct from `completion_mode` (who decides completion) and `requirement_level='hidden'` (whether the objective is mandatory, not whether it's visible) — revision 073 had built only the latter two.
 - `narrative.objective_dependencies`

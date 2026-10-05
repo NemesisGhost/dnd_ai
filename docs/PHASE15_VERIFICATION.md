@@ -320,3 +320,22 @@ Commit(s) on `phase15/completion`. **Status: implemented; local automated gates 
 Known limits: reversals exist only for the three effect kinds above; location, condition, resource, clock, quest-objective, knowledge and relationship events cannot be corrected through this surface yet (each refuses plainly) and extend the catalog as their checkpoints land. Bulk correction is deferred as the plan says. Not verified: CI; manual browser/accessibility (correction dialog focus and the preview at narrow width).
 
 Commands run (local PostgreSQL 18): ruff format/check and mypy clean; portal `npm test` (280 files, 2031 tests) / `npm run lint` / `npm run build` clean. Full Python suite on the final tree, no other database session active: 5961 passed, 1 failed (the known developer-`.env` test), 1322 s.
+
+## Checkpoint 15.2E-2a — quest definition completion
+
+Commit(s) on `phase15/completion`. **Status: implemented; local automated gates below; CI and manual browser/accessibility checks not performed.**
+
+| Area | Delivered |
+|---|---|
+| Migration | `125_quest_gm_notes`: `narrative.quests.gm_notes` (GM-only, at most 4000 characters) with its check and comment; round trip with `alembic check`. |
+| Commands | `commands/quest_children.py`: add and remove objective dependencies (prerequisite loops refused with `objective_dependency_cycle`; both objectives must belong to the quest; structural, so refused once progress exists), add and remove participants (published characters or organizations, one row per participant and role), add, update and remove outcomes (code immutable, unique per quest; removal deletes its rewards), add and remove rewards (a knowledge reward must name a usable knowledge item). `update_quest` gains `gm_notes` (omitted keeps, empty clears). All run under the authoring kernel: locks, expected version, idempotency, default-deny audit, revision snapshots. |
+| API | Routes under `/campaigns/{id}/authoring/quests/{quest_id}`: `dependencies`, `participants`, `outcomes`, `outcomes/{id}/update`, `outcomes/{id}/rewards`, `rewards/{id}/remove` and the matching removals; the view and options gain the new collections and catalogs. |
+| Portal | A completion section under the quest editor: notes, dependencies, participants, outcomes and rewards, each with validation messages and fixed-code error text. |
+| Tests | 11 API tests, 2 real-PostgreSQL races (opposite prerequisites cannot both land; two edits from one version, one is stale), a migration round trip, 9 portal tests, the dev-script guard extended to the four quest tables, and scenario step 13. |
+
+Decisions applied (not owner decisions): dependencies stop counting as quest progress and are themselves structural; item rewards are free text (no item domain target yet); only knowledge rewards carry a typed reference.
+
+Not verified: CI; manual browser/accessibility of the completion section.
+
+
+Commands run (local PostgreSQL 18): ruff format/check and mypy clean; portal `npm test` (280 files, 2041 tests) / `npm run lint` / `npm run build` clean. Full Python suite on the final tree, no other database session active: 5975 passed, 1 failed (the known developer-`.env` test), 1234 s.
