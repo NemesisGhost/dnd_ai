@@ -70,6 +70,7 @@ from dnd_ai.queries.content_preconditions import (
     archive_blocked_reason,
     publish_blocked_reason,
     publish_reference_ids,
+    replacement_publish_blocked_reason,
 )
 
 from ._content import EntityNotFoundError as EntityNotFoundError
@@ -534,10 +535,17 @@ def supersede_entity(
     same `SupersessionTargetInvalidError`. References to the old entity keep
     resolving: nothing is moved, deleted, or rewritten."""
     scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    # The replacement may be published by this call, so the records it refers to
+    # are locked `FOR SHARE` together with the pair, in ascending id order, exactly
+    # as an ordinary publish does (read unlocked first, then any the read missed).
+    reference_ids = _publish_reference_ids(
+        connection, world_id=scope.world_id, entity_id=replacement_entity_id
+    )
     locked = lock_entities(
         connection,
         world_id=scope.world_id,
         update_ids=sorted({entity_id, replacement_entity_id}),
+        share_ids=reference_ids,
     )
     entity = locked.get(entity_id)
     if entity is None:
@@ -563,6 +571,30 @@ def supersede_entity(
 
     replacement_result: EntityTransitionResult | None = None
     if replacement.canon_status == CANON_APPROVED:
+        missing = [
+            r
+            for r in publish_reference_ids(
+                connection,
+                entity_id=replacement_entity_id,
+                entity_type_code=replacement.entity_type_code,
+            )
+            if r not in locked
+        ]
+        if missing:
+            lock_entities(connection, world_id=scope.world_id, share_ids=missing)
+        reason_code = replacement_publish_blocked_reason(
+            connection,
+            superseded_id=entity_id,
+            replacement_id=replacement_entity_id,
+            replacement_type_code=replacement.entity_type_code,
+            replacement_canon_status=replacement.canon_status,
+        )
+        if reason_code == "quest_definition_incomplete":
+            raise QuestDefinitionIncompleteError(f"quest {replacement_entity_id} has no objective")
+        if reason_code is not None:
+            raise ReferenceNotPublishedError(
+                f"replacement {replacement_entity_id} refers to an unpublished record"
+            )
         _require_subtype_complete(
             connection, entity_id=replacement.entity_id, entity_type_id=replacement.entity_type_id
         )

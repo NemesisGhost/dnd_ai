@@ -25,11 +25,13 @@ from dnd_ai.commands.entity_lifecycle import (
     delete_draft_entity,
     publish_entity_as_canon,
     submit_entity_for_review,
+    supersede_entity,
 )
 from dnd_ai.commands.knowledge import _reveal_knowledge_to_party_impl
 from dnd_ai.commands.knowledge_definitions import create_knowledge_item, update_knowledge_item
 from dnd_ai.commands.locations import create_location, update_location
 from dnd_ai.commands.memberships import revoke_membership_role
+from dnd_ai.commands.npcs import create_npc
 from dnd_ai.commands.organizations import create_organization, update_organization
 from dnd_ai.commands.quest_definitions import (
     add_quest_objective,
@@ -49,8 +51,10 @@ from dnd_ai.domain.authoring import (
     OrganizationHierarchyCycleError,
     ParentLocationInvalidError,
     QuestHasProgressError,
+    ReferenceNotPublishedError,
     StaleWriteError,
 )
+from dnd_ai.queries.npc_authoring import list_species_options
 from tests.builders import make_authored_campaign, make_authored_world
 from tests.database.test_authoring_concurrency import (
     _client_for,
@@ -977,3 +981,119 @@ def test_a_first_reveal_waits_for_an_in_flight_reword_and_reveals_the_new_statem
         )
         == 1
     )
+
+
+# --- supersession vs archival of a record the replacement refers to -------------------------------
+
+
+@dataclass
+class SupersessionPair:
+    old: uuid.UUID
+    old_version: int
+    replacement: uuid.UUID
+    replacement_version: int
+    origin: uuid.UUID
+    origin_version: int
+
+
+def _move_through(fx: Fixture, entity_id: uuid.UUID, commands: tuple[Any, ...]) -> None:
+    for command in commands:
+        with fx.engine.begin() as c:
+            command(
+                c,
+                campaign_id=fx.campaign_id,
+                entity_id=entity_id,
+                actor_user_id=fx.owner,
+                expected_row_version=fx.version(entity_id),
+            )
+
+
+def _supersession_pair(fx: Fixture) -> SupersessionPair:
+    """A canon NPC, an approved replacement NPC, and the canon location the
+    replacement's origin points at."""
+    origin, _ = fx.location("Race origin")
+    _move_through(fx, origin, (submit_entity_for_review, approve_entity, publish_entity_as_canon))
+    with fx.engine.begin() as c:
+        species = list_species_options(c, world_id=fx.world_id)[0].species_id
+
+        def npc(name: str, place: uuid.UUID | None) -> uuid.UUID:
+            return create_npc(
+                c,
+                campaign_id=fx.campaign_id,
+                actor_user_id=fx.owner,
+                name=name,
+                summary=None,
+                species_id=species,
+                size_category="medium",
+                origin_location_id=place,
+            ).entity_id
+
+        old, replacement = npc("Race old npc", None), npc("Race new npc", origin)
+    _move_through(fx, old, (submit_entity_for_review, approve_entity, publish_entity_as_canon))
+    _move_through(fx, replacement, (submit_entity_for_review, approve_entity))
+    return SupersessionPair(
+        old, fx.version(old), replacement, fx.version(replacement), origin, fx.version(origin)
+    )
+
+
+def _supersede(fx: Fixture, p: SupersessionPair) -> Callable[[Connection], Any]:
+    return lambda c: supersede_entity(
+        c,
+        campaign_id=fx.campaign_id,
+        entity_id=p.old,
+        actor_user_id=fx.owner,
+        expected_row_version=p.old_version,
+        replacement_entity_id=p.replacement,
+        replacement_expected_row_version=p.replacement_version,
+    )
+
+
+def _archive_origin(fx: Fixture, p: SupersessionPair) -> Callable[[Connection], Any]:
+    return lambda c: archive_entity(
+        c,
+        campaign_id=fx.campaign_id,
+        entity_id=p.origin,
+        actor_user_id=fx.owner,
+        expected_row_version=p.origin_version,
+    )
+
+
+def _canon_of(fx: Fixture, entity_id: uuid.UUID) -> str:
+    with fx.engine.connect() as c:
+        value = c.execute(
+            text(
+                "SELECT cs.code FROM core.entities e JOIN core.canon_statuses cs "
+                "ON cs.canon_status_id = e.canon_status_id WHERE e.entity_id = :e"
+            ),
+            {"e": entity_id},
+        ).scalar()
+    assert isinstance(value, str)
+    return value
+
+
+def test_a_supersession_waits_for_an_in_flight_archive_of_a_reference_and_is_refused(
+    fx: Fixture,
+) -> None:
+    p = _supersession_pair(fx)
+    out = race(fx.engine, _archive_origin(fx, p), _supersede(fx, p), ENTITY_LOCK)
+    assert isinstance(out["error"], ReferenceNotPublishedError)
+    assert _canon_of(fx, p.old) == "canon"
+    assert _canon_of(fx, p.replacement) == "approved"
+    assert fx.version(p.old) == p.old_version
+    assert fx.version(p.replacement) == p.replacement_version
+    assert (
+        fx.count("SELECT count(*) FROM audit.change_log WHERE command_name = 'supersede_entity'")
+        == 0
+    )
+
+
+def test_an_archive_of_a_reference_waits_for_an_in_flight_supersession(fx: Fixture) -> None:
+    p = _supersession_pair(fx)
+    out = race(fx.engine, _supersede(fx, p), _archive_origin(fx, p), ENTITY_LOCK)
+    # The supersession committed first and published the replacement against a
+    # reference that was still published; the archive then ran on current state and
+    # is allowed under the existing-reference policy (canon records may point at an
+    # archived record; only new references must be usable).
+    assert "error" not in out
+    assert _canon_of(fx, p.old) == "superseded"
+    assert _canon_of(fx, p.replacement) == "canon"

@@ -122,6 +122,34 @@ def publish_blocked_reason(
     return None
 
 
+def replacement_publish_blocked_reason(
+    connection: Connection,
+    *,
+    superseded_id: uuid.UUID,
+    replacement_id: uuid.UUID,
+    replacement_type_code: str,
+    replacement_canon_status: str,
+) -> str | None:
+    """Why `replacement_id` cannot take over from `superseded_id`. A `canon`
+    replacement is already published and is valid under the existing-reference
+    policy. An `approved` one is published by the supersession itself, so it must
+    pass the ordinary publish preconditions, and must not depend on the record
+    being superseded (that record stops being a valid reference in the same
+    transaction)."""
+    if replacement_canon_status != "approved":
+        return None
+    reason = publish_blocked_reason(
+        connection, entity_id=replacement_id, entity_type_code=replacement_type_code
+    )
+    if reason is not None:
+        return reason
+    if superseded_id in publish_reference_ids(
+        connection, entity_id=replacement_id, entity_type_code=replacement_type_code
+    ):
+        return REFERENCE_NOT_PUBLISHED
+    return None
+
+
 def archive_blocked_reason(
     connection: Connection, *, entity_id: uuid.UUID, entity_type_code: str
 ) -> str | None:
