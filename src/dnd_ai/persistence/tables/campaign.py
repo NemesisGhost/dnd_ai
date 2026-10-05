@@ -150,6 +150,42 @@ parties = Table(
     Column("name", Text(), nullable=False),
     Column("description", Text()),
     *_timestamps(),
+    # Added by revision 120 (Phase 15 checkpoint 15.2C-1).
+    Column(
+        "row_version",
+        BigInteger(),
+        nullable=False,
+        server_default=text("1"),
+        comment=(
+            "Optimistic-concurrency token, incremented by every UPDATE "
+            "(core.bump_row_version()). Authoring commands require the caller's "
+            "expected_row_version to equal it under a row lock and reject a stale write."
+        ),
+    ),
+    Column(
+        "lifecycle_status_id",
+        UUID(),
+        ForeignKey("core.lifecycle_statuses.lifecycle_status_id", ondelete="RESTRICT"),
+        nullable=False,
+        comment=(
+            "Operational lifecycle (active or archived). An archived party stays referenced by "
+            "its history, is hidden from pickers, and takes no new membership or knowledge writes."
+        ),
+    ),
+    Column(
+        "archived_at",
+        TIMESTAMP(timezone=True),
+        comment="When the party was archived; NULL while active.",
+    ),
+    Column(
+        "created_by_user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="SET NULL"),
+        comment=(
+            "The authenticated human who created the party through the authoring command; NULL "
+            "for parties created before revision 120 or by operator tooling."
+        ),
+    ),
     schema="campaign",
     comment=(
         "A group of characters who adventure together. A stable world-level identity that "
@@ -236,6 +272,12 @@ party_memberships = Table(
 )
 
 Index("ix_parties_world_id", parties.c.world_id)
+Index("ix_parties_lifecycle_status_id", parties.c.lifecycle_status_id)
+Index(
+    "ix_parties_created_by_user_id",
+    parties.c.created_by_user_id,
+    postgresql_where=parties.c.created_by_user_id.isnot(None),
+)
 Index("ix_party_memberships_member_entity_id", party_memberships.c.member_entity_id)
 Index("ix_party_memberships_party_id", party_memberships.c.party_id)
 Index(

@@ -428,6 +428,7 @@ from dnd_ai.commands.local_auth import (
     normalize_login_name,
 )
 from dnd_ai.commands.memberships import assign_membership_role, create_campaign_membership
+from dnd_ai.commands.parties import create_party
 from dnd_ai.commands.player_characters import create_player_character
 from dnd_ai.commands.timelines import create_timeline
 from dnd_ai.commands.world_time import create_calendar, create_world_time
@@ -3129,7 +3130,12 @@ def _objective_visible_to_non_gm(objective: _ObjectiveFixture) -> bool:
 
 
 def _get_or_create_party(
-    connection: Connection, summary: _Summary, *, world_id: uuid.UUID, name: str
+    connection: Connection,
+    summary: _Summary,
+    *,
+    world_id: uuid.UUID,
+    campaign_id: uuid.UUID,
+    name: str,
 ) -> uuid.UUID:
     """Create-or-reuse one fixture-owned `campaign.parties` row, located by
     its distinctive `(world_id, name)`. No party-membership rows are
@@ -3156,15 +3162,25 @@ def _get_or_create_party(
         party_id = existing[0]
         assert isinstance(party_id, uuid.UUID)
         summary.add(created=False, label=f"party {name!r}", record_id=party_id)
+        _ensure_campaign_party(
+            connection, summary, campaign_id=campaign_id, party_id=party_id, party_name=name
+        )
         return party_id
-    party_id = connection.execute(
-        text(
-            "INSERT INTO campaign.parties (world_id, name) VALUES (:world, :name) RETURNING party_id"
-        ),
-        {"world": world_id, "name": name},
-    ).scalar()
-    assert isinstance(party_id, uuid.UUID)
+    # Created and attached to the campaign through the production command
+    # (Phase 15.2C-1), acting as the world owner.
+    assert _world_time_actor_user_id is not None, "the fixture user is set at the start of _run"
+    party_id = create_party(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=_world_time_actor_user_id,
+        name=name,
+    ).party_id
     summary.add(created=True, label=f"party {name!r}", record_id=party_id)
+    summary.add(
+        created=True,
+        label=f"campaign/party association ({name!r})",
+        record_id=f"{campaign_id}/{party_id}",
+    )
     return party_id
 
 
@@ -3185,6 +3201,8 @@ def _ensure_campaign_party(
         summary.add(created=False, label=label, record_id=f"{campaign_id}/{party_id}")
         return
     connection.execute(
+        # authored-content-direct-insert: allowed (attaches a party that already existed
+        # before this run; a new party is attached by create_party)
         text("INSERT INTO campaign.campaign_parties (campaign_id, party_id) VALUES (:c, :p)"),
         {"c": campaign_id, "p": party_id},
     )
@@ -5452,9 +5470,12 @@ def _ensure_world_and_knowledge_fixtures(
     )
 
     # --- knowledge party + memberships --------------------------------
-    party_id = _get_or_create_party(connection, summary, world_id=world_id, name=_WK_PARTY_NAME)
-    _ensure_campaign_party(
-        connection, summary, campaign_id=campaign_a_id, party_id=party_id, party_name=_WK_PARTY_NAME
+    party_id = _get_or_create_party(
+        connection,
+        summary,
+        world_id=world_id,
+        campaign_id=campaign_a_id,
+        name=_WK_PARTY_NAME,
     )
     membership_start = _wk_world_time(
         connection, summary, world_id=world_id, suffix="party membership start", offset=10
@@ -5906,14 +5927,11 @@ def _run(connection: Connection, *, user_id: uuid.UUID, dev_password: str) -> _S
     # Phase 13D quest list/detail fixtures
     # ----------------------------------------------------------------------
     quest_party_id = _get_or_create_party(
-        connection, summary, world_id=world_id, name=_QUEST_A_PARTY_NAME
-    )
-    _ensure_campaign_party(
         connection,
         summary,
+        world_id=world_id,
         campaign_id=campaign_a_id,
-        party_id=quest_party_id,
-        party_name=_QUEST_A_PARTY_NAME,
+        name=_QUEST_A_PARTY_NAME,
     )
     campaign_a_quest_ids = _ensure_campaign_quests(
         connection,

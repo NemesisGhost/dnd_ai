@@ -257,6 +257,7 @@ def _create_fixture(connection: Connection) -> _Fixture:
 
     party_id = connection.execute(
         text("""
+            -- authored-content-direct-insert: allowed (throwaway smoke-test fixture)
             INSERT INTO campaign.parties (world_id, name)
             VALUES (:world, 'Smoke Test Party')
             RETURNING party_id
@@ -265,6 +266,7 @@ def _create_fixture(connection: Connection) -> _Fixture:
     ).scalar()
     assert isinstance(party_id, uuid.UUID)
     connection.execute(
+        # authored-content-direct-insert: allowed (throwaway smoke-test fixture)
         text(
             "INSERT INTO campaign.campaign_parties (campaign_id, party_id) VALUES (:campaign, :party)"
         ),
