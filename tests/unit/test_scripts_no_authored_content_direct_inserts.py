@@ -50,6 +50,9 @@ _TABLES = (
     "character.character_known_spells",
     "character.character_prepared_spells",
     "campaign.character_state",
+    # Phase 15.2C-1 party definitions.
+    "campaign.parties",
+    "campaign.campaign_parties",
     "narrative.quests",
     "narrative.quest_stages",
     "narrative.quest_objectives",
