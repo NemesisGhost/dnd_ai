@@ -1068,6 +1068,18 @@ Maps a relationship type to default character-scoped capabilities, including:
 
 The relationship records semantic meaning; this mapping supplies defaults. A direct typed resource grant (§19.6) may extend or restrict a specific membership without inventing another relationship type.
 
+**Production defaults and the maximum-policy rule (Phase 15 checkpoint 15.2A-1, migration `114_relationship_defaults`).** The mapping is production reference data seeded by migration (never by a development script). The matrix below is the **maximum effective policy** for the seven built-in types: `dnd_ai.domain.access.BUILTIN_RELATIONSHIP_CAPABILITIES` holds the same matrix in code, and `resolve_access_context` (and the effective-access panel) honour a relationship-derived capability only if a database mapping row exists **and** the code matrix permits it **and** the relationship type is `is_active`. A stray or re-added row, a custom type, and an inactive type therefore confer nothing (default deny); rows for custom types may exist but are ineffective. These rules limit *relationship-derived* grants only; role capabilities (`canon.edit`, `gm`'s `character.view_full`/`view_knowledge`, ...) and explicit resource grants are independent sources.
+
+| Type | Capabilities | Perspective selectable |
+|---|---|---|
+| `owner`, `primary_controller` | `discover`, `view_summary`, `view_full`, `view_knowledge`, `view_private` | Yes |
+| `co_controller`, `portrayer` | `discover`, `view_summary`, `view_full`, `view_knowledge` | Yes |
+| `viewer`, `observer_approved_viewer` | `discover`, `view_summary` | No |
+| `former_controller` | none (continued access needs a separate active relationship) | No |
+| any other type | none until server policy admits it | No |
+
+`edit_narrative`, `edit_mechanical_state`, `control`, and `interact` are deliberately withheld from every type until Phase 16 (no route consumes them today). A character is listed as a perspective in the session bootstrap only when the user holds `character.view_knowledge` for it. The upgrade migration reconciles the seven built-in types to this matrix (adds missing pairs, removes unsupported pairs and records the removals in a NOTICE and one maintenance `audit.change_log` row); custom-type rows are left in place.
+
 The earlier `security.character_permissions` sketch is superseded by these semantic relationships plus typed resource grants. `character.character_controllers` remains the operational controller assignment described in §7.3 and may include AI, service, or external-system controllers; it is not interchangeable with a user's campaign authorization.
 
 #### 19.5 Access groups
