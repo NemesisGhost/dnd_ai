@@ -49,7 +49,7 @@ class SessionResult:
 
 
 @dataclass(frozen=True)
-class _Locked:
+class LockedSession:
     session_number: int
     title: str | None
     summary: str | None
@@ -60,9 +60,9 @@ class _Locked:
     lifecycle_status: str
 
 
-def _lock_session(
+def lock_campaign_session(
     connection: Connection, *, campaign_id: uuid.UUID, session_id: uuid.UUID
-) -> _Locked:
+) -> LockedSession:
     # The row is locked without a join (a join inside a locking statement is
     # re-evaluated after a wait and can return nothing); the status code is a
     # separate read.
@@ -82,7 +82,7 @@ def _lock_session(
         text("SELECT code FROM core.lifecycle_statuses WHERE lifecycle_status_id = :s"),
         {"s": row.lifecycle_status_id},
     ).scalar()
-    return _Locked(
+    return LockedSession(
         session_number=int(row.session_number),
         title=row.title,
         summary=row.summary,
@@ -175,7 +175,7 @@ def update_session(
     clean_title = normalize_title(title)
     clean_summary = normalize_description(summary)
     scope = lock_operation_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
-    current = _lock_session(connection, campaign_id=campaign_id, session_id=session_id)
+    current = lock_campaign_session(connection, campaign_id=campaign_id, session_id=session_id)
     if current.row_version != expected_row_version:
         raise StaleWriteError(f"session {session_id} is at {current.row_version}")
     if current.lifecycle_status != SESSION_ACTIVE:
@@ -241,7 +241,7 @@ def _transition(
     to_status: str,
 ) -> SessionResult:
     scope = lock_operation_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
-    current = _lock_session(connection, campaign_id=campaign_id, session_id=session_id)
+    current = lock_campaign_session(connection, campaign_id=campaign_id, session_id=session_id)
     if current.row_version != expected_row_version:
         raise StaleWriteError(f"session {session_id} is at {current.row_version}")
     if to_status == SESSION_ARCHIVED:

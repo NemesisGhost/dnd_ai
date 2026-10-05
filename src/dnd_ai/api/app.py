@@ -91,6 +91,7 @@ from .reference_corpus import router as reference_corpus_router
 from .relationships import router as relationships_router
 from .rulesets import router as rulesets_router
 from .session_authoring import router as session_authoring_router
+from .session_play import router as session_play_router
 from .sessions import router as sessions_router
 from .summary import router as summary_router
 from .timelines import router as timelines_router
@@ -195,6 +196,7 @@ def create_app() -> FastAPI:
     app.include_router(rulesets_router)
     app.include_router(sessions_router)
     app.include_router(session_authoring_router)
+    app.include_router(session_play_router)
     app.include_router(summary_router)
     app.include_router(timelines_router)
     app.include_router(user_preferences_router)

@@ -35,23 +35,22 @@ reasons every other query router in this package has neither.
 
 import uuid
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy import Connection
 
-from dnd_ai.commands.sessions import _end_session_impl
 from dnd_ai.domain.access import AccessContext
-from dnd_ai.queries.session import get_session_view, list_campaign_sessions
+from dnd_ai.queries.session import (
+    get_session_view,
+    list_campaign_sessions,
+    list_session_participants,
+)
 
-from ._shared import timeline_world_id
 from .access import require_campaign_capability
-from .audit import record_change_log
-from .correlation import get_request_correlation_id
-from .deps import get_connection, get_idempotency_key
+from .deps import get_connection
 from .errors import NotFoundError
-from .idempotency import IdempotentReplay, begin_idempotent_request, complete_idempotent_request
 
 router = APIRouter(tags=["sessions"])
 
@@ -68,88 +67,6 @@ _SESSION_VIEW_CAPABILITY = "campaign.view"
 # session_id resource-grant target additionally sees draft events linked to
 # it — same split dnd_ai.api.summary already applies campaign-wide.
 _DRAFT_EVENTS_CAPABILITY = "canon.edit"
-
-_END_SESSION_COMMAND_NAME = "end_session"
-_UPDATED_CHANGE_ACTION = "updated"
-
-
-class EndSessionRequest(BaseModel):
-    end_world_time_id: uuid.UUID
-    summary: str | None = None
-
-
-class EndSessionResponse(BaseModel):
-    session_id: uuid.UUID
-    already_ended: bool
-
-
-@router.post(
-    "/campaigns/{campaign_id}/sessions/{session_id}/end",
-    response_model=EndSessionResponse,
-    status_code=200,
-)
-def end_session_endpoint(
-    campaign_id: uuid.UUID,
-    session_id: uuid.UUID,
-    body: EndSessionRequest,
-    access: Annotated[AccessContext, Depends(require_campaign_capability(_CANON_EDIT_CAPABILITY))],
-    connection: Annotated[Connection, Depends(get_connection)],
-    idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
-    correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
-) -> EndSessionResponse:
-    reservation_id: uuid.UUID | None = None
-    if idempotency_key is not None:
-        fingerprint_payload: dict[str, Any] = {
-            "session_id": str(session_id),
-            **body.model_dump(mode="json"),
-        }
-        outcome = begin_idempotent_request(
-            connection,
-            actor_user_id=access.user_id,
-            campaign_id=campaign_id,
-            idempotency_key=idempotency_key,
-            command_name=_END_SESSION_COMMAND_NAME,
-            payload=fingerprint_payload,
-            correlation_id=correlation_id,
-        )
-        if isinstance(outcome, IdempotentReplay):
-            return EndSessionResponse.model_validate(outcome.response_body)
-        reservation_id = outcome.idempotent_request_id
-
-    result = _end_session_impl(
-        connection,
-        session_id=session_id,
-        campaign_id=campaign_id,
-        end_world_time_id=body.end_world_time_id,
-        summary=body.summary,
-    )
-
-    if not result.already_ended:
-        record_change_log(
-            connection,
-            change_action_code=_UPDATED_CHANGE_ACTION,
-            schema_name="campaign",
-            table_name="sessions",
-            record_id=session_id,
-            entity_id=None,
-            world_id=timeline_world_id(connection, access.timeline_id),
-            actor_user_id=access.user_id,
-            correlation_id=correlation_id,
-            command_name=_END_SESSION_COMMAND_NAME,
-            event_id=None,
-        )
-
-    response = EndSessionResponse(session_id=result.session_id, already_ended=result.already_ended)
-
-    if reservation_id is not None:
-        complete_idempotent_request(
-            connection,
-            idempotent_request_id=reservation_id,
-            response_status_code=200,
-            response_body=response.model_dump(mode="json"),
-        )
-
-    return response
 
 
 # ---------------------------------------------------------------------------
@@ -182,6 +99,15 @@ class SessionEventResponse(BaseModel):
     details: str | None
 
 
+class SessionParticipantResponse(BaseModel):
+    session_participant_id: uuid.UUID
+    character_id: uuid.UUID
+    character_name: str
+    participation_role: str
+    added_at: datetime
+    removed_at: datetime | None
+
+
 class SessionDetailResponse(BaseModel):
     session_id: uuid.UUID
     session_number: int
@@ -197,6 +123,8 @@ class SessionDetailResponse(BaseModel):
     play_status: str = "unscheduled"
     row_version: int | None = None
     available_actions: list[str] | None = None
+    # Editors only: who is (or was) present.
+    participants: list[SessionParticipantResponse] | None = None
 
 
 def _actions(lifecycle_status: str, play_status: str) -> list[str]:
@@ -205,6 +133,12 @@ def _actions(lifecycle_status: str, play_status: str) -> list[str]:
     if lifecycle_status == "archived":
         return ["restore"]
     actions = ["update"]
+    if play_status in ("unscheduled", "scheduled"):
+        actions.append("start")
+    if play_status in ("unscheduled", "scheduled", "in_progress"):
+        actions.append("manage_participants")
+    if play_status == "in_progress":
+        actions.extend(["log", "end"])
     if play_status != "in_progress":
         actions.append("archive")
     return actions
@@ -302,6 +236,21 @@ def get_session_endpoint(
         row_version=view.row_version if access.has_capability(_CANON_EDIT_CAPABILITY) else None,
         available_actions=(
             _actions(view.status_code, view.play_status)
+            if access.has_capability(_CANON_EDIT_CAPABILITY)
+            else None
+        ),
+        participants=(
+            [
+                SessionParticipantResponse(
+                    session_participant_id=p.session_participant_id,
+                    character_id=p.character_id,
+                    character_name=p.character_name,
+                    participation_role=p.participation_role,
+                    added_at=p.added_at,
+                    removed_at=p.removed_at,
+                )
+                for p in list_session_participants(connection, session_id=session_id)
+            ]
             if access.has_capability(_CANON_EDIT_CAPABILITY)
             else None
         ),

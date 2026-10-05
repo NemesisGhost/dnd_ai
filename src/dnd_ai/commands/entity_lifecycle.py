@@ -113,6 +113,8 @@ ENTITY_REFERENCE_CLASSIFICATION: dict[tuple[str, str, str], str] = {
     ("campaign", "inventory_entries", "holder_entity_id"): BLOCKING,
     ("campaign", "item_ownership", "owner_entity_id"): BLOCKING,
     ("campaign", "party_memberships", "member_entity_id"): BLOCKING,
+    # A character that has taken part in a session keeps that history (15.2D-2).
+    ("campaign", "session_participants", "character_id"): BLOCKING,
     ("campaign", "relationship_state", "perspective_holder_entity_id"): BLOCKING,
     ("integration", "external_identifiers", "entity_id"): BLOCKING,
     ("integration", "sync_jobs", "target_entity_id"): BLOCKING,

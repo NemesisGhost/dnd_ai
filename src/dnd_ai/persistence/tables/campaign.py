@@ -1579,3 +1579,62 @@ Index(
     timeline_clocks.c.last_event_id,
     postgresql_where=timeline_clocks.c.last_event_id.isnot(None),
 )
+
+
+# Added by revision 123 (Phase 15 checkpoint 15.2D-2).
+session_participants = Table(
+    "session_participants",
+    metadata,
+    _uuid_pk("session_participant_id"),
+    Column(
+        "session_id",
+        UUID(),
+        ForeignKey("campaign.sessions.session_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "character_id",
+        UUID(),
+        ForeignKey("character.characters.character_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "participation_role",
+        Text(),
+        nullable=False,
+        comment="player_character, npc, or guest (any character present without a fixed role).",
+    ),
+    Column("added_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    Column("removed_at", TIMESTAMP(timezone=True)),
+    Column(
+        "added_by_user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="SET NULL"),
+    ),
+    schema="campaign",
+    comment=(
+        "The characters taking part in a session (decision D-14: characters only, never "
+        "user attendance). A row is open while removed_at is NULL; a character may be added "
+        "again after removal. Presence does not grant access."
+    ),
+)
+
+Index("ix_session_participants_character_id", session_participants.c.character_id)
+Index(
+    "ix_session_participants_added_by_user_id",
+    session_participants.c.added_by_user_id,
+    postgresql_where=session_participants.c.added_by_user_id.isnot(None),
+)
+Index(
+    "ux_session_participants_open",
+    session_participants.c.session_id,
+    session_participants.c.character_id,
+    unique=True,
+    postgresql_where=session_participants.c.removed_at.is_(None),
+)
+Index(
+    "ux_sessions_one_in_progress",
+    sessions.c.campaign_id,
+    unique=True,
+    postgresql_where=sessions.c.started_at.isnot(None) & sessions.c.ended_at.is_(None),
+)

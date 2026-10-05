@@ -265,3 +265,43 @@ def get_session_view(
             ended_at=session_row["ended_at"],
         ),
     )
+
+
+@dataclass(frozen=True)
+class SessionParticipantView:
+    session_participant_id: uuid.UUID
+    character_id: uuid.UUID
+    character_name: str
+    participation_role: str
+    added_at: datetime
+    removed_at: datetime | None
+
+
+def list_session_participants(
+    connection: Connection, *, session_id: uuid.UUID
+) -> tuple[SessionParticipantView, ...]:
+    """Present participants first (by name), then those removed. For `canon.edit`
+    holders only (the route decides): presence names characters the viewer might
+    not otherwise be allowed to see."""
+    rows = connection.execute(
+        text("""
+            SELECT sp.session_participant_id, sp.character_id, e.canonical_name,
+                   sp.participation_role, sp.added_at, sp.removed_at
+            FROM campaign.session_participants sp
+            JOIN core.entities e ON e.entity_id = sp.character_id
+            WHERE sp.session_id = :s
+            ORDER BY (sp.removed_at IS NOT NULL), lower(e.canonical_name), sp.added_at
+        """),
+        {"s": session_id},
+    ).all()
+    return tuple(
+        SessionParticipantView(
+            session_participant_id=row.session_participant_id,
+            character_id=row.character_id,
+            character_name=str(row.canonical_name),
+            participation_role=str(row.participation_role),
+            added_at=row.added_at,
+            removed_at=row.removed_at,
+        )
+        for row in rows
+    )
