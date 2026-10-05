@@ -163,7 +163,7 @@ describe("QuestDetailPage", () => {
         expect(stageButton()).toHaveTextContent("Shown objectives: 1 of 1 complete")
         expect(screen.getByText("Shown objectives: 1 of 1 complete.")).toBeVisible()
         expect(document.body.textContent).not.toMatch(/Stage progress|Not started|In progress/)
-        expect(stageButton().textContent).not.toMatch(/bCompleteb/)
+        expect(stageButton().textContent).not.toMatch(/\bComplete\b/)
     })
 
     it.each([["failed"], ["skipped"], ["superseded"]])(
