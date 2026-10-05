@@ -282,9 +282,12 @@ MANAGED_SCHEMAS = [
 ]
 
 # Privileges each application role must hold on every managed table.
+# `app_read_only` is deliberately absent: since migration 115 it is deny-by-
+# default (SELECT only on an explicit allowlist of lookup/reference tables), so
+# its positive and negative grants are asserted in
+# test_reporting_role_boundary.py rather than as a blanket expectation here.
 EXPECTED_GRANTS = {
     "app_read_write": {"SELECT", "INSERT", "UPDATE", "DELETE"},
-    "app_read_only": {"SELECT"},
 }
 
 

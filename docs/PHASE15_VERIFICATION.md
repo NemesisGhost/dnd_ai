@@ -87,3 +87,28 @@ Explained non-pass: `tests/unit/test_config.py::test_local_session_allowed_origi
 
 - CI on the pushed head; portal `npm test`/lint/build (no portal code changed); the manual Compose walkthrough (migrate → invite → grant `owner` → select perspective) from the plan.
 - Existing developer databases: running the migration over one removes the old `owner` → `edit_*`/`control`/`interact`/`discover` extras that the dev script created; the removed pairs are in the migration NOTICE and the maintenance audit row.
+
+## Checkpoint 15.2A-2 — reporting-role (`app_read_only`) boundary
+
+Commit on `phase15/completion`. **Status: implemented; local automated gates green; CI and manual checks not observed.** Decision D-5 (owner decision, plan recommendation option a, deny by default) was applied as recommended.
+
+| Area | Delivered |
+|---|---|
+| Migration | `115_reporting_role_boundary`: revokes `SELECT` on all tables in the 13 application schemas from `app_read_only`, revokes the default privilege for future tables created by `migration_owner`, then grants `SELECT` only on an allowlist of 31 lookup tables plus 17 seeded `rules.*` reference tables (`REPORTING_READABLE_TABLES`). Excluded on purpose: `rules.item_definitions` (gains world-owned homebrew in a later checkpoint) and `rules.world_rulesets`. Sequences unchanged. Downgrade restores revision 001's grants. No row-level security. |
+| Consumer inventory | None at runtime: Compose `api` uses `app_read_write`; `database_recovery.py` only asserts the role exists; Terraform lists it for IAM login; remaining references are docs and grant tests. |
+| Tests | `tests/database/test_reporting_role_boundary.py` (32): 25 named sensitive tables denied (credential/token hashes, session and CSRF storage, idempotency stores, audit log, AI context, GM-only content); every table outside the allowlist denied and every allowlisted table readable; real `SET ROLE app_read_only` reads refused for secrets and allowed for a lookup; a new table created by `migration_owner` in `security`/`core`/`campaign` is denied to `app_read_only` and granted DML to `app_read_write`; runtime role unchanged; throwaway-database upgrade from 114 → 115 → downgrade → head → `alembic check`. `test_role_grants.py` no longer asserts a blanket `app_read_only` `SELECT` (its write-denial test remains). |
+| Docs | DATABASE_CONVENTIONS §27.1/§27.4 (deny-by-default, reporting is not administrator access, reviewed-views contract, no RLS), DATABASE_RECOVERY note that grants restore with the dump. |
+
+### Commands run (local PostgreSQL 18)
+
+| Check | Result |
+|---|---|
+| `uv run ruff format --check .` / `ruff check .` / `mypy src` | clean |
+| `uv run pytest tests/unit tests/database tests/scenario` | 5683 tests: 5682 passed, 1 failed (below) |
+| Round trip on a throwaway database (in the new test file) | passed, no drift |
+
+The test count fell from 5838 to 5683 because the ≈190 parametrized blanket `app_read_only` grant checks were replaced by the targeted boundary tests above. Explained non-pass: `tests/unit/test_config.py::test_local_session_allowed_origins_defaults_to_dev_topology_outside_production` (developer `.env` adds an origin; environment-only).
+
+### Not verified
+
+CI on the pushed head; the recovery script `verify` against a live restore (it only asserts the role exists and is unchanged by this migration).

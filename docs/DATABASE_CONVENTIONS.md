@@ -1335,9 +1335,11 @@ Separate the role that **owns** objects from the roles that **log in**. One owni
 | `migration_owner` | **No** | Owns every schema object. Never authenticates; exists only as an ownership and default-privilege anchor |
 | `migration_runner` | Yes | Executes migrations as a member of `migration_owner` |
 | `app_read_write` | Yes | Application runtime; DML only, no DDL |
-| `app_read_only` | Yes | Reporting and read-model queries |
+| `app_read_only` | Yes | Reporting. **Deny by default** (migration 115): `SELECT` only on an explicit allowlist of lookup and ruleset-reference tables; never on credentials, tokens, sessions/CSRF, idempotency storage, audit metadata, AI context, or authored/private content |
 | `integration_worker` | Yes | Scoped grants for Foundry/Discord/import-facing services |
 | `admin_maintenance` | Yes | Break-glass, human use only |
+
+**Reporting access is not administrator access.** `admin_maintenance` (break-glass human use) and `migration_owner`/`migration_runner` keep their own broad authority; that authority is never extended to, or inferred from, `app_read_only`. `app_read_only` has no runtime consumer today. If reporting is ever required, add reviewed views in a dedicated `reporting` schema that project only non-sensitive columns, grant `SELECT` on those views in a migration, and test the grant; do not widen table grants. Default privileges no longer grant `SELECT` on new tables to `app_read_only`, so every future table (including any Phase 16 private-content schema) is denied until deliberately granted. Row-level security is not used: no concrete need has been demonstrated, and it would add per-session policy context to every runtime query.
 
 Two rules follow from the split and must not be "simplified" away:
 
@@ -1358,7 +1360,7 @@ For the self-hosted deployment topology, credentials come from environment varia
 
 ### 27.4 Sensitive content
 
-GM-only notes, secrets, private messages, and source documents require explicit access control.
+GM-only notes, secrets, private messages, and source documents require explicit access control. Credential and token hashes, session and CSRF storage, idempotency request/response storage, and unrestricted audit metadata are never readable by the reporting role (§27.1; `tests/database/test_reporting_role_boundary.py` pins the denied set and that every table outside the allowlist is denied).
 
 ---
 

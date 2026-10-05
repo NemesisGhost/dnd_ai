@@ -154,6 +154,8 @@ folded into an ordinary pass. Every example in this document below uses
 
 The repository-native fix is to let Alembic recreate the roles before restoring data — the same `001_bootstrap` revision that created them on the original server, applied to the fresh one. `restore` (below) does this for you, in the right order for whichever of fresh-cluster or existing-cluster mode applies. (`pg_dumpall --globals-only` is a built-in alternative for capturing roles; it's discussed, and why it isn't the default recommendation here, further down.)
 
+**Role grants are part of the restored database.** Table privileges, including the deny-by-default `app_read_only` boundary from migration `115_reporting_role_boundary`, live inside the database and come back with `pg_restore`; only role definitions and passwords live outside it.
+
 **What role bootstrap does *not* recover.** Recreating the six *role definitions* — and the grants/ownership `001_bootstrap` assigns to them — is not the same as reproducing everything about the roles' live state on the server you backed up from:
 
 - **`pg_dump` never includes cluster roles at all** — not their existence, not their passwords, not their attributes.
