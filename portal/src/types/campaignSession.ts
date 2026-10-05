@@ -5,6 +5,20 @@ export interface CampaignSessionListItem {
     status_code: string
     started_at: string | null
     ended_at: string | null
+    // Phase 15.2D-1: the planned start and the derived play status.
+    scheduled_for?: string | null
+    play_status?: "unscheduled" | "scheduled" | "in_progress" | "completed"
+    // Editors only.
+    row_version?: number | null
+    available_actions?: ("update" | "archive" | "restore")[] | null
+}
+
+export interface SessionReceipt {
+    session_id: string
+    session_number: number
+    row_version: number
+    created: boolean
+    changed: boolean
 }
 
 export interface CampaignSessionEvent {

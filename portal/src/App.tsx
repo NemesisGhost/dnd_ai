@@ -15,6 +15,7 @@ import { CampaignQuestsPage } from "./pages/CampaignQuestsPage"
 import { CampaignQuestDetailPage } from "./pages/CampaignQuestDetailPage"
 import { CampaignSessionsPage } from "./pages/CampaignSessionsPage"
 import { CampaignSessionDetailPage } from "./pages/CampaignSessionDetailPage"
+import { CreateSessionPage, EditSessionPage } from "./pages/SessionFormPages"
 import { CampaignWorldPage, } from "./pages/CampaignWorldPage"
 import { CampaignWorldDetailPage } from "./pages/CampaignWorldDetailPage"
 import { CreateLocationPage } from "./pages/CreateLocationPage"
@@ -347,6 +348,16 @@ function App() {
             <Route
               path="sessions"
               element={<CampaignSessionsPage />}
+            />
+
+            <Route
+              path="sessions/new"
+              element={<CreateSessionPage />}
+            />
+
+            <Route
+              path="sessions/:sessionId/edit"
+              element={<EditSessionPage />}
             />
 
             <Route
