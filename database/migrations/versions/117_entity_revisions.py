@@ -92,9 +92,7 @@ def upgrade() -> None:
         COMMENT ON COLUMN core.entity_revisions.snapshot IS
         'The authored fields (GM-only data included) as of this version.';
     """)
-    op.execute(
-        "CREATE INDEX ix_entity_revisions_world_id ON core.entity_revisions (world_id);"
-    )
+    op.execute("CREATE INDEX ix_entity_revisions_world_id ON core.entity_revisions (world_id);")
     op.execute(
         "CREATE INDEX ix_entity_revisions_created_by_user_id "
         "ON core.entity_revisions (created_by_user_id) WHERE created_by_user_id IS NOT NULL;"
