@@ -486,3 +486,22 @@ Not verified: CI; manual browser/accessibility (the portrayal form and the runti
 
 
 Local gates for 15.3A-3: `ruff format`/`ruff check` and `mypy src` clean; portal 2104 tests passed, lint and build clean; full Python suite 6118 passed, 1 failed (the known developer-`.env` origin test in `tests/unit/test_config.py`). The first full run found four schema-registry gaps (the `detail_level` column classification, the `npc_id` entity-reference classification as owned cascade, an index on `created_by_user_id`, and the matching SQLAlchemy index); all were fixed and the full suite rerun clean.
+
+## Checkpoint 15.3B-1a — Item definitions
+
+Commit(s) on `phase15/completion`. **Status: implemented; local automated gates below; CI and manual browser/accessibility checks not performed.** Decision D-22 option c (generic seeds plus world-owned homebrew) applied as recommended.
+
+| Area | Delivered |
+|---|---|
+| Migration | `132_item_definition_authoring`: `owning_world_id`, `row_version` (bumped by `core.bump_row_version()`) and `created_by_user_id` on `rules.item_definitions`; code uniqueness split into a ruleset-wide partial unique index (keeping the old index name) and a per-world one; `owning_world_id` immutable with `ruleset_version_id`; the item-instance guard now also refuses another world's homebrew; 24 generic mundane definitions seeded for the current `dnd5e` version (no licensed text). Round trip with `alembic check`; the downgrade deletes homebrew and unreferenced seeds. |
+| Commands | `commands/item_definitions.py`: `create_item_definition` (code from the name, made unique per world under a world advisory lock) and `update_item_definition` (world-owned only, against `row_version`, `FOR UPDATE`, no-op when nothing changed). A seeded or foreign definition looks missing. |
+| API | `GET/POST /campaigns/{id}/authoring/item-definitions`, `GET .../options`, `GET .../{id}`, `POST .../{id}/update`; `canon.edit`, campaign idempotency, audit rows with content redacted. |
+| Portal | Item definitions list, new and edit pages; a sidebar link shown only to `canon.edit`. |
+| Tests | 9 API tests (seeds and options; derived unique codes; invalid input; versioned update; world isolation; permissions; the database guard against another world's homebrew; immutable ownership; replay and redacted audit), 2 real-PostgreSQL races (same-name creates, same-version updates), a migration round trip, 8 page tests plus a sidebar test, and scenario step 21. |
+
+Decisions applied (not owner decisions): a new definition starts as `draft` and can be set to `canon` by editing (item instances will be limited to canon definitions in 15.3B-1b); the code is derived and never edited; properties_jsonb and licensed catalogs are not authored here; archive is deferred.
+
+Not verified: CI; manual browser/accessibility (the form with keyboard only and at narrow width).
+
+
+Local gates for 15.3B-1a: `ruff format`/`ruff check` and `mypy src` clean; portal 2113 tests passed, lint and build clean; full Python suite 6131 passed, 1 failed (the known developer-`.env` origin test in `tests/unit/test_config.py`). The first test run found that the seed filter used the pre-rename ruleset code; it was corrected to `dnd5e` before the full run.

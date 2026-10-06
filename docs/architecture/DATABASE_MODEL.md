@@ -439,7 +439,7 @@ Primary tables:
 - `rules.proficiency_types` — `target_kind TEXT` (`skill` / `saving_throw` / `free_text`) added by a Phase 4 corrections revision, naming which `character.character_proficiencies` column a proficiency of this type must set
 - `rules.resource_definitions`
 
-`rules.item_definitions` is listed here as a rule-definition concept (§11) but is deferred to Phase 9, which owns both item definitions and item instances together.
+`rules.item_definitions` is listed here as a rule-definition concept and is specified in §11. It is also the one documented exception to "rules data is ruleset-wide": revision 132 (Phase 15.3B-1a, decision D-22) gives it an `owning_world_id`, so a GM's homebrew definition belongs to one world and is invisible to every other world on the same ruleset. Ruleset-wide definitions have no owner and are seeded; every other rules table stays ruleset-wide.
 
 ## 9. Location and dungeon model
 
@@ -562,7 +562,7 @@ Rules item definitions are distinct from world item instances, which are distinc
 
 Primary tables:
 
-- `rules.item_definitions` — reusable mechanical definitions (deferred to Phase 9)
+- `rules.item_definitions` — reusable mechanical definitions. **Built** (Phase 9, authoring in Phase 15.3B-1a, revision 132): `owning_world_id` (NULL for a ruleset-wide definition, set for world-owned homebrew; immutable), `row_version` for optimistic edits, `created_by_user_id`, and the existing canon status (homebrew is authored as `draft` or `canon`). The unique code is per ruleset version for ruleset-wide definitions and per owning world for homebrew. A closed set of generic, unlicensed mundane definitions (weapons, armor, a healing potion, gear, treasure) is seeded for the current `dnd5e` ruleset version, so a clean install can create item instances. A trigger refuses an item instance whose definition is homebrew owned by another world. Licensed catalogs are not seeded.
 - `world.item_instances` — particular objects in the world
 - `world.item_containers`
 - `campaign.item_state` — location, charges, damage/condition, equipped state
