@@ -133,6 +133,7 @@ COLUMN_CLASSES: dict[str, DataClass] = {
     ),
     **_table("character.character_senses", {"sense_type": _S}),
     **_table("character.characters", {"size_category": _S}),
+    **_table("character.npcs", {"detail_level": _S}),
     **_table("core.calendar_months", {"name": _P}),
     **_table(
         "core.calendars",
@@ -267,6 +268,21 @@ COLUMN_CLASSES: dict[str, DataClass] = {
     **_table("world.organization_memberships", {"rank": _C, "role": _C}),
     **_table("world.organizations", {"internal_description": _G, "public_description": _P}),
     **_table("world.political_factions", {"ideology": _P}),
+    **_table(
+        "character.npc_portrayal_profiles",
+        {
+            "voice": _G,
+            "speech_style": _G,
+            "vocabulary": _G,
+            "mannerisms": _G,
+            "emotional_baseline": _G,
+            "conversational_habits": _G,
+            "topics_avoided": _G,
+            "disclosure_boundaries": _G,
+            "roleplay_guidance": _G,
+            "change_note": _G,
+        },
+    ),
     **_table("world.political_relationships", {"treaty_terms": _G}),
     **_table(
         "world.route_relationships",

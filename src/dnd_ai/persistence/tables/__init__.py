@@ -98,6 +98,7 @@ from .characters import (
     character_senses,
     character_spellcasting_profiles,
     characters,
+    npc_portrayal_profiles,
     npcs,
     player_characters,
 )
@@ -413,6 +414,7 @@ __all__ = [
     "metadata",
     "military_units",
     "name_types",
+    "npc_portrayal_profiles",
     "npcs",
     "objective_dependencies",
     "objective_state",

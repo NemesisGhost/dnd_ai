@@ -12,6 +12,7 @@ from sqlalchemy import (
     Column,
     ForeignKey,
     Index,
+    Integer,
     PrimaryKeyConstraint,
     Table,
     Text,
@@ -85,6 +86,17 @@ npcs = Table(
         primary_key=True,
     ),
     *_timestamps(),
+    # Added by revision 131 (Phase 15 checkpoint 15.3A-3).
+    Column(
+        "detail_level",
+        Text(),
+        nullable=False,
+        server_default=text("'standard'::text"),
+        comment=(
+            "How much authoring this NPC deserves: minimal (a background figure), standard (a "
+            "named NPC), major (a fully portrayed NPC). A GM planning aid; it changes no rule."
+        ),
+    ),
     schema="character",
     comment=(
         "Marks a character as an NPC. Portrayal, goals, routines, and other simulation "
@@ -545,4 +557,45 @@ Index(
 Index(
     "ix_character_religious_affiliations_religion_id",
     character_religious_affiliations.c.religion_id,
+)
+
+npc_portrayal_profiles = Table(
+    "npc_portrayal_profiles",
+    metadata,
+    _uuid_pk("npc_portrayal_profile_id"),
+    Column(
+        "npc_id",
+        UUID(),
+        ForeignKey("character.npcs.npc_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("version_number", Integer(), nullable=False),
+    Column("voice", Text()),
+    Column("speech_style", Text()),
+    Column("vocabulary", Text()),
+    Column("mannerisms", Text()),
+    Column("emotional_baseline", Text()),
+    Column("conversational_habits", Text()),
+    Column("topics_avoided", Text()),
+    Column("disclosure_boundaries", Text()),
+    Column("roleplay_guidance", Text()),
+    Column("change_note", Text()),
+    Column(
+        "created_by_user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="SET NULL"),
+    ),
+    Column("created_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    UniqueConstraint("npc_id", "version_number", name="ux_npc_portrayal_profiles_version"),
+    schema="character",
+    comment=(
+        "Versioned, GM-only performance guidance for an NPC. Each save appends a version; no "
+        "version is ever changed or deleted (only removed with its NPC). Never part of a "
+        "player read; the AI context builder does not read it until Phase 20."
+    ),
+)
+
+Index(
+    "ix_npc_portrayal_profiles_created_by_user_id",
+    npc_portrayal_profiles.c.created_by_user_id,
 )
