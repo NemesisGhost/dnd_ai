@@ -1,6 +1,7 @@
 import { Link } from "react-router"
 import { ArchivedCampaignsSection } from "../components/ArchivedCampaignsSection"
 import type { SessionBootstrap } from "../types/bootstrap"
+import { canCreateWorlds } from "../utils/worldAccess"
 
 interface CampaignsPageProps {
   bootstrap: SessionBootstrap
@@ -9,8 +10,7 @@ interface CampaignsPageProps {
 export function CampaignsPage({
   bootstrap,
 }: CampaignsPageProps) {
-  const canCreate =
-    bootstrap.global_capabilities?.includes("world.create") === true
+  const canCreate = canCreateWorlds(bootstrap)
   const createLink = canCreate ? (
     <p>
       <Link to="/campaigns/new">Create campaign</Link>

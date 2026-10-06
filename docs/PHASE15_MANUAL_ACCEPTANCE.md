@@ -11,7 +11,7 @@ Do not use the running development servers or database.
 1. Create a throwaway database (for example `dnd_ai_acceptance`) on the local PostgreSQL 18 server and set `DATABASE_URL` for the shell you start the servers from.
 2. Run `uv run alembic -c database/alembic.ini upgrade head` against it. **This applies migration 135, which scrubs old audit and replay text; on a database with no old rows it is harmless, but take a backup first if you point it at anything that matters.**
 3. Start the API on port **8001** and the portal dev server on **5174** (not 8000 and 5173).
-4. Create an account that can create a world and a campaign through the portal's own screens (no seed script, no SQL), and a second account to be the player. Use the same flow the exit scenario uses: world, campaign, calendar and times, an NPC, a player character, a party, a session, a quest, a knowledge item, a dungeon with two areas, a relationship, a route, an item, an encounter, a source.
+4. Create an account that can create a world and a campaign through the portal's own screens (a platform administrator, or a user holding the built-in GM role in some campaign — ADR 0018) (no seed script, no SQL), and a second account to be the player. Use the same flow the exit scenario uses: world, campaign, calendar and times, an NPC, a player character, a party, a session, a quest, a knowledge item, a dungeon with two areas, a relationship, a route, an item, an encounter, a source.
 5. When you finish, stop both servers and drop the throwaway database.
 
 ## What to check on every page below

@@ -19,6 +19,7 @@ import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard"
 import type { CreateCampaignRequest, CreateCampaignResponse } from "../types/campaignSettings"
 import type { WorldDetail, WorldListResponse } from "../types/worldAuthoring"
 import { DESCRIPTION_MAX, NAME_MAX, validateDescription, validateName } from "../utils/authoringValidation"
+import { canCreateWorlds } from "../utils/worldAccess"
 import "../components/authoring/authoring.css"
 
 // The campaign setup wizard. Step state lives in the URL (`?worldId=&timelineId=`),
@@ -63,6 +64,10 @@ export function CampaignSetupPage() {
 
 function ChooseWorld() {
     const [, setParams] = useSearchParams()
+    const { state: session } = useSession()
+    // Offered only with the server-computed `world.create`; never a link that
+    // would fail after navigation.
+    const canCreate = session.status === "authenticated" && canCreateWorlds(session.bootstrap)
     const { state } = useAuthoringResource<WorldListResponse>(`${worldsListPath("active")}&limit=100`)
     const [choice, setChoice] = useState("")
 
@@ -94,9 +99,11 @@ function ChooseWorld() {
                 >
                     Continue
                 </button>
-                <Link className="authoring-button" to="/worlds/new?returnTo=/campaigns/new">
-                    Create a new world
-                </Link>
+                {canCreate ? (
+                    <Link className="authoring-button" to="/worlds/new?returnTo=/campaigns/new">
+                        Create a new world
+                    </Link>
+                ) : null}
                 <Link className="authoring-button" to="/campaigns">
                     Cancel
                 </Link>

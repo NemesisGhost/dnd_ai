@@ -127,6 +127,9 @@ function optionNames(select: HTMLElement): string[] {
     .map((option) => option.textContent ?? "")
 }
 
+// world_owner's server-computed world capabilities.
+const OWNER = ["campaign.create", "timeline.manage", "world.manage", "world.view"]
+
 beforeEach(() => {
   selectCharacter.mockReset()
   useCharacterMock.mockReset()
@@ -135,8 +138,8 @@ beforeEach(() => {
   server.on("GET", /^\/worlds\?status=all/, {
     body: {
       items: [
-        { world_id: "world-a", name: "World A" },
-        { world_id: "world-b", name: "World B" },
+        { world_id: "world-a", name: "World A", capabilities: OWNER },
+        { world_id: "world-b", name: "World B", capabilities: OWNER },
       ],
       next_cursor: null,
     },
@@ -145,11 +148,17 @@ beforeEach(() => {
     body: {
       world_id: "world-a",
       name: "World A",
+      capabilities: OWNER,
       timelines: [timeline("timeline-a", "Main A"), timeline("timeline-b", "Branch A")],
     },
   })
   server.on("GET", "/worlds/world-b", {
-    body: { world_id: "world-b", name: "World B", timelines: [timeline("timeline-c", "Main B")] },
+    body: {
+      world_id: "world-b",
+      name: "World B",
+      capabilities: OWNER,
+      timelines: [timeline("timeline-c", "Main B")],
+    },
   })
 })
 
@@ -284,6 +293,7 @@ describe("HierarchyContextPanel cascade", () => {
         body: {
           world_id: "world-b",
           name: "World B",
+          capabilities: OWNER,
           timelines: [timeline("timeline-c", "Main B")],
         },
       }
@@ -350,6 +360,33 @@ describe("HierarchyContextPanel disclosure", () => {
     expect(screen.getByRole("main").innerHTML).not.toContain("ghost")
     // Only the authorized worlds are offered.
     expect(optionNames(level("World"))).toEqual(["No selection", "World A", "World B"])
+  })
+
+  it("offers only worlds returned with world access, and no timeline choice for a view-only world", async () => {
+    server.on("GET", /^\/worlds\?status=all/, {
+      body: {
+        items: [
+          { world_id: "world-a", name: "World A", capabilities: ["world.view"] },
+          { world_id: "world-b", name: "World B", capabilities: OWNER },
+          { world_id: "world-z", name: "World Z", capabilities: [] },
+        ],
+        next_cursor: null,
+      },
+    })
+    server.on("GET", "/worlds/world-a", {
+      body: {
+        world_id: "world-a",
+        name: "World A",
+        capabilities: ["world.view"],
+        timelines: [timeline("timeline-a", "Main A")],
+      },
+    })
+    renderAt("/worlds/world-a")
+
+    await waitFor(() => expect(shown(level("World"))).toBe("World A"))
+    expect(optionNames(level("World"))).toEqual(["No selection", "World A", "World B"])
+    // Choosing a timeline would open a timeline-authoring route.
+    expect(level("Timeline")).toBeDisabled()
   })
 
   it("treats a timeline from another world as no selection", async () => {

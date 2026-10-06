@@ -36,7 +36,12 @@ from dnd_ai.domain.authoring import (
     WorldArchivedError,
     WorldHasActiveCampaignsError,
 )
-from tests.builders import dnd5e_ids, make_authored_campaign, make_authored_world
+from tests.builders import (
+    dnd5e_ids,
+    make_authored_campaign,
+    make_authored_world,
+    make_world_creator,
+)
 from tests.factories import make_external_identity, make_location, make_user, oidc_principal
 
 pytestmark = pytest.mark.database
@@ -193,7 +198,7 @@ def _purge_user_worlds(engine: Engine, user_id: uuid.UUID) -> None:
 @pytest.fixture
 def committed_owner(postgres_engine: Engine) -> Iterator[uuid.UUID]:
     with postgres_engine.begin() as setup:
-        user_id = make_user(setup, "Race Owner")
+        user_id = make_world_creator(setup, make_user(setup, "Race Owner"))
     yield user_id
     _purge_user_worlds(postgres_engine, user_id)
 

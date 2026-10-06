@@ -1,6 +1,7 @@
 import { createContext, useContext } from "react"
 import type { AuthoringResourceState } from "../hooks/useAuthoringResource"
 import type { WorldDetail } from "../types/worldAuthoring"
+import type { WorldAccess } from "../utils/worldAccess"
 
 // The World → Timeline selection the active route establishes, resolved from
 // server-authoritative data only. Shared by the sidebar and the hierarchy
@@ -19,6 +20,10 @@ export interface WorkspaceHierarchy {
     // so on a campaign route these stay null until the world read confirms.
     authoringWorldId: string | null
     authoringTimelineId: string | null
+    // How the caller may use `authoringWorldId`, from that world's own
+    // server-computed capabilities ("edit" or "view"); null with no world.
+    // Timeline-authoring navigation is offered only for "edit".
+    authoringWorldAccess: WorldAccess | null
     // GET /worlds/{id} for the route's world, keyed by that path so a previous
     // world's response is never shown for the next one. `null` when the route
     // names no world.

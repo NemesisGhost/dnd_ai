@@ -21,6 +21,8 @@ export const WORLD_BODY = {
     lifecycle_status: "active",
     row_version: 1,
     primary_timeline_id: "timeline-primary",
+    // The fixture user owns this world (world_owner's server-computed set).
+    capabilities: ["campaign.create", "timeline.manage", "world.manage", "world.view"],
     allowed_rulesets: [],
     timelines: [
         {

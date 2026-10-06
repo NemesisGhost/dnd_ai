@@ -7,6 +7,7 @@ import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { useSelectCampaign } from "../hooks/useSelectCampaign"
 import type { CampaignContext } from "../types/bootstrap"
 import type { WorldListResponse } from "../types/worldAuthoring"
+import { worldAccess, worldDestination } from "../utils/worldAccess"
 import { CharacterContextDetails } from "./CharacterContextDetails"
 import { CharacterPerspectiveSelector } from "./CharacterPerspectiveSelector"
 
@@ -116,17 +117,23 @@ export function HierarchyContextPanel({
         worldDetail?.name ??
         campaign?.world_name ??
         null
+  // Only worlds the server returned with world access are selectable; a world
+  // with none would have nowhere to navigate.
   const worldOptions = withCurrent(
     worlds.state.kind === "ready"
-      ? worlds.state.data.items.map((item) => ({ id: item.world_id, label: item.name }))
+      ? worlds.state.data.items
+          .filter((item) => worldDestination(item) !== null)
+          .map((item) => ({ id: item.world_id, label: item.name }))
       : [],
     activeWorldId !== null && worldName !== null
       ? { id: activeWorldId, label: worldName }
       : null,
   )
 
-  // Timeline
-  const timelineListReady = activeWorldId !== null && worldDetail !== null
+  // Timeline: choosing one opens a timeline-authoring route, so it is offered
+  // only for a world the caller may author (server-computed capabilities).
+  const timelineListReady =
+    activeWorldId !== null && worldDetail !== null && worldAccess(worldDetail) === "edit"
   const timelineName =
     activeTimelineId === null
       ? null

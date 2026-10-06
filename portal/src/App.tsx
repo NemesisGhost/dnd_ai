@@ -63,9 +63,7 @@ import { ResetPasswordPage } from "./pages/ResetPasswordPage"
 import { AccountPage } from "./pages/AccountPage"
 import { SettingsPage } from "./pages/SettingsPage"
 import { WorldsPage } from "./pages/WorldsPage"
-import { CreateWorldPage } from "./pages/CreateWorldPage"
 import { WorldOverviewPage } from "./pages/WorldOverviewPage"
-import { EditWorldPage } from "./pages/EditWorldPage"
 import { CampaignSetupPage } from "./pages/CampaignSetupPage"
 import { CampaignSettingsPage } from "./pages/CampaignSettingsPage"
 import { CreateTimelinePage } from "./pages/CreateTimelinePage"
@@ -76,6 +74,7 @@ import { CreateCalendarPage } from "./pages/CreateCalendarPage"
 import { WorldTimesPage } from "./pages/WorldTimesPage"
 import { EditTimelinePage } from "./pages/EditTimelinePage"
 import { CreateTimelineBranchPage } from "./pages/CreateTimelineBranchPage"
+import { CreateWorldRoute, EditWorldRoute } from "./layouts/WorldAccessRoutes"
 
 function CampaignsRoute() {
   const { bootstrap } = useAuthenticatedSession()
@@ -172,7 +171,7 @@ function App() {
 
             <Route
               path="/worlds/new"
-              element={<CreateWorldPage />}
+              element={<CreateWorldRoute />}
             />
 
             <Route
@@ -182,7 +181,7 @@ function App() {
 
             <Route
               path="/worlds/:worldId/edit"
-              element={<EditWorldPage />}
+              element={<EditWorldRoute />}
             />
 
             <Route

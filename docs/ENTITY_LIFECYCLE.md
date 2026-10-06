@@ -556,7 +556,7 @@ Delivered commands (each intent-specific, `expected_row_version`-guarded, idempo
 
 | Command | Status |
 |---|---|
-| `create_world` (world, allow-listed rulesets and default, owner membership, primary timeline — one transaction) | Built |
+| `create_world` (creator eligibility per [ADR 0018](adr/0018-world-creation-eligibility.md), then world, allow-listed rulesets and default, owner membership, primary timeline — one transaction) | Built |
 | `update_world`, `archive_world`, `restore_world` | Built |
 | `claim_unowned_world` (trusted infrastructure only, never over HTTP) | Built |
 | `create_timeline`, `update_timeline`, `create_timeline_branch`, `archive_timeline`, `restore_timeline` | Built |

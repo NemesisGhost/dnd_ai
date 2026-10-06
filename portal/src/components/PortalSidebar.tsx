@@ -22,6 +22,7 @@ import { useSelectCampaign } from "../hooks/useSelectCampaign"
 import { useSidebarCollapsed } from "../hooks/useSidebarCollapsed"
 import type { NavigationDrawerControl } from "../hooks/useNavigationDrawer"
 import { resolveNavigationCampaign } from "../utils/resolveNavigationCampaign"
+import { canCreateWorlds } from "../utils/worldAccess"
 import { AccessNavGroup } from "./AccessNavGroup"
 import { CampaignHomeNavGroup } from "./CampaignHomeNavGroup"
 import { DisabledNavItem } from "./DisabledNavItem"
@@ -94,7 +95,8 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
   // World and timeline context come from the route-derived hierarchy, which
   // confirms them against server data (WorkspaceHierarchyProvider) — never a
   // raw route ID.
-  const { authoringWorldId, authoringTimelineId } = useWorkspaceHierarchy()
+  const { authoringWorldId, authoringTimelineId, authoringWorldAccess } =
+    useWorkspaceHierarchy()
   const navigationRef = useRef<HTMLElement>(null)
   const { open: drawerOpen, closeAndFocusToggle, close } = drawer
 
@@ -241,15 +243,15 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
               />
 
               <WorldsNavGroup
-                activeWorldId={authoringWorldId}
+                activeWorldId={
+                  authoringWorldAccess === "none" ? null : authoringWorldId
+                }
                 activeTimelineId={authoringTimelineId}
+                canAuthorWorld={authoringWorldAccess === "edit"}
                 campaignWorldPath={
                   campaignPath === null ? null : `${campaignPath}/world`
                 }
-                canCreateWorld={
-                  bootstrap.global_capabilities?.includes("world.create") ===
-                  true
-                }
+                canCreateWorld={canCreateWorlds(bootstrap)}
                 collapsed={collapsed}
                 onNavigate={close}
               />

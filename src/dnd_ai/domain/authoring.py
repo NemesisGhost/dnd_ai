@@ -287,6 +287,18 @@ class KnowledgeSubjectInvalidError(SafeMessageError):
     safe_message = "The selected subject is not valid."
 
 
+class WorldCreationNotAuthorizedError(SafeMessageError):
+    """The caller is neither an active platform administrator nor an active
+    holder of the built-in `gm` role (docs/adr/0018-world-creation-
+    eligibility.md). A 403, not a 404: creation names no existing resource,
+    so refusing it discloses nothing beyond the caller's own eligibility,
+    which the session bootstrap already reports as `world.create`."""
+
+    safe_status_code = 403
+    safe_error_code = "forbidden"
+    safe_message = "You do not have permission to perform this action."
+
+
 class WorldNotAuthorizedError(DomainAuthorizationError):
     """No world authority, or no such world — indistinguishable (fixed 404)."""
 

@@ -5,7 +5,8 @@ import { LifecycleBadge } from "../components/authoring/feedback"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { usePageArrival } from "../hooks/usePageArrival"
 import { useAuthenticatedSession } from "../layouts/useAuthenticatedSession"
-import type { WorldListResponse } from "../types/worldAuthoring"
+import type { WorldListResponse, WorldSummary } from "../types/worldAuthoring"
+import { canCreateWorlds, worldAccess, worldDestination } from "../utils/worldAccess"
 import "../components/authoring/authoring.css"
 
 type StatusFilter = "active" | "archived"
@@ -19,9 +20,12 @@ function readFilter(value: string | null): StatusFilter {
     return value === "archived" ? "archived" : "active"
 }
 
-// The worlds the signed-in user owns, from GET /worlds. The list is filtered by
-// the server (only worlds the user holds authority over are ever returned), and
-// the "Create world" action appears only when the bootstrap's server-computed
+// The worlds the signed-in user holds authority over, from GET /worlds. The list
+// is filtered by the server; nothing here links to a world it did not return.
+// Each world links by its own server-computed capabilities: one the caller
+// manages opens its authoring overview, a view-only one opens the read-only
+// overview (marked "View only"), and one with no world access is not linked.
+// "Create world" appears only when the bootstrap's server-computed
 // `global_capabilities` includes `world.create` — never inferred.
 export function WorldsPage() {
     const { bootstrap } = useAuthenticatedSession()
@@ -31,7 +35,7 @@ export function WorldsPage() {
         `${worldsListPath(filter)}&limit=100`,
     )
     const headingRef = usePageArrival(state.kind !== "loading")
-    const canCreate = bootstrap.global_capabilities?.includes("world.create") === true
+    const canCreate = canCreateWorlds(bootstrap)
 
     return (
         <div className="world-page">
@@ -40,8 +44,8 @@ export function WorldsPage() {
                     Worlds
                 </h1>
                 <p className="authoring-page__lead">
-                    Worlds you own. A world holds its timelines and the campaigns played on
-                    them.
+                    Worlds you have access to. A world holds its timelines and the campaigns
+                    played on them.
                 </p>
 
                 {canCreate ? (
@@ -85,12 +89,15 @@ export function WorldsPage() {
                                 <li className="authoring-list__item" key={world.world_id}>
                                     <div>
                                         <h2>
-                                            <Link to={`/worlds/${world.world_id}`}>{world.name}</Link>
+                                            <WorldName world={world} />
                                         </h2>
                                         {world.description ? (
                                             <p className="authoring-field__hint">{world.description}</p>
                                         ) : null}
                                     </div>
+                                    {worldAccess(world) === "view" ? (
+                                        <span className="authoring-badge">View only</span>
+                                    ) : null}
                                     {world.lifecycle_status === "archived" ? (
                                         <LifecycleBadge status="archived" />
                                     ) : null}
@@ -105,4 +112,9 @@ export function WorldsPage() {
             </div>
         </div>
     )
+}
+
+function WorldName({ world }: { world: WorldSummary }) {
+    const to = worldDestination(world)
+    return to === null ? <>{world.name}</> : <Link to={to}>{world.name}</Link>
 }

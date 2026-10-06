@@ -54,9 +54,11 @@ export interface SessionBootstrap {
   // whether to render an admin surface at all (CP 10's /admin/accounts
   // page) — campaign-scoped access.manage grants nothing here.
   is_platform_administrator: boolean
-  // Phase 14: server-computed global (non-campaign) capabilities, currently
-  // `world.create` for human principals. Optional only so older fixtures keep
-  // compiling; the server always sends it. Never inferred client-side.
+  // Server-computed global (non-campaign) capabilities for this user. Today
+  // only `world.create`, present only for an active platform administrator or
+  // a user with an effective built-in GM assignment (ADR 0018) — never every
+  // human. Optional only so older fixtures keep compiling; the server always
+  // sends it. Never inferred client-side (see utils/worldAccess.ts).
   global_capabilities?: readonly string[]
   // Server-computed landing campaign (docs/UI_DESIGN.md §4.2): null means
   // "no campaign to resume" and the portal lands on /campaigns. Always null or

@@ -69,9 +69,13 @@ describe("CreateWorldPage", () => {
         expect(screen.getByRole("checkbox", { name: "House Rules" })).toBeInTheDocument()
     })
 
-    it("is unavailable without the server-computed world.create capability", async () => {
-        setup({ bootstrap: bootstrapWith({ global_capabilities: [] }) })
-        expect(await screen.findByRole("alert")).toHaveTextContent("do not have permission")
+    it("renders not-found and requests nothing without the server-computed world.create", async () => {
+        // Defense in depth behind CreateWorldRoute: mounted directly, the page
+        // still renders no form and never asks for rulesets.
+        const { server } = setup({ bootstrap: bootstrapWith({ global_capabilities: [] }) })
+        expect(await screen.findByRole("heading", { name: "Page not found" })).toBeInTheDocument()
+        expect(screen.queryByRole("textbox", { name: /World name/ })).toBeNull()
+        expect(server.calls).toEqual([])
     })
 
     it("shows field errors from the client-side mirrors, focuses the summary, and sends nothing", async () => {

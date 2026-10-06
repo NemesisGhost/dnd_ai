@@ -41,6 +41,40 @@ describe("WorldsPage", () => {
         expect(document.body.textContent).not.toContain("w1")
     })
 
+    it("links each world by its own server-computed access and never links one without access", async () => {
+        const server = installMockServer()
+        server.on("GET", /^\/worlds\?status=active/, {
+            body: {
+                items: [
+                    world("w1", "Editable", { capabilities: ["world.view", "world.manage"] }),
+                    world("w2", "Viewable", { capabilities: ["world.view"] }),
+                    world("w3", "Opaque", { capabilities: [] }),
+                ],
+                next_cursor: null,
+            },
+        })
+        render(bootstrapWith({ global_capabilities: [] }))
+
+        // Editable: the authoring overview, with no "View only" marker.
+        const editable = await screen.findByRole("link", { name: "Editable" })
+        expect(editable).toHaveAttribute("href", "/worlds/w1")
+        const editableItem = editable.closest("li")!
+        expect(editableItem).not.toHaveTextContent("View only")
+
+        // View-only: the read-only overview, marked as such.
+        const viewable = screen.getByRole("link", { name: "Viewable" })
+        expect(viewable).toHaveAttribute("href", "/worlds/w2")
+        expect(viewable.closest("li")).toHaveTextContent("View only")
+
+        // No world access: listed by name only, no link.
+        expect(screen.getByText("Opaque")).toBeInTheDocument()
+        expect(screen.queryByRole("link", { name: "Opaque" })).not.toBeInTheDocument()
+
+        // Only links for worlds the server returned, and no creation action.
+        const hrefs = screen.getAllByRole("link").map((link) => link.getAttribute("href"))
+        expect(hrefs).toEqual(["/worlds/w1", "/worlds/w2"])
+    })
+
     it("focuses the page heading once loaded", async () => {
         installMockServer().on("GET", /^\/worlds/, { body: { items: [], next_cursor: null } })
         render()

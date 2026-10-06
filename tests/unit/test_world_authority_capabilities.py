@@ -3,7 +3,7 @@ import uuid
 import pytest
 
 from dnd_ai.domain.world_authority import (
-    HUMAN_GLOBAL_CAPABILITIES,
+    GLOBAL_CAPABILITIES,
     WORLD_ROLE_CAPABILITIES,
     WorldAuthority,
     capabilities_for_roles,
@@ -47,4 +47,4 @@ def test_world_codes_are_not_campaign_capability_codes() -> None:
 
 
 def test_only_world_create_is_global() -> None:
-    assert {"world.create"} == HUMAN_GLOBAL_CAPABILITIES
+    assert {"world.create"} == GLOBAL_CAPABILITIES

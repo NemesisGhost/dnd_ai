@@ -33,6 +33,7 @@ const worldBody = {
   lifecycle_status: "active",
   row_version: 1,
   primary_timeline_id: "timeline-primary",
+  capabilities: ["campaign.create", "timeline.manage", "world.manage", "world.view"],
   allowed_rulesets: [],
   timelines: [
     timeline("timeline-primary", "Primary Timeline"),
@@ -66,7 +67,14 @@ beforeEach(() => {
   server = installMockServer()
   server.on("GET", /^\/worlds\?status=/, {
     body: {
-      items: [{ world_id: "world-mundivita", name: "Mundivita", description: null }],
+      items: [
+        {
+          world_id: "world-mundivita",
+          name: "Mundivita",
+          description: null,
+          capabilities: ["campaign.create", "timeline.manage", "world.manage", "world.view"],
+        },
+      ],
       next_cursor: null,
     },
   })

@@ -12,13 +12,14 @@ from typing import Any
 from sqlalchemy import Connection, text
 
 from tests.authoring_support import Actor, AuthoringHarness
-from tests.builders import dnd5e_ids
+from tests.builders import dnd5e_ids, make_world_creator
 
 
 def _make_world_and_campaign(
     gm: Actor, name: str, ruleset: tuple[uuid.UUID, uuid.UUID]
 ) -> tuple[uuid.UUID, str]:
     ruleset_id, ruleset_version_id = ruleset
+    make_world_creator(gm.harness.connection, gm.user_id)
     created = gm.post(
         "/worlds",
         {

@@ -8,12 +8,15 @@ import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { usePageArrival } from "../hooks/usePageArrival"
 import type { WorldDetail } from "../types/worldAuthoring"
 import { ERROR_CODE_MESSAGE } from "../utils/authoringValidation"
+import { worldAccess } from "../utils/worldAccess"
 import "../components/authoring/authoring.css"
 
 // A world's overview: details, its timelines as a lineage, the campaigns the
 // caller manages on it, and the actions the *server* says are available. A
 // blocked action is explained with the server's stable reason instead of being
-// hidden or silently disabled.
+// hidden or silently disabled. A world the server returns without
+// `world.manage` (view only) renders read-only: no create, edit, archive,
+// restore, timeline-authoring, or campaign-creation controls or links at all.
 export function WorldOverviewPage() {
     const { worldId = "" } = useParams()
     const { state, refetch } = useAuthoringResource<WorldDetail>(worldPath(worldId))
@@ -51,15 +54,54 @@ export function WorldOverviewPage() {
                         </h1>
                         <p role="alert">The world could not be loaded. Try reloading the page.</p>
                     </>
-                ) : (
+                ) : worldAccess(state.data) === "edit" ? (
                     <WorldOverview
                         world={state.data}
                         headingRef={headingRef}
                         refetch={refetch}
                     />
+                ) : (
+                    <ReadOnlyWorldOverview world={state.data} headingRef={headingRef} />
                 )}
             </div>
         </div>
+    )
+}
+
+interface ReadOnlyWorldOverviewProps {
+    world: WorldDetail
+    headingRef: RefObject<HTMLHeadingElement | null>
+}
+
+function ReadOnlyWorldOverview({ world, headingRef }: ReadOnlyWorldOverviewProps) {
+    return (
+        <>
+            <h1 ref={headingRef} tabIndex={-1}>
+                {world.name}
+            </h1>
+            <p>
+                <span className="authoring-badge">View only</span>{" "}
+                {world.lifecycle_status === "archived" ? <LifecycleBadge status="archived" /> : null}
+            </p>
+            {world.description ? <p>{world.description}</p> : null}
+
+            <section className="authoring-section" aria-labelledby="world-rulesets-heading">
+                <h2 id="world-rulesets-heading">Rulesets</h2>
+                <ul>
+                    {world.allowed_rulesets.map((ruleset) => (
+                        <li key={ruleset.ruleset_id}>
+                            {ruleset.display_name}
+                            {ruleset.is_default ? " (default)" : ""}
+                        </li>
+                    ))}
+                </ul>
+            </section>
+
+            <section className="authoring-section" aria-labelledby="world-timelines-heading">
+                <h2 id="world-timelines-heading">Timelines</h2>
+                <TimelineTree worldId={world.world_id} timelines={world.timelines} linked={false} />
+            </section>
+        </>
     )
 }
 

@@ -13,6 +13,7 @@ const WORLD = (actions: string[]) => ({
     lifecycle_status: "active",
     row_version: 1,
     primary_timeline_id: "t1",
+    capabilities: ["campaign.create", "timeline.manage", "world.manage", "world.view"],
     allowed_rulesets: [],
     timelines: [],
     managed_campaigns: [],

@@ -114,6 +114,8 @@ function nav() {
 const worldDetail = {
     world_id: "world-a",
     name: "World A",
+    // world_owner's server-computed world capabilities.
+    capabilities: ["campaign.create", "timeline.manage", "world.manage", "world.view"],
     timelines: [
         { timeline_id: "timeline-a", name: "Timeline A" },
         { timeline_id: "timeline-b", name: "Timeline B" },
@@ -798,6 +800,12 @@ describe("PortalSidebar Worlds group (Phase 14)", () => {
         )
         openWorlds()
         expect(within(nav()).queryByRole("link", { name: "New world" })).toBeNull()
+        // The slot stays visible as a disabled, non-focusable non-anchor.
+        const slot = disabledEntry("New world")
+        expect(slot.tagName).not.toBe("A")
+        expect(slot).not.toHaveAttribute("href")
+        expect(slot).not.toHaveAttribute("tabindex")
+        expect(slot).toHaveAccessibleDescription("Not available for your account")
     })
 
     it("does not infer creation when the bootstrap carries no global capabilities", () => {
@@ -1262,6 +1270,23 @@ describe("PortalSidebar World authoring navigation on a campaign route", () => {
         expect(within(nav()).getByRole("link", { name: "Campaign world" })).toHaveAttribute(
             "href",
             "/app/campaign-a/world",
+        )
+    })
+
+    it("gives a view-only world its read-only overview but no timeline-authoring destination", async () => {
+        server.on("GET", "/worlds/world-a", {
+            body: { ...worldDetail, capabilities: ["world.view"] },
+        })
+        renderSidebar("/app/campaign-a/home", campaignState())
+        openWorlds()
+
+        expect(
+            await within(nav()).findByRole("link", { name: "World overview" }),
+        ).toHaveAttribute("href", "/worlds/world-a")
+        expect(within(nav()).getByRole("link", { name: "Timelines" })).toBeInTheDocument()
+        expect(within(nav()).queryByRole("link", { name: "Timeline overview" })).toBeNull()
+        expect(disabledEntry("Timeline overview")).toHaveAccessibleDescription(
+            "Not available for your account",
         )
     })
 

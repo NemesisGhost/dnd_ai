@@ -10,6 +10,13 @@ platform administration, and never inferred by a client.
 
 `WorldAuthority` is the resolved snapshot a route or command receives. It is
 the analogue of `dnd_ai.domain.access.AccessContext` for the world aggregate.
+
+World *creation* is the one global, not per-world, capability (`world.create`,
+below). It is the deliberate exception to "never derived from campaign roles or
+platform administration": docs/adr/0018-world-creation-eligibility.md makes it
+exactly "active platform administrator, or effective built-in `gm`". Creating a
+world grants the creator `world_owner` on that world and nothing broader;
+being an administrator or a GM confers no authority over any existing world.
 """
 
 import uuid
@@ -20,10 +27,20 @@ WORLD_MANAGE = "world.manage"
 TIMELINE_MANAGE = "timeline.manage"
 CAMPAIGN_CREATE = "campaign.create"
 
-# Global (not world-scoped) capability: any active human principal may create
-# a world (ADR 0014, D3). Foundry device principals and machine principals
-# never hold it — `dnd_ai.api.auth.require_human_user_id` is the gate.
+# Global (not world-scoped) capability. Held only by an active platform
+# administrator or an active user with an effective assignment of the built-in
+# `gm` system-template role (ADR 0018, which amends ADR 0014 D3). It is
+# computed per user from the database by
+# `dnd_ai.queries.world_authority.may_create_worlds` — never granted statically
+# — and `create_world` enforces that same policy in its own transaction.
+# Foundry device principals and machine principals never hold it:
+# `dnd_ai.api.auth.require_human_user_id` refuses them before the policy runs.
 WORLD_CREATE = "world.create"
+
+# The `security.roles.code` of the built-in (campaign_id IS NULL) system
+# template whose effective holders may create worlds. A campaign-scoped custom
+# role with the same code is a different role and never qualifies.
+WORLD_CREATOR_SYSTEM_ROLE_CODE = "gm"
 
 WORLD_OWNER_ROLE = "world_owner"
 
@@ -31,7 +48,9 @@ WORLD_ROLE_CAPABILITIES: dict[str, frozenset[str]] = {
     WORLD_OWNER_ROLE: frozenset({WORLD_VIEW, WORLD_MANAGE, TIMELINE_MANAGE, CAMPAIGN_CREATE}),
 }
 
-HUMAN_GLOBAL_CAPABILITIES: frozenset[str] = frozenset({WORLD_CREATE})
+# Every global capability code that exists. Membership is per user and
+# database-resolved; this set only names the closed vocabulary.
+GLOBAL_CAPABILITIES: frozenset[str] = frozenset({WORLD_CREATE})
 
 
 @dataclass(frozen=True)
