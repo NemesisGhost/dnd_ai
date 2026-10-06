@@ -35,6 +35,7 @@ import {
   EditDungeonPage,
 } from "./pages/DungeonAuthoringPages"
 import { KnowledgeAudiencePage } from "./pages/KnowledgeAudiencePage"
+import { NpcPortrayalPage } from "./pages/NpcPortrayalPage"
 import { QuestProgressPage } from "./pages/QuestProgressPage"
 import { CreatePartyPage, EditPartyPage, PartiesPage } from "./pages/PartyPages"
 import {
@@ -317,6 +318,11 @@ function App() {
             <Route
               path="characters/:characterId/builds/new"
               element={<CreateCharacterBuildPage />}
+            />
+
+            <Route
+              path="characters/:characterId/portrayal"
+              element={<NpcPortrayalPage />}
             />
 
             <Route

@@ -9,6 +9,7 @@ import type { CharacterBuilds } from "../types/characterBuilds"
 import type { PlayerCharacterAuthoringView } from "../types/npcAuthoring"
 import { AuthoringEditLink } from "./AuthoringEditLink"
 import { EntityLifecyclePanel } from "./EntityLifecyclePanel"
+import { NpcRuntimePanel } from "./NpcRuntimePanel"
 
 interface NpcAuthoringControlsProps {
     campaignId: string
@@ -41,7 +42,9 @@ export function NpcAuthoringControls({ campaignId, characterId }: NpcAuthoringCo
                 detail={changes}
             />
             <PlayerAccessLink campaignId={campaignId} characterId={characterId} detail={changes} />
+            <PortrayalLink campaignId={campaignId} characterId={characterId} detail={changes} />
             <BuildsLink campaignId={campaignId} characterId={characterId} />
+            <NpcRuntimePanel campaignId={campaignId} characterId={characterId} />
             <EntityLifecyclePanel
                 campaignId={campaignId}
                 entityId={characterId}
@@ -123,6 +126,40 @@ function LoadedBuildsLink({ campaignId, characterId }: NpcAuthoringControlsProps
                 to={`/app/${encodeURIComponent(campaignId)}/characters/${encodeURIComponent(characterId)}/builds`}
             >
                 Builds and starting state
+            </Link>
+        </p>
+    )
+}
+
+// For an NPC, editors get a link to how it is played (its portrayal profile).
+function PortrayalLink({
+    campaignId,
+    characterId,
+    detail,
+}: NpcAuthoringControlsProps & { detail: number }) {
+    if (!useCampaignCapability(campaignId, "canon.edit")) {
+        return null
+    }
+    return <LoadedPortrayalLink campaignId={campaignId} characterId={characterId} detail={detail} />
+}
+
+function LoadedPortrayalLink({
+    campaignId,
+    characterId,
+    detail,
+}: NpcAuthoringControlsProps & { detail: number }) {
+    const { state } = useAuthoringResource<unknown>(
+        `${npcAuthoringPath(campaignId, characterId)}${detail === 0 ? "" : `?v=${detail}`}`,
+    )
+    if (state.kind !== "ready") {
+        return null
+    }
+    return (
+        <p>
+            <Link
+                to={`/app/${encodeURIComponent(campaignId)}/characters/${encodeURIComponent(characterId)}/portrayal`}
+            >
+                How this NPC is played
             </Link>
         </p>
     )

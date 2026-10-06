@@ -8,6 +8,7 @@ export interface TravelBody {
     character_ids: string[]
     party_id: string | null
     route_id: string | null
+    world_time_id?: string
 }
 
 export interface TravelReceipt {
