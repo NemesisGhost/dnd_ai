@@ -102,6 +102,8 @@ def test_only_the_reviewed_owned_rows_are_cascade_deleted(db_connection: Connect
         "character_languages",
         "character_movements",
         "character_senses",
+        # Phase 15.3A-3: the NPC's versioned portrayal profile.
+        "npc_portrayal_profiles",
         # Phase 15.1: a quest's own definition rows.
         "quests",
         "quest_stages",

@@ -64,6 +64,7 @@ MANAGED_TABLES = [
     ("rules", "feats"),
     ("rules", "spells"),
     ("character", "characters"),
+    ("character", "npc_portrayal_profiles"),
     ("character", "npcs"),
     ("character", "player_characters"),
     ("character", "character_descriptions"),

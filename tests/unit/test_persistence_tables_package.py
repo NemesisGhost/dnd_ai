@@ -115,6 +115,7 @@ EXPECTED_TABLES = {
         "character.character_senses",
         "character.character_spellcasting_profiles",
         "character.characters",
+        "character.npc_portrayal_profiles",
         "character.npcs",
         "character.player_characters",
     ],

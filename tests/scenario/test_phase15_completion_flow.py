@@ -588,3 +588,29 @@ def test_a_gm_sets_up_and_runs_a_campaign(
         status=200,
     )
     assert journey["moved"] == [pc_id] and journey["event_id"]
+
+    # --- Step 20 (15.3A-3): an NPC gets a detail level and a versioned portrayal profile ----
+    species = s.gm.get(f"{authoring}/npcs/options").json()["species"][0]["species_id"]
+    npc = write(
+        f"{authoring}/npcs", {"name": "Mira", "species_id": species, "size_category": "medium"}
+    )
+    portrayal = f"{authoring}/npcs/{npc['npc_id']}/portrayal"
+    first_profile = write(
+        portrayal,
+        {"expected_version": 0, "voice": "Low and gravelly", "emotional_baseline": "Wary"},
+        status=200,
+    )
+    assert first_profile["current_version"] == 1
+    second_profile = write(
+        portrayal,
+        {"expected_version": 1, "voice": "Low and gravelly", "mannerisms": "Taps the table"},
+        status=200,
+    )
+    assert second_profile["current_version"] == 2
+    leveled = write(
+        f"{authoring}/npcs/{npc['npc_id']}/detail-level",
+        {"expected_row_version": second_profile["row_version"], "detail_level": "major"},
+        status=200,
+    )
+    assert leveled["detail_level"] == "major"
+    assert s.player.get(portrayal).status_code == 403

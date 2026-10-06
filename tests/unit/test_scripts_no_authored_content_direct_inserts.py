@@ -103,6 +103,8 @@ _TABLES = (
     # Phase 15.3A-2c routes and travel.
     "world.route_relationships",
     "campaign.character_location_history",
+    # Phase 15.3A-3 NPC portrayal.
+    "character.npc_portrayal_profiles",
     "narrative.objective_dependencies",
     "knowledge.knowledge_items",
 )
