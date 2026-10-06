@@ -8,6 +8,7 @@ import {
 } from "../api/world"
 import { CharacterBoundary } from "../components/CharacterBoundary"
 import { NpcAuthoringControls } from "../components/NpcAuthoringControls"
+import { OrganizationMembers } from "../components/OrganizationMembers"
 import { RelationshipsPanel } from "../components/RelationshipsPanel"
 import { WorldEntityDetailBoundary } from "../components/WorldEntityDetailBoundary"
 import { isWorldDetailCategory } from "../types/world"
@@ -80,6 +81,7 @@ export function CampaignWorldDetailPage() {
                             campaignId={campaignId}
                             organization={organization}
                         />
+                        <OrganizationMembers campaignId={campaignId} organizationId={entityId} />
                         <RelationshipsPanel campaignId={campaignId} entityId={entityId} />
                     </>
                 )}

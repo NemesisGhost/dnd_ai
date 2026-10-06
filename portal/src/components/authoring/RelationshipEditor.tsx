@@ -152,6 +152,8 @@ function DetailsForm({
     const [isPublic, setIsPublic] = useState(view.typed.is_public === false ? "no" : "yes")
     const [active, setActive] = useState(view.typed.is_active === false ? "no" : "yes")
     const [terms, setTerms] = useState(text(view.typed.treaty_terms))
+    const [office, setOffice] = useState(text(view.typed.role))
+    const [rank, setRank] = useState(text(view.typed.rank))
     const [problem, setProblem] = useState<string | null>(null)
 
     function typedFields(): TypedFields {
@@ -160,6 +162,11 @@ function DetailsForm({
         if (view.kind === "employment") typed.job_title = title.trim() === "" ? null : title.trim()
         if (view.kind === "ownership") {
             typed.ownership_share = num(share)
+            typed.is_public = isPublic === "yes"
+        }
+        if (view.kind === "membership") {
+            typed.role = office.trim() === "" ? null : office.trim()
+            typed.rank = rank.trim() === "" ? null : rank.trim()
             typed.is_public = isPublic === "yes"
         }
         if (view.kind === "political") {
@@ -225,6 +232,22 @@ function DetailsForm({
                         onChange={setShare}
                         error={problem}
                     />
+                    <SelectField
+                        id={`rel-public-${view.relationship_id}`}
+                        label="Known to the public"
+                        value={isPublic}
+                        options={[
+                            { value: "yes", label: "Yes" },
+                            { value: "no", label: "No, only editors see it" },
+                        ]}
+                        onChange={setIsPublic}
+                    />
+                </>
+            ) : null}
+            {view.kind === "membership" ? (
+                <>
+                    <TextField id={`rel-office-${view.relationship_id}`} label="Office or role" value={office} onChange={setOffice} />
+                    <TextField id={`rel-rank-${view.relationship_id}`} label="Rank" value={rank} onChange={setRank} />
                     <SelectField
                         id={`rel-public-${view.relationship_id}`}
                         label="Known to the public"

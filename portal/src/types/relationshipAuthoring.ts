@@ -88,6 +88,8 @@ export interface TypedFields {
     is_public?: boolean
     is_active?: boolean
     treaty_terms?: string | null
+    role?: string | null
+    rank?: string | null
 }
 
 export interface CreateRelationshipBody extends TypedFields {
