@@ -480,6 +480,8 @@ Area connections support normal doors, secret doors, passages, portals, stairs/l
 
 Definitions describe what can exist. Timeline state (§17) describes what is currently open, destroyed, active, occupied, or depleted — kept mutation-safe by the five `campaign.*_state` tables' own `updated_at` triggers (revision 046, closing a gap where revision 040 declared the column but never attached `core.set_updated_at()`).
 
+**Authoring (Phase 15.3A-1, revision 128).** `dungeon` and `dungeon_area` are lifecycle-eligible entity types, so a dungeon and its areas are authored as drafts and published separately (an area needs its dungeon published first; a dungeon cannot be archived while it has active areas). The dungeon's `core.entities.row_version` is the aggregate version: it moves for every structural child (connection, feature, hazard, interactable) of every area, while each area versions its own fields. Runtime state is written only by `commands/dungeon_state.py` (and by the interaction commands), one `dungeon_state_changed` event per change, through the `last_event_id` column each `campaign.*_state` table already has. The authoring and correction paths do not change the schema beyond the one new event type.
+
 ### 9.3 Discovery versus existence
 
 A hidden feature exists independently of whether a party knows about it. Do not store `is_discovered` as a global property of a feature — discovery belongs to the knowledge model (§15) and may differ by party or character.

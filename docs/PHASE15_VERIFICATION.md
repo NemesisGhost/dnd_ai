@@ -381,3 +381,25 @@ Not verified: CI; manual browser/accessibility (the forms and comboboxes with a 
 
 
 Commands run (local PostgreSQL 18): ruff format/check and mypy clean; portal `npm test` (282 files, 2059 tests) / `npm run lint` / `npm run build` clean. Full Python suite on the final tree, no other database session active: 6013 passed, 1 failed (the known developer-`.env` test), 1221 s.
+
+## Checkpoint 15.3A-1 — dungeon structure and GM state
+
+Commit(s) on `phase15/completion`. **Status: implemented; local automated gates below; CI and manual browser/accessibility checks not performed.** Decision D-31 (option a: the dungeon root `row_version` covers its structural children; an area versions its own fields) applied as recommended.
+
+| Area | Delivered |
+|---|---|
+| Registry and gating | `dungeon` and `dungeon_area` join the lifecycle registry (and so every read-side visibility gate that uses it). Publish preconditions: a dungeon needs a published parent location, an area a published dungeon. Archive precondition: a dungeon with active areas cannot be archived (`dungeon_has_active_areas`). The player-facing dungeon-area read now answers not-found for an unpublished area or dungeon and omits connections to areas the reader cannot see. The five structural child FKs are classified `OWNED_CASCADE`. |
+| Migration | `128_dungeon_state_event`: the event type `dungeon_state_changed` (the plan expected no migration; one event type was needed). Round trip with `alembic check`. |
+| Commands | `commands/dungeons.py` (create and update a dungeon and an area; add, update and remove connections, features, hazards and interactables, all against the dungeon version; removal only while a draft) and `commands/dungeon_state.py` (`set_dungeon_state` for an area, a connection, a feature, a hazard or an interactable, with a last-event token, an event and one effect per component). |
+| Event correction | The E-1 catalog reverses dungeon state (restoring previous values, or removing a state row a first write created), including the interaction commands' own effects on the same rows, while the row is still the one the event last wrote. |
+| API | `/campaigns/{id}/authoring/dungeons...` and `.../dungeon-areas/{id}` (read and update), and `POST /campaigns/{id}/dungeon-areas/{id}/state`; `canon.edit`, campaign idempotency, audit rows with content redacted, a revision of the authored aggregate for each real change. |
+| Portal | Create and edit pages for a dungeon and an area, with areas, connections, contents and the state panel; an edit link on dungeon and area detail pages; the content-edit shell gains an optional sections-after-the-form hook. |
+| Dev data | The guard now covers the dungeon tables and the five dungeon state tables; three fixture sites in the dev-data script are marked. |
+| Tests | 13 API tests (drafts and areas; the dungeon and area versions; publish order and the archive block; a published parent location; versions of children and connections; connection rules; removal only while a draft; what players see; each kind of state; tokens, values and targets; published areas and the clock; correcting a state change; authority, replay and foreign dungeons), 3 real-PostgreSQL races (two structural edits from one version, an archive vs adding an area, two first state writes), a migration round trip, 11 portal tests, and scenario step 16. |
+
+Decisions applied (not owner decisions): authoring joins areas of one dungeon (the schema still allows teleportation links across dungeons; existing ones are untouched); a conditional route's machine-checkable requirement fields are not authored yet (only the description); state changes use the campaign clock or a time given in the request; connection state is shown on both of its areas.
+
+Not verified: CI; manual browser/accessibility (the inline forms and the state panel; narrow width); the discovery of hidden children is unchanged and was not re-verified beyond the existing suites.
+
+
+Commands run (local PostgreSQL 18): ruff format/check and mypy clean; portal `npm test` (283 files, 2070 tests; two unrelated tests flaked once under load and passed on rerun) / `npm run lint` / `npm run build` clean. Full Python suite on the final tree, no other database session active: 6054 passed, 1 failed (the known developer-`.env` test), 1585 s. (An earlier run showed two downgrade-ordering failures that came from an orphaned second pytest session sharing the database; they pass alone and in the clean rerun.)
