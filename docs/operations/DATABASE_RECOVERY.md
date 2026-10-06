@@ -1,5 +1,7 @@
 # Database Recovery Operations
 
+> **Before upgrading to revision `135_scrub_narrative_text`:** it permanently scrubs narrative text from audit and replay rows. Take a fresh backup immediately before `upgrade`; after it, take another and retire older backups under the ADR 0016 backup policy. A downgrade does not restore the scrubbed values; restore the pre-upgrade backup if they are needed.
+
 > **Status: accepted production deliverable.** The recovery
 > implementation completed its final production review at commit `f0572d0`.
 > Further speculative review is not an acceptance gate. Validate it in

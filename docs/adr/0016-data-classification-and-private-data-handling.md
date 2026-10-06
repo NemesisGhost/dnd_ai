@@ -39,11 +39,24 @@ Phase 15 completion found current defects in how authored content moved through 
    - *Host administrator:* the machine or database administrator can inspect stored data. The product promises application-level role privacy, not secrecy from the host administrator.
 8. **Outcomes of related decisions:** D-3 (GM-only free text: `origin_notes`, `condition_notes`, `events.details`, hidden from callers without `canon.edit`), D-4 (`sensitive_read` in `audit.change_log`), D-27 (receipts), D-5 (deny-by-default `app_read_only`) are implemented. D-2 and D-28 (scrubbing rows written before this decision) are decided separately at checkpoint 15.2A-4 and recorded there as an addendum.
 
+## Addendum: existing rows (D-2 and D-28, checkpoint 15.2A-4)
+
+Owner decision, 2026-10-07 (written, in the working session): "Let's go with your recommendations for D-2 & D-28." The recommendations were: scrub existing audit `changed_fields` prose (limited to the frozen prose keys of the frozen pre-15.2A-3 authoring commands); keep `reason`; rewrite existing completed idempotency response bodies of those commands to receipts; mark every modified row and record one bounded maintenance audit row.
+
+Implemented by migration `135_scrub_narrative_text`:
+
+- **Audit (D-2).** For rows of the frozen list of pre-15.2A-3 authoring commands, each frozen prose key's value in `changed_fields` becomes `{"redacted": true}` (the update shape with each side redacted; null stays null). `reason` is kept: it is a GM-authored audit note, GM-only and bounded, never projected to players. Ids, actor, action, command name, correlation id, timestamps, status columns and every non-prose key are never touched.
+- **Replay (D-28).** Completed `security.idempotent_requests` rows whose body has the shape of an authoring view are rewritten to a receipt (ids, flags, numbers, short closed codes); the key, fingerprint, status code, actor and timestamps are unchanged, so a replay still matches and now returns the receipt.
+- **Markers.** Each modified row gains `"_redacted_by": "135_scrub_narrative_text"`, and one maintenance row in `audit.change_log` (`actor_service = 'migration'`) records the revision, the count of modified audit rows per command, and the count of rewritten replay rows.
+- **Preconditions.** Inside the migration transaction and before any update, every candidate row is validated against the frozen lists; an unexpected shape raises and changes nothing.
+- **Irreversible.** Downgrade restores nothing. Backups taken before the migration still hold the narrative until they are retired under the backup policy above; take a fresh backup after the migration and retire older ones.
+- **Defect found and fixed in the same checkpoint.** Routes added after 15.2A-3 (relationships, NPC portrayal, items, item definitions, dungeons, encounters, sources) stored full authoring views, including GM-only text, in replay rows. Replay storage now keeps only `replay_body` (ids, flags, numbers, codes) for every authoring route, and the migration's replay predicate covers those shapes too.
+
 ## Consequences
 
 - A new free-text column cannot ship without a classification, and a new previewable resource cannot ship without a reviewed adapter.
 - Audit history no longer answers "what did the text say before the edit"; prior versions come from the revision store, and until that exists there is no prior-version feature.
-- Pre-existing audit and idempotency rows keep their old content until the owner-gated scrub; the limitation is disclosed in PHASE15_VERIFICATION.
+- Pre-existing audit and idempotency rows were scrubbed by migration 135 (see the addendum); only backups taken before it still hold the old content.
 - Phase 16 inherits these rules; it may add `collaboration` tables only with classifications, receipt-only mutations, no reporting grant, and no preview adapter without a new decision.
 
 ## References

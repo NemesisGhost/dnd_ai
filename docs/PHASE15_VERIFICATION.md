@@ -2,7 +2,7 @@
 
 Evidence for Phase 15.1 (GM world-content definitions) on branch `phase15/gm-authoring`, recorded against [PLAN.md Phase 15](PLAN.md) and [ADR 0015](adr/0015-typed-world-content-authoring.md). **Status: implementation complete and merged (PR #65, `60d5bc9`); automated gates green; manual browser and accessibility verification NOT performed** (see below). Phase 15.1 is a **subset** of Phase 15: **Phase 15 as a whole is incomplete**, and the remaining campaign-operations and world-structure work is the checkpoint sequence in [PLAN.md Phase 15](PLAN.md). Phase 16 is blocked by the Phase 15 completion gate.
 
-**Disclosed limitations (2026-10-05):** audit rows written by the 15.1 commands *before checkpoint 15.2A-3* copy up to 1,000 characters of narrative per field into `audit.change_log.changed_fields`, and the 15.1 authoring routes stored the full authoring view, including GM-only notes and background, in idempotency replay rows. **New writes no longer do either (15.2A-3, resolved).** Existing rows remain until the owner-gated checkpoint 15.2A-4. Audience-preview reads are audited as of 15.2A-3.
+**Disclosed limitations (2026-10-05):** audit rows written by the 15.1 commands *before checkpoint 15.2A-3* copy up to 1,000 characters of narrative per field into `audit.change_log.changed_fields`, and the 15.1 authoring routes stored the full authoring view, including GM-only notes and background, in idempotency replay rows. **New writes no longer do either (15.2A-3, resolved).** Existing rows were scrubbed by checkpoint 15.2A-4 (migration 135, owner decision 2026-10-07); only backups taken before it still hold the old content. Audience-preview reads are audited as of 15.2A-3.
 
 ## What was delivered
 
@@ -605,3 +605,21 @@ Not verified: CI; manual browser/accessibility (the comparison at ultrawide and 
 
 
 Local gates for 15.3C-2: `ruff format`/`ruff check` and `mypy src` clean; portal 2178 tests passed, lint and build clean; full Python suite 6219 passed, 1 failed (the known developer-`.env` origin test in `tests/unit/test_config.py`).
+
+## Checkpoint 15.2A-4 — Existing-data scrub (owner-gated)
+
+Commit(s) on `phase15/completion`. **Status: implemented; local automated gates below; CI not performed.** There is no manual step for this checkpoint.
+
+**Owner decision, 2026-10-07 (written, in the working session): "Let's go with your recommendations for D-2 & D-28." The recommendations were: scrub existing audit `changed_fields` prose (limited to the frozen prose keys of the frozen pre-15.2A-3 authoring commands); keep `reason`; rewrite existing completed idempotency response bodies of those commands to receipts; mark every modified row and record one bounded maintenance audit row.**
+
+| Area | Delivered |
+|---|---|
+| Decision applied | D-2: scrub existing audit prose (frozen commands and keys), keep `reason`. D-28: rewrite existing authoring-view replay bodies to receipts. Marker on each modified row plus one maintenance audit row. Pre-validation aborts on any unexpected shape. Irreversible; backups. |
+| Migration | `135_scrub_narrative_text` (the id is kept within Alembic's 32-character limit). Frozen lists in the file: 19 audit commands with their prose keys, the 28 structural keys as of 15.2A-3, and seven replay-view shapes. Plans every row first (raising on an unexpected shape before any update), then updates, then writes one maintenance row with counts. A row already redacted is neither changed nor counted. Keys added after 15.2A-3 are accepted only when their value is already safe (redacted, null, number, boolean or id). |
+| Future-write prevention | `replay_body` (domain) now filters every response stored through the authoring idempotency helper to ids, flags, numbers and closed codes. **Defect found while preparing the scrub:** routes added after 15.2A-3 (relationships, NPC portrayal, items, item definitions, dungeons, encounters, sources) stored full views with GM-only text in replay rows; fixed here, and the migration's replay predicate covers those shapes. A replay of those routes now returns a receipt; ten tests that compared the first response with the replay now compare the replay with `replay_body(first)`. The audit builders were already default-deny and a survey of the full scenario found no prose in audit rows. The clean-database scenario now ends with a permanent guard over every audit and replay row it wrote. |
+| Tests | 9 migration tests on a throwaway database populated at the previous revision (exact scrub per the frozen lists; every non-prose column and key identical; `reason` kept; rows with nothing to scrub untouched; markers; the maintenance row and counts; downgrade restores nothing and a second run finds nothing; six unexpected shapes each abort with zero changes and the version unchanged; empty database and `alembic check`), 3 API tests (replay of a scrubbed key returns the receipt and writes no audit or entity row; replay storage is minimal; audit carries no prose), 4 unit tests for `replay_body`, and the scenario guard. |
+
+Residual risk: backups taken before the migration contain the narrative until retired. The access-group family keeps full resource bodies in its replay rows (no narrative; their replay validates into models). The actor-scoped store (`/worlds`) keeps world, timeline and campaign views, whose descriptions are public or campaign-visible; both are outside the frozen predicate.
+
+
+Local gates for 15.2A-4: `ruff format`/`ruff check` and `mypy src` clean; full Python suite 6235 passed, 1 failed (the known developer-`.env` origin test in `tests/unit/test_config.py`). No portal code changed in this checkpoint, so the portal suite was not rerun.

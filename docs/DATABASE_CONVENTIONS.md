@@ -1196,6 +1196,8 @@ Audit:
 
 Audit tables are append-only to normal application roles.
 
+**One-time privacy remediation (Phase 15.2A-4, migration 135).** `audit.change_log` stays append-only to the application roles (the grant is unchanged). The single sanctioned exception is migration `135_scrub_narrative_text`, run as the migration owner: it replaces the narrative values that checkpoints before 15.2A-3 copied into `changed_fields` with `{"redacted": true}`, keeps every structural column and key (including `reason`), marks each modified row with `_redacted_by`, and records one maintenance row (`actor_service = 'migration'`). It is irreversible; a fresh backup is taken immediately before it runs. No other migration may edit audit rows.
+
 ### 24.3 Actor identity
 
 Audit records must identify:
