@@ -646,3 +646,30 @@
     gap: 0.25rem;
   }
 }
+
+/* A comparison table that scrolls sideways on a narrow screen instead of the page. */
+.authoring-table-scroll {
+    overflow-x: auto;
+}
+
+.authoring-table {
+    border-collapse: collapse;
+    width: 100%;
+    min-width: 32rem;
+}
+
+.authoring-table caption {
+    text-align: left;
+    font-weight: 600;
+    padding-bottom: 0.5rem;
+}
+
+.authoring-table th,
+.authoring-table td {
+    border: 1px solid currentColor;
+    padding: 0.4rem 0.6rem;
+    text-align: left;
+    vertical-align: top;
+    overflow-wrap: anywhere;
+}
+

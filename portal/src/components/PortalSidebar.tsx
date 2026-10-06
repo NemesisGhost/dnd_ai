@@ -6,6 +6,7 @@ import {
   Backpack,
   BookOpen,
   CalendarDays,
+  ClipboardCheck,
   LayoutList,
   MessageCircleQuestion,
   Package,
@@ -42,6 +43,12 @@ const campaignNavigationItems: NavigationItem[] = [
   { path: "quests", label: "Quests", icon: ScrollText },
   { path: "sessions", label: "Sessions", icon: CalendarDays },
   { path: "knowledge", label: "Knowledge", icon: BookOpen },
+  {
+    path: "review",
+    label: "Review",
+    icon: ClipboardCheck,
+    capability: "canon.edit",
+  },
   {
     path: "items",
     label: "Items",

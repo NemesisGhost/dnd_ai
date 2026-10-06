@@ -37,6 +37,7 @@ import {
 import { KnowledgeAudiencePage } from "./pages/KnowledgeAudiencePage"
 import { PrepareEncounterPage, PreparedEncounterPage } from "./pages/EncounterPages"
 import { ProvenancePage } from "./pages/ProvenancePage"
+import { ReviewQueuePage, RevisionHistoryPage } from "./pages/ReviewPages"
 import { ItemDefinitionFormPage, ItemDefinitionsPage } from "./pages/ItemDefinitionPages"
 import { CreateItemPage, EditItemPage, ItemsPage } from "./pages/ItemPages"
 import { NpcPortrayalPage } from "./pages/NpcPortrayalPage"
@@ -293,6 +294,13 @@ function App() {
               path="world/:category/:entityId/provenance"
               element={<ProvenancePage />}
             />
+
+            <Route
+              path="world/:category/:entityId/history"
+              element={<RevisionHistoryPage />}
+            />
+
+            <Route path="review" element={<ReviewQueuePage />} />
 
             <Route
               path="world/:category/:entityId"

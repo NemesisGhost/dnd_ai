@@ -37,13 +37,13 @@ export function ProvenancePage() {
             ) : state.kind !== "ready" ? (
                 <p role="alert">This record does not exist, or you do not have access to it.</p>
             ) : (
-                <Loaded view={state.data} />
+                <Loaded view={state.data} campaignId={campaignId} category={category} />
             )}
         </section>
     )
 }
 
-function Loaded({ view }: { view: Provenance }) {
+function Loaded({ view, campaignId, category }: { view: Provenance; campaignId: string; category: string }) {
     const current = view.links.filter((l) => l.is_attached)
     const past = view.links.filter((l) => !l.is_attached)
     return (
@@ -95,6 +95,13 @@ function Loaded({ view }: { view: Provenance }) {
                 </>
             ) : null}
 
+            <p>
+                <Link
+                    to={`/app/${encodeURIComponent(campaignId)}/world/${encodeURIComponent(category === "" ? "record" : category)}/${encodeURIComponent(view.entity_id)}/history`}
+                >
+                    Revision history and comparison
+                </Link>
+            </p>
             <h2>History</h2>
             {view.transitions.length === 0 ? <p>No lifecycle changes recorded.</p> : null}
             <ol className="authoring-choice-list">
