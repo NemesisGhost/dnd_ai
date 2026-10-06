@@ -548,3 +548,43 @@ def test_a_gm_sets_up_and_runs_a_campaign(
         == "dormant"
     )
     assert joined["kind"] == "membership"
+
+    # --- Step 19 (15.3A-2c): a route joins two places and the character travels along it ----
+    road = write(
+        f"{authoring}/relationships",
+        {
+            "kind": "route",
+            "relationship_type": "route",
+            "participants": [
+                {"entity_id": places[0], "role": "origin"},
+                {"entity_id": places[1], "role": "destination"},
+            ],
+            "distance_text": "40 miles",
+            "travel_mode": "On foot",
+            "is_hidden": True,
+        },
+    )
+    assert (
+        s.player.get(f"/campaigns/{s.cid}/relationships/{road['relationship_id']}").status_code
+        == 404
+    )
+    write(
+        f"/campaigns/{s.cid}/travel",
+        {
+            "destination_location_id": places[0],
+            "character_ids": [pc_id],
+            "world_time_id": opening["world_time_id"],
+        },
+        status=200,
+    )
+    journey = write(
+        f"/campaigns/{s.cid}/travel",
+        {
+            "destination_location_id": places[1],
+            "character_ids": [pc_id],
+            "route_id": road["relationship_id"],
+            "world_time_id": siege["world_time_id"],
+        },
+        status=200,
+    )
+    assert journey["moved"] == [pc_id] and journey["event_id"]

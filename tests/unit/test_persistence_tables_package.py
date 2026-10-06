@@ -235,6 +235,7 @@ EXPECTED_TABLES = {
         "world.ownership_relationships",
         "world.political_factions",
         "world.political_relationships",
+        "world.route_relationships",
         "world.relationship_participant_roles",
         "world.relationship_participants",
         "world.relationship_perspectives",

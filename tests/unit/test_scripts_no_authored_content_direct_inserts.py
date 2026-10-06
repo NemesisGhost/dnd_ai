@@ -100,6 +100,9 @@ _TABLES = (
     # Phase 15.3A-2b memberships and organization status.
     "world.organization_memberships",
     "campaign.organization_state",
+    # Phase 15.3A-2c routes and travel.
+    "world.route_relationships",
+    "campaign.character_location_history",
     "narrative.objective_dependencies",
     "knowledge.knowledge_items",
 )

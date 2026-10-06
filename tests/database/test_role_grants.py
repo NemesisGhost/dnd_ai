@@ -168,6 +168,7 @@ MANAGED_TABLES = [
     ("world", "ownership_relationships"),
     ("world", "family_relationships"),
     ("world", "political_relationships"),
+    ("world", "route_relationships"),
     ("campaign", "organization_statuses"),
     ("campaign", "organization_state"),
     ("campaign", "relationship_statuses"),
