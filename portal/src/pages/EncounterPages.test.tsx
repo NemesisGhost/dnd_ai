@@ -9,6 +9,14 @@ const AUTH = "/campaigns/c1/authoring/encounters"
 const BASE = "/campaigns/c1/encounters"
 
 const OPTIONS = {
+    action_kinds: [
+        { value: "attack", label: "Attack" },
+        { value: "dodge", label: "Dodge" },
+    ],
+    outcomes: [
+        { value: "defeated", label: "Defeated" },
+        { value: "escaped", label: "Escaped" },
+    ],
     sides: [
         { value: "party", label: "Party" },
         { value: "ally", label: "Ally" },
@@ -28,6 +36,9 @@ function encounter(overrides: object = {}) {
         location_id: "l1",
         location_name: "Stonebridge",
         world_time_id: "t1",
+        current_round: 0,
+        resulting_event_id: null,
+        rounds: [],
         participants: [
             {
                 encounter_participant_id: "p1",
@@ -36,6 +47,20 @@ function encounter(overrides: object = {}) {
                 entity_type_code: "player_character",
                 side: "party",
                 initiative: 14,
+                outcome: null,
+                current_hit_points: null,
+                maximum_hit_points: null,
+            },
+            {
+                encounter_participant_id: "p2",
+                participant_entity_id: "n2",
+                name: "Bryn",
+                entity_type_code: "npc",
+                side: "enemy",
+                initiative: null,
+                outcome: null,
+                current_hit_points: 7,
+                maximum_hit_points: 12,
             },
         ],
         ...overrides,
@@ -205,5 +230,111 @@ describe("SessionEncountersSection", () => {
             "href",
             "/app/c1/sessions/s1/encounters/new",
         )
+    })
+})
+
+describe("PreparedEncounterPage operation", () => {
+    const active = (extra: object = {}) =>
+        encounter({
+            status: "active",
+            can_prepare: false,
+            current_round: 2,
+            rounds: [
+                {
+                    round_number: 1,
+                    turns: [
+                        { turn_order: 0, actor_name: "Aldric", target_name: "Bryn", action_kind: "attack", hit: true, damage_amount: 5 },
+                    ],
+                },
+            ],
+            ...extra,
+        })
+
+    it("starts a prepared encounter", async () => {
+        const server = setup("/app/c1/sessions/s1/encounters/e1")
+        fireEvent.click(await screen.findByRole("button", { name: "Start encounter" }))
+        await vi.waitFor(() => expect(server.callsTo("POST", `${BASE}/e1/start`)).toHaveLength(1))
+    })
+
+    it("discards a prepared encounter only after confirming", async () => {
+        const server = setup("/app/c1/sessions/s1/encounters/e1")
+        fireEvent.click(await screen.findByRole("button", { name: "Discard encounter" }))
+        const dialog = await screen.findByRole("dialog", { name: "Discard this encounter?" })
+        expect(server.callsTo("POST", `${BASE}/e1/abort`)).toHaveLength(0)
+        fireEvent.click(within(dialog).getByRole("button", { name: "Discard encounter" }))
+        await vi.waitFor(() => expect(server.callsTo("POST", `${BASE}/e1/abort`)).toHaveLength(1))
+    })
+
+    it("shows the round, the turns and the hit points of an active encounter", async () => {
+        setup("/app/c1/sessions/s1/encounters/e1", active())
+        expect(await screen.findByRole("heading", { name: "Round 2" })).toBeInTheDocument()
+        expect(screen.getByText(/Aldric: attack at Bryn, hit, 5 damage/)).toBeInTheDocument()
+        expect(screen.getByText(/7 of 12 hit points/)).toBeInTheDocument()
+        expect(screen.queryByRole("form", { name: "Add a participant" })).not.toBeInTheDocument()
+    })
+
+    it("records a turn with only what was entered", async () => {
+        const server = setup("/app/c1/sessions/s1/encounters/e1", active())
+        const form = await screen.findByRole("form", { name: "Record a turn" })
+        fireEvent.change(within(form).getByRole("combobox", { name: "Who acts" }), { target: { value: "n1" } })
+        fireEvent.change(within(form).getByRole("combobox", { name: /Target/ }), { target: { value: "n2" } })
+        fireEvent.change(within(form).getByRole("combobox", { name: "Result" }), { target: { value: "hit" } })
+        fireEvent.change(within(form).getByRole("textbox", { name: /Damage/ }), { target: { value: "6" } })
+        fireEvent.click(within(form).getByRole("button", { name: "Record turn" }))
+        await vi.waitFor(() => expect(server.callsTo("POST", `${BASE}/e1/turns`)).toHaveLength(1))
+        expect(server.callsTo("POST", `${BASE}/e1/turns`)[0]!.body).toEqual({
+            actor_entity_id: "n1",
+            action_kind: "attack",
+            target_entity_id: "n2",
+            hit: true,
+            damage_amount: 6,
+        })
+    })
+
+    it("needs an actor and a sensible damage and round", async () => {
+        const server = setup("/app/c1/sessions/s1/encounters/e1", active())
+        const form = await screen.findByRole("form", { name: "Record a turn" })
+        fireEvent.click(within(form).getByRole("button", { name: "Record turn" }))
+        expect(await screen.findByText(/Choose who is taking the turn/)).toBeInTheDocument()
+        fireEvent.change(within(form).getByRole("combobox", { name: "Who acts" }), { target: { value: "n1" } })
+        fireEvent.change(within(form).getByRole("textbox", { name: /Damage/ }), { target: { value: "-3" } })
+        fireEvent.click(within(form).getByRole("button", { name: "Record turn" }))
+        expect(await screen.findByText(/Damage must be a whole number/)).toBeInTheDocument()
+        expect(server.callsTo("POST", `${BASE}/e1/turns`)).toHaveLength(0)
+    })
+
+    it("ends the encounter with the outcomes that were chosen", async () => {
+        const server = setup("/app/c1/sessions/s1/encounters/e1", active())
+        const form = await screen.findByRole("form", { name: "End the encounter" })
+        fireEvent.change(within(form).getByRole("combobox", { name: "Outcome for Bryn" }), { target: { value: "defeated" } })
+        fireEvent.click(within(form).getByRole("button", { name: "End encounter" }))
+        await vi.waitFor(() => expect(server.callsTo("POST", `${BASE}/e1/end`)).toHaveLength(1))
+        expect(server.callsTo("POST", `${BASE}/e1/end`)[0]!.body).toEqual({
+            outcomes: [{ participant_entity_id: "n2", outcome: "defeated" }],
+        })
+    })
+
+    it("aborts an active encounter after confirming", async () => {
+        const server = setup("/app/c1/sessions/s1/encounters/e1", active())
+        const form = await screen.findByRole("form", { name: "End the encounter" })
+        fireEvent.click(within(form).getByRole("button", { name: "Abort encounter" }))
+        const dialog = await screen.findByRole("dialog", { name: "Abort this encounter?" })
+        fireEvent.click(within(dialog).getByRole("button", { name: "Abort encounter" }))
+        await vi.waitFor(() => expect(server.callsTo("POST", `${BASE}/e1/abort`)).toHaveLength(1))
+    })
+
+    it("shows a finished encounter as a record with outcomes", async () => {
+        setup(
+            "/app/c1/sessions/s1/encounters/e1",
+            active({
+                status: "completed",
+                participants: [
+                    { ...encounter().participants[1], outcome: "defeated" },
+                ],
+            }),
+        )
+        expect(await screen.findByText(/defeated/)).toBeInTheDocument()
+        expect(screen.queryByRole("form", { name: "Record a turn" })).not.toBeInTheDocument()
+        expect(screen.queryByRole("form", { name: "End the encounter" })).not.toBeInTheDocument()
     })
 })

@@ -7,6 +7,23 @@ export interface EncounterParticipant {
     entity_type_code: string
     side: string
     initiative: number | null
+    outcome: string | null
+    current_hit_points: number | null
+    maximum_hit_points: number | null
+}
+
+export interface EncounterTurn {
+    turn_order: number
+    actor_name: string
+    target_name: string | null
+    action_kind: string | null
+    hit: boolean | null
+    damage_amount: number | null
+}
+
+export interface EncounterRound {
+    round_number: number
+    turns: EncounterTurn[]
 }
 
 export interface PreparedEncounter {
@@ -19,8 +36,12 @@ export interface PreparedEncounter {
     location_id: string | null
     location_name: string | null
     world_time_id: string
+    current_round: number
+    resulting_event_id: string | null
     participants: EncounterParticipant[]
+    rounds: EncounterRound[]
     changed?: boolean
+    event_id?: string | null
 }
 
 export interface EncounterSummary {
@@ -33,6 +54,8 @@ export interface EncounterSummary {
 
 export interface EncounterOptions {
     sides: { value: string; label: string }[]
+    action_kinds: { value: string; label: string }[]
+    outcomes: { value: string; label: string }[]
     limits: {
         summary_max_length: number
         initiative_min: number

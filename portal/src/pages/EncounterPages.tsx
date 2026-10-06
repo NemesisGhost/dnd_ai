@@ -1,16 +1,22 @@
 import { useState } from "react"
 import { Link, useNavigate, useParams } from "react-router"
 import {
+    abortEncounter,
     addParticipant,
     encounterOptionsPath,
+    endEncounter,
     prepareEncounter,
     preparedEncounterPath,
+    recordTurn,
     removeParticipant,
+    startEncounter,
     updateEncounter,
     updateParticipant,
 } from "../api/encounters"
+import type { TurnBody } from "../api/encounters"
 import { fetchWorldEntities } from "../api/world"
 import { useAnnounce } from "../components/authoring/announcer"
+import { ConfirmDialog } from "../components/authoring/ConfirmDialog"
 import { SelectField, TextAreaField, TextField } from "../components/authoring/fields"
 import { MutationStatusMessage } from "../components/authoring/feedback"
 import { ReferenceCombobox } from "../components/authoring/ReferenceCombobox"
@@ -29,6 +35,9 @@ const CODE_MESSAGE: Readonly<Record<string, string>> = {
     encounter_participant_exists: "That character is already in this encounter.",
     encounter_participant_invalid: "Choose a published character or place in this world.",
     encounter_full: "This encounter has as many participants as it can hold.",
+    encounter_not_ready: "Add at least one participant before starting the encounter.",
+    encounter_finished: "This encounter has already finished.",
+    conflict: "That could not be recorded: the encounter is not active, or that character has already taken a turn this round.",
     session_not_usable: "Encounters cannot be prepared in an archived session.",
     clock_required: "Set the campaign time first.",
 }
@@ -150,6 +159,10 @@ type Command =
     | { op: "add"; participant_entity_id: string; side: string; initiative: number | null }
     | { op: "change"; participant_id: string; side: string; initiative: number | null }
     | { op: "remove"; participant_id: string }
+    | { op: "start" }
+    | { op: "abort" }
+    | { op: "turn"; body: TurnBody }
+    | { op: "end"; outcomes: { participant_entity_id: string; outcome: string }[]; summary: string | null }
 
 // /app/:campaignId/sessions/:sessionId/encounters/:encounterId: a prepared encounter.
 export function PreparedEncounterPage() {
@@ -210,8 +223,17 @@ function Loaded({
     const [problem, setProblem] = useState<string | null>(null)
     const [done, setDone] = useState<string | null>(null)
     const { initiative_min: low, initiative_max: high } = options.limits
+    const [actor, setActor] = useState("")
+    const [action, setAction] = useState("attack")
+    const [target, setTarget] = useState("")
+    const [result, setResult] = useState("")
+    const [damage, setDamage] = useState("")
+    const [round, setRound] = useState("")
+    const [outcomes, setOutcomes] = useState<Record<string, string>>({})
+    const [endSummary, setEndSummary] = useState("")
+    const [confirmAbort, setConfirmAbort] = useState(false)
 
-    const mutation = useAuthoringMutation<Command, PreparedEncounter>({
+    const mutation = useAuthoringMutation<Command, unknown>({
         scopeKey: `encounter:${view.encounter_id}`,
         request: (command, ctx) => {
             switch (command.op) {
@@ -243,6 +265,22 @@ function Loaded({
                     )
                 case "remove":
                     return removeParticipant(campaignId, view.encounter_id, command.participant_id, ctx)
+                case "start":
+                    return startEncounter(campaignId, view.encounter_id, ctx)
+                case "abort":
+                    return abortEncounter(campaignId, view.encounter_id, ctx)
+                case "turn":
+                    return recordTurn(campaignId, view.encounter_id, command.body, ctx)
+                case "end":
+                    return endEncounter(
+                        campaignId,
+                        view.encounter_id,
+                        {
+                            outcomes: command.outcomes,
+                            ...(command.summary === null ? {} : { summary: command.summary }),
+                        },
+                        ctx,
+                    )
             }
         },
         onSuccess: async () => {
@@ -251,6 +289,11 @@ function Loaded({
             setWho(null)
             setInitiative("")
             setEdits({})
+            setActor("")
+            setTarget("")
+            setResult("")
+            setDamage("")
+            setConfirmAbort(false)
             await refetch()
             if (message !== null) announce(message)
         },
@@ -401,6 +444,10 @@ function Loaded({
                                     {", "}
                                     {humanize(p.side)}
                                     {p.initiative !== null ? `, initiative ${p.initiative}` : ""}
+                                    {p.current_hit_points !== null
+                                        ? `, ${p.current_hit_points} of ${p.maximum_hit_points} hit points`
+                                        : ""}
+                                    {p.outcome !== null ? `, ${humanize(p.outcome)}` : ""}
                                 </>
                             )}
                         </li>
@@ -450,6 +497,213 @@ function Loaded({
                     </button>
                 </form>
             ) : null}
+
+            {view.can_prepare ? (
+                <p>
+                    <button
+                        type="button"
+                        className="authoring-button"
+                        disabled={busy}
+                        onClick={() => run({ op: "start" }, "Encounter started")}
+                    >
+                        Start encounter
+                    </button>{" "}
+                    <button
+                        type="button"
+                        className="authoring-button"
+                        disabled={busy}
+                        onClick={() => setConfirmAbort(true)}
+                    >
+                        Discard encounter
+                    </button>
+                </p>
+            ) : null}
+
+            {view.status === "active" ? (
+                <>
+                    <h2>Round {view.current_round}</h2>
+                    <form
+                        noValidate
+                        aria-label="Record a turn"
+                        className="authoring-form"
+                        onSubmit={(event) => {
+                            event.preventDefault()
+                            if (actor === "") {
+                                setProblem("Choose who is taking the turn.")
+                                return
+                            }
+                            const points = damage.trim() === "" ? null : Number(damage)
+                            if (points !== null && (!Number.isInteger(points) || points < 0)) {
+                                setProblem("Damage must be a whole number, zero or more.")
+                                return
+                            }
+                            const roundNumber = round.trim() === "" ? null : Number(round)
+                            if (roundNumber !== null && (!Number.isInteger(roundNumber) || roundNumber < 1)) {
+                                setProblem("The round must be a whole number from 1.")
+                                return
+                            }
+                            run(
+                                {
+                                    op: "turn",
+                                    body: {
+                                        actor_entity_id: actor,
+                                        action_kind: action,
+                                        ...(roundNumber === null ? {} : { round_number: roundNumber }),
+                                        ...(target === "" ? {} : { target_entity_id: target }),
+                                        ...(result === "" ? {} : { hit: result === "hit" }),
+                                        ...(points === null ? {} : { damage_amount: points }),
+                                    },
+                                },
+                                "Turn recorded",
+                            )
+                        }}
+                    >
+                        <SelectField
+                            id="turn-actor"
+                            label="Who acts"
+                            value={actor}
+                            placeholder="Choose a participant"
+                            options={view.participants.map((p) => ({ value: p.participant_entity_id, label: p.name }))}
+                            onChange={setActor}
+                        />
+                        <SelectField
+                            id="turn-action"
+                            label="Action"
+                            value={action}
+                            options={options.action_kinds}
+                            onChange={setAction}
+                        />
+                        <SelectField
+                            id="turn-target"
+                            label="Target (optional)"
+                            value={target}
+                            placeholder="No target"
+                            options={view.participants.map((p) => ({ value: p.participant_entity_id, label: p.name }))}
+                            onChange={setTarget}
+                        />
+                        <SelectField
+                            id="turn-result"
+                            label="Result"
+                            value={result}
+                            placeholder="Not reported"
+                            options={[
+                                { value: "hit", label: "Hit" },
+                                { value: "miss", label: "Miss" },
+                            ]}
+                            onChange={setResult}
+                        />
+                        <TextField
+                            id="turn-damage"
+                            label="Damage (optional)"
+                            hint="A hit that damages a tracked character lowers their hit points."
+                            value={damage}
+                            onChange={setDamage}
+                        />
+                        <TextField
+                            id="turn-round"
+                            label="Round (optional)"
+                            hint={`Leave empty for round ${view.current_round}.`}
+                            value={round}
+                            onChange={setRound}
+                        />
+                        <button type="submit" className="authoring-button" disabled={busy}>
+                            Record turn
+                        </button>
+                    </form>
+
+                    <form
+                        noValidate
+                        aria-label="End the encounter"
+                        className="authoring-form"
+                        onSubmit={(event) => {
+                            event.preventDefault()
+                            run(
+                                {
+                                    op: "end",
+                                    outcomes: Object.entries(outcomes)
+                                        .filter(([, outcome]) => outcome !== "")
+                                        .map(([participant_entity_id, outcome]) => ({
+                                            participant_entity_id,
+                                            outcome,
+                                        })),
+                                    summary: endSummary.trim() === "" ? null : endSummary.trim(),
+                                },
+                                "Encounter ended",
+                            )
+                        }}
+                    >
+                        <h3>End the encounter</h3>
+                        {view.participants.map((p) => (
+                            <SelectField
+                                key={p.encounter_participant_id}
+                                id={`outcome-${p.encounter_participant_id}`}
+                                label={`Outcome for ${p.name}`}
+                                value={outcomes[p.participant_entity_id] ?? ""}
+                                placeholder="No tracked outcome"
+                                options={options.outcomes}
+                                onChange={(value) =>
+                                    setOutcomes({ ...outcomes, [p.participant_entity_id]: value })
+                                }
+                            />
+                        ))}
+                        <TextAreaField
+                            id="end-summary"
+                            label="How it ended (optional)"
+                            value={endSummary}
+                            onChange={setEndSummary}
+                            maxLength={options.limits.summary_max_length}
+                        />
+                        <button type="submit" className="authoring-button" disabled={busy}>
+                            End encounter
+                        </button>{" "}
+                        <button
+                            type="button"
+                            className="authoring-button"
+                            disabled={busy}
+                            onClick={() => setConfirmAbort(true)}
+                        >
+                            Abort encounter
+                        </button>
+                    </form>
+                </>
+            ) : null}
+
+            {view.rounds.length > 0 ? (
+                <>
+                    <h2>Turns</h2>
+                    {view.rounds.map((r) => (
+                        <section key={r.round_number} aria-label={`Round ${r.round_number}`}>
+                            <h3>Round {r.round_number}</h3>
+                            <ol className="authoring-choice-list">
+                                {r.turns.map((t) => (
+                                    <li key={t.turn_order}>
+                                        {t.actor_name}: {humanize(t.action_kind ?? "turn")}
+                                        {t.target_name !== null ? ` at ${t.target_name}` : ""}
+                                        {t.hit === true ? ", hit" : t.hit === false ? ", miss" : ""}
+                                        {t.damage_amount !== null && t.damage_amount > 0
+                                            ? `, ${t.damage_amount} damage`
+                                            : ""}
+                                    </li>
+                                ))}
+                            </ol>
+                        </section>
+                    ))}
+                </>
+            ) : null}
+
+            <ConfirmDialog
+                open={confirmAbort}
+                title={view.status === "pending" ? "Discard this encounter?" : "Abort this encounter?"}
+                description={
+                    view.status === "pending"
+                        ? "The prepared encounter is closed without ever starting. Nothing is recorded."
+                        : "The encounter ends without a result. Turns already recorded stay in the history."
+                }
+                confirmLabel={view.status === "pending" ? "Discard encounter" : "Abort encounter"}
+                pending={busy}
+                onConfirm={() => run({ op: "abort" }, "Encounter closed")}
+                onCancel={() => setConfirmAbort(false)}
+            />
         </>
     )
 }
