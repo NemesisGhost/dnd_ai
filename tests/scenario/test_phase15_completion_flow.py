@@ -456,3 +456,49 @@ def test_a_gm_sets_up_and_runs_a_campaign(
     seen = s.player.get(f"/campaigns/{s.cid}/dungeon-areas/{areas[0]}").json()
     assert seen["connections"][0]["connection_status_code"] == "open"
     assert seen["hazards"] == []  # hidden and undiscovered
+
+    # --- Step 17 (15.3A-2a): two places are related, seen by a player, then archived ----
+    places = []
+    for name in ("Northmark", "Southmark"):
+        place = write(f"{authoring}/locations", {"category": "settlement", "name": name})
+        current = s.gm.get(f"{authoring}/locations/{place['location_id']}").json()
+        version = int(current["row_version"])
+        for action in ("submit-for-review", "approve", "publish"):
+            version = int(
+                write(
+                    f"/campaigns/{s.cid}/entities/{place['location_id']}/lifecycle/{action}",
+                    {"expected_row_version": version},
+                    status=200,
+                )["row_version"]
+            )
+        places.append(place["location_id"])
+    edge = write(
+        f"{authoring}/relationships",
+        {
+            "kind": "general",
+            "relationship_type": "adjacency",
+            "participants": [
+                {"entity_id": places[0], "role": "subject"},
+                {"entity_id": places[1], "role": "object"},
+            ],
+            "description": "They share a border.",
+        },
+    )
+    edge_url = f"{authoring}/relationships/{edge['relationship_id']}"
+    write(
+        f"{edge_url}/perspectives",
+        {
+            "expected_row_version": int(s.gm.get(edge_url).json()["row_version"]),
+            "holder_entity_id": places[0],
+            "affinity": 30,
+        },
+        status=200,
+    )
+    visible = s.player.get(f"/campaigns/{s.cid}/world/relationships").json()["items"]
+    assert [i["relationship_id"] for i in visible] == [edge["relationship_id"]]
+    write(
+        f"{edge_url}/archive",
+        {"expected_row_version": int(s.gm.get(edge_url).json()["row_version"])},
+        status=200,
+    )
+    assert s.player.get(f"/campaigns/{s.cid}/world/relationships").json()["items"] == []

@@ -89,6 +89,14 @@ _TABLES = (
     "campaign.area_feature_state",
     "campaign.hazard_state",
     "campaign.interactable_state",
+    # Phase 15.3A-2a world relationships.
+    "world.relationships",
+    "world.relationship_participants",
+    "world.relationship_perspectives",
+    "world.family_relationships",
+    "world.employment_relationships",
+    "world.ownership_relationships",
+    "world.political_relationships",
     "narrative.objective_dependencies",
     "knowledge.knowledge_items",
 )

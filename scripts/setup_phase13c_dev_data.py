@@ -5067,6 +5067,7 @@ def _ensure_world_relationship(
         return existing
     relationship_id = connection.execute(
         text("""
+            -- authored-content-direct-insert: allowed (Phase 13C fixture; replaced in 15.3A-2a)
             INSERT INTO world.relationships (world_id, relationship_type_id, description)
             VALUES (
                 :w,
@@ -5084,6 +5085,7 @@ def _ensure_world_relationship(
     ):
         connection.execute(
             text("""
+                -- authored-content-direct-insert: allowed (Phase 13C fixture; replaced in 15.3A-2a)
                 INSERT INTO world.relationship_participants
                     (relationship_id, entity_id, participant_role_id)
                 VALUES (
