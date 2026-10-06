@@ -418,6 +418,10 @@ AUDIT_STRUCTURAL_FIELDS: frozenset[str] = frozenset(
         "quantity",
         "condition_percentage",
         "is_equipped",
+        "side",
+        "initiative",
+        "session_id",
+        "participant_entity_id",
     }
 )
 
