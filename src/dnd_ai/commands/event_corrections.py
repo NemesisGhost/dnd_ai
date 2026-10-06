@@ -76,6 +76,81 @@ _PROVENANCE_ROWS = {
 _BELIEF_COLUMNS = {component: column for column, component in BELIEF_COMPONENTS.items()}
 
 
+# Dungeon state effects are undone through the state row the event last wrote:
+# component -> (state table, key column, effect target column, status lookup, column).
+_DUNGEON_STATE = {
+    "location_is_searched": (
+        "location_state",
+        "location_id",
+        "target_entity_id",
+        None,
+        "is_searched",
+    ),
+    "location_is_destroyed": (
+        "location_state",
+        "location_id",
+        "target_entity_id",
+        None,
+        "is_destroyed",
+    ),
+    "location_alarm_level": (
+        "location_state",
+        "location_id",
+        "target_entity_id",
+        None,
+        "alarm_level",
+    ),
+    "location_condition_notes": (
+        "location_state",
+        "location_id",
+        "target_entity_id",
+        None,
+        "condition_notes",
+    ),
+    "connection_status_id": (
+        "area_connection_state",
+        "area_connection_id",
+        "target_area_connection_id",
+        ("connection_statuses", "connection_status_id"),
+        "connection_status_id",
+    ),
+    "hazard_status_id": (
+        "hazard_state",
+        "area_hazard_id",
+        "target_area_hazard_id",
+        ("hazard_statuses", "hazard_status_id"),
+        "hazard_status_id",
+    ),
+    "interactable_status_id": (
+        "interactable_state",
+        "area_interactable_id",
+        "target_area_interactable_id",
+        ("interactable_statuses", "interactable_status_id"),
+        "interactable_status_id",
+    ),
+    "feature_is_destroyed": (
+        "area_feature_state",
+        "area_feature_id",
+        "target_area_feature_id",
+        None,
+        "is_destroyed",
+    ),
+    "feature_condition_notes": (
+        "area_feature_state",
+        "area_feature_id",
+        "target_area_feature_id",
+        None,
+        "condition_notes",
+    ),
+}
+_AREA_TARGETS = (
+    "target_area_connection_id",
+    "target_area_feature_id",
+    "target_area_hazard_id",
+    "target_area_interactable_id",
+)
+
+
 @dataclass(frozen=True)
 class EffectAssessment:
     event_effect_id: uuid.UUID
@@ -87,6 +162,7 @@ class EffectAssessment:
     reason: str | None
     target_quest_objective_id: uuid.UUID | None = None
     target_knowledge_item_id: uuid.UUID | None = None
+    area_targets: dict[str, uuid.UUID] | None = None
 
 
 @dataclass(frozen=True)
@@ -161,6 +237,12 @@ def _assess_effect(
         "target_entity_id": effect.target_entity_id,
         "target_quest_objective_id": effect.target_quest_objective_id,
         "target_knowledge_item_id": effect.target_knowledge_item_id,
+        "area_targets": {
+            column: getattr(effect, column)
+            for column in _AREA_TARGETS
+            if getattr(effect, column) is not None
+        }
+        or None,
         "previous": effect.previous_value,
         "new": effect.new_value,
     }
@@ -178,6 +260,21 @@ def _assess_effect(
                     f"WHERE last_event_id = :e AND timeline_id = :t" + suffix
                 ),
                 {"e": event_id, "t": timeline_id},
+            ).scalar()
+            is not None
+        )
+        return EffectAssessment(**base, reversible=ok, reason=None if ok else REASON_STATE_CHANGED)
+    if component in _DUNGEON_STATE:
+        table, key, target_column, _lookup, _column = _DUNGEON_STATE[component]
+        target = getattr(effect, target_column)
+        ok = (
+            target is not None
+            and connection.execute(
+                text(
+                    f"SELECT 1 FROM campaign.{table} "  # noqa: S608 - fixed table names
+                    f"WHERE {key} = :k AND last_event_id = :e AND timeline_id = :t" + suffix
+                ),
+                {"k": target, "e": event_id, "t": timeline_id},
             ).scalar()
             is not None
         )
@@ -277,7 +374,8 @@ def assess_event(
     effects = connection.execute(
         text(
             "SELECT event_effect_id, target_entity_id, target_quest_objective_id, "
-            "target_knowledge_item_id, target_component, previous_value, "
+            "target_knowledge_item_id, target_area_connection_id, target_area_feature_id, "
+            "target_area_hazard_id, target_area_interactable_id, target_component, previous_value, "
             "new_value, application_status FROM narrative.event_effects "
             "WHERE event_id = :e ORDER BY created_at, event_effect_id"
         ),
@@ -324,6 +422,41 @@ def _compensate(
                     "WHERE last_event_id = :e AND timeline_id = :t"
                 ),
                 {"v": effect.previous, "c": correcting_event_id, "e": event_id, "t": timeline_id},
+            )
+    elif effect.component in _DUNGEON_STATE:
+        table, key, target_column, lookup, column = _DUNGEON_STATE[effect.component]
+        target = (
+            effect.target_entity_id
+            if target_column == "target_entity_id"
+            else (effect.area_targets or {}).get(target_column)
+        )
+        if lookup is not None and effect.previous is None:  # the state did not exist before
+            connection.execute(
+                text(  # noqa: S608 - fixed table and key names
+                    f"DELETE FROM campaign.{table} WHERE {key} = :k AND timeline_id = :t "
+                    "AND last_event_id IN (:e, :c)"
+                ),
+                {"k": target, "t": timeline_id, "e": event_id, "c": correcting_event_id},
+            )
+        else:
+            value_sql = (
+                f"(SELECT {lookup[1]} FROM campaign.{lookup[0]} WHERE code = :v)"
+                if lookup is not None
+                else ":v"
+            )
+            connection.execute(
+                text(  # noqa: S608 - fixed table, key and column names
+                    f"UPDATE campaign.{table} SET {column} = {value_sql}, last_event_id = :c, "
+                    f"updated_at = now() WHERE {key} = :k AND timeline_id = :t "
+                    "AND last_event_id IN (:e, :c)"
+                ),
+                {
+                    "v": effect.previous,
+                    "k": target,
+                    "t": timeline_id,
+                    "e": event_id,
+                    "c": correcting_event_id,
+                },
             )
     elif effect.component in _PROVENANCE_ROWS:
         for table, column in _PROVENANCE_ROWS[effect.component]:
@@ -381,16 +514,21 @@ def _compensate(
         text("""
             INSERT INTO narrative.event_effects
                 (event_id, target_entity_id, target_quest_objective_id,
-                 target_knowledge_item_id, target_component, previous_value, new_value,
-                 effective_world_time_id)
-            VALUES (:e, :c, :o, :k, :component, CAST(:previous AS jsonb), CAST(:new AS jsonb),
-                    :time)
+                 target_knowledge_item_id, target_area_connection_id, target_area_feature_id,
+                 target_area_hazard_id, target_area_interactable_id, target_component,
+                 previous_value, new_value, effective_world_time_id)
+            VALUES (:e, :c, :o, :k, :ac, :af, :ah, :ai, :component, CAST(:previous AS jsonb),
+                    CAST(:new AS jsonb), :time)
         """),
         {
             "e": correcting_event_id,
             "c": character,
             "o": effect.target_quest_objective_id,
             "k": effect.target_knowledge_item_id,
+            "ac": (effect.area_targets or {}).get("target_area_connection_id"),
+            "af": (effect.area_targets or {}).get("target_area_feature_id"),
+            "ah": (effect.area_targets or {}).get("target_area_hazard_id"),
+            "ai": (effect.area_targets or {}).get("target_area_interactable_id"),
             "component": effect.component,
             "previous": None if effect.new is None else json.dumps(effect.new),
             "new": None if effect.previous is None else json.dumps(effect.previous),

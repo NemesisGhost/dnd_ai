@@ -65,6 +65,7 @@ from .characters import router as characters_router
 from .correlation import CorrelationIdMiddleware
 from .deps import dispose_engine, get_engine, verify_database_identity
 from .dungeon import router as dungeon_router
+from .dungeon_authoring import router as dungeon_authoring_router
 from .encounters import router as encounters_router
 from .entity_lifecycle import router as entity_lifecycle_router
 from .errors import install_error_handlers
@@ -203,6 +204,7 @@ def create_app() -> FastAPI:
     app.include_router(session_play_router)
     app.include_router(quest_runtime_router)
     app.include_router(knowledge_runtime_router)
+    app.include_router(dungeon_authoring_router)
     app.include_router(summary_router)
     app.include_router(timelines_router)
     app.include_router(user_preferences_router)

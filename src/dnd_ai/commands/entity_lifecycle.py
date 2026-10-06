@@ -50,6 +50,7 @@ from dnd_ai.domain.authoring import (
     SupersessionTargetInvalidError,
     normalize_reason,
 )
+from dnd_ai.domain.dungeon_authoring import DungeonHasActiveAreasError
 from dnd_ai.domain.entity_lifecycle import (
     APPROVE,
     ARCHIVE,
@@ -67,6 +68,7 @@ from dnd_ai.domain.entity_lifecycle import (
     target_canon_status,
 )
 from dnd_ai.queries.content_preconditions import (
+    DUNGEON_HAS_ACTIVE_AREAS,
     archive_blocked_reason,
     publish_blocked_reason,
     publish_reference_ids,
@@ -107,6 +109,14 @@ ENTITY_REFERENCE_CLASSIFICATION: dict[tuple[str, str, str], str] = {
     ("world", "military_units", "military_unit_id"): OWNED_CASCADE,
     ("world", "political_factions", "political_faction_id"): OWNED_CASCADE,
     ("world", "religions", "religion_id"): OWNED_CASCADE,
+    # Dungeon structure (Phase 15.3A-1): the aggregate's own definition rows, which exist
+    # only while the dungeon is a draft that can be deleted (state and knowledge point at
+    # them from other tables and block earlier).
+    ("world", "area_connections", "from_dungeon_area_id"): OWNED_CASCADE,
+    ("world", "area_connections", "to_dungeon_area_id"): OWNED_CASCADE,
+    ("world", "area_features", "dungeon_area_id"): OWNED_CASCADE,
+    ("world", "area_hazards", "dungeon_area_id"): OWNED_CASCADE,
+    ("world", "area_interactables", "dungeon_area_id"): OWNED_CASCADE,
     ("world", "religious_organizations", "religious_organization_id"): OWNED_CASCADE,
     # --- blocking: references to core.entities -------------------------------
     ("ai", "agent_assignments", "entity_id"): BLOCKING,
@@ -668,12 +678,12 @@ def archive_entity(
         expected_row_version=expected_row_version,
     )
     require_transition(ARCHIVE, entity.canon_status, entity.lifecycle_status)
-    if (
-        archive_blocked_reason(
-            connection, entity_id=entity_id, entity_type_code=entity.entity_type_code
-        )
-        is not None
-    ):
+    blocked = archive_blocked_reason(
+        connection, entity_id=entity_id, entity_type_code=entity.entity_type_code
+    )
+    if blocked == DUNGEON_HAS_ACTIVE_AREAS:
+        raise DungeonHasActiveAreasError(f"dungeon {entity_id} has active areas")
+    if blocked is not None:
         raise CharacterHasUserRelationshipsError(f"entity {entity_id} is linked to a user")
     new_version = _set_lifecycle(connection, entity_id, "archived", archived=True)
     return _result(

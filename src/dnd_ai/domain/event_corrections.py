@@ -43,6 +43,15 @@ REVERSIBLE_COMPONENTS = frozenset(
         "belief_confidence",
         "belief_interpretation",
         "belief_willing_to_share",
+        "location_is_searched",
+        "location_is_destroyed",
+        "location_alarm_level",
+        "location_condition_notes",
+        "connection_status_id",
+        "hazard_status_id",
+        "interactable_status_id",
+        "feature_is_destroyed",
+        "feature_condition_notes",
     }
 )
 
