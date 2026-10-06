@@ -344,6 +344,8 @@ AUDIT_STRUCTURAL_FIELDS: frozenset[str] = frozenset(
         "quest_outcome_id",
         "code",
         "event_status",
+        "quest_status",
+        "objective_status",
         "correction_kind",
         "start_world_time_id",
         "end_world_time_id",

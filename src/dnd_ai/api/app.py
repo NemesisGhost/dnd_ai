@@ -87,6 +87,7 @@ from .parties import router as parties_router
 from .player_character_authoring import router as player_character_authoring_router
 from .preview import router as preview_router
 from .quest_authoring import router as quest_authoring_router
+from .quest_runtime import router as quest_runtime_router
 from .quests import router as quests_router
 from .reference_corpus import router as reference_corpus_router
 from .relationships import router as relationships_router
@@ -199,6 +200,7 @@ def create_app() -> FastAPI:
     app.include_router(sessions_router)
     app.include_router(session_authoring_router)
     app.include_router(session_play_router)
+    app.include_router(quest_runtime_router)
     app.include_router(summary_router)
     app.include_router(timelines_router)
     app.include_router(user_preferences_router)

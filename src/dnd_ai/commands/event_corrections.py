@@ -52,6 +52,13 @@ from ._operations import OperationScope, lock_operation_scope
 from ._shared import lookup_id
 from .events import EventParticipant, _insert_event_row
 
+# Quest and objective status effects are undone through the state row the event last wrote:
+# component -> (state table, status lookup table, status column).
+_RUNTIME_STATE = {
+    "quest_status_id": ("quest_state", "quest_statuses", "quest_status_id"),
+    "objective_status_id": ("objective_state", "objective_statuses", "objective_status_id"),
+}
+
 
 @dataclass(frozen=True)
 class EffectAssessment:
@@ -62,6 +69,7 @@ class EffectAssessment:
     new: Any
     reversible: bool
     reason: str | None
+    target_quest_objective_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -134,6 +142,7 @@ def _assess_effect(
         "event_effect_id": effect.event_effect_id,
         "component": str(effect.target_component),
         "target_entity_id": effect.target_entity_id,
+        "target_quest_objective_id": effect.target_quest_objective_id,
         "previous": effect.previous_value,
         "new": effect.new_value,
     }
@@ -141,6 +150,20 @@ def _assess_effect(
     if effect.application_status != "applied":
         return EffectAssessment(**base, reversible=False, reason=REASON_NOT_APPLIED)
     component = str(effect.target_component)
+    if component in _RUNTIME_STATE:
+        table = _RUNTIME_STATE[component][0]
+        # The state row the event wrote is still the latest write of its scope.
+        ok = (
+            connection.execute(
+                text(
+                    f"SELECT 1 FROM campaign.{table} "  # noqa: S608 - fixed table names
+                    f"WHERE last_event_id = :e AND timeline_id = :t" + suffix
+                ),
+                {"e": event_id, "t": timeline_id},
+            ).scalar()
+            is not None
+        )
+        return EffectAssessment(**base, reversible=ok, reason=None if ok else REASON_STATE_CHANGED)
     if component not in REVERSIBLE_COMPONENTS or effect.target_entity_id is None:
         return EffectAssessment(**base, reversible=False, reason=REASON_UNSUPPORTED)
     character = effect.target_entity_id
@@ -218,7 +241,7 @@ def assess_event(
     )
     effects = connection.execute(
         text(
-            "SELECT event_effect_id, target_entity_id, target_component, previous_value, "
+            "SELECT event_effect_id, target_entity_id, target_quest_objective_id, target_component, previous_value, "
             "new_value, application_status FROM narrative.event_effects "
             "WHERE event_id = :e ORDER BY created_at, event_effect_id"
         ),
@@ -249,7 +272,24 @@ def _compensate(
     effect: EffectAssessment,
 ) -> None:
     character = effect.target_entity_id
-    if effect.component == "current_hit_points":
+    if effect.component in _RUNTIME_STATE:
+        table, status_table, status_column = _RUNTIME_STATE[effect.component]
+        if effect.previous is None:  # the state did not exist before the event
+            connection.execute(
+                text(f"DELETE FROM campaign.{table} WHERE last_event_id = :e AND timeline_id = :t"),  # noqa: S608
+                {"e": event_id, "t": timeline_id},
+            )
+        else:
+            connection.execute(
+                text(
+                    f"UPDATE campaign.{table} SET {status_column} = "  # noqa: S608
+                    f"(SELECT {status_column} FROM campaign.{status_table} WHERE code = :v), "
+                    "last_event_id = :c, updated_at = now() "
+                    "WHERE last_event_id = :e AND timeline_id = :t"
+                ),
+                {"v": effect.previous, "c": correcting_event_id, "e": event_id, "t": timeline_id},
+            )
+    elif effect.component == "current_hit_points":
         connection.execute(
             text(
                 "UPDATE campaign.character_state SET current_hit_points = :v, "
@@ -289,13 +329,14 @@ def _compensate(
     connection.execute(
         text("""
             INSERT INTO narrative.event_effects
-                (event_id, target_entity_id, target_component, previous_value, new_value,
-                 effective_world_time_id)
-            VALUES (:e, :c, :component, CAST(:previous AS jsonb), CAST(:new AS jsonb), :time)
+                (event_id, target_entity_id, target_quest_objective_id, target_component,
+                 previous_value, new_value, effective_world_time_id)
+            VALUES (:e, :c, :o, :component, CAST(:previous AS jsonb), CAST(:new AS jsonb), :time)
         """),
         {
             "e": correcting_event_id,
             "c": character,
+            "o": effect.target_quest_objective_id,
             "component": effect.component,
             "previous": None if effect.new is None else json.dumps(effect.new),
             "new": None if effect.previous is None else json.dumps(effect.previous),

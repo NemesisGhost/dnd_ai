@@ -28,7 +28,15 @@ EVENT_NAME_MAX_LENGTH = 500
 EVENT_DETAILS_MAX_LENGTH = 4000
 
 # Effect components whose compensation exists today. Anything else refuses.
-REVERSIBLE_COMPONENTS = frozenset({"current_hit_points", "character_build_id", "party_membership"})
+REVERSIBLE_COMPONENTS = frozenset(
+    {
+        "current_hit_points",
+        "character_build_id",
+        "party_membership",
+        "quest_status_id",
+        "objective_status_id",
+    }
+)
 
 REASON_STATE_CHANGED = "state_changed"
 REASON_UNSUPPORTED = "unsupported_effect"
