@@ -360,3 +360,24 @@ Not verified: CI; manual browser/accessibility (confirmation dialog, objective b
 
 
 Commands run (local PostgreSQL 18): ruff format/check and mypy clean; portal `npm test` (281 files, 2051 tests) / `npm run lint` / `npm run build` clean. Full Python suite on the final tree, no other database session active: 5995 passed, 1 failed (the known developer-`.env` test), 1288 s.
+
+## Checkpoint 15.2E-3 — knowledge runtime
+
+Commit(s) on `phase15/completion`. **Status: implemented; local automated gates below; CI and manual browser/accessibility checks not performed.** Decision D-17 (the audiences the schema already has: party, character, NPC, organization and public-at-location; no new audience type) applied as recommended.
+
+| Area | Delivered |
+|---|---|
+| Migration | `127_knowledge_runtime`: event types `knowledge_learned`, `knowledge_transferred`, `belief_changed`, `knowledge_made_public`; `last_event_id` (nullable, partial index, shared same-timeline trigger) on `knowledge.entity_knowledge` and `knowledge.public_knowledge`. Round trip with `alembic check`. |
+| Commands | `commands/knowledge_runtime.py`: `reveal_knowledge_to_party` (the existing writer behind the kernel), `record_character_knowledge`, `record_knowledge_transfer`, `change_belief` (token: the event that last wrote the belief), `make_knowledge_public`. Published claim and knowers required, per-(timeline, claim, knower) advisory lock, claim and entities `FOR SHARE`, world time from the request or the clock. |
+| Event correction | The E-1 catalog reverses learning and telling (belief and transfer removed), public records, party reveals and belief changes (previous values restored), while the row is still the one the event last wrote. |
+| API | `GET /campaigns/{id}/knowledge/{item}/audience`, `POST .../reveal-to-party|learn|transfer|make-public`, `POST .../knowledge/knowers/{id}/belief` (`canon.edit`, campaign idempotency, id-only receipts, audit rows with interpretation text redacted). |
+| Portal | A Who knows this page (parties, individual beliefs with Change belief, learned, told and public forms) linked from the claim editor; event pages label the new effects. |
+| Dev data | The guard now covers the five knowledge state tables; four fixture sites in the dev-data script are marked. |
+| Tests | 13 API tests (learn with belief, audit redaction and an unchanged truth; the statement freeze; knower and claim validity; one belief per knower and the clock; transfers with conveyed interpretation; belief changes with stale, no-op and empty cases; public locations seen by a player; party reveals; corrections of each kind and refusals after the state moved; branch isolation; authority, replay and foreign claims), 4 real-PostgreSQL races (two first learnings, two belief changes from one token, a statement edit vs the first learning, a correction vs a belief change), a migration round trip, 8 portal tests, and scenario step 15. |
+
+Decisions applied (not owner decisions): transferring to someone who already knows the claim is refused (use Change belief); distorted versions (`knowledge_version_id`) are not written by these commands; the belief token is the last event rather than a new row version column; every command takes its time from the request or the campaign clock (the page uses the clock).
+
+Not verified: CI; manual browser/accessibility (the forms and comboboxes with a screen reader); the player-facing knowledge reads are unchanged and were not re-verified beyond the existing suites.
+
+
+Commands run (local PostgreSQL 18): ruff format/check and mypy clean; portal `npm test` (282 files, 2059 tests) / `npm run lint` / `npm run build` clean. Full Python suite on the final tree, no other database session active: 6013 passed, 1 failed (the known developer-`.env` test), 1221 s.
