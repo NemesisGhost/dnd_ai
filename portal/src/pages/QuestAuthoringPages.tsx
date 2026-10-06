@@ -131,6 +131,13 @@ export function EditQuestPage() {
                         refreshing={state.refreshing}
                         refetch={refetch}
                     />
+                    {state.data.canon_status === "canon" ? (
+                        <p>
+                            <Link to={`/app/${encodeURIComponent(campaignId)}/quests/${encodeURIComponent(questId)}/progress`}>
+                                Run this quest
+                            </Link>
+                        </p>
+                    ) : null}
                     <QuestCompletionEditor
                         key={state.data.row_version}
                         campaignId={campaignId}

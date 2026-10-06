@@ -29,6 +29,7 @@ import { CreateKnowledgePage, EditKnowledgePage } from "./pages/KnowledgeAuthori
 import { CharacterBuildsPage, CreateCharacterBuildPage } from "./pages/CharacterBuildPages"
 import { PartyMembersPage } from "./pages/PartyMembersPage"
 import { EventDetailPage, RecordEventPage } from "./pages/EventPages"
+import { QuestProgressPage } from "./pages/QuestProgressPage"
 import { CreatePartyPage, EditPartyPage, PartiesPage } from "./pages/PartyPages"
 import {
   ChooseCharacterTypePage,
@@ -300,6 +301,11 @@ function App() {
             <Route
               path="characters/:characterId/edit"
               element={<EditCharacterPage />}
+            />
+
+            <Route
+              path="quests/:questId/progress"
+              element={<QuestProgressPage />}
             />
 
             <Route

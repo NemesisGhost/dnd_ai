@@ -46,6 +46,8 @@ const COMPONENT_LABEL: Readonly<Record<string, string>> = {
     current_hit_points: "Hit points",
     character_build_id: "Active build",
     party_membership: "Party membership",
+    quest_status_id: "Quest status",
+    objective_status_id: "Objective status",
     current_world_time_id: "Campaign time",
     current_location_id: "Location",
 }
