@@ -3502,6 +3502,7 @@ def _ensure_quest_state(
     if existing is None:
         state_id = connection.execute(
             text("""
+                -- phase14-direct-insert: allowed (fixture state at a fixed status, no clock or events)
                 INSERT INTO campaign.quest_state
                     (timeline_id, quest_id, party_id, quest_status_id)
                 VALUES (:timeline, :quest, :party, :status)
@@ -3560,6 +3561,7 @@ def _ensure_objective_state(
     if existing is None:
         state_id = connection.execute(
             text("""
+                -- phase14-direct-insert: allowed (fixture state at a fixed status, no clock or events)
                 INSERT INTO campaign.objective_state
                     (timeline_id, quest_objective_id, party_id, objective_status_id)
                 VALUES (:timeline, :objective, :party, :status)

@@ -341,3 +341,21 @@ def test_a_gm_sets_up_and_runs_a_campaign(
     )
     assert view["gm_notes"] == "Twist"
     assert "gm_notes" not in s.player.get(f"/campaigns/{s.cid}/quests/{quest['quest_id']}").text
+
+    # --- Step 14 (15.2E-2b): publish the quest and run it with explicit GM commands -----
+    for action in ("submit-for-review", "approve", "publish"):
+        lifecycle = f"/campaigns/{s.cid}/entities/{quest['quest_id']}/lifecycle"
+        version = int(s.gm.get(quest_url).json()["row_version"])
+        write(f"{lifecycle}/{action}", {"expected_row_version": version}, status=200)
+    quest_runtime = f"/campaigns/{s.cid}/quests/{quest['quest_id']}"
+    write(f"{quest_runtime}/activate", {"expected_status": None}, status=200)
+    write(
+        f"/campaigns/{s.cid}/quests/objectives/{first}/status",
+        {"new_status": "completed", "expected_status": None},
+        status=200,
+    )
+    scope = s.gm.get(f"{quest_runtime}/progress").json()["scopes"][0]
+    assert scope["status"] == "active" and scope["all_required_complete"] is False
+    write(f"{quest_runtime}/complete", {"expected_status": "active", "note": "Done."}, status=200)
+    assert s.gm.get(f"{quest_runtime}/progress").json()["scopes"][0]["status"] == "completed"
+    assert s.player.get(f"{quest_runtime}/progress").status_code == 403

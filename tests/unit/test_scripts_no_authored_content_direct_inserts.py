@@ -68,6 +68,9 @@ _TABLES = (
     "narrative.quest_participants",
     "narrative.quest_outcomes",
     "narrative.quest_rewards",
+    # Phase 15.2E-2b quest runtime state.
+    "campaign.quest_state",
+    "campaign.objective_state",
     "narrative.objective_dependencies",
     "knowledge.knowledge_items",
 )
