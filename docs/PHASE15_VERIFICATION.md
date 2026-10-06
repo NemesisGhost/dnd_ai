@@ -339,3 +339,24 @@ Not verified: CI; manual browser/accessibility of the completion section.
 
 
 Commands run (local PostgreSQL 18): ruff format/check and mypy clean; portal `npm test` (280 files, 2041 tests) / `npm run lint` / `npm run build` clean. Full Python suite on the final tree, no other database session active: 5975 passed, 1 failed (the known developer-`.env` test), 1234 s.
+
+## Checkpoint 15.2E-2b — quest runtime
+
+Commit(s) on `phase15/completion`. **Status: implemented; local automated gates below; CI and manual browser/accessibility checks not performed.** Decision D-16 (option a: explicit GM commands only; the read model hints when all required objectives are complete) applied as recommended.
+
+| Area | Delivered |
+|---|---|
+| Migration | `126_quest_runtime_events`: seven event types (`quest_activated|completed|suspended|resumed|abandoned`, `objective_activated|skipped`); `quest_failed` already existed and is not touched. Round trip with `alembic check`. |
+| Commands | `commands/quest_runtime.py`: `change_quest_status` (activate, complete, fail, suspend, resume, abandon) and `set_objective_status` (available, active, completed, failed, skipped), with per-scope advisory lock, quest `FOR SHARE`, from-status guard (`expected_status`, stale otherwise), published-quest requirement, party validation, and world time from the request or the clock. The adapter `advance_objective` shares the lock and now refuses a suspended or finished quest. |
+| Event correction | The E-1 catalog gains `quest_status_id` and `objective_status_id` (reversible while the state row is still the one the event last wrote; a first write is undone by removing the state). The adapter route's existing objective events become correctable too. |
+| API | `GET /campaigns/{id}/quests/{quest_id}/progress`, `POST .../{quest_id}/activate|complete|fail|suspend|resume|abandon`, `POST .../quests/objectives/{id}/status` (`canon.edit`, campaign idempotency, id-only receipts, audit rows without the note). |
+| Portal | Run quest page with per-scope cards, confirmed finishing actions, objective moves, and a link from the published quest's editor; event pages label the new effects. |
+| Dev data | The guard now covers `campaign.quest_state` and `campaign.objective_state`; the two fixture sites in the dev-data script are marked (fixed statuses without a clock or events). |
+| Tests | 15 API tests (a full run; the matrix; stale; unpublished and foreign quests; time from clock or request; party scopes; objective rules; hint without completion; adapter route interplay; authority, replay, audit; corrections restoring status and removing a first activation; refused after the state moved; unpublished quests stop running), 4 real-PostgreSQL races (complete vs fail, two first activations, suspend vs objective change, structural edit vs first activation), a migration round trip, 10 portal tests, and scenario step 14. |
+
+Decisions applied (not owner decisions): prerequisites between objectives are shown to authors but not enforced at runtime (the GM decides); objective changes need an `active` quest for that audience; the quest-level note is stored as the event's GM-only details; a quest with no state row stays untracked for the adapter route.
+
+Not verified: CI; manual browser/accessibility (confirmation dialog, objective buttons); the player-facing quest read model is unchanged and was not re-verified beyond the existing suites.
+
+
+Commands run (local PostgreSQL 18): ruff format/check and mypy clean; portal `npm test` (281 files, 2051 tests) / `npm run lint` / `npm run build` clean. Full Python suite on the final tree, no other database session active: 5995 passed, 1 failed (the known developer-`.env` test), 1288 s.
