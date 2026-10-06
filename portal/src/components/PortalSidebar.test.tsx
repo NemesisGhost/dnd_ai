@@ -136,6 +136,23 @@ afterEach(() => {
     vi.unstubAllGlobals()
 })
 
+describe("PortalSidebar item definitions link", () => {
+    it("is offered only on a campaign that grants canon.edit", () => {
+        const editor: CampaignContext = { ...first, capabilities: ["canon.edit"] }
+        const { unmount } = renderSidebar("/app/campaign-a/home", {
+            status: "authenticated",
+            bootstrap: makeBootstrap({ campaigns: [editor, second] }),
+        })
+        expect(within(nav()).getByRole("link", { name: "Item definitions" })).toHaveAttribute(
+            "href",
+            "/app/campaign-a/item-definitions",
+        )
+        unmount()
+        renderSidebar("/app/campaign-a/home")
+        expect(within(nav()).queryByRole("link", { name: "Item definitions" })).not.toBeInTheDocument()
+    })
+})
+
 describe("PortalSidebar destinations", () => {
     it("targets the route campaign for every campaign-specific link", () => {
         renderSidebar("/app/campaign-a/home")

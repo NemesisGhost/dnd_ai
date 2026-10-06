@@ -3,6 +3,7 @@ import type { KeyboardEvent as ReactKeyboardEvent } from "react"
 import { NavLink, useMatch } from "react-router"
 import type { LucideIcon } from "lucide-react"
 import {
+  Backpack,
   BookOpen,
   CalendarDays,
   LayoutList,
@@ -29,6 +30,8 @@ interface NavigationItem {
   path: string
   label: string
   icon: LucideIcon
+  // Shown only on a campaign that grants this capability.
+  capability?: string
 }
 
 // Campaign Home is rendered by CampaignHomeNavGroup; the campaign world page
@@ -38,6 +41,12 @@ const campaignNavigationItems: NavigationItem[] = [
   { path: "quests", label: "Quests", icon: ScrollText },
   { path: "sessions", label: "Sessions", icon: CalendarDays },
   { path: "knowledge", label: "Knowledge", icon: BookOpen },
+  {
+    path: "item-definitions",
+    label: "Item definitions",
+    icon: Backpack,
+    capability: "canon.edit",
+  },
 ]
 
 const NAVIGATION_LIST_ID = "main-navigation-list"
@@ -231,7 +240,14 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
                 onNavigate={close}
               />
 
-              {campaignNavigationItems.map((item) => {
+              {campaignNavigationItems
+                .filter(
+                  (item) =>
+                    item.capability === undefined ||
+                    resolvedCampaign?.capabilities.includes(item.capability) ===
+                      true,
+                )
+                .map((item) => {
                 const Icon = item.icon
                 return (
                   <li key={item.path}>

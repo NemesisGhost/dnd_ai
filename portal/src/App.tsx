@@ -35,6 +35,7 @@ import {
   EditDungeonPage,
 } from "./pages/DungeonAuthoringPages"
 import { KnowledgeAudiencePage } from "./pages/KnowledgeAudiencePage"
+import { ItemDefinitionFormPage, ItemDefinitionsPage } from "./pages/ItemDefinitionPages"
 import { NpcPortrayalPage } from "./pages/NpcPortrayalPage"
 import { QuestProgressPage } from "./pages/QuestProgressPage"
 import { CreatePartyPage, EditPartyPage, PartiesPage } from "./pages/PartyPages"
@@ -323,6 +324,21 @@ function App() {
             <Route
               path="characters/:characterId/portrayal"
               element={<NpcPortrayalPage />}
+            />
+
+            <Route
+              path="item-definitions"
+              element={<ItemDefinitionsPage />}
+            />
+
+            <Route
+              path="item-definitions/new"
+              element={<ItemDefinitionFormPage />}
+            />
+
+            <Route
+              path="item-definitions/:definitionId"
+              element={<ItemDefinitionFormPage />}
             />
 
             <Route
