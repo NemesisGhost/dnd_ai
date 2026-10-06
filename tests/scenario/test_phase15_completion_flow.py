@@ -728,3 +728,19 @@ def test_a_gm_sets_up_and_runs_a_campaign(
     assert (
         s.player.get(f"/campaigns/{s.cid}/entities/{npc['npc_id']}/provenance").status_code == 403
     )
+
+    # --- Step 26 (15.3C-2): the review queue and an entity's revision history ----------------
+    write(f"{authoring}/locations", {"category": "settlement", "name": "Waiting for review"})
+    queue = s.gm.get(f"/campaigns/{s.cid}/review-queue", status="draft").json()
+    assert queue["counts"]["draft"] >= 1 and queue["items"]
+    history = s.gm.get(f"/campaigns/{s.cid}/entities/{npc['npc_id']}/revisions").json()
+    versions = [r["row_version"] for r in history["revisions"]]
+    assert (
+        versions == sorted(versions, reverse=True) and history["revisions"][-1]["kind"] == "created"
+    )
+    compare = s.gm.get(
+        f"/campaigns/{s.cid}/entities/{npc['npc_id']}/revisions/compare",
+        **{"from": versions[-1], "to": versions[0]},
+    )
+    assert compare.status_code == 200 and compare.json()["to_version"] == versions[0]
+    assert s.player.get(f"/campaigns/{s.cid}/review-queue").status_code == 403
