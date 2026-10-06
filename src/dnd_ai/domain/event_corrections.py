@@ -35,6 +35,14 @@ REVERSIBLE_COMPONENTS = frozenset(
         "party_membership",
         "quest_status_id",
         "objective_status_id",
+        "knowledge_learned",
+        "knowledge_public",
+        "party_discovered",
+        "awareness_level",
+        "belief_awareness_level",
+        "belief_confidence",
+        "belief_interpretation",
+        "belief_willing_to_share",
     }
 )
 

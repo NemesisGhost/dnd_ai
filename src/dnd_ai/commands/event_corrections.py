@@ -47,6 +47,7 @@ from dnd_ai.domain.event_corrections import (
     normalize_event_text,
     require_recordable_type,
 )
+from dnd_ai.domain.knowledge_runtime import BELIEF_COMPONENTS
 
 from ._operations import OperationScope, lock_operation_scope
 from ._shared import lookup_id
@@ -60,6 +61,21 @@ _RUNTIME_STATE = {
 }
 
 
+# Knowledge effects are undone through the rows the event wrote, found by event provenance:
+# component -> [(table, provenance column)]. The first entry is the state row whose
+# `last_event_id` says nothing has written it since; the rest are history rows removed with it.
+_PROVENANCE_ROWS = {
+    "knowledge_learned": [
+        ("knowledge.entity_knowledge", "last_event_id"),
+        ("knowledge.information_transfers", "caused_by_event_id"),
+    ],
+    "knowledge_public": [("knowledge.public_knowledge", "last_event_id")],
+    "party_discovered": [("knowledge.party_discoveries", "discovered_via_event_id")],
+    "awareness_level": [("campaign.party_knowledge", "last_event_id")],
+}
+_BELIEF_COLUMNS = {component: column for column, component in BELIEF_COMPONENTS.items()}
+
+
 @dataclass(frozen=True)
 class EffectAssessment:
     event_effect_id: uuid.UUID
@@ -70,6 +86,7 @@ class EffectAssessment:
     reversible: bool
     reason: str | None
     target_quest_objective_id: uuid.UUID | None = None
+    target_knowledge_item_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -143,6 +160,7 @@ def _assess_effect(
         "component": str(effect.target_component),
         "target_entity_id": effect.target_entity_id,
         "target_quest_objective_id": effect.target_quest_objective_id,
+        "target_knowledge_item_id": effect.target_knowledge_item_id,
         "previous": effect.previous_value,
         "new": effect.new_value,
     }
@@ -158,6 +176,23 @@ def _assess_effect(
                 text(
                     f"SELECT 1 FROM campaign.{table} "  # noqa: S608 - fixed table names
                     f"WHERE last_event_id = :e AND timeline_id = :t" + suffix
+                ),
+                {"e": event_id, "t": timeline_id},
+            ).scalar()
+            is not None
+        )
+        return EffectAssessment(**base, reversible=ok, reason=None if ok else REASON_STATE_CHANGED)
+    if component in _PROVENANCE_ROWS or component in _BELIEF_COLUMNS:
+        table, column = (
+            _PROVENANCE_ROWS[component][0]
+            if component in _PROVENANCE_ROWS
+            else ("knowledge.entity_knowledge", "last_event_id")
+        )
+        ok = (
+            connection.execute(
+                text(
+                    f"SELECT 1 FROM {table} "  # noqa: S608 - fixed table names
+                    f"WHERE {column} = :e AND timeline_id = :t" + suffix
                 ),
                 {"e": event_id, "t": timeline_id},
             ).scalar()
@@ -241,7 +276,8 @@ def assess_event(
     )
     effects = connection.execute(
         text(
-            "SELECT event_effect_id, target_entity_id, target_quest_objective_id, target_component, previous_value, "
+            "SELECT event_effect_id, target_entity_id, target_quest_objective_id, "
+            "target_knowledge_item_id, target_component, previous_value, "
             "new_value, application_status FROM narrative.event_effects "
             "WHERE event_id = :e ORDER BY created_at, event_effect_id"
         ),
@@ -289,6 +325,21 @@ def _compensate(
                 ),
                 {"v": effect.previous, "c": correcting_event_id, "e": event_id, "t": timeline_id},
             )
+    elif effect.component in _PROVENANCE_ROWS:
+        for table, column in _PROVENANCE_ROWS[effect.component]:
+            connection.execute(
+                text(f"DELETE FROM {table} WHERE {column} = :e AND timeline_id = :t"),  # noqa: S608
+                {"e": event_id, "t": timeline_id},
+            )
+    elif effect.component in _BELIEF_COLUMNS:
+        connection.execute(
+            text(  # noqa: S608 - the column comes from the fixed belief mapping
+                f"UPDATE knowledge.entity_knowledge SET {_BELIEF_COLUMNS[effect.component]} = :v, "
+                "last_event_id = :c, updated_at = now() "
+                "WHERE last_event_id IN (:e, :c) AND timeline_id = :t"
+            ),
+            {"v": effect.previous, "c": correcting_event_id, "e": event_id, "t": timeline_id},
+        )
     elif effect.component == "current_hit_points":
         connection.execute(
             text(
@@ -329,14 +380,17 @@ def _compensate(
     connection.execute(
         text("""
             INSERT INTO narrative.event_effects
-                (event_id, target_entity_id, target_quest_objective_id, target_component,
-                 previous_value, new_value, effective_world_time_id)
-            VALUES (:e, :c, :o, :component, CAST(:previous AS jsonb), CAST(:new AS jsonb), :time)
+                (event_id, target_entity_id, target_quest_objective_id,
+                 target_knowledge_item_id, target_component, previous_value, new_value,
+                 effective_world_time_id)
+            VALUES (:e, :c, :o, :k, :component, CAST(:previous AS jsonb), CAST(:new AS jsonb),
+                    :time)
         """),
         {
             "e": correcting_event_id,
             "c": character,
             "o": effect.target_quest_objective_id,
+            "k": effect.target_knowledge_item_id,
             "component": effect.component,
             "previous": None if effect.new is None else json.dumps(effect.new),
             "new": None if effect.previous is None else json.dumps(effect.previous),

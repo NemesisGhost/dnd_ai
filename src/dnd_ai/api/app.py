@@ -77,6 +77,7 @@ from .invitation_onboarding import router as invitation_onboarding_router
 from .items import router as items_router
 from .knowledge import router as knowledge_router
 from .knowledge_authoring import router as knowledge_authoring_router
+from .knowledge_runtime import router as knowledge_runtime_router
 from .local_auth import router as local_auth_router
 from .location_authoring import router as location_authoring_router
 from .memberships import router as memberships_router
@@ -201,6 +202,7 @@ def create_app() -> FastAPI:
     app.include_router(session_authoring_router)
     app.include_router(session_play_router)
     app.include_router(quest_runtime_router)
+    app.include_router(knowledge_runtime_router)
     app.include_router(summary_router)
     app.include_router(timelines_router)
     app.include_router(user_preferences_router)
