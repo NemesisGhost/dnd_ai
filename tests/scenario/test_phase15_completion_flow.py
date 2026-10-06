@@ -614,3 +614,24 @@ def test_a_gm_sets_up_and_runs_a_campaign(
     )
     assert leveled["detail_level"] == "major"
     assert s.player.get(portrayal).status_code == 403
+
+    # --- Step 21 (15.3B-1a): a clean install has generic definitions; homebrew is per world ----
+    definitions = f"{authoring}/item-definitions"
+    generic = s.gm.get(definitions).json()["items"]
+    assert any(item["code"] == "longsword" and not item["is_homebrew"] for item in generic)
+    homebrew = write(definitions, {"name": "Moonblade", "category": "weapon", "rarity": "rare"})
+    assert homebrew["code"] == "moonblade" and homebrew["canon_status"] == "draft"
+    published = write(
+        f"{definitions}/{homebrew['item_definition_id']}/update",
+        {
+            "expected_row_version": homebrew["row_version"],
+            "name": "Moonblade",
+            "category": "weapon",
+            "rarity": "rare",
+            "canon_status": "canon",
+        },
+        status=200,
+    )
+    assert published["canon_status"] == "canon" and published["changed"] is True
+    other_world = s.stranger.get(f"/campaigns/{s.other_cid}/authoring/item-definitions")
+    assert "moonblade" not in {item["code"] for item in other_world.json()["items"]}
