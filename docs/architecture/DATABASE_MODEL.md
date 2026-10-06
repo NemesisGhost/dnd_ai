@@ -542,6 +542,8 @@ An organization row stores `organization_type_id` (a lookup — government, busi
 
 Membership is a specialized relationship (§10.2), supporting multiple roles, rejoining, secret membership, ranks, and historical periods — it is not a separate ad hoc table.
 
+**Membership and offices (Phase 15.3A-2b, decision D-19).** A membership is a `membership`-kind relationship (ADR 0017) with its `world.organization_memberships` row; an office is that row's `role` and `rank` (option a: no vacancy table; vacancies and succession are deferred). It is created, edited, ended, archived and restored through the relationship commands, begins at a required world time, and the member may be a character or another organization. The existing exclusion constraint `ex_organization_memberships_no_overlap` rejects overlapping stints for one member and organization under concurrency (surfaced as `membership_overlap`); rejoining is a new relationship. The roster read (`GET /campaigns/{id}/organizations/{id}/members`) shows readers only active, public memberships of members they can discover, and shows editors every stint. `update_organization_status` is hardened: a caller that names the status it saw (`expected_status`) gets a stale write if it moved, repeating the current status is refused (`organization_status_unchanged`), and the event correction catalog reverses it.
+
 ### 10.4 Religion distinction
 
 A religion is a belief system; a church, temple, order, or cult is an organization that may serve it. Conflating the two loses the distinction between believing something and belonging to (or being employed by) an institution built around it.

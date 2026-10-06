@@ -424,3 +424,23 @@ Not verified: CI; manual browser/accessibility (the expanding editors, the parti
 
 
 Commands run (local PostgreSQL 18): ruff format/check and mypy clean; portal `npm test` (284 files, 2076 tests; one unrelated test flaked once under load and passed on rerun) / `npm run lint` / `npm run build` clean. Full Python suite on the final tree, no other database session active: 6071 passed, 1 failed (the known developer-`.env` test), 1612 s.
+
+## Checkpoint 15.3A-2b — organization membership, offices and operational status
+
+Commit(s) on `phase15/completion`. **Status: implemented; local automated gates below; CI and manual browser/accessibility checks not performed.** Decision D-19 (option a: an office is the membership's `role` and `rank`; no vacancy table) applied as recommended. No migration (the plan expected none).
+
+| Area | Delivered |
+|---|---|
+| Membership | A new `membership` kind in the relationship kernel (member and organization roles, a required start, `role`, `rank`, `is_public`), written through `create_relationship`, `update_relationship`, `end_relationship`, `archive_relationship` and `restore_relationship`. The organization must be an organization and the member a character or another organization. The existing exclusion constraint rejects overlapping stints (surfaced as `membership_overlap`, also on moving a start); rejoining is a new relationship. |
+| Roster | `GET /campaigns/{id}/organizations/{id}/members`: readers see active, public stints of members they can discover; editors see every stint with its flags, the organization's current status and the status choices. Unpublished organizations are not found by readers. |
+| Status | `update_organization_status` is hardened: the optional `expected_status` token (a mismatch is a stale write), repeating the current status is refused (`organization_status_unchanged`), and the event correction catalog now reverses `organization_status_id`. Adapters that do not send the token keep working. |
+| Portal | A Members and offices section on organization pages (roster for everyone; add member and status control for editors); the relationship editor gains the office, rank and public fields for a membership. |
+| Dev data | The guard now covers the membership and organization-state tables; no fixture sites needed marking. |
+| Tests | 10 API tests (a member joins with an office; invalid shapes; one stint at a time and rejoin; edited offices; moving a start into an overlap; reader and editor rosters; unpublished organizations; hardened status and its token; correcting a status change; authority and replay), 1 real-PostgreSQL race (two overlapping stints written at once), 7 portal tests, and scenario step 18. |
+
+Decisions applied (not owner decisions): a member may be a character or another organization; ending a membership keeps the row as history (the roster flags it ended); vacancies and succession are deferred, as the plan says.
+
+Not verified: CI; manual browser/accessibility (the member search and the time pickers).
+
+
+Commands run (local PostgreSQL 18): ruff format/check and mypy clean; portal `npm test` (285 files, 2083 tests) / `npm run lint` / `npm run build` clean. Full Python suite on the final tree, no other database session active: 6082 passed, 1 failed (the known developer-`.env` test), 1516 s.
