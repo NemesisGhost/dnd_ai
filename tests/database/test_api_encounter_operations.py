@@ -5,6 +5,7 @@ from collections.abc import Iterator
 import pytest
 from sqlalchemy import Connection, text
 
+from dnd_ai.domain.data_classification import replay_body
 from tests.authoring_support import AuthoringHarness, harness_fixture_factory
 from tests.content_support import ContentSetup
 from tests.database.test_api_encounter_preparation import add, base, code, prepare, view
@@ -216,12 +217,14 @@ def test_replay_of_a_turn_and_a_start_records_one(s: ContentSetup) -> None:
     key = s.gm.fresh_key()
     first = s.gm.post_raw(base(s, f"/{encounter}/start"), {}, key=key)
     replay = s.gm.post_raw(base(s, f"/{encounter}/start"), {}, key=key)
-    assert first.status_code == replay.status_code == 200 and first.json() == replay.json()
+    assert first.status_code == replay.status_code == 200 and replay.json() == replay_body(
+        first.json()
+    )
     assert events_of(s, encounter) == ["Encounter started"]
     turn_key = s.gm.fresh_key()
     body = {"actor_entity_id": aldric}
     one = s.gm.post_raw(base(s, f"/{encounter}/turns"), body, key=turn_key)
     two = s.gm.post_raw(base(s, f"/{encounter}/turns"), body, key=turn_key)
-    assert one.status_code == two.status_code == 201 and one.json() == two.json()
+    assert one.status_code == two.status_code == 201 and two.json() == replay_body(one.json())
     assert len(view(s, encounter)["rounds"][0]["turns"]) == 1
     assert len(s.audit("resolve_combat_turn")) == 1

@@ -744,3 +744,38 @@ def test_a_gm_sets_up_and_runs_a_campaign(
     )
     assert compare.status_code == 200 and compare.json()["to_version"] == versions[0]
     assert s.player.get(f"/campaigns/{s.cid}/review-queue").status_code == 403
+
+    # --- Guard (15.2A-4): nothing the scenario wrote left prose in audit or replay storage ----
+    import re as _re
+
+    from sqlalchemy import text as _text
+
+    from dnd_ai.domain.data_classification import AUDIT_STRUCTURAL_FIELDS as _STRUCTURAL
+    from dnd_ai.domain.data_classification import replay_body as _replay_body
+
+    for (body,) in s.connection.execute(
+        _text(
+            "SELECT response_body FROM security.idempotent_requests WHERE response_body IS NOT NULL"
+        )
+    ):
+        assert isinstance(body, dict) and body == _replay_body(body), body
+
+    def _prose(value: object) -> bool:
+        if isinstance(value, str):
+            # Ids, timestamps and short codes have no whitespace; a sentence does.
+            return _re.search(r"\s", value) is not None
+        if isinstance(value, dict):
+            return any(_prose(v) for v in value.values())
+        if isinstance(value, list):
+            return any(_prose(v) for v in value)
+        return False
+
+    for command, changed in s.connection.execute(
+        _text(
+            "SELECT command_name, changed_fields FROM audit.change_log WHERE changed_fields IS NOT NULL"
+        )
+    ):
+        # Structural fields (names, ids, codes) may hold any short value; the rest must not
+        # carry a sentence.
+        content = {k: v for k, v in changed.items() if k not in _STRUCTURAL}
+        assert not _prose(content), (command, content)

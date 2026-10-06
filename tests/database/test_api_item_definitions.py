@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import Connection, text
 from sqlalchemy.exc import DBAPIError
 
+from dnd_ai.domain.data_classification import replay_body
 from tests.authoring_support import AuthoringHarness, harness_fixture_factory
 from tests.content_support import ContentSetup
 from tests.factories import make_item_instance
@@ -197,7 +198,9 @@ def test_replay_and_audit_are_redacted(s: ContentSetup) -> None:
     body = {"name": "Moonblade", "category": "weapon", "description": "Secret lore"}
     first = s.gm.post(s.url("item-definitions"), body, key=key)
     replay = s.gm.post(s.url("item-definitions"), body, key=key)
-    assert first.status_code == replay.status_code == 201 and first.json() == replay.json()
+    assert first.status_code == replay.status_code == 201 and replay.json() == replay_body(
+        first.json()
+    )
     assert len(s.gm.get(s.url("item-definitions"), homebrew="true").json()["items"]) == 1
     rows = s.audit("create_item_definition")
     assert len(rows) == 1 and rows[0].action == "created"

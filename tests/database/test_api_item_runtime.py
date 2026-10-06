@@ -6,6 +6,7 @@ from collections.abc import Iterator
 import pytest
 from sqlalchemy import Connection, text
 
+from dnd_ai.domain.data_classification import replay_body
 from tests.authoring_support import AuthoringHarness, harness_fixture_factory
 from tests.content_support import ContentSetup
 from tests.database.test_api_campaign_clock import Times
@@ -484,7 +485,9 @@ def test_replay_returns_the_same_response_with_one_event(s: ContentSetup) -> Non
     url = f"/campaigns/{s.cid}/items/{made['item_instance_id']}/award"
     first = s.gm.post_raw(url, body, key=key)
     replay = s.gm.post_raw(url, body, key=key)
-    assert first.status_code == replay.status_code == 200 and first.json() == replay.json()
+    assert first.status_code == replay.status_code == 200 and replay.json() == replay_body(
+        first.json()
+    )
     assert event_types(s, made["item_instance_id"]) == ["item_acquired"]
     assert len(s.audit("award_item")) == 1
 

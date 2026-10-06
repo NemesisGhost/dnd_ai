@@ -6,6 +6,7 @@ from collections.abc import Iterator
 import pytest
 from sqlalchemy import Connection, text
 
+from dnd_ai.domain.data_classification import replay_body
 from tests.authoring_support import AuthoringHarness, harness_fixture_factory
 from tests.content_support import ContentSetup
 from tests.database.test_api_campaign_clock import Times, _advance
@@ -539,7 +540,9 @@ def test_authority_replay_and_foreign_dungeons(s: ContentSetup) -> None:
     body = {"name": "Replayed", "danger_level": 2}
     first = s.gm.post(s.url("dungeons"), body, key=key)
     replay = s.gm.post(s.url("dungeons"), body, key=key)
-    assert first.status_code == replay.status_code == 201 and first.json() == replay.json()
+    assert first.status_code == replay.status_code == 201 and replay.json() == replay_body(
+        first.json()
+    )
     assert len(s.audit("create_dungeon")) == 2  # the first test dungeon and the replayed one
     foreign = s.stranger.post(
         s.url("dungeons", s.other_cid), {"name": "Elsewhere"}, key=s.stranger.fresh_key()

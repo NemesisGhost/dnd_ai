@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import Connection, text
 from sqlalchemy.exc import DBAPIError
 
+from dnd_ai.domain.data_classification import replay_body
 from tests.authoring_support import AuthoringHarness, harness_fixture_factory
 from tests.content_support import ContentSetup
 
@@ -246,7 +247,9 @@ def test_replay_and_other_worlds(s: ContentSetup) -> None:
     body = {"expected_version": 0, "voice": "Soft"}
     first = s.gm.post(portrayal_url(s, created["npc_id"]), body, key=key)
     replay = s.gm.post(portrayal_url(s, created["npc_id"]), body, key=key)
-    assert first.status_code == replay.status_code == 200 and first.json() == replay.json()
+    assert first.status_code == replay.status_code == 200 and replay.json() == replay_body(
+        first.json()
+    )
     assert s.gm.get(portrayal_url(s, created["npc_id"])).json()["current_version"] == 1
     foreign = s.stranger.get(s.url(f"npcs/{created['npc_id']}/portrayal", s.other_cid))
     assert foreign.status_code == 404

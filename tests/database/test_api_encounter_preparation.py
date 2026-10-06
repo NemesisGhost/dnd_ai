@@ -6,6 +6,7 @@ from collections.abc import Iterator
 import pytest
 from sqlalchemy import Connection, text
 
+from dnd_ai.domain.data_classification import replay_body
 from tests.authoring_support import AuthoringHarness, harness_fixture_factory
 from tests.content_support import ContentSetup
 from tests.database.test_api_routes_travel import clock_at, pc, place
@@ -195,6 +196,8 @@ def test_replay_returns_the_same_response_with_one_participant(s: ContentSetup) 
     url = base(s, f"/{encounter}/participants")
     first = s.gm.post_raw(url, {"participant_entity_id": aldric}, key=key)
     replay = s.gm.post_raw(url, {"participant_entity_id": aldric}, key=key)
-    assert first.status_code == replay.status_code == 201 and first.json() == replay.json()
+    assert first.status_code == replay.status_code == 201 and replay.json() == replay_body(
+        first.json()
+    )
     assert len(view(s, encounter)["participants"]) == 1
     assert len(s.audit("add_encounter_participant")) == 1
