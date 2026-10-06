@@ -35,6 +35,7 @@ import {
   EditDungeonPage,
 } from "./pages/DungeonAuthoringPages"
 import { KnowledgeAudiencePage } from "./pages/KnowledgeAudiencePage"
+import { PrepareEncounterPage, PreparedEncounterPage } from "./pages/EncounterPages"
 import { ItemDefinitionFormPage, ItemDefinitionsPage } from "./pages/ItemDefinitionPages"
 import { CreateItemPage, EditItemPage, ItemsPage } from "./pages/ItemPages"
 import { NpcPortrayalPage } from "./pages/NpcPortrayalPage"
@@ -431,6 +432,16 @@ function App() {
             <Route
               path="sessions/:sessionId/run"
               element={<SessionRunPage />}
+            />
+
+            <Route
+              path="sessions/:sessionId/encounters/new"
+              element={<PrepareEncounterPage />}
+            />
+
+            <Route
+              path="sessions/:sessionId/encounters/:encounterId"
+              element={<PreparedEncounterPage />}
             />
 
             <Route

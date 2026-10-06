@@ -26,6 +26,7 @@ import type { ReferenceOption } from "../components/authoring/ReferenceCombobox"
 import { WorldTimePicker } from "../components/authoring/WorldTimePicker"
 import { useSession } from "../context/SessionContext"
 import { AwardItemSection } from "../components/AwardItemSection"
+import { SessionEncountersSection } from "../components/SessionEncountersSection"
 import { TravelSection } from "../components/TravelSection"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
@@ -123,6 +124,9 @@ function RunBody({
             ) : null}
             {actions.includes("log") ? (
                 <AwardItemSection campaignId={campaignId} participants={session.participants ?? []} />
+            ) : null}
+            {actions.includes("log") ? (
+                <SessionEncountersSection campaignId={campaignId} sessionId={session.session_id} />
             ) : null}
             <LogSection
                 campaignId={campaignId}
