@@ -585,3 +585,23 @@ Not verified: CI; manual browser/accessibility (the provenance page at narrow wi
 
 
 Local gates for 15.3C-1: `ruff format`/`ruff check` and `mypy src` clean; portal 2168 tests passed (one unrelated page test failed once under load and passed alone), lint and build clean; full Python suite 6205 passed, 2 failed: the known developer-`.env` origin test and `tests/database/test_seed_idempotency.py::test_database_matches_seed_file[core-source_types-source_type_id]`, which asserted the table equals its frozen seed file and now excludes it, as migration 103 did for `audit.change_actions` (the added rows are covered by `test_entity_source_links_migration.py`). After that fix only `test_seed_idempotency.py` was rerun (54 passed); the full suite was not rerun.
+
+## Checkpoint 15.3C-2 — Review queues and revision comparison
+
+Commit(s) on `phase15/completion`. **Status: implemented; local automated gates below; CI and manual browser/accessibility checks not performed.** Decision D-25 (self-approval allowed and audited for self-hosted use) applied as recommended.
+
+| Area | Delivered |
+|---|---|
+| Migration | None. Reads only, over `core.entities`, `core.entity_revisions` (15.2R) and the existing approve audit row. |
+| Queue | `GET /campaigns/{id}/review-queue?status=&type=&cursor=&limit=`: statuses `pending` (default), `draft`, `in_review`, `approved`, `rejected`, `archived`; kind filter over the lifecycle-eligible types; keyset paging by update time then id; the latest change's author (and whether it was the viewer) from the revision of the current version; a count per status. An unknown status or a bad cursor is a 422. Only the campaign's world. |
+| History and compare | `GET .../entities/{id}/revisions` and `.../revisions/compare?from=&to=`. `domain/revision_compare.py` flattens both snapshots (lists of objects matched by an identifier when unique) and reports added, removed and changed paths, with long values cut and flagged; a lifecycle revision resolves to the latest authored snapshot at or before it. Unknown versions, other worlds and missing records are 404. |
+| Self-approval | The approve audit row gains `self_approved` when the approver authored the latest revision before the approval. A different approver is not flagged. |
+| Portal | The review page (filters with counts, list, Load more) and the revision history page (list, compare as a table), a Review sidebar link, and links from the provenance page. |
+| Tests | 10 unit tests for the comparison (including a 2,000-field snapshot), 6 API tests (statuses and counts, kind filter and paging, other worlds and players, history and compare, refusals, self-approval flagged and not), 10 portal tests, and scenario step 26. As with the other authoring routes a player is refused with 403 (the plan said 404). |
+
+Decisions applied (not owner decisions): the queue's default is every active, unpublished record; "author of the latest change" for self-approval is the author of the latest revision before the approval; the comparison covers authored fields only, never audit data.
+
+Not verified: CI; manual browser/accessibility (the comparison at ultrawide and narrow width and with a screen reader).
+
+
+Local gates for 15.3C-2: `ruff format`/`ruff check` and `mypy src` clean; portal 2178 tests passed, lint and build clean; full Python suite 6219 passed, 1 failed (the known developer-`.env` origin test in `tests/unit/test_config.py`).
