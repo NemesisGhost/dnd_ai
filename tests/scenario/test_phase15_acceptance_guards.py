@@ -11,30 +11,28 @@ state command each have one effect.
 import re
 import uuid
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import Connection, text
 
-from dnd_ai.domain.access import FOUNDRY_ACCESS_AUTH_METHOD, AuthenticatedPrincipal
-from tests.authoring_support import AuthoringHarness, harness_fixture_factory
+from dnd_ai.domain.access import (
+    FOUNDRY_ACCESS_AUTH_METHOD,
+    AuthenticatedPrincipal,
+)
+from tests.authoring_support import ORIGIN, AuthoringHarness, harness_fixture_factory
 from tests.content_support import ContentSetup
 from tests.database.test_api_campaign_clock import Times, _advance, _branch_campaign
 from tests.database.test_api_routes_travel import clock_at
+from tests.scenario.phase15_route_manifest import CAMPAIGN, FOUNDRY_PERMITTED, Entry, classify
 
 pytestmark = pytest.mark.scenario
 
-# The Phase 15 GM route families: every route under these prefixes is a GM-only route.
-GM_ROUTE_PATTERNS = [
-    r"^/campaigns/\{campaign_id\}/authoring/",
-    r"^/campaigns/\{campaign_id\}/items/\{[a-z_]+\}/(award|equip|unequip|consume|damage|repair|destroy|attune|end-attunement|transfer|identify)$",
-    r"^/campaigns/\{campaign_id\}/encounters(/.*)?$",
-    r"^/campaigns/\{campaign_id\}/sources$",
-    r"^/campaigns/\{campaign_id\}/entities/\{[a-z_]+\}/(sources/(attach|detach)|provenance|revisions(/compare)?)$",
-    r"^/campaigns/\{campaign_id\}/review-queue$",
-    r"^/campaigns/\{campaign_id\}/travel$",
-    r"^/campaigns/\{campaign_id\}/parties/\{[a-z_]+\}/inventory$",
-]
-GM_ROUTES = [re.compile(p) for p in GM_ROUTE_PATTERNS]
+# Pinned on purpose: adding or removing a route changes these and forces a conscious update.
+EXPECTED_GUARDED = 232  # 190 Phase 15 + 40 earlier-phase GM routes + 2 world-scoped
+EXPECTED_PHASE15_GM = 190
+EXPECTED_MEMBER_READS = 25
 
 
 @pytest.fixture
@@ -47,80 +45,216 @@ def s(harness: AuthoringHarness, db_connection: Connection) -> ContentSetup:
     return ContentSetup(harness, db_connection)
 
 
-def gm_routes(s: ContentSetup) -> list[tuple[str, str]]:
-    """`(METHOD, concrete path)` for every Phase 15 GM route, ids filled with fresh UUIDs.
-
-    The route table is read from the app's OpenAPI document, which lists every included router
-    (the app's own `routes` holds lazily included routers that cannot be walked)."""
-    found: list[tuple[str, str]] = []
-    for template, operations in s.harness.app.openapi()["paths"].items():
-        if not any(p.match(template) for p in GM_ROUTES):
-            continue
-        for method in sorted(m.upper() for m in operations if m in ("get", "post")):
-            if method == "GET" and re.search(r"/encounters/\{[a-z_]+\}$", template):
-                continue  # the encounter record read is `campaign.view`, open to every member
-            path = template.replace("{campaign_id}", s.cid)
-            path = re.sub(r"\{[a-z_]+\}", lambda _: str(uuid.uuid4()), path)
-            found.append((method, path))
-    return found
+def manifest(s: ContentSetup) -> list[Entry]:
+    """Every operation of the application, classified (see `phase15_route_manifest`)."""
+    entries, unclassified = classify(s.harness.app.openapi()["paths"])
+    assert unclassified == [], f"unclassified routes: {unclassified}"
+    return entries
 
 
-def test_there_are_many_gm_routes_to_guard(s: ContentSetup) -> None:
-    routes = gm_routes(s)
-    assert len(routes) >= 120, len(routes)
-    methods = {m for m, _ in routes}
-    assert methods == {"GET", "POST"}
+def concrete(s: ContentSetup, entry: Entry, campaign_id: str | None = None) -> str:
+    path = entry.template.replace("{campaign_id}", campaign_id or s.cid)
+    path = path.replace("{world_id}", str(s.world_id))
+    return re.sub(r"\{[a-z_]+\}", lambda _: str(uuid.uuid4()), path)
 
 
-def guarded_routes(s: ContentSetup) -> list[tuple[str, str]]:
-    routes = gm_routes(s)
-    assert len(routes) >= 120, "the route table was not read; a guard over it would pass vacuously"
+def guarded(s: ContentSetup) -> list[Entry]:
+    """Routes that need authority a plain member does not hold: GM-only campaign routes and the
+    world-scoped authoring routes."""
+    routes = [e for e in manifest(s) if e.klass in ("gm", "world")]
+    assert len(routes) >= EXPECTED_GUARDED, "the route table was not read; a guard would be vacuous"
     return routes
 
 
-def test_players_are_refused_every_phase15_gm_route(s: ContentSetup) -> None:
-    refused: list[tuple[str, str, int]] = []
-    for method, path in guarded_routes(s):
-        if method == "GET":
-            response = s.player.get(path)
-        else:
-            response = s.player.post_raw(path, {}, key=s.player.fresh_key())
-        if response.status_code != 403:
-            refused.append((method, path, response.status_code))
-    assert refused == []
+def call(client, entry: Entry, path: str):  # type: ignore[no-untyped-def]
+    if entry.method == "GET":
+        return client.get(path)
+    if entry.method == "DELETE":
+        if hasattr(client, "post_raw"):
+            return client.client.delete(path, headers=client.headers(key=None))
+        return client.delete(path, headers={"Origin": ORIGIN})
+    if hasattr(client, "post_raw"):
+        return client.post_raw(path, {}, key=client.fresh_key())
+    return client.post(path, json={}, headers={"Origin": ORIGIN})
 
 
-def test_outsiders_find_no_phase15_gm_route_of_this_campaign(s: ContentSetup) -> None:
+def test_every_route_is_classified(s: ContentSetup) -> None:
+    entries = manifest(s)
+    assert len({(e.method, e.template) for e in entries}) == len(entries)
+    assert {e.klass for e in entries} == {"gm", "member_read", "world", "out_of_scope"}
+    # Aliases: no two templates differ only by their id placeholder names.
+    shapes = [(e.method, re.sub(r"\{[a-z_]+\}", "{}", e.template)) for e in entries]
+    assert len(set(shapes)) == len(shapes)
+
+
+def test_the_manifest_covers_every_phase15_family_and_its_size_is_pinned(s: ContentSetup) -> None:
+    entries = manifest(s)
+    gm = [e for e in entries if e.klass == "gm"]
+    assert len(guarded(s)) == EXPECTED_GUARDED
+    assert sum(1 for e in gm if e.phase15) == EXPECTED_PHASE15_GM
+    assert sum(1 for e in entries if e.klass == "member_read") == EXPECTED_MEMBER_READS
+    families = {e.family.split(" (")[0] for e in gm if e.phase15}
+    for required in (
+        "authoring",
+        "campaign clock",
+        "world-time points",
+        "calendars",
+        "parties, party membership, party inventory",
+        "session definition, participation, start, end, log",
+        "events and corrections",
+        "quest runtime and progress",
+        "knowledge runtime and audience",
+        "dungeon state",
+        "organization state",
+        "relationship kernel",
+        "item instances, custody, operations",
+        "encounter preparation and operation",
+        "sources",
+        "lifecycle, publication, provenance, revisions",
+        "review queue",
+        "routes and travel",
+        "character-relationship administration",
+        "audit history",
+    ):
+        assert required in families, required
+    # The authoring family spans many sub-families; each must have routes in the table.
+    authoring = [e.template for e in gm if e.template.startswith(f"{CAMPAIGN}/authoring/")]
+    for part in (
+        "player-characters",
+        "npcs",
+        "builds",
+        "dungeons",
+        "relationships",
+        "routes",
+        "item-definitions",
+        "items",
+        "encounters",
+        "locations",
+        "organizations",
+        "religions",
+        "quests",
+        "knowledge",
+        "portrayal",
+    ):
+        assert any(part in t for t in authoring), part
+
+
+def test_players_are_refused_every_gm_route(s: ContentSetup) -> None:
+    wrong: list[tuple[str, str, int]] = []
+    for entry in guarded(s):
+        response = call(s.player, entry, concrete(s, entry))
+        if response.status_code != entry.insufficient_authority:
+            wrong.append((entry.method, entry.template, response.status_code))
+    assert wrong == []
+
+
+def test_player_safe_reads_are_not_refused_to_a_player_and_not_found_by_an_outsider(
+    s: ContentSetup,
+) -> None:
+    reads = [e for e in manifest(s) if e.klass == "member_read"]
+    assert len(reads) == EXPECTED_MEMBER_READS
+    wrong: list[tuple[str, int, int]] = []
+    for entry in reads:
+        path = concrete(s, entry)
+        member = s.player.get(path).status_code
+        outsider = s.stranger.get(path).status_code
+        if member not in (200, 404) or outsider != 404:
+            wrong.append((entry.template, member, outsider))
+    assert wrong == []
+
+
+def test_unauthenticated_callers_are_rejected_on_every_gm_route(s: ContentSetup) -> None:
+    wrong: list[tuple[str, str, int]] = []
+    with TestClient(s.harness.app, raise_server_exceptions=False) as anonymous:
+        for entry in guarded(s):
+            response = call(anonymous, entry, concrete(s, entry))
+            if response.status_code != 401:
+                wrong.append((entry.method, entry.template, response.status_code))
+    assert wrong == []
+
+
+def _normal(response):  # type: ignore[no-untyped-def]
+    content = response.json()
+    if isinstance(content.get("error"), dict):
+        content["error"].pop("correlation_id", None)
+    return response.status_code, content
+
+
+def test_outsiders_find_no_gm_route_and_the_refusal_is_the_same_as_for_a_missing_campaign(
+    s: ContentSetup,
+) -> None:
     leaked: list[tuple[str, str, int]] = []
-    for method, path in guarded_routes(s):
-        if method == "GET":
-            response = s.stranger.get(path)
-        else:
-            response = s.stranger.post_raw(path, {}, key=s.stranger.fresh_key())
+    different: list[str] = []
+    for entry in guarded(s):
+        response = call(s.stranger, entry, concrete(s, entry))
         if response.status_code != 404:
-            leaked.append((method, path, response.status_code))
+            leaked.append((entry.method, entry.template, response.status_code))
+            continue
+        if entry.klass == "gm":
+            missing = call(s.stranger, entry, concrete(s, entry, campaign_id=str(uuid.uuid4())))
+            if _normal(response) != _normal(missing):
+                different.append(entry.template)
     assert leaked == []
+    assert different == []
 
 
-def test_a_paired_foundry_principal_is_refused_every_phase15_gm_route(s: ContentSetup) -> None:
-    foundry = AuthenticatedPrincipal(
+def _principal(s: ContentSetup, method: str) -> AuthenticatedPrincipal:
+    device = method == FOUNDRY_ACCESS_AUTH_METHOD
+    return AuthenticatedPrincipal(
         user_id=s.gm.user_id,
-        auth_method=FOUNDRY_ACCESS_AUTH_METHOD,
+        auth_method=method,
         foundry_external_system_id=uuid.uuid4(),
         foundry_world_id=uuid.uuid4(),
-        campaign_id=uuid.UUID(s.cid),
-        foundry_connection_id=uuid.uuid4(),
-        foundry_device_id=uuid.uuid4(),
-        foundry_scopes=frozenset({"encounter_read", "character_read"}),
+        campaign_id=uuid.UUID(s.cid) if device else None,
+        foundry_connection_id=uuid.uuid4() if device else None,
+        foundry_device_id=uuid.uuid4() if device else None,
+        foundry_scopes=frozenset({"encounter_read", "character_read"}) if device else None,
     )
-    client = s.harness.principal_client(foundry)
+
+
+def test_foundry_devices_cannot_invoke_human_gm_authoring(s: ContentSetup) -> None:
+    client = s.harness.principal_client(_principal(s, FOUNDRY_ACCESS_AUTH_METHOD))
     allowed: list[tuple[str, str, int]] = []
-    for method, path in guarded_routes(s):
-        response = client.get(path) if method == "GET" else client.post(path, json={})
-        # A Foundry device never gets through; the paired routes it may use are not in this list.
+    for entry in guarded(s):
+        if (entry.method, entry.template) in FOUNDRY_PERMITTED:
+            continue
+        response = call(client, entry, concrete(s, entry))
         if response.status_code not in (401, 403, 404):
-            allowed.append((method, path, response.status_code))
+            allowed.append((entry.method, entry.template, response.status_code))
     assert allowed == []
+
+
+def test_machine_credentials_cannot_invoke_human_gm_authoring(s: ContentSetup) -> None:
+    # The two machine credential shapes the platform has known: the retired shared-secret
+    # `FoundrySystem` key (revoked and rejected before any route runs) and a Foundry device
+    # access token that was never issued. Neither reaches a GM route.
+    wrong: list[tuple[str, str, str, int]] = []
+    with TestClient(s.harness.app, raise_server_exceptions=False) as machine:
+        for scheme in ("FoundrySystem", "FoundryAccess"):
+            headers = {"Authorization": f"{scheme} not-a-real-credential", "Origin": ORIGIN}
+            for entry in guarded(s):
+                path = concrete(s, entry)
+                if entry.method == "GET":
+                    response = machine.get(path, headers=headers)
+                elif entry.method == "DELETE":
+                    response = machine.delete(path, headers=headers)
+                else:
+                    response = machine.post(path, json={}, headers=headers)
+                if response.status_code != 401:
+                    wrong.append((scheme, entry.method, entry.template, response.status_code))
+    assert wrong == []
+
+
+def test_the_completion_scenario_enrols_its_player_through_supported_routes_only() -> None:
+    flow = (Path(__file__).parent / "test_phase15_completion_flow.py").read_text(encoding="utf-8")
+    code = "\n".join(line for line in flow.splitlines() if not line.lstrip().startswith("#"))
+    code = code.split('"""', 2)[2]  # drop the module docstring, which explains what is forbidden
+    assert "ContentSetup(harness, db_connection, enrol_player=False)" in code
+    for forbidden in ("add_member", "membership_roles", "INSERT INTO security"):
+        assert forbidden not in code, forbidden
+    assert "FROM security.campaign_memberships" not in code
+    for required in ("/invitations", "/campaign-invitations/accept", "/access-overview", "/roles"):
+        assert required in code, required
 
 
 def test_a_second_worlds_ids_are_not_found_from_this_campaign(s: ContentSetup) -> None:
