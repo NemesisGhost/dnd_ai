@@ -678,3 +678,18 @@ def test_a_gm_sets_up_and_runs_a_campaign(
         and restored["last_event_id"] == equipped["event_id"]
     )
     assert s.player.get(f"{authoring}/items/{sword['item_instance_id']}").status_code == 403
+
+    # --- Step 23 (15.3B-2a): an encounter is prepared in the session ----------------------
+    encounters = f"/campaigns/{s.cid}/encounters"
+    prepared = write(
+        f"{encounters}/prepare", {"session_id": session["session_id"], "summary": "Ambush"}
+    )
+    assert prepared["status"] == "pending" and prepared["participants"] == []
+    with_mira = write(
+        f"{encounters}/{prepared['encounter_id']}/participants",
+        {"participant_entity_id": npc["npc_id"], "side": "enemy", "initiative": 12},
+    )
+    assert [(p["name"], p["side"]) for p in with_mira["participants"]] == [("Mira", "enemy")]
+    listed = s.gm.get(f"{authoring}/encounters", session_id=session["session_id"])
+    assert [e["participant_count"] for e in listed.json()["items"]] == [1]
+    assert s.player.get(f"{authoring}/encounters/{prepared['encounter_id']}").status_code == 403
