@@ -60,6 +60,15 @@ export interface ContentEditConfig<TView extends EditableView, TOptions, TValues
     // True when a change to a canon record needs a confirmation (always, today).
     canonWarning: string
     saved: string
+    // Optional sections rendered after the form, sharing the page view and refetch (for an
+    // aggregate whose children are edited beside its own fields).
+    renderExtra?: (props: {
+        campaignId: string
+        entityId: string
+        view: TView
+        options: TOptions
+        refetch: () => Promise<void>
+    }) => ReactNode
 }
 
 interface Props<TView extends EditableView, TOptions, TValues, TBody> {
@@ -299,6 +308,8 @@ function EditForm<TView extends EditableView, TOptions, TValues, TBody>({
                 ) : null}
                 <FormActions pending={pending} onCancel={() => void navigate(detailPath)} />
             </AuthoringForm>
+
+            {config.renderExtra?.({ campaignId, entityId, view, options, refetch })}
 
             <ConfirmDialog
                 open={confirmingCanon && mutation.status.kind !== "error"}

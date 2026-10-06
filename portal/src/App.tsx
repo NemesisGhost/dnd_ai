@@ -29,6 +29,11 @@ import { CreateKnowledgePage, EditKnowledgePage } from "./pages/KnowledgeAuthori
 import { CharacterBuildsPage, CreateCharacterBuildPage } from "./pages/CharacterBuildPages"
 import { PartyMembersPage } from "./pages/PartyMembersPage"
 import { EventDetailPage, RecordEventPage } from "./pages/EventPages"
+import {
+  CreateDungeonPage,
+  EditDungeonAreaPage,
+  EditDungeonPage,
+} from "./pages/DungeonAuthoringPages"
 import { KnowledgeAudiencePage } from "./pages/KnowledgeAudiencePage"
 import { QuestProgressPage } from "./pages/QuestProgressPage"
 import { CreatePartyPage, EditPartyPage, PartiesPage } from "./pages/PartyPages"
@@ -232,6 +237,21 @@ function App() {
             <Route
               path="world"
               element={<CampaignWorldPage />}
+            />
+
+            <Route
+              path="world/dungeon/new"
+              element={<CreateDungeonPage />}
+            />
+
+            <Route
+              path="world/dungeon/:dungeonId/edit"
+              element={<EditDungeonPage />}
+            />
+
+            <Route
+              path="world/dungeon/:dungeonId/areas/:areaId/edit"
+              element={<EditDungeonAreaPage />}
             />
 
             <Route

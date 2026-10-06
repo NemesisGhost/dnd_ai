@@ -84,6 +84,10 @@ function CampaignWorldContent({
                               to: `/app/${encodeURIComponent(campaignId)}/world/location/new`,
                           },
                           {
+                              label: "New dungeon",
+                              to: `/app/${encodeURIComponent(campaignId)}/world/dungeon/new`,
+                          },
+                          {
                               label: "New organization",
                               to: `/app/${encodeURIComponent(campaignId)}/world/organization/new`,
                           },
