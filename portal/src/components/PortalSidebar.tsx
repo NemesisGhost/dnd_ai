@@ -8,6 +8,7 @@ import {
   CalendarDays,
   LayoutList,
   MessageCircleQuestion,
+  Package,
   PanelLeftClose,
   PanelLeftOpen,
   ScrollText,
@@ -41,6 +42,12 @@ const campaignNavigationItems: NavigationItem[] = [
   { path: "quests", label: "Quests", icon: ScrollText },
   { path: "sessions", label: "Sessions", icon: CalendarDays },
   { path: "knowledge", label: "Knowledge", icon: BookOpen },
+  {
+    path: "items",
+    label: "Items",
+    icon: Package,
+    capability: "canon.edit",
+  },
   {
     path: "item-definitions",
     label: "Item definitions",

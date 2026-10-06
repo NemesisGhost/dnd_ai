@@ -7,6 +7,8 @@ import {
     fetchReligionDetail,
 } from "../api/world"
 import { CharacterBoundary } from "../components/CharacterBoundary"
+import { CharacterInventoryPanel } from "../components/InventoryPanels"
+import { ItemAuthoringControls } from "../components/ItemAuthoringControls"
 import { NpcAuthoringControls } from "../components/NpcAuthoringControls"
 import { OrganizationMembers } from "../components/OrganizationMembers"
 import { RelationshipsPanel } from "../components/RelationshipsPanel"
@@ -119,10 +121,13 @@ export function CampaignWorldDetailPage() {
                 resourceLabel="item"
             >
                 {(item) => (
-                    <WorldItemDetailPage
-                        campaignId={campaignId}
-                        item={item}
-                    />
+                    <>
+                        <WorldItemDetailPage
+                            campaignId={campaignId}
+                            item={item}
+                        />
+                        <ItemAuthoringControls campaignId={campaignId} itemId={entityId} />
+                    </>
                 )}
             </WorldEntityDetailBoundary>
         )
@@ -161,6 +166,7 @@ export function CampaignWorldDetailPage() {
                         </Link>
                     </p>
                     <CharacterDetailPage character={character} />
+                    <CharacterInventoryPanel campaignId={campaignId} characterId={entityId} />
                     <NpcAuthoringControls campaignId={campaignId} characterId={entityId} />
                     <RelationshipsPanel campaignId={campaignId} entityId={entityId} />
                 </div>

@@ -147,9 +147,14 @@ describe("PortalSidebar item definitions link", () => {
             "href",
             "/app/campaign-a/item-definitions",
         )
+        expect(within(nav()).getByRole("link", { name: "Items" })).toHaveAttribute(
+            "href",
+            "/app/campaign-a/items",
+        )
         unmount()
         renderSidebar("/app/campaign-a/home")
         expect(within(nav()).queryByRole("link", { name: "Item definitions" })).not.toBeInTheDocument()
+        expect(within(nav()).queryByRole("link", { name: "Items" })).not.toBeInTheDocument()
     })
 })
 

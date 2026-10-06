@@ -16,6 +16,7 @@ import type { FieldError } from "../components/authoring/feedback"
 import { ReferenceCombobox } from "../components/authoring/ReferenceCombobox"
 import type { ReferenceOption } from "../components/authoring/ReferenceCombobox"
 import { WorldTimePicker } from "../components/authoring/WorldTimePicker"
+import { PartyInventoryPanel } from "../components/InventoryPanels"
 import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
@@ -84,6 +85,7 @@ export function PartyMembersPage() {
                         refetch={resource.refetch}
                         current={false}
                     />
+                    <PartyInventoryPanel campaignId={campaignId} partyId={partyId} />
                 </>
             )}
         </section>
