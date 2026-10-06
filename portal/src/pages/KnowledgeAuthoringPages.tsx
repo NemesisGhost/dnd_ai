@@ -1,3 +1,4 @@
+import { Link, useParams } from "react-router"
 import {
     createKnowledgeItem,
     fetchKnowledgeSubjectOptions,
@@ -287,5 +288,17 @@ const editConfig: ContentEditConfig<
 
 // Edit a knowledge claim: /app/:campaignId/knowledge/:knowledgeItemId/edit.
 export function EditKnowledgePage() {
-    return <ContentEditPage config={editConfig} />
+    const { campaignId = "", knowledgeItemId = "" } = useParams()
+    return (
+        <>
+            <ContentEditPage config={editConfig} />
+            <p>
+                <Link
+                    to={`/app/${encodeURIComponent(campaignId)}/knowledge/${encodeURIComponent(knowledgeItemId)}/audience`}
+                >
+                    Who knows this
+                </Link>
+            </p>
+        </>
+    )
 }

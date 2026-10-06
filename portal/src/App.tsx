@@ -29,6 +29,7 @@ import { CreateKnowledgePage, EditKnowledgePage } from "./pages/KnowledgeAuthori
 import { CharacterBuildsPage, CreateCharacterBuildPage } from "./pages/CharacterBuildPages"
 import { PartyMembersPage } from "./pages/PartyMembersPage"
 import { EventDetailPage, RecordEventPage } from "./pages/EventPages"
+import { KnowledgeAudiencePage } from "./pages/KnowledgeAudiencePage"
 import { QuestProgressPage } from "./pages/QuestProgressPage"
 import { CreatePartyPage, EditPartyPage, PartiesPage } from "./pages/PartyPages"
 import {
@@ -301,6 +302,11 @@ function App() {
             <Route
               path="characters/:characterId/edit"
               element={<EditCharacterPage />}
+            />
+
+            <Route
+              path="knowledge/:knowledgeItemId/audience"
+              element={<KnowledgeAudiencePage />}
             />
 
             <Route
