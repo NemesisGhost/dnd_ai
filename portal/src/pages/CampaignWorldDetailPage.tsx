@@ -8,6 +8,7 @@ import {
 } from "../api/world"
 import { CharacterBoundary } from "../components/CharacterBoundary"
 import { NpcAuthoringControls } from "../components/NpcAuthoringControls"
+import { RelationshipsPanel } from "../components/RelationshipsPanel"
 import { WorldEntityDetailBoundary } from "../components/WorldEntityDetailBoundary"
 import { isWorldDetailCategory } from "../types/world"
 import { CharacterDetailPage } from "./CharacterDetailPage"
@@ -53,10 +54,13 @@ export function CampaignWorldDetailPage() {
                 resourceLabel="location"
             >
                 {(location) => (
-                    <WorldLocationDetailPage
-                        campaignId={campaignId}
-                        location={location}
-                    />
+                    <>
+                        <WorldLocationDetailPage
+                            campaignId={campaignId}
+                            location={location}
+                        />
+                        <RelationshipsPanel campaignId={campaignId} entityId={entityId} />
+                    </>
                 )}
             </WorldEntityDetailBoundary>
         )
@@ -71,10 +75,13 @@ export function CampaignWorldDetailPage() {
                 resourceLabel="organization"
             >
                 {(organization) => (
-                    <WorldOrganizationDetailPage
-                        campaignId={campaignId}
-                        organization={organization}
-                    />
+                    <>
+                        <WorldOrganizationDetailPage
+                            campaignId={campaignId}
+                            organization={organization}
+                        />
+                        <RelationshipsPanel campaignId={campaignId} entityId={entityId} />
+                    </>
                 )}
             </WorldEntityDetailBoundary>
         )
@@ -89,10 +96,13 @@ export function CampaignWorldDetailPage() {
                 resourceLabel="religion"
             >
                 {(religion) => (
-                    <WorldReligionDetailPage
-                        campaignId={campaignId}
-                        religion={religion}
-                    />
+                    <>
+                        <WorldReligionDetailPage
+                            campaignId={campaignId}
+                            religion={religion}
+                        />
+                        <RelationshipsPanel campaignId={campaignId} entityId={entityId} />
+                    </>
                 )}
             </WorldEntityDetailBoundary>
         )
@@ -150,6 +160,7 @@ export function CampaignWorldDetailPage() {
                     </p>
                     <CharacterDetailPage character={character} />
                     <NpcAuthoringControls campaignId={campaignId} characterId={entityId} />
+                    <RelationshipsPanel campaignId={campaignId} entityId={entityId} />
                 </div>
             )}
         </CharacterBoundary>
