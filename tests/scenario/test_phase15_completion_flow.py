@@ -635,3 +635,46 @@ def test_a_gm_sets_up_and_runs_a_campaign(
     assert published["canon_status"] == "canon" and published["changed"] is True
     other_world = s.stranger.get(f"/campaigns/{s.other_cid}/authoring/item-definitions")
     assert "moonblade" not in {item["code"] for item in other_world.json()["items"]}
+
+    # --- Step 22 (15.3B-1b): an item is authored, awarded, used, and its last event voided ----
+    s.publish(npc["npc_id"], leveled["row_version"])
+    generic_sword = next(item for item in generic if item["code"] == "longsword")
+    sword = write(
+        f"{authoring}/items",
+        {"name": "Mira's Sword", "item_definition_id": generic_sword["item_definition_id"]},
+    )
+    s.publish(sword["item_instance_id"], sword["row_version"])
+    item_url = f"/campaigns/{s.cid}/items/{sword['item_instance_id']}"
+    awarded = write(
+        f"{item_url}/award",
+        {"expected_last_event_id": None, "holder_entity_id": npc["npc_id"]},
+        status=200,
+    )
+    assert awarded["holder"]["entity_id"] == npc["npc_id"] and awarded["owner"] is not None
+    equipped = write(
+        f"{item_url}/equip", {"expected_last_event_id": awarded["last_event_id"]}, status=200
+    )
+    damaged = write(
+        f"{item_url}/damage",
+        {"expected_last_event_id": equipped["last_event_id"], "amount": 25},
+        status=200,
+    )
+    assert damaged["is_equipped"] is True and damaged["condition_percentage"] == 75
+    stale = s.gm.post_raw(
+        f"{item_url}/destroy",
+        {"expected_last_event_id": awarded["last_event_id"]},
+        key=s.gm.fresh_key(),
+    )
+    assert stale.status_code == 409
+    voided = write(
+        f"/campaigns/{s.cid}/events/{damaged['event_id']}/void",
+        {"reason": "The blow never landed"},
+        status=200,
+    )
+    assert voided["correcting_event_id"]
+    restored = s.gm.get(f"{authoring}/items/{sword['item_instance_id']}").json()
+    assert (
+        restored["condition_percentage"] is None
+        and restored["last_event_id"] == equipped["event_id"]
+    )
+    assert s.player.get(f"{authoring}/items/{sword['item_instance_id']}").status_code == 403

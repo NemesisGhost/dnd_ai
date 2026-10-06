@@ -105,7 +105,10 @@ def test_an_event_places_an_item_with_a_holder(postgres_engine: Engine, f: Fixtu
         assert event_row.type_code == "item_transferred"
 
         effect_row = verify.execute(
-            text("SELECT target_entity_id FROM narrative.event_effects WHERE event_id = :e"),
+            text(
+                "SELECT target_entity_id FROM narrative.event_effects WHERE event_id = :e "
+                "AND target_component = 'inventory_entries.location'"
+            ),
             {"e": result.event_id},
         ).one()
         assert effect_row.target_entity_id == f.item_instance_id
@@ -169,13 +172,15 @@ def test_a_second_transfer_records_the_real_previous_location_in_the_event_effec
     with postgres_engine.connect() as verify:
         first_effect = verify.execute(
             text(
-                "SELECT previous_value, new_value FROM narrative.event_effects WHERE event_id = :e"
+                "SELECT previous_value, new_value FROM narrative.event_effects WHERE event_id = :e "
+                "AND target_component = 'inventory_entries.location'"
             ),
             {"e": first.event_id},
         ).one()
         second_effect = verify.execute(
             text(
-                "SELECT previous_value, new_value FROM narrative.event_effects WHERE event_id = :e"
+                "SELECT previous_value, new_value FROM narrative.event_effects WHERE event_id = :e "
+                "AND target_component = 'inventory_entries.location'"
             ),
             {"e": second.event_id},
         ).one()

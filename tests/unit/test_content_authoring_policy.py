@@ -99,7 +99,7 @@ def test_a_type_specific_block_only_hides_an_action_the_table_allows() -> None:
 
 def test_ineligible_types_report_one_blocked_pseudo_action() -> None:
     available, blocked = evaluate_content_actions(
-        entity_type_code="item_instance", canon_status="draft", lifecycle_status="active"
+        entity_type_code="event", canon_status="draft", lifecycle_status="active"
     )
     assert available == [UPDATE]
     assert [b.action for b in blocked] == ["all"]

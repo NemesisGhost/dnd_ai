@@ -105,6 +105,14 @@ _TABLES = (
     "campaign.character_location_history",
     # Phase 15.3A-3 NPC portrayal.
     "character.npc_portrayal_profiles",
+    # Phase 15.3B-1a/1b item definitions, instances and custody.
+    "rules.item_definitions",
+    "world.item_instances",
+    "world.item_containers",
+    "campaign.item_state",
+    "campaign.item_ownership",
+    "campaign.inventory_entries",
+    "campaign.item_attunements",
     "narrative.objective_dependencies",
     "knowledge.knowledge_items",
 )
