@@ -128,6 +128,10 @@ function AddRelationship({
     const [share, setShare] = useState("")
     const [isPublic, setIsPublic] = useState("yes")
     const [terms, setTerms] = useState("")
+    const [distance, setDistance] = useState("")
+    const [duration, setDuration] = useState("")
+    const [mode, setMode] = useState("")
+    const [concealed, setConcealed] = useState("no")
     const [problem, setProblem] = useState<string | null>(null)
     const shape = options.kinds.find((k) => k.code === kind)
 
@@ -179,6 +183,12 @@ function AddRelationship({
             body.is_public = isPublic === "yes"
         }
         if (kind === "political" && terms.trim() !== "") body.treaty_terms = terms.trim()
+        if (kind === "route") {
+            if (distance.trim() !== "") body.distance_text = distance.trim()
+            if (duration.trim() !== "") body.travel_time_text = duration.trim()
+            if (mode.trim() !== "") body.travel_mode = mode.trim()
+            body.is_hidden = concealed === "yes"
+        }
         mutation.submit(body)
     }
 
@@ -284,6 +294,24 @@ function AddRelationship({
                     ) : null}
                     {kind === "political" ? (
                         <TextAreaField id="rel-new-terms" label="Terms" value={terms} onChange={setTerms} />
+                    ) : null}
+                    {kind === "route" ? (
+                        <>
+                            <TextField id="rel-new-distance" label="Distance" value={distance} onChange={setDistance} />
+                            <TextField id="rel-new-duration" label="Travel time" value={duration} onChange={setDuration} />
+                            <TextField id="rel-new-mode" label="Mode of travel" value={mode} onChange={setMode} />
+                            <SelectField
+                                id="rel-new-concealed"
+                                label="Concealed"
+                                hint="Only editors see a concealed route."
+                                value={concealed}
+                                options={[
+                                    { value: "no", label: "No" },
+                                    { value: "yes", label: "Yes" },
+                                ]}
+                                onChange={setConcealed}
+                            />
+                        </>
                     ) : null}
                     <button
                         type="submit"

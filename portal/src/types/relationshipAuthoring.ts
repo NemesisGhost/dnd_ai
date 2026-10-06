@@ -90,6 +90,10 @@ export interface TypedFields {
     treaty_terms?: string | null
     role?: string | null
     rank?: string | null
+    distance_text?: string | null
+    travel_time_text?: string | null
+    travel_mode?: string | null
+    is_hidden?: boolean
 }
 
 export interface CreateRelationshipBody extends TypedFields {

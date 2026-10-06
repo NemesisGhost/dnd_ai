@@ -152,6 +152,10 @@ function DetailsForm({
     const [isPublic, setIsPublic] = useState(view.typed.is_public === false ? "no" : "yes")
     const [active, setActive] = useState(view.typed.is_active === false ? "no" : "yes")
     const [terms, setTerms] = useState(text(view.typed.treaty_terms))
+    const [distance, setDistance] = useState(text(view.typed.distance_text))
+    const [duration, setDuration] = useState(text(view.typed.travel_time_text))
+    const [mode, setMode] = useState(text(view.typed.travel_mode))
+    const [hidden, setHidden] = useState(view.typed.is_hidden === true ? "yes" : "no")
     const [office, setOffice] = useState(text(view.typed.role))
     const [rank, setRank] = useState(text(view.typed.rank))
     const [problem, setProblem] = useState<string | null>(null)
@@ -163,6 +167,12 @@ function DetailsForm({
         if (view.kind === "ownership") {
             typed.ownership_share = num(share)
             typed.is_public = isPublic === "yes"
+        }
+        if (view.kind === "route") {
+            typed.distance_text = distance.trim() === "" ? null : distance.trim()
+            typed.travel_time_text = duration.trim() === "" ? null : duration.trim()
+            typed.travel_mode = mode.trim() === "" ? null : mode.trim()
+            typed.is_hidden = hidden === "yes"
         }
         if (view.kind === "membership") {
             typed.role = office.trim() === "" ? null : office.trim()
@@ -241,6 +251,24 @@ function DetailsForm({
                             { value: "no", label: "No, only editors see it" },
                         ]}
                         onChange={setIsPublic}
+                    />
+                </>
+            ) : null}
+            {view.kind === "route" ? (
+                <>
+                    <TextField id={`rel-distance-${view.relationship_id}`} label="Distance" value={distance} onChange={setDistance} />
+                    <TextField id={`rel-duration-${view.relationship_id}`} label="Travel time" value={duration} onChange={setDuration} />
+                    <TextField id={`rel-mode-${view.relationship_id}`} label="Mode of travel" value={mode} onChange={setMode} />
+                    <SelectField
+                        id={`rel-hidden-${view.relationship_id}`}
+                        label="Concealed"
+                        hint="Only editors see a concealed route."
+                        value={hidden}
+                        options={[
+                            { value: "no", label: "No" },
+                            { value: "yes", label: "Yes" },
+                        ]}
+                        onChange={setHidden}
                     />
                 </>
             ) : null}

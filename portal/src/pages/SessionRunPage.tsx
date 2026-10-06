@@ -25,6 +25,7 @@ import { ReferenceCombobox } from "../components/authoring/ReferenceCombobox"
 import type { ReferenceOption } from "../components/authoring/ReferenceCombobox"
 import { WorldTimePicker } from "../components/authoring/WorldTimePicker"
 import { useSession } from "../context/SessionContext"
+import { TravelSection } from "../components/TravelSection"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
@@ -115,6 +116,9 @@ function RunBody({
             ) : null}
             {actions.includes("manage_participants") ? (
                 <Participants campaignId={campaignId} session={session} refetch={refetch} />
+            ) : null}
+            {actions.includes("log") ? (
+                <TravelSection campaignId={campaignId} participants={session.participants ?? []} />
             ) : null}
             <LogSection
                 campaignId={campaignId}
