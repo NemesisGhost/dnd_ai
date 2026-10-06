@@ -444,3 +444,23 @@ Not verified: CI; manual browser/accessibility (the member search and the time p
 
 
 Commands run (local PostgreSQL 18): ruff format/check and mypy clean; portal `npm test` (285 files, 2083 tests) / `npm run lint` / `npm run build` clean. Full Python suite on the final tree, no other database session active: 6082 passed, 1 failed (the known developer-`.env` test), 1516 s.
+
+## Checkpoint 15.3A-2c — routes and travel
+
+Commit(s) on `phase15/completion`. **Status: implemented; local automated gates below; CI and manual browser/accessibility checks not performed.** Decision D-20 (option a: a relationship subtype under a new `route` type, no table of its own) applied as recommended.
+
+| Area | Delivered |
+|---|---|
+| Migration | `130_routes`: relationship type `route`, participant roles `origin` and `destination`, `world.route_relationships (relationship_id, distance_text, travel_time_text, travel_mode, is_hidden)` with bounded text, and the event type `characters_traveled`. Round trip with `alembic check`. |
+| Routes | A `route` kind in the relationship kernel (two places of the world as origin and destination; typed fields; create, edit, end, archive and restore through the relationship commands). A concealed route is hidden from every non-editor read (list and detail). `GET /campaigns/{id}/authoring/routes?location_id=` lists the routes that touch a place (the plan named `/authoring/routes`; creation uses the relationship endpoint). |
+| Travel | `commands/travel.py` `record_travel` and `POST /campaigns/{id}/travel`: characters and/or a party's current members, a published destination place, the campaign clock or a given time (which must follow each mover's arrival), an optional route that must be active and join the mover's place to the destination. One `characters_traveled` event with an effect per mover; location history closed and opened atomically; already-there travelers reported; one bad traveler stops the whole journey; an advisory lock per traveler serializes journeys that start from "nowhere". |
+| Portal | A Travel section on the session run page and route fields in the relationship editors. |
+| Dev data | The guard now covers `world.route_relationships` and `campaign.character_location_history`; no fixture sites needed marking. |
+| Tests | 9 API tests (a route with its details; invalid shapes; a concealed route hidden from readers; several characters in one event, repeats and a second journey; a party; one bad traveler; route mismatches and an archived route; time rules; authority and replay), 1 real-PostgreSQL race (two journeys from nowhere), a migration round trip, 5 portal tests, and scenario step 19. |
+
+Decisions applied (not owner decisions): routes join places only (a dungeon or an area counts as a place); travel takes its time from the clock unless one is given; an optional route is checked in both directions; event correction does not yet reverse location changes (unchanged from before); pathfinding is deferred, as the plan says.
+
+Not verified: CI; manual browser/accessibility (the traveler checkboxes and the destination search).
+
+
+Commands run (local PostgreSQL 18): ruff format/check and mypy clean; portal `npm test` (286 files, 2088 tests) / `npm run lint` / `npm run build` clean. Full Python suite, no other database session active: 6093 passed, 4 failed in the first run (the known developer-`.env` test, and three table-list tests that had not yet been told about `world.route_relationships`: the persistence package lists and the role-grants coverage list). Those lists were updated and the affected files rerun (581 and 19 passed); the full suite was not rerun because nothing else changed.
