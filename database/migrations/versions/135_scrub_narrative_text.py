@@ -8,7 +8,7 @@ Create Date: 2026-10-07 14:00:00.000000
 
 Purpose:
     Phase 15 checkpoint 15.2A-4, decisions D-2 and D-28, decided in writing by the owner
-    (2026-10-07): scrub existing audit narrative (`changed_fields` prose; the `reason` note is
+    (in the working session): scrub existing audit narrative (`changed_fields` prose; the `reason` note is
     kept) and rewrite existing idempotency response bodies to receipts, with a marker on every
     modified row and one bounded maintenance audit row.
 

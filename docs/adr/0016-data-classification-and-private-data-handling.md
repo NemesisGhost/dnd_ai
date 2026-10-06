@@ -41,7 +41,7 @@ Phase 15 completion found current defects in how authored content moved through 
 
 ## Addendum: existing rows (D-2 and D-28, checkpoint 15.2A-4)
 
-Owner decision, 2026-10-07 (written, in the working session): "Let's go with your recommendations for D-2 & D-28." The recommendations were: scrub existing audit `changed_fields` prose (limited to the frozen prose keys of the frozen pre-15.2A-3 authoring commands); keep `reason`; rewrite existing completed idempotency response bodies of those commands to receipts; mark every modified row and record one bounded maintenance audit row.
+Owner decision (written, in the working session; the date was not recorded): "Let's go with your recommendations for D-2 & D-28." The recommendations were: scrub existing audit `changed_fields` prose (limited to the frozen prose keys of the frozen pre-15.2A-3 authoring commands); keep `reason`; rewrite existing completed idempotency response bodies of those commands to receipts; mark every modified row and record one bounded maintenance audit row.
 
 Implemented by migration `135_scrub_narrative_text`:
 

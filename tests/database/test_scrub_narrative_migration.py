@@ -1,6 +1,6 @@
 """Migration 135 (the one-time scrub of narrative in audit and replay rows), checkpoint 15.2A-4.
 
-Decisions D-2 and D-28, decided by the owner on 2026-10-07: scrub audit `changed_fields` prose
+Decisions D-2 and D-28, decided by the owner in the working session: scrub audit `changed_fields` prose
 (keep `reason`), rewrite replay bodies to receipts, mark every modified row, and record one
 maintenance row. These tests run the real migration on a throwaway database populated at the
 revision before it.
