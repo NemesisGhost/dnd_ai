@@ -528,3 +528,21 @@ Not verified: CI; manual browser/accessibility (the operations panel with keyboa
 
 Local gates for 15.3B-1b: `ruff format`/`ruff check` and `mypy src` clean; portal 2142 tests passed, lint and build clean; full Python suite 6168 passed, 1 failed (the known developer-`.env` origin test in `tests/unit/test_config.py`). Earlier runs during the work found: the adapter route cannot require an active campaign (its fixtures use pending campaigns), so it keeps API-layer authority; a correction chain needed the previous token restored; and the attunement end needed to be strictly after its start.
 
+## Checkpoint 15.3B-2a — Encounter preparation
+
+Commit(s) on `phase15/completion`. **Status: implemented; local automated gates below; CI and manual browser/accessibility checks not performed.** Decision D-23 (existing characters only; creatures are Phase 19) applied as recommended.
+
+| Area | Delivered |
+|---|---|
+| Migration | None. `narrative.encounters` already allowed `pending` and `narrative.encounter_participants` already carried side and initiative. |
+| Commands | `commands/encounter_preparation.py`: `create_encounter` (pending, in an active session of the campaign, explicit time or campaign clock, optional published place), `update_encounter`, `add_encounter_participant` (a published `npc`, `player_character` or bare `character` of the world; at most 50; no duplicates), `update_encounter_participant`, `remove_encounter_participant`. Lock order: operation scope, the session `FOR SHARE`, the encounter `FOR UPDATE`, then named entities `FOR SHARE`. Only a pending encounter can change. No event is recorded. |
+| API | `POST /campaigns/{id}/encounters/prepare`, `POST .../encounters/{id}/update`, `.../participants`, `.../participants/{pid}/update|remove`, `GET .../authoring/encounters[?session_id=]`, `.../options`, `.../{id}`; `canon.edit`, campaign idempotency, one audit row per change (summary redacted). The existing `POST .../encounters` (starts an active encounter) and its read are unchanged. |
+| Portal | Prepare page, the pending encounter page (details, participants, add), and an Encounters section on the run page. |
+| Tests | 8 API tests (prepared pending with place and summary and redacted audit; participants, side, initiative, duplicates, drafts and foreign entities; side and initiative edits and removal; place and summary edits; nothing changes after start; session membership and archive; permissions and other worlds; replay), 2 real-PostgreSQL races (two adds of one character; an add against a start), 10 portal tests, and scenario step 23. |
+
+Decisions applied (not owner decisions): an encounter is prepared only in an active session; a prepared encounter with no place is allowed; sides are party, ally, enemy, neutral with party the default; there is no way to delete a pending encounter until `abort_encounter` (15.3B-2b).
+
+Not verified: CI; manual browser/accessibility (the participant forms with keyboard only and at narrow width).
+
+
+Local gates for 15.3B-2a: `ruff format`/`ruff check` and `mypy src` clean; portal 2152 tests passed, lint and build clean; full Python suite 6178 passed, 1 failed (the known developer-`.env` origin test in `tests/unit/test_config.py`).
