@@ -103,6 +103,7 @@ from .rulesets import router as rulesets_router
 from .session_authoring import router as session_authoring_router
 from .session_play import router as session_play_router
 from .sessions import router as sessions_router
+from .sources import router as sources_router
 from .summary import router as summary_router
 from .timelines import router as timelines_router
 from .travel import router as travel_router
@@ -182,6 +183,7 @@ def create_app() -> FastAPI:
     app.include_router(characters_router)
     app.include_router(dungeon_router)
     app.include_router(encounter_preparation_router)
+    app.include_router(sources_router)
     app.include_router(encounters_router)
     app.include_router(entity_lifecycle_router)
     app.include_router(events_router)

@@ -100,6 +100,7 @@ ENTITY_REFERENCE_CLASSIFICATION: dict[tuple[str, str, str], str] = {
     ("core", "entity_tags", "entity_id"): OWNED_CASCADE,
     # Canonical revision history (Phase 15, revision 117): removed with a deleted draft.
     ("core", "entity_revisions", "entity_id"): OWNED_CASCADE,
+    ("core", "entity_source_links", "entity_id"): OWNED_CASCADE,
     ("character", "npc_portrayal_profiles", "npc_id"): OWNED_CASCADE,
     # An item instance's own subtype and container rows go with a draft; its timeline state,
     # custody, attunement, identification and combat records block deletion.

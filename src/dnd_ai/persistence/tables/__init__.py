@@ -109,6 +109,7 @@ from .core import (
     entities,
     entity_names,
     entity_revisions,
+    entity_source_links,
     entity_tags,
     entity_types,
     lifecycle_statuses,
@@ -496,5 +497,6 @@ __all__ = [
     "world_time_precisions",
     "world_times",
     "entity_revisions",
+    "entity_source_links",
     "worlds",
 ]

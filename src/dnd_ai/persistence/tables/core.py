@@ -771,3 +771,63 @@ Index(
     entity_revisions.c.created_by_user_id,
     postgresql_where=entity_revisions.c.created_by_user_id.isnot(None),
 )
+
+entity_source_links = Table(
+    "entity_source_links",
+    metadata,
+    _uuid_pk("entity_source_link_id"),
+    Column(
+        "entity_id",
+        UUID(),
+        ForeignKey("core.entities.entity_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "source_id",
+        UUID(),
+        ForeignKey("core.sources.source_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "attached_by_user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="SET NULL"),
+    ),
+    Column("attached_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    Column(
+        "detached_by_user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="SET NULL"),
+    ),
+    Column(
+        "detached_at",
+        TIMESTAMP(timezone=True),
+        comment="When the source was detached; NULL while it is attached.",
+    ),
+    schema="core",
+    comment=(
+        "A source attached to an entity after its creation (the creation source stays on "
+        "core.entities.source_id). A link is detached by setting detached_at once and is never "
+        "otherwise changed or deleted, so the history of what was cited and when is kept. "
+        "Never part of a player read."
+    ),
+)
+
+Index(
+    "ux_entity_source_links_active",
+    entity_source_links.c.entity_id,
+    entity_source_links.c.source_id,
+    unique=True,
+    postgresql_where=entity_source_links.c.detached_at.is_(None),
+)
+Index("ix_entity_source_links_source_id", entity_source_links.c.source_id)
+Index(
+    "ix_entity_source_links_attached_by_user_id",
+    entity_source_links.c.attached_by_user_id,
+    postgresql_where=entity_source_links.c.attached_by_user_id.isnot(None),
+)
+Index(
+    "ix_entity_source_links_detached_by_user_id",
+    entity_source_links.c.detached_by_user_id,
+    postgresql_where=entity_source_links.c.detached_by_user_id.isnot(None),
+)
