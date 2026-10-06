@@ -20,6 +20,7 @@ KIND_OWNERSHIP = "ownership"
 KIND_POLITICAL = "political"
 KIND_GENERAL = "general"
 KIND_MEMBERSHIP = "membership"
+KIND_ROUTE = "route"
 
 
 @dataclass(frozen=True)
@@ -58,6 +59,13 @@ RELATIONSHIP_KINDS: tuple[RelationshipKind, ...] = (
         ("membership",),
         ("member", "organization"),
         fixed_roles=("member", "organization"),
+    ),
+    RelationshipKind(
+        KIND_ROUTE,
+        "Route",
+        ("route",),
+        ("origin", "destination"),
+        fixed_roles=("origin", "destination"),
     ),
     RelationshipKind(
         KIND_POLITICAL,
@@ -166,6 +174,50 @@ ORGANIZATION_TYPE_CODES = frozenset(
     }
 )
 MEMBER_TYPE_CODES = frozenset({"npc", "player_character"}) | ORGANIZATION_TYPE_CODES
+
+
+# Routes (15.3A-2c) join two places; travel moves characters between places.
+PLACE_TYPE_CODES = frozenset(
+    {
+        "location",
+        "settlement",
+        "building",
+        "plane",
+        "continent",
+        "nation",
+        "region",
+        "district",
+        "geographic_feature",
+        "realm",
+        "dungeon",
+        "dungeon_area",
+    }
+)
+MAX_TRAVELERS = 50
+
+
+class RouteMismatchError(SafeMessageError):
+    """The route does not join where the travelers are to where they are going."""
+
+    safe_status_code = 409
+    safe_error_code = "route_mismatch"
+    safe_message = "That route does not join where the travelers are to where they are going."
+
+
+class TravelInvalidError(SafeMessageError):
+    """Travel needs a published destination and at least one published traveler."""
+
+    safe_status_code = 400
+    safe_error_code = "travel_invalid"
+    safe_message = "Choose a published destination and at least one traveler."
+
+
+class TravelTimeInvalidError(SafeMessageError):
+    """Travelers leave a place after they arrived there."""
+
+    safe_status_code = 409
+    safe_error_code = "travel_time_invalid"
+    safe_message = "Choose a time after the travelers arrived where they are."
 
 
 class MembershipOverlapError(SafeMessageError):

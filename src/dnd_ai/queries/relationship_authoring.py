@@ -19,6 +19,7 @@ from dnd_ai.domain.relationship_authoring import (
     KIND_FAMILY,
     KIND_OWNERSHIP,
     KIND_POLITICAL,
+    KIND_ROUTE,
     RELATIONSHIP_KINDS,
 )
 
@@ -93,6 +94,7 @@ def _kind(connection: Connection, relationship_id: uuid.UUID) -> str:
         (KIND_EMPLOYMENT, "employment_relationships"),
         (KIND_OWNERSHIP, "ownership_relationships"),
         (KIND_POLITICAL, "political_relationships"),
+        (KIND_ROUTE, "route_relationships"),
     ):
         if (
             connection.execute(
@@ -152,6 +154,10 @@ def _typed(connection: Connection, relationship_id: uuid.UUID, kind: str) -> dic
         KIND_OWNERSHIP: "SELECT ownership_share, is_public FROM world.ownership_relationships",
         KIND_POLITICAL: "SELECT is_active, treaty_terms FROM world.political_relationships",
         "membership": "SELECT role, rank, is_public FROM world.organization_memberships",
+        KIND_ROUTE: (
+            "SELECT distance_text, travel_time_text, travel_mode, is_hidden "
+            "FROM world.route_relationships"
+        ),
     }
     if kind not in queries:
         return {}

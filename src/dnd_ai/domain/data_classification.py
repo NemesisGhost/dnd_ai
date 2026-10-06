@@ -268,6 +268,10 @@ COLUMN_CLASSES: dict[str, DataClass] = {
     **_table("world.organizations", {"internal_description": _G, "public_description": _P}),
     **_table("world.political_factions", {"ideology": _P}),
     **_table("world.political_relationships", {"treaty_terms": _G}),
+    **_table(
+        "world.route_relationships",
+        {"distance_text": _C, "travel_time_text": _C, "travel_mode": _C},
+    ),
     **_table("world.relationship_participants", {"notes": _G}),
     **_table(
         "world.relationship_perspectives", {"emotional_tone": _G, "private_interpretation": _G}

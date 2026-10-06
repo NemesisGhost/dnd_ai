@@ -118,6 +118,9 @@ def get_relationship_view(
                            OR EXISTS (SELECT 1 FROM world.organization_memberships m
                                       WHERE m.relationship_id = r.relationship_id
                                         AND NOT m.is_public)
+                           OR EXISTS (SELECT 1 FROM world.route_relationships rr
+                                      WHERE rr.relationship_id = r.relationship_id
+                                        AND rr.is_hidden)
                        ) AS not_for_readers
                 FROM world.relationships r
                 JOIN world.relationship_types rt ON rt.relationship_type_id = r.relationship_type_id

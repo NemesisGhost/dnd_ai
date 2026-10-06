@@ -94,6 +94,10 @@ class CreateRelationshipRequest(BaseAuthoringRequest):
     treaty_terms: str | None = Field(default=None, max_length=TEXT_MAX_LENGTH)
     role: str | None = Field(default=None, max_length=SHORT_TEXT_MAX_LENGTH)
     rank: str | None = Field(default=None, max_length=SHORT_TEXT_MAX_LENGTH)
+    distance_text: str | None = Field(default=None, max_length=SHORT_TEXT_MAX_LENGTH)
+    travel_time_text: str | None = Field(default=None, max_length=SHORT_TEXT_MAX_LENGTH)
+    travel_mode: str | None = Field(default=None, max_length=SHORT_TEXT_MAX_LENGTH)
+    is_hidden: bool | None = None
 
 
 class UpdateRelationshipRequest(BaseAuthoringRequest):
@@ -108,6 +112,10 @@ class UpdateRelationshipRequest(BaseAuthoringRequest):
     treaty_terms: str | None = Field(default=None, max_length=TEXT_MAX_LENGTH)
     role: str | None = Field(default=None, max_length=SHORT_TEXT_MAX_LENGTH)
     rank: str | None = Field(default=None, max_length=SHORT_TEXT_MAX_LENGTH)
+    distance_text: str | None = Field(default=None, max_length=SHORT_TEXT_MAX_LENGTH)
+    travel_time_text: str | None = Field(default=None, max_length=SHORT_TEXT_MAX_LENGTH)
+    travel_mode: str | None = Field(default=None, max_length=SHORT_TEXT_MAX_LENGTH)
+    is_hidden: bool | None = None
     change_note: str | None = Field(default=None, max_length=REASON_MAX_LENGTH)
 
 
@@ -141,6 +149,10 @@ _TYPED_NAMES = (
     "treaty_terms",
     "role",
     "rank",
+    "distance_text",
+    "travel_time_text",
+    "travel_mode",
+    "is_hidden",
 )
 
 

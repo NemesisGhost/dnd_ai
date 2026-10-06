@@ -31,9 +31,11 @@ from dnd_ai.domain.relationship_authoring import (
     KIND_MEMBERSHIP,
     KIND_OWNERSHIP,
     KIND_POLITICAL,
+    KIND_ROUTE,
     MEMBER_TYPE_CODES,
     ORGANIZATION_TYPE_CODES,
     PARTICIPANT_TYPE_CODES,
+    PLACE_TYPE_CODES,
     SHORT_TEXT_MAX_LENGTH,
     MembershipOverlapError,
     MembershipStartRequiredError,
@@ -89,6 +91,7 @@ _TYPED_FIELDS: dict[str, tuple[str, ...]] = {
     KIND_OWNERSHIP: ("ownership_share", "is_public"),
     KIND_POLITICAL: ("is_active", "treaty_terms"),
     KIND_MEMBERSHIP: ("role", "rank", "is_public"),
+    KIND_ROUTE: ("distance_text", "travel_time_text", "travel_mode", "is_hidden"),
     "general": (),
 }
 
@@ -104,7 +107,15 @@ def _clean_typed(kind_code: str, typed: dict[str, Any]) -> dict[str, Any]:
         raise RelationshipInvalidError(f"{kind_code} has no field(s) {sorted(unknown)}")
     clean: dict[str, Any] = {}
     for name, value in typed.items():
-        if name in ("family_unit_name", "job_title", "role", "rank"):
+        if name in (
+            "family_unit_name",
+            "job_title",
+            "role",
+            "rank",
+            "distance_text",
+            "travel_time_text",
+            "travel_mode",
+        ):
             clean[name] = normalize_text(value, field=name, limit=SHORT_TEXT_MAX_LENGTH)
         elif name == "treaty_terms":
             clean[name] = normalize_text(value, field=name)
@@ -162,6 +173,7 @@ def _kind_of(connection: Connection, relationship_id: uuid.UUID, type_code: str)
         (KIND_OWNERSHIP, "ownership_relationships"),
         (KIND_POLITICAL, "political_relationships"),
         (KIND_MEMBERSHIP, "organization_memberships"),
+        (KIND_ROUTE, "route_relationships"),
     ):
         found = connection.execute(
             text(f"SELECT 1 FROM world.{table} WHERE relationship_id = :r"),  # noqa: S608
@@ -257,6 +269,11 @@ def create_relationship(
             type_codes=PARTICIPANT_TYPE_CODES,
             error=RelationshipParticipantInvalidError,
         )
+    if shape.code == KIND_ROUTE:
+        for participant in participants:
+            place = locked.get(participant.entity_id)
+            if place is None or place.entity_type_code not in PLACE_TYPE_CODES:
+                raise RelationshipParticipantInvalidError("a route joins two places")
     if shape.code == KIND_MEMBERSHIP:
         by_role = {p.role: p.entity_id for p in participants}
         organization = locked.get(by_role["organization"])
@@ -409,6 +426,21 @@ def _insert_typed(
                 "start": started_world_time_id,
             },
         )
+    elif kind == KIND_ROUTE:
+        connection.execute(
+            text("""
+                INSERT INTO world.route_relationships
+                    (relationship_id, distance_text, travel_time_text, travel_mode, is_hidden)
+                VALUES (:r, :distance, :time, :mode, :hidden)
+            """),
+            {
+                "r": relationship_id,
+                "distance": typed.get("distance_text"),
+                "time": typed.get("travel_time_text"),
+                "mode": typed.get("travel_mode"),
+                "hidden": typed.get("is_hidden", False),
+            },
+        )
     elif kind == KIND_POLITICAL:
         connection.execute(
             text(
@@ -430,6 +462,10 @@ def _current_typed(connection: Connection, relationship_id: uuid.UUID, kind: str
         KIND_OWNERSHIP: "SELECT ownership_share, is_public FROM world.ownership_relationships",
         KIND_POLITICAL: "SELECT is_active, treaty_terms FROM world.political_relationships",
         KIND_MEMBERSHIP: "SELECT role, rank, is_public FROM world.organization_memberships",
+        KIND_ROUTE: (
+            "SELECT distance_text, travel_time_text, travel_mode, is_hidden "
+            "FROM world.route_relationships"
+        ),
     }
     if kind not in queries:
         return {}
@@ -533,6 +569,7 @@ def _update_typed(
         KIND_OWNERSHIP: "ownership_relationships",
         KIND_POLITICAL: "political_relationships",
         KIND_MEMBERSHIP: "organization_memberships",
+        KIND_ROUTE: "route_relationships",
     }
     if kind not in tables:
         return

@@ -225,6 +225,7 @@ from .relationships import (
     relationships,
     religions,
     religious_organizations,
+    route_relationships,
 )
 from .rules import (
     abilities,
@@ -431,6 +432,7 @@ __all__ = [
     "player_characters",
     "political_factions",
     "political_relationships",
+    "route_relationships",
     "proficiency_types",
     "prompt_fragments",
     "prompt_templates",

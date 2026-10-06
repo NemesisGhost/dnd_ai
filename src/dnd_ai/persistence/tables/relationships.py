@@ -688,3 +688,35 @@ political_relationships = Table(
         "additions beyond that generic shape."
     ),
 )
+
+route_relationships = Table(
+    "route_relationships",
+    metadata,
+    Column(
+        "relationship_id",
+        UUID(),
+        ForeignKey("world.relationships.relationship_id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("distance_text", Text()),
+    Column("travel_time_text", Text()),
+    Column("travel_mode", Text()),
+    Column(
+        "is_hidden",
+        Boolean(),
+        nullable=False,
+        server_default=text("false"),
+        comment=(
+            "The route is concealed: only people who can edit canon see it. A fact about the "
+            "route itself, never about who has found it."
+        ),
+    ),
+    *_timestamps(),
+    schema="world",
+    comment=(
+        "A specialized relationship: a route between two locations (origin and destination "
+        "participants). Distance, travel time and mode are free text; is_hidden says the route "
+        "is built to be concealed and is shown only to editors. Travel along it is recorded "
+        "by the travel command, which updates character location history."
+    ),
+)

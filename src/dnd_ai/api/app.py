@@ -101,6 +101,7 @@ from .session_play import router as session_play_router
 from .sessions import router as sessions_router
 from .summary import router as summary_router
 from .timelines import router as timelines_router
+from .travel import router as travel_router
 from .user_preferences import router as user_preferences_router
 from .world_explorer import router as world_explorer_router
 from .world_time import router as world_time_router
@@ -209,6 +210,7 @@ def create_app() -> FastAPI:
     app.include_router(dungeon_authoring_router)
     app.include_router(relationship_authoring_router)
     app.include_router(organization_members_router)
+    app.include_router(travel_router)
     app.include_router(summary_router)
     app.include_router(timelines_router)
     app.include_router(user_preferences_router)

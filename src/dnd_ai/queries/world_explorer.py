@@ -567,6 +567,10 @@ def list_world_relationships(
                             SELECT 1 FROM world.organization_memberships oml
                             WHERE oml.relationship_id = r.relationship_id AND NOT oml.is_public
                         )
+                        AND NOT EXISTS (
+                            SELECT 1 FROM world.route_relationships rrl
+                            WHERE rrl.relationship_id = r.relationship_id AND rrl.is_hidden
+                        )
                     )
                   )
               AND (CAST(:type_code AS text) IS NULL OR rt.code = CAST(:type_code AS text))
