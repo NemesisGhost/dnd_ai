@@ -5,6 +5,8 @@
     POST /campaigns/{id}/encounters/{eid}/participants       (add a character, side, initiative)
     POST /campaigns/{id}/encounters/{eid}/participants/{pid}/update
     POST /campaigns/{id}/encounters/{eid}/participants/{pid}/remove
+    POST /campaigns/{id}/encounters/{eid}/start              (pending -> active, 15.3B-2b)
+    POST /campaigns/{id}/encounters/{eid}/abort              (pending or active -> aborted)
     GET  /campaigns/{id}/authoring/encounters?session_id=
     GET  /campaigns/{id}/authoring/encounters/options
     GET  /campaigns/{id}/authoring/encounters/{eid}
@@ -23,6 +25,11 @@ from fastapi.responses import JSONResponse
 from pydantic import Field
 from sqlalchemy import Connection
 
+from dnd_ai.commands.encounter_operations import (
+    EncounterOperationResult,
+    abort_encounter,
+    start_prepared_encounter,
+)
 from dnd_ai.commands.encounter_preparation import (
     PreparationResult,
     add_encounter_participant,
@@ -32,6 +39,7 @@ from dnd_ai.commands.encounter_preparation import (
     update_encounter_participant,
 )
 from dnd_ai.domain.access import AccessContext
+from dnd_ai.domain.encounter_operations import ACTION_KINDS, OUTCOMES
 from dnd_ai.domain.encounter_preparation import (
     INITIATIVE_MAX,
     INITIATIVE_MIN,
@@ -99,6 +107,27 @@ def _view_json(view: EncounterPreparationView, *, changed: bool | None = None) -
         "location_id": None if view.location_id is None else str(view.location_id),
         "location_name": view.location_name,
         "world_time_id": str(view.world_time_id),
+        "current_round": view.current_round,
+        "resulting_event_id": (
+            None if view.resulting_event_id is None else str(view.resulting_event_id)
+        ),
+        "rounds": [
+            {
+                "round_number": r.round_number,
+                "turns": [
+                    {
+                        "turn_order": t.turn_order,
+                        "actor_name": t.actor_name,
+                        "target_name": t.target_name,
+                        "action_kind": t.action_kind,
+                        "hit": t.hit,
+                        "damage_amount": t.damage_amount,
+                    }
+                    for t in r.turns
+                ],
+            }
+            for r in view.rounds
+        ],
         "participants": [
             {
                 "encounter_participant_id": str(p.encounter_participant_id),
@@ -107,6 +136,9 @@ def _view_json(view: EncounterPreparationView, *, changed: bool | None = None) -
                 "entity_type_code": p.entity_type_code,
                 "side": p.side,
                 "initiative": p.initiative,
+                "outcome": p.outcome,
+                "current_hit_points": p.current_hit_points,
+                "maximum_hit_points": p.maximum_hit_points,
             }
             for p in view.participants
         ],
@@ -131,6 +163,8 @@ def _load(connection: Connection, access: AccessContext, encounter_id: uuid.UUID
 def options_endpoint() -> dict[str, Any]:
     return {
         "sides": [{"value": code, "label": label} for code, label in SIDES],
+        "action_kinds": [{"value": code, "label": label} for code, label in ACTION_KINDS],
+        "outcomes": [{"value": code, "label": label} for code, label in OUTCOMES],
         "limits": {
             "summary_max_length": SUMMARY_MAX_LENGTH,
             "initiative_min": INITIATIVE_MIN,
@@ -352,5 +386,115 @@ def remove_participant_endpoint(
             actor_user_id=access.user_id,
             encounter_id=encounter_id,
             encounter_participant_id=participant_id,
+        ),
+    )
+
+
+class OperationRequest(BaseAuthoringRequest):
+    world_time_id: uuid.UUID | None = None
+    session_id: uuid.UUID | None = None
+    note: str | None = Field(default=None, max_length=4000)
+
+
+def _operate(
+    *,
+    command_name: str,
+    encounter_id: uuid.UUID,
+    access: AccessContext,
+    connection: Connection,
+    idempotency_key: str | None,
+    correlation_id: str | None,
+    body: OperationRequest,
+    command: Callable[[], EncounterOperationResult],
+) -> Any:
+    idem = start_campaign_idempotency(
+        connection,
+        actor_user_id=access.user_id,
+        campaign_id=access.campaign_id,
+        idempotency_key=idempotency_key,
+        command_name=command_name,
+        payload={"encounter_id": str(encounter_id), **body.model_dump(mode="json")},
+        correlation_id=correlation_id,
+    )
+    if idem.replay is not None:
+        return idem.replay
+    result = command()
+    record_change_log(
+        connection,
+        change_action_code="updated",
+        schema_name="narrative",
+        table_name="encounters",
+        record_id=result.encounter_id,
+        entity_id=None,
+        world_id=result.world_id,
+        actor_user_id=access.user_id,
+        correlation_id=correlation_id,
+        command_name=command_name,
+        event_id=result.event_id,
+        previous_status=result.previous_status,
+        new_status=result.new_status,
+    )
+    response = {
+        **_view_json(_load(connection, access, encounter_id), changed=True),
+        "event_id": None if result.event_id is None else str(result.event_id),
+    }
+    finish_campaign_idempotency(connection, idem, status_code=200, body=response)
+    return response
+
+
+@router.post(_BASE + "/{encounter_id}/start")
+def start_endpoint(
+    encounter_id: uuid.UUID,
+    body: OperationRequest,
+    access: _Access,
+    connection: _Conn,
+    idempotency_key: _Key,
+    correlation_id: _Corr,
+) -> Any:
+    return _operate(
+        command_name="start_encounter",
+        encounter_id=encounter_id,
+        access=access,
+        connection=connection,
+        idempotency_key=idempotency_key,
+        correlation_id=correlation_id,
+        body=body,
+        command=lambda: start_prepared_encounter(
+            connection,
+            campaign_id=access.campaign_id,
+            actor_user_id=access.user_id,
+            encounter_id=encounter_id,
+            world_time_id=body.world_time_id,
+            session_id=body.session_id,
+            note=body.note,
+        ),
+    )
+
+
+@router.post(_BASE + "/{encounter_id}/abort")
+def abort_endpoint(
+    encounter_id: uuid.UUID,
+    body: OperationRequest,
+    access: _Access,
+    connection: _Conn,
+    idempotency_key: _Key,
+    correlation_id: _Corr,
+) -> Any:
+    return _operate(
+        command_name="abort_encounter",
+        encounter_id=encounter_id,
+        access=access,
+        connection=connection,
+        idempotency_key=idempotency_key,
+        correlation_id=correlation_id,
+        body=body,
+        command=lambda: abort_encounter(
+            connection,
+            campaign_id=access.campaign_id,
+            actor_user_id=access.user_id,
+            encounter_id=encounter_id,
+            world_time_id=body.world_time_id,
+            session_id=body.session_id,
+            note=body.note,
         ),
     )
