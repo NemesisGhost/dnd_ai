@@ -71,6 +71,12 @@ _TABLES = (
     # Phase 15.2E-2b quest runtime state.
     "campaign.quest_state",
     "campaign.objective_state",
+    # Phase 15.2E-3 knowledge runtime state.
+    "knowledge.entity_knowledge",
+    "knowledge.information_transfers",
+    "knowledge.public_knowledge",
+    "knowledge.party_discoveries",
+    "campaign.party_knowledge",
     "narrative.objective_dependencies",
     "knowledge.knowledge_items",
 )

@@ -5172,6 +5172,7 @@ def _ensure_party_knowledge(
         return
     connection.execute(
         text("""
+            -- phase14-direct-insert: allowed (fixture knowledge at fixed times, with no clock or events)
             INSERT INTO campaign.party_knowledge
                 (timeline_id, party_id, knowledge_item_id, awareness_level, confidence,
                  interpretation, willing_to_share)
@@ -5212,6 +5213,7 @@ def _ensure_entity_knowledge(
         return
     connection.execute(
         text("""
+            -- phase14-direct-insert: allowed (fixture knowledge at fixed times, with no clock or events)
             INSERT INTO knowledge.entity_knowledge
                 (timeline_id, knowledge_item_id, knower_entity_id, awareness_level, confidence,
                  interpretation, willing_to_share)
@@ -5253,6 +5255,7 @@ def _ensure_public_knowledge(
         return
     connection.execute(
         text("""
+            -- phase14-direct-insert: allowed (fixture knowledge at fixed times, with no clock or events)
             INSERT INTO knowledge.public_knowledge
                 (timeline_id, knowledge_item_id, location_id, awareness_level,
                  known_since_world_time_id)
@@ -5292,6 +5295,7 @@ def _ensure_party_discovery(
         return
     connection.execute(
         text("""
+            -- phase14-direct-insert: allowed (fixture knowledge at fixed times, with no clock or events)
             INSERT INTO knowledge.party_discoveries
                 (timeline_id, knowledge_item_id, party_id, discovered_at_world_time_id,
                  discovered_via_event_id)

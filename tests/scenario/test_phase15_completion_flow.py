@@ -359,3 +359,41 @@ def test_a_gm_sets_up_and_runs_a_campaign(
     write(f"{quest_runtime}/complete", {"expected_status": "active", "note": "Done."}, status=200)
     assert s.gm.get(f"{quest_runtime}/progress").json()["scopes"][0]["status"] == "completed"
     assert s.player.get(f"{quest_runtime}/progress").status_code == 403
+
+    # --- Step 15 (15.2E-3): a claim is learned, believed differently, and made public ----
+    claim = write(
+        f"/campaigns/{s.cid}/authoring/knowledge",
+        {
+            "statement": "The duke is a vampire.",
+            "knowledge_type": "secret",
+            "truth_status": "true",
+            "sensitivity": "secret",
+        },
+    )
+    for action in ("submit-for-review", "approve", "publish"):
+        lifecycle = f"/campaigns/{s.cid}/entities/{claim['knowledge_item_id']}/lifecycle"
+        version = int(
+            s.gm.get(f"/campaigns/{s.cid}/authoring/knowledge/{claim['knowledge_item_id']}").json()[
+                "row_version"
+            ]
+        )
+        write(f"{lifecycle}/{action}", {"expected_row_version": version}, status=200)
+    knowledge = f"/campaigns/{s.cid}/knowledge/{claim['knowledge_item_id']}"
+    learned = write(
+        f"{knowledge}/learn",
+        {"knower_entity_id": pc_id, "awareness_level": "suspected", "interpretation": "He is ill."},
+    )
+    audience = s.gm.get(f"{knowledge}/audience").json()
+    belief = audience["knowers"][0]
+    assert (
+        belief["awareness_level"] == "suspected" and belief["last_event_id"] == learned["event_id"]
+    )
+    write(
+        f"/campaigns/{s.cid}/knowledge/knowers/{belief['entity_knowledge_id']}/belief",
+        {"expected_last_event_id": learned["event_id"], "interpretation": "He is undead."},
+        status=200,
+    )
+    assert (
+        s.gm.get(f"{knowledge}/audience").json()["knowers"][0]["interpretation"] == "He is undead."
+    )
+    assert s.player.get(f"{knowledge}/audience").status_code == 403
