@@ -20,6 +20,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import Connection
 
+from dnd_ai.domain.data_classification import replay_body
+
 from .idempotency import (
     IdempotentReplay,
     begin_actor_idempotent_request,
@@ -132,10 +134,13 @@ def finish_campaign_idempotency(
     status_code: int,
     body: dict[str, Any],
 ) -> None:
+    """Store the response for replay. Only the minimal receipt part is stored (`replay_body`,
+    checkpoint 15.2A-4), so a replay of any authoring write returns ids, flags and codes and
+    never a name, summary or GM-only text; the client refetches the record."""
     if state.reservation_id is not None:
         complete_idempotent_request(
             connection,
             idempotent_request_id=state.reservation_id,
             response_status_code=status_code,
-            response_body=body,
+            response_body=replay_body(body),
         )

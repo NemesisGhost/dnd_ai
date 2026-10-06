@@ -24,6 +24,7 @@ Three things live here, none of which touch the database:
 """
 
 import enum
+import re
 import uuid
 from collections.abc import Mapping
 from typing import Any
@@ -461,6 +462,62 @@ def audit_diff(
         for key, new_value in after.items()
         if before.get(key) != new_value
     }
+
+
+# --- Idempotency replay bodies ---------------------------------------------------------
+
+# String values a replay body may keep, besides ids: short closed codes (statuses and kinds).
+_REPLAY_CODE_KEYS = frozenset(
+    {
+        "status",
+        "previous_status",
+        "new_status",
+        "previous_status_code",
+        "new_status_code",
+        "status_code",
+        "canon_status",
+        "lifecycle_status",
+        "operation",
+        "action",
+        "kind",
+        "side",
+        "detail_level",
+        "entity_type_code",
+    }
+)
+_REPLAY_CODE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+
+
+def _is_uuid(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        uuid.UUID(value)
+    except ValueError:
+        return False
+    return True
+
+
+def replay_body(body: Mapping[str, Any]) -> dict[str, Any]:
+    """The part of a command response that may be stored for replay (checkpoint 15.2A-4).
+
+    Replay storage keeps ids, flags, numbers and short closed codes only: a key ending in
+    `_id` holding a UUID, a list of UUIDs, a boolean, a number, a null, and the code keys
+    above. Every other value (a name, a summary, a reference, a nested view) is dropped, so a
+    stored replay never holds narrative, whichever route wrote it. A replay therefore returns
+    a minimal receipt and the client refetches the record."""
+    kept: dict[str, Any] = {}
+    for key, value in body.items():
+        if value is None or isinstance(value, bool | int | float):
+            kept[key] = value
+        elif isinstance(value, str):
+            if (key.endswith("_id") and _is_uuid(value)) or (
+                key in _REPLAY_CODE_KEYS and _REPLAY_CODE.match(value)
+            ):
+                kept[key] = value
+        elif isinstance(value, list) and all(_is_uuid(item) for item in value):
+            kept[key] = list(value)
+    return kept
 
 
 # --- Idempotency receipts --------------------------------------------------------------
