@@ -546,3 +546,22 @@ Not verified: CI; manual browser/accessibility (the participant forms with keybo
 
 
 Local gates for 15.3B-2a: `ruff format`/`ruff check` and `mypy src` clean; portal 2152 tests passed, lint and build clean; full Python suite 6178 passed, 1 failed (the known developer-`.env` origin test in `tests/unit/test_config.py`).
+
+## Checkpoint 15.3B-2b — Encounter operation
+
+Commit(s) on `phase15/completion`. **Status: implemented; local automated gates below; CI, manual browser/accessibility checks and a live Foundry combat sync not performed.** No new owner decisions.
+
+| Area | Delivered |
+|---|---|
+| Migration | None. Rounds, turns, outcomes and the `aborted` status already existed; start, abort and end events use the `other` event type with the encounter as cause. |
+| Commands | `commands/encounter_operations.py`: `start_prepared_encounter` (pending to active; needs a participant, all published; opens round 1; one event; the encounter time becomes the start time) and `abort_encounter` (pending to aborted with no event; active to aborted with an event that becomes the resulting event). `commands/encounters.py`: a turn's round and order are optional and computed under the encounter lock, the current round advances, hit points never go below zero. The Foundry sync still calls the same implementations. |
+| API | `POST /campaigns/{id}/encounters/{eid}/start` and `/abort` (scope-locked authority, campaign idempotency, one audit row with the status change). The existing `/turns` and `/end` take an optional time (the campaign clock), run on the campaign idempotency store and write an audit row; they keep their API-layer authority (the adapter fixtures use pending campaigns), a residual as for the item transfer. The authoring read adds the round, outcomes, hit points and the turn log. |
+| Portal | The encounter page operates the encounter: start or discard, record turns, end with outcomes, abort, and a read-only record. |
+| Tests | 9 API tests (start needs participants and records one event; an unpublished participant blocks it; turns default and apply hit points; participants and activity; end with outcomes; abort of a pending and an active encounter; permissions; replay), 2 real-PostgreSQL races (two automatic turns; a turn against an abort), 8 more portal tests, and scenario step 24. All 29 existing encounter API tests and the Foundry sync tests pass unchanged. |
+
+Decisions applied (not owner decisions): a pending encounter is closed with abort (shown as Discard); at most one turn per participant per round is the existing constraint and is reported as a conflict; damage lowers hit points only through a turn on a tracked character; hit points are not typed on the encounter page.
+
+Not verified: CI; manual browser/accessibility (turn entry with keyboard only, reduced motion); a live Foundry combat sync.
+
+
+Local gates for 15.3B-2b: `ruff format`/`ruff check` and `mypy src` clean; portal 2160 tests passed, lint and build clean; full Python suite 6189 passed, 1 failed (the known developer-`.env` origin test in `tests/unit/test_config.py`).
