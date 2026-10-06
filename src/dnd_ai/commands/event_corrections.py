@@ -76,6 +76,21 @@ _PROVENANCE_ROWS = {
 _BELIEF_COLUMNS = {component: column for column, component in BELIEF_COMPONENTS.items()}
 
 
+# Item effects are undone through the item's own rows. `campaign.item_state.last_event_id` is the
+# item's single token (every item operation writes it), so any item effect is reversible only
+# while that row still names the event, whichever table the effect changed.
+_ITEM_COMPONENTS = frozenset(
+    {
+        "item_state",
+        "inventory_entries.location",
+        "item_ownership",
+        "item_attuned",
+        "item_attunement_ended",
+    }
+)
+_ITEM_STATE_COLUMNS = ("quantity", "condition_percentage", "is_equipped", "is_destroyed")
+
+
 # Dungeon state effects are undone through the state row the event last wrote:
 # component -> (state table, key column, effect target column, status lookup, column).
 _DUNGEON_STATE = {
@@ -257,6 +272,30 @@ def _assess_effect(
     if effect.application_status != "applied":
         return EffectAssessment(**base, reversible=False, reason=REASON_NOT_APPLIED)
     component = str(effect.target_component)
+    if component in _ITEM_COMPONENTS:
+        item = effect.target_entity_id
+        ok = False
+        if item is not None:
+            if lock:
+                # The item row first, the order every item operation takes.
+                connection.execute(
+                    text(
+                        "SELECT 1 FROM world.item_instances WHERE item_instance_id = :i FOR UPDATE"
+                    ),
+                    {"i": item},
+                )
+            ok = (
+                connection.execute(
+                    text(
+                        "SELECT 1 FROM campaign.item_state "
+                        "WHERE timeline_id = :t AND item_instance_id = :i AND last_event_id = :e"
+                        + suffix
+                    ),
+                    {"t": timeline_id, "i": item, "e": event_id},
+                ).scalar()
+                is not None
+            )
+        return EffectAssessment(**base, reversible=ok, reason=None if ok else REASON_STATE_CHANGED)
     if component in _RUNTIME_STATE:
         table = _RUNTIME_STATE[component][0]
         # The state row the event wrote is still the latest write of its scope.
@@ -413,7 +452,15 @@ def _compensate(
     effect: EffectAssessment,
 ) -> None:
     character = effect.target_entity_id
-    if effect.component in _RUNTIME_STATE:
+    if effect.component in _ITEM_COMPONENTS:
+        _compensate_item(
+            connection,
+            timeline_id=timeline_id,
+            event_id=event_id,
+            correcting_event_id=correcting_event_id,
+            effect=effect,
+        )
+    elif effect.component in _RUNTIME_STATE:
         table, status_table, status_column = _RUNTIME_STATE[effect.component]
         if effect.previous is None:  # the state did not exist before the event
             connection.execute(
@@ -542,6 +589,94 @@ def _compensate(
             "time": world_time_id,
         },
     )
+
+
+def _compensate_item(
+    connection: Connection,
+    *,
+    timeline_id: uuid.UUID,
+    event_id: uuid.UUID,
+    correcting_event_id: uuid.UUID,
+    effect: EffectAssessment,
+) -> None:
+    """Put one item component back. The `item_state` component also restores the item's token."""
+    item = effect.target_entity_id
+    keys = {"t": timeline_id, "i": item, "e": event_id, "c": correcting_event_id}
+    previous = effect.previous
+    component = effect.component
+    if component == "item_state":
+        assert isinstance(previous, dict)
+        connection.execute(
+            text(
+                "UPDATE campaign.item_state SET quantity = :q, condition_percentage = :cp, "
+                "is_equipped = :eq, is_destroyed = :d, "
+                "last_event_id = CAST(:token AS uuid), updated_at = now() "
+                "WHERE timeline_id = :t AND item_instance_id = :i"
+            ),
+            {
+                **keys,
+                "q": previous["quantity"],
+                "cp": previous["condition_percentage"],
+                "eq": previous["is_equipped"],
+                "d": previous["is_destroyed"],
+                # The token goes back to the item's previous event, so that event can be
+                # corrected next.
+                "token": previous["last_event_id"],
+            },
+        )
+    elif component == "inventory_entries.location":
+        place = previous if isinstance(previous, dict) else {}
+        connection.execute(
+            text(
+                "UPDATE campaign.inventory_entries SET holder_entity_id = :h, container_id = :k, "
+                "location_id = :l, last_event_id = :c, updated_at = now() "
+                "WHERE timeline_id = :t AND item_instance_id = :i"
+            ),
+            {
+                **keys,
+                "h": place.get("holder_entity_id"),
+                "k": place.get("container_id"),
+                "l": place.get("location_id"),
+            },
+        )
+    elif component == "item_ownership":
+        if previous is None:  # the row did not exist before the event
+            connection.execute(
+                text(
+                    "DELETE FROM campaign.item_ownership "
+                    "WHERE timeline_id = :t AND item_instance_id = :i"
+                ),
+                keys,
+            )
+        else:
+            assert isinstance(previous, dict)
+            connection.execute(
+                text(
+                    "UPDATE campaign.item_ownership SET owner_entity_id = :o, "
+                    "last_event_id = :c, updated_at = now() "
+                    "WHERE timeline_id = :t AND item_instance_id = :i"
+                ),
+                {**keys, "o": previous.get("owner_entity_id")},
+            )
+    elif component == "item_attuned":
+        # The attunement never happened. Nothing later is in force (the token named this event),
+        # so the item's active attunement is the one this event made.
+        connection.execute(
+            text(
+                "DELETE FROM campaign.item_attunements WHERE timeline_id = :t "
+                "AND item_instance_id = :i AND broken_world_time_id IS NULL"
+            ),
+            keys,
+        )
+    else:  # item_attunement_ended: the character is still attuned
+        connection.execute(
+            text(
+                "UPDATE campaign.item_attunements SET broken_world_time_id = NULL, "
+                "last_event_id = :c, updated_at = now() "
+                "WHERE timeline_id = :t AND item_instance_id = :i AND last_event_id = :e"
+            ),
+            keys,
+        )
 
 
 def _bump_party(connection: Connection, party_id: uuid.UUID | None) -> None:

@@ -78,6 +78,9 @@ ENTITY_LIFECYCLE_ELIGIBLE_TYPE_CODES: frozenset[str] = frozenset(
         # timeline state and knowledge, never here)
         "dungeon",
         "dungeon_area",
+        # Item instances (Phase 15.3B-1b; where one is, who carries it and its condition are
+        # timeline state, never here)
+        "item_instance",
     }
 )
 
@@ -85,7 +88,6 @@ ENTITY_LIFECYCLE_ELIGIBLE_TYPE_CODES: frozenset[str] = frozenset(
 ENTITY_LIFECYCLE_EXCLUDED_TYPE_CODES: dict[str, str] = {
     "character": "the bare supertype has no authoring surface; NPC and player-character identity are lifecycle-eligible subtypes",
     "event": "has its own draft/recorded/voided/corrected status machine (Phase 15E)",
-    "item_instance": "instance/state/inventory semantics (Phase 15F)",
 }
 
 

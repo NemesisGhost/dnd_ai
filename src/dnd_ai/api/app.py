@@ -75,6 +75,7 @@ from .foundry_pairing import router as foundry_pairing_router
 from .integration import router as integration_router
 from .interactions import router as interactions_router
 from .invitation_onboarding import router as invitation_onboarding_router
+from .item_authoring import router as item_authoring_router
 from .item_definition_authoring import router as item_definition_authoring_router
 from .items import router as items_router
 from .knowledge import router as knowledge_router
@@ -213,6 +214,7 @@ def create_app() -> FastAPI:
     app.include_router(relationship_authoring_router)
     app.include_router(organization_members_router)
     app.include_router(travel_router)
+    app.include_router(item_authoring_router)
     app.include_router(item_definition_authoring_router)
     app.include_router(npc_portrayal_router)
     app.include_router(summary_router)

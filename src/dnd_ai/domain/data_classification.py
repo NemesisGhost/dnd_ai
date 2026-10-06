@@ -410,6 +410,14 @@ AUDIT_STRUCTURAL_FIELDS: frozenset[str] = frozenset(
         "member_entity_id",
         "effective_from_world_time_id",
         "effective_to_world_time_id",
+        "item_definition_id",
+        "holder_entity_id",
+        "container_id",
+        "owner_entity_id",
+        "attuned_character_id",
+        "quantity",
+        "condition_percentage",
+        "is_equipped",
     }
 )
 

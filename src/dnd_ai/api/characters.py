@@ -192,6 +192,9 @@ class InventoryItemResponse(BaseModel):
     # None unless identification_level allows it (or the caller holds
     # canon.edit) — see dnd_ai.queries.inventory's own docstring.
     properties: dict[str, Any] | None
+    # The instance's own name, and the item's optimistic token (the last event seen).
+    name: str = ""
+    last_event_id: uuid.UUID | None = None
 
 
 class CharacterSheetClassLevelResponse(BaseModel):
@@ -510,6 +513,8 @@ def get_character_inventory_endpoint(
             owner_entity_id=item.owner_entity_id,
             identification_level=item.identification_level,
             properties=item.properties,
+            name=item.name,
+            last_event_id=item.last_event_id,
         )
         for item in items
     ]

@@ -4849,6 +4849,7 @@ def _get_or_create_item_definition(
         raise SystemExit("expected a seeded rules.item_categories row (code='wondrous_item').")
     item_definition_id = connection.execute(
         text("""
+            -- authored-content-direct-insert: allowed (dev fixture: an item with state and custody for the dev world)
             INSERT INTO rules.item_definitions
                 (ruleset_version_id, item_category_id, code, display_name, rarity,
                  requires_attunement)
@@ -4884,6 +4885,7 @@ def _ensure_item_instance(
     )
     connection.execute(
         text(
+            # authored-content-direct-insert: allowed (dev fixture: an item with state and custody for the dev world)
             "INSERT INTO world.item_instances (item_instance_id, item_definition_id, origin_notes) "
             "VALUES (:id, :def, :notes)"
         ),
@@ -4913,6 +4915,7 @@ def _ensure_item_state(
         return
     connection.execute(
         text("""
+            -- authored-content-direct-insert: allowed (dev fixture: an item with state and custody for the dev world)
             INSERT INTO campaign.item_state
                 (timeline_id, item_instance_id, quantity, charges_current, charges_maximum)
             VALUES (:t, :i, 1, :cur, :max)
@@ -4946,6 +4949,7 @@ def _ensure_inventory_entry(
         return
     connection.execute(
         text("""
+            -- authored-content-direct-insert: allowed (dev fixture: an item with state and custody for the dev world)
             INSERT INTO campaign.inventory_entries
                 (timeline_id, item_instance_id, holder_entity_id, location_id)
             VALUES (:t, :i, :h, :l)
