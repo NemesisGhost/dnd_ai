@@ -33,7 +33,11 @@ from dataclasses import dataclass
 
 from sqlalchemy import Connection, Engine, text
 
-from dnd_ai.domain.relationship_authoring import RelationshipArchivedError
+from dnd_ai.domain.authoring import StaleWriteError
+from dnd_ai.domain.relationship_authoring import (
+    OrganizationStatusUnchangedError,
+    RelationshipArchivedError,
+)
 
 from ._shared import (
     lifecycle_code,
@@ -42,6 +46,13 @@ from ._shared import (
     validate_session_campaign,
 )
 from .events import EventParticipant, _insert_event_row
+
+
+class _Unset:
+    """Marks a keyword the caller did not pass (so `None` can mean "no state yet")."""
+
+
+UNSET = _Unset()
 
 
 @dataclass(frozen=True)
@@ -383,6 +394,7 @@ def _update_organization_status_impl(
     cause_interaction_id: uuid.UUID | None = None,
     cause_event_id: uuid.UUID | None = None,
     event_details: str | None = None,
+    expected_status: str | None | _Unset = UNSET,
 ) -> UpdateOrganizationStatusResult:
     """The actual work of update_organization_status(), on a connection the
     caller already has open — see this module's docstring for why it splits
@@ -410,6 +422,12 @@ def _update_organization_status_impl(
         connection, timeline_id=timeline_id, organization_id=organization_id
     )
     previous_status_code = existing[1] if existing is not None else None
+    # Phase 15.3A-2b hardening: a caller that names the status it saw (the authoring
+    # route always does) gets a stale write if it moved, and a change must change it.
+    if not isinstance(expected_status, _Unset) and expected_status != previous_status_code:
+        raise StaleWriteError(f"organization {organization_id} is {previous_status_code!r}")
+    if previous_status_code == new_status_code:
+        raise OrganizationStatusUnchangedError(f"organization already {new_status_code}")
 
     event_id = _insert_event_row(
         connection,

@@ -85,6 +85,7 @@ from .memberships import router as memberships_router
 from .movement import router as movement_router
 from .npc_authoring import router as npc_authoring_router
 from .organization_authoring import router as organization_authoring_router
+from .organization_members import router as organization_members_router
 from .parties import router as parties_router
 from .player_character_authoring import router as player_character_authoring_router
 from .preview import router as preview_router
@@ -207,6 +208,7 @@ def create_app() -> FastAPI:
     app.include_router(knowledge_runtime_router)
     app.include_router(dungeon_authoring_router)
     app.include_router(relationship_authoring_router)
+    app.include_router(organization_members_router)
     app.include_router(summary_router)
     app.include_router(timelines_router)
     app.include_router(user_preferences_router)

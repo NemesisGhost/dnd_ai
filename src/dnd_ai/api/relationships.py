@@ -183,6 +183,9 @@ class EvolveRelationshipReactionResponse(BaseModel):
 class UpdateOrganizationStatusRequest(BaseModel):
     world_time_id: uuid.UUID
     new_status_code: str
+    # The status the caller saw (null when none was recorded). Optional for adapters; the
+    # authoring panel always sends it, and a mismatch is a stale write.
+    expected_status: str | None = None
     actor_entity_id: uuid.UUID | None = None
     session_id: uuid.UUID | None = None
     cause_interaction_id: uuid.UUID | None = None
@@ -451,6 +454,11 @@ def update_organization_status_endpoint(
         cause_interaction_id=body.cause_interaction_id,
         cause_event_id=body.cause_event_id,
         event_details=body.event_details,
+        **(
+            {"expected_status": body.expected_status}
+            if "expected_status" in body.model_fields_set
+            else {}
+        ),
     )
 
     record_change_log(

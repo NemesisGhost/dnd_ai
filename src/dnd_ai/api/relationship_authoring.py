@@ -92,6 +92,8 @@ class CreateRelationshipRequest(BaseAuthoringRequest):
     is_public: bool | None = None
     is_active: bool | None = None
     treaty_terms: str | None = Field(default=None, max_length=TEXT_MAX_LENGTH)
+    role: str | None = Field(default=None, max_length=SHORT_TEXT_MAX_LENGTH)
+    rank: str | None = Field(default=None, max_length=SHORT_TEXT_MAX_LENGTH)
 
 
 class UpdateRelationshipRequest(BaseAuthoringRequest):
@@ -104,6 +106,8 @@ class UpdateRelationshipRequest(BaseAuthoringRequest):
     is_public: bool | None = None
     is_active: bool | None = None
     treaty_terms: str | None = Field(default=None, max_length=TEXT_MAX_LENGTH)
+    role: str | None = Field(default=None, max_length=SHORT_TEXT_MAX_LENGTH)
+    rank: str | None = Field(default=None, max_length=SHORT_TEXT_MAX_LENGTH)
     change_note: str | None = Field(default=None, max_length=REASON_MAX_LENGTH)
 
 
@@ -135,6 +139,8 @@ _TYPED_NAMES = (
     "is_public",
     "is_active",
     "treaty_terms",
+    "role",
+    "rank",
 )
 
 

@@ -52,6 +52,7 @@ REVERSIBLE_COMPONENTS = frozenset(
         "interactable_status_id",
         "feature_is_destroyed",
         "feature_condition_notes",
+        "organization_status_id",
     }
 )
 

@@ -21,16 +21,22 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy import Connection, text
+from sqlalchemy.exc import IntegrityError
 
 from dnd_ai.domain.authoring import StaleWriteError, normalize_reason
 from dnd_ai.domain.content_authoring import diff_fields, initial_fields
 from dnd_ai.domain.relationship_authoring import (
     KIND_EMPLOYMENT,
     KIND_FAMILY,
+    KIND_MEMBERSHIP,
     KIND_OWNERSHIP,
     KIND_POLITICAL,
+    MEMBER_TYPE_CODES,
+    ORGANIZATION_TYPE_CODES,
     PARTICIPANT_TYPE_CODES,
     SHORT_TEXT_MAX_LENGTH,
+    MembershipOverlapError,
+    MembershipStartRequiredError,
     PerspectiveHolderInvalidError,
     RelationshipAlreadyEndedError,
     RelationshipArchivedError,
@@ -82,6 +88,7 @@ _TYPED_FIELDS: dict[str, tuple[str, ...]] = {
     KIND_EMPLOYMENT: ("job_title",),
     KIND_OWNERSHIP: ("ownership_share", "is_public"),
     KIND_POLITICAL: ("is_active", "treaty_terms"),
+    KIND_MEMBERSHIP: ("role", "rank", "is_public"),
     "general": (),
 }
 
@@ -97,7 +104,7 @@ def _clean_typed(kind_code: str, typed: dict[str, Any]) -> dict[str, Any]:
         raise RelationshipInvalidError(f"{kind_code} has no field(s) {sorted(unknown)}")
     clean: dict[str, Any] = {}
     for name, value in typed.items():
-        if name == "family_unit_name" or name == "job_title":
+        if name in ("family_unit_name", "job_title", "role", "rank"):
             clean[name] = normalize_text(value, field=name, limit=SHORT_TEXT_MAX_LENGTH)
         elif name == "treaty_terms":
             clean[name] = normalize_text(value, field=name)
@@ -154,6 +161,7 @@ def _kind_of(connection: Connection, relationship_id: uuid.UUID, type_code: str)
         (KIND_EMPLOYMENT, "employment_relationships"),
         (KIND_OWNERSHIP, "ownership_relationships"),
         (KIND_POLITICAL, "political_relationships"),
+        (KIND_MEMBERSHIP, "organization_memberships"),
     ):
         found = connection.execute(
             text(f"SELECT 1 FROM world.{table} WHERE relationship_id = :r"),  # noqa: S608
@@ -238,6 +246,8 @@ def create_relationship(
     if len({(p.entity_id, p.role) for p in participants}) != len(participants):
         raise RelationshipInvalidError("a participant appears twice in the same role")
 
+    if shape.code == KIND_MEMBERSHIP and started_world_time_id is None:
+        raise MembershipStartRequiredError("a membership needs its start")
     scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
     locked = lock_entities(connection, world_id=scope.world_id, share_ids=entity_ids)
     for entity_id in set(entity_ids):
@@ -247,6 +257,14 @@ def create_relationship(
             type_codes=PARTICIPANT_TYPE_CODES,
             error=RelationshipParticipantInvalidError,
         )
+    if shape.code == KIND_MEMBERSHIP:
+        by_role = {p.role: p.entity_id for p in participants}
+        organization = locked.get(by_role["organization"])
+        member = locked.get(by_role["member"])
+        if organization is None or organization.entity_type_code not in ORGANIZATION_TYPE_CODES:
+            raise RelationshipParticipantInvalidError("the organization is not an organization")
+        if member is None or member.entity_type_code not in MEMBER_TYPE_CODES:
+            raise RelationshipParticipantInvalidError("that cannot be a member")
     _world_time_sort_key(connection, scope.world_id, started_world_time_id)
     type_id = lookup_id(
         connection, "world", "relationship_types", "relationship_type_id", relationship_type
@@ -279,14 +297,18 @@ def create_relationship(
             """),
             {"r": relationship_id, "e": participant.entity_id, "role": participant.role},
         )
-    _insert_typed(
-        connection,
-        relationship_id=relationship_id,
-        kind=shape.code,
-        participants=participants,
-        typed=clean_typed,
-        started_world_time_id=started_world_time_id,
-    )
+    try:
+        with connection.begin_nested():
+            _insert_typed(
+                connection,
+                relationship_id=relationship_id,
+                kind=shape.code,
+                participants=participants,
+                typed=clean_typed,
+                started_world_time_id=started_world_time_id,
+            )
+    except IntegrityError as error:
+        raise _translate(error) from error
     version = connection.execute(
         text("SELECT row_version FROM world.relationships WHERE relationship_id = :r"),
         {"r": relationship_id},
@@ -310,6 +332,14 @@ def create_relationship(
             }
         ),
     )
+
+
+def _translate(error: IntegrityError) -> Exception:
+    """The exclusion constraint on membership stints is the one database refusal that is an
+    expected outcome of a request rather than a bug."""
+    if getattr(error.orig, "sqlstate", None) == "23P01":
+        return MembershipOverlapError("overlapping membership")
+    return error
 
 
 def _insert_typed(
@@ -361,6 +391,24 @@ def _insert_typed(
                 "public": typed.get("is_public", True),
             },
         )
+    elif kind == KIND_MEMBERSHIP:
+        connection.execute(
+            text("""
+                INSERT INTO world.organization_memberships
+                    (relationship_id, organization_id, member_entity_id, role, rank, is_public,
+                     effective_from_world_time_id)
+                VALUES (:r, :organization, :member, :role, :rank, :public, :start)
+            """),
+            {
+                "r": relationship_id,
+                "organization": by_role["organization"],
+                "member": by_role["member"],
+                "role": typed.get("role"),
+                "rank": typed.get("rank"),
+                "public": typed.get("is_public", True),
+                "start": started_world_time_id,
+            },
+        )
     elif kind == KIND_POLITICAL:
         connection.execute(
             text(
@@ -381,6 +429,7 @@ def _current_typed(connection: Connection, relationship_id: uuid.UUID, kind: str
         KIND_EMPLOYMENT: "SELECT job_title FROM world.employment_relationships",
         KIND_OWNERSHIP: "SELECT ownership_share, is_public FROM world.ownership_relationships",
         KIND_POLITICAL: "SELECT is_active, treaty_terms FROM world.political_relationships",
+        KIND_MEMBERSHIP: "SELECT role, rank, is_public FROM world.organization_memberships",
     }
     if kind not in queries:
         return {}
@@ -445,7 +494,13 @@ def update_relationship(
             created=False,
             changed=False,
         )
-    _update_typed(connection, relationship_id, locked.kind, clean_typed, started_world_time_id)
+    try:
+        with connection.begin_nested():
+            _update_typed(
+                connection, relationship_id, locked.kind, clean_typed, started_world_time_id
+            )
+    except IntegrityError as error:
+        raise _translate(error) from error
     new_version = connection.execute(
         text(
             "UPDATE world.relationships SET description = :d, started_world_time_id = :s "
@@ -477,11 +532,12 @@ def _update_typed(
         KIND_EMPLOYMENT: "employment_relationships",
         KIND_OWNERSHIP: "ownership_relationships",
         KIND_POLITICAL: "political_relationships",
+        KIND_MEMBERSHIP: "organization_memberships",
     }
     if kind not in tables:
         return
     assignments = dict(typed)
-    if kind == KIND_EMPLOYMENT:
+    if kind in (KIND_EMPLOYMENT, KIND_MEMBERSHIP):
         assignments["effective_from_world_time_id"] = started_world_time_id
     if not assignments:
         return
@@ -523,6 +579,14 @@ def end_relationship(
         connection.execute(
             text(
                 "UPDATE world.employment_relationships SET effective_to_world_time_id = :e, "
+                "updated_at = now() WHERE relationship_id = :r"
+            ),
+            {"e": ended_world_time_id, "r": relationship_id},
+        )
+    if locked.kind == KIND_MEMBERSHIP:
+        connection.execute(
+            text(
+                "UPDATE world.organization_memberships SET effective_to_world_time_id = :e, "
                 "updated_at = now() WHERE relationship_id = :r"
             ),
             {"e": ended_world_time_id, "r": relationship_id},

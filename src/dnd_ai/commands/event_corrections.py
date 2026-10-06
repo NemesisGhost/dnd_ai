@@ -128,6 +128,13 @@ _DUNGEON_STATE = {
         ("interactable_statuses", "interactable_status_id"),
         "interactable_status_id",
     ),
+    "organization_status_id": (
+        "organization_state",
+        "organization_id",
+        "target_entity_id",
+        ("organization_statuses", "organization_status_id"),
+        "organization_status_id",
+    ),
     "feature_is_destroyed": (
         "area_feature_state",
         "area_feature_id",

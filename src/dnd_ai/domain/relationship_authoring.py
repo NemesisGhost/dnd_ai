@@ -19,6 +19,7 @@ KIND_EMPLOYMENT = "employment"
 KIND_OWNERSHIP = "ownership"
 KIND_POLITICAL = "political"
 KIND_GENERAL = "general"
+KIND_MEMBERSHIP = "membership"
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,13 @@ RELATIONSHIP_KINDS: tuple[RelationshipKind, ...] = (
         ("ownership",),
         ("owner", "property"),
         fixed_roles=("owner", "property"),
+    ),
+    RelationshipKind(
+        KIND_MEMBERSHIP,
+        "Membership",
+        ("membership",),
+        ("member", "organization"),
+        fixed_roles=("member", "organization"),
     ),
     RelationshipKind(
         KIND_POLITICAL,
@@ -144,6 +152,44 @@ def normalize_stance(value: int | None, *, field: str) -> int | None:
     if value is not None and not STANCE_MIN <= value <= STANCE_MAX:
         raise AuthoringValidationError(f"{field} must be from {STANCE_MIN} to {STANCE_MAX}")
     return value
+
+
+# Membership (15.3A-2b): who may belong to an organization, and which entity is the organization.
+ORGANIZATION_TYPE_CODES = frozenset(
+    {
+        "organization",
+        "business",
+        "government",
+        "religious_organization",
+        "military_unit",
+        "political_faction",
+    }
+)
+MEMBER_TYPE_CODES = frozenset({"npc", "player_character"}) | ORGANIZATION_TYPE_CODES
+
+
+class MembershipOverlapError(SafeMessageError):
+    """One stint at a time for the same member and organization."""
+
+    safe_status_code = 409
+    safe_error_code = "membership_overlap"
+    safe_message = "That member already belongs to this organization during that time."
+
+
+class MembershipStartRequiredError(SafeMessageError):
+    """A membership begins at a world time."""
+
+    safe_status_code = 400
+    safe_error_code = "membership_start_required"
+    safe_message = "Choose when the membership began."
+
+
+class OrganizationStatusUnchangedError(SafeMessageError):
+    """A status change must change the status."""
+
+    safe_status_code = 409
+    safe_error_code = "organization_status_unchanged"
+    safe_message = "The organization already has that status."
 
 
 class RelationshipInvalidError(SafeMessageError):
