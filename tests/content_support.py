@@ -66,14 +66,20 @@ def add_member(connection: Connection, campaign_id: str, user_id: uuid.UUID, rol
 
 
 class ContentSetup:
-    def __init__(self, harness: AuthoringHarness, connection: Connection) -> None:
+    def __init__(
+        self, harness: AuthoringHarness, connection: Connection, *, enrol_player: bool = True
+    ) -> None:
+        """`enrol_player=False` leaves the player an account with no membership, for
+        flows (the Phase 15 completion scenario) that enrol through the invitation
+        and Access-management routes instead of the `add_member` fixture helper."""
         self.harness = harness
         self.connection = connection
         ruleset = dnd5e_ids(connection)
         self.gm: Actor = harness.new_actor("GM")
         self.world_id, self.cid = _make_world_and_campaign(self.gm, "World", ruleset)
         self.player: Actor = harness.new_actor("Player")
-        add_member(connection, self.cid, self.player.user_id, "player")
+        if enrol_player:
+            add_member(connection, self.cid, self.player.user_id, "player")
         self.stranger: Actor = harness.new_actor("Stranger GM")
         self.other_world_id, self.other_cid = _make_world_and_campaign(
             self.stranger, "Other World", ruleset

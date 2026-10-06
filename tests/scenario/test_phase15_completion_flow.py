@@ -1,18 +1,25 @@
 """Phase 15 completion exit scenario (PLANv2 15.8, built incrementally).
 
 A GM sets up and runs a campaign using only the HTTP API with a real cookie
-session, CSRF token, and Origin check on every write: no SQL, no seed script, no
-Foundry, no importer, no AI. Each Phase 15 completion checkpoint appends its
-steps to this one flow and keeps the earlier steps green; checkpoint 15.4 runs the
-whole flow against a freshly migrated database.
+session, CSRF token, and Origin check on every write: no seed script, no Foundry,
+no importer, no AI, and no SQL that creates or discovers product data. The player
+is enrolled through the invitation, acceptance, Access-overview, role and
+character-relationship routes (`ContentSetup(..., enrol_player=False)`; the
+`add_member` fixture helper is not used, and a static guard in
+`test_phase15_acceptance_guards.py` keeps it that way). The only database access in
+this file is read-only verification: the player's session bootstrap, and the closing
+guard over the audit and replay rows the flow wrote. Each Phase 15 completion
+checkpoint appends its steps to this one flow and keeps the earlier steps green;
+checkpoint 15.4 runs the whole flow against a freshly migrated database.
 
 Steps implemented so far (numbering follows the plan's §11 table):
 
   1  create a world (owner)                 -- Phase 14, via the shared setup
   2  create a campaign                      -- Phase 14, via the shared setup
   3  calendar and world times               -- 15.2W-1
+  4  invitation, acceptance, role (Access)    -- Phase 13, via the API
   5  player character identity (builds: B-2) -- 15.2B-1
-  6  grant relationship, perspective          -- 15.2B-1 (invitations: later)
+  6  grant relationship, perspective          -- 15.2B-1
   7  party, member, party perspective        -- 15.2C-1, 15.2C-2
   9  advance (and correct) the clock          -- 15.2W-2
  10  schedule and edit a session             -- 15.2D-1
@@ -23,7 +30,7 @@ Steps implemented so far (numbering follows the plan's §11 table):
 from collections.abc import Iterator
 
 import pytest
-from sqlalchemy import Connection, text
+from sqlalchemy import Connection
 
 from dnd_ai.queries.bootstrap import get_session_bootstrap
 from tests.authoring_support import AuthoringHarness, harness_fixture_factory
@@ -42,12 +49,32 @@ def test_a_gm_sets_up_and_runs_a_campaign(
 ) -> None:
     # Steps 1-2: the shared setup creates the world, timeline, and campaign through
     # the production routes (a GM who owns the world, a player, and an outsider).
-    s = ContentSetup(harness, db_connection)
+    s = ContentSetup(harness, db_connection, enrol_player=False)
 
     def write(path: str, body: dict, status: int = 201) -> dict:
         response = s.gm.post_raw(path, body, key=s.gm.fresh_key())
         assert response.status_code == status, (path, response.text)
         return response.json()
+
+    # --- Step 4 (invitation and access): the player joins ---------------------------
+    # The player joins through the supported contracts only: the GM issues an
+    # invitation, the player accepts it, the GM reads the resulting membership from the
+    # Access overview, then assigns the player role and the character relationship.
+    invitation = write(f"/campaigns/{s.cid}/invitations", {})
+    assert sorted(invitation) == ["campaign_invitation_id", "token"]
+    accepted = s.player.post_raw("/campaign-invitations/accept", {"token": invitation["token"]})
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["campaign_id"] == s.cid
+    access = s.gm.get(f"/campaigns/{s.cid}/access-overview").json()
+    joined_members = [m for m in access["members"] if m["user_id"] == str(s.player.user_id)]
+    assert len(joined_members) == 1
+    membership = joined_members[0]["campaign_membership_id"]
+    assert joined_members[0]["status_code"] == "active"
+    # Acceptance grants no role, relationship, or grant on its own.
+    assert joined_members[0]["roles"] == []
+    assert joined_members[0]["character_relationships"] == []
+    player_role = next(r["role_id"] for r in access["assignable_roles"] if r["code"] == "player")
+    write(f"/campaigns/{s.cid}/memberships/{membership}/roles", {"role_id": player_role})
 
     # --- Step 3 (15.2W-1): a calendar, calendar dates, and a narrative moment ----------
     calendar = write(
@@ -117,13 +144,6 @@ def test_a_gm_sets_up_and_runs_a_campaign(
         {"name": "Aldric", "species_id": species, "size_category": "medium"},
     )
     pc_id = pc["player_character_id"]
-    membership = db_connection.execute(
-        text(
-            "SELECT campaign_membership_id FROM security.campaign_memberships "
-            "WHERE campaign_id = :c AND user_id = :u"
-        ),
-        {"c": s.cid, "u": s.player.user_id},
-    ).scalar()
     link = f"/campaigns/{s.cid}/memberships/{membership}/character-relationships"
 
     def perspectives() -> list[str]:
