@@ -96,7 +96,6 @@ def downgrade() -> None:
     op.execute("DROP TABLE IF EXISTS world.route_relationships;")
     op.execute("DELETE FROM narrative.event_types WHERE code = 'characters_traveled';")
     op.execute(
-        "DELETE FROM world.relationship_participant_roles "
-        "WHERE code IN ('origin', 'destination');"
+        "DELETE FROM world.relationship_participant_roles WHERE code IN ('origin', 'destination');"
     )
     op.execute("DELETE FROM world.relationship_types WHERE code = 'route';")
