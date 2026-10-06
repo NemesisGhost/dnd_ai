@@ -4576,11 +4576,13 @@ def _ensure_location_tree(
             )
         elif fixture.entity_type_code == "dungeon":
             connection.execute(
+                # authored-content-direct-insert: allowed (Phase 13C fixture; replaced in 15.3A-1)
                 text("INSERT INTO world.dungeons (dungeon_id, danger_level) VALUES (:l, :d)"),
                 {"l": location_id, "d": fixture.danger_level},
             )
         elif fixture.entity_type_code == "dungeon_area":
             connection.execute(
+                # authored-content-direct-insert: allowed (Phase 13C fixture; replaced in 15.3A-1)
                 text("INSERT INTO world.dungeon_areas (dungeon_area_id) VALUES (:l)"),
                 {"l": location_id},
             )
@@ -4622,6 +4624,7 @@ def _ensure_location_state(
         return
     connection.execute(
         text("""
+            -- authored-content-direct-insert: allowed (fixture state at fixed values, no events)
             INSERT INTO campaign.location_state
                 (timeline_id, location_id, is_searched, is_destroyed, alarm_level, condition_notes)
             VALUES (:t, :l, :searched, :destroyed, :alarm, :notes)

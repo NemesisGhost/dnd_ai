@@ -111,6 +111,11 @@ def test_only_the_reviewed_owned_rows_are_cascade_deleted(db_connection: Connect
         "knowledge_items",
         # Phase 15.2B-1: a player character's marker row is part of its identity.
         "player_characters",
+        # Phase 15.3A-1: a dungeon aggregate's own structural rows.
+        "area_connections",
+        "area_features",
+        "area_hazards",
+        "area_interactables",
     }
     assert all(v in (OWNED_CASCADE, BLOCKING) for v in ENTITY_REFERENCE_CLASSIFICATION.values())
 

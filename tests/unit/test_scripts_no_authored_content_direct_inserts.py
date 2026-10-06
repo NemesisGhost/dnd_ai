@@ -77,6 +77,18 @@ _TABLES = (
     "knowledge.public_knowledge",
     "knowledge.party_discoveries",
     "campaign.party_knowledge",
+    # Phase 15.3A-1 dungeon definitions and runtime state.
+    "world.dungeons",
+    "world.dungeon_areas",
+    "world.area_connections",
+    "world.area_features",
+    "world.area_hazards",
+    "world.area_interactables",
+    "campaign.location_state",
+    "campaign.area_connection_state",
+    "campaign.area_feature_state",
+    "campaign.hazard_state",
+    "campaign.interactable_state",
     "narrative.objective_dependencies",
     "knowledge.knowledge_items",
 )

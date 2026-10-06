@@ -397,3 +397,62 @@ def test_a_gm_sets_up_and_runs_a_campaign(
         s.gm.get(f"{knowledge}/audience").json()["knowers"][0]["interpretation"] == "He is undead."
     )
     assert s.player.get(f"{knowledge}/audience").status_code == 403
+
+    # --- Step 16 (15.3A-1): a dungeon is authored, published, run and read by a player ----
+    authoring = f"/campaigns/{s.cid}/authoring"
+    dungeon = write(f"{authoring}/dungeons", {"name": "The Sunken Vault", "danger_level": 6})
+    dungeon_url = f"{authoring}/dungeons/{dungeon['dungeon_id']}"
+
+    def dungeon_version() -> int:
+        return int(s.gm.get(dungeon_url).json()["row_version"])
+
+    areas = []
+    for name in ("Entry Hall", "Vault"):
+        created = write(f"{dungeon_url}/areas", {"name": name})
+        areas.append(created["dungeon_area_id"])
+    write(
+        f"{dungeon_url}/connections",
+        {
+            "expected_row_version": dungeon_version(),
+            "from_area_id": areas[0],
+            "to_area_id": areas[1],
+            "connection_type": "door",
+        },
+    )
+    write(
+        f"{dungeon_url}/hazards",
+        {
+            "expected_row_version": dungeon_version(),
+            "dungeon_area_id": areas[0],
+            "child_type": "trap",
+            "severity": 5,
+            "is_hidden": True,
+        },
+    )
+    for entity_id in (dungeon["dungeon_id"], *areas):
+        for action in ("submit-for-review", "approve", "publish"):
+            current = (
+                s.gm.get(dungeon_url)
+                if entity_id == dungeon["dungeon_id"]
+                else s.gm.get(f"{authoring}/dungeon-areas/{entity_id}")
+            ).json()
+            write(
+                f"/campaigns/{s.cid}/entities/{entity_id}/lifecycle/{action}",
+                {"expected_row_version": current["row_version"]},
+                status=200,
+            )
+    hall = s.gm.get(f"{authoring}/dungeon-areas/{areas[0]}").json()
+    door = hall["connections"][0]["area_connection_id"]
+    write(
+        f"/campaigns/{s.cid}/dungeon-areas/{areas[0]}/state",
+        {
+            "kind": "connection",
+            "target_id": door,
+            "expected_last_event_id": None,
+            "connection_status": "open",
+        },
+        status=200,
+    )
+    seen = s.player.get(f"/campaigns/{s.cid}/dungeon-areas/{areas[0]}").json()
+    assert seen["connections"][0]["connection_status_code"] == "open"
+    assert seen["hazards"] == []  # hidden and undiscovered
