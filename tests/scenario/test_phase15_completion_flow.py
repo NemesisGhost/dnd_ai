@@ -693,3 +693,21 @@ def test_a_gm_sets_up_and_runs_a_campaign(
     listed = s.gm.get(f"{authoring}/encounters", session_id=session["session_id"])
     assert [e["participant_count"] for e in listed.json()["items"]] == [1]
     assert s.player.get(f"{authoring}/encounters/{prepared['encounter_id']}").status_code == 403
+
+    # --- Step 24 (15.3B-2b): the prepared encounter starts, a turn is taken, and it ends ----
+    started = write(f"{encounters}/{prepared['encounter_id']}/start", {}, status=200)
+    assert started["status"] == "active" and started["current_round"] == 1
+    taken = write(
+        f"{encounters}/{prepared['encounter_id']}/turns",
+        {"actor_entity_id": npc["npc_id"], "action_kind": "dodge"},
+    )
+    assert taken["event_id"] is None
+    ended = write(
+        f"{encounters}/{prepared['encounter_id']}/end",
+        {"outcomes": [{"participant_entity_id": npc["npc_id"], "outcome": "escaped"}]},
+        status=200,
+    )
+    record = s.gm.get(f"{authoring}/encounters/{prepared['encounter_id']}").json()
+    assert record["status"] == "completed" and record["resulting_event_id"] == ended["event_id"]
+    assert [p["outcome"] for p in record["participants"]] == ["escaped"]
+    assert len(record["rounds"][0]["turns"]) == 1
