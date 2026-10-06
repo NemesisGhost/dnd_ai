@@ -126,6 +126,7 @@ EXPECTED_TABLES = {
         "core.entities",
         "core.entity_names",
         "core.entity_revisions",
+        "core.entity_source_links",
         "core.entity_tags",
         "core.entity_types",
         "core.lifecycle_statuses",

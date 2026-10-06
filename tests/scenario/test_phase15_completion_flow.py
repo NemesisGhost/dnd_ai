@@ -711,3 +711,20 @@ def test_a_gm_sets_up_and_runs_a_campaign(
     assert record["status"] == "completed" and record["resulting_event_id"] == ended["event_id"]
     assert [p["outcome"] for p in record["participants"]] == ["escaped"]
     assert len(record["rounds"][0]["turns"]) == 1
+
+    # --- Step 25 (15.3C-1): a source is attached to the NPC and its provenance is read ----
+    source = write(
+        f"/campaigns/{s.cid}/sources",
+        {"source_type": "session_notes", "title": "Session 3 notes", "reference": "The inn scene"},
+    )
+    linked = write(
+        f"/campaigns/{s.cid}/entities/{npc['npc_id']}/sources/attach",
+        {"source_id": source["source_id"]},
+        status=200,
+    )
+    assert [link["title"] for link in linked["links"]] == ["Session 3 notes"]
+    assert linked["origin"]["source_type"] == "gm_entry"
+    assert "Published as canon" in [t["label"] for t in linked["transitions"]]
+    assert (
+        s.player.get(f"/campaigns/{s.cid}/entities/{npc['npc_id']}/provenance").status_code == 403
+    )

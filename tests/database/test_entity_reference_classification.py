@@ -85,6 +85,8 @@ def test_only_the_reviewed_owned_rows_are_cascade_deleted(db_connection: Connect
         "entity_tags",
         # Phase 15.2R: the definition's canonical revision history.
         "entity_revisions",
+        # Phase 15.3C-1: the sources attached to the entity.
+        "entity_source_links",
         "locations",
         "settlements",
         "buildings",

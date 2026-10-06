@@ -178,6 +178,8 @@ MANAGED_TABLES = [
     ("campaign", "timeline_clocks"),
     # Phase 15 checkpoint 15.2D-2 (revision 123): session participants.
     ("campaign", "session_participants"),
+    # Phase 15 checkpoint 15.3C-1 (revision 134): sources attached to an entity.
+    ("core", "entity_source_links"),
     # Phase 9 — item domain
     ("rules", "item_categories"),
     ("rules", "item_definitions"),
