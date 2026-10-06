@@ -565,3 +565,23 @@ Not verified: CI; manual browser/accessibility (turn entry with keyboard only, r
 
 
 Local gates for 15.3B-2b: `ruff format`/`ruff check` and `mypy src` clean; portal 2160 tests passed, lint and build clean; full Python suite 6189 passed, 1 failed (the known developer-`.env` origin test in `tests/unit/test_config.py`).
+
+## Checkpoint 15.3C-1 — Source attachment and provenance
+
+Commit(s) on `phase15/completion`. **Status: implemented; local automated gates below; CI and manual browser/accessibility checks not performed.** Decision D-26 (closed source types, a title and GM-only reference text, no upload, no URL fetch) applied as recommended.
+
+| Area | Delivered |
+|---|---|
+| Migration | `134_entity_source_links`: `core.entity_source_links` (entity, source, attached by and at, detached by and at) with a unique index for one active link per pair, a guard trigger (a source of another world is refused; a link only ever changes by being detached once), and the three new source types as explicit inserts (the 003 seed file stays frozen). Round trip with `alembic check`. |
+| Commands | `commands/sources.py`: `create_source`, `attach_source`, `detach_source`. Lock order: authority scope, entity `FOR SHARE`, source `FOR SHARE`, a per-pair advisory lock. A source of another world is refused as invalid; attaching what is attached and detaching what is not are conflicts. Not a definition edit: no `row_version` change and no revision. |
+| API | `GET/POST /campaigns/{id}/sources`, `POST .../entities/{id}/sources/attach|detach`, `GET .../entities/{id}/provenance`; `canon.edit`, campaign idempotency, one audit row per change with title and reference redacted. A player is refused with 403 like every authoring route (the plan said 404; the codebase answers a missing capability with 403 and a foreign world with 404). The source list leaves out the creation source every entity cites. |
+| Provenance | Creator and creation source, the links attached now and detached with who and when, lifecycle transitions from the audit rows of the lifecycle commands (action, statuses, actor, time; never the reason or changed fields), and supersession both ways. |
+| Portal | A Sources section under each record's lifecycle panel and a provenance page. The item page showed two lifecycle panels (a defect from 15.3B-1b: the boundary and the item controls each mounted one); the boundary now skips its own panel for items. |
+| Tests | 9 API tests (typed source with redacted audit; world-scoped list; attach and detach history and the unchanged row version; another world's source; provenance with creator, origin and transitions; supersession links; permissions and other worlds; replay; the database guards), 2 real-PostgreSQL races, a migration round trip, 8 portal tests, and scenario step 25. |
+
+Decisions applied (not owner decisions): a link can attach any lifecycle state of a record (provenance is not an edit); only world-owned sources are attached; the creation source is shown as the origin, not as a link; reference text is shown to editors only.
+
+Not verified: CI; manual browser/accessibility (the provenance page at narrow width).
+
+
+Local gates for 15.3C-1: `ruff format`/`ruff check` and `mypy src` clean; portal 2168 tests passed (one unrelated page test failed once under load and passed alone), lint and build clean; full Python suite 6205 passed, 2 failed: the known developer-`.env` origin test and `tests/database/test_seed_idempotency.py::test_database_matches_seed_file[core-source_types-source_type_id]`, which asserted the table equals its frozen seed file and now excludes it, as migration 103 did for `audit.change_actions` (the added rows are covered by `test_entity_source_links_migration.py`). After that fix only `test_seed_idempotency.py` was rerun (54 passed); the full suite was not rerun.

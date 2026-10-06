@@ -214,7 +214,8 @@ Entity rows are definition records. Timeline-specific conditions do not belong h
 
 ### 5.5 Sources and canon
 
-- `core.sources`
+- `core.sources` — where a fact came from. Since Phase 15.3C-1 (decision D-26) a GM authors world-owned sources of a closed list of types (`gm_entry`, `published_reference`, `homebrew_document`, `session_notes`) with a title and a GM-only reference text (no upload, no URL fetch)
+- `core.entity_source_links` — Phase 15.3C-1 (revision 134): a source attached to an entity after its creation (the creation source stays on `core.entities.source_id`). A link is detached once by setting `detached_at` and never otherwise changed or deleted, so what was cited and when is kept; one active link per entity and source (a unique index); a source of another world is refused (a trigger). Never part of a player read
 - `core.source_types` — lookup for `sources.source_type_id` (book, session note, homebrew document, import, …)
 - `core.source_documents`
 - `core.canon_statuses`
