@@ -403,3 +403,24 @@ Not verified: CI; manual browser/accessibility (the inline forms and the state p
 
 
 Commands run (local PostgreSQL 18): ruff format/check and mypy clean; portal `npm test` (283 files, 2070 tests; two unrelated tests flaked once under load and passed on rerun) / `npm run lint` / `npm run build` clean. Full Python suite on the final tree, no other database session active: 6054 passed, 1 failed (the known developer-`.env` test), 1585 s. (An earlier run showed two downgrade-ordering failures that came from an orphaned second pytest session sharing the database; they pass alone and in the clean rerun.)
+
+## Checkpoint 15.3A-2a — relationship authoring kernel and world relationships
+
+Commit(s) on `phase15/completion`. **Status: implemented; local automated gates below; CI and manual browser/accessibility checks not performed.** Decision D-18 (option a: a version and an archive lifecycle, projection to readers who can see every participant and whose subtype allows it; no canon status for edges) applied as recommended and recorded in ADR 0017 (which also resolves ADR 0015 decision 8).
+
+| Area | Delivered |
+|---|---|
+| Migration | `129_relationship_definition`: `world.relationships.row_version` (bumped by `core.bump_row_version()`), `lifecycle_status_id` (existing rows `active`, defaulted on insert), `archived_at`, `created_by_user_id`. Round trip with `alembic check`. |
+| Commands | `commands/world_relationships.py`: `create_relationship` (family, employment, ownership, political, general; participants and typed fields atomically), `update_relationship`, `end_relationship`, `archive_relationship`, `restore_relationship`, `set_relationship_perspective`. Lock order: participants `FOR SHARE`, then the relationship `FOR UPDATE`; every command names the relationship version. `evolve_relationship_reaction` now refuses an archived relationship. |
+| Projection | The world relationship list and the relationship detail hide an archived relationship and one whose ownership or membership row is not public from readers who cannot edit (the same not-found as a missing one); editors see all. The NPC portrayal context ignores archived edges. Existing participant-visibility rules are unchanged. |
+| API | `/campaigns/{id}/authoring/relationships` (options, a per-entity list, create, read, update, end, archive, restore, perspectives); `canon.edit`, campaign idempotency, audit rows with content redacted (no revision snapshots: a relationship is not an entity). |
+| Portal | A Relationships panel on location, organization, religion and character detail pages for editors: list, per-relationship editor (fields, end, archive, restore, perspectives) and an add form. |
+| Dev data | The guard now covers the seven relationship tables; the two fixture sites in the dev-data script are marked. |
+| Tests | 12 API tests (each kind, invalid shapes, update limits and versions, ending rules, a political end, archive and restore for readers and editors, a private ownership edge, an edge to an unpublished participant, perspectives, an archived relationship refusing a state change, the editor list, authority and replay), 3 real-PostgreSQL races (two edits from one version, an archive vs a state change, an archived participant vs create), a migration round trip, 6 portal tests, and scenario step 17. |
+
+Decisions applied (not owner decisions): editors may reference draft participants (the edge stays unseen until they are published); the kind, type and participants are fixed at creation; membership, offices and routes are left to the next checkpoints; relationship perspectives are authored as a full replacement per holder.
+
+Not verified: CI; manual browser/accessibility (the expanding editors, the participant search); character and religion detail pages were not individually exercised in a browser.
+
+
+Commands run (local PostgreSQL 18): ruff format/check and mypy clean; portal `npm test` (284 files, 2076 tests; one unrelated test flaked once under load and passed on rerun) / `npm run lint` / `npm run build` clean. Full Python suite on the final tree, no other database session active: 6071 passed, 1 failed (the known developer-`.env` test), 1612 s.
