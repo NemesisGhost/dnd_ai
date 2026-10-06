@@ -563,12 +563,12 @@ Rules item definitions are distinct from world item instances, which are distinc
 Primary tables:
 
 - `rules.item_definitions` — reusable mechanical definitions. **Built** (Phase 9, authoring in Phase 15.3B-1a, revision 132): `owning_world_id` (NULL for a ruleset-wide definition, set for world-owned homebrew; immutable), `row_version` for optimistic edits, `created_by_user_id`, and the existing canon status (homebrew is authored as `draft` or `canon`). The unique code is per ruleset version for ruleset-wide definitions and per owning world for homebrew. A closed set of generic, unlicensed mundane definitions (weapons, armor, a healing potion, gear, treasure) is seeded for the current `dnd5e` ruleset version, so a clean install can create item instances. A trigger refuses an item instance whose definition is homebrew owned by another world. Licensed catalogs are not seeded.
-- `world.item_instances` — particular objects in the world
+- `world.item_instances` — particular objects in the world. **Built** (Phase 15.3B-1b): a lifecycle-managed entity type (draft until published; archived and draft instances never reach a reader without `canon.edit`); the definition is fixed after creation and must be a published definition the world can use
 - `world.item_containers`
-- `campaign.item_state` — location, charges, damage/condition, equipped state
+- `campaign.item_state` — quantity, damage/condition, charges, equipped and destroyed state. Since Phase 15.3B-1b its `last_event_id` is the item's single optimistic token ("last event seen"): every item operation, including a placement or an attunement, writes it, and an event correction restores the previous token, so it always names the item's last event still in force
 - `campaign.item_ownership` — who owns an instance
 - `campaign.inventory_entries` — who currently possesses/carries it, and where (a container, a location) — distinct from ownership, since a borrowed or stolen item is possessed without being owned
-- `campaign.item_attunements`
+- `campaign.item_attunements` — a character's attunement to an item; one active attunement per item (a unique index), at most three active per character (a command rule under a per-character advisory lock), and ending one must be strictly after it began (a trigger)
 - `knowledge.item_identification` — identification level and which hidden properties are known to whom
 
 Examples:

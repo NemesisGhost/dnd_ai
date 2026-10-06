@@ -505,3 +505,26 @@ Not verified: CI; manual browser/accessibility (the form with keyboard only and 
 
 
 Local gates for 15.3B-1a: `ruff format`/`ruff check` and `mypy src` clean; portal 2113 tests passed, lint and build clean; full Python suite 6131 passed, 1 failed (the known developer-`.env` origin test in `tests/unit/test_config.py`). The first test run found that the seed filter used the pre-rename ruleset code; it was corrected to `dnd5e` before the full run.
+
+## Checkpoint 15.3B-1b — Item instances, inventory and custody
+
+Commit(s) on `phase15/completion`. **Status: implemented; local automated gates below; CI and manual browser/accessibility checks not performed.** No new owner decisions were required (decision D-22 was applied in 15.3B-1a).
+
+| Area | Delivered |
+|---|---|
+| Migration | `133_item_runtime_events`: seven event types (equipped, unequipped, consumed, damaged, repaired, attuned, attunement ended). `item_acquired`, `item_destroyed`, `item_transferred` and `item_identified` already existed and are reused. No table changes. |
+| Lifecycle | `item_instance` is now lifecycle-eligible (removed from the excluded set); the entity-reference classification marks the subtype and container rows owned and the timeline state, custody, attunement, identification and combat rows blocking. |
+| Authoring | `commands/item_instances.py`: `create_item_instance` (a draft; the definition must be published and usable by the world, locked `FOR SHARE`) and `update_item_instance` (name, summary, origin notes; definition fixed). |
+| Operations | `commands/item_operations.py`: award, transfer, equip, unequip, consume, damage, repair, destroy, attune, end attunement. One shared lock order and the item's last-event token (`item_state.last_event_id`); a destroyed item takes nothing more; an equipped or attuned item does not change holder or get destroyed; holders must be published characters; containers must be real containers and cannot form a loop (serialized by a per-timeline advisory lock); attunement needs the carrier, a definition that requires it, one attuner per item and at most three per character (per-character advisory lock); ending must be strictly after beginning. |
+| Adapter | `POST /campaigns/{id}/items/{id}/transfer` is the same implementation now. It keeps API-layer authority and an optional token, accepts no `world_time_id` (campaign clock), and can carry ownership. It still works for pending campaigns, unlike the scope-locked operation routes (a residual: a role revoked mid-request is not re-checked on this route, as before). |
+| Corrections | `commands/event_corrections.py` reverses all five item components while the item's token still names the event; the `item_state` effect carries the token before and after (recorded for every operation), so voiding the latest event puts the previous token back and the earlier one can be voided next. |
+| API | `/authoring/items` (list, options, get, create, update), `/items/{id}/award|equip|unequip|consume|damage|repair|destroy|attune|end-attunement`, `GET /parties/{id}/inventory`; the character inventory read gains the instance name and the token and hides draft and archived instances from non-editors. |
+| Portal | Items list, create and edit pages; the Run this item panel and lifecycle panel on an item's World page; character and party inventory panels; the run-page Award an item section; an Items sidebar link. |
+| Tests | 15 API tests (instances, definition rules, permissions, award, targetability, token transfer, places and adapter, containers, equipment and condition, destroy, attunement, party inventory, character inventory, replay, explorer visibility), 6 correction tests, 3 real-PostgreSQL races, a migration round trip, 30 portal tests (the operations panel, item pages, inventory panels and the award section) plus a sidebar assertion, and scenario step 22. Five existing adapter tests that counted effects per transfer now filter by component. |
+
+Decisions applied (not owner decisions): holders are published characters of any kind (`npc`, `player_character`, and the bare `character` fixtures use); equipped or attuned items do not change holder (unequip first); destroy is refused while attuned; a consumed last unit destroys the item; party inventory is for editors, players see their own character's; containers have no authoring UI (only existing container rows can hold items); a transfer that changes nothing is refused.
+
+Not verified: CI; manual browser/accessibility (the operations panel with keyboard only and at narrow width); Foundry sync was not exercised against a live Foundry (the sync commands' own tests pass).
+
+Local gates for 15.3B-1b: `ruff format`/`ruff check` and `mypy src` clean; portal 2142 tests passed, lint and build clean; full Python suite 6168 passed, 1 failed (the known developer-`.env` origin test in `tests/unit/test_config.py`). Earlier runs during the work found: the adapter route cannot require an active campaign (its fixtures use pending campaigns), so it keeps API-layer authority; a correction chain needed the previous token restored; and the attunement end needed to be strictly after its start.
+
