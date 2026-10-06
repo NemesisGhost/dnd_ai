@@ -99,6 +99,7 @@ from .quests import router as quests_router
 from .reference_corpus import router as reference_corpus_router
 from .relationship_authoring import router as relationship_authoring_router
 from .relationships import router as relationships_router
+from .review_queue import router as review_queue_router
 from .rulesets import router as rulesets_router
 from .session_authoring import router as session_authoring_router
 from .session_play import router as session_play_router
@@ -183,6 +184,7 @@ def create_app() -> FastAPI:
     app.include_router(characters_router)
     app.include_router(dungeon_router)
     app.include_router(encounter_preparation_router)
+    app.include_router(review_queue_router)
     app.include_router(sources_router)
     app.include_router(encounters_router)
     app.include_router(entity_lifecycle_router)

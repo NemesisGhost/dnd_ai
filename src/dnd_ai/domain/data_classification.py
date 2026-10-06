@@ -423,6 +423,7 @@ AUDIT_STRUCTURAL_FIELDS: frozenset[str] = frozenset(
         "session_id",
         "participant_entity_id",
         "source_type",
+        "self_approved",
     }
 )
 
