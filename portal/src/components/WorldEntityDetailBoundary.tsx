@@ -13,6 +13,9 @@ interface WorldEntityDetailBoundaryProps<T> {
     ) => Promise<T>
     /** Lowercase noun used in loading/unavailable copy, e.g. "location". */
     resourceLabel: string
+    // False when the page renders its own lifecycle panel (an item, whose operations panel
+    // refreshes with it).
+    lifecycle?: boolean
     children: (detail: T) => ReactNode
 }
 
@@ -25,6 +28,7 @@ export function WorldEntityDetailBoundary<T>({
     entityId,
     fetchDetail,
     resourceLabel,
+    lifecycle = true,
     children,
 }: WorldEntityDetailBoundaryProps<T>) {
     const { state, retry } = useWorldDetail(
@@ -76,11 +80,14 @@ export function WorldEntityDetailBoundary<T>({
     return (
         <>
             {children(state.detail)}
-            <EntityLifecyclePanel
-                campaignId={campaignId}
-                entityId={entityId}
-                onChanged={retry}
-            />
+            {lifecycle ? (
+                <EntityLifecyclePanel
+                    campaignId={campaignId}
+                    entityId={entityId}
+                    category={resourceLabel}
+                    onChanged={retry}
+                />
+            ) : null}
         </>
     )
 }

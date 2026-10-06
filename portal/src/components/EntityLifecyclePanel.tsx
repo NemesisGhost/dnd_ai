@@ -17,6 +17,7 @@ import { describeBlockedReason } from "../utils/blockedReason"
 import { useAnnounce } from "./authoring/announcer"
 import { ConfirmDialog } from "./authoring/ConfirmDialog"
 import { LifecycleBadge, MutationStatusMessage } from "./authoring/feedback"
+import { EntitySourcesSection } from "./EntitySourcesSection"
 import { SupersedeEntityDialog } from "./SupersedeEntityDialog"
 import "./authoring/authoring.css"
 
@@ -126,6 +127,8 @@ function actionLabel(code: string): string {
 interface EntityLifecyclePanelProps {
     campaignId: string
     entityId: string
+    // The World category, so the sources section can link to the provenance page.
+    category?: string
     // Called after a successful transition so the page above can refetch.
     onChanged?: () => void
 }
@@ -134,16 +137,16 @@ interface EntityLifecyclePanelProps {
 // campaign member whose bootstrap lists `canon.edit`, and only the actions the
 // server's `available_actions` reports; blocked actions are explained, not
 // disabled in place. Players (no capability) trigger no request at all.
-export function EntityLifecyclePanel({ campaignId, entityId, onChanged }: EntityLifecyclePanelProps) {
+export function EntityLifecyclePanel({ campaignId, entityId, category, onChanged }: EntityLifecyclePanelProps) {
     // Players (and any render without a session) mount nothing and send no
     // request; the loading hooks live in the inner component.
     if (!useCampaignCapability(campaignId, "canon.edit")) {
         return null
     }
-    return <LoadedPanel campaignId={campaignId} entityId={entityId} onChanged={onChanged} />
+    return <LoadedPanel campaignId={campaignId} entityId={entityId} category={category} onChanged={onChanged} />
 }
 
-function LoadedPanel({ campaignId, entityId, onChanged }: EntityLifecyclePanelProps) {
+function LoadedPanel({ campaignId, entityId, category, onChanged }: EntityLifecyclePanelProps) {
     const { state, refetch } = useAuthoringResource<EntityLifecycleView>(
         entityLifecyclePath(campaignId, entityId),
     )
@@ -151,13 +154,16 @@ function LoadedPanel({ campaignId, entityId, onChanged }: EntityLifecyclePanelPr
         return null
     }
     return (
-        <Panel
-            key={state.data.row_version}
-            campaignId={campaignId}
-            view={state.data}
-            refetch={refetch}
-            onChanged={onChanged}
-        />
+        <>
+            <Panel
+                key={state.data.row_version}
+                campaignId={campaignId}
+                view={state.data}
+                refetch={refetch}
+                onChanged={onChanged}
+            />
+            <EntitySourcesSection campaignId={campaignId} entityId={entityId} category={category} />
+        </>
     )
 }
 

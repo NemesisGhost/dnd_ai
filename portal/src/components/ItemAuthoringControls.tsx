@@ -27,6 +27,7 @@ export function ItemAuthoringControls({ campaignId, itemId }: Props) {
             <EntityLifecyclePanel
                 campaignId={campaignId}
                 entityId={itemId}
+                category="item"
                 onChanged={() => setChanges((n) => n + 1)}
             />
         </>

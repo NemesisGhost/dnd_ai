@@ -119,6 +119,7 @@ export function CampaignWorldDetailPage() {
                 entityId={entityId}
                 fetchDetail={fetchItemDetail}
                 resourceLabel="item"
+                lifecycle={false}
             >
                 {(item) => (
                     <>

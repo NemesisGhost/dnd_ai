@@ -48,6 +48,7 @@ export function NpcAuthoringControls({ campaignId, characterId }: NpcAuthoringCo
             <EntityLifecyclePanel
                 campaignId={campaignId}
                 entityId={characterId}
+                category="character"
                 onChanged={() => setChanges((n) => n + 1)}
             />
         </>
