@@ -361,6 +361,7 @@ def get_relationship_endpoint(
         expected_world_id=timeline_world_id(connection, access.timeline_id),
         include_subjective=include_subjective,
         visibility=resolve_world_entity_visibility(access, connection),
+        include_private=access.has_capability(_RELATIONSHIP_MANAGE_CAPABILITY),
     )
 
     return RelationshipResponse(

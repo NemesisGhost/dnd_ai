@@ -439,6 +439,7 @@ def list_world_relationships_endpoint(
         visibility=resolve_world_entity_visibility(access, connection),
         limit=limit,
         after_relationship_id=after_relationship_id,
+        include_private=access.has_capability("canon.edit"),
     )
 
     page = build_page(

@@ -12,6 +12,7 @@ them; tests cover them instead).
 """
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     Column,
     ForeignKey,
@@ -82,6 +83,43 @@ relationships = Table(
     ),
     Column("source_id", UUID(), ForeignKey("core.sources.source_id", ondelete="SET NULL")),
     *_timestamps(),
+    # Added by revision 129 (Phase 15 checkpoint 15.3A-2a).
+    Column(
+        "row_version",
+        BigInteger(),
+        nullable=False,
+        server_default=text("1"),
+        comment=(
+            "Optimistic-concurrency token, incremented by every UPDATE "
+            "(core.bump_row_version()). Authoring commands require the caller's "
+            "expected_row_version to equal it under a row lock and reject a stale write."
+        ),
+    ),
+    Column(
+        "lifecycle_status_id",
+        UUID(),
+        ForeignKey("core.lifecycle_statuses.lifecycle_status_id", ondelete="RESTRICT"),
+        nullable=False,
+        comment=(
+            "Operational lifecycle (active or archived). An archived relationship stays in "
+            "history, is hidden from readers who cannot edit canon, and takes no authoring or "
+            "state writes until restored."
+        ),
+    ),
+    Column(
+        "archived_at",
+        TIMESTAMP(timezone=True),
+        comment="When the relationship was archived; NULL while active.",
+    ),
+    Column(
+        "created_by_user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="SET NULL"),
+        comment=(
+            "The authenticated human who created the relationship through the authoring "
+            "command; NULL for relationships created before revision 129 or by operator tooling."
+        ),
+    ),
     schema="world",
     comment=(
         "Connects entities through a meaningful association (docs/DOMAIN_MODEL.md "
@@ -95,6 +133,12 @@ relationships = Table(
 )
 
 Index("ix_relationships_world_id", relationships.c.world_id)
+Index("ix_relationships_lifecycle_status_id", relationships.c.lifecycle_status_id)
+Index(
+    "ix_relationships_created_by_user_id",
+    relationships.c.created_by_user_id,
+    postgresql_where=relationships.c.created_by_user_id.isnot(None),
+)
 Index("ix_relationships_relationship_type_id", relationships.c.relationship_type_id)
 Index(
     "ix_relationships_source_id",

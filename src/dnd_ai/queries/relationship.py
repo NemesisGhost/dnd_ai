@@ -92,6 +92,7 @@ def get_relationship_view(
     expected_world_id: uuid.UUID,
     include_subjective: bool,
     visibility: WorldEntityVisibility,
+    include_private: bool = False,
 ) -> RelationshipView:
     """The effective state of one relationship: its participants, current
     shared status, and — only when `include_subjective=True` — every
@@ -108,9 +109,19 @@ def get_relationship_view(
     row = (
         connection.execute(
             text("""
-                SELECT r.relationship_id, r.world_id, r.description, rt.code AS type_code
+                SELECT r.relationship_id, r.world_id, r.description, rt.code AS type_code,
+                       (
+                           ls.code <> 'active'
+                           OR EXISTS (SELECT 1 FROM world.ownership_relationships o
+                                      WHERE o.relationship_id = r.relationship_id
+                                        AND NOT o.is_public)
+                           OR EXISTS (SELECT 1 FROM world.organization_memberships m
+                                      WHERE m.relationship_id = r.relationship_id
+                                        AND NOT m.is_public)
+                       ) AS not_for_readers
                 FROM world.relationships r
                 JOIN world.relationship_types rt ON rt.relationship_type_id = r.relationship_type_id
+                JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = r.lifecycle_status_id
                 WHERE r.relationship_id = :relationship
             """),
             {"relationship": relationship_id},
@@ -119,6 +130,10 @@ def get_relationship_view(
         .one_or_none()
     )
 
+    # Phase 15.3A-2a (D-18): an archived relationship, and one whose subtype is not public, are the
+    # same not-found for a reader who cannot edit canon.
+    if row is not None and row["not_for_readers"] and not include_private:
+        raise RelationshipNotFoundError(f"relationship {relationship_id} is not for readers")
     if row is None or row["world_id"] != expected_world_id:
         raise RelationshipNotFoundError(
             f"relationship {relationship_id} does not exist in world {expected_world_id} "

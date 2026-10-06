@@ -177,6 +177,9 @@ def _relationship_state(
         text("""
             SELECT rs.affinity, rs.trust, cs.code AS status_code
             FROM world.relationship_participants rp_npc
+            JOIN world.relationships rel ON rel.relationship_id = rp_npc.relationship_id
+            JOIN core.lifecycle_statuses rls
+                ON rls.lifecycle_status_id = rel.lifecycle_status_id AND rls.code = 'active'
             JOIN world.relationship_participants rp_other
                 ON rp_other.relationship_id = rp_npc.relationship_id
                AND rp_other.entity_id = :other

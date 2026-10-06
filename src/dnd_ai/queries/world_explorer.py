@@ -505,6 +505,7 @@ def list_world_relationships(
     visibility: WorldEntityVisibility,
     limit: int,
     after_relationship_id: uuid.UUID | None,
+    include_private: bool = False,
 ) -> tuple[RelationshipCard, ...]:
     """Up to `limit + 1` relationships in the world, ordered by
     `relationship_id`.
@@ -537,6 +538,7 @@ def list_world_relationships(
         "limit_plus_one": limit + 1,
         "after_relationship_id": after_relationship_id,
         "has_cursor": after_relationship_id is not None,
+        "include_private": include_private,
         **_entity_visibility_params(
             world_id=world_id, timeline_id=timeline_id, visibility=visibility
         ),
@@ -549,6 +551,24 @@ def list_world_relationships(
             JOIN world.relationship_types rt
               ON rt.relationship_type_id = r.relationship_type_id
             WHERE r.world_id = :world_id
+              AND (
+                    CAST(:include_private AS boolean)
+                    OR (
+                        NOT EXISTS (
+                            SELECT 1 FROM core.lifecycle_statuses rls
+                            WHERE rls.lifecycle_status_id = r.lifecycle_status_id
+                              AND rls.code <> 'active'
+                        )
+                        AND NOT EXISTS (
+                            SELECT 1 FROM world.ownership_relationships orl
+                            WHERE orl.relationship_id = r.relationship_id AND NOT orl.is_public
+                        )
+                        AND NOT EXISTS (
+                            SELECT 1 FROM world.organization_memberships oml
+                            WHERE oml.relationship_id = r.relationship_id AND NOT oml.is_public
+                        )
+                    )
+                  )
               AND (CAST(:type_code AS text) IS NULL OR rt.code = CAST(:type_code AS text))
               AND (
                     CAST(:like_pattern AS text) IS NULL

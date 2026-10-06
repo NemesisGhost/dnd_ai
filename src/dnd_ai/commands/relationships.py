@@ -33,7 +33,14 @@ from dataclasses import dataclass
 
 from sqlalchemy import Connection, Engine, text
 
-from ._shared import lookup_id, require_state_targetable, validate_session_campaign
+from dnd_ai.domain.relationship_authoring import RelationshipArchivedError
+
+from ._shared import (
+    lifecycle_code,
+    lookup_id,
+    require_state_targetable,
+    validate_session_campaign,
+)
 from .events import EventParticipant, _insert_event_row
 
 
@@ -72,12 +79,16 @@ def _lock_relationship(connection: Connection, relationship_id: uuid.UUID) -> No
     campaign.relationship_state row) before touching campaign.
     relationship_state at all — the same first-write concurrency guard
     advance_objective applies via _lock_quest_objective."""
-    connection.execute(
+    row = connection.execute(
         text(
-            "SELECT relationship_id FROM world.relationships WHERE relationship_id = :r FOR UPDATE"
+            "SELECT lifecycle_status_id FROM world.relationships "
+            "WHERE relationship_id = :r FOR UPDATE"
         ),
         {"r": relationship_id},
-    )
+    ).one_or_none()
+    # Phase 15.3A-2a: an archived relationship takes no state writes until it is restored.
+    if row is not None and lifecycle_code(connection, row.lifecycle_status_id) != "active":
+        raise RelationshipArchivedError(f"relationship {relationship_id} is archived")
 
 
 def _lock_relationship_state(

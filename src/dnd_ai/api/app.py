@@ -92,6 +92,7 @@ from .quest_authoring import router as quest_authoring_router
 from .quest_runtime import router as quest_runtime_router
 from .quests import router as quests_router
 from .reference_corpus import router as reference_corpus_router
+from .relationship_authoring import router as relationship_authoring_router
 from .relationships import router as relationships_router
 from .rulesets import router as rulesets_router
 from .session_authoring import router as session_authoring_router
@@ -205,6 +206,7 @@ def create_app() -> FastAPI:
     app.include_router(quest_runtime_router)
     app.include_router(knowledge_runtime_router)
     app.include_router(dungeon_authoring_router)
+    app.include_router(relationship_authoring_router)
     app.include_router(summary_router)
     app.include_router(timelines_router)
     app.include_router(user_preferences_router)
