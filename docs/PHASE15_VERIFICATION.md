@@ -464,3 +464,25 @@ Not verified: CI; manual browser/accessibility (the traveler checkboxes and the 
 
 
 Commands run (local PostgreSQL 18): ruff format/check and mypy clean; portal `npm test` (286 files, 2088 tests) / `npm run lint` / `npm run build` clean. Full Python suite, no other database session active: 6093 passed, 4 failed in the first run (the known developer-`.env` test, and three table-list tests that had not yet been told about `world.route_relationships`: the persistence package lists and the role-grants coverage list). Those lists were updated and the affected files rerun (581 and 19 passed); the full suite was not rerun because nothing else changed.
+
+## Checkpoint 15.3A-3 — NPC portrayal and NPC runtime operations
+
+Commit(s) on `phase15/completion`. **Status: implemented; local automated gates below; CI and manual browser/accessibility checks not performed.** Decision D-21 (option a: one versioned `npc_portrayal_profiles` plus `npcs.detail_level`; goals, routines and emotional state deferred to Phase 20) applied as recommended.
+
+| Area | Delivered |
+|---|---|
+| Migration | `131_npc_portrayal`: `character.npcs.detail_level` (default `standard`) and the append-only, GM-only `character.npc_portrayal_profiles` (nine bounded text fields, change note, author, unique `(npc_id, version_number)`), with a trigger refusing update and any delete but the cascade from deleting the NPC. Round trip with `alembic check`. |
+| Commands | `commands/npc_portrayal.py`: `update_npc_detail_level` (against the NPC `row_version`) and `save_npc_portrayal_profile` (appends the next version; the token is the version number seen, `0` for none; saving the current version again is a no-op). The NPC entity is locked `FOR UPDATE`, which serializes two saves. |
+| API | `GET/POST /campaigns/{id}/authoring/npcs/{id}/portrayal` (with `?version=`), `POST .../detail-level`, and `GET /campaigns/{id}/authoring/npc-runtime-options` (the rules conditions and resources of the campaign ruleset). `canon.edit`, campaign idempotency, audit rows with content redacted. |
+| Privacy | The profile never appears in a player read, the character read model, the world explorer, or the NPC authoring read; the AI context builders do not read it (a source-level test pins this until Phase 20). |
+| Runtime | The GM controls for an NPC (hit points, conditions, resources, location) use the existing character-state routes and the travel command; the panel only reaches them. No new hardening of those routes was needed beyond what earlier checkpoints added. |
+| Portal | A portrayal page and a Run this NPC panel (published NPCs only) on the character detail page, with a link to the portrayal. |
+| Dev data | The guard now covers `character.npc_portrayal_profiles`. |
+| Tests | 11 API tests (no profile and the default level; appended versions and the token; invalid saves; append-only enforcement; a deleted draft removes its profile; the detail level and its version; an archived NPC; nothing leaks to players or read models, and the AI builders do not read it; runtime options; replay and other worlds), 1 real-PostgreSQL race (two saves from one version), a migration round trip, 16 portal tests, and scenario step 20. |
+
+Decisions applied (not owner decisions): the runtime panel handles hit points, conditions, resources and a move (no new route was needed); conditions and resources are picked from the campaign ruleset version; the panel is offered for published NPCs only because the state commands require it.
+
+Not verified: CI; manual browser/accessibility (the portrayal form and the runtime panel at narrow width).
+
+
+Local gates for 15.3A-3: `ruff format`/`ruff check` and `mypy src` clean; portal 2104 tests passed, lint and build clean; full Python suite 6118 passed, 1 failed (the known developer-`.env` origin test in `tests/unit/test_config.py`). The first full run found four schema-registry gaps (the `detail_level` column classification, the `npc_id` entity-reference classification as owned cascade, an index on `created_by_user_id`, and the matching SQLAlchemy index); all were fixed and the full suite rerun clean.

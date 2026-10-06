@@ -384,6 +384,8 @@ erDiagram
 - `character.npc_disclosure_rules`
 - `character.npc_agent_assignments`
 
+**Built (Phase 15.3A-3, revision 131, decision D-21).** The minimal slice: `character.npcs.detail_level` (`minimal`, `standard`, `major`; a GM planning aid) and `character.npc_portrayal_profiles`, an append-only, GM-only version history per NPC with the nine fields above (voice, speech style, vocabulary, mannerisms, emotional baseline, conversational habits, topics avoided, disclosure boundaries, roleplay guidance, each bounded at 4000 characters) plus a change note and author. Saving appends the next version against the version number the editor saw (`0` when there is none); a trigger refuses any update or delete of a version except the cascade from deleting the NPC. The profile is never part of a player read or of the character read model, and the AI context builders do not read it (a test pins this; Phase 20 decides how portrayal reaches a model). Characteristics, goals, routines, preferences, boundaries, disclosure rules, agent assignments and the per-timeline emotional and goal state remain **Planned**.
+
 Portrayal defaults (`npc_portrayal_profiles`, `npc_characteristics`, `npc_preferences`, `npc_boundaries`, `npc_disclosure_rules`) are world definitions. Current mood, trust, and goal progress are timeline-scoped and live in typed state (`campaign.npc_emotional_state`, `campaign.npc_goal_state` — §16), not here — this table holds what an NPC generally *is*, not what is currently true of them in a given timeline.
 
 The AI context service assembles prompts from the current portrayal profile and current state rather than relying on one unstructured personality prompt.
