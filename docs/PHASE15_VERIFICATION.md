@@ -623,3 +623,27 @@ Residual risk: backups taken before the migration contain the narrative until re
 
 
 Local gates for 15.2A-4: `ruff format`/`ruff check` and `mypy src` clean; full Python suite 6235 passed, 1 failed (the known developer-`.env` origin test in `tests/unit/test_config.py`). No portal code changed in this checkpoint, so the portal suite was not rerun.
+
+## Checkpoint 15.4 — Completion and acceptance (automated part)
+
+Commit(s) on `phase15/completion`. **Status: the automated part is done; the checkpoint is NOT closed.** What remains is the owner's manual acceptance (recorded in [PHASE15_MANUAL_ACCEPTANCE.md](PHASE15_MANUAL_ACCEPTANCE.md)), a CI run on the final head (none has been made on this branch), and the merge. **Phase 15 must not be called complete until those exist.**
+
+| Requirement (plan 15.4) | Evidence |
+|---|---|
+| Clean-database exit scenario | `tests/scenario/test_phase15_completion_flow.py` runs the whole GM flow (the numbered steps 1 to 26: world, campaign, calendar and times, player characters, party, clock, session, events and corrections, quests, knowledge, dungeons, relationships, organization membership, routes and travel, NPC portrayal, items, encounters, sources and provenance, review queue and history) through the HTTP API with a real cookie session, CSRF token and Origin check, against a database freshly created and migrated to head for the test session. Run alone it passes. |
+| Capabilities | `tests/scenario/test_phase15_acceptance_guards.py` reads the app's OpenAPI route table (at least 120 Phase 15 GM routes, with a guard against reading an empty table) and shows every one refuses a player (403), finds nothing for an outsider (404), and refuses a paired Foundry principal (401/403/404). |
+| Scope | A second world's location, NPC, portrayal, item, provenance, revisions and comparison are 404 from this campaign (reads and writes), and never appear in its review queue. |
+| Lifecycle | A branch made at a point does not see an event recorded on its parent afterwards (404 through the explorer; absent from `campaign.effective_events`). |
+| Optimistic | A stale write is a 409 `stale_write`; rereading and retrying succeeds. |
+| Idempotency | A retried create and a retried state command (travel) each have one effect and replay a receipt. |
+| Audit and replay | The scenario ends with a permanent guard: every replay row it wrote equals its minimal receipt, and no audit row it wrote holds a sentence outside structural fields. |
+| Errors | A hidden (draft) record and a missing one give a player identical 404 bodies for location, item and character reads. |
+| Dev data | `tests/unit/test_scripts_no_authored_content_direct_inserts.py` (the guard also covers the item definition, instance and custody tables) passes; the one script that inserts items directly marks them as a justified dev fixture. |
+| Gates | See the final gate line below. |
+
+Defects found while closing the phase (all fixed): replay storage of routes added after 15.2A-3 (15.2A-4), the item page's duplicate lifecycle panel (15.3C-1), the adapter route's effect-count change (15.3B-1b), and a vacuous-pass risk in the first draft of the route guards (caught by an assertion that the route table is non-empty).
+
+**Not verified, and required before closure:** the manual matrix (390, 1280 and 2560 px; keyboard-only; NVDA or Narrator spot checks; 200% zoom; reduced motion; the carried Phase 14 and 15.1 items) on ports 8001 and 5174 against a throwaway database; CI on the final head; the accessibility and responsive behaviour of every portal page added in Phase 15 (each checkpoint above lists its own pending item); a live Foundry sync.
+
+
+Final local gate line (head of `phase15/completion` before this commit): `ruff format`/`ruff check` and `mypy src` clean; full Python suite 6244 passed, 1 failed (the known developer-`.env` origin test in `tests/unit/test_config.py`, which fails only because the developer `.env` adds a tunnel origin); portal 2178 tests passed (296 files), `tsc`, lint and build clean. **No CI run exists for this branch, and the manual acceptance is not done.**

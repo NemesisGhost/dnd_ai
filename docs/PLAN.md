@@ -2117,6 +2117,8 @@ Phase 14 is complete when:
 
 Maps and images remain deferred (no storage contract). Phase 16 is blocked until checkpoint 31 closes.
 
+**Status (2026-10-07):** checkpoints 1 through 30 and the automated part of 31 are implemented on `phase15/completion`, one commit group per checkpoint, with local evidence in [PHASE15_VERIFICATION.md](PHASE15_VERIFICATION.md). Checkpoint 31 closes only with the owner's manual acceptance ([PHASE15_MANUAL_ACCEPTANCE.md](PHASE15_MANUAL_ACCEPTANCE.md)) and a green CI run on the final head; neither exists yet, so Phase 15 is **not** complete.
+
 Implement in independently verifiable increments. Each increment includes commands, read models, portal workflows, authorization, audit, temporal behavior, and tests.
 
 #### 15A. World structure and places
