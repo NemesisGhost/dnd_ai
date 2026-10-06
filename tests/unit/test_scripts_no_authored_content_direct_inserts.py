@@ -97,6 +97,9 @@ _TABLES = (
     "world.employment_relationships",
     "world.ownership_relationships",
     "world.political_relationships",
+    # Phase 15.3A-2b memberships and organization status.
+    "world.organization_memberships",
+    "campaign.organization_state",
     "narrative.objective_dependencies",
     "knowledge.knowledge_items",
 )

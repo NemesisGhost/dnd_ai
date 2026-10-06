@@ -502,3 +502,49 @@ def test_a_gm_sets_up_and_runs_a_campaign(
         status=200,
     )
     assert s.player.get(f"/campaigns/{s.cid}/world/relationships").json()["items"] == []
+
+    # --- Step 18 (15.3A-2b): an organization takes a member with an office and changes status ----
+    guild = write(
+        f"{authoring}/organizations",
+        {"kind": "organization", "organization_type": "guild", "name": "The Guild"},
+    )
+    guild_id = guild["organization_id"]
+    version = int(guild["row_version"])
+    for action in ("submit-for-review", "approve", "publish"):
+        version = int(
+            write(
+                f"/campaigns/{s.cid}/entities/{guild_id}/lifecycle/{action}",
+                {"expected_row_version": version},
+                status=200,
+            )["row_version"]
+        )
+    joined = write(
+        f"{authoring}/relationships",
+        {
+            "kind": "membership",
+            "relationship_type": "membership",
+            "participants": [
+                {"entity_id": pc_id, "role": "member"},
+                {"entity_id": guild_id, "role": "organization"},
+            ],
+            "started_world_time_id": opening["world_time_id"],
+            "role": "Quartermaster",
+            "is_public": True,
+        },
+    )
+    roster = s.gm.get(f"/campaigns/{s.cid}/organizations/{guild_id}/members").json()
+    assert [m["role"] for m in roster["members"]] == ["Quartermaster"]
+    write(
+        f"/campaigns/{s.cid}/organizations/{guild_id}/status",
+        {
+            "world_time_id": siege["world_time_id"],
+            "new_status_code": "dormant",
+            "expected_status": None,
+        },
+        status=200,
+    )
+    assert (
+        s.gm.get(f"/campaigns/{s.cid}/organizations/{guild_id}/members").json()["status"]
+        == "dormant"
+    )
+    assert joined["kind"] == "membership"
