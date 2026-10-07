@@ -2,6 +2,7 @@
 
 - **Status**: Accepted
 - **Date**: 2026-10-06
+- **Amended by**: [ADR 0020](0020-scoped-system-world-and-campaign-roles.md): the "may create worlds" policy of decisions 6 and 7 is now the system `gm` role (ADR 0018, which they cite, is superseded), a user may hold several world roles at once (the operator commands treat a user's roles as one set), and shared world canon now also needs a world capability. `world_viewer` and every other decision here are unchanged.
 - **Builds on**: [ADR 0014](0014-world-authoring-authority.md) (per-world membership authority) and [ADR 0018](0018-world-creation-eligibility.md) (world creation limited to platform administrators and effective GMs). Neither is changed; this ADR adds a read-only world role, defines how a campaign member sees that campaign's world, and gives a remediation path for ownership granted before ADR 0018.
 
 ## Context
