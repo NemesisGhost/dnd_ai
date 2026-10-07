@@ -149,6 +149,7 @@ def get_timeline_endpoint(
         user_id=authority.user_id,
         world_id=authority.world_id,
         timeline_id=timeline_id,
+        capabilities=authority.capabilities,
     )
     if detail is None:
         raise NotFoundError()

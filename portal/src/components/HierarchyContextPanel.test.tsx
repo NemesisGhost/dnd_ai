@@ -71,11 +71,15 @@ function LocationProbe() {
 
 let server: MockServer
 
-function renderAt(path: string, selectedCharacterId: string | null = null) {
+function renderAt(
+  path: string,
+  selectedCharacterId: string | null = null,
+  session: SessionBootstrap = bootstrap,
+) {
   return render(
     <SessionContext.Provider
       value={{
-        state: { status: "authenticated", bootstrap },
+        state: { status: "authenticated", bootstrap: session },
         reload: vi.fn(),
         refresh: vi.fn(),
       }}
@@ -87,7 +91,7 @@ function renderAt(path: string, selectedCharacterId: string | null = null) {
           <WorkspaceHierarchyProvider>
             <Routes>
               {/* The shell supplies the authenticated outlet context. */}
-              <Route element={<Outlet context={{ bootstrap, reload: vi.fn() }} />}>
+              <Route element={<Outlet context={{ bootstrap: session, reload: vi.fn() }} />}>
               <Route element={<WorldWorkspaceLayout />}>
                 <Route path="/worlds" element={<h1>All worlds page</h1>} />
                 <Route path="/worlds/:worldId" element={<h1>World page</h1>} />
@@ -98,8 +102,9 @@ function renderAt(path: string, selectedCharacterId: string | null = null) {
                 />
               </Route>
               </Route>
-              <Route path="/app/:campaignId" element={<CampaignLayout bootstrap={bootstrap} />}>
+              <Route path="/app/:campaignId" element={<CampaignLayout bootstrap={session} />}>
                 <Route path="home" element={<h1>Campaign home</h1>} />
+                <Route path="world" element={<h1>Campaign world</h1>} />
               </Route>
             </Routes>
             <LocationProbe />
@@ -429,3 +434,76 @@ describe("HierarchyContextPanel disclosure", () => {
     expect(summary.closest("details")).toHaveAttribute("open")
   })
 })
+
+describe("HierarchyContextPanel world choices across authority sources", () => {
+  // The observed account: explicit world_owner of "test 1", and a player in a
+  // campaign on a different world it holds no world role on.
+  const player: SessionBootstrap = {
+    ...sessionBootstrapFixture,
+    global_capabilities: [],
+    campaigns: [
+      {
+        ...campaignFor("c-play", "world-hosted", "Hosted World", "timeline-h", "Main H"),
+        roles: ["player"],
+        capabilities: ["campaign.view"],
+      },
+    ],
+  }
+
+  beforeEach(() => {
+    server.on("GET", /^\/worlds\?status=all/, {
+      body: {
+        items: [{ world_id: "world-owned", name: "test 1", capabilities: OWNER }],
+        next_cursor: null,
+      },
+    })
+    server.on("GET", "/worlds/world-hosted", { status: 404, body: {} })
+    server.on("GET", "/worlds/world-owned", {
+      body: {
+        world_id: "world-owned",
+        name: "test 1",
+        capabilities: OWNER,
+        timelines: [timeline("timeline-o", "Main O")],
+      },
+    })
+  })
+
+  it("offers the same deduplicated worlds on All Worlds and on campaign routes", async () => {
+    const all = renderAt("/worlds", null, player)
+    await waitFor(() => expect(level("World")).toBeEnabled())
+    const onAllWorlds = optionNames(level("World"))
+    all.unmount()
+
+    renderAt("/app/c-play/home", null, player)
+    await waitFor(() => expect(shown(level("World"))).toBe("Hosted World"))
+    await waitFor(() => expect(optionNames(level("World"))).toEqual(onAllWorlds))
+    expect(onAllWorlds).toEqual(["No selection", "Hosted World", "test 1"])
+  })
+
+  it("opens a campaign-visible world through its campaign, never a /worlds route", async () => {
+    renderAt("/worlds", null, player)
+    await waitFor(() => expect(level("World")).toBeEnabled())
+
+    fireEvent.change(level("World"), { target: { value: "world-hosted" } })
+
+    await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/app/c-play/world"))
+    expect(screen.getByTestId("location")).not.toHaveTextContent("/worlds/")
+  })
+
+  it("opens an explicitly owned world on its own overview", async () => {
+    renderAt("/app/c-play/home", null, player)
+    await waitFor(() => expect(optionNames(level("World"))).toContain("test 1"))
+
+    fireEvent.change(level("World"), { target: { value: "world-owned" } })
+
+    await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/worlds/world-owned"))
+  })
+
+  it("never offers timeline authoring for a campaign-visible world", async () => {
+    renderAt("/app/c-play/home", null, player)
+    await waitFor(() => expect(server.callsTo("GET", "/worlds/world-hosted")).not.toHaveLength(0))
+    expect(shown(level("Timeline"))).toBe("Main H")
+    expect(level("Timeline")).toBeDisabled()
+  })
+})
+

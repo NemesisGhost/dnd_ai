@@ -1015,7 +1015,7 @@ Delivered by Phase 14 (revision 110; [ADR 0014](../adr/0014-world-authoring-auth
 
 ##### `security.world_roles`
 
-A standard lookup (conventions §11) seeded with `world_owner` (`database/seeds/security.world_roles.yaml`). Its *capabilities* are a closed mapping in `dnd_ai.domain.world_authority`, not rows in `security.capabilities` (which is assignable to campaign roles).
+A standard lookup (conventions §11) seeded with `world_owner` (revision 110, `database/seeds/security.world_roles.yaml`) and the read-only `world_viewer` (revision 136, an explicit INSERT; [ADR 0019](../adr/0019-world-visibility-and-viewer-role.md)). Its *capabilities* are a closed mapping in `dnd_ai.domain.world_authority`, not rows in `security.capabilities` (which is assignable to campaign roles): `world_owner` carries `world.view`, `world.manage`, `timeline.manage`, and `campaign.create`; `world_viewer` carries `world.view` only.
 
 ##### `security.world_memberships`
 
@@ -1029,7 +1029,7 @@ Key columns:
 - `joined_at TIMESTAMPTZ NOT NULL`, `ended_at TIMESTAMPTZ NULL` (`ended_at >= joined_at`)
 - `created_at`, `updated_at`
 
-At most one open row (`ended_at IS NULL`) per `(world_id, user_id)`. Open rows with an active status and role authorize; closed rows are history and are never deleted by commands. A **deferred constraint trigger** (`security.assert_world_retains_owner`, which locks the world row `FOR UPDATE`) rejects a commit that leaves a world that had an active owner with none. A world with **no rows of any status** is an unclaimed legacy world: nobody may author it until trusted infrastructure runs `claim_unowned_world` (`scripts/claim_world_ownership.py`), which succeeds only while the world has no membership rows at all.
+At most one open row (`ended_at IS NULL`) per `(world_id, user_id)`. Open rows with an active status and role authorize; closed rows are history and are never deleted by commands. A **deferred constraint trigger** (`security.assert_world_retains_owner`, which locks the world row `FOR UPDATE`) rejects a commit that leaves a world that had an active owner with none. A world with **no rows of any status** is an unclaimed legacy world: nobody may author it until trusted infrastructure runs `claim_unowned_world` (`scripts/claim_world_ownership.py`), which succeeds only while the world has no membership rows at all. Every later change — granting `world_viewer`, ending a membership, transferring ownership — is also trusted infrastructure only (`dnd_ai.commands.world_memberships` through `scripts/manage_world_membership.py`): it closes and opens rows rather than editing them, refuses to leave a world without an active owner, and grants `world_owner` only to an account that may create worlds ([ADR 0019](../adr/0019-world-visibility-and-viewer-role.md)). A campaign membership never creates a world membership.
 
 #### 19.3 Roles and capabilities
 

@@ -39,6 +39,7 @@ from tests.factories import (
     make_timeline,
     make_user,
     make_world,
+    system_role_id,
 )
 
 pytestmark = pytest.mark.database
@@ -116,8 +117,13 @@ def session(postgres_engine: Engine) -> Iterator[Session]:
             login_name=login_name,
             display_name="Prefs User",
         )
-        make_campaign_membership(connection, campaign_a, created.user_id)
-        make_campaign_membership(connection, campaign_b, created.user_id)
+        player_role_id = system_role_id(connection, "player")
+        for campaign_id in (campaign_a, campaign_b):
+            make_membership_role(
+                connection,
+                make_campaign_membership(connection, campaign_id, created.user_id),
+                player_role_id,
+            )
 
     app = create_app()
     app.dependency_overrides[get_engine] = lambda: postgres_engine

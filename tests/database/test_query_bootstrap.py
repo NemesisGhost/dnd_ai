@@ -79,6 +79,19 @@ def _character_relationship_type_id(db_connection: Connection, code: str) -> uui
     )
 
 
+def _viewer_membership(
+    db_connection: Connection, campaign_id: uuid.UUID, user_id: uuid.UUID
+) -> uuid.UUID:
+    """An active membership holding a role that grants `campaign.view` — the
+    minimum the bootstrap requires before it offers a campaign at all. Tests
+    about roles build their own role instead."""
+    membership_id = make_campaign_membership(db_connection, campaign_id, user_id)
+    role_id = make_role(db_connection, campaign_id=campaign_id, code="member")
+    make_role_capability(db_connection, role_id, _capability_id(db_connection, "campaign.view"))
+    make_membership_role(db_connection, membership_id, role_id)
+    return membership_id
+
+
 def _make_role_with_capabilities(
     db_connection: Connection, *, campaign_id: uuid.UUID, code: str, capability_codes: list[str]
 ) -> uuid.UUID:
@@ -122,7 +135,10 @@ def test_gm_membership_includes_canon_edit_capability(
     campaign_id = make_campaign(db_connection, timeline_id, "GM Campaign")
     membership_id = make_campaign_membership(db_connection, campaign_id, user_id)
     gm_role_id = _make_role_with_capabilities(
-        db_connection, campaign_id=campaign_id, code="gm", capability_codes=["canon.edit"]
+        db_connection,
+        campaign_id=campaign_id,
+        code="gm",
+        capability_codes=["campaign.view", "canon.edit"],
     )
     make_membership_role(db_connection, membership_id, gm_role_id)
 
@@ -162,7 +178,7 @@ def test_observer_membership_has_only_observer_role(
     campaign_id = make_campaign(db_connection, timeline_id, "Observer Campaign")
     membership_id = make_campaign_membership(db_connection, campaign_id, user_id)
     observer_role_id = _make_role_with_capabilities(
-        db_connection, campaign_id=campaign_id, code="observer", capability_codes=[]
+        db_connection, campaign_id=campaign_id, code="observer", capability_codes=["campaign.view"]
     )
     make_membership_role(db_connection, membership_id, observer_role_id)
 
@@ -170,7 +186,7 @@ def test_observer_membership_has_only_observer_role(
 
     campaign = bootstrap.campaigns[0]
     assert campaign.roles == ("observer",)
-    assert campaign.capabilities == ()
+    assert campaign.capabilities == ("campaign.view",)
 
 
 def test_multiple_roles_are_all_returned(
@@ -179,7 +195,10 @@ def test_multiple_roles_are_all_returned(
     campaign_id = make_campaign(db_connection, timeline_id, "Multi-Role Campaign")
     membership_id = make_campaign_membership(db_connection, campaign_id, user_id)
     gm_role_id = _make_role_with_capabilities(
-        db_connection, campaign_id=campaign_id, code="gm", capability_codes=["canon.edit"]
+        db_connection,
+        campaign_id=campaign_id,
+        code="gm",
+        capability_codes=["campaign.view", "canon.edit"],
     )
     assistant_role_id = _make_role_with_capabilities(
         db_connection,
@@ -198,21 +217,100 @@ def test_multiple_roles_are_all_returned(
     assert "character.interact" in campaign.capabilities
 
 
-def test_revoked_role_is_excluded(
+def test_revoked_role_is_excluded_from_roles_and_capabilities(
     db_connection: Connection, timeline_id: uuid.UUID, user_id: uuid.UUID
 ) -> None:
     campaign_id = make_campaign(db_connection, timeline_id, "Revoked Role Campaign")
     membership_id = make_campaign_membership(db_connection, campaign_id, user_id)
-    role_id = _make_role_with_capabilities(
+    player_role_id = _make_role_with_capabilities(
+        db_connection, campaign_id=campaign_id, code="player", capability_codes=["campaign.view"]
+    )
+    gm_role_id = _make_role_with_capabilities(
         db_connection, campaign_id=campaign_id, code="gm", capability_codes=["canon.edit"]
     )
-    make_membership_role(db_connection, membership_id, role_id, revoked=True)
+    make_membership_role(db_connection, membership_id, player_role_id)
+    make_membership_role(db_connection, membership_id, gm_role_id, revoked=True)
 
     bootstrap = get_session_bootstrap(db_connection, user_id=user_id)
 
     campaign = bootstrap.campaigns[0]
-    assert campaign.roles == ()
-    assert campaign.capabilities == ()
+    assert campaign.roles == ("player",)
+    assert campaign.capabilities == ("campaign.view",)
+
+
+def _set_role_expiry(db_connection: Connection, membership_id: uuid.UUID, *, past: bool) -> None:
+    """Expire (or schedule to expire) every role of the membership. An expired
+    assignment is backdated so `expires_at` still follows `granted_at`."""
+    db_connection.execute(
+        text("""
+            UPDATE security.membership_roles
+            SET granted_at = now() - interval '2 days',
+                expires_at = CASE WHEN :past THEN now() - interval '1 day'
+                                  ELSE now() + interval '1 day' END
+            WHERE campaign_membership_id = :m
+        """),
+        {"m": membership_id, "past": past},
+    )
+
+
+@pytest.mark.parametrize(
+    "role_state", ["no_role", "revoked_role", "expired_role", "role_without_campaign_view"]
+)
+def test_an_active_membership_without_an_effective_campaign_view_role_is_not_offered(
+    db_connection: Connection, timeline_id: uuid.UUID, user_id: uuid.UUID, role_state: str
+) -> None:
+    """The observed defect: an active membership that grants no `campaign.view`
+    (never had a role, or every role revoked/expired/viewless) was listed and
+    could be resumed as the last-visited campaign, landing on routes that each
+    answer 403. It is neither listed, nor startup, nor an accepted stored
+    preference — while a campaign the user can view still is."""
+    viewable = make_campaign(db_connection, timeline_id, "A Viewable")
+    _viewer_membership(db_connection, viewable, user_id)
+    hidden = make_campaign(db_connection, timeline_id, "B Hidden")
+    membership_id = make_campaign_membership(db_connection, hidden, user_id)
+    if role_state != "no_role":
+        role_id = _make_role_with_capabilities(
+            db_connection,
+            campaign_id=hidden,
+            code="player",
+            capability_codes=(
+                ["character.interact"]
+                if role_state == "role_without_campaign_view"
+                else ["campaign.view"]
+            ),
+        )
+        make_membership_role(
+            db_connection, membership_id, role_id, revoked=role_state == "revoked_role"
+        )
+        if role_state == "expired_role":
+            _set_role_expiry(db_connection, membership_id, past=True)
+    db_connection.execute(
+        text("""
+            INSERT INTO security.user_portal_preferences
+                (user_id, preferred_campaign_id, last_visited_campaign_id)
+            VALUES (:u, :c, :c)
+        """),
+        {"u": user_id, "c": hidden},
+    )
+
+    bootstrap = get_session_bootstrap(db_connection, user_id=user_id)
+
+    assert [c.campaign_id for c in bootstrap.campaigns] == [viewable]
+    assert bootstrap.startup_campaign_id == viewable
+    assert bootstrap.campaign_preferences.preferred_campaign_id is None
+    assert bootstrap.campaign_preferences.last_visited_campaign_id is None
+
+
+def test_an_unexpired_role_still_offers_the_campaign(
+    db_connection: Connection, timeline_id: uuid.UUID, user_id: uuid.UUID
+) -> None:
+    campaign_id = make_campaign(db_connection, timeline_id, "Expiring Later")
+    membership_id = _viewer_membership(db_connection, campaign_id, user_id)
+    _set_role_expiry(db_connection, membership_id, past=False)
+
+    assert [
+        c.campaign_id for c in get_session_bootstrap(db_connection, user_id=user_id).campaigns
+    ] == [campaign_id]
 
 
 # ---------------------------------------------------------------------------
@@ -225,8 +323,8 @@ def test_multiple_campaigns_are_returned_in_deterministic_order(
 ) -> None:
     campaign_b = make_campaign(db_connection, timeline_id, "B Campaign")
     campaign_a = make_campaign(db_connection, timeline_id, "A Campaign")
-    make_campaign_membership(db_connection, campaign_b, user_id)
-    make_campaign_membership(db_connection, campaign_a, user_id)
+    _viewer_membership(db_connection, campaign_b, user_id)
+    _viewer_membership(db_connection, campaign_a, user_id)
 
     bootstrap = get_session_bootstrap(db_connection, user_id=user_id)
 
@@ -275,7 +373,7 @@ def test_membership_revocation_is_reflected_on_the_next_call(
     db_connection: Connection, timeline_id: uuid.UUID, user_id: uuid.UUID
 ) -> None:
     campaign_id = make_campaign(db_connection, timeline_id, "Soon Revoked Campaign")
-    make_campaign_membership(db_connection, campaign_id, user_id)
+    _viewer_membership(db_connection, campaign_id, user_id)
     assert len(get_session_bootstrap(db_connection, user_id=user_id).campaigns) == 1
 
     db_connection.execute(
@@ -299,7 +397,7 @@ def test_character_relationship_with_capability_is_a_selectable_perspective(
     db_connection: Connection, world_id: uuid.UUID, timeline_id: uuid.UUID, user_id: uuid.UUID
 ) -> None:
     campaign_id = make_campaign(db_connection, timeline_id, "Perspective Campaign")
-    membership_id = make_campaign_membership(db_connection, campaign_id, user_id)
+    membership_id = _viewer_membership(db_connection, campaign_id, user_id)
     character_id = make_character(db_connection, world_id, name="Aldric")
     relationship_type_id = _character_relationship_type_id(db_connection, "owner")
     capability_id = _capability_id(db_connection, "character.control")
@@ -326,7 +424,7 @@ def test_character_perspective_exposes_only_its_authorized_current_parties(
     membership on the campaign's timeline, party associated with the
     campaign — never guess one."""
     campaign_id = make_campaign(db_connection, timeline_id, "Party Perspective Campaign")
-    membership_id = make_campaign_membership(db_connection, campaign_id, user_id)
+    membership_id = _viewer_membership(db_connection, campaign_id, user_id)
     character_id = make_character(db_connection, world_id, name="Kestrel")
     relationship_type_id = _character_relationship_type_id(db_connection, "owner")
     make_relationship_type_capability(
@@ -366,7 +464,7 @@ def test_character_relationship_with_no_mapped_capability_is_not_selectable(
     db_connection: Connection, world_id: uuid.UUID, timeline_id: uuid.UUID, user_id: uuid.UUID
 ) -> None:
     campaign_id = make_campaign(db_connection, timeline_id, "No Capability Campaign")
-    membership_id = make_campaign_membership(db_connection, campaign_id, user_id)
+    membership_id = _viewer_membership(db_connection, campaign_id, user_id)
     character_id = make_character(db_connection, world_id, name="Ghostly")
     relationship_type_id = _character_relationship_type_id(db_connection, "former_controller")
     # Deliberately no make_relationship_type_capability call — this
@@ -386,7 +484,7 @@ def test_revoked_character_relationship_is_not_selectable(
     db_connection: Connection, world_id: uuid.UUID, timeline_id: uuid.UUID, user_id: uuid.UUID
 ) -> None:
     campaign_id = make_campaign(db_connection, timeline_id, "Revoked Relationship Campaign")
-    membership_id = make_campaign_membership(db_connection, campaign_id, user_id)
+    membership_id = _viewer_membership(db_connection, campaign_id, user_id)
     character_id = make_character(db_connection, world_id, name="Revoked")
     relationship_type_id = _character_relationship_type_id(db_connection, "viewer")
     capability_id = _capability_id(db_connection, "character.view_summary")
@@ -414,7 +512,7 @@ def test_a_fictional_time_bounded_relationship_is_never_selectable_regardless_of
     chronology ("early", "middle", "late" relative to each other, not to
     any tracked "now") — all three must be excluded identically."""
     campaign_id = make_campaign(db_connection, timeline_id, "Bounded Relationship Campaign")
-    membership_id = make_campaign_membership(db_connection, campaign_id, user_id)
+    membership_id = _viewer_membership(db_connection, campaign_id, user_id)
     relationship_type_id = _character_relationship_type_id(db_connection, "viewer")
     capability_id = _capability_id(db_connection, "character.view_summary")
     make_relationship_type_capability(db_connection, relationship_type_id, capability_id)
@@ -454,7 +552,7 @@ def test_an_open_ended_fictional_time_bounded_relationship_remains_selectable(
     own identical "current record" precedent (`effective_to_*_id IS NULL`
     means still current, never a comparison against some external clock)."""
     campaign_id = make_campaign(db_connection, timeline_id, "Open Ended Relationship Campaign")
-    membership_id = make_campaign_membership(db_connection, campaign_id, user_id)
+    membership_id = _viewer_membership(db_connection, campaign_id, user_id)
     character_id = make_character(db_connection, world_id, name="Open Ended")
     # `owner` carries `character.view_knowledge` by production default (migration 114).
     relationship_type_id = _character_relationship_type_id(db_connection, "owner")
@@ -486,7 +584,7 @@ def test_a_relationship_to_a_deactivated_character_is_not_selectable(
     character_relationship` already refused to act on an inactive
     character but the read side never re-checked it after the fact."""
     campaign_id = make_campaign(db_connection, timeline_id, "Deactivated Character Campaign")
-    membership_id = make_campaign_membership(db_connection, campaign_id, user_id)
+    membership_id = _viewer_membership(db_connection, campaign_id, user_id)
     character_id = make_character(db_connection, world_id, name="Soon Archived")
     relationship_type_id = _character_relationship_type_id(db_connection, "viewer")
     capability_id = _capability_id(db_connection, "character.view_summary")
@@ -514,7 +612,7 @@ def test_multiple_perspectives_leave_selected_character_null(
     db_connection: Connection, world_id: uuid.UUID, timeline_id: uuid.UUID, user_id: uuid.UUID
 ) -> None:
     campaign_id = make_campaign(db_connection, timeline_id, "Two Character Campaign")
-    membership_id = make_campaign_membership(db_connection, campaign_id, user_id)
+    membership_id = _viewer_membership(db_connection, campaign_id, user_id)
     relationship_type_id = _character_relationship_type_id(db_connection, "co_controller")
     capability_id = _capability_id(db_connection, "character.control")
     make_relationship_type_capability(db_connection, relationship_type_id, capability_id)
@@ -535,7 +633,7 @@ def test_relationship_revocation_is_reflected_on_the_next_call(
     db_connection: Connection, world_id: uuid.UUID, timeline_id: uuid.UUID, user_id: uuid.UUID
 ) -> None:
     campaign_id = make_campaign(db_connection, timeline_id, "Soon Revoked Character Campaign")
-    membership_id = make_campaign_membership(db_connection, campaign_id, user_id)
+    membership_id = _viewer_membership(db_connection, campaign_id, user_id)
     character_id = make_character(db_connection, world_id, name="Soon Gone")
     relationship_type_id = _character_relationship_type_id(db_connection, "owner")
     capability_id = _capability_id(db_connection, "character.control")
@@ -599,7 +697,7 @@ def test_a_discover_only_character_is_not_a_selectable_perspective(
     (Phase 15 checkpoint 15.2A-1: only relationships holding
     `character.view_knowledge` permit perspective selection)."""
     campaign_id = make_campaign(db_connection, timeline_id, "Discover Only Campaign")
-    membership_id = make_campaign_membership(db_connection, campaign_id, user_id)
+    membership_id = _viewer_membership(db_connection, campaign_id, user_id)
     character_id = make_character(db_connection, world_id, name="Barely Known")
     relationship_type_id = _character_relationship_type_id(db_connection, "viewer")
     make_membership_character_relationship(
@@ -620,7 +718,7 @@ def test_revoking_character_view_knowledge_stops_advertising_parties_next_call(
     db_connection: Connection, world_id: uuid.UUID, timeline_id: uuid.UUID, user_id: uuid.UUID
 ) -> None:
     campaign_id = make_campaign(db_connection, timeline_id, "Revoke View Knowledge Campaign")
-    membership_id = make_campaign_membership(db_connection, campaign_id, user_id)
+    membership_id = _viewer_membership(db_connection, campaign_id, user_id)
     character_id = make_character(db_connection, world_id, name="Was Trusted")
     relationship_id = _view_knowledge_perspective(
         db_connection,
@@ -654,7 +752,7 @@ def test_a_party_not_associated_with_the_campaign_is_not_advertised(
     db_connection: Connection, world_id: uuid.UUID, timeline_id: uuid.UUID, user_id: uuid.UUID
 ) -> None:
     campaign_id = make_campaign(db_connection, timeline_id, "Unassociated Party Campaign")
-    membership_id = make_campaign_membership(db_connection, campaign_id, user_id)
+    membership_id = _viewer_membership(db_connection, campaign_id, user_id)
     character_id = make_character(db_connection, world_id, name="Kestrel")
     _view_knowledge_perspective(
         db_connection,
@@ -682,7 +780,7 @@ def test_every_advertised_party_resolves_through_the_real_perspective_resolver(
     portal, `resolve_party_perspective` accepts every one for that
     character."""
     campaign_id = make_campaign(db_connection, timeline_id, "Round Trip Campaign")
-    membership_id = make_campaign_membership(db_connection, campaign_id, user_id)
+    membership_id = _viewer_membership(db_connection, campaign_id, user_id)
     character_id = make_character(db_connection, world_id, name="Roundtrip")
     _view_knowledge_perspective(
         db_connection,
@@ -729,7 +827,10 @@ def test_two_users_in_the_same_campaign_see_different_capabilities(
     gm_membership_id = make_campaign_membership(db_connection, campaign_id, gm_user_id)
     player_membership_id = make_campaign_membership(db_connection, campaign_id, player_user_id)
     gm_role_id = _make_role_with_capabilities(
-        db_connection, campaign_id=campaign_id, code="gm", capability_codes=["canon.edit"]
+        db_connection,
+        campaign_id=campaign_id,
+        code="gm",
+        capability_codes=["campaign.view", "canon.edit"],
     )
     player_role_id = _make_role_with_capabilities(
         db_connection,
@@ -751,7 +852,7 @@ def test_no_disclosure_of_a_campaign_the_user_is_not_a_member_of(
     db_connection: Connection, timeline_id: uuid.UUID, user_id: uuid.UUID
 ) -> None:
     accessible_campaign_id = make_campaign(db_connection, timeline_id, "Accessible")
-    make_campaign_membership(db_connection, accessible_campaign_id, user_id)
+    _viewer_membership(db_connection, accessible_campaign_id, user_id)
     inaccessible_campaign_id = make_campaign(db_connection, timeline_id, "Secret Campaign")
     other_user_id = make_user(db_connection, "Someone Else")
     make_campaign_membership(db_connection, inaccessible_campaign_id, other_user_id)

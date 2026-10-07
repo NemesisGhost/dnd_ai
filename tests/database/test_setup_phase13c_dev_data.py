@@ -2155,6 +2155,110 @@ def test_phase13e_running_apply_twice_creates_no_duplicates(db_connection: Conne
     assert counts_after_second == counts_after_first
 
 
+def test_phase13e_rerun_ends_a_stray_roleless_cross_campaign_membership(
+    db_connection: Connection,
+) -> None:
+    """The observed local defect: a manual session gave Player A an active,
+    roleless Campaign B membership (the fixture documents none) and Campaign B
+    became their last-visited campaign. Re-applying the fixture ends that
+    membership through the real command — never deleting it — and Player A's
+    bootstrap offers only Campaign A."""
+    user_id = _make_local_account(
+        db_connection, display_name="Phase13E Stray Tester", is_platform_administrator=True
+    )
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
+    player_a = _phase13e_login_name(
+        db_connection, setup_phase13c_dev_data._PHASE13E_PLAYER_A_LOGIN_NAME
+    )
+    assert player_a is not None
+    campaign_b_id = _campaigns(db_connection, user_id=user_id)[
+        setup_phase13c_dev_data._CAMPAIGN_B_NAME
+    ].campaign_id
+    stray_id = db_connection.execute(
+        text("""
+            INSERT INTO security.campaign_memberships
+                (campaign_id, user_id, membership_status_id, joined_at)
+            VALUES (:c, :u, (SELECT membership_status_id FROM security.membership_statuses
+                             WHERE code = 'active'), now() - interval '1 minute')
+            RETURNING campaign_membership_id
+        """),
+        {"c": campaign_b_id, "u": player_a},
+    ).scalar_one()
+    db_connection.execute(
+        text("""
+            INSERT INTO security.user_portal_preferences (user_id, last_visited_campaign_id)
+            VALUES (:u, :c)
+            ON CONFLICT (user_id) DO UPDATE SET last_visited_campaign_id = EXCLUDED.last_visited_campaign_id
+        """),
+        {"u": player_a, "c": campaign_b_id},
+    )
+
+    summary = _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
+
+    assert (
+        _phase13e_open_membership(db_connection, campaign_id=campaign_b_id, user_id=player_a)
+        is None
+    )
+    assert (
+        db_connection.execute(
+            text(
+                "SELECT count(*) FROM security.campaign_memberships WHERE campaign_membership_id = :m"
+            ),
+            {"m": stray_id},
+        ).scalar_one()
+        == 1
+    )
+    assert any("ended unintended membership" in line for line in summary.lines)
+    bootstrap = get_session_bootstrap(db_connection, user_id=player_a)
+    assert [c.campaign_name for c in bootstrap.campaigns] == [
+        setup_phase13c_dev_data._CAMPAIGN_A_NAME
+    ]
+    assert bootstrap.campaign_preferences.last_visited_campaign_id is None
+
+
+def test_phase13e_rerun_keeps_a_stray_membership_that_grants_campaign_view(
+    db_connection: Connection,
+) -> None:
+    """A cross-campaign membership someone gave a role on purpose during manual
+    testing opens the campaign; a fixture re-run reports it and leaves it."""
+    user_id = _make_local_account(
+        db_connection, display_name="Phase13E Kept Tester", is_platform_administrator=True
+    )
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
+    player_b = _phase13e_login_name(
+        db_connection, setup_phase13c_dev_data._PHASE13E_PLAYER_B_LOGIN_NAME
+    )
+    assert player_b is not None
+    campaign_a_id = _campaigns(db_connection, user_id=user_id)[
+        setup_phase13c_dev_data._CAMPAIGN_A_NAME
+    ].campaign_id
+    membership_id = db_connection.execute(
+        text("""
+            INSERT INTO security.campaign_memberships
+                (campaign_id, user_id, membership_status_id, joined_at)
+            VALUES (:c, :u, (SELECT membership_status_id FROM security.membership_statuses
+                             WHERE code = 'active'), now() - interval '1 minute')
+            RETURNING campaign_membership_id
+        """),
+        {"c": campaign_a_id, "u": player_b},
+    ).scalar_one()
+    db_connection.execute(
+        text("""
+            INSERT INTO security.membership_roles (campaign_membership_id, role_id)
+            SELECT :m, role_id FROM security.roles WHERE campaign_id IS NULL AND code = 'player'
+        """),
+        {"m": membership_id},
+    )
+
+    summary = _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
+
+    assert (
+        _phase13e_open_membership(db_connection, campaign_id=campaign_a_id, user_id=player_b)
+        == membership_id
+    )
+    assert any(line.startswith("  [kept]") for line in summary.lines)
+
+
 def test_phase13e_existing_admin_account_is_never_modified(db_connection: Connection) -> None:
     user_id = _make_local_account(
         db_connection, display_name="Phase13E Admin Guard Tester", is_platform_administrator=True
