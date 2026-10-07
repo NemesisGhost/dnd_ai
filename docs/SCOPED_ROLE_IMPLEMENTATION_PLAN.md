@@ -661,7 +661,7 @@ Q3 (assignment-time vs continuous GM checks) no longer applies to campaign roles
 | Plan revision | this file as committed at `a61e23a` |
 | Phase 15 base at start | `origin/phase15/completion` = `82ed14c` (no divergence at the start) |
 | Phase 15 changes incorporated | `c1b7038` (campaign-derived world visibility, the `world_viewer` role, operator world-membership commands, ADR 0019, migration `136_world_viewer_role`) and `9b10732` (CI sharding), merged with `git merge`; `phase15/completion` itself was never modified or pushed |
-| Final synchronization | see §16.6 |
+| Final synchronization | `phase15/completion` at `c1b7038` is an ancestor of the final head; see §16.6 |
 
 ### 16.2 Checkpoints
 
@@ -700,4 +700,21 @@ Q2 backfill as recommended; Q5 Observer is a classification only; Q8 world-scope
 
 ### 16.6 Verification record
 
-VERIFICATION_PLACEHOLDER
+Verified on head `27db91d` (which contains `origin/phase15/completion` at `c1b7038`), run locally against PostgreSQL 18 with throwaway databases:
+
+| Check | Result |
+|---|---|
+| `ruff format --check`, `ruff check`, `mypy src` | clean |
+| `tests/unit` | 1160 passed |
+| `tests/database` + `tests/scenario` | 5263 passed, 14 failed. All 14 are `test_frozen_seed_file_is_unchanged[rules.*]`, which fail identically on the base tree on Windows (CRLF checkout); not caused by this work |
+| Portal `tsc`, `eslint`, `vite build` | clean / succeeds |
+| Portal `vitest` (full run) | 1 to 2 intermittent timing failures per run, a different set each run (HierarchyContextPanel, QuestAuthoringPages, ActivateAccountPage); each passes alone. A full run on the unmodified `main` tree also failed ActivateAccountPage and QuestAuthoringPages, so the flakiness predates this work |
+| Alembic | single head `138_world_roles_and_use_grants`; populated upgrade and downgrade/re-upgrade tests pass for both revisions |
+
+**Final synchronization:** `git fetch origin` was repeated before the push; `origin/phase15/completion` had not moved past `c1b7038`, so no further merge or re-run was needed.
+
+**Not done, stated plainly:**
+
+- **CI was not run** against this head. The workflow triggers only on pushes to `main` and pull requests to `main`; no PR was opened.
+- **Manual validation (section 13.2) was not performed.** Browser walkthroughs of the portal and operator scripts against a real deployment remain for the owner.
+- The 14 frozen-seed failures above are unresolved on Windows.
