@@ -1,6 +1,6 @@
 # Scoped System, World, and Campaign Authorization — Implementation Plan
 
-- **Status:** Proposed (planning only; nothing here is implemented)
+- **Status:** Proposed (planning only; nothing here is implemented). Owner answers to seven of the §14 questions were recorded on 2026-10-06 and are folded into the decisions below; the remaining questions keep their recommended defaults until answered.
 - **Date:** 2026-10-06
 - **Branch:** `feature/scoped-role-model`, based on `origin/phase15/completion` at `82ed14c2e2ef07da02baf77b9a8455c1bab56a40`
 - **Migration head at planning time:** `135_scrub_narrative_text` (on the Phase 15 base). Do not reserve a number from this; see §12.4.
@@ -100,17 +100,74 @@ No production deployment exists: [ADR 0013](adr/0013-locally-host-production-on-
 
 ### 2.9 Findings motivating this work (graded)
 
-Graded with the E/I/T/D/B dimensions used in [PROJECT_STATUS.md](PROJECT_STATUS.md) (each 0–2). The full rubric text, including the score-to-severity bands above the Low (3) and Medium (4) examples it shows, is not in the repository, so only totals are given; the owner should confirm severity labels.
+These are graded with the owner's production issue grading rubric (`.tmp/issue-grading-rubric(2).md`, not committed). The factors are production exposure 0–3, impact 0–3, triggerability 0–2, detection/recovery 0–1 and blast radius 0–1. The bands are 9–10 Critical, 7–8 High, 4–6 Medium, 1–3 Low and 0 Informational.
 
-| # | Finding | Evidence | E/I/T/D/B | Total |
-|---|---|---|---|---:|
-| F1 | A campaign `gm`/`assistant_gm` on a shared world can create, edit, publish, archive, or supersede canon used by every campaign on that world | §2.5, `lock_authoring_scope` | 1/2/1/1/2 | 7 |
-| F2 | World drafts, revisions, provenance, and GM-only prep authored from one campaign are readable by every other campaign's `canon.edit` holders on the world | §2.5 read side | 1/1/1/2/1 | 6 |
-| F3 | `access.manage` in one campaign on a timeline lets the holder create further campaigns on that timeline without world authority (Path B) | §2.4 | 1/1/1/1/1 | 5 |
-| F4 | World-creation eligibility can be minted by any campaign owner assigning the `gm` template | §2.1 | 1/1/1/0/1 | 4 |
-| F5 | Disabling the sole owner/access manager strands a world or campaign with no in-app recovery | §2.2, §2.3 | 1/1/0/1/1 | 4 |
+**Environment and deployment-path basis (applies to every finding).** No production deployment exists today (§2.8). The rubric scores a future path only with evidence that the code will run in production. That evidence exists here: the affected code is the shipping authorization path of the API and portal, ADR 0013 (accepted) designates the self-hosted mini-PC as the production target, and Phase 17 packages exactly these services for it. Each finding is therefore scored for that planned self-hosted, single-instance deployment, with no assumed concurrency or scale. These are application authorization paths, not migrations, so no upgrade path is crossed. The rubric's rule against lowering a score for code that "establishes a production security boundary" applies to F1, F2 and F4. No severity is elevated beyond its numeric band.
 
-Exposure is E1 throughout because nothing is deployed to production (§2.8). None of these is a reason to change Phase 15; they are fixed by this workstream after Phase 15 merges (§12).
+| Rank | Finding | Score | Severity |
+|---:|---|---:|---|
+| 1 | F1 — a campaign capability writes shared world canon | 8 | High |
+| 2 | F2 — world drafts and prep are readable across campaigns | 7 | High |
+| 3 | F5 — disabling a sole owner strands a world or campaign | 6 | Medium |
+| 4 | F4 — world-creation eligibility is minted by a campaign role assignment | 5 | Medium |
+| 5 | F3 — campaign creation borrows `access.manage` from another campaign on the timeline | 5 | Medium |
+
+Under the rubric's default dispositions, F1 and F2 (High) block a release or deployment. They do not block the Phase 15 merge here, because the brief keeps Phase 15's scope unchanged and nothing is deployed. This workstream is sequenced between the Phase 15 merge and Phase 16 (an owner decision, §12.6), so it lands before Phase 17 makes a production deployment possible.
+
+#### F1 — A campaign capability writes shared world canon (8, High)
+
+- **Component:** `lock_authoring_scope` in [commands/_content.py](../src/dnd_ai/commands/_content.py) and its callers (§2.5); ADR 0015 decision 3.
+- **Scenario:** a world hosts two campaigns with different GMs, which is the supported product model: the owner creates campaign B and assigns another user `gm` or `assistant_gm` in it. B's GM then edits, publishes, archives or supersedes a location, NPC or quest definition.
+- **Impact:** the integrity of shared canon and of the world-authorization boundary. Campaign A sees canon change, or disappear through archival, that nobody in A authored or approved.
+- **Symptoms:** canon changes in campaign A with no action from A's GM. Audit rows exist, but A's GM would have no reason to look for them.
+- **Evidence:** these writes check only `resolve_access_context(...).has_capability("canon.edit")` for the route campaign. No check of world authority exists, and no test asserts one.
+- **Scores:** exposure 2 (a normal authoring path, limited to worlds with more than one GM); impact 3 (an authorization-boundary failure with integrity loss); triggerability 1 (needs an authenticated campaign GM); detection 1 (silent and persistent, repaired by hand); blast 1 (every campaign on the world).
+- **Correction and tests:** the D6 world check under lock, with SR-5 tests for each writer.
+- **Mitigations:** the audit trail and revision history make repair possible. Worlds are created by their owners, so a second GM exists only by the owner's choice.
+
+#### F2 — World drafts and prep are readable across campaigns (7, High)
+
+- **Component:** the authoring read models, [queries/review_queue.py](../src/dnd_ai/queries/review_queue.py), [queries/provenance.py](../src/dnd_ai/queries/provenance.py) and reads of `core.entity_revisions`.
+- **Scenario:** the same shared world as F1. B's GM opens the review queue or an entity's revision history and sees A's unpublished drafts and GM-only definition prep.
+- **Impact:** the confidentiality of another campaign's preparation (spoilers). No credentials are exposed.
+- **Symptoms:** none, because the disclosure is silent.
+- **Evidence:** these reads are gated only by campaign `canon.edit`, and nothing tests that they stay within one campaign.
+- **Scores:** exposure 2; impact 2 (a serious partial confidentiality failure, limited to world-level prep that B's GM will partly see anyway once it is published); triggerability 1; detection 1 (silent); blast 1.
+- **Correction and tests:** gate these reads on `world.canon.read_private` (D6), with the §5.2 non-disclosure tests in SR-5.
+- **Mitigations:** campaign-scoped secrets (events, sessions, knowledge runtime, AI context) are not affected.
+
+#### F5 — Disabling a sole owner strands a world or campaign (6, Medium)
+
+- **Component:** `security.world_has_active_owner()` (migration 110), `security.campaign_has_access_manager()` (migration 080) and `_disable_local_account_impl` in [commands/local_auth.py](../src/dnd_ai/commands/local_auth.py).
+- **Scenario:** an admin disables the only owner of a world, or the only access manager of a campaign, for example when someone leaves the group. With D11, removing the only owner's system GM has the same effect on world management.
+- **Impact:** nobody can administer that world or campaign: no sharing, transfer, archival or member management.
+- **Symptoms:** every management action returns "not found", and nothing in the app explains the cause or fixes it.
+- **Evidence:** both functions ignore account lifecycle (verified in the migration source), every resolver requires an active account, and no recovery command exists.
+- **Scores:** exposure 1 (a rare administrative action); impact 2; triggerability 1 (needs an admin action); detection 1 (recovery needs direct database access); blast 1 (durable state shared by every member).
+- **Correction and tests:** the stranded-account report and the recovery commands in §4.5 (SR-6).
+- **Mitigations:** reactivating the account (or restoring system GM) restores access, and no data is lost.
+
+#### F4 — World-creation eligibility is minted by a campaign role assignment (5, Medium)
+
+- **Component:** `holds_effective_system_gm_role` and `may_create_worlds` in [queries/world_authority.py](../src/dnd_ai/queries/world_authority.py) (ADR 0018).
+- **Scenario:** any holder of campaign `access.manage` assigns the `gm` template to any member, who thereby gains platform-wide `world.create`.
+- **Impact:** a platform authorization decision is made by campaign-level configuration. It grants no access to existing data.
+- **Symptoms:** none; the new worlds look normal.
+- **Evidence:** the query accepts an active `gm` template assignment in any campaign.
+- **Scores:** exposure 2; impact 1 (unwanted world creation only); triggerability 1; detection 1 (silent); blast 0 (one user's capability).
+- **Correction and tests:** the system GM role (SR-1), and a test that a campaign `gm` holder without system GM gets 403.
+- **Mitigations:** creating a world affects no one else's data.
+
+#### F3 — Campaign creation borrows `access.manage` from another campaign on the timeline (5, Medium)
+
+- **Component:** Path B of `_authorize_timeline_reuse` in [commands/campaigns.py](../src/dnd_ai/commands/campaigns.py).
+- **Scenario:** a user who manages campaign A on timeline T creates more campaigns on T without any world authority.
+- **Impact:** the new campaigns share T's state. The actor could already write T's state through A, so no new integrity exposure arises.
+- **Symptoms:** extra campaigns appear on the world. The owner sees them only through the `has_blocking_campaigns` flag.
+- **Evidence:** Path B in the source, with no world check on that path.
+- **Scores:** exposure 1 (needs an already-shared timeline); impact 1; triggerability 1; detection 1; blast 1 (durable world state the owner cannot see).
+- **Correction and tests:** remove Path B (D7, SR-3).
+- **Mitigations:** the actor already held management authority on that timeline.
 
 ---
 
@@ -131,9 +188,11 @@ Like world capabilities today, these are a closed mapping in a new `domain/syste
 | System capability | Admin | GM | Player | Observer | Meaning |
 |---|:-:|:-:|:-:|:-:|---|
 | `accounts.manage` | ✔ | | | | Create/disable/reactivate accounts, issue activation/reset links, revoke sessions |
-| `system_roles.manage` | ✔ | | | | Assign/revoke GM, Player, Observer (Admin grant: see D3) |
+| `system_roles.manage` | ✔ | | | | Assign/revoke GM, Player, Observer; revoke Admin |
+| `system_roles.grant_admin` | ✔* | | | | Grant Admin in the app. *Only while the deployment setting `DND_AI_ALLOW_IN_APP_ADMIN_GRANT` is true; it is false by default (D3) |
 | `world.create` | | ✔ | | | Create a world (creator becomes its Owner). Code kept for portal compatibility |
-| `campaign.host` | | ✔ | | | Eligible to create a campaign (still needs world-use, D7) and to be assigned campaign roles that confer ownership or GM authority (D11) |
+| `campaign.host` | | ✔ | | | Create a campaign (still needs world use, D7) |
+| `world.administer` | | ✔ | | | Precondition for exercising world-management capabilities on worlds the user owns or is authorized to manage (D11) |
 
 Player and Observer carry **no** platform capabilities in this work. They are explicit account classifications used as invitation/creation defaults and shown in administration. Whether a system Observer should be barred from campaign roles carrying write capabilities is an owner question (Q5); the recommended default is "classification only".
 
@@ -145,11 +204,13 @@ System capabilities never confer campaign membership, campaign capabilities, or 
 
 1. Backfill an `admin` assignment for every user with `is_platform_administrator = true` (any lifecycle status, so a later reactivation restores it).
 2. Also backfill `gm` for those users. This preserves their current `world.create` (ADR 0018 gives it to admins); without it, a fresh install's bootstrap admin could no longer create the first world.
-3. Backfill `player` for every other user.
-4. **Do not** grant system `gm` to existing holders of the campaign `gm` template (consequences in §9.2).
-5. Drop the column in the same revision; `is_platform_administrator()` becomes "holds an unrevoked `admin` assignment and the account is active". Downgrade re-adds and repopulates it.
-6. Keep the bootstrap field `is_platform_administrator` as a **derived** compatibility value until the portal reads `accounts.manage` (same checkpoint, SR-2), then remove it.
-7. `bootstrap_initial_admin` assigns `admin` + `gm`. `grant_platform_administrator.py` writes an `admin` assignment and remains the **only** way to grant Admin (D-10 preserved). Admins may assign GM/Player/Observer over HTTP and may **revoke** Admin over HTTP subject to the last-admin guard (Q1 asks whether HTTP Admin grant should be allowed).
+3. Backfill `gm` for every user holding an open, active `world_owner` membership. These users already passed a creation-eligibility check or an operator claim, and under D11 an Owner without system GM could not manage their own world, which would strand it (F5). This is a narrow, deliberate exception tied to world ownership, not to campaign roles.
+4. Backfill `player` for every user who received no role in steps 1–3.
+5. **Do not** grant system `gm` to existing holders of the campaign `gm` template on that basis (consequences in §9.2).
+6. Drop the column in the same revision; `is_platform_administrator()` becomes "holds an unrevoked `admin` assignment and the account is active". Downgrade re-adds and repopulates it.
+7. Keep the bootstrap field `is_platform_administrator` as a **derived** compatibility value until the portal reads `accounts.manage` (same checkpoint, SR-2), then remove it.
+8. `bootstrap_initial_admin` assigns `admin` + `gm`. Admins may assign GM/Player/Observer over HTTP and may **revoke** Admin over HTTP, subject to the last-admin guard.
+9. **Granting Admin (owner decision Q1).** For now, Admin is granted operationally only by `scripts/grant_platform_administrator.py`, which now writes an `admin` assignment (D-10 stays in force by default). The in-app path is built in the same checkpoint so it can be switched on later without new code: `assign_system_role` accepts `admin`, the route and the Platform Accounts control exist, and both are enabled only when `DND_AI_ALLOW_IN_APP_ADMIN_GRANT=true`. With the setting false (the default), the route refuses `admin` with 403 `admin_grant_disabled` before touching the idempotency store, the bootstrap omits `system_roles.grant_admin`, and the portal shows the Admin checkbox disabled with "Granting Admin is done by the operator script on this deployment". Enabling the setting is a deployment decision recorded in [LOCAL_DEPLOYMENT.md](LOCAL_DEPLOYMENT.md). Each in-app grant writes the same audit record as a script grant, with the acting admin as actor.
 
 *Alternative rejected:* keep the column as a mirror. Two sources of truth for the most sensitive flag, with no remaining reader, is a defect waiting to happen.
 
@@ -165,11 +226,13 @@ Extend `security.world_roles` with `world_editor`, `world_reviewer`, `world_read
 | `world.canon.edit` — create/edit definitions, sources, world relationships; submit/return-to-draft/delete-draft | ✔ | ✔ | | | |
 | `world.canon.review` — approve, reject, publish, supersede, archive, restore | ✔ | | ✔ | | |
 | `world.manage` — settings, rulesets, calendars, archive/restore the world | ✔ | | | | |
-| `timeline.manage` — create/branch/edit/archive timelines | ✔ | | | | |
+| `timeline.manage` — create/branch/edit/archive timelines | ✔ | ✔ | | | |
 | `world.share` — assign/end Editor/Reviewer/Reader, issue/revoke use grants | ✔ | | | | |
 | `world.transfer` — add/remove Owners | ✔ | | | | |
 | `campaign.create` — host a campaign on this world (D7) | ✔ | | | | ✔ |
 
+- **Timelines follow world read/write access (owner decision Q6).** `timeline.manage` belongs to Owner and Editor, the two roles with write access to the world. Reviewers, Readers and use-grant holders cannot create or branch timelines. A GM hosting a campaign through a use grant asks an Owner or Editor for a branch.
+- **World-management capabilities need system GM (owner decision Q4, D11).** `world.manage`, `world.share`, `world.transfer` and `campaign.create` are effective only while the holder also has system `world.administer`. Editing, reviewing, reading and `timeline.manage` do not need it.
 - Self-approval is allowed when one person holds Editor + Reviewer (single-GM worlds would otherwise deadlock). Mandatory two-person review is not introduced.
 - "Deletion" of a world means archive (rule 9, [ENTITY_LIFECYCLE.md §14](ENTITY_LIFECYCLE.md)); physical deletion stays limited to unreferenced drafts and fixtures.
 - Archive/restore/supersede of canon are `world.canon.review`, not `world.canon.edit`, because they change what every campaign sees (Q13).
@@ -194,7 +257,7 @@ A new `security.world_use_grants` row (world, user, granted by, revoked at/by) c
 
 1. the creator holds system `campaign.host` (GM);
 2. the creator holds world `campaign.create` (Owner or an unrevoked use grant);
-3. if the timeline already has a campaign, the creator holds `timeline.manage` (Owner) on its world — campaigns on one timeline share timeline state ([ADR 0003](adr/0003-separate-world-timeline-and-campaign.md)), so a use-grant holder may only start a campaign on a timeline with no campaign (the Owner provisions a branch per hosted campaign; Q6).
+3. if the timeline already has a campaign, the creator holds `timeline.manage` (Owner or Editor) on its world. Campaigns on one timeline share timeline state ([ADR 0003](adr/0003-separate-world-timeline-and-campaign.md)), so a use-grant holder may only start a campaign on a timeline with no campaign; an Owner or Editor provisions a branch for each hosted campaign (Q6, decided).
 
 **Path B is removed.** The timeline bootstrap-grant path stays (trusted infrastructure only) but also requires condition 1. The creator receives **both** `campaign_owner` and `gm` in the same transaction.
 
@@ -202,7 +265,7 @@ Revoking a use grant stops *new* campaigns only; existing campaigns continue unc
 
 ### D8. Campaign-originated records that live in world tables (explicit exceptions)
 
-Three records are world-scoped by schema but created as part of running a campaign. Recommended classification (Q9):
+Three records are world-scoped by schema but created as part of running a campaign. The owner accepted this classification (Q9):
 
 | ID | Record | Recommendation |
 |---|---|---|
@@ -220,13 +283,15 @@ Every other `lock_authoring_scope` caller is a world-definition write and follow
 
 Reuse §2.6's columns unchanged. Contributor credit is derived from `core.entity_revisions.created_by_user_id`; approval credit from `audit.change_log` approve/publish rows (and lifecycle revisions). Importer credit will use `core.source_documents.ingested_by_user_id` and Phase 18 batch provenance. Ownership transfer, role ending, grant revocation, and account disablement must not update or null any of these (tested in SR-4/SR-5). No new attribution table.
 
-### D11. Campaign roles that require system GM eligibility
+### D11. What system GM is required for (owner decision Q4)
 
-**Recommendation:** assigning (via `add_campaign_member`, `assign_membership_role`, `change_membership_role`, or campaign creation) a role that is the built-in `gm` template **or carries `access.manage`** requires the assignee to hold system `campaign.host` at that moment. All other roles — `assistant_gm`, `player`, `observer`, `import_reviewer`, `rules_curator`, custom roles without `access.manage` — need no system role (Q4).
+System GM is required to **create worlds**, to **create campaigns**, and to **manage worlds the user owns or is authorized to manage**. It is **not** required to hold any campaign role.
 
-- *Why:* campaign ownership and the GM seat are what a system GM "is eligible for"; the check is capability-based (`access.manage`) so a custom role cannot bypass it.
-- **Assignment-time, not continuous.** Revoking someone's system GM does not strip existing campaign roles or world ownership (it would silently break running campaigns). It prevents new creation and new GM/owner assignments, and administration shows "holds campaign GM/owner without system GM" (Q3).
-- A campaign GM status never borrows across campaigns: eligibility is a system check on the assignee; the authority itself is still the requested campaign's membership.
+- **Creation:** `world.create` (D2) and `campaign.host` (D7, condition 1).
+- **World management:** the world-management capabilities `world.manage`, `world.share`, `world.transfer` and `campaign.create` (whether from Owner or a use grant) are effective only while the holder has system `world.administer`. The resolver applies this when it computes a `WorldAuthority`, so the check is **continuous**: revoking system GM removes these capabilities on the next request, while the world-role rows stay in place. Restoring GM brings the capabilities back with no data change. Editing, reviewing, reading and timeline work are unaffected.
+- **Campaign roles have no system-role gate.** Any active account may be assigned any campaign role, including `campaign_owner` and `gm`, by a campaign `access.manage` holder. Campaign authority is still resolved only from the requested campaign's membership, so it never borrows across campaigns. The system role only decides whether someone may create worlds and campaigns or manage worlds.
+- **Stranding:** a world whose Owners all lack an active account **or** system GM can no longer be managed. Such worlds appear in the stranded report and fall under `recover_world_ownership` (§4.5). New Owners (transfer, co-owner, recovery) must hold system GM when they are added (§4.2).
+- *Interpretation note:* the owner's answer named creation and world management in reply to "which campaign roles require system GM". This plan reads that as "no campaign role requires it". SR-0 records the reading for confirmation.
 
 ---
 
@@ -237,24 +302,25 @@ Reuse §2.6's columns unchanged. Contributor credit is derived from `core.entity
 1. Admin opens Platform Accounts and either creates an account (login name, display name, **system roles**, default Player) or selects an existing one.
 2. Admin assigns system **GM** (`POST /admin/accounts/{user_id}/system-roles`). Audited.
 3. A new user receives the existing one-time activation link; activation creates credentials only. No campaign, world, or invitation is involved.
-4. After sign-in, the GM's bootstrap has `campaigns: []` and `global_capabilities` ⊇ `{world.create, campaign.host}`. `/campaigns` shows **Create a world** and, if any world grants them `campaign.create`, **Create a campaign** (§7).
+4. After sign-in, the GM's bootstrap has `campaigns: []` and `global_capabilities` ⊇ `{world.create, campaign.host, world.administer}`. `/campaigns` shows **Create a world** and, if any world grants them `campaign.create`, **Create a campaign** (§7).
 5. Creating a campaign assigns `campaign_owner` + `gm` to the creator explicitly, in the creating transaction (D7).
 
 ### 4.2 Who may change what
 
 | Change | Who | Guard |
 |---|---|---|
-| Grant Admin | Out-of-band script only (D-10) | — |
+| Grant Admin | Operator script; in-app by an Admin only when `DND_AI_ALLOW_IN_APP_ADMIN_GRANT=true` (D3, Q1) | Audited either way |
 | Revoke Admin | Admin (HTTP) | Last active admin (shared advisory lock, extended to revocation) |
 | Assign/revoke GM, Player, Observer | Admin | Audited; never touches campaign or world rows |
-| Assign/end Editor/Reviewer/Reader; issue/revoke use grants | World Owner (`world.share`) | Target must be an active account; non-disclosing account lookup by exact login name (reuse `find_eligible_campaign_account`'s pattern in [queries/access_overview.py](../src/dnd_ai/queries/access_overview.py)) |
-| Add/remove world Owner; transfer ownership | World Owner (`world.transfer`) | New Owner must hold system `campaign.host` (world ownership is a GM-tier responsibility, mirroring world creation); DB retains ≥1 owner |
-| Invite to a campaign; assign campaign roles | Campaign `access.manage` (unchanged) | D11 eligibility for GM/owner roles; DB keeps ≥1 access manager |
-| Transfer campaign ownership | Campaign `access.manage` | New `transfer_campaign_ownership` wraps assign + optional revoke in one transaction and one audit record; D11 applies |
+| Assign/end Editor/Reviewer/Reader; issue/revoke use grants | World Owner with system GM (`world.share`) | Target must be an active account; non-disclosing account lookup by exact login name (reuse `find_eligible_campaign_account`'s pattern in [queries/access_overview.py](../src/dnd_ai/queries/access_overview.py)) |
+| Add/remove world Owner; transfer ownership | World Owner with system GM (`world.transfer`) | New Owner must hold system GM when added (D11); DB retains ≥1 owner |
+| Create/branch/edit/archive timelines | World Owner or Editor (`timeline.manage`, Q6) | Use-grant holders, Reviewers and Readers cannot |
+| Invite to a campaign; assign campaign roles | Campaign `access.manage` (unchanged) | No system-role requirement (D11); DB keeps ≥1 access manager |
+| Transfer campaign ownership | Campaign `access.manage` | New `transfer_campaign_ownership` wraps assign + optional revoke in one transaction and one audit record |
 
 ### 4.3 Invitations
 
-- Inviting is unchanged: `access.manage`, no role carried, acceptance creates/reactivates membership only. **Acceptance never reads or writes system roles.** A GM then assigns campaign roles, subject to D11.
+- Inviting is unchanged: `access.manage`, no role carried, acceptance creates/reactivates membership only. **Acceptance never reads or writes system roles.** A campaign access manager then assigns campaign roles.
 - Existing accounts: accept while signed in (unchanged).
 - New accounts via invitation-authorized registration: the created account receives system **Player** explicitly in the registration transaction (never GM or Admin), so no account exists without a deliberate classification. Q12 asks whether invited registration should remain.
 
@@ -264,7 +330,7 @@ All authority is resolved from current rows on every request, so every change ta
 
 | Event | Effect |
 |---|---|
-| System GM revoked | No new worlds, campaigns, or GM/owner campaign assignments. Existing world roles and campaign roles remain (D11). |
+| System GM revoked | No new worlds or campaigns; world-management capabilities stop at once on worlds the user owns or holds a use grant for (D11). World-role rows, editing/reviewing/reading, timeline work and all campaign roles are unchanged. Worlds left with no manageable Owner are reported as stranded. |
 | Admin revoked / account disabled | Loses `accounts.manage`/`system_roles.manage`; last-admin guard applies to both paths. |
 | Account disabled | Every resolver already requires an active account, so all system, world, and campaign authority stops at once; sessions are revoked (existing). Rows are kept so reactivation restores access. The response and the accounts list report worlds/campaigns where this account was the **only** active owner/access manager (F5), and the recovery operations below apply. |
 | World role ended | Immediate loss of that world capability; authored records and attribution unchanged. |
@@ -275,8 +341,8 @@ All authority is resolved from current rows on every request, so every change ta
 
 Routine Admin access grants **no** world or campaign reads. Two recovery operations exist, each an explicit command with its own audit record (`actor_user_id`, target, reason text required), callable only by an active Admin, and never folded into ordinary reads:
 
-- `recover_world_ownership(world_id, new_owner_user_id, reason)` — only when the world has no owner with an **active account**; new owner must hold `campaign.host`.
-- `recover_campaign_access_manager(campaign_id, new_user_id, reason)` — only when the campaign has no access manager with an active account; assigns `campaign_owner` (creating a membership if needed); D11 applies.
+- `recover_world_ownership(world_id, new_owner_user_id, reason)` — only when the world has no Owner with an **active account and system GM**; the new Owner must hold system GM.
+- `recover_campaign_access_manager(campaign_id, new_user_id, reason)` — only when the campaign has no access manager with an active account; assigns `campaign_owner` (creating a membership if needed).
 
 Recommended surface: commands plus operator scripts first (the posture of `claim_world_ownership.py` and `grant_platform_administrator.py`); an Admin portal action only if the owner wants it (Q11). No "view as admin" or perspective-merging override is added.
 
@@ -319,7 +385,7 @@ One Alembic revision (number allocated from the head at implementation time, §1
 4. **World roles:** add `world_editor`, `world_reviewer`, `world_reader` to `security.world_roles.yaml`. Replace the "one open row per (world, user)" partial unique index with one on `(world_id, user_id, world_role_id) WHERE ended_at IS NULL`. Add `granted_by_user_id FK NULL` and `ended_by_user_id FK NULL` with partial FK indexes. The owner-retention trigger is unchanged (it already filters `wr.code = 'world_owner'`).
 5. **`security.world_use_grants`** — `world_use_grant_id PK`, `world_id FK → core.worlds ON DELETE CASCADE` (immutable), `user_id FK` (immutable), `granted_by_user_id FK NOT NULL`, `granted_at`, `revoked_at NULL`, `revoked_by_user_id FK NULL`. Partial unique open `(world_id, user_id)`.
 6. **Grants:** new tables get `app_read_write` through default privileges; `app_read_only` stays deny-by-default (revision `115`) except that `security.system_roles` joins `REPORTING_READABLE_TABLES` if `security.world_roles` is on it at implementation time.
-7. **No DB enforcement of D11 or last-admin.** Both are application checks under locks (D11 is an assignment-time eligibility rule, not an invariant; last-admin keeps the existing advisory-lock design). A DB backstop for last-admin is a reasonable alternative but not required by any observed failure.
+7. **No DB enforcement of D11 or last-admin.** Both are application checks (D11 is applied when the resolver computes world capabilities; last-admin keeps the existing advisory-lock design). A DB backstop for last-admin is a reasonable alternative but not required by any observed failure.
 8. **Downgrade:** re-add `is_platform_administrator` populated from unrevoked `admin` assignments; delete non-owner world-membership rows, restore the original unique index; drop new tables and seed rows.
 
 ---
@@ -330,14 +396,14 @@ All mutations: human principals only, CSRF + allowed Origin for cookie callers, 
 
 **Session bootstrap (`GET /auth/session`)**
 - Add `system_roles: string[]` (display only).
-- `global_capabilities` becomes the union from D2 (`accounts.manage`, `system_roles.manage`, `world.create`, `campaign.host`), still computed per user and empty for non-human principals.
+- `global_capabilities` becomes the union from D2 (`accounts.manage`, `system_roles.manage`, `system_roles.grant_admin` when enabled, `world.create`, `campaign.host`, `world.administer`), still computed per user and empty for non-human principals.
 - Each `campaigns[]` entry adds `world_capabilities: string[]` — the caller's capabilities on that campaign's world — so the portal can present authoring as read-only without inferring.
 - `is_platform_administrator` stays derived until SR-2's portal change lands, then is removed.
 
 **System administration** (all require `accounts.manage` or `system_roles.manage` as noted; checks live in the commands, as today)
-- `GET /admin/accounts` adds `system_roles` per account and a filter `?system_role=`; adds `holds_campaign_lead_without_gm: bool` (D11 report).
-- `POST /admin/accounts` accepts `system_role_codes` (default `["player"]`; `admin` refused with 422 per D-10).
-- `POST /admin/accounts/{user_id}/system-roles` `{system_role_code}` → 201/200-replay; `admin` refused.
+- `GET /admin/accounts` adds `system_roles` per account and a filter `?system_role=`; adds `stranded_world_count` per account (worlds where this account is the only Owner and lacks an active account or system GM; D11, F5).
+- `POST /admin/accounts` accepts `system_role_codes` (default `["player"]`). `admin` is accepted only when the in-app Admin grant is enabled; otherwise 403 `admin_grant_disabled` (D3).
+- `POST /admin/accounts/{user_id}/system-roles` `{system_role_code}` → 201, or 200 on replay. `admin` requires `system_roles.grant_admin`, which needs the deployment setting (D3); otherwise 403 `admin_grant_disabled`.
 - `POST /admin/accounts/{user_id}/system-roles/{system_role_code}/revoke` → 409 `last_active_platform_administrator` where applicable.
 - Disable response gains `stranded: {world_ids: [], campaign_ids: []}` (IDs only; the admin is not shown names they could not otherwise read). Q11 covers whether that disclosure is acceptable.
 
@@ -352,7 +418,7 @@ All mutations: human principals only, CSRF + allowed Origin for cookie callers, 
 
 **Campaigns**
 - `POST /campaigns`: D7 authorization; response unchanged; errors `system_gm_required` (403, the caller lacks system `campaign.host`) and the existing non-disclosing `TimelineNotAuthorizedError`.
-- Role-assignment endpoints add `target_requires_system_gm` (409, D11). `GET /campaigns/{id}/access-overview` marks assignable roles that the target is ineligible for, so the UI can explain rather than fail.
+- Role-assignment endpoints are unchanged: campaign roles carry no system-role requirement (D11).
 - `POST /campaigns/{id}/ownership-transfer` (`access.manage`).
 
 **Authoring and review routes** keep their paths; their dependency/command gains the D6 world check. Error for a campaign GM without world authority: the existing non-disclosing `CampaignNotAuthorizedError` mapping is **not** reused (the user can see the record); return 403 `world_authority_required` so the UI can explain.
@@ -366,7 +432,7 @@ All mutations: human principals only, CSRF + allowed Origin for cookie callers, 
 Every gate below reads server data (`global_capabilities`, `world_capabilities`, per-world `capabilities`, `available_actions`) — never role labels. Hiding is presentation; the server re-checks.
 
 - **Profile menu / Platform Accounts:** gate on `accounts.manage` (replacing `is_platform_administrator`, per [UI_DESIGN.md §4.4](UI_DESIGN.md#44-platform-accounts-authorization)).
-- **Platform Accounts page:** system-role badges per account; a "System roles" editor (checkboxes for GM/Player/Observer; Admin shown read-only with the recovery-runbook note); create-account form gains the system-role choice; filter by role; a notice for "campaign GM/owner without system GM".
+- **Platform Accounts page:** system-role badges per account; a "System roles" editor (checkboxes for GM/Player/Observer; the Admin checkbox is enabled only when the bootstrap carries `system_roles.grant_admin`, and otherwise is disabled with the operator-script explanation); create-account form gains the system-role choice; filter by role; a notice for accounts that are the only Owner of a stranded world.
 - **Accounts with no campaigns (`/campaigns`, `/home` resolver):**
   - GM: "You are not in any campaigns yet." with **Create a world**, and **Create a campaign** when any world grants `campaign.create`.
   - Player/Observer: the existing "Ask a GM to invite you" plus **Accept a campaign invitation**.
@@ -375,7 +441,6 @@ Every gate below reads server data (`global_capabilities`, `world_capabilities`,
 - **World overview for a Reader or use-grant holder:** read-only; Readers get a published-canon browser (SR-7); use-grant holders see world metadata and "Host a campaign here".
 - **Campaign setup (`/campaigns/new`):** world picker lists only worlds with `campaign.create`; timeline picker lists only timelines the server says are eligible (D7 rule 3) with a reason for disabled ones.
 - **Campaign authoring screens:** when `world_capabilities` lacks `world.canon.edit`, editors open read-only with "Editing shared world content requires the world Editor role (ask the world owner)". Review actions follow `world.canon.review`. E1–E3 screens are unaffected.
-- **Access page:** the role picker explains D11 ineligibility inline.
 
 [UI_DESIGN.md](UI_DESIGN.md) §3, §4.3, §4.4, §4.6, §5.2, §6.4 and §8 are updated in the same checkpoints.
 
@@ -394,7 +459,7 @@ Every gate below reads server data (`global_capabilities`, `world_capabilities`,
 
 ### 9.2 Consequences of not promoting campaign GMs
 
-- Users who today create worlds only through a campaign `gm` assignment (ADR 0018) **lose** `world.create` and campaign creation until an Admin assigns system GM. The accounts filter "campaign GM/owner without system GM" lists them for a one-pass review.
+- Users who today create worlds only through a campaign `gm` assignment (ADR 0018) **lose** `world.create` and campaign creation until an Admin assigns system GM. An admin can find them with the one-off query in the upgrade note ([LOCAL_DEPLOYMENT.md](LOCAL_DEPLOYMENT.md)): active campaign `gm` holders with no system GM.
 - Campaign GMs without world roles keep running their campaigns but **cannot edit shared world definitions** on worlds they do not own (F1 fixed). On a typical dev database the owner already owns the worlds (claimed via `claim_world_ownership.py` or created in-app), so the visible impact is limited to secondary GMs. If the owner wants them to keep authoring, they assign world Editor explicitly after upgrade.
 - Nothing is deleted; no attribution changes.
 
@@ -429,29 +494,29 @@ The campaign audit-history read ([AUDIT_HISTORY_API.md](AUDIT_HISTORY_API.md)) d
 
 Each checkpoint is one short-lived branch/PR (or commit group), with focused tests and docs in the same change, merged in order. "Done" means the listed tests pass locally against PostgreSQL 18, the full suites and portal checks pass, and final-head CI is green ([DEVELOPMENT.md §10](DEVELOPMENT.md#10-definition-of-done)).
 
-**SR-0 — Decision record (docs only).** New ADR "Scoped system, world, and campaign roles" (number allocated at write time) superseding ADR 0018 and amending ADR 0014 D2/D4/D5 and ADR 0015 D3, recording D1–D11 and the owner's answers to §14.
+**SR-0 — Decision record (docs only).** New ADR "Scoped system, world, and campaign roles" (number allocated at write time) superseding ADR 0018 and amending ADR 0014 D2/D4/D5 and ADR 0015 D3, recording D1–D11, the owner's answers in §14, and the D11 interpretation for confirmation.
 *Accept:* owner approval recorded; ADR 0014/0015/0018 status lines updated.
 
 **SR-1 — System-role schema and resolution.** Migration (§6 items 1–3, 6, 8 for system roles); `domain/system_authority.py`; `queries/system_authority.py` (`resolve_system_capabilities`); `is_platform_administrator()` reimplemented on assignments; last-admin count on assignments; bootstrap `system_roles` + new `global_capabilities`; `may_create_worlds` → `world.create` from GM only; factories/scripts.
-*Accept:* backfill test on a populated pre-upgrade database (admin→admin+gm, others→player, campaign `gm` holders unchanged); downgrade round trip restores the column; bootstrap returns the right capability sets for each role combination; a campaign-`gm` holder without system GM gets 403 on `POST /worlds`.
+*Accept:* backfill test on a populated pre-upgrade database (admin→admin+gm, world owner→gm, others→player, campaign `gm` holders not promoted on that basis); downgrade round trip restores the column; bootstrap returns the right capability sets for each role combination; a campaign-`gm` holder without system GM gets 403 on `POST /worlds`.
 
-**SR-2 — System-role administration.** Commands, routes (§7), audit, idempotency; Platform Accounts UI; profile menu on `accounts.manage`; remove `is_platform_administrator` from the bootstrap; invited registration assigns Player.
-*Accept:* admin assigns/revokes GM; non-admin gets non-disclosing 404; revoking the last admin → 409 under concurrent attempts (real-PostgreSQL race test reusing the advisory lock); invited registration yields exactly `player`; portal tests for the editor and the menu gate.
+**SR-2 — System-role administration.** Commands, routes (§7), audit, idempotency; Platform Accounts UI; profile menu on `accounts.manage`; remove `is_platform_administrator` from the bootstrap; the in-app Admin grant behind `DND_AI_ALLOW_IN_APP_ADMIN_GRANT` (default false, D3 item 9), added to `config.py`; invited registration assigns Player.
+*Accept:* admin assigns/revokes GM; non-admin gets non-disclosing 404; revoking the last admin → 409 under concurrent attempts (real-PostgreSQL race test reusing the advisory lock); invited registration yields exactly `player`; with the setting false, granting `admin` returns 403 `admin_grant_disabled` without reserving an idempotency key and the bootstrap omits `system_roles.grant_admin`; with it true, an Admin grants Admin and one audit row is written; portal tests for the editor and the menu gate.
 
 **SR-3 — Campaign creation eligibility.** D7: system `campaign.host` + world `campaign.create` + timeline rule; remove Path B; bootstrap-grant path requires GM; creator gets `campaign_owner` + `gm`.
 *Accept:* tests for each of: owner GM succeeds; owner without system GM refused; use-grant holder on unused timeline succeeds and on used timeline refused; former Path B caller refused; creator holds both roles; no campaign borrowing across a shared timeline.
 
 **SR-4 — World roles, use grants, sharing, transfer.** Migration (§6 items 4–5); capability matrix D4; resolver returns multiple roles; world access routes; ownership transfer; Sharing page; `GET /worlds` includes Readers/Editors/Reviewers/use grants.
-*Accept:* Editor+Reviewer combination yields the union; last-owner end refused; transfer keeps `core.entities.created_by_user_id` and revision authors unchanged; non-owner gets 404/403 per existing world rules; Sharing UI tests including confirmation focus.
+*Accept:* Editor+Reviewer combination yields the union; last-owner end refused; transfer keeps `core.entities.created_by_user_id` and revision authors unchanged; non-owner gets 404/403 per existing world rules; Sharing UI tests including confirmation focus; an Editor can branch a timeline and a use-grant holder or Reviewer cannot; an Owner whose system GM is revoked loses share/transfer/manage/campaign.create on the next request but keeps edit/review/read, and regains them when GM is restored.
 
 **SR-5 — World canon boundary.** `lock_authoring_scope` world step (D6) with lock order documented in [SYSTEM_ARCHITECTURE.md §7.1](architecture/SYSTEM_ARCHITECTURE.md); lifecycle split edit/review; private reads (`world.canon.read_private`) for authoring views, review queue, revisions, provenance, sources; E1–E3 left on campaign `canon.edit` (verify E2 `origin_notes`); bootstrap `world_capabilities`; portal read-only presentation.
 *Accept:* campaign GM without world role → 403 on every world-definition write and private read in §2.5, and still reads published canon (with GM-only fields) in their campaign; Editor without Reviewer cannot publish; Reviewer without Editor cannot create; E1–E3 still work for campaign GMs; cross-campaign non-disclosure tests (§5.2) for sessions, events, encounter prep, knowledge runtime, AI synthesis cache/context, proposals, search; concurrency test: world role ended mid-command is honored under the new lock.
 
-**SR-6 — Campaign role eligibility, transfers, recovery.** D11 in all assignment commands and the access overview; `transfer_campaign_ownership`; stranded reporting on disable; recovery commands (+ scripts, or routes if Q11).
+**SR-6 — Transfers, stranding, recovery.** `transfer_campaign_ownership`; stranded reporting on disable and on GM revocation; recovery commands (+ scripts, or routes if Q11).
 *Accept:* assigning `gm`/owner/custom-`access.manage` role to a non-GM → 409; to a GM → OK; revoking system GM leaves existing campaign roles intact and is listed in the admin report; recovery refused while an active owner exists, succeeds otherwise, and writes an override audit row; admin with no campaign membership still gets 404 on every campaign read.
 
 **SR-7 — World Reader surface (minimal).** World-scoped published-canon browse using the player-safe projection already used for campaign readers (no new projection rules).
-*Accept:* Reader sees published canon only; no drafts, GM-only fields, revisions, provenance, or any campaign data; non-Reader gets 404. *Deferrable* if the owner prefers (Q7).
+*Accept:* Reader sees published canon only; no drafts, GM-only fields, revisions, provenance, or any campaign data; non-Reader gets 404. Ships in this workstream (owner decision Q7).
 
 **SR-8 — End-to-end scenario and documentation closure.** A `tests/scenario` test of §4.1 plus the shared-world case below; manual validation (§13.2); docs (§13.3); verification record.
 *Accept:* scenario passes on a clean database; manual checklist recorded; final-head CI green.
@@ -478,7 +543,7 @@ High churn on `phase15/completion`; expect conflicts:
 ### 12.2 Safe to start after this plan is approved (before Phase 15 merges)
 
 - SR-0 (ADR and doc drafts on this branch).
-- Pure code with unit tests and no imports from churned modules: `domain/system_authority.py`, the D4 world capability table, D11 eligibility predicate.
+- Pure code with unit tests and no imports from churned modules: `domain/system_authority.py`, the D4 world capability table, the D11 world-management gate.
 - Drafting the migration body without fixing its revision id or `down_revision`.
 
 ### 12.3 Wait for Phase 15 to merge
@@ -499,7 +564,7 @@ Before implementation and again before merge, fetch origin and reconcile subsequ
 
 ### 12.6 Later phase gates and sequencing (recommendation only; the plan is not renumbered)
 
-- Land SR-1…SR-8 **after Phase 15 merges and before Phase 16 starts** (Q10). Phase 16's privacy exit criteria ("GM-role users must not access player-private material") should be tested against the final role model, and its "multi-GM worlds" revisit noted in ADR 0015 is exactly D6.
+- Land SR-1…SR-8 **after Phase 15 merges and before Phase 16 starts** (owner decision Q10). Phase 16's privacy exit criteria ("GM-role users must not access player-private material") should be tested against the final role model, and its "multi-GM worlds" revisit noted in ADR 0015 is exactly D6.
 - Phase 15's clean-database exit scenario gains one setup step after merge (bootstrap admin is GM, or admin assigns GM) — made in SR-1 as a test-fixture change, not a change to Phase 15 scope.
 - Phase 17 browser acceptance adds "admin creates GM without campaign" and "world sharing".
 - Phase 18 import authorization follows §12.5.
@@ -510,7 +575,7 @@ Before implementation and again before merge, fetch origin and reconcile subsequ
 
 ### 13.1 Focused automated tests (smallest that prove each invariant)
 
-- **Unit:** system and world capability unions for every role combination; no hierarchy (Admin alone lacks `world.create`); D11 predicate including custom roles carrying `access.manage`.
+- **Unit:** system and world capability unions for every role combination; no hierarchy (Admin alone lacks `world.create`); D11 gate (Owner without system GM keeps edit/review/read/timeline capabilities and loses manage/share/transfer/campaign.create; restoring GM restores them).
 - **Database:** constraint positive/negative tests for both new tables and the changed world index; seed idempotency; protected lookup codes; populated upgrade + downgrade round trip; FK indexes and comments present.
 - **Command:** each §11 acceptance item; last-admin and last-owner races (reuse existing race-test patterns); world role ended mid-authoring.
 - **API:** CSRF/Origin, idempotent replay without duplicate audit, non-disclosing 404s, error codes in §7.
@@ -524,14 +589,14 @@ No new harness or fault-injection work is planned (PLAN §24.1 proportionality).
 1. Fresh install: bootstrap admin can create a world and a campaign.
 2. Admin creates a new account with GM only; activation link works; the GM lands on an empty `/campaigns` with Create a world.
 3. GM creates a world and campaign; Access shows them as campaign owner and GM.
-4. Admin revokes the GM's system GM: existing campaign still works; Create a world disappears; admin list flags the account.
+4. Admin revokes the GM's system GM: their campaign still works; Create a world disappears; their world opens without Sharing/settings controls; the admin list reports the world as stranded if they were its only Owner. Restoring GM brings the controls back.
 5. Owner shares the world: Editor, Reviewer, Reader, and a use grant to another GM; each sees exactly the expected controls.
-6. The hosting GM creates a campaign on an owner-provisioned branch; cannot pick a timeline already in use.
+6. The hosting GM cannot create a branch; an Owner or Editor creates one; the hosting GM creates a campaign on it and cannot pick a timeline already in use.
 7. A campaign GM without a world role sees authoring as read-only with the explanation; can still record events and create world-time points.
 8. Same person is GM in one campaign and Player in another on the same world: switching campaigns changes capabilities; nothing leaks.
 9. Ownership transfer with "retain as Editor"; authored records still show the original creator.
 10. Disable the sole owner of a world: admin sees it reported; recovery restores ownership with an audit entry.
-11. Last admin cannot be revoked or disabled.
+11. Last admin cannot be revoked or disabled. With the in-app Admin grant disabled (default), the Admin checkbox is disabled and a direct API call is refused; with it enabled, an Admin can grant Admin and an audit row records it.
 12. Keyboard and screen-reader pass over the Sharing page and the system-role editor; narrow and wide layouts.
 
 ### 13.3 Documentation updated during implementation
@@ -542,32 +607,38 @@ No new harness or fault-injection work is planned (PLAN §24.1 proportionality).
 - [SYSTEM_ARCHITECTURE.md](architecture/SYSTEM_ARCHITECTURE.md) §18 security model and §7.1 lock order.
 - [ENTITY_LIFECYCLE.md](ENTITY_LIFECYCLE.md) §3.1a and lifecycle transition authority.
 - [UI_DESIGN.md](UI_DESIGN.md) as listed in §8; [PHASE13E_ACCESS_CONTRACT.md](PHASE13E_ACCESS_CONTRACT.md) §3p/§4 (system roles replace the flag).
-- [operations/PLATFORM_ADMINISTRATOR_RECOVERY.md](operations/PLATFORM_ADMINISTRATOR_RECOVERY.md), [LOCAL_DEPLOYMENT.md](LOCAL_DEPLOYMENT.md) (upgrade note: assign system GM and world Editors after upgrade).
+- [operations/PLATFORM_ADMINISTRATOR_RECOVERY.md](operations/PLATFORM_ADMINISTRATOR_RECOVERY.md), [LOCAL_DEPLOYMENT.md](LOCAL_DEPLOYMENT.md) (the `DND_AI_ALLOW_IN_APP_ADMIN_GRANT` setting; upgrade note: assign system GM and world Editors after upgrade).
 - [PLAN.md](PLAN.md)/[PLANv2.md](PLANv2.md) authoring matrix (§16) and [PROJECT_STATUS.md](PROJECT_STATUS.md) — status only, when checkpoints close.
 - A verification record for the workstream when it closes.
 
 ---
 
-## 14. Owner decisions required
+## 14. Owner decisions
+
+### 14.1 Decided (2026-10-06)
+
+| # | Question | Decision | Where applied |
+|---|---|---|---|
+| Q1 | May an Admin grant Admin in the app? | Script-only for now, but build the in-app path, disabled by default (`DND_AI_ALLOW_IN_APP_ADMIN_GRANT`) | D2, D3 item 9, §7, §8, SR-2 |
+| Q4 | What does system GM gate? | Creating worlds and campaigns, and managing worlds the user owns or is authorized to manage. **Interpreted** as: no campaign role requires system GM (confirm in SR-0) | D11, D4 |
+| Q6 | Who may create or branch timelines? | Only users with read/write access to the world (Owner, Editor) | D4, D7 |
+| Q7 | Reader browse surface now or later? | Now | SR-7 |
+| Q9 | Accept exceptions E1–E3? | Yes | D8 |
+| Q10 | Land between the Phase 15 merge and the start of Phase 16? | Yes | §12.6 |
+| Q14 | Severity bands for §2.9 | Use the owner's rubric (`.tmp/issue-grading-rubric(2).md`) | §2.9 |
+
+Q3 (assignment-time vs continuous GM checks) no longer applies to campaign roles. For world management, the Q4 decision makes the check continuous (D11).
+
+### 14.2 Still open (recommended defaults apply until answered)
 
 | # | Question | Recommendation |
 |---|---|---|
-| Q1 | May an Admin grant Admin over HTTP, or does D-10's out-of-band rule stay? | Keep out-of-band; allow HTTP revoke with last-admin guard |
-| Q2 | Backfill existing admins with GM as well? | Yes (preserves current world creation) |
-| Q3 | Is system-GM eligibility checked only at assignment time, or continuously? | Assignment time; report mismatches |
-| Q4 | Which campaign roles require system GM? | Built-in `gm` and any role carrying `access.manage` only |
+| Q2 | Backfill existing admins with GM, and existing world Owners with GM (D3 items 2–3)? | Yes to both. Without it, admins lose world creation and Owners lose management of their own worlds |
 | Q5 | Should system Observer restrict campaign role assignment? | No; classification only for now |
-| Q6 | May use-grant holders create branch timelines for their campaigns? | No; the Owner provisions branches |
-| Q7 | Ship the Reader browse surface (SR-7) now or defer? | Ship minimal SR-7; defer if Phase 16 timing is tight |
-| Q8 | World-scoped authoring without a campaign? | Defer; require world role + campaign `canon.edit` now |
-| Q9 | Accept exceptions E1–E3 as campaign-authorized? | Yes, with E2 verification in SR-5 |
-| Q10 | Sequence this between Phase 15 merge and Phase 16 start? | Yes |
-| Q11 | Recovery overrides over HTTP, or scripts only? Is listing stranded IDs to the disabling admin acceptable? | Scripts first; IDs-only report acceptable |
-| Q12 | Keep invitation-authorized registration (accounts created by an invitation) with system Player? | Keep; it never grants more than Player |
-| Q13 | Archive/restore/supersede of canon: Reviewer (recommended) or Editor? | Reviewer |
-| Q14 | Confirm severity bands for §2.9 totals (the rubric's band table is not in the repository) | — |
-
----
+| Q8 | World-scoped authoring without a campaign? | Defer; require a world role plus campaign `canon.edit` now |
+| Q11 | Recovery overrides over HTTP, or scripts only? Is listing stranded IDs to the disabling admin acceptable? | Scripts first; an IDs-only report is acceptable |
+| Q12 | Keep invitation-authorized registration (accounts created through an invitation) with system Player? | Keep; it never grants more than Player |
+| Q13 | Archive/restore/supersede of canon: Reviewer or Editor? | Reviewer |
 
 ## 15. Exclusions and dependencies
 
