@@ -378,6 +378,7 @@ def resolve_quest_response(
         connection,
         world_id=timeline_world_id(connection, access.timeline_id),
         mode="reference",
+        viewer_user_id=access.user_id,
         can_edit_canon=is_gm,
     ):
         return None
@@ -534,6 +535,7 @@ def list_quests_endpoint(
         connection,
         world_id=world_id,
         mode="browse",
+        viewer_user_id=access.user_id,
         can_edit_canon=is_gm,
         include_noncanon=is_gm,
         include_archived=False,

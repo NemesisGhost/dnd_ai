@@ -51,6 +51,11 @@ from dnd_ai.domain.passwords import (
     validate_password_policy,
     verify_password,
 )
+from dnd_ai.domain.system_authority import (
+    SYSTEM_ROLE_ADMIN,
+    SYSTEM_ROLE_GM,
+    SYSTEM_ROLE_PLAYER,
+)
 
 from ._shared import lookup_id
 from .foundry_pairing import revoke_all_foundry_connections
@@ -58,6 +63,7 @@ from .invitation_onboarding import (
     _lock_and_validate_onboarding_session,
     accept_locked_onboarding_invitation,
 )
+from .system_roles import AdminGrantDisabledError, insert_system_role_assignments
 
 _ACTIVATION_TOKEN_TTL = timedelta(hours=48)
 _PASSWORD_RESET_TOKEN_TTL = timedelta(hours=2)
@@ -172,7 +178,7 @@ def _create_user_with_activation_token(
     display_name: str,
     email: str | None,
     created_by_user_id: uuid.UUID | None,
-    is_platform_administrator_flag: bool,
+    system_role_codes: tuple[str, ...],
 ) -> IssuedActivationToken:
     """Shared by `bootstrap_initial_admin` and `create_local_account`:
     creates the `security.users` row and its first (and, until consumed,
@@ -188,19 +194,19 @@ def _create_user_with_activation_token(
     active_status_id = _active_lifecycle_status_id(connection)
     user_id = connection.execute(
         text("""
-            INSERT INTO security.users
-                (display_name, email, lifecycle_status_id, is_platform_administrator)
-            VALUES (:display_name, :email, :status, :is_admin)
+            INSERT INTO security.users (display_name, email, lifecycle_status_id)
+            VALUES (:display_name, :email, :status)
             RETURNING user_id
         """),
-        {
-            "display_name": display_name,
-            "email": email,
-            "status": active_status_id,
-            "is_admin": is_platform_administrator_flag,
-        },
+        {"display_name": display_name, "email": email, "status": active_status_id},
     ).scalar()
     assert isinstance(user_id, uuid.UUID)
+    insert_system_role_assignments(
+        connection,
+        user_id=user_id,
+        role_codes=system_role_codes,
+        granted_by_user_id=created_by_user_id,
+    )
 
     raw_token = generate_opaque_secret()
     token_hash = hash_opaque_secret(raw_token)
@@ -262,7 +268,7 @@ def bootstrap_initial_admin(
             display_name=display_name,
             email=email,
             created_by_user_id=None,
-            is_platform_administrator_flag=True,
+            system_role_codes=(SYSTEM_ROLE_ADMIN, SYSTEM_ROLE_GM),
         )
 
 
@@ -273,6 +279,8 @@ def _create_local_account_impl(
     login_name: str,
     display_name: str,
     email: str | None = None,
+    system_role_codes: tuple[str, ...] = (SYSTEM_ROLE_PLAYER,),
+    allow_in_app_admin_grant: bool = False,
 ) -> IssuedActivationToken:
     """The composable form of `create_local_account`, on a connection the
     caller already has open — the same `_..._impl`/public-wrapper split
@@ -289,13 +297,15 @@ def _create_local_account_impl(
         raise NotPlatformAdministratorError(
             f"user {created_by_user_id} is not a platform administrator"
         )
+    if SYSTEM_ROLE_ADMIN in system_role_codes and not allow_in_app_admin_grant:
+        raise AdminGrantDisabledError(f"in-app admin grant is disabled (user {created_by_user_id})")
     return _create_user_with_activation_token(
         connection,
         login_name=login_name,
         display_name=display_name,
         email=email,
         created_by_user_id=created_by_user_id,
-        is_platform_administrator_flag=False,
+        system_role_codes=system_role_codes,
     )
 
 
@@ -1098,7 +1108,7 @@ class AccountLifecycleResult:
 class LastActivePlatformAdministratorError(SafeMessageError):
     """Raised by `_set_local_account_lifecycle_status_impl` when disabling
     `target_user_id` would leave `security.users` with zero rows that are
-    both `is_platform_administrator` and active — the platform would then
+    both an active account and a holder of an unrevoked system `admin` assignment — the platform would then
     have no principal left capable of creating, activating, disabling, or
     reactivating any account, including recovering from this exact state.
     Applies identically whether the caller is disabling their own account
@@ -1116,9 +1126,10 @@ class LastActivePlatformAdministratorError(SafeMessageError):
     # grant_platform_administrator.py, the only path that can). Restated to
     # describe the invariant without implying an in-app fix.
     safe_message = (
-        "This is the platform's only active administrator account and cannot be disabled. "
-        "Promoting a second administrator requires direct database access — see the "
-        "platform administrator recovery runbook."
+        "This is the platform's only active administrator account and cannot be disabled or "
+        "lose the Administrator role. Granting a second administrator is done by the operator "
+        "script (or in the app when the deployment enables it) — see the platform "
+        "administrator recovery runbook."
     )
 
 
@@ -1140,10 +1151,12 @@ _PLATFORM_ADMINISTRATOR_LIFECYCLE_LOCK_KEY = "platform_administrator_lifecycle"
 def _count_active_platform_administrators(connection: Connection) -> int:
     value = connection.execute(
         text("""
-            SELECT count(*)
+            SELECT count(DISTINCT u.user_id)
             FROM security.users u
             JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
-            WHERE u.is_platform_administrator AND ls.code = 'active'
+            JOIN security.user_system_roles usr ON usr.user_id = u.user_id
+            JOIN security.system_roles sr ON sr.system_role_id = usr.system_role_id
+            WHERE usr.revoked_at IS NULL AND sr.code = 'admin' AND ls.code = 'active'
         """)
     ).scalar()
     assert isinstance(value, int)
@@ -1174,7 +1187,7 @@ def grant_platform_administrator(
     engine: Engine, *, login_name: str
 ) -> GrantPlatformAdministratorResult:
     """Out-of-band promotion (D-10) — the only path in this codebase that
-    ever sets `is_platform_administrator = true` on an *existing* account
+    ever grants the system `admin` role to an *existing* account
     (`bootstrap_initial_admin` above is the only other writer, and only for
     the platform's very first account ever). Deliberately **no API route
     and no portal control call this** — see `scripts/
@@ -1202,7 +1215,7 @@ def grant_platform_administrator(
         row = (
             connection.execute(
                 text("""
-                    SELECT u.user_id, u.is_platform_administrator
+                    SELECT u.user_id
                     FROM security.users u
                     JOIN security.external_identities ei ON ei.user_id = u.user_id
                     JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
@@ -1220,14 +1233,13 @@ def grant_platform_administrator(
                 f"login name {normalized_login_name!r} does not resolve to an active local account"
             )
         user_id = row["user_id"]
-        already_administrator = bool(row["is_platform_administrator"])
+        already_administrator = is_platform_administrator(connection, user_id=user_id)
         if not already_administrator:
-            connection.execute(
-                text(
-                    "UPDATE security.users SET is_platform_administrator = true "
-                    "WHERE user_id = :user_id"
-                ),
-                {"user_id": user_id},
+            insert_system_role_assignments(
+                connection,
+                user_id=user_id,
+                role_codes=(SYSTEM_ROLE_ADMIN,),
+                granted_by_user_id=None,
             )
         return GrantPlatformAdministratorResult(
             user_id=user_id,
@@ -1296,7 +1308,7 @@ def _set_local_account_lifecycle_status_impl(
     row = (
         connection.execute(
             text("""
-                SELECT ls.code, u.is_platform_administrator
+                SELECT ls.code
                 FROM security.users u
                 JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
                 WHERE u.user_id = :user_id
@@ -1313,7 +1325,7 @@ def _set_local_account_lifecycle_status_impl(
 
     if (
         disabling
-        and row["is_platform_administrator"]
+        and is_platform_administrator(connection, user_id=target_user_id)
         and previous_status_code == _ACTIVE_LIFECYCLE_STATUS_CODE
         and _count_active_platform_administrators(connection) <= 1
     ):
@@ -1476,7 +1488,7 @@ def _register_invited_local_account_impl(
         display_name=display_name,
         email=None,
         created_by_user_id=None,
-        is_platform_administrator_flag=False,
+        system_role_codes=(SYSTEM_ROLE_PLAYER,),
     )
     _activate_local_account_impl(
         connection, raw_activation_token=issued.raw_token, raw_password=raw_password

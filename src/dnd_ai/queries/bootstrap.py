@@ -82,7 +82,8 @@ from dataclasses import dataclass
 
 from sqlalchemy import Connection, text
 
-from dnd_ai.domain.access import is_platform_administrator, resolve_access_context
+from dnd_ai.domain.access import resolve_access_context
+from dnd_ai.queries.world_authority import resolve_world_authority
 
 # The capability `dnd_ai.api.access.resolve_party_perspective` requires the
 # caller to hold for a character before it will authorize *any* party
@@ -126,6 +127,20 @@ class CampaignBootstrapView:
     character_perspectives: tuple[CharacterPerspectiveView, ...]
     selected_character_id: uuid.UUID | None
     capabilities: tuple[str, ...]
+    # The caller's capabilities on this campaign's *world* (docs/adr/0019-scoped-system-
+    # world-and-campaign-roles.md): independent of `capabilities`, which are campaign-
+    # scoped. Lets the portal present shared-canon authoring read-only without inferring
+    # it from a campaign role.
+    world_capabilities: tuple[str, ...] = ()
+
+
+def _world_capabilities(
+    connection: Connection, user_id: uuid.UUID, world_id: uuid.UUID | None
+) -> tuple[str, ...]:
+    if world_id is None:
+        return ()
+    authority = resolve_world_authority(connection, user_id=user_id, world_id=world_id)
+    return () if authority is None else tuple(sorted(authority.capabilities))
 
 
 STARTUP_MODE_RESUME_LAST_VISITED = "resume_last_visited"
@@ -160,13 +175,6 @@ class SessionBootstrapView:
 
     user_id: uuid.UUID
     display_name: str
-    # Additive Phase 13E checkpoint 9 field: the only server-authoritative
-    # signal the portal has for whether to render an admin surface at all
-    # (CP 10's /admin/accounts page) — campaign-scoped `access.manage`
-    # grants nothing here; this is the same campaign-independent primitive
-    # `dnd_ai.commands.local_auth._create_local_account_impl`/`_issue_
-    # password_reset_token_impl` already gate on.
-    is_platform_administrator: bool
     startup_campaign_id: uuid.UUID | None
     campaign_preferences: CampaignPreferencesView
     campaigns: tuple[CampaignBootstrapView, ...]
@@ -435,6 +443,7 @@ def get_session_bootstrap(connection: Connection, *, user_id: uuid.UUID) -> Sess
                 character_perspectives=character_perspectives,
                 selected_character_id=selected_character_id,
                 capabilities=tuple(sorted(access.role_capabilities)),
+                world_capabilities=_world_capabilities(connection, user_id, world_id),
             )
         )
 
@@ -460,7 +469,6 @@ def get_session_bootstrap(connection: Connection, *, user_id: uuid.UUID) -> Sess
     return SessionBootstrapView(
         user_id=user_id,
         display_name=display_name,
-        is_platform_administrator=is_platform_administrator(connection, user_id=user_id),
         startup_campaign_id=resolve_startup_campaign_id(authorized_ids, preferred, last_visited),
         campaign_preferences=CampaignPreferencesView(
             startup_mode=(

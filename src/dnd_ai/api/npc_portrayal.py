@@ -31,6 +31,7 @@ from dnd_ai.domain.npc_portrayal import (
     NOTE_MAX_LENGTH,
     PROFILE_FIELDS,
 )
+from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.npc_portrayal import NpcPortrayalView, get_npc_portrayal, get_runtime_options
 
 from ._authoring import (
@@ -50,6 +51,13 @@ router = APIRouter(tags=["npc-portrayal"])
 
 _BASE = "/campaigns/{campaign_id}/authoring/npcs"
 _Access = Annotated[AccessContext, Depends(require_campaign_capability("canon.edit"))]
+# Reads of the private side of shared world canon (drafts, GM-only prep, revisions,
+# provenance, sources, the review queue) also need `world.canon.read_private`
+# (docs/adr/0020-scoped-system-world-and-campaign-roles.md, D6).
+_PrivateRead = Annotated[
+    AccessContext,
+    Depends(require_campaign_capability("canon.edit", world_capability=WORLD_CANON_READ_PRIVATE)),
+]
 _Conn = Annotated[Connection, Depends(get_connection)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
@@ -102,7 +110,7 @@ def _view_json(view: NpcPortrayalView) -> dict[str, Any]:
 
 
 @router.get("/campaigns/{campaign_id}/authoring/npc-runtime-options")
-def runtime_options_endpoint(access: _Access, connection: _Conn) -> dict[str, Any]:
+def runtime_options_endpoint(access: _PrivateRead, connection: _Conn) -> dict[str, Any]:
     options = get_runtime_options(connection, campaign_id=access.campaign_id)
     return {
         "conditions": [{"value": str(i), "label": n, "code": c} for i, n, c in options.conditions],
@@ -113,7 +121,7 @@ def runtime_options_endpoint(access: _Access, connection: _Conn) -> dict[str, An
 @router.get(_BASE + "/{npc_id}/portrayal")
 def get_portrayal_endpoint(
     npc_id: uuid.UUID,
-    access: _Access,
+    access: _PrivateRead,
     connection: _Conn,
     version: Annotated[int | None, Query(ge=1)] = None,
 ) -> dict[str, Any]:

@@ -94,13 +94,18 @@ from dnd_ai.commands.local_auth import (
     revoke_browser_session,
     revoke_browser_session_by_token,
 )
+from dnd_ai.commands.system_roles import assign_system_role, revoke_system_role
+from dnd_ai.config import settings
 from dnd_ai.domain.access import AuthenticatedPrincipal
 from dnd_ai.domain.passwords import MAX_PASSWORD_LENGTH
 from dnd_ai.domain.rate_limit import RateLimiter
-from dnd_ai.domain.world_authority import WORLD_CREATE
 from dnd_ai.queries.accounts import ACCOUNT_LIST_KEYSET, list_platform_accounts
 from dnd_ai.queries.bootstrap import get_session_bootstrap
-from dnd_ai.queries.world_authority import may_create_worlds
+from dnd_ai.queries.stranded import (
+    stranded_campaign_ids_for_manager,
+    stranded_world_ids_for_owner,
+)
+from dnd_ai.queries.system_authority import resolve_system_capabilities, resolve_system_roles
 
 from .audit import record_change_log
 from .auth import (
@@ -172,6 +177,8 @@ _LOGIN_SUCCESS_COMMAND_NAME = "local_auth.login_success"
 _LOGIN_FAILURE_COMMAND_NAME = "local_auth.login_failure"
 _LOGOUT_COMMAND_NAME = "local_auth.logout"
 _CREATE_ACCOUNT_COMMAND_NAME = "local_auth.create_account"
+_ASSIGN_SYSTEM_ROLE_COMMAND_NAME = "system_roles.assign"
+_REVOKE_SYSTEM_ROLE_COMMAND_NAME = "system_roles.revoke"
 _ACTIVATE_ACCOUNT_COMMAND_NAME = "local_auth.activate_account"
 _ISSUE_PASSWORD_RESET_COMMAND_NAME = "local_auth.issue_password_reset"
 _CONSUME_PASSWORD_RESET_COMMAND_NAME = "local_auth.consume_password_reset"
@@ -543,6 +550,8 @@ class CampaignBootstrapResponse(BaseModel):
     character_perspectives: list[CharacterPerspectiveResponse]
     selected_character_id: uuid.UUID | None
     capabilities: list[str]
+    # Capabilities on the campaign's world (D6), independent of `capabilities`.
+    world_capabilities: list[str] = Field(default_factory=list)
 
 
 class SessionFeaturesResponse(BaseModel):
@@ -580,13 +589,15 @@ class SessionBootstrapResponse(BaseModel):
     user: SessionUserResponse
     csrf_token: str
     browser_session_id: uuid.UUID | None
-    is_platform_administrator: bool
+    # The caller's unrevoked system roles (docs/adr/0019-scoped-system-world-and-
+    # campaign-roles.md) — for display only; the portal gates on
+    # `global_capabilities`, never on a role label.
+    system_roles: list[str] = Field(default_factory=list)
     # Server-computed global (not campaign-scoped) capabilities for *this*
-    # user — currently only `world.create`, present exactly when
-    # `create_world` would authorize the caller: a human principal who is an
-    # active platform administrator or holds an effective built-in `gm`
-    # assignment (docs/adr/0018-world-creation-eligibility.md). The portal
-    # gates world-creation entry points on this and never infers it.
+    # user: the union of the system capabilities of the caller's system roles
+    # (`dnd_ai.domain.system_authority`), empty for a non-human principal.
+    # `world.create` is present exactly when `create_world` would authorize the
+    # caller. The portal gates entry points on this and never infers it.
     global_capabilities: list[str] = Field(default_factory=list)
     startup_campaign_id: uuid.UUID | None
     campaign_preferences: CampaignPreferencesResponse
@@ -634,15 +645,19 @@ def session_bootstrap_endpoint(
         else None
     )
     bootstrap = get_session_bootstrap(connection, user_id=principal.user_id)
+    system_roles = (
+        sorted(resolve_system_roles(connection, user_id=principal.user_id))
+        if principal.auth_method in HUMAN_AUTH_METHODS
+        else []
+    )
     return SessionBootstrapResponse(
         user=SessionUserResponse(user_id=bootstrap.user_id, display_name=bootstrap.display_name),
         csrf_token=csrf_token or "",
         browser_session_id=principal.local_session_id,
-        is_platform_administrator=bootstrap.is_platform_administrator,
+        system_roles=system_roles,
         global_capabilities=(
-            [WORLD_CREATE]
+            sorted(resolve_system_capabilities(connection, user_id=principal.user_id))
             if principal.auth_method in HUMAN_AUTH_METHODS
-            and may_create_worlds(connection, user_id=principal.user_id)
             else []
         ),
         startup_campaign_id=bootstrap.startup_campaign_id,
@@ -678,6 +693,7 @@ def session_bootstrap_endpoint(
                 ],
                 selected_character_id=campaign.selected_character_id,
                 capabilities=list(campaign.capabilities),
+                world_capabilities=list(campaign.world_capabilities),
             )
             for campaign in bootstrap.campaigns
         ],
@@ -790,12 +806,18 @@ def revoke_session_endpoint(
 # ---------------------------------------------------------------------------
 
 
+SystemRoleCode = Literal["admin", "gm", "player", "observer"]
+
+
 class PlatformAccountResponse(BaseModel):
     user_id: uuid.UUID
     display_name: str
     login_name: str | None
     lifecycle_status_code: str
     is_platform_administrator: bool
+    system_roles: list[str]
+    # Worlds this account owns that currently have no manageable Owner (plan F5).
+    stranded_world_count: int = 0
     has_local_credential: bool
     has_outstanding_activation: bool
     last_login_at: str | None
@@ -813,6 +835,7 @@ def list_platform_accounts_endpoint(
     connection: Annotated[Connection, Depends(get_connection)],
     q: Annotated[str | None, Query()] = None,
     status: Annotated[str | None, Query()] = None,
+    system_role: Annotated[SystemRoleCode | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
     cursor: Annotated[str | None, Query()] = None,
 ) -> PlatformAccountListResponse:
@@ -832,6 +855,7 @@ def list_platform_accounts_endpoint(
         requesting_user_id=admin_user_id,
         query=q,
         status_code=status,
+        system_role_code=system_role,
         limit=limit,
         after_name=after_name,
         after_user_id=after_user_id,
@@ -851,6 +875,10 @@ def list_platform_accounts_endpoint(
                 login_name=account.login_name,
                 lifecycle_status_code=account.lifecycle_status_code,
                 is_platform_administrator=account.is_platform_administrator,
+                system_roles=list(account.system_roles),
+                stranded_world_count=len(
+                    stranded_world_ids_for_owner(connection, user_id=account.user_id)
+                ),
                 has_local_credential=account.has_local_credential,
                 has_outstanding_activation=account.has_outstanding_activation,
                 last_login_at=account.last_login_at.isoformat()
@@ -869,10 +897,19 @@ def list_platform_accounts_endpoint(
 # ---------------------------------------------------------------------------
 
 
+def _default_new_account_roles() -> list[SystemRoleCode]:
+    return ["player"]
+
+
 class CreateAccountRequest(BaseModel):
     login_name: str
     display_name: str
     email: str | None = None
+    # At least one system role (default Player). `admin` is accepted only while
+    # the in-app Administrator grant is enabled (403 `admin_grant_disabled`).
+    system_role_codes: list[SystemRoleCode] = Field(
+        default_factory=_default_new_account_roles, min_length=1
+    )
 
 
 class CreateAccountResponse(BaseModel):
@@ -900,6 +937,8 @@ def create_account_endpoint(
         login_name=body.login_name,
         display_name=body.display_name,
         email=body.email,
+        system_role_codes=tuple(dict.fromkeys(body.system_role_codes)),
+        allow_in_app_admin_grant=settings.allow_in_app_admin_grant,
     )
     record_change_log(
         connection,
@@ -919,6 +958,121 @@ def create_account_endpoint(
         login_name=result.login_name,
         raw_activation_token=result.raw_token,
         expires_at=result.expires_at.isoformat(),
+    )
+
+
+class SystemRoleAssignmentRequest(BaseModel):
+    system_role_code: SystemRoleCode
+
+
+class SystemRoleChangeResponse(BaseModel):
+    user_id: uuid.UUID
+    system_role_code: SystemRoleCode
+    changed: bool
+    # Present when revoking `gm`: worlds that revocation left without a manageable
+    # Owner (IDs only).
+    stranded_world_ids: list[uuid.UUID] = Field(default_factory=list)
+
+
+@router.post(
+    "/admin/accounts/{target_user_id}/system-roles",
+    response_model=SystemRoleChangeResponse,
+    status_code=200,
+)
+def assign_system_role_endpoint(
+    target_user_id: uuid.UUID,
+    body: SystemRoleAssignmentRequest,
+    response: Response,
+    admin_user_id: Annotated[uuid.UUID, Depends(require_human_user_id)],
+    connection: Annotated[Connection, Depends(get_connection)],
+    correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
+) -> SystemRoleChangeResponse:
+    """Assigns a system role to any account (201 when newly assigned, 200 when it
+    was already held). Gated inside the command: a non-administrator gets the
+    fixed non-disclosing 404, and `admin` additionally needs the deployment's
+    in-app Administrator grant (403 `admin_grant_disabled`). The assignment is
+    naturally idempotent, so no `Idempotency-Key` is reserved. It creates no
+    campaign membership and touches no world or campaign row."""
+    change = assign_system_role(
+        connection,
+        admin_user_id=admin_user_id,
+        target_user_id=target_user_id,
+        role_code=body.system_role_code,
+        allow_in_app_admin_grant=settings.allow_in_app_admin_grant,
+    )
+    if change.changed:
+        response.status_code = 201
+        record_change_log(
+            connection,
+            change_action_code="created",
+            schema_name="security",
+            table_name="user_system_roles",
+            record_id=change.user_system_role_id,
+            entity_id=None,
+            world_id=None,
+            actor_user_id=admin_user_id,
+            correlation_id=correlation_id,
+            command_name=_ASSIGN_SYSTEM_ROLE_COMMAND_NAME,
+            event_id=None,
+            changed_fields={
+                "system_role_code": body.system_role_code,
+                "target_user_id": str(target_user_id),
+            },
+        )
+    return SystemRoleChangeResponse(
+        user_id=target_user_id, system_role_code=body.system_role_code, changed=change.changed
+    )
+
+
+@router.post(
+    "/admin/accounts/{target_user_id}/system-roles/{system_role_code}/revoke",
+    response_model=SystemRoleChangeResponse,
+    status_code=200,
+)
+def revoke_system_role_endpoint(
+    target_user_id: uuid.UUID,
+    system_role_code: SystemRoleCode,
+    admin_user_id: Annotated[uuid.UUID, Depends(require_human_user_id)],
+    connection: Annotated[Connection, Depends(get_connection)],
+    correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
+) -> SystemRoleChangeResponse:
+    """Revokes an open system-role assignment (history is kept). 409
+    `last_active_platform_administrator` when it would remove the last active
+    administrator. Campaign roles and world roles are untouched."""
+    change = revoke_system_role(
+        connection,
+        admin_user_id=admin_user_id,
+        target_user_id=target_user_id,
+        role_code=system_role_code,
+    )
+    if change.changed:
+        record_change_log(
+            connection,
+            change_action_code="updated",
+            schema_name="security",
+            table_name="user_system_roles",
+            record_id=change.user_system_role_id,
+            entity_id=None,
+            world_id=None,
+            actor_user_id=admin_user_id,
+            correlation_id=correlation_id,
+            command_name=_REVOKE_SYSTEM_ROLE_COMMAND_NAME,
+            event_id=None,
+            changed_fields={
+                "system_role_code": system_role_code,
+                "target_user_id": str(target_user_id),
+                "revoked": True,
+            },
+        )
+    return SystemRoleChangeResponse(
+        user_id=target_user_id,
+        system_role_code=system_role_code,
+        changed=change.changed,
+        stranded_world_ids=(
+            stranded_world_ids_for_owner(connection, user_id=target_user_id)
+            if system_role_code == "gm"
+            else []
+        ),
     )
 
 
@@ -979,10 +1133,30 @@ def issue_password_reset_endpoint(
     )
 
 
+class StrandedResponse(BaseModel):
+    """IDs only: the administrator is not shown names they could not otherwise
+    read. Worlds with no manageable Owner (an Owner needs an active account and
+    system GM) and campaigns with no access manager on an active account; the
+    operator recovery scripts apply (docs/adr/0019-scoped-system-world-and-
+    campaign-roles.md, plan section 4.5)."""
+
+    world_ids: list[uuid.UUID] = Field(default_factory=list)
+    campaign_ids: list[uuid.UUID] = Field(default_factory=list)
+
+
 class AccountLifecycleResponse(BaseModel):
     user_id: uuid.UUID
     previous_lifecycle_status: str
     new_lifecycle_status: str
+    # Present on a disable: what this account's disablement left unmanageable.
+    stranded: StrandedResponse | None = None
+
+
+def _stranded_for(connection: Connection, user_id: uuid.UUID) -> StrandedResponse:
+    return StrandedResponse(
+        world_ids=stranded_world_ids_for_owner(connection, user_id=user_id),
+        campaign_ids=stranded_campaign_ids_for_manager(connection, user_id=user_id),
+    )
 
 
 @router.post(
@@ -1025,6 +1199,7 @@ def disable_account_endpoint(
         user_id=result.user_id,
         previous_lifecycle_status=result.previous_lifecycle_status_code,
         new_lifecycle_status=result.new_lifecycle_status_code,
+        stranded=_stranded_for(connection, result.user_id),
     )
 
 

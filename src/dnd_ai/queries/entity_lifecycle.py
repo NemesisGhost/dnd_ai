@@ -38,10 +38,12 @@ from dnd_ai.domain.entity_lifecycle import (
     evaluate_actions,
     is_lifecycle_eligible,
 )
+from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.content_preconditions import (
     replacement_publish_blocked_reason,
     type_specific_blocks,
 )
+from dnd_ai.queries.world_authority import resolve_world_authority
 
 REFERENCE_VISIBLE_CANON_STATUSES = ("canon", "superseded", "deprecated")
 
@@ -51,13 +53,26 @@ def lifecycle_hidden_entity_ids(
     *,
     world_id: uuid.UUID,
     mode: Literal["reference", "browse"],
+    viewer_user_id: uuid.UUID,
     can_edit_canon: bool,
     include_noncanon: bool = False,
     include_archived: bool = False,
 ) -> frozenset[uuid.UUID]:
     """IDs of lifecycle-managed entities in `world_id` the caller must not see
     in `mode`. Bounded by the number of non-published/archived definitions in
-    one world; one query per request."""
+    one world; one query per request.
+
+    `can_edit_canon` is the caller's *campaign* capability to see unpublished
+    definitions; it only takes effect while `viewer_user_id` also holds
+    `world.canon.read_private` on `world_id` (docs/adr/0019-scoped-system-world-and-
+    campaign-roles.md, D6). Drafts belong to the world, so a GM of another campaign
+    on the same world never sees them; every caller passes its own user, so no
+    call site can skip the world check."""
+    if can_edit_canon:
+        authority = resolve_world_authority(connection, user_id=viewer_user_id, world_id=world_id)
+        can_edit_canon = authority is not None and authority.has_capability(
+            WORLD_CANON_READ_PRIVATE
+        )
     rows = connection.execute(
         text("""
             SELECT e.entity_id

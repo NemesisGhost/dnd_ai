@@ -228,12 +228,19 @@ def _revealable_knowledge(
     """Knowledge items about `npc_entity_id` that `party_id` does not yet
     know — the closed candidate set a `reveal_knowledge` proposal may draw
     from. See this module's own docstring for why this is the mechanism
-    that keeps an AI-authored proposal safe."""
+    that keeps an AI-authored proposal safe. Only *published* (`canon`, active)
+    knowledge definitions qualify: they belong to the world, so a draft prepared in
+    another campaign on the same world never enters this campaign's AI context
+    (docs/adr/0020-scoped-system-world-and-campaign-roles.md)."""
     rows = connection.execute(
         text("""
             SELECT ki.knowledge_item_id, ki.canonical_statement, ki.sensitivity
             FROM knowledge.knowledge_items ki
+            JOIN core.entities ke ON ke.entity_id = ki.knowledge_item_id
+            JOIN core.canon_statuses kcs ON kcs.canon_status_id = ke.canon_status_id
+            JOIN core.lifecycle_statuses kls ON kls.lifecycle_status_id = ke.lifecycle_status_id
             WHERE ki.subject_entity_id = :npc
+              AND kcs.code = 'canon' AND kls.code = 'active'
               AND NOT EXISTS (
                   SELECT 1 FROM campaign.party_knowledge pk
                   WHERE pk.timeline_id = :timeline AND pk.party_id = :party

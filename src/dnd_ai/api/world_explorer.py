@@ -30,11 +30,13 @@ from pydantic import BaseModel
 from sqlalchemy import Connection
 
 from dnd_ai.domain.access import AccessContext
+from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.entity_lifecycle import (
     EntityStatusSummary,
     get_entity_status_summary,
     lifecycle_hidden_entity_ids,
 )
+from dnd_ai.queries.world_authority import resolve_world_authority
 from dnd_ai.queries.world_explorer import (
     ENTITY_SEARCH_KEYSET,
     RELATIONSHIP_KEYSET,
@@ -129,6 +131,21 @@ def _grant_denied_entity_ids(access: AccessContext) -> frozenset[uuid.UUID]:
     return entity_denied | event_denied
 
 
+def _may_preview_unpublished(access: AccessContext, connection: Connection) -> bool:
+    """Whether the caller may see *unpublished* world definitions (drafts, proposed,
+    approved, rejected): campaign `canon.edit` **and** `world.canon.read_private` on
+    the world (docs/adr/0020-scoped-system-world-and-campaign-roles.md, D6). Another
+    campaign's GM on the same world sees published canon only."""
+    if not access.has_capability(_GM_CAPABILITY):
+        return False
+    authority = resolve_world_authority(
+        connection,
+        user_id=access.user_id,
+        world_id=timeline_world_id(connection, access.timeline_id),
+    )
+    return authority is not None and authority.has_capability(WORLD_CANON_READ_PRIVATE)
+
+
 def _campaign_view_denied_entity_ids(
     access: AccessContext, connection: Connection
 ) -> frozenset[uuid.UUID]:
@@ -142,6 +159,7 @@ def _campaign_view_denied_entity_ids(
         connection,
         world_id=timeline_world_id(connection, access.timeline_id),
         mode="reference",
+        viewer_user_id=access.user_id,
         can_edit_canon=access.has_capability(_GM_CAPABILITY),
     )
 
@@ -366,6 +384,7 @@ def search_world_entities_endpoint(
             connection,
             world_id=timeline_world_id(connection, access.timeline_id),
             mode="browse",
+            viewer_user_id=access.user_id,
             can_edit_canon=access.has_capability(_GM_CAPABILITY),
             include_noncanon=include_noncanon,
             include_archived=include_archived,
@@ -378,7 +397,9 @@ def search_world_entities_endpoint(
         after_name=after_name,
         after_entity_id=after_entity_id,
         canon_status_codes=(
-            list(canon_status) if canon_status and access.has_capability(_GM_CAPABILITY) else None
+            list(canon_status)
+            if canon_status and _may_preview_unpublished(access, connection)
+            else None
         ),
     )
 

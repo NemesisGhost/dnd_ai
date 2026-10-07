@@ -33,6 +33,7 @@ from dnd_ai.domain.content_authoring import (
     SHORT_TEXT_MAX_LENGTH,
     LocationCategory,
 )
+from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.location_authoring import (
     LocationAuthoringView,
     get_location_authoring,
@@ -60,6 +61,13 @@ _PARENT_KEYSET = "location_parent_options"
 _CAPABILITY = "canon.edit"
 
 _Access = Annotated[AccessContext, Depends(require_campaign_capability(_CAPABILITY))]
+# Reads of the private side of shared world canon (drafts, GM-only prep, revisions,
+# provenance, sources, the review queue) also need `world.canon.read_private`
+# (docs/adr/0020-scoped-system-world-and-campaign-roles.md, D6).
+_PrivateRead = Annotated[
+    AccessContext,
+    Depends(require_campaign_capability(_CAPABILITY, world_capability=WORLD_CANON_READ_PRIVATE)),
+]
 _Conn = Annotated[Connection, Depends(get_connection)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
@@ -131,7 +139,7 @@ def _view_json(view: LocationAuthoringView, *, changed: bool | None = None) -> d
 
 
 @router.get(_BASE + "/options")
-def location_options_endpoint(access: _Access) -> dict[str, Any]:
+def location_options_endpoint(access: _PrivateRead) -> dict[str, Any]:
     del access  # authorization is the dependency's job
     return {
         "can_create": True,
@@ -146,7 +154,7 @@ def location_options_endpoint(access: _Access) -> dict[str, Any]:
 
 @router.get(_BASE + "/parent-options")
 def location_parent_options_endpoint(
-    access: _Access,
+    access: _PrivateRead,
     connection: _Conn,
     for_location: Annotated[uuid.UUID | None, Query(alias="for")] = None,
     q: Annotated[str | None, Query(max_length=200)] = None,
@@ -235,7 +243,7 @@ def create_location_endpoint(
 
 @router.get(_BASE + "/{location_id}")
 def get_location_authoring_endpoint(
-    location_id: uuid.UUID, access: _Access, connection: _Conn
+    location_id: uuid.UUID, access: _PrivateRead, connection: _Conn
 ) -> dict[str, Any]:
     world_id = timeline_world_id(connection, access.timeline_id)
     view = get_location_authoring(connection, world_id=world_id, location_id=location_id)

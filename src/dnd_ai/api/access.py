@@ -106,12 +106,32 @@ from dnd_ai.domain.access import (
     AuthenticatedPrincipal,
     resolve_access_context,
 )
+from dnd_ai.domain.authoring import WorldAuthorityRequiredError
 from dnd_ai.domain.errors import DomainAuthorizationError
 from dnd_ai.domain.foundry_pairing import FOUNDRY_SCOPES
+from dnd_ai.queries.world_authority import resolve_world_authority
 
+from ._shared import timeline_world_id
 from .auth import get_authenticated_user_id
 from .deps import get_connection
 from .errors import ForbiddenError, NotFoundError
+
+
+def require_world_capability_for_campaign(
+    connection: Connection, *, access: AccessContext, world_capability: str
+) -> None:
+    """Require `world_capability` on the world of the campaign `access` was
+    resolved for (decision D6), raising 403 `world_authority_required` otherwise.
+    The caller has already established campaign authority."""
+    authority = resolve_world_authority(
+        connection,
+        user_id=access.user_id,
+        world_id=timeline_world_id(connection, access.timeline_id),
+    )
+    if authority is None or not authority.has_capability(world_capability):
+        raise WorldAuthorityRequiredError(
+            f"user {access.user_id} lacks {world_capability} on the campaign's world"
+        )
 
 
 def require_campaign_capability(
@@ -120,6 +140,7 @@ def require_campaign_capability(
     allow_foundry_access: bool = False,
     foundry_scope: str | None = None,
     allow_archived_campaign: bool = False,
+    world_capability: str | None = None,
 ) -> Callable[[uuid.UUID, AuthenticatedPrincipal, Connection], AccessContext]:
     """Returns a FastAPI dependency requiring `capability_code` (role- or
     character-relationship-derived, per `AccessContext.has_capability`) in
@@ -138,6 +159,15 @@ def require_campaign_capability(
     `POST .../reactivate` pass `True`; a route-registry test pins that exact
     set. `pending`/`inactive` keep their existing behavior because only
     fixtures produce them.
+
+    `world_capability` (docs/adr/0020-scoped-system-world-and-campaign-roles.md,
+    D6) additionally requires that capability on the campaign's *world*, resolved
+    for the caller in the same request. It is how a read of shared world canon's
+    private side (drafts, GM-only prep, revisions, provenance, sources, the review
+    queue) is limited to `world.canon.read_private` holders: a campaign GM with no
+    world role keeps `canon.edit` for running their game but is refused with 403
+    `world_authority_required` here. Campaign authority is checked first, so a
+    non-member still gets the non-disclosing 404.
 
     `allow_foundry_access` (Phase 11R workstream C) gates whether a
     `FOUNDRY_ACCESS_AUTH_METHOD`-authenticated request may use this route at
@@ -213,11 +243,16 @@ def require_campaign_capability(
 
         if not access.has_capability(capability_code):
             raise ForbiddenError()
+        if world_capability is not None:
+            require_world_capability_for_campaign(
+                connection, access=access, world_capability=world_capability
+            )
         return dataclasses.replace(access, principal=principal)
 
     _dependency.allow_foundry_access = allow_foundry_access  # type: ignore[attr-defined]
     _dependency.foundry_scope = foundry_scope  # type: ignore[attr-defined]
     _dependency.allow_archived_campaign = allow_archived_campaign  # type: ignore[attr-defined]
+    _dependency.world_capability = world_capability  # type: ignore[attr-defined]
     return _dependency
 
 

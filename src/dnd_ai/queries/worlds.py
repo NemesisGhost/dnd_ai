@@ -19,7 +19,9 @@ from dataclasses import dataclass
 from sqlalchemy import Connection, text
 
 from dnd_ai.domain.authoring_policy import BlockedAction, world_actions
-from dnd_ai.domain.world_authority import capabilities_for_roles
+from dnd_ai.domain.system_authority import WORLD_ADMINISTER
+from dnd_ai.domain.world_authority import WorldAuthority, capabilities_for_roles
+from dnd_ai.queries.system_authority import has_system_capability
 from dnd_ai.queries.timelines import TimelineSummary, list_timeline_summaries
 
 NAME_SORT_PREFIX = 200
@@ -35,6 +37,9 @@ class WorldSummary:
     primary_timeline_id: uuid.UUID | None
     capabilities: list[str]
     sort_name: str
+    # Display only: the caller's world role codes and whether they hold a use grant.
+    role_codes: list[str]
+    has_use_grant: bool
 
 
 @dataclass(frozen=True)
@@ -81,30 +86,50 @@ def list_worlds(
 ) -> list[WorldSummary]:
     """Authorized worlds ordered by `(lower(name), world_id)`; fetches
     `limit + 1` rows so the caller can build a keyset page."""
+    may_administer = has_system_capability(
+        connection, user_id=user_id, capability_code=WORLD_ADMINISTER
+    )
     rows = connection.execute(
         text("""
+            WITH my_roles AS (
+                SELECT wm.world_id, wr.code AS role_code
+                FROM security.world_memberships wm
+                JOIN security.membership_statuses ms
+                  ON ms.membership_status_id = wm.membership_status_id
+                JOIN security.world_roles wr ON wr.world_role_id = wm.world_role_id
+                WHERE wm.user_id = :user_id
+                  AND wm.ended_at IS NULL
+                  AND ms.code = 'active' AND ms.is_active
+                  AND wr.is_active
+            ), my_grants AS (
+                SELECT g.world_id
+                FROM security.world_use_grants g
+                WHERE g.user_id = :user_id AND g.revoked_at IS NULL
+            ), my_worlds AS (
+                SELECT world_id FROM my_roles
+                UNION
+                SELECT world_id FROM my_grants
+            )
             SELECT w.world_id, w.name, w.description, wls.code AS lifecycle_code,
                    w.row_version, lower(w.name) AS sort_name,
                    (SELECT t.timeline_id FROM campaign.timelines t
                      WHERE t.world_id = w.world_id AND t.is_primary) AS primary_timeline_id,
-                   array_agg(DISTINCT wr.code) AS role_codes
-            FROM security.world_memberships wm
-            JOIN security.membership_statuses ms
-              ON ms.membership_status_id = wm.membership_status_id
-            JOIN security.world_roles wr ON wr.world_role_id = wm.world_role_id
-            JOIN security.users u ON u.user_id = wm.user_id
-            JOIN core.lifecycle_statuses uls ON uls.lifecycle_status_id = u.lifecycle_status_id
-            JOIN core.worlds w ON w.world_id = wm.world_id
+                   COALESCE(
+                       (SELECT array_agg(DISTINCT r.role_code) FROM my_roles r
+                         WHERE r.world_id = w.world_id),
+                       ARRAY[]::text[]
+                   ) AS role_codes,
+                   EXISTS (SELECT 1 FROM my_grants g WHERE g.world_id = w.world_id)
+                       AS has_use_grant
+            FROM my_worlds mw
+            JOIN core.worlds w ON w.world_id = mw.world_id
             JOIN core.lifecycle_statuses wls ON wls.lifecycle_status_id = w.lifecycle_status_id
-            WHERE wm.user_id = :user_id
-              AND wm.ended_at IS NULL
-              AND ms.code = 'active' AND ms.is_active
-              AND wr.is_active
-              AND uls.code = 'active'
+            JOIN security.users u ON u.user_id = :user_id
+            JOIN core.lifecycle_statuses uls ON uls.lifecycle_status_id = u.lifecycle_status_id
+            WHERE uls.code = 'active'
               AND (CAST(:status AS text) = 'all' OR wls.code = :status)
               AND (CAST(:after_name AS text) IS NULL
                    OR (lower(w.name), w.world_id) > (:after_name, CAST(:after_id AS uuid)))
-            GROUP BY w.world_id, wls.code
             ORDER BY lower(w.name), w.world_id
             LIMIT :limit
         """),
@@ -124,8 +149,16 @@ def list_worlds(
             lifecycle_status=str(row.lifecycle_code),
             row_version=int(row.row_version),
             primary_timeline_id=row.primary_timeline_id,
-            capabilities=sorted(capabilities_for_roles(frozenset(row.role_codes))),
+            capabilities=sorted(
+                capabilities_for_roles(
+                    frozenset(row.role_codes),
+                    has_use_grant=bool(row.has_use_grant),
+                    may_administer=may_administer,
+                )
+            ),
             sort_name=str(row.sort_name),
+            role_codes=sorted(row.role_codes),
+            has_use_grant=bool(row.has_use_grant),
         )
         for row in rows
     ]
@@ -206,7 +239,7 @@ def get_world_detail(
     *,
     user_id: uuid.UUID,
     world_id: uuid.UUID,
-    role_codes: frozenset[str],
+    authority: WorldAuthority,
 ) -> WorldDetail | None:
     row = connection.execute(
         text("""
@@ -262,8 +295,10 @@ def get_world_detail(
         lifecycle_status=str(row.lifecycle_code),
         row_version=int(row.row_version),
         primary_timeline_id=row.primary_timeline_id,
-        capabilities=sorted(capabilities_for_roles(role_codes)),
+        capabilities=sorted(authority.capabilities),
         sort_name=str(row.sort_name),
+        role_codes=sorted(authority.role_codes),
+        has_use_grant=authority.has_use_grant,
     )
     return WorldDetail(
         summary=summary,

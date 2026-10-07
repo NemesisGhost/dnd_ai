@@ -67,6 +67,7 @@ from dnd_ai.domain.entity_lifecycle import (
     require_transition,
     target_canon_status,
 )
+from dnd_ai.domain.world_authority import WORLD_CANON_EDIT, WORLD_CANON_REVIEW
 from dnd_ai.queries.content_preconditions import (
     DUNGEON_HAS_ACTIVE_AREAS,
     archive_blocked_reason,
@@ -270,6 +271,49 @@ def _publish_reference_ids(
     return publish_reference_ids(connection, entity_id=entity_id, entity_type_code=type_code)
 
 
+# What each lifecycle action needs on the world (docs/adr/0019-scoped-system-world-and-
+# campaign-roles.md, Q13): preparing and withdrawing a draft is editing; approving,
+# rejecting, publishing, superseding, archiving and restoring change what every
+# campaign on the world sees, so they are reviewing. Campaign `canon.edit` is
+# required in addition, as for every authoring write.
+_ACTION_WORLD_CAPABILITY: dict[str, str] = {
+    SUBMIT_FOR_REVIEW: WORLD_CANON_EDIT,
+    RETURN_TO_DRAFT: WORLD_CANON_EDIT,
+    DELETE_DRAFT: WORLD_CANON_EDIT,
+    APPROVE: WORLD_CANON_REVIEW,
+    REJECT: WORLD_CANON_REVIEW,
+    PUBLISH: WORLD_CANON_REVIEW,
+    SUPERSEDE: WORLD_CANON_REVIEW,
+    ARCHIVE: WORLD_CANON_REVIEW,
+    RESTORE: WORLD_CANON_REVIEW,
+}
+
+# The campaign-originated records that live in world tables (D8: E2 item instances,
+# E3 player-character identity) stay authorized by the campaign, lifecycle included:
+# a campaign GM who creates one must be able to finish it without a world role.
+CAMPAIGN_ORIGINATED_TYPES: frozenset[str] = frozenset({"player_character", "item_instance"})
+
+
+def _lifecycle_world_capability(
+    connection: Connection, *, entity_id: uuid.UUID, action: str
+) -> str | None:
+    """The world capability `action` needs on `entity_id`, or `None` for the
+    campaign-originated exceptions. The entity type is read without a lock: it can
+    never change (entity-type-change protection), and an unknown entity falls
+    through to the strict capability and then to the normal not-found error."""
+    type_code = connection.execute(
+        text("""
+            SELECT et.code FROM core.entities e
+            JOIN core.entity_types et ON et.entity_type_id = e.entity_type_id
+            WHERE e.entity_id = :e
+        """),
+        {"e": entity_id},
+    ).scalar()
+    if type_code in CAMPAIGN_ORIGINATED_TYPES:
+        return None
+    return _ACTION_WORLD_CAPABILITY[action]
+
+
 def _prepare(
     connection: Connection,
     *,
@@ -277,12 +321,19 @@ def _prepare(
     entity_id: uuid.UUID,
     actor_user_id: uuid.UUID,
     expected_row_version: int,
-    action: str | None = None,
+    action: str,
 ) -> tuple[uuid.UUID, LockedContent]:
     """Lock and authorize (scope, then entities in `entity_id` order: the target
     `FOR UPDATE`, and for publish the records it refers to `FOR SHARE`), bind the
     target to the campaign's world, and compare the version."""
-    scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_authoring_scope(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        world_capability=_lifecycle_world_capability(
+            connection, entity_id=entity_id, action=action
+        ),
+    )
     world_id = scope.world_id
     reference_ids = (
         _publish_reference_ids(connection, world_id=world_id, entity_id=entity_id)
@@ -560,7 +611,14 @@ def supersede_entity(
     Nonexistent, other-world, wrong-type, and wrong-status replacements are the
     same `SupersessionTargetInvalidError`. References to the old entity keep
     resolving: nothing is moved, deleted, or rewritten."""
-    scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_authoring_scope(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        world_capability=_lifecycle_world_capability(
+            connection, entity_id=entity_id, action=SUPERSEDE
+        ),
+    )
     # The replacement may be published by this call, so the records it refers to
     # are locked `FOR SHARE` together with the pair, in ascending id order, exactly
     # as an ordinary publish does (read unlocked first, then any the read missed).
@@ -687,6 +745,7 @@ def archive_entity(
         entity_id=entity_id,
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
+        action=ARCHIVE,
     )
     require_transition(ARCHIVE, entity.canon_status, entity.lifecycle_status)
     blocked = archive_blocked_reason(
@@ -724,6 +783,7 @@ def restore_entity(
         entity_id=entity_id,
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
+        action=RESTORE,
     )
     require_transition(RESTORE, entity.canon_status, entity.lifecycle_status)
     _require_subtype_complete(connection, entity_id=entity_id, entity_type_id=entity.entity_type_id)
@@ -754,6 +814,7 @@ def delete_draft_entity(
         entity_id=entity_id,
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
+        action=DELETE_DRAFT,
     )
     require_transition(DELETE_DRAFT, entity.canon_status, entity.lifecycle_status)
     if _has_blocking_references(connection, entity_id=entity_id):

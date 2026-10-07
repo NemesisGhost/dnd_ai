@@ -27,6 +27,7 @@ from dnd_ai.domain.knowledge_authoring import (
     SENSITIVITIES,
     STATEMENT_MAX_LENGTH,
 )
+from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.knowledge_authoring import (
     KnowledgeAuthoringView,
     get_knowledge_authoring,
@@ -59,6 +60,13 @@ _BASE = "/campaigns/{campaign_id}/authoring/knowledge"
 _CAPABILITY = "canon.edit"
 
 _Access = Annotated[AccessContext, Depends(require_campaign_capability(_CAPABILITY))]
+# Reads of the private side of shared world canon (drafts, GM-only prep, revisions,
+# provenance, sources, the review queue) also need `world.canon.read_private`
+# (docs/adr/0020-scoped-system-world-and-campaign-roles.md, D6).
+_PrivateRead = Annotated[
+    AccessContext,
+    Depends(require_campaign_capability(_CAPABILITY, world_capability=WORLD_CANON_READ_PRIVATE)),
+]
 _Conn = Annotated[Connection, Depends(get_connection)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
@@ -119,7 +127,7 @@ def _response(
 
 
 @router.get(_BASE + "/options")
-def knowledge_options_endpoint(access: _Access, connection: _Conn) -> dict[str, Any]:
+def knowledge_options_endpoint(access: _PrivateRead, connection: _Conn) -> dict[str, Any]:
     del access
     types, truths = list_knowledge_catalogs(connection)
     return {
@@ -136,7 +144,7 @@ def knowledge_options_endpoint(access: _Access, connection: _Conn) -> dict[str, 
 
 @router.get(_BASE + "/subject-options")
 def knowledge_subject_options_endpoint(
-    access: _Access,
+    access: _PrivateRead,
     connection: _Conn,
     q: Annotated[str | None, Query(max_length=200)] = None,
     limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
@@ -212,7 +220,7 @@ def create_knowledge_endpoint(
 
 @router.get(_BASE + "/{knowledge_item_id}")
 def get_knowledge_authoring_endpoint(
-    knowledge_item_id: uuid.UUID, access: _Access, connection: _Conn
+    knowledge_item_id: uuid.UUID, access: _PrivateRead, connection: _Conn
 ) -> dict[str, Any]:
     view = get_knowledge_authoring(
         connection,

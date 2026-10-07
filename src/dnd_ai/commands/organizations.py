@@ -47,6 +47,7 @@ from dnd_ai.domain.organization_authoring import (
     organization_kind,
     organization_type_for,
 )
+from dnd_ai.domain.world_authority import WORLD_CANON_EDIT
 
 from ._content import (
     ContentWriteResult,
@@ -189,7 +190,12 @@ def create_organization(
     _require_religion_rule(kind, religion_id)
     organization_type = organization_type_for(kind, typed)
 
-    scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_authoring_scope(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        world_capability=WORLD_CANON_EDIT,
+    )
     reference_ids = [
         r for r in (parent_organization_id, headquarters_location_id, religion_id) if r is not None
     ]
@@ -348,7 +354,12 @@ def update_organization(
     """Replace an Organization's editable fields. The kind (entity type) is
     immutable; an identical resubmission is a no-op."""
     normalize_reason(change_note)
-    scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_authoring_scope(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        world_capability=WORLD_CANON_EDIT,
+    )
 
     hint = connection.execute(
         text(

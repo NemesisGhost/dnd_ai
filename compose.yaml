@@ -246,6 +246,11 @@ services:
       # fallback, and requires every origin in it to be HTTPS (this file
       # always runs `api` with DND_AI_ENVIRONMENT=production).
       DND_AI_FEATURE_FOUNDRY_INTEGRATION: ${API_FEATURE_FOUNDRY_INTEGRATION:-false}
+      # Whether an Administrator may grant the system Administrator role in the
+      # app (docs/adr/0020-scoped-system-world-and-campaign-roles.md). Off by
+      # default; Admin is otherwise granted only by
+      # scripts/grant_platform_administrator.py.
+      DND_AI_ALLOW_IN_APP_ADMIN_GRANT: ${API_ALLOW_IN_APP_ADMIN_GRANT:-false}
       DND_AI_FOUNDRY_ALLOWED_ORIGINS: ${API_FOUNDRY_ALLOWED_ORIGINS:-}
       # Phase 12 AI provider (see .env.example's "AI provider" section for
       # the full explanation). Same soft-default posture as the Foundry

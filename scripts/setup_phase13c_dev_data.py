@@ -341,7 +341,7 @@ which applies here just as much to picking the *right* account as to
 external authorization). The account must already exist, be active, and
 carry a local (`security.external_identities(issuer='local')`) identity
 with a password credential — this script never creates a user, sets a
-password, or changes `is_platform_administrator`.
+password, or changes any system role.
 
 Reused production paths, not reimplemented here:
 
@@ -435,7 +435,7 @@ from dnd_ai.commands.timelines import create_timeline
 from dnd_ai.commands.world_time import create_calendar, create_world_time
 from dnd_ai.commands.worlds import create_world
 from dnd_ai.config import settings
-from dnd_ai.domain.access import resolve_access_context
+from dnd_ai.domain.access import is_platform_administrator, resolve_access_context
 from dnd_ai.domain.character_builds import (
     BuildInput,
     ClassLevelInput,
@@ -1718,7 +1718,7 @@ def _resolve_user(connection: Connection, user_id: uuid.UUID) -> _UserInfo:
     row = (
         connection.execute(
             text("""
-                SELECT u.user_id, u.display_name, u.is_platform_administrator, ls.code AS lifecycle,
+                SELECT u.user_id, u.display_name, ls.code AS lifecycle,
                        ei.subject AS login_name,
                        (lc.local_credential_id IS NOT NULL) AS has_password
                 FROM security.users u
@@ -1748,7 +1748,7 @@ def _resolve_user(connection: Connection, user_id: uuid.UUID) -> _UserInfo:
         user_id=row["user_id"],
         display_name=row["display_name"],
         login_name=row["login_name"],
-        is_platform_administrator=row["is_platform_administrator"],
+        is_platform_administrator=is_platform_administrator(connection, user_id=user_id),
     )
 
 

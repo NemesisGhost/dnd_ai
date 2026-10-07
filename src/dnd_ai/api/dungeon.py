@@ -205,6 +205,7 @@ def get_dungeon_area_endpoint(
         connection,
         world_id=world_id,
         mode="reference",
+        viewer_user_id=access.user_id,
         can_edit_canon=access.has_capability(_DUNGEON_MANAGE_CAPABILITY),
     )
     if dungeon_area_id in unpublished:

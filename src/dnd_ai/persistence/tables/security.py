@@ -48,10 +48,22 @@ world_roles = _lookup_table(
     "security",
     "world_roles",
     "world_role_id",
-    "Roles a user can hold on a world (currently world_owner). Capabilities are a "
-    "closed mapping in application code (dnd_ai.domain.world_authority), not rows in "
+    "Roles a user can hold on a world: world_owner, world_editor, world_reviewer, "
+    "world_reader. A user may hold several at once. Capabilities are a closed mapping "
+    "in application code (dnd_ai.domain.world_authority), not rows in "
     "security.capabilities, which is assignable to campaign roles "
-    "(docs/adr/0014-world-authoring-authority.md).",
+    "(docs/adr/0020-scoped-system-world-and-campaign-roles.md).",
+)
+
+system_roles = _lookup_table(
+    "security",
+    "system_roles",
+    "system_role_id",
+    "Platform-level roles a user can hold: admin, gm, player, observer. Capabilities "
+    "are a closed mapping in application code (dnd_ai.domain.system_authority), not "
+    "rows in security.capabilities. Independent of world roles and campaign roles: "
+    "no system role grants campaign or world access "
+    "(docs/adr/0020-scoped-system-world-and-campaign-roles.md).",
 )
 
 character_relationship_types = _lookup_table(
@@ -116,23 +128,6 @@ users = Table(
         comment=(
             "Updated by the application on successful authentication; NULL for a user "
             "who has never logged in."
-        ),
-    ),
-    Column(
-        "is_platform_administrator",
-        Boolean(),
-        nullable=False,
-        server_default=text("false"),
-        comment=(
-            "A minimal, campaign-independent authorization primitive (revision "
-            "099_local_authentication, Phase 11R workstream A) for account-management "
-            "operations that have no campaign_id to scope a security.resource_grants/"
-            "security.roles check against — creating a local account, issuing a "
-            "password-reset token, and the one-time initial-admin bootstrap. Deliberately "
-            "not a security.roles row: campaign roles grant capabilities within one "
-            "campaign membership (docs/architecture/DATABASE_MODEL.md §19.3), and this is "
-            "the opposite scope entirely (docs/architecture/DATABASE_MODEL.md §19.7's "
-            "authentication-identity/campaign-responsibility separation, principle 13)."
         ),
     ),
     *_timestamps(),
@@ -1364,7 +1359,7 @@ password_reset_tokens = Table(
         UUID(),
         ForeignKey("security.users.user_id", ondelete="SET NULL"),
         nullable=False,
-        comment="The administrator (is_platform_administrator) who issued this reset token.",
+        comment="The platform administrator (system role admin) who issued this reset token.",
     ),
     Column(
         "revoke_sessions",
@@ -1558,6 +1553,21 @@ world_memberships = Table(
     ),
     Column("joined_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
     Column("ended_at", TIMESTAMP(timezone=True)),
+    Column(
+        "granted_by_user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="RESTRICT"),
+        comment=(
+            "The user who assigned this role; NULL for the world creator, operator claims "
+            "and rows that predate this column."
+        ),
+    ),
+    Column(
+        "ended_by_user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="RESTRICT"),
+        comment="The user who ended this assignment; NULL while it is open.",
+    ),
     *_timestamps(),
     schema="security",
     comment=(
@@ -1575,11 +1585,143 @@ Index("ix_world_memberships_user_id", world_memberships.c.user_id)
 Index("ix_world_memberships_world_role_id", world_memberships.c.world_role_id)
 Index("ix_world_memberships_membership_status_id", world_memberships.c.membership_status_id)
 Index(
+    "ix_world_memberships_granted_by_user_id",
+    world_memberships.c.granted_by_user_id,
+    postgresql_where=world_memberships.c.granted_by_user_id.isnot(None),
+)
+Index(
+    "ix_world_memberships_ended_by_user_id",
+    world_memberships.c.ended_by_user_id,
+    postgresql_where=world_memberships.c.ended_by_user_id.isnot(None),
+)
+Index(
     "ux_world_memberships_open",
     world_memberships.c.world_id,
     world_memberships.c.user_id,
+    world_memberships.c.world_role_id,
     unique=True,
     postgresql_where=world_memberships.c.ended_at.is_(None),
+)
+
+world_use_grants = Table(
+    "world_use_grants",
+    metadata,
+    _uuid_pk("world_use_grant_id"),
+    Column(
+        "world_id",
+        UUID(),
+        ForeignKey("core.worlds.world_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "granted_by_user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("granted_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    Column("revoked_at", TIMESTAMP(timezone=True)),
+    Column(
+        "revoked_by_user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="RESTRICT"),
+    ),
+    *_timestamps(),
+    schema="security",
+    comment=(
+        "Permission for a user to host a campaign on a world and nothing else: it confers "
+        "world.view and campaign.create (and no canon read, no timeline management). Open "
+        "rows (revoked_at IS NULL) authorize; revoking stops new campaigns only -- existing "
+        "campaigns are unaffected. Never deleted by commands "
+        "(docs/adr/0020-scoped-system-world-and-campaign-roles.md)."
+    ),
+)
+
+Index("ix_world_use_grants_world_id", world_use_grants.c.world_id)
+Index("ix_world_use_grants_user_id", world_use_grants.c.user_id)
+Index("ix_world_use_grants_granted_by_user_id", world_use_grants.c.granted_by_user_id)
+Index(
+    "ix_world_use_grants_revoked_by_user_id",
+    world_use_grants.c.revoked_by_user_id,
+    postgresql_where=world_use_grants.c.revoked_by_user_id.isnot(None),
+)
+Index(
+    "ux_world_use_grants_open",
+    world_use_grants.c.world_id,
+    world_use_grants.c.user_id,
+    unique=True,
+    postgresql_where=world_use_grants.c.revoked_at.is_(None),
+)
+
+# ---------------------------------------------------------------------------
+# System roles (revision 137)
+# ---------------------------------------------------------------------------
+
+user_system_roles = Table(
+    "user_system_roles",
+    metadata,
+    _uuid_pk("user_system_role_id"),
+    Column(
+        "user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "system_role_id",
+        UUID(),
+        ForeignKey("security.system_roles.system_role_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "granted_by_user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="RESTRICT"),
+        comment=(
+            "The administrator who made the assignment; NULL for migration backfill, the "
+            "initial-admin bootstrap and operator-script grants."
+        ),
+    ),
+    Column("granted_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    Column("revoked_at", TIMESTAMP(timezone=True)),
+    Column(
+        "revoked_by_user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="RESTRICT"),
+    ),
+    *_timestamps(),
+    schema="security",
+    comment=(
+        "A user's assignment of a system role. Open rows (revoked_at IS NULL) authorize "
+        "while the account is active; revoked rows are history and are never deleted by "
+        "commands. Never implies membership in any campaign or authority over any world."
+    ),
+)
+
+Index("ix_user_system_roles_user_id", user_system_roles.c.user_id)
+Index("ix_user_system_roles_system_role_id", user_system_roles.c.system_role_id)
+Index(
+    "ix_user_system_roles_granted_by_user_id",
+    user_system_roles.c.granted_by_user_id,
+    postgresql_where=user_system_roles.c.granted_by_user_id.isnot(None),
+)
+Index(
+    "ix_user_system_roles_revoked_by_user_id",
+    user_system_roles.c.revoked_by_user_id,
+    postgresql_where=user_system_roles.c.revoked_by_user_id.isnot(None),
+)
+Index(
+    "ux_user_system_roles_open",
+    user_system_roles.c.user_id,
+    user_system_roles.c.system_role_id,
+    unique=True,
+    postgresql_where=user_system_roles.c.revoked_at.is_(None),
 )
 
 # ---------------------------------------------------------------------------

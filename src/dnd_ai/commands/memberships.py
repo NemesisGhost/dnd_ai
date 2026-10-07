@@ -1194,3 +1194,73 @@ def end_campaign_membership(
         revoked_resource_grant_ids=tuple(revoked_resource_grant_ids),
         removed_access_group_membership_ids=tuple(removed_access_group_membership_ids),
     )
+
+
+@dataclass(frozen=True)
+class TransferCampaignOwnershipResult:
+    target_campaign_membership_id: uuid.UUID
+    assigned_membership_role_id: uuid.UUID | None
+    revoked_membership_role_ids: tuple[uuid.UUID, ...]
+
+
+def transfer_campaign_ownership(
+    connection: Connection,
+    *,
+    campaign_id: uuid.UUID,
+    actor_membership_id: uuid.UUID,
+    target_campaign_membership_id: uuid.UUID,
+    relinquish_own_ownership: bool,
+) -> TransferCampaignOwnershipResult:
+    """Give an existing, eligible member the `campaign_owner` role and, when
+    `relinquish_own_ownership`, end the caller's own `campaign_owner` assignment,
+    in one transaction (docs/adr/0020-scoped-system-world-and-campaign-roles.md).
+    Reuses `assign_membership_role` and `revoke_membership_role`, so every
+    eligibility rule and the access-manager retention guard apply unchanged; the
+    assignment is made first, so the campaign is never without an owner. Only the
+    `campaign_owner` assignment moves: the caller's `gm` role, their membership
+    and everything they authored stay as they were, and the target's system roles
+    are neither read nor written (any active account may own a campaign, D11).
+    Idempotent: a target who already owns the campaign is not given a second
+    assignment."""
+    owner_role_id = connection.execute(
+        text(
+            "SELECT role_id FROM security.roles WHERE code = 'campaign_owner' AND campaign_id IS NULL"
+        )
+    ).scalar()
+    assert isinstance(owner_role_id, uuid.UUID)
+    already = connection.execute(
+        text("""
+            SELECT membership_role_id FROM security.membership_roles
+            WHERE campaign_membership_id = :m AND role_id = :r AND revoked_at IS NULL
+        """),
+        {"m": target_campaign_membership_id, "r": owner_role_id},
+    ).scalar()
+    assigned: uuid.UUID | None = None
+    if already is None:
+        assigned = assign_membership_role(
+            connection,
+            campaign_membership_id=target_campaign_membership_id,
+            role_id=owner_role_id,
+            campaign_id=campaign_id,
+            granted_by_membership_id=actor_membership_id,
+        ).membership_role_id
+    revoked: list[uuid.UUID] = []
+    if relinquish_own_ownership and actor_membership_id != target_campaign_membership_id:
+        own = connection.execute(
+            text("""
+                SELECT membership_role_id FROM security.membership_roles
+                WHERE campaign_membership_id = :m AND role_id = :r AND revoked_at IS NULL
+                ORDER BY membership_role_id
+            """),
+            {"m": actor_membership_id, "r": owner_role_id},
+        ).scalars()
+        for membership_role_id in list(own):
+            if revoke_membership_role(
+                connection, membership_role_id=membership_role_id, campaign_id=campaign_id
+            ).revoked:
+                revoked.append(membership_role_id)
+    return TransferCampaignOwnershipResult(
+        target_campaign_membership_id=target_campaign_membership_id,
+        assigned_membership_role_id=assigned,
+        revoked_membership_role_ids=tuple(revoked),
+    )

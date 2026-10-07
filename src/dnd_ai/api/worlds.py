@@ -27,7 +27,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import Field
-from sqlalchemy import Connection
+from sqlalchemy import Connection, text
 
 from dnd_ai.commands.worlds import (
     WorldMutationResult,
@@ -37,7 +37,13 @@ from dnd_ai.commands.worlds import (
     update_world,
 )
 from dnd_ai.domain.authoring import WorldCreationNotAuthorizedError
-from dnd_ai.domain.world_authority import WORLD_MANAGE, WORLD_VIEW, WorldAuthority
+from dnd_ai.domain.world_authority import (
+    CAMPAIGN_CREATE,
+    TIMELINE_MANAGE,
+    WORLD_MANAGE,
+    WORLD_VIEW,
+    WorldAuthority,
+)
 from dnd_ai.queries.world_authority import may_create_worlds
 from dnd_ai.queries.worlds import WorldDetail, WorldSummary, get_world_detail, list_worlds
 
@@ -99,6 +105,8 @@ def world_summary_body(summary: WorldSummary) -> dict[str, Any]:
             None if summary.primary_timeline_id is None else str(summary.primary_timeline_id)
         ),
         "capabilities": summary.capabilities,
+        "role_codes": summary.role_codes,
+        "has_use_grant": summary.has_use_grant,
     }
 
 
@@ -139,7 +147,7 @@ def blocked_body(blocked: Any) -> dict[str, str]:
     return {"action": blocked.action, "reason": blocked.reason}
 
 
-def _detail_body(detail: WorldDetail) -> dict[str, Any]:
+def _detail_body(detail: WorldDetail, *, hosting: dict[uuid.UUID, str | None]) -> dict[str, Any]:
     return {
         **world_summary_body(detail.summary),
         "default_ruleset_id": (
@@ -162,10 +170,47 @@ def _detail_body(detail: WorldDetail) -> dict[str, Any]:
             }
             for r in detail.allowed_rulesets
         ],
-        "timelines": [timeline_summary_body(t) for t in detail.timelines],
+        "timelines": [
+            {
+                **timeline_summary_body(t),
+                # Whether the caller may start a campaign on this timeline (D7): they need
+                # `campaign.create`, and `timeline.manage` as well once it already hosts a
+                # campaign. Presentation only; `create_campaign` re-checks under lock.
+                "campaign_hosting": {
+                    "eligible": hosting[t.timeline_id] is None,
+                    "reason": hosting[t.timeline_id],
+                },
+            }
+            for t in detail.timelines
+        ],
         "managed_campaigns": [managed_campaign_body(c) for c in detail.managed_campaigns],
         "available_actions": detail.available_actions,
         "blocked_actions": [blocked_body(b) for b in detail.blocked_actions],
+    }
+
+
+def _campaign_hosting(
+    connection: Connection, detail: WorldDetail, authority: WorldAuthority
+) -> dict[uuid.UUID, str | None]:
+    """Per timeline: `None` when the caller may start a campaign on it, else why not
+    (`world_use_not_permitted`, or `timeline_in_use` when it already hosts a campaign and
+    the caller lacks `timeline.manage`; decision D7)."""
+    if not authority.has_capability(CAMPAIGN_CREATE):
+        return {t.timeline_id: "world_use_not_permitted" for t in detail.timelines}
+    used = set(
+        connection.execute(
+            text(
+                "SELECT DISTINCT c.timeline_id FROM campaign.campaigns c "
+                "JOIN campaign.timelines t ON t.timeline_id = c.timeline_id "
+                "WHERE t.world_id = :w"
+            ),
+            {"w": detail.summary.world_id},
+        ).scalars()
+    )
+    can_manage = authority.has_capability(TIMELINE_MANAGE)
+    return {
+        t.timeline_id: (None if (t.timeline_id not in used) or can_manage else "timeline_in_use")
+        for t in detail.timelines
     }
 
 
@@ -264,11 +309,11 @@ def get_world_endpoint(
         connection,
         user_id=authority.user_id,
         world_id=authority.world_id,
-        role_codes=authority.role_codes,
+        authority=authority,
     )
     if detail is None:  # raced with deletion; same non-disclosing 404
         raise NotFoundError()
-    return _detail_body(detail)
+    return _detail_body(detail, hosting=_campaign_hosting(connection, detail, authority))
 
 
 def _record_world_change(

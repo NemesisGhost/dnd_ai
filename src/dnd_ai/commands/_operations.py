@@ -38,7 +38,11 @@ def lock_operation_scope(
     Raises the same non-disclosing errors as `lock_authoring_scope`."""
     if capability != CANON_EDIT:
         raise ValueError("operation commands currently authorize through canon.edit")
-    scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    # Campaign-state operations (and the campaign-originated world-time points, D8/E1)
+    # are authorized by the campaign alone: no world capability is required.
+    scope = lock_authoring_scope(
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, world_capability=None
+    )
     timeline_id = connection.execute(
         text("SELECT timeline_id FROM campaign.campaigns WHERE campaign_id = :c"),
         {"c": campaign_id},

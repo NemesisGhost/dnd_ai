@@ -52,6 +52,7 @@ from dnd_ai.domain.dungeon_authoring import (
     RATING_MIN,
     STATE_KINDS,
 )
+from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.dungeon_authoring import (
     AreaAuthoringView,
     ChildRow,
@@ -81,6 +82,13 @@ router = APIRouter(tags=["dungeon-authoring"])
 _BASE = "/campaigns/{campaign_id}/authoring/dungeons"
 _AREAS = "/campaigns/{campaign_id}/authoring/dungeon-areas"
 _Access = Annotated[AccessContext, Depends(require_campaign_capability("canon.edit"))]
+# Reads of the private side of shared world canon (drafts, GM-only prep, revisions,
+# provenance, sources, the review queue) also need `world.canon.read_private`
+# (docs/adr/0020-scoped-system-world-and-campaign-roles.md, D6).
+_PrivateRead = Annotated[
+    AccessContext,
+    Depends(require_campaign_capability("canon.edit", world_capability=WORLD_CANON_READ_PRIVATE)),
+]
 _Conn = Annotated[Connection, Depends(get_connection)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
@@ -383,7 +391,7 @@ def _dungeon_of(connection: Connection, result: ContentWriteResult) -> uuid.UUID
 
 
 @router.get(_BASE + "/options")
-def dungeon_options_endpoint(access: _Access, connection: _Conn) -> dict[str, Any]:
+def dungeon_options_endpoint(access: _PrivateRead, connection: _Conn) -> dict[str, Any]:
     del access
     return {
         "can_create": True,
@@ -404,7 +412,7 @@ def dungeon_options_endpoint(access: _Access, connection: _Conn) -> dict[str, An
 
 
 @router.get(_BASE + "/{dungeon_id}")
-def get_dungeon_endpoint(dungeon_id: uuid.UUID, access: _Access, connection: _Conn) -> Any:
+def get_dungeon_endpoint(dungeon_id: uuid.UUID, access: _PrivateRead, connection: _Conn) -> Any:
     world_id = timeline_world_id(connection, access.timeline_id)
     view = get_dungeon_authoring(connection, world_id=world_id, dungeon_id=dungeon_id)
     if view is None:
@@ -413,7 +421,7 @@ def get_dungeon_endpoint(dungeon_id: uuid.UUID, access: _Access, connection: _Co
 
 
 @router.get(_AREAS + "/{dungeon_area_id}")
-def get_area_endpoint(dungeon_area_id: uuid.UUID, access: _Access, connection: _Conn) -> Any:
+def get_area_endpoint(dungeon_area_id: uuid.UUID, access: _PrivateRead, connection: _Conn) -> Any:
     world_id = timeline_world_id(connection, access.timeline_id)
     view = get_area_authoring(
         connection,

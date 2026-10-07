@@ -35,6 +35,7 @@ from dnd_ai.domain.knowledge_authoring import (
     normalize_knowledge_fields,
     statement_to_name,
 )
+from dnd_ai.domain.world_authority import WORLD_CANON_EDIT
 
 from ._content import (
     ContentWriteResult,
@@ -95,7 +96,12 @@ def create_knowledge_item(
     subject_entity_id: uuid.UUID | None = None,
 ) -> ContentWriteResult:
     fields = normalize_knowledge_fields(statement=statement, sensitivity=sensitivity)
-    scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_authoring_scope(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        world_capability=WORLD_CANON_EDIT,
+    )
     locked = lock_entities(
         connection,
         world_id=scope.world_id,
@@ -175,7 +181,12 @@ def update_knowledge_item(
     change_note: str | None = None,
 ) -> ContentWriteResult:
     normalize_reason(change_note)
-    scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_authoring_scope(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        world_capability=WORLD_CANON_EDIT,
+    )
     current_subject = connection.execute(
         text(
             "SELECT subject_entity_id FROM knowledge.knowledge_items WHERE knowledge_item_id = :k"

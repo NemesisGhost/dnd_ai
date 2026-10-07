@@ -53,6 +53,7 @@ from dnd_ai.domain.relationship_authoring import (
     relationship_kind,
     validate_shape,
 )
+from dnd_ai.domain.world_authority import WORLD_CANON_EDIT
 
 from ._content import (
     EntityNotFoundError,
@@ -194,7 +195,12 @@ def _lock_relationship(
     expected_row_version: int,
     allow_archived: bool = False,
 ) -> _Locked:
-    scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_authoring_scope(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        world_capability=WORLD_CANON_EDIT,
+    )
     participants = connection.execute(
         text(
             "SELECT p.entity_id, r.code AS role FROM world.relationship_participants p "
@@ -260,7 +266,12 @@ def create_relationship(
 
     if shape.code == KIND_MEMBERSHIP and started_world_time_id is None:
         raise MembershipStartRequiredError("a membership needs its start")
-    scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_authoring_scope(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        world_capability=WORLD_CANON_EDIT,
+    )
     locked = lock_entities(connection, world_id=scope.world_id, share_ids=entity_ids)
     for entity_id in set(entity_ids):
         usable_reference(
