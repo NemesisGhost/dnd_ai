@@ -463,6 +463,18 @@ def _deputy(fx: Fixture) -> tuple[uuid.UUID, uuid.UUID]:
     """A second `campaign_owner` member; returns `(user_id, membership_role_id)`."""
     with fx.engine.begin() as setup:
         user = make_user(setup, "Deputy GM")
+        # Shared canon needs a world role as well as the campaign role (ADR 0020).
+        setup.execute(
+            text("""
+                INSERT INTO security.world_memberships
+                    (world_id, user_id, world_role_id, membership_status_id)
+                VALUES (:w, :u,
+                        (SELECT world_role_id FROM security.world_roles WHERE code = 'world_editor'),
+                        (SELECT membership_status_id FROM security.membership_statuses
+                         WHERE code = 'active'))
+            """),
+            {"w": fx.world_id, "u": user},
+        )
         setup.execute(
             text("""
                 INSERT INTO security.campaign_memberships

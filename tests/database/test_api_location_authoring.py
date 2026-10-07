@@ -619,6 +619,12 @@ def test_a_removed_role_cannot_replay_a_stored_response(s: ContentSetup) -> None
 
     deputy = s.harness.new_actor("Deputy")
     add_member(s.connection, s.cid, deputy.user_id, "campaign_owner")
+    # Shared canon also needs a world role (ADR 0020), which the campaign role never confers.
+    shared = s.gm.post(
+        f"/worlds/{s.world_id}/roles",
+        {"login_name": deputy.login_name, "role_code": "world_editor"},
+    )
+    assert shared.status_code == 201, shared.text
     body = {"category": "region", "name": "Deputy's"}
     assert deputy.post(s.url("locations"), body, key="dep-1").status_code == 201
     s.connection.execute(

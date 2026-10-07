@@ -92,6 +92,7 @@ from dnd_ai.api.app import create_app
 from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
 from dnd_ai.commands.campaigns import grant_timeline_bootstrap
+from dnd_ai.commands.worlds import claim_unowned_world
 from dnd_ai.domain.access import LOCAL_AUTH_ISSUER
 from tests.factories import (
     make_ability,
@@ -110,6 +111,7 @@ from tests.factories import (
     make_quest_stage,
     make_ruleset_version_for_world,
     make_skill,
+    make_system_role_assignment,
     make_timeline,
     make_user,
     make_world,
@@ -216,6 +218,7 @@ class Fixture:
         # access_overview.find_eligible_campaign_account's own eligibility
         # bar; still no real login flow exercised anywhere in this file.
         self.gm_user_id = make_user(connection, "Vertical Slice GM")
+        make_system_role_assignment(connection, self.gm_user_id, "gm")
         self.player1_user_id = make_user(connection, "Vertical Slice Player One")
         make_external_identity(
             connection, self.player1_user_id, issuer=LOCAL_AUTH_ISSUER, subject=f"vs-player1-{slug}"
@@ -715,6 +718,10 @@ def test_the_vertical_slice_scenario(
 
     # -- Step 17: a second campaign on the same timeline sees altered
     # (non-hidden) dungeon state but not the first party's discoveries.
+    # A second campaign on a used timeline needs world authority (ADR 0020): the GM, who got
+    # the first campaign through a bootstrap grant, is made the world's owner here.
+    with postgres_engine.begin() as connection:
+        claim_unowned_world(connection, world_id=f.world_id, user_id=f.gm_user_id)
     create_campaign2_response = gm.post(
         "/campaigns",
         json={

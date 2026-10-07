@@ -1,9 +1,9 @@
 # Scoped System, World, and Campaign Authorization — Implementation Plan
 
-- **Status:** Proposed (planning only; nothing here is implemented). Owner answers to seven of the §14 questions were recorded on 2026-10-06 and are folded into the decisions below; the remaining questions keep their recommended defaults until answered.
+- **Status:** Implemented on branch `feature/scoped-role-model` (checkpoints SR-0 to SR-8; see §16 for what was built, what differs from this plan, and the verification actually performed). Not merged, not deployed, no CI run on the final head. Owner answers to seven of the §14 questions were recorded on 2026-10-06 and are folded into the decisions below; the remaining questions keep their recommended defaults until answered (§16.4).
 - **Date:** 2026-10-06
 - **Branch:** `feature/scoped-role-model`, based on `origin/phase15/completion` at `82ed14c2e2ef07da02baf77b9a8455c1bab56a40`
-- **Migration head at planning time:** `135_scrub_narrative_text` (on the Phase 15 base). Do not reserve a number from this; see §12.4.
+- **Migration head at planning time:** `135_scrub_narrative_text` (on the Phase 15 base). Do not reserve a number from this; see §12.4. **As implemented:** `137_system_roles` and `138_world_roles_and_use_grants`, allocated from the head after synchronizing with Phase 15 (`136_world_viewer_role`). The superseding ADR is [ADR 0020](adr/0020-scoped-system-world-and-campaign-roles.md); the number 0019 was taken on the Phase 15 branch by the world-visibility ADR.
 - **Supersedes on approval:** [ADR 0018](adr/0018-world-creation-eligibility.md) entirely; amends [ADR 0014](adr/0014-world-authoring-authority.md) decisions 2, 4 and 5 and [ADR 0015](adr/0015-typed-world-content-authoring.md) decision 3. The superseding ADR is written in checkpoint SR-0.
 
 This document separates **verified facts** (§2, each with a code or document reference observed on the base commit) from **recommendations** (§3 onward). A recommendation is not a decision until the owner approves it; open questions are collected in §14.
@@ -647,3 +647,57 @@ Q3 (assignment-time vs continuous GM checks) no longer applies to campaign roles
 **Dependencies:** Phase 15 merged (§12.3); PostgreSQL 18 locally and in CI; existing advisory-lock and retention-trigger patterns; existing idempotency, audit, CSRF/Origin, and non-disclosure infrastructure.
 
 **Recommended first implementation checkpoint:** SR-0 (ADR recording the answers to §14), then SR-1 (system-role schema, backfill, and resolver), because every later checkpoint depends on `campaign.host` and the removal of the `is_platform_administrator` flag, and SR-1 is the smallest change that fixes F4 on its own.
+
+---
+
+## 16. Implementation record
+
+### 16.1 Starting state and synchronization
+
+| Item | Value |
+|---|---|
+| Branch | `feature/scoped-role-model` (existing worktree `dnd_ai-scoped-roles`; its working files were missing from disk and were restored from `HEAD` with the owner's approval, nothing else touched) |
+| Starting commit | `a61e23a` (plan plus recorded owner decisions), on `82ed14c` |
+| Plan revision | this file as committed at `a61e23a` |
+| Phase 15 base at start | `origin/phase15/completion` = `82ed14c` (no divergence at the start) |
+| Phase 15 changes incorporated | `c1b7038` (campaign-derived world visibility, the `world_viewer` role, operator world-membership commands, ADR 0019, migration `136_world_viewer_role`) and `9b10732` (CI sharding), merged with `git merge`; `phase15/completion` itself was never modified or pushed |
+| Final synchronization | see §16.6 |
+
+### 16.2 Checkpoints
+
+| Checkpoint | Result |
+|---|---|
+| SR-0 decision record | ADR 0020 written; ADR 0014, 0015, 0018 and (after the merge) 0019 carry status notes |
+| SR-1 system-role schema and resolution | `137_system_roles`, `domain/system_authority.py`, `queries/system_authority.py`; `is_platform_administrator` reimplemented on assignments and the column dropped; bootstrap carries `system_roles` and `global_capabilities` |
+| SR-2 administration | assign/revoke commands and routes, last-admin guard (shared advisory lock, real race test), in-app Admin grant behind `DND_AI_ALLOW_IN_APP_ADMIN_GRANT` (default false), create-account with roles, Platform Accounts editor, invited registration gives exactly `player` |
+| SR-3 campaign creation | system `campaign.host` + world `campaign.create` + `timeline.manage` on a used timeline; former Path B removed; creator receives `campaign_owner` and `gm` |
+| SR-4 world roles, use grants, sharing, transfer | `138_world_roles_and_use_grants`; multi-role resolver; D11 gate; sharing routes and Sharing page; ownership transfer keeps authorship |
+| SR-5 world canon boundary | `lock_authoring_scope(world_capability=...)` (required argument), edit/review split in the lifecycle, private reads gated on `world.canon.read_private`, bootstrap `world_capabilities`, portal read-only presentation |
+| SR-6 transfers, stranding, recovery | campaign ownership transfer, stranded reporting (disable response, GM revocation, account list), recovery commands and operator scripts |
+| SR-7 World Reader surface | `GET /worlds/{id}/canon` and the Published canon page |
+| SR-8 scenario and documentation | two scenario tests, the docs listed in §13.3, this record |
+
+### 16.3 Differences from this plan, and why
+
+1. **SR-6 acceptance bullet on campaign-role eligibility.** "Assigning `gm`/owner/custom-`access.manage` role to a non-GM -> 409" contradicts D11 and the note under §14.1 (Q3 no longer applies to campaign roles; no campaign role requires system GM). D11, the owner's brief, and the later text win: any active account may hold any campaign role. A test asserts it.
+2. **Idempotency on the system-role routes.** They are naturally idempotent (201 new, 200 held or already revoked, one audit row) and do not reserve an `Idempotency-Key`, matching the sibling `/admin/accounts/*` routes. The world-sharing routes accept the optional actor-scoped key like the other world routes.
+3. **Audit categories.** The existing change actions (`created`, `updated`, `status_changed`) with a command name and structural changed-field names are used; no new `audit.change_actions` row was added. The recovery override is identified by its command name plus the mandatory reason.
+4. **Drafts in the World Explorer and AI context (finding F2, found while testing).** The plan listed the authoring views, review queue, revisions, provenance and sources. The World Explorer's "canon.edit sees unpublished definitions" rule (`lifecycle_hidden_entity_ids`, the canon-status preview) leaked another campaign's drafts the same way, and NPC AI context offered draft knowledge items as reveal candidates. Both now need `world.canon.read_private` (explorer) or published status (AI context); a test covers each.
+5. **E2/E3 lifecycle.** The D8 exceptions are applied to the record's whole lifecycle (player characters, item instances): a campaign GM can publish them without a world role. Strictly following §5.1 would have left those records unfinishable.
+6. **Timeline eligibility for the portal.** The world detail now carries `campaign_hosting` per timeline (`eligible`, `reason`), computed with the same rule `create_campaign` enforces.
+7. **`security.system_roles` is not on the reporting-readable allow-list** (the plan said "if world_roles is"); it stays deny-by-default, which is the safe reading.
+8. **Frozen seed.** `database/seeds/security.world_roles.yaml` is revision 110's frozen input (DATABASE_CONVENTIONS section 25.4, and Phase 15's ADR 0019 relies on it), so Editor, Reviewer and Reader are inserted explicitly in `138_world_roles_and_use_grants`.
+9. **`world_viewer` coexists with Reader.** Phase 15 added a read-only `world_viewer` (`world.view` only) after this plan was written. It is kept unchanged. The operator commands it added assumed one role per user; they now treat a user's roles as one set. Whether to retire Viewer in favour of Reader is open (§16.4).
+10. **Claim script.** `scripts/claim_world_ownership.py` is unchanged; it does not require the new Owner to hold system GM (a trusted-infrastructure choice). The stranded report shows the consequence.
+
+### 16.4 Defaults adopted for the still-open questions (not owner decisions)
+
+Q2 backfill as recommended; Q5 Observer is a classification only; Q8 world-scoped authoring deferred; Q11 recovery by scripts, the disabling administrator sees IDs only; Q12 invited registration kept with `player`; Q13 archive, restore and supersede need `world.canon.review`. New open question: retire `world_viewer` in favour of Reader?
+
+### 16.5 Migrations and backfill
+
+`137_system_roles`: seeds `admin`, `gm`, `player`, `observer`; backfills `admin` and `gm` for every `is_platform_administrator` user (any lifecycle status), `gm` for every user with an open active `world_owner` membership, `player` for everyone left; drops the column and restates the one column comment that named it. Campaign `gm` holders are **not** promoted. Downgrade re-adds the column from unrevoked `admin` rows. `138_world_roles_and_use_grants`: adds three roles, `granted_by_user_id` and `ended_by_user_id`, the per-role open index, and `world_use_grants`; no backfill. Downgrade deletes Editor, Reviewer and Reader rows and use grants, closes (never deletes) a Viewer row that sits beside an Owner row, and restores the old index. Both revisions are covered by a populated upgrade and a downgrade/re-upgrade round trip.
+
+### 16.6 Verification record
+
+VERIFICATION_PLACEHOLDER

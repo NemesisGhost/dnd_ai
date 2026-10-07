@@ -106,6 +106,7 @@ from dnd_ai.api.app import create_app
 from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
 from dnd_ai.commands.campaigns import grant_timeline_bootstrap
+from dnd_ai.commands.worlds import claim_unowned_world
 from dnd_ai.domain.access import (
     FOUNDRY_SYSTEM_AUTH_METHOD,
     LOCAL_AUTH_ISSUER,
@@ -121,6 +122,7 @@ from tests.factories import (
     make_location,
     make_organization,
     make_ruleset_version_for_world,
+    make_system_role_assignment,
     make_timeline,
     make_user,
     make_world,
@@ -143,6 +145,12 @@ class Fixture:
 
         self.creator_user_id = make_user(connection, "Campaign API Creator")
         self.second_user_id = make_user(connection, "Campaign API Second User")
+        # Hosting a campaign needs the system `gm` role (ADR 0020, `campaign.host`). Both
+        # users hold it, so the refusals these tests assert are the *authority* refusals
+        # (no grant, no world authority, no borrowed access.manage), never merely a missing
+        # system role.
+        make_system_role_assignment(connection, self.creator_user_id, "gm")
+        make_system_role_assignment(connection, self.second_user_id, "gm")
         # An unrevoked local identity — add_campaign_member now requires
         # one (review correction), and this user is the target of
         # test_a_member_with_only_campaign_view_cannot_reuse_the_timeline's
@@ -307,6 +315,10 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
             {"w": fixture.world_id, "other": fixture.other_world_id},
         )
         cleanup.execute(
+            text("DELETE FROM security.user_system_roles WHERE user_id = ANY(:users)"),
+            {"users": [fixture.creator_user_id, fixture.second_user_id]},
+        )
+        cleanup.execute(
             text("DELETE FROM security.users WHERE user_id = ANY(:users)"),
             {"users": [fixture.creator_user_id, fixture.second_user_id]},
         )
@@ -428,10 +440,11 @@ def test_a_positively_entitled_user_can_create_the_first_campaign_on_their_grant
                 WHERE mr.campaign_membership_id = :m
             """),
             {"m": campaign_membership_id},
-        ).one()
-        assert role_row.code == "campaign_owner"
-        assert role_row.granted_by_membership_id is None
-        assert role_row.revoked_at is None
+        ).all()
+        # The creator receives both roles, explicitly and at once (ADR 0020).
+        assert {row.code for row in role_row} == {"campaign_owner", "gm"}
+        assert all(row.granted_by_membership_id is None for row in role_row)
+        assert all(row.revoked_at is None for row in role_row)
 
         audit_row = verify.execute(
             text("""
@@ -573,8 +586,9 @@ def test_the_sole_owners_own_role_cannot_be_revoked_from_an_active_campaign(
         with postgres_engine.connect() as verify:
             membership_role_id = verify.execute(
                 text(
-                    "SELECT membership_role_id FROM security.membership_roles "
-                    "WHERE campaign_membership_id = :m"
+                    "SELECT mr.membership_role_id FROM security.membership_roles mr "
+                    "JOIN security.roles r ON r.role_id = mr.role_id "
+                    "WHERE mr.campaign_membership_id = :m AND r.code = 'campaign_owner'"
                 ),
                 {"m": campaign_membership_id},
             ).scalar_one()
@@ -648,51 +662,28 @@ def test_campaign_creation_is_atomic_and_preserves_grant_usability_when_ruleset_
 # ---------------------------------------------------------------------------
 
 
-def test_the_existing_access_manager_can_create_a_second_campaign_on_their_own_timeline(
+def test_the_existing_access_manager_cannot_borrow_that_authority_for_a_second_campaign(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
 ) -> None:
-    """The one authorized reuse case: the same user who already holds
-    `access.manage` in an existing campaign on `timeline_id` may attach a
-    second campaign to it — proving the check is a real entitlement gate,
-    not a blanket "no campaign may ever reuse a timeline" regression, and
-    that it needs no bootstrap grant of its own: `f.creator_user_id`'s own
-    grant was already consumed by the first campaign (proven elsewhere),
-    yet the second campaign — reached through the access.manage branch,
-    which never looks at `security.timeline_bootstrap_grants` at all —
-    still succeeds. The second campaign still starts with its own
-    independent membership/role, never inheriting the first campaign's
-    row — `security.campaign_memberships`/`.membership_roles` are keyed by
-    `campaign_id`, never by the timeline they share."""
+    """Holding `access.manage` in a campaign on the timeline is authority over *that
+    campaign*, not over the timeline's world (ADR 0020, finding F3): the creator, a system
+    GM who got the first campaign through a one-time bootstrap grant, cannot start a second
+    campaign on the same timeline. A world Owner (or Editor) can, which the next test
+    proves; nothing was written by the refusal."""
     with client_factory(f.creator_user_id) as client:
         first_response = client.post("/campaigns", json=_body(f, name="First Expedition"))
         assert first_response.status_code == 201, first_response.text
-        first_campaign_id = uuid.UUID(first_response.json()["campaign_id"])
-
         second_response = client.post("/campaigns", json=_body(f, name="Second Expedition"))
-    assert second_response.status_code == 201, second_response.text
-    second_campaign_id = uuid.UUID(second_response.json()["campaign_id"])
-    second_membership_id = uuid.UUID(second_response.json()["campaign_membership_id"])
-    assert second_campaign_id != first_campaign_id
+    assert second_response.status_code == 404, second_response.text
 
     with postgres_engine.connect() as verify:
-        # No second grant was ever issued for this timeline — the fixture
-        # only grants f.creator_user_id once — so a live grant count of
-        # zero here confirms the second campaign truly went through the
-        # access.manage reuse branch, not a second (nonexistent) grant.
-        live_grant_count = verify.execute(
-            text("""
-                SELECT count(*) FROM security.timeline_bootstrap_grants
-                WHERE timeline_id = :t AND consumed_at IS NULL AND revoked_at IS NULL
-            """),
-            {"t": f.timeline_id},
-        ).scalar_one()
-        assert live_grant_count == 0
-
-        role_rows = verify.execute(
-            text("SELECT role_id FROM security.membership_roles WHERE campaign_membership_id = :m"),
-            {"m": second_membership_id},
-        ).all()
-        assert len(role_rows) == 1
+        assert (
+            verify.execute(
+                text("SELECT count(*) FROM campaign.campaigns WHERE timeline_id = :t"),
+                {"t": f.timeline_id},
+            ).scalar_one()
+            == 1
+        )
 
 
 def test_an_unrelated_user_cannot_create_a_second_campaign_on_anothers_timeline(
@@ -1070,7 +1061,7 @@ def test_a_sequential_replay_returns_the_original_campaign_with_exactly_one_of_e
             ),
             {"m": campaign_membership_id},
         ).scalar_one()
-        assert role_count == 1
+        assert role_count == 2  # campaign_owner and gm
 
         grant_row = verify.execute(
             text("""
@@ -1231,6 +1222,10 @@ def test_different_idempotency_keys_intentionally_create_a_second_campaign_via_t
     resulting campaign."""
     first_key = f"first-{uuid.uuid4().hex[:8]}"
     second_key = f"second-{uuid.uuid4().hex[:8]}"
+    # A second campaign on a used timeline needs `timeline.manage` on its world (an Owner or
+    # Editor), not a borrowed `access.manage`: the creator is made the world's owner.
+    with postgres_engine.begin() as setup:
+        claim_unowned_world(setup, world_id=f.world_id, user_id=f.creator_user_id)
     with client_factory(f.creator_user_id) as client:
         first = client.post(
             "/campaigns",

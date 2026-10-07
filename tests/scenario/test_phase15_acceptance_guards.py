@@ -30,7 +30,7 @@ from tests.scenario.phase15_route_manifest import CAMPAIGN, FOUNDRY_PERMITTED, E
 pytestmark = pytest.mark.scenario
 
 # Pinned on purpose: adding or removing a route changes these and forces a conscious update.
-EXPECTED_GUARDED = 232  # 190 Phase 15 + 40 earlier-phase GM routes + 2 world-scoped
+EXPECTED_GUARDED = 233  # 190 Phase 15 + 41 earlier-phase GM routes (+ campaign ownership transfer) + 2 world-scoped
 EXPECTED_PHASE15_GM = 190
 EXPECTED_MEMBER_READS = 25
 

@@ -214,7 +214,13 @@ def test_upgrade_backfills_by_policy_and_round_trips() -> None:
                 )
                 assert {
                     r.code for r in conn.execute(text("SELECT code FROM security.world_roles"))
-                } == {"world_owner", "world_editor", "world_reviewer", "world_reader"}
+                } == {
+                    "world_owner",
+                    "world_viewer",
+                    "world_editor",
+                    "world_reviewer",
+                    "world_reader",
+                }
         finally:
             engine.dispose()
 

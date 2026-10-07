@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import Connection, text
 
 from dnd_ai.queries.world_authority import resolve_world_authority
-from tests.factories import make_user, make_world
+from tests.factories import make_system_role_assignment, make_user, make_world
 
 pytestmark = pytest.mark.database
 
@@ -39,6 +39,7 @@ def _grant(
 def test_an_active_owner_resolves_with_the_full_capability_set(db_connection: Connection) -> None:
     world = make_world(db_connection, "wa-owner")
     user = make_user(db_connection)
+    make_system_role_assignment(db_connection, user, "gm")
     _grant(db_connection, world, user)
 
     authority = resolve_world_authority(db_connection, user_id=user, world_id=world)

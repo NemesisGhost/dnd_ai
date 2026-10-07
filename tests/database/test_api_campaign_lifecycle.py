@@ -81,7 +81,7 @@ def test_a_world_owner_creates_a_campaign_without_a_bootstrap_grant(s: Setup) ->
     listed = [c for c in bootstrap["campaigns"] if c["campaign_id"] == created["campaign_id"]]
     assert len(listed) == 1
     campaign = listed[0]
-    assert campaign["roles"] == ["campaign_owner"]
+    assert campaign["roles"] == ["campaign_owner", "gm"]
     assert {"access.manage", "campaign.view", "canon.edit"} <= set(campaign["capabilities"])
     assert campaign["world_id"] == s.world_id
     assert bootstrap["startup_campaign_id"] == created["campaign_id"]
@@ -98,15 +98,15 @@ def test_a_world_owner_gets_no_membership_in_campaigns_they_did_not_create(
 ) -> None:
     """Path A authorizes creation only: a second user who also owns... nothing —
     and the original owner is not a member of someone else's campaign."""
-    other = harness.new_actor("Other GM")
-    # `other` has no authority over s.world_id and no grant: 404, not 403/409.
+    other = harness.new_actor("Other GM", system_roles=("gm",))
+    # `other` is a system GM with no authority over s.world_id and no grant: 404, not 403/409.
     response = other.post("/campaigns", s.campaign_body(), key=other.fresh_key())
     assert response.status_code == 404, response.text
     assert response.json()["error"]["code"] == "not_found"
 
 
 def test_lifecycle_is_checked_only_after_authorization(harness: AuthoringHarness, s: Setup) -> None:
-    other = harness.new_actor("Stranger")
+    other = harness.new_actor("Stranger", system_roles=("gm",))
     side = s.gm.post(f"/worlds/{s.world_id}/timelines", {"name": "Side", "description": None})
     side_id, side_version = side.json()["timeline_id"], side.json()["row_version"]
     assert (
