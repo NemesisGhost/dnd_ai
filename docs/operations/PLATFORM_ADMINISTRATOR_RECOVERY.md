@@ -9,8 +9,8 @@ account-lifecycle contract this recovery path sits underneath.
 
 ## Why this exists (D-10)
 
-`security.users.is_platform_administrator` is set on an *existing*
-account by exactly one path: **`scripts/grant_platform_administrator.py`**.
+The system `admin` role (`security.user_system_roles`, [ADR 0020](../adr/0020-scoped-system-world-and-campaign-roles.md)) is granted to an *existing*
+account by exactly one path by default: **`scripts/grant_platform_administrator.py`**.
 No API route and no portal control ever promotes an account — the same
 "trusted infrastructure, never over HTTP" boundary
 [`scripts/bootstrap_admin.py`](../../scripts/bootstrap_admin.py) and
@@ -18,7 +18,7 @@ No API route and no portal control ever promotes an account — the same
 analogous first-campaign entitlement.
 
 Without this script, the platform's administrator population has a bus
-factor of whoever currently holds `is_platform_administrator = true` and
+factor of whoever currently holds an unrevoked `admin` assignment and
 can still authenticate. Lose that (a forgotten passphrase with no second
 administrator to reset it, or an accidental disable) and the only
 recovery is direct SQL against the database. This script replaces that
@@ -135,7 +135,7 @@ uv run python scripts/grant_platform_administrator.py --login-name gm2
 
 The preview should now report `currently_platform_administrator: True`.
 Separately, sign in as that account through the portal and confirm
-`GET /auth/session` reports `is_platform_administrator: true` and that
+`GET /auth/session` lists `accounts.manage` in `global_capabilities` and that
 `GET /admin/accounts` succeeds (200, not the non-disclosing 404 a
 non-administrator receives).
 
@@ -149,3 +149,21 @@ generic error; concurrent promotion and disablement serializing on the
 shared advisory lock (real independent connections, real PostgreSQL
 locks); and that `LastActivePlatformAdministratorError`'s message no
 longer advises the impossible "activate another administrator" remedy.
+
+## Related recoveries (scoped roles, ADR 0020)
+
+The Administrator role grants no world or campaign access, so two further recoveries
+exist. Each is an operator script that needs an active Administrator, a mandatory
+reason, and writes one audit row with the Administrator as actor. Each refuses an
+aggregate that is not actually stranded, so it can never take over a healthy world or
+campaign, and neither reads any content.
+
+- **A world nobody can manage** (its only Owner's account was disabled, or the Owner lost the system `gm` role):
+  `uv run python scripts/recover_world_ownership.py --list-stranded`, then
+  `--world-id <uuid> --admin-login <admin> --new-owner-login <gm> --reason "..."` (preview), and `--apply`.
+  The new Owner must be an active account holding system GM.
+- **A campaign with no access manager on an active account:**
+  `uv run python scripts/recover_campaign_access_manager.py --campaign-id <uuid> --admin-login <admin> --new-manager-login <login> --reason "..."` (preview), and `--apply`.
+  The new manager receives the `campaign_owner` role and a membership if they had none.
+
+The disable response and the Platform Accounts list report the affected IDs and counts.

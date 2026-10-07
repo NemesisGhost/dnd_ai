@@ -1,6 +1,6 @@
 # ADR 0018: World creation is limited to platform administrators and game masters
 
-- **Status**: Accepted
+- **Status**: Superseded by [ADR 0020](0020-scoped-system-world-and-campaign-roles.md)
 - **Date**: 2026-10-06
 - **Amends**: [ADR 0014](0014-world-authoring-authority.md) decision 3 (the global capability `world.create`). The rest of ADR 0014 — per-world `world_owner` authority, the closed world-capability mapping, resolution from the database on every request, and legacy-world claiming — is unchanged.
 

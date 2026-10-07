@@ -64,6 +64,13 @@ For upgrades: take/verify a backup, pull or build immutable versioned images, ru
 
 Residential power, internet, dynamic IP, and single-host availability are accepted constraints. A UPS, router restart behavior, and remote recovery are operational improvements, not requirements to create a hybrid production architecture.
 
+### Scoped roles: settings and the upgrade note ([ADR 0020](adr/0020-scoped-system-world-and-campaign-roles.md))
+
+- **`API_ALLOW_IN_APP_ADMIN_GRANT`** (compose; `DND_AI_ALLOW_IN_APP_ADMIN_GRANT` for a direct run) defaults to `false`. While it is false the Administrator role is granted only by `scripts/grant_platform_administrator.py`, the Platform Accounts Administrator checkbox is disabled with an explanation, and `POST /admin/accounts*` refuses `admin` with 403 `admin_grant_disabled`. Turning it on is a deployment decision: an Administrator can then make other Administrators from the app, and each grant is audited with the acting administrator.
+- **Upgrading a populated database** (migrations 137 and 138). Existing administrators receive the system `admin` and `gm` roles, existing world Owners receive `gm`, and everyone else receives `player`. Campaign GMs are **not** promoted. After the upgrade an Administrator should assign system GM to the people who run games, and the owner should give world Editor to any second GM who authors shared content. To find campaign GMs who lost world creation: `SELECT DISTINCT u.user_id, u.display_name FROM security.users u JOIN security.campaign_memberships cm ON cm.user_id = u.user_id AND cm.ended_at IS NULL JOIN security.membership_roles mr ON mr.campaign_membership_id = cm.campaign_membership_id AND mr.revoked_at IS NULL JOIN security.roles r ON r.role_id = mr.role_id AND r.campaign_id IS NULL AND r.code = 'gm' WHERE NOT EXISTS (SELECT 1 FROM security.user_system_roles usr JOIN security.system_roles sr ON sr.system_role_id = usr.system_role_id WHERE usr.user_id = u.user_id AND usr.revoked_at IS NULL AND sr.code = 'gm');`
+- **A fresh install:** `scripts/bootstrap_admin.py` creates the first account with `admin` and `gm`, so the bootstrap administrator can create the first world and campaign. Every account created afterwards starts as `player` unless the creating Administrator chooses otherwise.
+- **Stranded worlds and campaigns** (an Owner whose account was disabled or who lost system GM; a campaign whose only access manager was disabled): see [operations/PLATFORM_ADMINISTRATOR_RECOVERY.md](operations/PLATFORM_ADMINISTRATOR_RECOVERY.md).
+
 ## Production readiness gate
 
 Do not retire transitional AWS resources until all of the following are recorded:

@@ -1,10 +1,12 @@
 # ADR 0014: World authoring authority is a per-world membership
 
-- **Status**: Accepted; decision 3 amended by [ADR 0018](0018-world-creation-eligibility.md)
+- **Status**: Accepted; decision 3 amended by [ADR 0018](0018-world-creation-eligibility.md) (itself superseded by ADR 0020); decisions 2, 4 and 5 amended by [ADR 0020](0020-scoped-system-world-and-campaign-roles.md)
 - **Date**: 2026-10-03
 - **Builds on**: [ADR 0003](0003-separate-world-timeline-and-campaign.md), which separates world, timeline, and campaign. This ADR adds the missing authorization concept for the *world* aggregate.
 - **Related**: the unmerged branch `phase14/product-direction-and-world-ownership` proposed "ownership scopes" (a different model). It is **not adopted**; see Alternatives.
 
+> **Amended 2026-10-06 (again by [ADR 0020](0020-scoped-system-world-and-campaign-roles.md), which replaces ADR 0018: `world.create` now belongs to the system `gm` role, world roles gain Editor/Reviewer/Reader plus a world-use grant, and authority over a world is no longer owner-only).**
+>
 > **Amended 2026-10-06.** [ADR 0018](0018-world-creation-eligibility.md) replaces decision 3: `world.create` is no longer held by every active human, only by an active platform administrator or an active user with an effective assignment of the built-in `gm` role, and `create_world` enforces it. Decision 3, the matching "Platform-administrator-only" alternative, and the "any human user can create unlimited worlds" consequence below are kept as the historical record; read ADR 0018 for current policy. Every other decision here is unchanged.
 
 ## Context

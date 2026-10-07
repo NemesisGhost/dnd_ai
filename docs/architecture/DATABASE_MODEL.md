@@ -853,7 +853,15 @@ Key columns:
 - `created_at TIMESTAMPTZ`
 - `updated_at TIMESTAMPTZ`
 - `last_login_at TIMESTAMPTZ NULL`
-- `is_platform_administrator BOOLEAN` (migration 099, Phase 11R workstream A) — a minimal, campaign-independent authorization primitive for account-management operations with no `campaign_id` to scope a `security.roles`/`.resource_grants` check against at all: creating a local account, issuing a password-reset token, and the one-time initial-admin bootstrap (`dnd_ai.commands.local_auth.bootstrap_initial_admin`, engine-only, never exposed over HTTP, fails closed once any `security.users` row already exists). Deliberately not a `security.roles` row — campaign roles grant capabilities within one campaign membership (§19.3 below), the opposite scope from platform-account administration. A deliberate extension beyond docs/PLAN.md §23.1's own text, which describes "an administrator" creating accounts without specifying how that administrator is itself authorized.
+- *(removed by migration 137)* `is_platform_administrator`. Platform authority is now an explicit **system role** held in `security.user_system_roles` (§19.1a below, [ADR 0020](../adr/0020-scoped-system-world-and-campaign-roles.md)): an unrevoked `admin` assignment on an active account is what `dnd_ai.domain.access.is_platform_administrator` now means. Account-management operations (creating a local account, issuing a password-reset token, the one-time initial-admin bootstrap) still have no `campaign_id` to scope a campaign role against, which is why the authority is a system role and not a `security.roles` row.
+
+##### System roles (`security.system_roles`, `security.user_system_roles`) {#191a}
+
+Delivered by revision 137 ([ADR 0020](../adr/0020-scoped-system-world-and-campaign-roles.md)). **Built.** Platform-level authority, independent of world roles and campaign roles.
+
+`security.system_roles` is a standard lookup (conventions §11) seeded with `admin`, `gm`, `player` and `observer` (`database/seeds/security.system_roles.yaml`); the four codes are protected from rename (`core.enforce_protected_lookup_codes`). Capabilities are a closed mapping in `dnd_ai.domain.system_authority`, **not** rows in `security.capabilities`: `admin` carries `accounts.manage`, `system_roles.manage` and (only while the deployment enables the in-app grant) `system_roles.grant_admin`; `gm` carries `world.create`, `campaign.host` and `world.administer`; `player` and `observer` carry none. A user may hold any combination and capabilities are the union, with no hierarchy.
+
+`security.user_system_roles` is one row per assignment: `user_system_role_id PK`, `user_id` and `system_role_id` (immutable, `ON DELETE RESTRICT`), `granted_by_user_id` (NULL only for backfill, the initial-admin bootstrap and the operator script), `granted_at`, `revoked_at`, `revoked_by_user_id`. At most one unrevoked row per `(user_id, system_role_id)`; revoked rows are history and are never deleted by commands. A system role never implies a campaign membership, a campaign capability, or authority over any world, and a campaign or world role never implies a system role.
 
 ##### `security.local_credentials`
 
@@ -1011,11 +1019,11 @@ The earlier sketch names `security.campaign_members`; the target name is **`secu
 
 #### 19.2a World authoring authority
 
-Delivered by Phase 14 (revision 110; [ADR 0014](../adr/0014-world-authoring-authority.md)). **Built.** World-level authorization is deliberately separate from campaign membership and from platform administration.
+Delivered by Phase 14 (revision 110; [ADR 0014](../adr/0014-world-authoring-authority.md)) and extended by revision 138 ([ADR 0020](../adr/0020-scoped-system-world-and-campaign-roles.md)). **Built.** World-level authorization is deliberately separate from campaign membership and from system roles.
 
 ##### `security.world_roles`
 
-A standard lookup (conventions §11) seeded with `world_owner` (`database/seeds/security.world_roles.yaml`). Its *capabilities* are a closed mapping in `dnd_ai.domain.world_authority`, not rows in `security.capabilities` (which is assignable to campaign roles).
+A standard lookup (conventions §11) seeded with `world_owner`, `world_editor`, `world_reviewer` and `world_reader` (`database/seeds/security.world_roles.yaml`); the four codes are protected from rename. A user may hold several roles on one world and capabilities are the union. Capabilities are a closed mapping in `dnd_ai.domain.world_authority`, not rows in `security.capabilities` (which is assignable to campaign roles): Owner `world.view`, `world.canon.read`, `world.canon.read_private`, `world.canon.edit`, `world.canon.review`, `world.manage`, `timeline.manage`, `world.share`, `world.transfer`, `campaign.create`; Editor `world.view`, `world.canon.read`, `world.canon.read_private`, `world.canon.edit`, `timeline.manage`; Reviewer `world.view`, `world.canon.read`, `world.canon.read_private`, `world.canon.review`; Reader `world.view`, `world.canon.read`. The four *world-management* capabilities (`world.manage`, `world.share`, `world.transfer`, `campaign.create`) are effective only while the holder also has the system `world.administer` capability (the system `gm` role); that gate is applied when the authority is resolved, so it is continuous and never rewrites a row.
 
 ##### `security.world_memberships`
 
@@ -1027,15 +1035,22 @@ Key columns:
 - `world_role_id UUID FK -> security.world_roles`
 - `membership_status_id UUID FK -> security.membership_statuses`
 - `joined_at TIMESTAMPTZ NOT NULL`, `ended_at TIMESTAMPTZ NULL` (`ended_at >= joined_at`)
+- `granted_by_user_id UUID NULL`, `ended_by_user_id UUID NULL` (revision 138; `NULL` for the creator, operator claims and older rows)
 - `created_at`, `updated_at`
 
-At most one open row (`ended_at IS NULL`) per `(world_id, user_id)`. Open rows with an active status and role authorize; closed rows are history and are never deleted by commands. A **deferred constraint trigger** (`security.assert_world_retains_owner`, which locks the world row `FOR UPDATE`) rejects a commit that leaves a world that had an active owner with none. A world with **no rows of any status** is an unclaimed legacy world: nobody may author it until trusted infrastructure runs `claim_unowned_world` (`scripts/claim_world_ownership.py`), which succeeds only while the world has no membership rows at all.
+At most one open row (`ended_at IS NULL`) per `(world_id, user_id, world_role_id)` (revision 138; it was one per `(world_id, user_id)`). Open rows with an active status and role authorize; closed rows are history and are never deleted by commands. A **deferred constraint trigger** (`security.assert_world_retains_owner`, which locks the world row `FOR UPDATE`) rejects a commit that leaves a world that had an active owner with none. A world with **no rows of any status** is an unclaimed legacy world: nobody may author it until trusted infrastructure runs `claim_unowned_world` (`scripts/claim_world_ownership.py`), which succeeds only while the world has no membership rows at all.
+
+##### `security.world_use_grants`
+
+Revision 138. Permission for a user to host a campaign on a world and nothing else: `world.view` and `campaign.create`, with no canon reads and no timeline management. Columns: `world_use_grant_id PK`, `world_id` (immutable, `ON DELETE CASCADE`), `user_id` (immutable), `granted_by_user_id NOT NULL`, `granted_at`, `revoked_at`, `revoked_by_user_id`. At most one open row per `(world_id, user_id)`. Revoking stops *new* campaigns only; campaigns the holder already created are unaffected. Reading a world and using it are separate permissions: a Reader has no use grant and a use-grant holder cannot read canon.
+
+A world is **stranded** when it has no Owner who can manage it: an Owner needs an active account and the system `gm` role. The retention trigger above counts only assignment rows, so it does not notice; `dnd_ai.queries.stranded` reports such worlds and `scripts/recover_world_ownership.py` repairs them (§4.5 of the scoped-role plan).
 
 #### 19.3 Roles and capabilities
 
 Primary tables:
 
-- `security.roles` — configurable campaign-role definitions such as campaign owner, GM, assistant GM, player, observer, import reviewer and rules curator
+- `security.roles` — configurable campaign-role definitions such as campaign owner, GM, assistant GM, player, observer, import reviewer and rules curator. Rows with `campaign_id IS NULL` are **templates every campaign may assign**; they are never assignments, and nothing at the system level is assigned through this table (system roles live in `security.user_system_roles`, §19.1a). The built-in campaign `gm` template is therefore not the system `gm` role, and assigning it confers no platform capability.
 - `security.capabilities` — stable operation codes such as `campaign.view`, `character.control`, `canon.edit`, `import.approve`, `access.manage` and `rules_source.manage`
 - `security.role_capabilities` — many-to-many role-to-capability defaults
 - `security.membership_roles` — many-to-many campaign-membership-to-role assignments

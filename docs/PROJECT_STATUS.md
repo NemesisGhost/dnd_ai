@@ -23,6 +23,10 @@ and every disclosed limitation are in [PHASE15_VERIFICATION.md](PHASE15_VERIFICA
 **Phase 16 (player authoring and collaboration) remains blocked by the Phase 15 completion gate**
 until that evidence exists.
 
+## Scoped-role authorization (ADR 0020)
+
+**Implemented on branch `feature/scoped-role-model`; not merged, not deployed, and not yet verified by CI.** Platform, world and campaign authority are three independent scopes ([ADR 0020](adr/0020-scoped-system-world-and-campaign-roles.md), [SCOPED_ROLE_IMPLEMENTATION_PLAN.md](SCOPED_ROLE_IMPLEMENTATION_PLAN.md) holds the checkpoint progress and the verification record). It adds migrations `137_system_roles` and `138_world_roles_and_use_grants`, removes `security.users.is_platform_administrator`, and is sequenced after the Phase 15 merge and before Phase 16. It does not change Phase 15's completion gate or its acceptance status.
+
 ## Current delivery state
 
 | Area | Current state | Next closure gate |

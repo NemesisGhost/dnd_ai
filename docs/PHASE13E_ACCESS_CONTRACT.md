@@ -58,11 +58,11 @@ character-relationship, resource-grant, or invitation state.
 | `/campaigns/{campaign_id}/invitations/{campaign_invitation_id}/revoke` | POST | `dnd_ai.api.campaign_invitations` | `access.manage` | Campaign-scoped — **portal-wired, checkpoint 7**. See §3m. |
 | `/campaign-invitations/accept` | POST | `dnd_ai.api.campaign_invitations` | none (`require_human_user_id` only) | Self-service — **portal-wired, checkpoint 7**, currently through manual token entry. See §3m. |
 | `/campaigns` | POST | `dnd_ai.api.campaigns` | none at the route; real authorization inside `dnd_ai.commands.campaigns.create_campaign` | Human, but not generically self-service — see §4 |
-| `/admin/accounts` | POST | `dnd_ai.api.local_auth` | `security.users.is_platform_administrator` (checked in-command) | Platform-administrator |
-| `/admin/accounts/{user_id}/password-reset` | POST | `dnd_ai.api.local_auth` | `is_platform_administrator` | Platform-administrator |
-| `/admin/accounts/{user_id}/disable` | POST | `dnd_ai.api.local_auth` | `is_platform_administrator` | Platform-administrator |
-| `/admin/accounts/{user_id}/reactivate` | POST | `dnd_ai.api.local_auth` | `is_platform_administrator` | Platform-administrator |
-| `/admin/accounts/{user_id}/revoke-sessions` | POST | `dnd_ai.api.local_auth` | `is_platform_administrator` | Platform-administrator |
+| `/admin/accounts` | POST | `dnd_ai.api.local_auth` | system `admin` role (`accounts.manage`; checked in-command) | Platform-administrator |
+| `/admin/accounts/{user_id}/password-reset` | POST | `dnd_ai.api.local_auth` | system `admin` role | Platform-administrator |
+| `/admin/accounts/{user_id}/disable` | POST | `dnd_ai.api.local_auth` | system `admin` role | Platform-administrator |
+| `/admin/accounts/{user_id}/reactivate` | POST | `dnd_ai.api.local_auth` | system `admin` role | Platform-administrator |
+| `/admin/accounts/{user_id}/revoke-sessions` | POST | `dnd_ai.api.local_auth` | system `admin` role | Platform-administrator |
 | `/auth/password-reset-status` | POST | `dnd_ai.api.local_auth` | none — public, Origin-checked, read-only, non-consuming advisory check (`{"valid": bool}`), own rate-limit bucket; uses the same token loader and target eligibility (active account with a local credential) as the final reset; no row lock, audit row, or idempotency key; every unusable reason is indistinguishable | Self-service |
 | `/auth/activation-status` | POST | `dnd_ai.api.local_auth` | none — public, Origin-checked, read-only advisory check (`{"valid": bool}`); no principal, machine credentials ignored | Self-service |
 | `/auth/activate`, `/auth/password-reset`, `/auth/change-password`, `/auth/sessions` (list/delete own) | various | `dnd_ai.api.local_auth` | none — acts on the caller's own account | Self-service |
@@ -901,7 +901,7 @@ self-service, layered on the local-authentication backend that already
 existed before 13E-B.
 
 - **`GET /admin/accounts`** (checkpoint 9): keyset-paginated platform-account
-  list, gated on `SessionBootstrap.is_platform_administrator` — never a
+  list, gated on the bootstrap's `global_capabilities` containing `accounts.manage` (the system `admin` role; ADR 0020) — never a
   campaign-scoped `access.manage` grant, which confers nothing here (`dnd_ai.
   queries.access_overview`'s own module docstring: "do not merge account-wide
   administration with campaign administration unless the existing
@@ -1063,8 +1063,10 @@ campaign rather than carrying it forward.
 
 ## 4. Principal/boundary summary
 
+> **Amended by [ADR 0020](adr/0020-scoped-system-world-and-campaign-roles.md).** `security.users.is_platform_administrator` and `SessionBootstrap.is_platform_administrator` no longer exist: platform authority is the system `admin` role, and the bootstrap reports `system_roles` and `global_capabilities`. `POST /admin/accounts` accepts `system_role_codes` (default `["player"]`; `admin` only while `DND_AI_ALLOW_IN_APP_ADMIN_GRANT` is true, otherwise 403 `admin_grant_disabled`). New routes: `POST /admin/accounts/{user_id}/system-roles` (201 new, 200 already held) and `POST /admin/accounts/{user_id}/system-roles/{code}/revoke` (409 `last_active_platform_administrator`); `GET /admin/accounts` adds `system_roles`, `stranded_world_count` and a `system_role` filter; the disable and GM-revoke responses report stranded world/campaign IDs. D-10 stands: the operator script remains the default way to grant Admin.
+
 - **Local-session/OIDC-human:** `dnd_ai.api.auth.require_human_user_id` accepts only `LOCAL_SESSION_AUTH_METHOD` and `OIDC_AUTH_METHOD`. Every campaign-scoped access-management route (§2's campaign-scoped rows, plus the new overview read) is reachable by either.
-- **Platform-administrator:** `/admin/accounts*` (`dnd_ai.api.local_auth`) — gated on `security.users.is_platform_administrator`, checked *inside* the command (a non-platform-administrator caller gets a fixed, non-disclosing 404, not 403). Entirely separate from any campaign's `access.manage` — a campaign owner is not automatically a platform administrator, and vice versa.
+- **Platform-administrator:** `/admin/accounts*` (`dnd_ai.api.local_auth`) — gated on the system `admin` role (`security.user_system_roles`, ADR 0020), checked *inside* the command (a non-platform-administrator caller gets a fixed, non-disclosing 404, not 403). Entirely separate from any campaign's `access.manage` — a campaign owner is not automatically a platform administrator, and vice versa.
 - **Campaign-scoped:** every `access.manage`-gated route in §2, plus the new overview read — authorization is per-campaign, resolved fresh per request via `dnd_ai.domain.access.resolve_access_context`.
 - **Self-service:** routes that act only on the caller's own account/own invitation with no special capability (`/auth/login`, `/auth/logout`, `/auth/change-password`, `/auth/sessions` list/delete-own, `/auth/activate`, `/auth/password-reset`, `POST /campaign-invitations/accept`).
 - **Invitation onboarding (delivered, §3n):** a narrowly unauthenticated
