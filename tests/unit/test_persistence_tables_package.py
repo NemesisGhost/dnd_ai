@@ -288,12 +288,15 @@ EXPECTED_TABLES = {
         "security.role_capabilities",
         "security.roles",
         "security.service_accounts",
+        "security.system_roles",
         "security.timeline_bootstrap_grants",
         "security.user_activation_tokens",
         "security.user_portal_preferences",
+        "security.user_system_roles",
         "security.users",
         "security.world_memberships",
         "security.world_roles",
+        "security.world_use_grants",
     ],
 }
 

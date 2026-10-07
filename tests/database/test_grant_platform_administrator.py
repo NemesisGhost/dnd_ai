@@ -19,8 +19,8 @@ from dnd_ai.commands.local_auth import (
     PlatformAccountNotFoundError,
     grant_platform_administrator,
 )
-from dnd_ai.domain.access import LOCAL_AUTH_ISSUER
-from tests.factories import make_external_identity, make_user
+from dnd_ai.domain.access import LOCAL_AUTH_ISSUER, is_platform_administrator
+from tests.factories import make_external_identity, make_system_role_assignment, make_user
 
 pytestmark = pytest.mark.database
 
@@ -32,6 +32,9 @@ def _cleanup_user(engine: Engine, user_id: uuid.UUID) -> None:
         )
         connection.execute(
             text("DELETE FROM security.external_identities WHERE user_id = :u"), {"u": user_id}
+        )
+        connection.execute(
+            text("DELETE FROM security.user_system_roles WHERE user_id = :u"), {"u": user_id}
         )
         connection.execute(text("DELETE FROM security.users WHERE user_id = :u"), {"u": user_id})
 
@@ -48,11 +51,7 @@ def test_promotes_an_active_account(postgres_engine: Engine) -> None:
         assert result.already_administrator is False
 
         with postgres_engine.connect() as verify:
-            is_admin = verify.execute(
-                text("SELECT is_platform_administrator FROM security.users WHERE user_id = :u"),
-                {"u": user_id},
-            ).scalar_one()
-            assert is_admin is True
+            assert is_platform_administrator(verify, user_id=user_id) is True
     finally:
         _cleanup_user(postgres_engine, user_id)
 
@@ -144,10 +143,7 @@ def test_concurrent_promotion_and_disablement_serialize_on_the_advisory_lock(
         make_external_identity(
             setup, other_admin_id, issuer=LOCAL_AUTH_ISSUER, subject=other_admin_login
         )
-        setup.execute(
-            text("UPDATE security.users SET is_platform_administrator = true WHERE user_id = :u"),
-            {"u": other_admin_id},
-        )
+        make_system_role_assignment(setup, other_admin_id, "admin")
 
     try:
         with postgres_engine.connect() as first, postgres_engine.connect() as second:
@@ -180,4 +176,5 @@ def test_concurrent_promotion_and_disablement_serialize_on_the_advisory_lock(
 def test_last_active_administrator_message_no_longer_advises_an_impossible_remedy() -> None:
     message = LastActivePlatformAdministratorError().safe_message
     assert "Activate another administrator account first" not in message
-    assert "direct database access" in message
+    # The remedy named exists: the operator script (D-10), or the in-app grant when enabled.
+    assert "operator script" in message

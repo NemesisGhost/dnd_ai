@@ -15,6 +15,7 @@ from sqlalchemy import Connection, text
 from dnd_ai.commands.campaigns import create_campaign
 from dnd_ai.commands.worlds import CreateWorldResult, create_world
 from dnd_ai.queries.world_authority import may_create_worlds
+from tests.factories import make_system_role_assignment
 
 
 @dataclass(frozen=True)
@@ -41,20 +42,16 @@ def dnd5e_ids(connection: Connection) -> tuple[uuid.UUID, uuid.UUID]:
 
 
 def make_world_creator(connection: Connection, user_id: uuid.UUID) -> uuid.UUID:
-    """Make `user_id` a legitimate world creator (docs/adr/0018-world-
-    creation-eligibility.md) by giving the account platform administration —
-    the creation path with no campaign prerequisite. A no-op for a user who
-    already qualifies (an administrator, or an effective built-in `gm`).
+    """Make `user_id` a legitimate world creator (docs/adr/0019-scoped-system-
+    world-and-campaign-roles.md) by giving the account the system `gm` role. A
+    no-op for a user who already qualifies.
 
-    Administration grants no authority over any existing world or campaign, so
+    System GM grants no authority over any existing world or campaign, so
     promoting the actor that authors a test world changes nothing else the
     test observes about that actor's world or campaign access. Tests of the
     policy itself build their actors explicitly instead."""
     if not may_create_worlds(connection, user_id=user_id):
-        connection.execute(
-            text("UPDATE security.users SET is_platform_administrator = true WHERE user_id = :u"),
-            {"u": user_id},
-        )
+        make_system_role_assignment(connection, user_id, "gm")
     return user_id
 
 
