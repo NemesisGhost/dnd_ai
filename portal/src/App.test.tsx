@@ -668,6 +668,8 @@ describe("portal routing", () => {
     ).toHaveBeenCalledWith(
       "mundivita",
       "character-ixamarra",
+      // The character's only authorized party, sent with its character.
+      "party-primary",
     )
 
     expect(
@@ -683,7 +685,7 @@ describe("portal routing", () => {
       }),
     ).toHaveAttribute(
       "href",
-      "/app/mundivita/quests/quest-detail",
+      "/app/mundivita/quests/quest-detail?character_id=character-ixamarra&party_id=party-primary",
     )
   })
 
@@ -698,6 +700,7 @@ describe("portal routing", () => {
       "mundivita",
       "quest-detail",
       "character-ixamarra",
+      "party-primary",
     )
 
     expect(
@@ -984,6 +987,7 @@ describe("portal routing", () => {
       "",
       null,
       null,
+      true,
     )
 
     expect(

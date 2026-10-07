@@ -674,8 +674,10 @@ perspective every discovery on the timeline is in scope; with one, only
 that party's/character's. For `known`/`rumors` a GM with no perspective
 sees `knowledge.knowledge_items` in the world; `party_shared`/
 `character_private` still require the GM to supply an authorized
-party/character perspective and return an empty page without one. A non-GM
-never receives `truth_status`/`sensitivity`.
+party/character perspective for their audience-specific records; without
+one they carry only public knowledge (see §10.6). A non-GM never receives
+`truth_status`/`sensitivity` unless a targeted `canon.edit` allow grants it
+for that item.
 
 ### 10.6 Perspective resolution (Phase 13D §4)
 
@@ -697,6 +699,17 @@ never receives `truth_status`/`sensitivity`.
 - `character_private` needs only `character_id` (with
   `character.view_knowledge` held for it). `recent` accepts either or
   both. `public` needs neither.
+- **Public knowledge is additive** (2026-10-06 correction — it was
+  originally a mutually exclusive view, so a player with no perspective got
+  an empty default `known` page despite public lore existing). Every view
+  includes the timeline's `knowledge.public_knowledge` items that fit it,
+  with or without a perspective; a perspective only adds its audience's
+  records. `include_public=false` is the explicit opt-out and `view=public`
+  the public-only filter. An item both public and audience-known is listed
+  once, in the audience's own projection (party/character belief, or the
+  canonical projection for a caller with ground truth) — the same
+  precedence the detail route applies — resolved before `q` and the cursor.
+  See `dnd_ai.queries.knowledge_browse`.
 - The existing `GET .../knowledge/{id}` detail route is unchanged for its
   GM and `(character_id, party_id)` callers, and additionally: a non-GM
   who supplies **only** `character_id` and holds `character.view_knowledge`

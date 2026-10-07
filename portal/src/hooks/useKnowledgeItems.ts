@@ -48,6 +48,7 @@ interface KnowledgeItemsSnapshot {
     query: string
     knowledgeType: string | null
     cursor: string | null
+    includePublic: boolean
     requestVersion: number
     state: KnowledgeItemsState
 }
@@ -73,6 +74,7 @@ export function useKnowledgeItems(
     query: string,
     knowledgeType: string | null,
     cursor: string | null = null,
+    includePublic = true,
 ): UseKnowledgeItemsResult {
     const { reload } = useSession()
 
@@ -88,6 +90,7 @@ export function useKnowledgeItems(
             query,
             knowledgeType,
             cursor,
+            includePublic,
             requestVersion: 0,
             state: initialState,
         }))
@@ -108,6 +111,7 @@ export function useKnowledgeItems(
         snapshot.knowledgeType ===
         knowledgeType &&
         snapshot.cursor === cursor &&
+        snapshot.includePublic === includePublic &&
         snapshot.requestVersion ===
         requestVersion
 
@@ -144,6 +148,7 @@ export function useKnowledgeItems(
                 query,
                 knowledgeType,
                 cursor,
+                includePublic,
             },
             controller.signal,
         )
@@ -162,6 +167,7 @@ export function useKnowledgeItems(
                     query,
                     knowledgeType,
                     cursor,
+                    includePublic,
                     requestVersion,
                     state: {
                         status: "success",
@@ -198,6 +204,7 @@ export function useKnowledgeItems(
                         query,
                         knowledgeType,
                         cursor,
+                        includePublic,
                         requestVersion,
                         state: initialState,
                     })
@@ -220,6 +227,7 @@ export function useKnowledgeItems(
                         query,
                         knowledgeType,
                         cursor,
+                        includePublic,
                         requestVersion,
                         state: {
                             status:
@@ -237,6 +245,7 @@ export function useKnowledgeItems(
                     query,
                     knowledgeType,
                     cursor,
+                    includePublic,
                     requestVersion,
                     state: {
                         status: "error",
@@ -256,6 +265,7 @@ export function useKnowledgeItems(
         query,
         knowledgeType,
         cursor,
+        includePublic,
         requestVersion,
         reload,
     ])

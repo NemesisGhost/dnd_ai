@@ -94,9 +94,10 @@ describe("quest authoring routes", () => {
       "href",
       "/app/mundivita/quests/q1/edit",
     )
+    // A tracked quest's detail link carries the list's party perspective.
     expect(screen.getByRole("link", { name: /The Siege, Active/ })).toHaveAttribute(
       "href",
-      "/app/mundivita/quests/q2",
+      "/app/mundivita/quests/q2?character_id=character-ixamarra&party_id=party-primary",
     )
   })
 

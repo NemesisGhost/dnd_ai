@@ -41,6 +41,9 @@ export interface KnowledgeSearchParameters {
     knowledgeType: string | null
     cursor?: string | null
     limit?: number
+    /** Public knowledge is included in every view by default; only an
+     * explicit `false` asks the server to leave it out. */
+    includePublic?: boolean
 }
 
 // Matches the backend's KnowledgeResponse (GET .../knowledge/{id}) —

@@ -29,6 +29,7 @@ detail-route coverage in their existing respective files.
 
 import uuid
 from collections.abc import Callable, Iterator
+from typing import Any, cast
 
 import pytest
 from fastapi.testclient import TestClient
@@ -46,9 +47,12 @@ from tests.factories import (
     make_character_relationship_type,
     make_membership_character_relationship,
     make_membership_role,
+    make_objective_state,
     make_party,
     make_party_membership,
     make_quest,
+    make_quest_objective,
+    make_quest_stage,
     make_quest_state,
     make_relationship_type_capability,
     make_resource_grant,
@@ -466,3 +470,198 @@ def test_the_deny_does_not_affect_a_different_campaign_member(
     assert list_response.status_code == 200, list_response.text
     assert str(f.tracked_quest_id) in {item["quest_id"] for item in list_response.json()}
     assert detail_response.status_code == 200, detail_response.text
+
+
+# ---------------------------------------------------------------------------
+# Party audience end-to-end: the (character_id, party_id) pair the portal
+# sends adds the own party's quests and statuses to the campaign-wide ones,
+# never another party's, and is re-authorized on every request.
+# ---------------------------------------------------------------------------
+
+
+class _PartyAudience:
+    def __init__(self, connection: Connection, f: Fixture) -> None:
+        self.rival_party_id = make_party(connection, f.world_id, name="The Rivals")
+        make_campaign_party(connection, f.campaign_id, self.rival_party_id)
+        # Tracked only for the rival party — never visible to The Company.
+        self.rival_only_quest_id = make_quest(connection, f.world_id, name="The Rivals' Pact")
+        make_quest_state(
+            connection,
+            f.timeline_id,
+            self.rival_only_quest_id,
+            party_id=self.rival_party_id,
+            status_code="active",
+        )
+        # A rival-specific status on a campaign-wide quest.
+        make_quest_state(
+            connection,
+            f.timeline_id,
+            f.tracked_quest_id,
+            party_id=self.rival_party_id,
+            status_code="failed",
+        )
+        # One objective on the campaign-wide quest with a campaign-wide, an
+        # own-party, and a rival-party status.
+        stage_id = make_quest_stage(connection, f.tracked_quest_id)
+        self.objective_id = make_quest_objective(connection, stage_id, name="Light the beacon")
+        make_objective_state(connection, f.timeline_id, self.objective_id, status_code="active")
+        make_objective_state(
+            connection,
+            f.timeline_id,
+            self.objective_id,
+            party_id=f.party_id,
+            status_code="completed",
+        )
+        make_objective_state(
+            connection,
+            f.timeline_id,
+            self.objective_id,
+            party_id=self.rival_party_id,
+            status_code="failed",
+        )
+
+
+@pytest.fixture
+def audience(f: Fixture, postgres_engine: Engine) -> _PartyAudience:
+    with postgres_engine.begin() as connection:
+        return _PartyAudience(connection, f)
+
+
+def _pair(f: Fixture) -> dict[str, str]:
+    return {"character_id": str(f.character_id), "party_id": str(f.party_id)}
+
+
+def _objective_status(detail: dict[str, Any], objective_id: uuid.UUID) -> str | None:
+    for stage in detail["stages"]:
+        for objective in stage["objectives"]:
+            if objective["quest_objective_id"] == str(objective_id):
+                return cast("str | None", objective["status_code"])
+    raise AssertionError(f"objective {objective_id} not in detail")
+
+
+def test_a_party_perspective_keeps_campaign_wide_quests_and_adds_its_own(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, audience: _PartyAudience
+) -> None:
+    with client_factory(f.player_user_id) as client:
+        response = client.get(_list_url(f), params=_pair(f))
+    assert response.status_code == 200, response.text
+    by_id = {item["quest_id"]: item for item in response.json()}
+    assert set(by_id) == {
+        str(f.tracked_quest_id),
+        str(f.party_scoped_quest_id),
+        str(f.party_only_quest_id),
+    }
+    # The rival party's own quest is never listed, and its status on the
+    # campaign-wide quest never replaces the campaign-wide one.
+    assert str(audience.rival_only_quest_id) not in by_id
+    assert by_id[str(f.tracked_quest_id)]["status_code"] == "active"
+    assert by_id[str(f.party_scoped_quest_id)]["status_code"] == "completed"
+
+
+def test_a_character_without_its_party_sees_campaign_wide_quests_only(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, audience: _PartyAudience
+) -> None:
+    """The request shape the portal used to send (`character_id` alone):
+    no party perspective is resolved, so party-only quests and party
+    statuses stay out — which is why the portal must send the pair."""
+    with client_factory(f.player_user_id) as client:
+        response = client.get(_list_url(f), params={"character_id": str(f.character_id)})
+    assert response.status_code == 200, response.text
+    by_id = {item["quest_id"]: item for item in response.json()}
+    assert set(by_id) == {str(f.tracked_quest_id), str(f.party_scoped_quest_id)}
+    assert by_id[str(f.party_scoped_quest_id)]["status_code"] == "active"
+
+
+def test_detail_shows_the_own_partys_objective_status_never_anothers(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, audience: _PartyAudience
+) -> None:
+    detail_url = f"/campaigns/{f.campaign_id}/quests/{f.tracked_quest_id}"
+    with client_factory(f.player_user_id) as client:
+        with_party = client.get(detail_url, params=_pair(f))
+        without_party = client.get(detail_url, params={"character_id": str(f.character_id)})
+        rival_quest = client.get(
+            f"/campaigns/{f.campaign_id}/quests/{audience.rival_only_quest_id}",
+            params=_pair(f),
+        )
+    assert with_party.status_code == 200, with_party.text
+    assert with_party.json()["status_code"] == "active"
+    assert _objective_status(with_party.json(), audience.objective_id) == "completed"
+    assert _objective_status(without_party.json(), audience.objective_id) == "active"
+    # Another party's private quest is the same non-disclosing 404 as a
+    # nonexistent one, even with a valid perspective.
+    assert rival_quest.status_code == 404
+
+
+def test_every_listed_quest_opens_in_detail_under_the_same_perspective(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, audience: _PartyAudience
+) -> None:
+    with client_factory(f.player_user_id) as client:
+        listed = client.get(_list_url(f), params=_pair(f)).json()
+        for item in listed:
+            detail = client.get(
+                f"/campaigns/{f.campaign_id}/quests/{item['quest_id']}", params=_pair(f)
+            )
+            assert detail.status_code == 200, (item, detail.text)
+            assert detail.json()["status_code"] == item["status_code"]
+
+
+def test_a_party_the_character_does_not_belong_to_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, audience: _PartyAudience
+) -> None:
+    params = {"character_id": str(f.character_id), "party_id": str(audience.rival_party_id)}
+    with client_factory(f.player_user_id) as client:
+        listed = client.get(_list_url(f), params=params)
+        detail = client.get(
+            f"/campaigns/{f.campaign_id}/quests/{audience.rival_only_quest_id}", params=params
+        )
+    assert listed.status_code == 404
+    assert detail.status_code == 404
+
+
+@pytest.mark.parametrize("revocation", ["party_membership", "character_relationship"])
+def test_perspective_revocation_takes_effect_on_the_next_request(
+    client_factory: Callable[[uuid.UUID], TestClient],
+    f: Fixture,
+    audience: _PartyAudience,
+    postgres_engine: Engine,
+    revocation: str,
+) -> None:
+    detail_url = f"/campaigns/{f.campaign_id}/quests/{f.party_only_quest_id}"
+    with client_factory(f.player_user_id) as client:
+        before_list = client.get(_list_url(f), params=_pair(f))
+        before_detail = client.get(detail_url, params=_pair(f))
+    assert str(f.party_only_quest_id) in {item["quest_id"] for item in before_list.json()}
+    assert before_detail.status_code == 200
+
+    with postgres_engine.begin() as revoke:
+        if revocation == "party_membership":
+            later = make_world_time(revoke, f.world_id, 200)
+            revoke.execute(
+                text(
+                    "UPDATE campaign.party_memberships SET effective_to_world_time_id = :t "
+                    "WHERE party_id = :p AND member_entity_id = :c"
+                ),
+                {"t": later, "p": f.party_id, "c": f.character_id},
+            )
+        else:
+            revoke.execute(
+                text(
+                    "UPDATE security.membership_character_relationships SET revoked_at = now() "
+                    "WHERE character_id = :c"
+                ),
+                {"c": f.character_id},
+            )
+
+    with client_factory(f.player_user_id) as client:
+        after_list = client.get(_list_url(f), params=_pair(f))
+        after_detail = client.get(detail_url, params=_pair(f))
+        campaign_wide = client.get(_list_url(f))
+    # The pair can no longer be proven: the same fixed 404 as any
+    # unauthorized perspective, never a silent party-scoped answer.
+    assert after_list.status_code == 404
+    assert after_detail.status_code == 404
+    # Campaign-wide quests remain available without the revoked perspective.
+    assert {item["quest_id"] for item in campaign_wide.json()} == {
+        str(f.tracked_quest_id),
+        str(f.party_scoped_quest_id),
+    }

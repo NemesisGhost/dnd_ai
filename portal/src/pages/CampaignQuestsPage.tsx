@@ -1,15 +1,36 @@
 import { useParams } from "react-router"
 import { CampaignQuestsBoundary } from "../components/CampaignQuestsBoundary"
-import { usePerspective } from "../context/CharacterPerspectiveContext"
+import { useQuestPartyPerspective } from "../hooks/useQuestPartyPerspective"
 import { QuestsPage } from "./QuestsPage"
 import PlaceholderPage from "./PlaceholderPage"
+
+function CampaignQuestsContent({ campaignId }: { campaignId: string }) {
+    const { characterId, partyId, parties, selectParty } =
+        useQuestPartyPerspective(campaignId)
+
+    return (
+        <CampaignQuestsBoundary
+            campaignId={campaignId}
+            characterId={characterId}
+            partyId={partyId}
+        >
+            {(quests) => (
+                <QuestsPage
+                    campaignId={campaignId}
+                    quests={quests}
+                    characterId={characterId}
+                    partyId={partyId}
+                    parties={parties}
+                    onPartyChange={selectParty}
+                />
+            )}
+        </CampaignQuestsBoundary>
+    )
+}
 
 export function CampaignQuestsPage() {
     const { campaignId } =
         useParams<{ campaignId: string }>()
-
-    const { getSelectedCharacterId } =
-        usePerspective()
 
     if (campaignId === undefined) {
         return (
@@ -20,20 +41,5 @@ export function CampaignQuestsPage() {
         )
     }
 
-    const characterId =
-        getSelectedCharacterId(campaignId)
-
-    return (
-        <CampaignQuestsBoundary
-            campaignId={campaignId}
-            characterId={characterId}
-        >
-            {(quests) => (
-                <QuestsPage
-                    campaignId={campaignId}
-                    quests={quests}
-                />
-            )}
-        </CampaignQuestsBoundary>
-    )
+    return <CampaignQuestsContent campaignId={campaignId} />
 }

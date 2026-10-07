@@ -29,9 +29,11 @@ interface RenderOverrides {
     query?: string
     partyId?: string | null
     parties?: AuthorizedParty[]
+    includePublic?: boolean
     onViewChange?: (view: KnowledgeView) => void
     onQueryChange?: (query: string) => void
     onPartyChange?: (partyId: string | null) => void
+    onIncludePublicChange?: (includePublic: boolean) => void
     children?: React.ReactNode
 }
 
@@ -53,9 +55,11 @@ function renderPage(overrides: RenderOverrides = {}) {
         query: "",
         partyId: null,
         parties: authorizedParties,
+        includePublic: true,
         onViewChange: vi.fn(),
         onQueryChange: vi.fn(),
         onPartyChange: vi.fn(),
+        onIncludePublicChange: vi.fn(),
         children: <p>Knowledge results go here.</p>,
         ...overrides,
     }
@@ -113,7 +117,7 @@ describe("KnowledgePage", () => {
             "Party shared",
             "Character private",
             "Recent",
-            "Public",
+            "Public only",
         ])
     })
 
@@ -266,6 +270,8 @@ describe("KnowledgePage", () => {
                 onViewChange={vi.fn()}
                 onQueryChange={vi.fn()}
                 onPartyChange={vi.fn()}
+                includePublic
+                onIncludePublicChange={vi.fn()}
             >
                 <p>Loading knowledge results.</p>
             </KnowledgePage>,
@@ -289,6 +295,8 @@ describe("KnowledgePage", () => {
                 onViewChange={vi.fn()}
                 onQueryChange={vi.fn()}
                 onPartyChange={vi.fn()}
+                includePublic
+                onIncludePublicChange={vi.fn()}
             >
                 <p>Knowledge results go here.</p>
             </KnowledgePage>,
@@ -352,6 +360,8 @@ describe("KnowledgePage — audience preview (Phase 13E-B manual-acceptance fix)
                     onViewChange={vi.fn()}
                     onQueryChange={vi.fn()}
                     onPartyChange={vi.fn()}
+                    includePublic
+                    onIncludePublicChange={vi.fn()}
                 >
                     <p>Knowledge results go here.</p>
                 </KnowledgePage>
@@ -367,5 +377,31 @@ describe("KnowledgePage — audience preview (Phase 13E-B manual-acceptance fix)
         expect(
             screen.queryByRole("button", { name: "Preview as member" }),
         ).not.toBeInTheDocument()
+    })
+
+    it("includes public knowledge by default and reports an explicit opt-out", () => {
+        const { onIncludePublicChange } = renderPage()
+
+        const checkbox = screen.getByRole("checkbox", {
+            name: "Include public knowledge",
+        })
+
+        expect(checkbox).toBeChecked()
+        expect(checkbox).toBeEnabled()
+
+        fireEvent.click(checkbox)
+
+        expect(onIncludePublicChange).toHaveBeenLastCalledWith(false)
+    })
+
+    it("locks public knowledge on for the public-only view", () => {
+        renderPage({ view: "public", includePublic: false })
+
+        const checkbox = screen.getByRole("checkbox", {
+            name: "Include public knowledge",
+        })
+
+        expect(checkbox).toBeChecked()
+        expect(checkbox).toBeDisabled()
     })
 })

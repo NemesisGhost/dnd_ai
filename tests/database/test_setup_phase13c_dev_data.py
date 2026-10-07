@@ -1382,6 +1382,7 @@ def _knowledge(
     party: uuid.UUID | None = None,
     knower: uuid.UUID | None = None,
     timeline_id: uuid.UUID | None = None,
+    include_public: bool = True,
 ) -> tuple:
     return list_knowledge(
         db_connection,
@@ -1398,6 +1399,7 @@ def _knowledge(
         after_statement=None,
         after_time_sort=None,
         after_record_id=None,
+        include_public=include_public,
     )
 
 
@@ -1555,6 +1557,7 @@ def test_wk_private_party_public_recipient_semantics(db_connection: Connection) 
             view="character_private",
             ground_truth=False,
             knower=character_a,
+            include_public=False,
         )
     }
     private_b = {
@@ -1566,13 +1569,20 @@ def test_wk_private_party_public_recipient_semantics(db_connection: Connection) 
             view="character_private",
             ground_truth=False,
             knower=character_b,
+            include_public=False,
         )
     }
     assert private_a and private_b
     assert not (private_a & private_b), "character-private knowledge must not cross knowers"
 
     party_shared = _knowledge(
-        db_connection, campaign_a, world_a, view="party_shared", ground_truth=False, party=party_id
+        db_connection,
+        campaign_a,
+        world_a,
+        view="party_shared",
+        ground_truth=False,
+        party=party_id,
+        include_public=False,
     )
     assert {i.scope for i in party_shared} == {"party"}
     assert len(party_shared) >= 4
@@ -1580,6 +1590,24 @@ def test_wk_private_party_public_recipient_semantics(db_connection: Connection) 
     public = _knowledge(db_connection, campaign_a, world_a, view="public", ground_truth=False)
     assert any("aurell" in i.statement.lower() for i in public)
     assert {i.scope for i in public} == {"public"}
+
+    # Public lore is additive: each character's default view carries it
+    # alongside (never instead of) that character's own private records.
+    public_ids = {i.knowledge_item_id for i in public}
+    for knower, private in ((character_a, private_a), (character_b, private_b)):
+        default = {
+            i.knowledge_item_id
+            for i in _knowledge(
+                db_connection,
+                campaign_a,
+                world_a,
+                view="character_private",
+                ground_truth=False,
+                knower=knower,
+            )
+        }
+        assert private <= default
+        assert public_ids <= default
 
 
 def test_wk_recent_carries_visible_source_provenance(db_connection: Connection) -> None:

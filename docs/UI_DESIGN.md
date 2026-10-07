@@ -439,6 +439,8 @@ Each item shows, when permitted:
 - effective time;
 - related entities and quests.
 
+Public lore is part of every view by default, whether or not a character or party perspective is selected; choosing a perspective adds that audience's records and never removes public ones. Leaving public lore out is an explicit user choice ("Include public knowledge"), and the Public view shows public lore only. An item that is both public and known to the selected audience appears once, as that audience's own belief.
+
 The UI never labels a player-facing claim “false” merely because the GM's canonical record says so. GM mode can compare canonical truth with character beliefs. Player mode shows only the belief state available to the selected perspective.
 
 Knowledge collections use cards. A card may show the authorized statement, type, scope, awareness, confidence, willingness-to-share state, and truth status only when those fields are meaningful and deliberately included for the current audience. Null values are omitted or neutrally described; they are never translated into a suggestion that hidden information exists.
@@ -448,6 +450,8 @@ Opening a knowledge card as a full detail surface requires an explicit detail ro
 ### 5.7 Quests and quest detail
 
 The quest collection uses concise cards. The current list contract supplies a quest name and status, so list cards do not invent descriptions, objective counts, rewards, participants, or locations from data absent from that contract. Each card links to the established campaign-scoped quest detail route.
+
+Quest list and detail requests carry the selected character together with a party perspective, because the API honors a party only as an authorized `(character_id, party_id)` pair. The party comes from the selected character's `authorized_parties` in the session bootstrap: none when the character has none (campaign-wide quests only), the only one when there is exactly one, and only an explicit user choice when there are several — never a guess. Campaign-wide quests always remain listed; the party adds its own quests and statuses, and other parties' quests never appear. The chosen pair travels in the detail link's URL so the detail shows the same party's status and objectives, and it is dropped in favour of that derivation when the selected character changes.
 
 The full quest detail surface visually continues the selected card and organizes the authorized contract into separately headed stage and objective regions. It preserves server-provided stage sequence and objective order; it does not alphabetize narrative progression. Stages are connected, independently collapsible cards whose collapsed summary counts the shown (audience-filtered) objectives that are complete, without claiming a whole-stage status ([UI_STYLE_GUIDE.md §12.3](UI_STYLE_GUIDE.md#123-connected-collapsible-stage-cards)).
 

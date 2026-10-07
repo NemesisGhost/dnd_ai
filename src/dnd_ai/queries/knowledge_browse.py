@@ -16,7 +16,30 @@ of the screen — across the documented views.
 | `party_shared` | `campaign.party_knowledge` (authorized party), every row | the party's collective knowledge |
 | `character_private` | `knowledge.entity_knowledge` where `knower_entity_id` = the authorized character | that one character's individual beliefs |
 | `recent` | `knowledge.party_discoveries` for the authorized party and/or character | the audience's discovery stream, newest first |
-| `public` | `knowledge.public_knowledge` on the timeline | any `campaign.view` caller — no perspective needed |
+| `public` | `knowledge.public_knowledge` on the timeline | the explicit public-only filter — any `campaign.view` caller |
+
+## Public knowledge is additive
+
+`knowledge.public_knowledge` is lore anyone on the timeline knows, so every
+view includes the public items that fit it (`known` only settled public
+items, `rumors` only rumor-typed ones, and so on) **by default, whatever
+perspective the caller has or lacks** — a player with no perspective gets
+the public items rather than an empty page, and selecting a party or
+character only *adds* that audience's records. Public items are omitted
+only when the caller explicitly asks (`include_public=False`); `view=
+"public"` is the explicit public-only filter.
+
+An item can be both public and in the caller's audience. Each item is
+listed **once**, in its most audience-specific safe projection: the
+authorized party's / character's own belief (or, for a caller with ground
+truth, the canonical projection) wins over the public projection — the
+same precedence `dnd_ai.queries.knowledge.get_knowledge_view` applies for
+the detail route, so list and detail show the same statement. Precedence
+is resolved before the `q` search and the keyset cursor, so a search term
+matching only the public (canonical) wording never resurfaces an item
+whose winning projection is the party's differing interpretation. An item
+public in several locations is one row (its earliest `known_since`
+representative), never one per location.
 
 The `known`/`rumors` split is grounded in the seeded
 `knowledge.knowledge_types` vocabulary, not an invented flag:
@@ -54,9 +77,10 @@ So a baseline `canon.edit` caller with **no** perspective sees *canonical*
 data for `known`/`rumors`/`recent`/`public` (minus any per-item `canon.
 edit` deny); a non-GM with a targeted `canon.edit` allow sees canonical
 data for exactly the allowed items; everyone else sees only their
-authorized party's / character's own belief. `party_shared`/
-`character_private` still require an authorized party/character perspective
-and return an empty page without one. The `truth_status`/`sensitivity`
+authorized party's / character's own belief. The audience-specific part of
+`party_shared`/`character_private` still requires an authorized party/
+character perspective — without one those views carry only public items.
+The `truth_status`/`sensitivity`
 metadata is populated per row exactly when that per-item `canon.edit`
 decision is true — the identical split `get_knowledge_view` applies for the
 detail route.
@@ -68,7 +92,8 @@ detail route.
 world-time (`core.world_times.sort_key`) **descending, NULLS LAST**, then
 by an immutable `party_discovery_id` tie-breaker (Phase 13D §4's
 "recently discovered" contract — an ordered stream, newest visible
-discovery first, no arbitrary wall-clock window). Both are the exact
+discovery first, no arbitrary wall-clock window); a public row's position
+is the world time it became public. Both are the exact
 keysets the opaque `dnd_ai.api.pagination` cursor carries. No total count.
 
 Framework-free, authorizes nothing itself: `include_ground_truth`,
@@ -207,10 +232,18 @@ def list_knowledge(
     after_statement: str | None,
     after_time_sort: int | None,
     after_record_id: uuid.UUID | None,
+    include_public: bool = True,
 ) -> tuple[KnowledgeListItem, ...]:
-    """Up to `limit + 1` visible knowledge records for `view`. Returns an
-    empty tuple (never an error) when the view needs a perspective the
-    caller does not have — an empty page is not an existence hint.
+    """Up to `limit + 1` visible knowledge records for `view`.
+
+    Public knowledge is **additive** (see "Public knowledge" in the module
+    docstring): unless `include_public` is `False`, every view also returns
+    the timeline's public items that fit it, whatever perspective the
+    caller has or lacks. Only the audience-specific part of a view needs a
+    perspective; without one that part is simply empty — never an error,
+    and never an existence hint. `view="public"` is the explicit
+    public-only filter, so it returns an empty page when `include_public`
+    is `False`.
 
     Item *visibility* and *ground-truth-field* visibility are two
     independent decisions (Issue 4 of the Phase 13D corrections). `denied_
@@ -249,7 +282,7 @@ def list_knowledge(
                 "has_cursor": after_record_id is not None,
             }
         )
-        return _list_recent(connection, common)
+        return _list_recent(connection, common, include_public=include_public)
 
     common.update(
         {
@@ -258,24 +291,26 @@ def list_knowledge(
             "has_cursor": after_record_id is not None,
         }
     )
-    if view == "public":
-        return _list_public(connection, common)
-    if view == "character_private":
-        if authorized_knower_id is None:
-            return ()
-        return _list_character_private(connection, common)
-    # known / rumors / party_shared
-    if authorized_party_id is None:
-        # The canonical (ground-truth) projection — reachable for a baseline
-        # GM, or for a non-GM who holds a targeted `canon.edit` allow for at
-        # least one item (`_list_canonical` itself filters to exactly the
-        # items this caller may see ground truth for, so a targeted deny is
-        # honored and a targeted allow reveals only its own item — never
-        # campaign-wide authority). A caller with neither gets an empty page.
-        if not include_ground_truth and not ground_truth_allowed_item_ids:
-            return ()
-        return _list_canonical(connection, common, view=view)
-    return _list_party(connection, common, view=view)
+    item_filters = _item_filters(view)
+    sources: list[str] = []
+    if view in ("known", "rumors", "party_shared"):
+        if authorized_party_id is not None:
+            sources.append(_party_source(item_filters))
+        elif include_ground_truth or ground_truth_allowed_item_ids:
+            # The canonical (ground-truth) projection — reachable for a
+            # baseline GM, or for a non-GM who holds a targeted `canon.edit`
+            # allow for at least one item (`_canonical_source` itself keeps
+            # exactly the items this caller may see ground truth for, so a
+            # targeted deny is honored and a targeted allow reveals only its
+            # own item — never campaign-wide authority).
+            sources.append(_canonical_source(item_filters))
+    elif view == "character_private" and authorized_knower_id is not None:
+        sources.append(_character_source(item_filters))
+    if include_public:
+        sources.append(_public_source(item_filters))
+    if not sources:
+        return ()
+    return _list_by_statement(connection, common, sources)
 
 
 # ---------------------------------------------------------------------------
@@ -287,34 +322,228 @@ def _escape_like(term: str) -> str:
     return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
-_STATEMENT_CURSOR_PREDICATE = """
-    (
-      NOT CAST(:has_cursor AS boolean)
-      OR (:__sort_expr__, :__id_expr__)
-         > (CAST(:after_statement AS text), CAST(:after_record_id AS uuid))
+def _item_filters(view: str) -> str:
+    """The item-level `WHERE` predicates every candidate source applies
+    before precedence is resolved: the caller's world, the view's own
+    rumor/settled split, the `type` filter, and the excluded (targeted
+    `campaign.view` deny + lifecycle-hidden) items. Each depends only on the
+    item, never on which projection of it wins, so applying them per source
+    cannot change which projection an item resolves to."""
+    if view == "known":
+        view_clause = "AND NOT (kt.code = ANY(CAST(:rumor_codes AS text[])))"
+    elif view == "rumors":
+        view_clause = "AND kt.code = ANY(CAST(:rumor_codes AS text[]))"
+    else:  # party_shared / character_private / public / recent
+        view_clause = ""
+    return f"""
+          AND e.world_id = :world_id
+          {view_clause}
+          AND (CAST(:type_code AS text) IS NULL OR kt.code = CAST(:type_code AS text))
+          AND NOT (ki.knowledge_item_id = ANY(CAST(:denied AS uuid[])))
+    """
+
+
+# The joins every candidate source makes from its own knowledge row to the
+# item definition, its entity (for the world check), type, and truth status.
+_ITEM_JOINS = """
+        JOIN knowledge.knowledge_items ki ON ki.knowledge_item_id = {item_col}
+        JOIN core.entities e ON e.entity_id = ki.knowledge_item_id
+        JOIN knowledge.knowledge_types kt ON kt.knowledge_type_id = ki.knowledge_type_id
+        JOIN knowledge.truth_statuses ts ON ts.truth_status_id = ki.truth_status_id
+"""
+
+# One row per publicly known item on the timeline. An item may be public in
+# several locations (`uq_public_knowledge` is per timeline/item/location);
+# the representative row is the one it has been public longest — earliest
+# `known_since` world time, `NULL` last — with `public_knowledge_id` as the
+# immutable tie-breaker, so the projection (and the cursor's record id) is
+# deterministic and an item is never listed once per location.
+_PUBLIC_ITEMS_CTE = """
+    public_items AS (
+        SELECT DISTINCT ON (pub.knowledge_item_id)
+               pub.public_knowledge_id, pub.knowledge_item_id, pub.awareness_level,
+               pub.known_since_world_time_id, pwt.sort_key AS known_since_sort
+        FROM knowledge.public_knowledge pub
+        LEFT JOIN core.world_times pwt ON pwt.world_time_id = pub.known_since_world_time_id
+        WHERE pub.timeline_id = :timeline_id
+        ORDER BY pub.knowledge_item_id, pwt.sort_key ASC NULLS LAST, pub.public_knowledge_id
     )
 """
 
 
-def _cursor_predicate(statement_expr: str, id_expr: str) -> str:
-    """The keyset `WHERE` clause for a statement-ordered view, bound to
-    that view's viewer-safe statement expression and unique record id."""
-    return _STATEMENT_CURSOR_PREDICATE.replace(
-        ":__sort_expr__", _sort_key_expr(statement_expr)
-    ).replace(":__id_expr__", id_expr)
-
-
-def _statement_filters() -> str:
-    """The shared `q` + type-code filters for the statement-ordered views.
-    `:__statement_expr__` is substituted by each caller."""
-    return """
-        AND (
-              CAST(:like_pattern AS text) IS NULL
-              OR :__statement_expr__ ILIKE CAST(:like_pattern AS text) ESCAPE '\\'
-            )
-        AND (CAST(:type_code AS text) IS NULL OR kt.code = CAST(:type_code AS text))
-        AND NOT (ki.knowledge_item_id = ANY(CAST(:denied AS uuid[])))
+def _candidate_columns(
+    *,
+    statement_expr: str,
+    record_id: str,
+    scope: str,
+    precedence: int,
+    awareness: str = "NULL",
+    confidence: str = "NULL",
+    willing_to_share: str = "NULL",
+    discovery_world_time_id: str = "NULL",
+    source_event_id: str = "NULL",
+    source_interaction_id: str = "NULL",
+    time_sort: str = "NULL",
+) -> str:
+    """The uniform, explicitly typed column list every candidate source
+    selects, so the sources `UNION ALL` cleanly. `scope` is a SQL
+    expression; `precedence` orders the projections of one item (lower
+    wins — see "Public knowledge" in the module docstring)."""
+    return f"""
+        SELECT ki.knowledge_item_id,
+               {record_id} AS record_id,
+               kt.code AS knowledge_type_code,
+               {statement_expr} AS statement,
+               {_sort_key_expr(statement_expr)} AS statement_sort,
+               ts.code AS truth_status_code, ki.sensitivity,
+               {_GROUND_TRUTH_EXPR} AS caller_sees_ground_truth,
+               CAST({awareness} AS text) AS awareness_level,
+               CAST({confidence} AS integer) AS confidence,
+               CAST({willing_to_share} AS boolean) AS willing_to_share,
+               CAST({discovery_world_time_id} AS uuid) AS discovery_world_time_id,
+               CAST({source_event_id} AS uuid) AS source_event_id,
+               CAST({source_interaction_id} AS uuid) AS source_interaction_id,
+               ki.subject_entity_id,
+               CAST({time_sort} AS bigint) AS time_sort,
+               CAST({scope} AS text) AS scope,
+               {precedence} AS precedence
     """
+
+
+# Projection precedence for one item (lower wins): the caller's own
+# audience-specific belief — party, character — or the ground-truth
+# canonical projection, ahead of the public lore projection. The same order
+# `dnd_ai.queries.knowledge.get_knowledge_view` resolves for the detail
+# route, so list and detail show the same statement for the same item.
+_AUDIENCE_PRECEDENCE = 1
+_PUBLIC_PRECEDENCE = 2
+
+
+def _party_source(item_filters: str) -> str:
+    columns = _candidate_columns(
+        statement_expr="COALESCE(pk.interpretation, ki.canonical_statement)",
+        record_id="ki.knowledge_item_id",
+        scope="'party'",
+        precedence=_AUDIENCE_PRECEDENCE,
+        awareness="pk.awareness_level",
+        confidence="pk.confidence",
+        willing_to_share="pk.willing_to_share",
+        source_event_id="pk.last_event_id",
+    )
+    return f"""
+        {columns}
+        FROM campaign.party_knowledge pk
+        {_ITEM_JOINS.format(item_col="pk.knowledge_item_id")}
+        WHERE pk.timeline_id = :timeline_id
+          AND pk.party_id = :party_id
+          {item_filters}
+    """
+
+
+def _character_source(item_filters: str) -> str:
+    columns = _candidate_columns(
+        statement_expr="COALESCE(ek.interpretation, ki.canonical_statement)",
+        record_id="ek.entity_knowledge_id",
+        scope="'character'",
+        precedence=_AUDIENCE_PRECEDENCE,
+        awareness="ek.awareness_level",
+        confidence="ek.confidence",
+        willing_to_share="ek.willing_to_share",
+        discovery_world_time_id="ek.learned_at_world_time_id",
+        source_event_id="ek.learned_via_event_id",
+        source_interaction_id="ek.learned_via_interaction_id",
+    )
+    return f"""
+        {columns}
+        FROM knowledge.entity_knowledge ek
+        {_ITEM_JOINS.format(item_col="ek.knowledge_item_id")}
+        WHERE ek.timeline_id = :timeline_id
+          AND ek.knower_entity_id = :knower_id
+          {item_filters}
+    """
+
+
+def _canonical_source(item_filters: str) -> str:
+    columns = _candidate_columns(
+        statement_expr="ki.canonical_statement",
+        record_id="ki.knowledge_item_id",
+        scope="'canonical'",
+        precedence=_AUDIENCE_PRECEDENCE,
+    )
+    return f"""
+        {columns}
+        FROM knowledge.knowledge_items ki
+        JOIN core.entities e ON e.entity_id = ki.knowledge_item_id
+        JOIN knowledge.knowledge_types kt ON kt.knowledge_type_id = ki.knowledge_type_id
+        JOIN knowledge.truth_statuses ts ON ts.truth_status_id = ki.truth_status_id
+        -- The canonical source returns *only* items this caller may see
+        -- ground truth for: a targeted `canon.edit` deny drops the item from
+        -- here (it may still surface through a belief or public source), and
+        -- a non-GM's targeted `canon.edit` allow reveals exactly its own
+        -- item and no other.
+        WHERE {_GROUND_TRUTH_EXPR}
+          {item_filters}
+    """
+
+
+def _public_source(item_filters: str) -> str:
+    # The canonical statement is exactly what public lore *is*; the
+    # GM-only `truth_status`/`sensitivity` stay gated per item by
+    # `caller_sees_ground_truth`, never by the item being public.
+    columns = _candidate_columns(
+        statement_expr="ki.canonical_statement",
+        record_id="pi.public_knowledge_id",
+        scope="'public'",
+        precedence=_PUBLIC_PRECEDENCE,
+        awareness="pi.awareness_level",
+        discovery_world_time_id="pi.known_since_world_time_id",
+    )
+    return f"""
+        {columns}
+        FROM public_items pi
+        {_ITEM_JOINS.format(item_col="pi.knowledge_item_id")}
+        WHERE TRUE
+          {item_filters}
+    """
+
+
+def _list_by_statement(
+    connection: Connection, params: dict[str, object], sources: list[str]
+) -> tuple[KnowledgeListItem, ...]:
+    """Every statement-ordered view: the `UNION ALL` of its candidate
+    `sources`, reduced to **one row per item** by projection precedence
+    (`DISTINCT ON`, lowest `precedence` then lowest `record_id`) *before*
+    the `q` search and the keyset cursor run against the chosen row's
+    viewer-safe statement. Resolving the projection first is what keeps the
+    choice deterministic: a search term that only matches an item's
+    canonical (public) statement never resurfaces an item whose winning
+    projection is the party's differing interpretation, and pages never
+    show the same item twice."""
+    union = "\n        UNION ALL\n".join(sources)
+    sql = f"""
+        WITH {_PUBLIC_ITEMS_CTE.strip()},
+        candidates AS ({union}),
+        chosen AS (
+            SELECT DISTINCT ON (c.knowledge_item_id) c.*
+            FROM candidates c
+            ORDER BY c.knowledge_item_id, c.precedence, c.record_id
+        )
+        SELECT c.*
+        FROM chosen c
+        WHERE (
+                CAST(:like_pattern AS text) IS NULL
+                OR c.statement ILIKE CAST(:like_pattern AS text) ESCAPE '\\'
+              )
+          AND (
+                NOT CAST(:has_cursor AS boolean)
+                OR (c.statement_sort, c.record_id)
+                   > (CAST(:after_statement AS text), CAST(:after_record_id AS uuid))
+              )
+        ORDER BY c.statement_sort, c.record_id
+        LIMIT :limit_plus_one
+    """
+    rows = connection.execute(text(sql), params).mappings()
+    return tuple(_row_to_item(r, scope=str(r["scope"])) for r in rows)
 
 
 def _row_to_item(r: object, *, scope: str) -> KnowledgeListItem:
@@ -372,167 +601,6 @@ def _opt_uuid(v: object) -> uuid.UUID | None:
     return v if isinstance(v, uuid.UUID) else None
 
 
-def _list_party(
-    connection: Connection, params: dict[str, object], *, view: str
-) -> tuple[KnowledgeListItem, ...]:
-    if view == "known":
-        type_clause = "AND NOT (kt.code = ANY(CAST(:rumor_codes AS text[])))"
-    elif view == "rumors":
-        type_clause = "AND kt.code = ANY(CAST(:rumor_codes AS text[]))"
-    else:  # party_shared
-        type_clause = ""
-    statement_expr = "COALESCE(pk.interpretation, ki.canonical_statement)"
-    sort_key = _sort_key_expr(statement_expr)
-    sql = f"""
-        SELECT ki.knowledge_item_id,
-               ki.knowledge_item_id AS record_id,
-               kt.code AS knowledge_type_code,
-               {statement_expr} AS statement,
-               {sort_key} AS statement_sort,
-               ts.code AS truth_status_code, ki.sensitivity,
-               {_GROUND_TRUTH_EXPR} AS caller_sees_ground_truth,
-               pk.awareness_level, pk.confidence, pk.willing_to_share,
-               NULL::uuid AS discovery_world_time_id,
-               pk.last_event_id AS source_event_id,
-               NULL::uuid AS source_interaction_id,
-               ki.subject_entity_id,
-               NULL::bigint AS time_sort
-        FROM campaign.party_knowledge pk
-        JOIN knowledge.knowledge_items ki ON ki.knowledge_item_id = pk.knowledge_item_id
-        JOIN core.entities e ON e.entity_id = ki.knowledge_item_id
-        JOIN knowledge.knowledge_types kt ON kt.knowledge_type_id = ki.knowledge_type_id
-        JOIN knowledge.truth_statuses ts ON ts.truth_status_id = ki.truth_status_id
-        WHERE pk.timeline_id = :timeline_id
-          AND pk.party_id = :party_id
-          AND e.world_id = :world_id
-          {type_clause}
-          {_statement_filters().replace(":__statement_expr__", statement_expr)}
-          AND {_cursor_predicate(statement_expr, "ki.knowledge_item_id")}
-        ORDER BY {sort_key}, ki.knowledge_item_id
-        LIMIT :limit_plus_one
-    """
-    rows = connection.execute(text(sql), params).mappings()
-    return tuple(_row_to_item(r, scope="party") for r in rows)
-
-
-def _list_character_private(
-    connection: Connection, params: dict[str, object]
-) -> tuple[KnowledgeListItem, ...]:
-    statement_expr = "COALESCE(ek.interpretation, ki.canonical_statement)"
-    sort_key = _sort_key_expr(statement_expr)
-    sql = f"""
-        SELECT ki.knowledge_item_id,
-               ek.entity_knowledge_id AS record_id,
-               kt.code AS knowledge_type_code,
-               {statement_expr} AS statement,
-               {sort_key} AS statement_sort,
-               ts.code AS truth_status_code, ki.sensitivity,
-               {_GROUND_TRUTH_EXPR} AS caller_sees_ground_truth,
-               ek.awareness_level, ek.confidence, ek.willing_to_share,
-               wt.world_time_id AS discovery_world_time_id,
-               ek.learned_via_event_id AS source_event_id,
-               ek.learned_via_interaction_id AS source_interaction_id,
-               ki.subject_entity_id,
-               NULL::bigint AS time_sort
-        FROM knowledge.entity_knowledge ek
-        JOIN knowledge.knowledge_items ki ON ki.knowledge_item_id = ek.knowledge_item_id
-        JOIN core.entities e ON e.entity_id = ki.knowledge_item_id
-        JOIN knowledge.knowledge_types kt ON kt.knowledge_type_id = ki.knowledge_type_id
-        JOIN knowledge.truth_statuses ts ON ts.truth_status_id = ki.truth_status_id
-        LEFT JOIN core.world_times wt ON wt.world_time_id = ek.learned_at_world_time_id
-        WHERE ek.timeline_id = :timeline_id
-          AND ek.knower_entity_id = :knower_id
-          AND e.world_id = :world_id
-          {_statement_filters().replace(":__statement_expr__", statement_expr)}
-          AND {_cursor_predicate(statement_expr, "ek.entity_knowledge_id")}
-        ORDER BY {sort_key}, ek.entity_knowledge_id
-        LIMIT :limit_plus_one
-    """
-    rows = connection.execute(text(sql), params).mappings()
-    return tuple(_row_to_item(r, scope="character") for r in rows)
-
-
-def _list_canonical(
-    connection: Connection, params: dict[str, object], *, view: str
-) -> tuple[KnowledgeListItem, ...]:
-    if view == "known":
-        type_clause = "AND NOT (kt.code = ANY(CAST(:rumor_codes AS text[])))"
-    elif view == "rumors":
-        type_clause = "AND kt.code = ANY(CAST(:rumor_codes AS text[]))"
-    else:
-        type_clause = ""
-    statement_expr = "ki.canonical_statement"
-    sort_key = _sort_key_expr(statement_expr)
-    sql = f"""
-        SELECT ki.knowledge_item_id,
-               ki.knowledge_item_id AS record_id,
-               kt.code AS knowledge_type_code,
-               {statement_expr} AS statement,
-               {sort_key} AS statement_sort,
-               ts.code AS truth_status_code, ki.sensitivity,
-               {_GROUND_TRUTH_EXPR} AS caller_sees_ground_truth,
-               NULL::text AS awareness_level, NULL::smallint AS confidence,
-               NULL::boolean AS willing_to_share,
-               NULL::uuid AS discovery_world_time_id,
-               NULL::uuid AS source_event_id, NULL::uuid AS source_interaction_id,
-               ki.subject_entity_id,
-               NULL::bigint AS time_sort
-        FROM knowledge.knowledge_items ki
-        JOIN core.entities e ON e.entity_id = ki.knowledge_item_id
-        JOIN knowledge.knowledge_types kt ON kt.knowledge_type_id = ki.knowledge_type_id
-        JOIN knowledge.truth_statuses ts ON ts.truth_status_id = ki.truth_status_id
-        WHERE e.world_id = :world_id
-          {type_clause}
-          -- The canonical view returns *only* items this caller may see
-          -- ground truth for: a targeted `canon.edit` deny drops the item
-          -- from here (it may still surface through a belief view), and a
-          -- non-GM's targeted `canon.edit` allow reveals exactly its own
-          -- item and no other.
-          AND {_GROUND_TRUTH_EXPR}
-          {_statement_filters().replace(":__statement_expr__", statement_expr)}
-          AND {_cursor_predicate(statement_expr, "ki.knowledge_item_id")}
-        ORDER BY {sort_key}, ki.knowledge_item_id
-        LIMIT :limit_plus_one
-    """
-    rows = connection.execute(text(sql), params).mappings()
-    return tuple(_row_to_item(r, scope="canonical") for r in rows)
-
-
-def _list_public(
-    connection: Connection, params: dict[str, object]
-) -> tuple[KnowledgeListItem, ...]:
-    statement_expr = "ki.canonical_statement"
-    sort_key = _sort_key_expr(statement_expr)
-    sql = f"""
-        SELECT ki.knowledge_item_id,
-               pub.public_knowledge_id AS record_id,
-               kt.code AS knowledge_type_code,
-               {statement_expr} AS statement,
-               {sort_key} AS statement_sort,
-               ts.code AS truth_status_code, ki.sensitivity,
-               {_GROUND_TRUTH_EXPR} AS caller_sees_ground_truth,
-               pub.awareness_level, NULL::smallint AS confidence,
-               NULL::boolean AS willing_to_share,
-               pub.known_since_world_time_id AS discovery_world_time_id,
-               NULL::uuid AS source_event_id, NULL::uuid AS source_interaction_id,
-               ki.subject_entity_id,
-               NULL::bigint AS time_sort
-        FROM knowledge.public_knowledge pub
-        JOIN knowledge.knowledge_items ki ON ki.knowledge_item_id = pub.knowledge_item_id
-        JOIN core.entities e ON e.entity_id = ki.knowledge_item_id
-        JOIN knowledge.knowledge_types kt ON kt.knowledge_type_id = ki.knowledge_type_id
-        JOIN knowledge.truth_statuses ts ON ts.truth_status_id = ki.truth_status_id
-        WHERE pub.timeline_id = :timeline_id
-          AND e.world_id = :world_id
-          {_statement_filters().replace(":__statement_expr__", statement_expr)}
-          AND {_cursor_predicate(statement_expr, "pub.public_knowledge_id")}
-        ORDER BY {sort_key}, pub.public_knowledge_id
-        LIMIT :limit_plus_one
-    """
-    rows = connection.execute(text(sql), params).mappings()
-    return tuple(_row_to_item(r, scope="public") for r in rows)
-
-
 def _owned_belief(party_col: str, character_col: str, *, canonical: bool = False) -> str:
     """A SQL `CASE` that reads `party_col` for a party-owned discovery
     (`pd.party_id IS NOT NULL`) and `character_col` for a character-owned
@@ -548,9 +616,11 @@ def _owned_belief(party_col: str, character_col: str, *, canonical: bool = False
 
 
 def _list_recent(
-    connection: Connection, params: dict[str, object]
+    connection: Connection, params: dict[str, object], *, include_public: bool
 ) -> tuple[KnowledgeListItem, ...]:
-    """`knowledge.party_discoveries` newest-first by discovery world time.
+    """`knowledge.party_discoveries` newest-first by discovery world time,
+    plus (unless `include_public` is `False`) the timeline's public items
+    ordered by the world time they became public.
 
     **Audience** (which discoveries are in scope): a caller with baseline
     `canon.edit` and *no* perspective sees every discovery on the timeline;
@@ -564,7 +634,7 @@ def _list_recent(
     **Projection** (per row, `_GROUND_TRUTH_EXPR`): where this caller may
     see the item's ground truth, the row shows the canonical statement
     (`scope` `canonical`, no belief metadata) with `truth_status`/
-    `sensitivity` — identical to `_list_canonical`. Where they may not
+    `sensitivity` — identical to the canonical source. Where they may not
     (no `canon.edit` standing for it, or a targeted `canon.edit` deny),
     *every* viewer-facing column — `statement`, `scope`, `awareness_level`,
     `confidence`, `willing_to_share` — is resolved through the **discovery
@@ -573,10 +643,19 @@ def _list_recent(
     interpretation of its own, and the row is shown only if that belief
     row exists at all (so `recent` never discloses a canonical statement a
     `canon.edit` deny or a missing belief should have replaced, and never
-    lists an item the matching detail route would 404 on). The `q`
-    substring match runs against that same effective statement expression.
-    `NULL` discovery time sorts last; `pd.party_discovery_id` is the stable
-    tie-breaker.
+    lists an item the matching detail route would 404 on).
+
+    **Public rows** use the representative `public_items` row (its
+    `known_since` time is the row's position in the stream) and appear only
+    for items with *no* in-audience discovery row — the audience's own
+    discovery is the more specific projection and wins, decided before the
+    `q` search runs, exactly like the statement-ordered views. A public
+    row shows the canonical statement (`scope` `public`, or `canonical`
+    with ground truth where the caller may see it).
+
+    The `q` substring match runs against each row's effective statement.
+    `NULL` world time sorts last; the row's own immutable id
+    (`party_discovery_id` / `public_knowledge_id`) is the tie-breaker.
     """
     gm_baseline = params["gm"] is True
     no_perspective = params["party_id"] is None and params["knower_id"] is None
@@ -609,68 +688,94 @@ def _list_recent(
     # the discovery owner's own belief row exists. A `canon.edit` deny flips
     # a row from the first case to needing the second — so a denied item
     # with no belief simply drops out (non-disclosing), exactly as it would
-    # from `_list_canonical`.
+    # from the canonical source.
     belief_clause = (
         f"AND ({gt} "
         "OR (pd.party_id IS NOT NULL AND pk.party_knowledge_id IS NOT NULL) "
         "OR (pd.knower_entity_id IS NOT NULL AND ek.entity_knowledge_id IS NOT NULL))"
     )
+    item_filters = _item_filters("recent")
+
+    discovery_columns = _candidate_columns(
+        statement_expr=statement_expr,
+        record_id="pd.party_discovery_id",
+        scope=scope_expr,
+        precedence=_AUDIENCE_PRECEDENCE,
+        awareness=awareness_expr,
+        confidence=confidence_expr,
+        willing_to_share=share_expr,
+        discovery_world_time_id="pd.discovered_at_world_time_id",
+        source_event_id="pd.discovered_via_event_id",
+        source_interaction_id="pd.discovered_via_interaction_id",
+        time_sort="wt.sort_key",
+    )
+    public_rows = ""
+    if include_public:
+        public_columns = _candidate_columns(
+            statement_expr="ki.canonical_statement",
+            record_id="pi.public_knowledge_id",
+            scope=f"CASE WHEN {gt} THEN 'canonical' ELSE 'public' END",
+            precedence=_PUBLIC_PRECEDENCE,
+            awareness=f"CASE WHEN {gt} THEN NULL::text ELSE pi.awareness_level END",
+            discovery_world_time_id="pi.known_since_world_time_id",
+            time_sort="pi.known_since_sort",
+        )
+        public_rows = f"""
+        UNION ALL
+        {public_columns}
+        FROM public_items pi
+        {_ITEM_JOINS.format(item_col="pi.knowledge_item_id")}
+        WHERE NOT EXISTS (
+                SELECT 1 FROM discoveries d WHERE d.knowledge_item_id = pi.knowledge_item_id
+              )
+          {item_filters}
+        """
 
     sql = f"""
-        SELECT ki.knowledge_item_id,
-               pd.party_discovery_id AS record_id,
-               kt.code AS knowledge_type_code,
-               {statement_expr} AS statement,
-               ts.code AS truth_status_code, ki.sensitivity,
-               {gt} AS caller_sees_ground_truth,
-               {awareness_expr} AS awareness_level,
-               {confidence_expr} AS confidence,
-               {share_expr} AS willing_to_share,
-               {scope_expr} AS scope,
-               pd.discovered_at_world_time_id AS discovery_world_time_id,
-               pd.discovered_via_event_id AS source_event_id,
-               pd.discovered_via_interaction_id AS source_interaction_id,
-               ki.subject_entity_id,
-               wt.sort_key AS time_sort
-        FROM knowledge.party_discoveries pd
-        JOIN knowledge.knowledge_items ki ON ki.knowledge_item_id = pd.knowledge_item_id
-        JOIN core.entities e ON e.entity_id = ki.knowledge_item_id
-        JOIN knowledge.knowledge_types kt ON kt.knowledge_type_id = ki.knowledge_type_id
-        JOIN knowledge.truth_statuses ts ON ts.truth_status_id = ki.truth_status_id
-        LEFT JOIN core.world_times wt ON wt.world_time_id = pd.discovered_at_world_time_id
-        LEFT JOIN campaign.party_knowledge pk
-               ON pk.timeline_id = pd.timeline_id
-              AND pk.knowledge_item_id = pd.knowledge_item_id
-              AND pk.party_id = :party_id
-        LEFT JOIN knowledge.entity_knowledge ek
-               ON ek.timeline_id = pd.timeline_id
-              AND ek.knowledge_item_id = pd.knowledge_item_id
-              AND ek.knower_entity_id = :knower_id
-        WHERE pd.timeline_id = :timeline_id
-          AND e.world_id = :world_id
-          AND {audience_clause}
-          {belief_clause}
-          AND (CAST(:type_code AS text) IS NULL OR kt.code = CAST(:type_code AS text))
-          AND NOT (ki.knowledge_item_id = ANY(CAST(:denied AS uuid[])))
-          AND (
+        WITH {_PUBLIC_ITEMS_CTE.strip()},
+        discoveries AS (
+            {discovery_columns}
+            FROM knowledge.party_discoveries pd
+            {_ITEM_JOINS.format(item_col="pd.knowledge_item_id")}
+            LEFT JOIN core.world_times wt ON wt.world_time_id = pd.discovered_at_world_time_id
+            LEFT JOIN campaign.party_knowledge pk
+                   ON pk.timeline_id = pd.timeline_id
+                  AND pk.knowledge_item_id = pd.knowledge_item_id
+                  AND pk.party_id = :party_id
+            LEFT JOIN knowledge.entity_knowledge ek
+                   ON ek.timeline_id = pd.timeline_id
+                  AND ek.knowledge_item_id = pd.knowledge_item_id
+                  AND ek.knower_entity_id = :knower_id
+            WHERE pd.timeline_id = :timeline_id
+              AND {audience_clause}
+              {belief_clause}
+              {item_filters}
+        ),
+        combined AS (
+            SELECT * FROM discoveries
+            {public_rows}
+        )
+        SELECT c.*
+        FROM combined c
+        WHERE (
                 CAST(:like_pattern AS text) IS NULL
-                OR ({statement_expr}) ILIKE CAST(:like_pattern AS text) ESCAPE '\\'
+                OR c.statement ILIKE CAST(:like_pattern AS text) ESCAPE '\\'
               )
           AND (
             NOT CAST(:has_cursor AS boolean)
             OR (
               (CAST(:after_time_sort AS bigint) IS NOT NULL AND (
-                 wt.sort_key < CAST(:after_time_sort AS bigint)
-                 OR wt.sort_key IS NULL
-                 OR (wt.sort_key = CAST(:after_time_sort AS bigint)
-                     AND pd.party_discovery_id > CAST(:after_record_id AS uuid))
+                 c.time_sort < CAST(:after_time_sort AS bigint)
+                 OR c.time_sort IS NULL
+                 OR (c.time_sort = CAST(:after_time_sort AS bigint)
+                     AND c.record_id > CAST(:after_record_id AS uuid))
               ))
               OR (CAST(:after_time_sort AS bigint) IS NULL
-                  AND wt.sort_key IS NULL
-                  AND pd.party_discovery_id > CAST(:after_record_id AS uuid))
+                  AND c.time_sort IS NULL
+                  AND c.record_id > CAST(:after_record_id AS uuid))
             )
           )
-        ORDER BY wt.sort_key DESC NULLS LAST, pd.party_discovery_id
+        ORDER BY c.time_sort DESC NULLS LAST, c.record_id
         LIMIT :limit_plus_one
     """
     rows = connection.execute(text(sql), params).mappings()

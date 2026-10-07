@@ -9,6 +9,7 @@ interface QuestDetailBoundaryProps {
     campaignId: string
     questId: string
     characterId: string | null
+    partyId?: string | null
     children: (
         quest: QuestDetail,
     ) => ReactNode
@@ -18,12 +19,14 @@ export function QuestDetailBoundary({
     campaignId,
     questId,
     characterId,
+    partyId = null,
     children,
 }: QuestDetailBoundaryProps) {
     const { state, retry } = useQuest(
         campaignId,
         questId,
         characterId,
+        partyId,
     )
 
     if (state.status === "loading") {

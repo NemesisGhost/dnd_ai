@@ -80,6 +80,7 @@ describe("useCampaignQuests", () => {
             useCampaignQuests(
                 "campaign-a",
                 "character-a",
+                "party-a",
             ),
         )
 
@@ -99,6 +100,7 @@ describe("useCampaignQuests", () => {
         ).toHaveBeenCalledWith(
             "campaign-a",
             "character-a",
+            "party-a",
             expect.any(AbortSignal),
         )
     })
@@ -256,7 +258,7 @@ describe("useCampaignQuests", () => {
 
         const firstSignal =
             fetchCampaignQuestsMock.mock
-                .calls[0]?.[2] as AbortSignal
+                .calls[0]?.[3] as AbortSignal
 
         rerender({
             characterId: "character-b",
@@ -298,12 +300,40 @@ describe("useCampaignQuests", () => {
 
         const signal =
             fetchCampaignQuestsMock.mock
-                .calls[0]?.[2] as AbortSignal
+                .calls[0]?.[3] as AbortSignal
 
         expect(signal.aborted).toBe(false)
 
         unmount()
 
         expect(signal.aborted).toBe(true)
+    })
+
+    it("refetches, never reusing the previous list, when only the party perspective changes", async () => {
+        fetchCampaignQuestsMock
+            .mockResolvedValueOnce(firstPerspectiveQuests)
+            .mockReturnValueOnce(new Promise<CampaignQuestListItem[]>(() => { }))
+
+        const { result, rerender } = renderHook(
+            ({ partyId }) => useCampaignQuests("campaign-a", "character-a", partyId),
+            { initialProps: { partyId: "party-a" as string | null } },
+        )
+
+        await waitFor(() => {
+            expect(result.current.state).toEqual({
+                status: "success",
+                quests: firstPerspectiveQuests,
+            })
+        })
+
+        rerender({ partyId: "party-b" })
+
+        expect(result.current.state).toEqual({ status: "loading" })
+        expect(fetchCampaignQuestsMock).toHaveBeenLastCalledWith(
+            "campaign-a",
+            "character-a",
+            "party-b",
+            expect.any(AbortSignal),
+        )
     })
 })

@@ -27,10 +27,13 @@ those fields, it never hides an item the caller could otherwise see
 ground truth for an item must prove an authorized party
 (`dnd_ai.api.access.resolve_party_perspective`, `character.view_knowledge`
 + current party membership) or, for character-private, hold
-`character.view_knowledge` for the named character. An
-omitted-or-unauthorized perspective yields an empty list page, or — for
-the detail route — the identical fixed, non-disclosing 404 a nonexistent
-item produces (a knowledge item's own existence can be sensitive). The
+`character.view_knowledge` for the named character. An omitted perspective
+contributes no audience-specific records to a list page, or — for the
+detail route — yields the identical fixed, non-disclosing 404 a nonexistent
+item produces (a knowledge item's own existence can be sensitive). Public
+knowledge (`knowledge.public_knowledge`) needs no perspective: the list
+includes it in every view unless the caller passes `include_public=false`,
+and the detail route falls back to it. The
 list's `subject_entity_id`/`source_event_id`/`source_interaction_id` are
 each returned only when the caller can independently discover that
 resource (`_resolve_related_id_redaction`). These are reads: no idempotency
@@ -248,17 +251,22 @@ def list_knowledge_endpoint(
     party_id: Annotated[uuid.UUID | None, Query()] = None,
     q: Annotated[str | None, Query(max_length=_MAX_QUERY_LEN)] = None,
     type: Annotated[str | None, Query(max_length=64)] = None,
+    include_public: Annotated[bool, Query()] = True,
     limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
     cursor: Annotated[str | None, Query()] = None,
 ) -> KnowledgeListResponse:
     """The audience-filtered Knowledge screen list. See
     `dnd_ai.queries.knowledge_browse` for the `view` vocabulary and
-    semantics. `character_id`/`party_id` are the perspective: `known`/
-    `rumors`/`party_shared` need an authorized `(character_id, party_id)`
-    pair; `character_private` needs `character_id` (with
-    `character.view_knowledge` held for it); `recent` uses either or both;
-    `public` needs neither. An unauthorized or omitted perspective yields
-    an empty page, not an error and not an existence hint."""
+    semantics. `character_id`/`party_id` are the perspective: the
+    audience-specific part of `known`/`rumors`/`party_shared` needs an
+    authorized `(character_id, party_id)` pair; `character_private` needs
+    `character_id` (with `character.view_knowledge` held for it); `recent`
+    uses either or both. Public knowledge needs no perspective and is
+    included in every view by default — an omitted perspective yields just
+    the public items, never an error or an existence hint. `include_public=
+    false` is the explicit opt-out; `view=public` is the public-only
+    filter. An item both public and in the caller's audience is listed once,
+    in its audience-specific projection."""
     include_ground_truth = access.has_capability(_KNOWLEDGE_GROUND_TRUTH_CAPABILITY)
 
     authorized_party_id = resolve_party_perspective(
@@ -324,6 +332,7 @@ def list_knowledge_endpoint(
         after_statement=after_statement,
         after_time_sort=after_time_sort,
         after_record_id=after_record_id,
+        include_public=include_public,
     )
 
     if time_ordered:

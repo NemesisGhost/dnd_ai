@@ -62,7 +62,7 @@ afterEach(() => {
 })
 
 describe("fetchCampaignQuests", () => {
-    it("returns the authorized quest list for a character perspective", async () => {
+    it("sends both character_id and party_id for a party perspective", async () => {
         const controller = new AbortController()
 
         const fetchMock = vi.fn().mockResolvedValue(
@@ -83,6 +83,7 @@ describe("fetchCampaignQuests", () => {
             fetchCampaignQuests(
                 "campaign/a b",
                 "character/c d",
+                "party/g h",
                 controller.signal,
             ),
         ).resolves.toEqual(questListFixture)
@@ -90,7 +91,7 @@ describe("fetchCampaignQuests", () => {
         expect(fetchMock).toHaveBeenCalledTimes(1)
 
         expect(fetchMock).toHaveBeenCalledWith(
-            "/api/campaigns/campaign%2Fa%20b/quests?character_id=character%2Fc+d",
+            "/api/campaigns/campaign%2Fa%20b/quests?character_id=character%2Fc+d&party_id=party%2Fg+h",
             {
                 method: "GET",
                 headers: {
@@ -117,6 +118,7 @@ describe("fetchCampaignQuests", () => {
         await expect(
             fetchCampaignQuests(
                 "campaign-a",
+                null,
                 null,
             ),
         ).resolves.toEqual([])
@@ -146,6 +148,7 @@ describe("fetchCampaignQuests", () => {
         const request = fetchCampaignQuests(
             "campaign-a",
             null,
+            null,
         )
 
         await expect(request).rejects.toBeInstanceOf(
@@ -162,7 +165,7 @@ describe("fetchCampaignQuests", () => {
 })
 
 describe("fetchQuest", () => {
-    it("returns authorized quest detail for a character perspective", async () => {
+    it("sends both character_id and party_id for quest detail", async () => {
         const controller = new AbortController()
 
         const fetchMock = vi.fn().mockResolvedValue(
@@ -184,6 +187,7 @@ describe("fetchQuest", () => {
                 "campaign/a b",
                 "quest/e f",
                 "character/c d",
+                "party/g h",
                 controller.signal,
             ),
         ).resolves.toEqual(questDetailFixture)
@@ -191,7 +195,7 @@ describe("fetchQuest", () => {
         expect(fetchMock).toHaveBeenCalledTimes(1)
 
         expect(fetchMock).toHaveBeenCalledWith(
-            "/api/campaigns/campaign%2Fa%20b/quests/quest%2Fe%20f?character_id=character%2Fc+d",
+            "/api/campaigns/campaign%2Fa%20b/quests/quest%2Fe%20f?character_id=character%2Fc+d&party_id=party%2Fg+h",
             {
                 method: "GET",
                 headers: {
@@ -216,6 +220,7 @@ describe("fetchQuest", () => {
             "campaign-a",
             "unavailable-quest",
             null,
+            null,
         )
 
         await expect(request).rejects.toBeInstanceOf(
@@ -235,5 +240,30 @@ describe("fetchQuest", () => {
                 cache: "no-store",
             }),
         )
+    })
+})
+
+describe("quest perspective parameters", () => {
+    it("never sends a party without its character, and omits party_id for no party", async () => {
+        const fetchMock = vi.fn().mockImplementation(() =>
+            Promise.resolve(
+                new Response(JSON.stringify([]), {
+                    status: 200,
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                }),
+            ),
+        )
+
+        vi.stubGlobal("fetch", fetchMock)
+
+        await fetchCampaignQuests("campaign-a", "character-a", null)
+        await fetchCampaignQuests("campaign-a", null, "party-a")
+
+        expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+            "/api/campaigns/campaign-a/quests?character_id=character-a",
+            "/api/campaigns/campaign-a/quests",
+        ])
     })
 })
