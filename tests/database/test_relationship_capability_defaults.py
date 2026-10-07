@@ -37,10 +37,12 @@ from tests.factories import (
     make_character,
     make_character_relationship_type,
     make_membership_character_relationship,
+    make_membership_role,
     make_relationship_type_capability,
     make_timeline,
     make_user,
     make_world,
+    system_role_id,
 )
 
 pytestmark = [pytest.mark.database, pytest.mark.real_relationship_policy]
@@ -98,6 +100,7 @@ class Setup:
         self.campaign_id = make_campaign(connection, timeline_id)
         self.user_id = make_user(connection, "Player")
         self.membership_id = make_campaign_membership(connection, self.campaign_id, self.user_id)
+        make_membership_role(connection, self.membership_id, system_role_id(connection, "player"))
         self.character_id = make_character(connection, self.world_id, name="Hero")
 
     def relate(self, type_id: uuid.UUID, *, revoked: bool = False) -> None:

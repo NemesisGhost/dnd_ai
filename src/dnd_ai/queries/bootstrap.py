@@ -23,6 +23,12 @@ itself already performs per campaign:
   a member of one is not thereby proven to still be entitled to see it
   listed, and `resolve_access_context` does not filter on this itself, so
   this module applies it explicitly);
+- only campaigns where the resolved access currently carries
+  `campaign.view` — the same capability every campaign read route requires
+  (`dnd_ai.api.access.require_campaign_capability`). An active membership
+  whose role assignments are all revoked or expired, or that never had one,
+  is not a selectable campaign: offering it would land the portal on routes
+  that each answer 403;
 - roles: only `security.membership_roles` rows currently in force
   (`revoked_at IS NULL`, `expires_at IS NULL OR expires_at > now()`,
   `security.roles.is_active`) for that membership — the same conditions
@@ -79,10 +85,11 @@ Campaign startup (docs/UI_DESIGN.md §4.2, §4.7):
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy import Connection, text
 
-from dnd_ai.domain.access import resolve_access_context
+from dnd_ai.domain.access import AccessContext, resolve_access_context
 from dnd_ai.queries.world_authority import resolve_world_authority
 
 # The capability `dnd_ai.api.access.resolve_party_perspective` requires the
@@ -91,6 +98,11 @@ from dnd_ai.queries.world_authority import resolve_world_authority
 # character the user cannot satisfy this for must not have parties
 # advertised under it — see the party-row query below.
 _KNOWLEDGE_PERSPECTIVE_CAPABILITY = "character.view_knowledge"
+
+# The capability every campaign read route requires. A campaign is offered
+# (listed, selected at startup, accepted as a stored preference) only while
+# the caller holds it — never on the strength of a bare membership.
+CAMPAIGN_VIEW_CAPABILITY = "campaign.view"
 
 
 @dataclass(frozen=True)
@@ -194,30 +206,53 @@ _BOOTSTRAP_SCOPE_FROM_WHERE = """
 """
 
 
+def _campaign_view_access(
+    connection: Connection, *, user_id: uuid.UUID, campaign_id: uuid.UUID
+) -> AccessContext | None:
+    """`resolve_access_context` for `campaign_id`, but only while it carries
+    `campaign.view`; `None` otherwise (no membership, or a membership with no
+    role assignment currently in force that grants it)."""
+    access = resolve_access_context(connection, user_id=user_id, campaign_id=campaign_id)
+    if access is None or not access.has_capability(CAMPAIGN_VIEW_CAPABILITY):
+        return None
+    return access
+
+
+def _scoped_campaign_rows(connection: Connection, *, user_id: uuid.UUID) -> list[Any]:
+    return list(
+        connection.execute(
+            text(
+                "SELECT cm.campaign_membership_id, c.campaign_id, c.name AS campaign_name "
+                + _BOOTSTRAP_SCOPE_FROM_WHERE
+                + " ORDER BY c.name, c.campaign_id"
+            ),
+            {"user_id": user_id},
+        )
+        .mappings()
+        .all()
+    )
+
+
 def list_bootstrap_campaign_ids(connection: Connection, *, user_id: uuid.UUID) -> list[uuid.UUID]:
     """The campaign IDs the session bootstrap would list for `user_id`,
     ordered `(name, campaign_id)` — the single definition of "authorized
     bootstrap campaign scope" shared with `is_campaign_bootstrap_authorized`
     so preference writes can never drift from what the bootstrap offers."""
-    return list(
-        connection.execute(
-            text(
-                "SELECT c.campaign_id "
-                + _BOOTSTRAP_SCOPE_FROM_WHERE
-                + " ORDER BY c.name, c.campaign_id"
-            ),
-            {"user_id": user_id},
-        ).scalars()
-    )
+    return [
+        row["campaign_id"]
+        for row in _scoped_campaign_rows(connection, user_id=user_id)
+        if _campaign_view_access(connection, user_id=user_id, campaign_id=row["campaign_id"])
+        is not None
+    ]
 
 
 def is_campaign_bootstrap_authorized(
     connection: Connection, *, user_id: uuid.UUID, campaign_id: uuid.UUID
 ) -> bool:
     """True only when `campaign_id` is in the same scope the bootstrap lists
-    (active membership in an active campaign) *and* `resolve_access_context`
-    resolves for it — the bootstrap skips a campaign when that returns
-    `None`, so this does too."""
+    (active membership in an active campaign) *and* the resolved access
+    carries `campaign.view` — the bootstrap skips a campaign otherwise, so
+    this does too."""
     in_scope = connection.execute(
         text(
             "SELECT 1 " + _BOOTSTRAP_SCOPE_FROM_WHERE + " AND c.campaign_id = :campaign_id LIMIT 1"
@@ -226,7 +261,7 @@ def is_campaign_bootstrap_authorized(
     ).scalar()
     if in_scope is None:
         return False
-    return resolve_access_context(connection, user_id=user_id, campaign_id=campaign_id) is not None
+    return _campaign_view_access(connection, user_id=user_id, campaign_id=campaign_id) is not None
 
 
 def resolve_startup_campaign_id(
@@ -263,31 +298,20 @@ def get_session_bootstrap(connection: Connection, *, user_id: uuid.UUID) -> Sess
     ).scalar()
     assert isinstance(display_name, str)
 
-    membership_rows = (
-        connection.execute(
-            text(
-                "SELECT cm.campaign_membership_id, c.campaign_id, c.name AS campaign_name "
-                + _BOOTSTRAP_SCOPE_FROM_WHERE
-                + " ORDER BY c.name, c.campaign_id"
-            ),
-            {"user_id": user_id},
-        )
-        .mappings()
-        .all()
-    )
+    membership_rows = _scoped_campaign_rows(connection, user_id=user_id)
 
     campaigns: list[CampaignBootstrapView] = []
     for row in membership_rows:
         campaign_id = row["campaign_id"]
         membership_id = row["campaign_membership_id"]
 
-        access = resolve_access_context(connection, user_id=user_id, campaign_id=campaign_id)
+        # `None` both when resolve_access_context finds no authorizing
+        # membership (should not happen: the scan above uses the same
+        # active/ended_at criteria) and when the membership has no role
+        # currently granting `campaign.view`. Either way the campaign is not
+        # offered, and one such row never breaks the rest of the bootstrap.
+        access = _campaign_view_access(connection, user_id=user_id, campaign_id=campaign_id)
         if access is None:
-            # The membership scan above and resolve_access_context's own
-            # membership check use the same active/ended_at criteria, so
-            # this should not happen in practice; skip defensively rather
-            # than raise, so one inconsistent row cannot break the whole
-            # bootstrap response for every other campaign.
             continue
 
         # World and timeline for the World -> Timeline -> Campaign hierarchy

@@ -32,6 +32,7 @@ const ROLE_OPTIONS = [
     { value: "world_editor", label: "Editor — creates and edits definitions and timelines" },
     { value: "world_reviewer", label: "Reviewer — approves and publishes canon" },
     { value: "world_reader", label: "Reader — reads published canon" },
+    { value: "world_viewer", label: "Viewer — sees the world, its timelines and calendars" },
     { value: "world_owner", label: "Owner — full control, including sharing and transfer" },
 ] as const
 
@@ -40,6 +41,7 @@ const RETAIN_OPTIONS = [
     { value: "world_editor", label: "Editor" },
     { value: "world_reviewer", label: "Reviewer" },
     { value: "world_reader", label: "Reader" },
+    { value: "world_viewer", label: "Viewer" },
 ] as const
 
 type Pending =

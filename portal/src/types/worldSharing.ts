@@ -2,8 +2,17 @@
 // role on a world, who may host campaigns on it, and the published-canon browse a
 // world Reader sees.
 
-export type WorldRoleCode = "world_owner" | "world_editor" | "world_reviewer" | "world_reader"
-export type RetainedWorldRoleCode = "world_editor" | "world_reviewer" | "world_reader"
+export type WorldRoleCode =
+    | "world_owner"
+    | "world_viewer"
+    | "world_editor"
+    | "world_reviewer"
+    | "world_reader"
+export type RetainedWorldRoleCode =
+    | "world_viewer"
+    | "world_editor"
+    | "world_reviewer"
+    | "world_reader"
 
 export interface WorldRoleAssignment {
     world_membership_id: string
@@ -71,6 +80,7 @@ export interface WorldCanonResponse {
 
 export const WORLD_ROLE_LABEL: Readonly<Record<string, string>> = {
     world_owner: "Owner",
+    world_viewer: "Viewer",
     world_editor: "Editor",
     world_reviewer: "Reviewer",
     world_reader: "Reader",

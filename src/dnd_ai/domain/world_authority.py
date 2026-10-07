@@ -38,6 +38,21 @@ from dataclasses import dataclass
 # re-exported here so existing imports keep working.
 from dnd_ai.domain.system_authority import WORLD_CREATE
 
+from .authoring_policy import (
+    TIMELINE_ARCHIVE,
+    TIMELINE_CREATE_BRANCH,
+    TIMELINE_CREATE_CAMPAIGN,
+    TIMELINE_RESTORE,
+    TIMELINE_UPDATE,
+    WORLD_ARCHIVE,
+    WORLD_CREATE_CALENDAR,
+    WORLD_CREATE_CAMPAIGN,
+    WORLD_CREATE_TIMELINE,
+    WORLD_RESTORE,
+    WORLD_UPDATE,
+    BlockedAction,
+)
+
 WORLD_VIEW = "world.view"
 WORLD_CANON_READ = "world.canon.read"
 WORLD_CANON_READ_PRIVATE = "world.canon.read_private"
@@ -53,9 +68,19 @@ WORLD_OWNER_ROLE = "world_owner"
 WORLD_EDITOR_ROLE = "world_editor"
 WORLD_REVIEWER_ROLE = "world_reviewer"
 WORLD_READER_ROLE = "world_reader"
+# Explicit read-only access to a world outside any campaign: `world.view` and nothing else
+# (docs/adr/0019-world-visibility-and-viewer-role.md). Never derived from a campaign role.
+# Distinct from `world_reader`, which also reads the world's published canon (ADR 0020).
+WORLD_VIEWER_ROLE = "world_viewer"
 
 WORLD_ROLE_CODES: frozenset[str] = frozenset(
-    {WORLD_OWNER_ROLE, WORLD_EDITOR_ROLE, WORLD_REVIEWER_ROLE, WORLD_READER_ROLE}
+    {
+        WORLD_OWNER_ROLE,
+        WORLD_VIEWER_ROLE,
+        WORLD_EDITOR_ROLE,
+        WORLD_REVIEWER_ROLE,
+        WORLD_READER_ROLE,
+    }
 )
 
 WORLD_ROLE_CAPABILITIES: dict[str, frozenset[str]] = {
@@ -80,6 +105,7 @@ WORLD_ROLE_CAPABILITIES: dict[str, frozenset[str]] = {
         {WORLD_VIEW, WORLD_CANON_READ, WORLD_CANON_READ_PRIVATE, WORLD_CANON_REVIEW}
     ),
     WORLD_READER_ROLE: frozenset({WORLD_VIEW, WORLD_CANON_READ}),
+    WORLD_VIEWER_ROLE: frozenset({WORLD_VIEW}),
 }
 
 # What an open world-use grant confers, separate from any world role.
@@ -89,6 +115,48 @@ USE_GRANT_CAPABILITIES: frozenset[str] = frozenset({WORLD_VIEW, CAMPAIGN_CREATE}
 WORLD_MANAGEMENT_CAPABILITIES: frozenset[str] = frozenset(
     {WORLD_MANAGE, WORLD_SHARE, WORLD_TRANSFER, CAMPAIGN_CREATE}
 )
+
+# The world capability each action a world/timeline read model can report
+# requires — the same capability the action's route and command enforce. The
+# read models drop an action the caller lacks the capability for from *both*
+# `available_actions` and `blocked_actions`: a viewer is not "blocked" from
+# editing, the action simply is not theirs.
+WORLD_ACTION_CAPABILITIES: dict[str, str] = {
+    WORLD_UPDATE: WORLD_MANAGE,
+    WORLD_ARCHIVE: WORLD_MANAGE,
+    WORLD_RESTORE: WORLD_MANAGE,
+    WORLD_CREATE_CALENDAR: WORLD_MANAGE,
+    WORLD_CREATE_TIMELINE: TIMELINE_MANAGE,
+    WORLD_CREATE_CAMPAIGN: CAMPAIGN_CREATE,
+}
+TIMELINE_ACTION_CAPABILITIES: dict[str, str] = {
+    TIMELINE_UPDATE: TIMELINE_MANAGE,
+    TIMELINE_ARCHIVE: TIMELINE_MANAGE,
+    TIMELINE_RESTORE: TIMELINE_MANAGE,
+    TIMELINE_CREATE_BRANCH: TIMELINE_MANAGE,
+    TIMELINE_CREATE_CAMPAIGN: CAMPAIGN_CREATE,
+}
+
+
+def authorized_actions(
+    available: list[str],
+    blocked: list[BlockedAction],
+    *,
+    capabilities: frozenset[str],
+    required: dict[str, str],
+) -> tuple[list[str], list[BlockedAction]]:
+    """Keep only the actions whose required capability the caller holds. An
+    action missing from `required` is dropped (deny by default)."""
+
+    def allowed(action: str) -> bool:
+        needed = required.get(action)
+        return needed is not None and needed in capabilities
+
+    return (
+        [action for action in available if allowed(action)],
+        [item for item in blocked if allowed(item.action)],
+    )
+
 
 # Every global capability code that exists. Membership is per user and
 # database-resolved; this set only names the closed vocabulary.

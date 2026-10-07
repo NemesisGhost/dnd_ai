@@ -49,8 +49,10 @@ from .world_access import require_world_capability
 
 router = APIRouter(tags=["world-sharing"])
 
-WorldRoleCode = Literal["world_owner", "world_editor", "world_reviewer", "world_reader"]
-RetainedRoleCode = Literal["world_editor", "world_reviewer", "world_reader"]
+WorldRoleCode = Literal[
+    "world_owner", "world_viewer", "world_editor", "world_reviewer", "world_reader"
+]
+RetainedRoleCode = Literal["world_viewer", "world_editor", "world_reviewer", "world_reader"]
 
 
 class AssignWorldRoleRequest(BaseAuthoringRequest):

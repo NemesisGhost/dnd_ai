@@ -1,6 +1,6 @@
 # ADR 0014: World authoring authority is a per-world membership
 
-- **Status**: Accepted; decision 3 amended by [ADR 0018](0018-world-creation-eligibility.md) (itself superseded by ADR 0020); decisions 2, 4 and 5 amended by [ADR 0020](0020-scoped-system-world-and-campaign-roles.md)
+- **Status**: Accepted; decision 3 amended by [ADR 0018](0018-world-creation-eligibility.md) (itself superseded by ADR 0020); extended by [ADR 0019](0019-world-visibility-and-viewer-role.md) (the read-only `world_viewer` role and operator membership changes); decisions 2, 4 and 5 amended by [ADR 0020](0020-scoped-system-world-and-campaign-roles.md)
 - **Date**: 2026-10-03
 - **Builds on**: [ADR 0003](0003-separate-world-timeline-and-campaign.md), which separates world, timeline, and campaign. This ADR adds the missing authorization concept for the *world* aggregate.
 - **Related**: the unmerged branch `phase14/product-direction-and-world-ownership` proposed "ownership scopes" (a different model). It is **not adopted**; see Alternatives.

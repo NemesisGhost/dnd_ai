@@ -331,6 +331,14 @@ class WorldAlreadyClaimedError(ValueError):
     over HTTP."""
 
 
+class WorldMembershipChangeRefusedError(ValueError):
+    """A trusted-infrastructure world-membership change
+    (`dnd_ai.commands.world_memberships`) was refused before writing anything:
+    unknown world, inactive account, unknown role, an ineligible new owner, no
+    open membership to end, or a change that would leave the world without an
+    active owner. Raised only to a script, never over HTTP."""
+
+
 def _normalize(value: str | None, *, field: str, max_length: int, required: bool) -> str | None:
     if value is None:
         if required:

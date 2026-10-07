@@ -6,7 +6,10 @@ database and pagination is applied after filtering. `get_world_detail` assumes
 the caller has already been authorized for `world.view` (the route dependency)
 and builds the read model, including the server-computed
 `available_actions` / `blocked_actions` from the same policy functions the
-commands call (`dnd_ai.domain.authoring_policy`).
+commands call (`dnd_ai.domain.authoring_policy`), restricted to the actions the
+caller's world roles carry the capability for
+(`dnd_ai.domain.world_authority.WORLD_ACTION_CAPABILITIES`) — a `world_viewer`
+is offered none.
 
 `managed_campaigns` deliberately lists only campaigns on which the *caller*
 holds an active `access.manage` membership: a world owner learns nothing about
@@ -20,7 +23,12 @@ from sqlalchemy import Connection, text
 
 from dnd_ai.domain.authoring_policy import BlockedAction, world_actions
 from dnd_ai.domain.system_authority import WORLD_ADMINISTER
-from dnd_ai.domain.world_authority import WorldAuthority, capabilities_for_roles
+from dnd_ai.domain.world_authority import (
+    WORLD_ACTION_CAPABILITIES,
+    WorldAuthority,
+    authorized_actions,
+    capabilities_for_roles,
+)
 from dnd_ai.queries.system_authority import has_system_capability
 from dnd_ai.queries.timelines import TimelineSummary, list_timeline_summaries
 
@@ -285,8 +293,11 @@ def get_world_detail(
         ).all()
     ]
     blocking = world_has_blocking_campaigns(connection, world_id=world_id)
-    available, blocked = world_actions(
-        lifecycle_status=str(row.lifecycle_code), has_blocking_campaigns=blocking
+    capabilities = authority.capabilities
+    available, blocked = authorized_actions(
+        *world_actions(lifecycle_status=str(row.lifecycle_code), has_blocking_campaigns=blocking),
+        capabilities=capabilities,
+        required=WORLD_ACTION_CAPABILITIES,
     )
     summary = WorldSummary(
         world_id=row.world_id,

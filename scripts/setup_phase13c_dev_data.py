@@ -427,7 +427,11 @@ from dnd_ai.commands.local_auth import (
     _disable_local_account_impl,
     normalize_login_name,
 )
-from dnd_ai.commands.memberships import assign_membership_role, create_campaign_membership
+from dnd_ai.commands.memberships import (
+    assign_membership_role,
+    create_campaign_membership,
+    end_campaign_membership,
+)
 from dnd_ai.commands.parties import create_party
 from dnd_ai.commands.party_members import add_party_member
 from dnd_ai.commands.player_characters import create_player_character
@@ -479,6 +483,7 @@ _RULESET_CODE = "dnd5e"
 _RELATIONSHIP_TYPE_CODE = "owner"
 
 _CREATED_CHANGE_ACTION = "created"
+_UPDATED_CHANGE_ACTION = "updated"
 
 # --------------------------------------------------------------------------
 # Phase 13E-A access-overview manual-verification fixture
@@ -3907,6 +3912,75 @@ def _ensure_phase13e_membership(
     return result.campaign_membership_id
 
 
+def _ensure_phase13e_no_membership(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    campaign_id: uuid.UUID,
+    user_id: uuid.UUID,
+    ended_by_membership_id: uuid.UUID,
+    label: str,
+    actor_user_id: uuid.UUID,
+) -> None:
+    """Reconcile the documented cross-campaign isolation for the one shape
+    that is never useful: a fixture account that this dataset says has *no*
+    membership in `campaign_id` holding one that grants no `campaign.view`
+    (for example from the Access page's "Add member", which creates a
+    membership with no role). Such a membership is not offered by the session
+    bootstrap and opens nothing, yet still shows on the Access overview. It is
+    ended through the real `dnd_ai.commands.memberships.end_campaign_membership`
+    — never deleted — and audited like the API's own removal.
+
+    A stray membership that *does* grant `campaign.view` was given a role on
+    purpose during manual testing; it is left in place and reported, never
+    ended by a fixture re-run. No open membership: nothing to do."""
+    open_membership_id = connection.execute(
+        text("""
+            SELECT campaign_membership_id FROM security.campaign_memberships
+            WHERE campaign_id = :campaign AND user_id = :user AND ended_at IS NULL
+        """),
+        {"campaign": campaign_id, "user": user_id},
+    ).scalar()
+    if open_membership_id is None:
+        return
+    assert isinstance(open_membership_id, uuid.UUID)
+    access = resolve_access_context(connection, user_id=user_id, campaign_id=campaign_id)
+    if access is not None and access.has_capability("campaign.view"):
+        summary.lines.append(
+            f"  [kept] membership with campaign.view: {label}: {open_membership_id}"
+        )
+        return
+    result = end_campaign_membership(
+        connection,
+        campaign_membership_id=open_membership_id,
+        campaign_id=campaign_id,
+        ended_by_membership_id=ended_by_membership_id,
+    )
+    if not result.ended:
+        return
+    record_change_log(
+        connection,
+        change_action_code=_UPDATED_CHANGE_ACTION,
+        schema_name="security",
+        table_name="campaign_memberships",
+        record_id=open_membership_id,
+        entity_id=None,
+        world_id=None,
+        actor_user_id=actor_user_id,
+        correlation_id=None,
+        command_name=_COMMAND_NAME,
+        event_id=None,
+        previous_status="active",
+        new_status="revoked",
+    )
+    summary.add(
+        created=False,
+        changed=True,
+        label=f"ended unintended membership: {label}",
+        record_id=open_membership_id,
+    )
+
+
 def _resolve_system_role_id(connection: Connection, role_code: str) -> uuid.UUID:
     """Resolves a system-template role (`security.roles.campaign_id IS
     NULL`) by code — narrower than the generic `lookup_id` helper, which
@@ -3927,6 +4001,38 @@ def _resolve_system_role_id(connection: Connection, role_code: str) -> uuid.UUID
         )
     assert isinstance(role_id, uuid.UUID)
     return role_id
+
+
+def _phase13e_account_is_active(connection: Connection, user_id: uuid.UUID) -> bool:
+    return bool(
+        connection.execute(
+            text("""
+                SELECT ls.code = 'active' FROM security.users u
+                JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
+                WHERE u.user_id = :u
+            """),
+            {"u": user_id},
+        ).scalar()
+    )
+
+
+def _phase13e_has_active_role(
+    connection: Connection, *, campaign_membership_id: uuid.UUID, role_code: str
+) -> bool:
+    return bool(
+        connection.execute(
+            text("""
+                SELECT EXISTS (
+                    SELECT 1 FROM security.membership_roles mr
+                    JOIN security.roles r ON r.role_id = mr.role_id
+                    WHERE mr.campaign_membership_id = :m AND r.code = :code
+                      AND r.campaign_id IS NULL AND mr.revoked_at IS NULL
+                      AND (mr.expires_at IS NULL OR mr.expires_at > now())
+                )
+            """),
+            {"m": campaign_membership_id, "code": role_code},
+        ).scalar()
+    )
 
 
 def _ensure_phase13e_role(
@@ -4186,7 +4292,9 @@ def _ensure_phase13e_access_fixtures(
     verification. `campaign_a_membership_id`/`campaign_b_membership_id`
     are the pre-existing `--user-id` account's own memberships — used
     only as the GM-side `granted_by_membership_id` for every role/
-    relationship/grant below, never as a target of any change."""
+    relationship/grant below (and `ended_by_membership_id` for a stray
+    membership `_ensure_phase13e_no_membership` closes), never as a target
+    of any change."""
     gm2_user_id = _get_or_create_phase13e_dev_account(
         connection,
         summary,
@@ -4321,6 +4429,40 @@ def _ensure_phase13e_access_fixtures(
         label=f"{_PHASE13E_PLAYER_B_DISPLAY_NAME} (second manager)",
     )
 
+    # Documented isolation (module docstring): GM2, Player A, and Observer A
+    # have no Campaign B membership, and Player B none in Campaign A. End any
+    # that a manual session added, so the fixture describes the database.
+    for stray_campaign_id, stray_user_id, ended_by_membership_id, stray_label in (
+        (campaign_b_id, gm2_user_id, campaign_b_membership_id, _PHASE13E_GM2_DISPLAY_NAME),
+        (
+            campaign_b_id,
+            player_a_user_id,
+            campaign_b_membership_id,
+            _PHASE13E_PLAYER_A_DISPLAY_NAME,
+        ),
+        (
+            campaign_b_id,
+            observer_a_user_id,
+            campaign_b_membership_id,
+            _PHASE13E_OBSERVER_A_DISPLAY_NAME,
+        ),
+        (
+            campaign_a_id,
+            player_b_user_id,
+            campaign_a_membership_id,
+            _PHASE13E_PLAYER_B_DISPLAY_NAME,
+        ),
+    ):
+        _ensure_phase13e_no_membership(
+            connection,
+            summary,
+            campaign_id=stray_campaign_id,
+            user_id=stray_user_id,
+            ended_by_membership_id=ended_by_membership_id,
+            label=f"{stray_label} (not a fixture member of this campaign)",
+            actor_user_id=admin_user_id,
+        )
+
     disabled_user_id = _get_or_create_phase13e_dev_account(
         connection,
         summary,
@@ -4337,16 +4479,30 @@ def _ensure_phase13e_access_fixtures(
         label=_PHASE13E_DISABLED_DISPLAY_NAME,
         actor_user_id=admin_user_id,
     )
-    _ensure_phase13e_role(
+    # The role is granted while the account is still active (first run). A
+    # disabled account cannot be given a role by the real command, so if a
+    # manual session revoked it afterwards, a re-run reports that instead of
+    # failing; the membership itself — what the Access overview shows — stays.
+    if _phase13e_account_is_active(connection, disabled_user_id) or _phase13e_has_active_role(
         connection,
-        summary,
-        campaign_id=campaign_a_id,
         campaign_membership_id=disabled_membership_id,
         role_code=_PHASE13E_PLAYER_ROLE_CODE,
-        granted_by_membership_id=campaign_a_membership_id,
-        actor_user_id=admin_user_id,
-        label=_PHASE13E_DISABLED_DISPLAY_NAME,
-    )
+    ):
+        _ensure_phase13e_role(
+            connection,
+            summary,
+            campaign_id=campaign_a_id,
+            campaign_membership_id=disabled_membership_id,
+            role_code=_PHASE13E_PLAYER_ROLE_CODE,
+            granted_by_membership_id=campaign_a_membership_id,
+            actor_user_id=admin_user_id,
+            label=_PHASE13E_DISABLED_DISPLAY_NAME,
+        )
+    else:
+        summary.lines.append(
+            f"  [skipped] role '{_PHASE13E_PLAYER_ROLE_CODE}': {_PHASE13E_DISABLED_DISPLAY_NAME} "
+            "(revoked after the account was disabled; a disabled account cannot be given a role)"
+        )
     _ensure_phase13e_account_disabled(
         connection,
         summary,
@@ -6417,7 +6573,7 @@ def _print_bootstrap_verification(*, user_id: uuid.UUID) -> None:
         connection.execute(text("SET default_transaction_read_only = on"))
         view = get_session_bootstrap(connection, user_id=user_id)
     print(f"\n-- get_session_bootstrap(user_id={user_id}) --")
-    print(f"display_name={view.display_name!r} selected_campaign_id={view.selected_campaign_id}")
+    print(f"display_name={view.display_name!r} startup_campaign_id={view.startup_campaign_id}")
     for campaign in view.campaigns:
         perspectives = ", ".join(
             f"{p.character_name} ({p.character_id})" for p in campaign.character_perspectives

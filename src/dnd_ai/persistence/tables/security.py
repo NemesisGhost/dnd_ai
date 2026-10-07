@@ -48,7 +48,7 @@ world_roles = _lookup_table(
     "security",
     "world_roles",
     "world_role_id",
-    "Roles a user can hold on a world: world_owner, world_editor, world_reviewer, "
+    "Roles a user can hold on a world: world_owner, world_viewer, world_editor, world_reviewer, "
     "world_reader. A user may hold several at once. Capabilities are a closed mapping "
     "in application code (dnd_ai.domain.world_authority), not rows in "
     "security.capabilities, which is assignable to campaign roles "

@@ -70,6 +70,7 @@ export function WorldOverviewPage() {
 
 const ROLE_LABEL: Record<string, string> = {
     world_owner: "Owner",
+    world_viewer: "Viewer",
     world_editor: "Editor",
     world_reviewer: "Reviewer",
     world_reader: "Reader",

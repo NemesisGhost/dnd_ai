@@ -22,8 +22,12 @@ from dnd_ai.queries.bootstrap import (
     list_bootstrap_campaign_ids,
 )
 from tests.factories import (
+    lookup_id,
     make_campaign,
     make_campaign_membership,
+    make_membership_role,
+    make_role,
+    make_role_capability,
     make_timeline,
     make_user,
     make_world,
@@ -62,8 +66,23 @@ def _member_of(
     db_connection: Connection, timeline_id: uuid.UUID, user_id: uuid.UUID, name: str
 ) -> uuid.UUID:
     campaign_id = make_campaign(db_connection, timeline_id, name)
-    make_campaign_membership(db_connection, campaign_id, user_id)
+    membership_id = make_campaign_membership(db_connection, campaign_id, user_id)
+    _grant_campaign_view(db_connection, campaign_id, membership_id)
     return campaign_id
+
+
+def _grant_campaign_view(
+    db_connection: Connection, campaign_id: uuid.UUID, membership_id: uuid.UUID
+) -> None:
+    """The bootstrap offers a campaign only while the membership holds a role
+    granting `campaign.view`."""
+    role_id = make_role(db_connection, campaign_id=campaign_id, code="member")
+    make_role_capability(
+        db_connection,
+        role_id,
+        lookup_id(db_connection, "security", "capabilities", "capability_id", "campaign.view"),
+    )
+    make_membership_role(db_connection, membership_id, role_id)
 
 
 def _change_log_count(db_connection: Connection) -> int:
@@ -191,7 +210,11 @@ def test_authorization_helper_agrees_with_the_bootstrap_campaign_list(
     ended = make_campaign(db_connection, timeline_id, "Ended")
     make_campaign_membership(db_connection, ended, user_id, ended=True)
     archived = make_campaign(db_connection, timeline_id, "Arch", lifecycle_status_code="archived")
-    make_campaign_membership(db_connection, archived, user_id)
+    _grant_campaign_view(
+        db_connection, archived, make_campaign_membership(db_connection, archived, user_id)
+    )
+    roleless = make_campaign(db_connection, timeline_id, "Roleless")
+    make_campaign_membership(db_connection, roleless, user_id)
     stranger = make_campaign(db_connection, timeline_id, "Stranger")
 
     bootstrap_ids = [
@@ -199,7 +222,7 @@ def test_authorization_helper_agrees_with_the_bootstrap_campaign_list(
     ]
 
     assert bootstrap_ids == list_bootstrap_campaign_ids(db_connection, user_id=user_id) == [listed]
-    for campaign_id in (listed, ended, archived, stranger):
+    for campaign_id in (listed, ended, archived, roleless, stranger):
         assert is_campaign_bootstrap_authorized(
             db_connection, user_id=user_id, campaign_id=campaign_id
         ) == (campaign_id in bootstrap_ids)
@@ -305,3 +328,20 @@ def test_archived_last_visited_is_ignored(
 
     assert bootstrap.campaign_preferences.last_visited_campaign_id is None
     assert bootstrap.startup_campaign_id is None
+
+
+def test_a_roleless_membership_is_refused_as_a_preference_and_never_written(
+    db_connection: Connection, timeline_id: uuid.UUID, user_id: uuid.UUID
+) -> None:
+    """An active membership with no role granting `campaign.view` is not a
+    campaign the user can open, so neither preference write accepts it."""
+    roleless = make_campaign(db_connection, timeline_id, "Roleless")
+    make_campaign_membership(db_connection, roleless, user_id)
+
+    with pytest.raises(CampaignNotAvailableError):
+        set_campaign_startup_preference(
+            db_connection, user_id=user_id, preferred_campaign_id=roleless
+        )
+    with pytest.raises(CampaignNotAvailableError):
+        record_last_visited_campaign(db_connection, user_id=user_id, campaign_id=roleless)
+    assert _row(db_connection, user_id) is None

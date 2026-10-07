@@ -394,6 +394,16 @@ def make_role_capability(
     )
 
 
+def system_role_id(connection: Connection, code: str) -> uuid.UUID:
+    """A built-in system-template role (`campaign_id IS NULL`) by code."""
+    value = connection.execute(
+        text("SELECT role_id FROM security.roles WHERE campaign_id IS NULL AND code = :code"),
+        {"code": code},
+    ).scalar()
+    assert isinstance(value, uuid.UUID), code
+    return value
+
+
 def make_membership_role(
     connection: Connection,
     campaign_membership_id: uuid.UUID,
