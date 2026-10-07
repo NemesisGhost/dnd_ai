@@ -5,6 +5,7 @@ import { useSession } from "../../context/SessionContext"
 import { useAuthoringMutation } from "../../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../../hooks/useAuthoringResource"
 import { usePageArrival } from "../../hooks/usePageArrival"
+import { useWorldCapability, WORLD_CANON_EDIT } from "../../hooks/useWorldCapability"
 import { useUnsavedChangesGuard } from "../../hooks/useUnsavedChangesGuard"
 import type { MutationContext } from "../../api/worlds"
 import type { EntityBlockedAction } from "../../types/entityLifecycle"
@@ -34,6 +35,9 @@ export interface EditableView {
 export interface ContentEditConfig<TView extends EditableView, TOptions, TValues, TBody> {
     noun: string
     heading: string
+    // Records that are campaign-originated (player-character identity, ADR 0020 E3) need no
+    // world Editor role; every other definition is shared world canon and does.
+    campaignOriginated?: boolean
     // Name of the route parameter carrying the record id.
     entityParam: string
     breadcrumbLabel: string
@@ -89,7 +93,9 @@ export function ContentEditPage<TView extends EditableView, TOptions, TValues, T
     const { state, refetch } = useAuthoringResource<TView>(config.viewPath(campaignId, entityId))
     const options = useAuthoringResource<TOptions>(config.optionsPath(campaignId))
     const ready = state.kind === "ready" && options.state.kind === "ready"
-    const headingRef = usePageArrival(ready)
+    const hasWorldEdit = useWorldCapability(campaignId, WORLD_CANON_EDIT)
+    const needsWorldEdit = config.campaignOriginated !== true && !hasWorldEdit
+    const headingRef = usePageArrival(ready || needsWorldEdit)
     const [keptChanges, setKeptChanges] = useState<TValues | null>(null)
     const detailPath = config.detailPath(campaignId, entityId)
     const headingId = `edit-${config.noun.replace(/\s+/g, "-")}-heading`
@@ -108,7 +114,9 @@ export function ContentEditPage<TView extends EditableView, TOptions, TValues, T
             <h1 id={headingId} ref={headingRef} tabIndex={-1}>
                 {config.heading}
             </h1>
-            {state.kind === "loading" || options.state.kind === "loading" ? (
+            {needsWorldEdit ? (
+                <p role="alert">Editing shared world content requires the world Editor role. Ask the world owner.</p>
+            ) : state.kind === "loading" || options.state.kind === "loading" ? (
                 <p role="status">Loading {config.noun}…</p>
             ) : state.kind === "unavailable" || state.kind === "denied" ? (
                 <p role="alert">

@@ -153,7 +153,7 @@ export function MutationStatusMessage({
     switch (error.kind) {
         case "denied":
             message =
-                "You do not have permission to do this. Your access may have changed."
+                specific ?? "You do not have permission to do this. Your access may have changed."
             action = (
                 <button type="button" className="authoring-button" onClick={onCheckSession}>
                     Check my session

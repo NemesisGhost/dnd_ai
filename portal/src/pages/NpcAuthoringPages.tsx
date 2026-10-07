@@ -302,6 +302,7 @@ const playerCharacterCreateConfig: ContentCreateConfig<
 > = {
     ...createConfig,
     noun: "player character",
+    campaignOriginated: true,
     heading: "New player character",
     lead: "A new player character is saved as a draft. Only people who can edit canon see it until it is published. Linking a player to it is done in Access, after it is published.",
     optionsPath: playerCharacterOptionsPath,
@@ -390,6 +391,7 @@ const playerCharacterEditConfig: ContentEditConfig<
         NpcFieldsBody
     >),
     noun: "player character",
+    campaignOriginated: true,
     heading: "Edit player character",
     viewPath: playerCharacterAuthoringPath,
     optionsPath: playerCharacterOptionsPath,

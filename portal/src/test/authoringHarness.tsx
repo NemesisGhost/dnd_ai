@@ -103,7 +103,7 @@ export function bootstrapWith(overrides: Partial<SessionBootstrap> = {}): Sessio
     return {
         ...sessionBootstrapFixture,
         csrf_token: TEST_CSRF,
-        global_capabilities: ["world.create"],
+        global_capabilities: ["world.create", "campaign.host", "world.administer"],
         ...overrides,
     }
 }

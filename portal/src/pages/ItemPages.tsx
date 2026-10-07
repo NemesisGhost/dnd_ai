@@ -130,6 +130,7 @@ function Fields({
 
 const createConfig: ContentCreateConfig<ItemOptions, ItemFormValues, CreateItemBody, ItemView> = {
     noun: "item",
+    campaignOriginated: true,
     heading: "New item",
     lead: "A new item is saved as a draft. It cannot be awarded or moved until it is published.",
     breadcrumbLabel: "Items",
@@ -170,6 +171,7 @@ type ItemEditBody = Omit<UpdateItemBody, "expected_row_version" | "change_note">
 
 const editConfig: ContentEditConfig<ItemView, ItemOptions, ItemFormValues, ItemEditBody> = {
     noun: "item",
+    campaignOriginated: true,
     heading: "Edit item",
     entityParam: "itemId",
     breadcrumbLabel: "Items",

@@ -39,3 +39,8 @@ export function worldDestination(
 ): string | null {
     return worldAccess(world) === "none" ? null : `/worlds/${encodeURIComponent(world.world_id)}`
 }
+
+// What the server says the caller may do on a world, from its own `capabilities` (ADR 0020).
+export function worldCan(world: Partial<Pick<WorldSummary, "capabilities">>, capability: string): boolean {
+    return (world.capabilities ?? []).includes(capability)
+}

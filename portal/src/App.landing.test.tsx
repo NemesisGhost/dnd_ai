@@ -184,7 +184,7 @@ describe("persistent sidebar through the real route tree", () => {
     const admin = bootstrapWith({
         campaigns: [alpha, beta],
         startup_campaign_id: "alpha",
-        is_platform_administrator: true,
+        global_capabilities: ["accounts.manage", "system_roles.manage"],
     })
 
     it.each([

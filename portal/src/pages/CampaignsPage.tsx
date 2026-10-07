@@ -1,6 +1,7 @@
 import { Link } from "react-router"
 import { ArchivedCampaignsSection } from "../components/ArchivedCampaignsSection"
 import type { SessionBootstrap } from "../types/bootstrap"
+import { canHostCampaigns } from "../utils/systemAccess"
 import { canCreateWorlds } from "../utils/worldAccess"
 
 interface CampaignsPageProps {
@@ -11,7 +12,10 @@ export function CampaignsPage({
   bootstrap,
 }: CampaignsPageProps) {
   const canCreate = canCreateWorlds(bootstrap)
-  const createLink = canCreate ? (
+  // Campaign creation is a game master's action (system `campaign.host`, ADR 0020); the page
+  // offers it only when the server says so, and the server re-checks on every request.
+  const canHost = canHostCampaigns(bootstrap)
+  const createLink = canHost ? (
     <p>
       <Link to="/campaigns/new">Create campaign</Link>
     </p>
@@ -22,10 +26,21 @@ export function CampaignsPage({
       <main className="app-main">
         <section className="placeholder-page">
           <h1>Campaigns</h1>
-          <p>
-            You do not have access to any campaigns yet. Ask a GM to invite
-            you.
-          </p>
+          {canCreate || canHost ? (
+            <>
+              <p>You are not in any campaigns yet.</p>
+              {canCreate ? (
+                <p>
+                  <Link to="/worlds/new">Create a world</Link>
+                </p>
+              ) : null}
+            </>
+          ) : (
+            <p>
+              You do not have access to any campaigns yet. Ask a GM to invite
+              you.
+            </p>
+          )}
           <p>
             <Link to="/campaign-invitations/accept">
               Accept a campaign invitation

@@ -64,6 +64,8 @@ import { AccountPage } from "./pages/AccountPage"
 import { SettingsPage } from "./pages/SettingsPage"
 import { WorldsPage } from "./pages/WorldsPage"
 import { WorldOverviewPage } from "./pages/WorldOverviewPage"
+import { WorldSharingPage } from "./pages/WorldSharingPage"
+import { WorldCanonPage } from "./pages/WorldCanonPage"
 import { CampaignSetupPage } from "./pages/CampaignSetupPage"
 import { CampaignSettingsPage } from "./pages/CampaignSettingsPage"
 import { CreateTimelinePage } from "./pages/CreateTimelinePage"
@@ -75,6 +77,7 @@ import { WorldTimesPage } from "./pages/WorldTimesPage"
 import { EditTimelinePage } from "./pages/EditTimelinePage"
 import { CreateTimelineBranchPage } from "./pages/CreateTimelineBranchPage"
 import { CreateWorldRoute, EditWorldRoute } from "./layouts/WorldAccessRoutes"
+import { canManageAccounts } from "./utils/systemAccess"
 
 function CampaignsRoute() {
   const { bootstrap } = useAuthenticatedSession()
@@ -94,7 +97,7 @@ function PlatformAccountsRoute() {
   // and no GET /api/admin/accounts request is sent (navigation plan
   // §3.1). AdminAccountsPage keeps its own internal check as defense in
   // depth.
-  if (!bootstrap.is_platform_administrator) {
+  if (!canManageAccounts(bootstrap)) {
     return <NotFoundPage />
   }
 
@@ -182,6 +185,16 @@ function App() {
             <Route
               path="/worlds/:worldId/edit"
               element={<EditWorldRoute />}
+            />
+
+            <Route
+              path="/worlds/:worldId/sharing"
+              element={<WorldSharingPage />}
+            />
+
+            <Route
+              path="/worlds/:worldId/canon"
+              element={<WorldCanonPage />}
             />
 
             <Route

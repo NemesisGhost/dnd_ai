@@ -74,7 +74,6 @@ function buildSessionState(
             },
             csrf_token: "fixture-csrf-token",
             browser_session_id: "browser-session-a",
-            is_platform_administrator: false,
             startup_campaign_id: "campaign-a",
             campaign_preferences: {
               startup_mode: "resume_last_visited",

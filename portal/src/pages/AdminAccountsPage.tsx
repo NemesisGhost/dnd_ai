@@ -8,7 +8,9 @@ import { OneTimeSecretPanel } from "../components/OneTimeSecretPanel"
 import { usePlatformAccounts } from "../hooks/usePlatformAccounts"
 import { NotFoundPage } from "./NotFoundPage"
 import type { SessionBootstrap } from "../types/bootstrap"
+import { SystemRolesEditor } from "../components/SystemRolesEditor"
 import { buildFragmentLink } from "../utils/oneTimeLink"
+import { canGrantAdmin, canManageAccounts, canManageSystemRoles } from "../utils/systemAccess"
 
 interface AdminAccountsPageProps {
     bootstrap: SessionBootstrap
@@ -23,7 +25,7 @@ function formatTimestamp(timestamp: string | null): string {
     )
 }
 
-// Gated on bootstrap.is_platform_administrator as presentation only —
+// Gated on the server-computed `accounts.manage` capability as presentation only —
 // GET /admin/accounts and every mutation below remain the real,
 // server-authoritative gate (PHASE13E_REMAINING_IMPLEMENTATION_PLAN.md
 // §9.1's non-negotiable rule 5: "portal code may hide or disable a
@@ -35,7 +37,7 @@ export function AdminAccountsPage({ bootstrap }: AdminAccountsPageProps) {
     // boundary so the refetch that follows issuance cannot unmount it.
     const [issuedReset, setIssuedReset] = useState<IssuedPasswordReset | null>(null)
 
-    if (!bootstrap.is_platform_administrator) {
+    if (!canManageAccounts(bootstrap)) {
         return <NotFoundPage />
     }
 
@@ -44,7 +46,7 @@ export function AdminAccountsPage({ bootstrap }: AdminAccountsPageProps) {
             <section aria-labelledby="admin-accounts-heading">
                 <h1 id="admin-accounts-heading">Platform accounts</h1>
 
-                <CreateAccountPanel onCreated={retry} />
+                <CreateAccountPanel onCreated={retry} canGrantAdmin={canGrantAdmin(bootstrap)} />
 
                 {issuedReset !== null && (
                     <OneTimeSecretPanel
@@ -83,6 +85,7 @@ export function AdminAccountsPage({ bootstrap }: AdminAccountsPageProps) {
                                 <tr>
                                     <th scope="col">Display name</th>
                                     <th scope="col">Login name</th>
+                                    <th scope="col">System roles</th>
                                     <th scope="col">Status</th>
                                     <th scope="col">Last login</th>
                                     <th scope="col" className="admin-accounts__numeric">
@@ -98,6 +101,13 @@ export function AdminAccountsPage({ bootstrap }: AdminAccountsPageProps) {
                                             <span className="admin-accounts__name">
                                                 {account.display_name}
                                             </span>
+                                            {(account.stranded_world_count ?? 0) > 0 && (
+                                                <span className="access-badge" role="note">
+                                                    Owns {account.stranded_world_count} world
+                                                    {account.stranded_world_count === 1 ? "" : "s"} no
+                                                    one can currently manage
+                                                </span>
+                                            )}
                                             {account.is_platform_administrator && (
                                                 <span
                                                     className="access-badge admin-accounts__admin-badge"
@@ -109,6 +119,18 @@ export function AdminAccountsPage({ bootstrap }: AdminAccountsPageProps) {
                                         </td>
                                         <td>
                                             {account.login_name ?? "(pending activation)"}
+                                        </td>
+                                        <td>
+                                            {account.system_roles.length === 0
+                                                ? "None"
+                                                : account.system_roles.join(", ")}
+                                            {canManageSystemRoles(bootstrap) && (
+                                                <SystemRolesEditor
+                                                    account={account}
+                                                    canGrantAdmin={canGrantAdmin(bootstrap)}
+                                                    onChanged={retry}
+                                                />
+                                            )}
                                         </td>
                                         <td>
                                             <span

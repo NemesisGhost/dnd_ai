@@ -3,9 +3,12 @@ import { useCreateAccount } from "../hooks/useCreateAccount"
 import { OneTimeSecretPanel } from "./OneTimeSecretPanel"
 import { buildFragmentLink } from "../utils/oneTimeLink"
 import type { CreateAccountResponse } from "../types/platformAccounts"
+import { SYSTEM_ROLE_OPTIONS, type SystemRoleCode } from "../utils/systemAccess"
 
 interface CreateAccountPanelProps {
     onCreated: () => void
+    // True only while the server reports `system_roles.grant_admin`.
+    canGrantAdmin?: boolean
 }
 
 function statusMessage(kind: "pending" | "denied" | "error"): string {
@@ -19,7 +22,7 @@ function statusMessage(kind: "pending" | "denied" | "error"): string {
     }
 }
 
-export function CreateAccountPanel({ onCreated }: CreateAccountPanelProps) {
+export function CreateAccountPanel({ onCreated, canGrantAdmin = false }: CreateAccountPanelProps) {
     const loginNameId = useId()
     const displayNameId = useId()
     const emailId = useId()
@@ -27,12 +30,15 @@ export function CreateAccountPanel({ onCreated }: CreateAccountPanelProps) {
     const [displayName, setDisplayName] = useState("")
     const [email, setEmail] = useState("")
     const [created, setCreated] = useState<CreateAccountResponse | null>(null)
+    // New accounts default to Player; at least one system role is always chosen.
+    const [roles, setRoles] = useState<readonly SystemRoleCode[]>(["player"])
 
     const { status, submit, reset } = useCreateAccount((result) => {
         setCreated(result)
         setLoginName("")
         setDisplayName("")
         setEmail("")
+        setRoles(["player"])
         onCreated()
     })
 
@@ -56,10 +62,20 @@ export function CreateAccountPanel({ onCreated }: CreateAccountPanelProps) {
             aria-label="Create account"
             onSubmit={(event) => {
                 event.preventDefault()
-                if (isPending || loginName.trim() === "" || displayName.trim() === "") {
+                if (
+                    isPending ||
+                    loginName.trim() === "" ||
+                    displayName.trim() === "" ||
+                    roles.length === 0
+                ) {
                     return
                 }
-                submit(loginName.trim(), displayName.trim(), email.trim() === "" ? null : email.trim())
+                submit(
+                    loginName.trim(),
+                    displayName.trim(),
+                    email.trim() === "" ? null : email.trim(),
+                    roles,
+                )
             }}
         >
             <label htmlFor={loginNameId}>Login name</label>
@@ -111,6 +127,34 @@ export function CreateAccountPanel({ onCreated }: CreateAccountPanelProps) {
                     setEmail(event.currentTarget.value)
                 }}
             />
+
+            <fieldset disabled={isPending}>
+                <legend>System roles</legend>
+                {SYSTEM_ROLE_OPTIONS.map((option) => (
+                    <label key={option.code}>
+                        <input
+                            type="checkbox"
+                            checked={roles.includes(option.code)}
+                            disabled={option.code === "admin" && !canGrantAdmin}
+                            onChange={(event) => {
+                                const checked = event.currentTarget.checked
+                                setRoles((current) =>
+                                    checked
+                                        ? [...current, option.code]
+                                        : current.filter((code) => code !== option.code),
+                                )
+                            }}
+                        />{" "}
+                        {option.label}
+                    </label>
+                ))}
+                <p>
+                    {canGrantAdmin
+                        ? ""
+                        : "Granting Administrator is done by the operator script on this deployment. "}
+                    A system role never grants access to any campaign or world.
+                </p>
+            </fieldset>
 
             <div className="access-role-editor__actions">
                 <button type="submit" disabled={isPending} aria-busy={isPending}>

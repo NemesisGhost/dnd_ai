@@ -95,8 +95,11 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
   // World and timeline context come from the route-derived hierarchy, which
   // confirms them against server data (WorkspaceHierarchyProvider) — never a
   // raw route ID.
-  const { authoringWorldId, authoringTimelineId, authoringWorldAccess } =
+  const { authoringWorldId, authoringTimelineId, authoringWorldAccess, world } =
     useWorkspaceHierarchy()
+  // The caller's capabilities on the world the route confirmed, from the server's own read.
+  const worldHas = (capability: string): boolean =>
+    world?.kind === "ready" && world.data.capabilities.includes(capability)
   const navigationRef = useRef<HTMLElement>(null)
   const { open: drawerOpen, closeAndFocusToggle, close } = drawer
 
@@ -247,7 +250,9 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
                   authoringWorldAccess === "none" ? null : authoringWorldId
                 }
                 activeTimelineId={authoringTimelineId}
-                canAuthorWorld={authoringWorldAccess === "edit"}
+                canAuthorWorld={authoringWorldAccess === "edit" || worldHas("timeline.manage")}
+                canShareWorld={worldHas("world.share")}
+                canReadCanon={worldHas("world.canon.read")}
                 campaignWorldPath={
                   campaignPath === null ? null : `${campaignPath}/world`
                 }

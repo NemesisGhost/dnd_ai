@@ -8,7 +8,7 @@ import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { usePageArrival } from "../hooks/usePageArrival"
 import type { WorldDetail } from "../types/worldAuthoring"
 import { ERROR_CODE_MESSAGE } from "../utils/authoringValidation"
-import { worldAccess } from "../utils/worldAccess"
+import { worldAccess, worldCan } from "../utils/worldAccess"
 import "../components/authoring/authoring.css"
 
 // A world's overview: details, its timelines as a lineage, the campaigns the
@@ -68,17 +68,55 @@ export function WorldOverviewPage() {
     )
 }
 
+const ROLE_LABEL: Record<string, string> = {
+    world_owner: "Owner",
+    world_editor: "Editor",
+    world_reviewer: "Reviewer",
+    world_reader: "Reader",
+}
+
 interface ReadOnlyWorldOverviewProps {
     world: WorldDetail
     headingRef: RefObject<HTMLHeadingElement | null>
 }
 
 function ReadOnlyWorldOverview({ world, headingRef }: ReadOnlyWorldOverviewProps) {
+    // A world role other than Owner, or a permission to host campaigns, opens this limited
+    // overview. What it offers is exactly what the server's capabilities allow (ADR 0020).
+    const base = `/worlds/${encodeURIComponent(world.world_id)}`
+    const canHost = worldCan(world, "campaign.create") && world.lifecycle_status === "active"
+    const canTimeline = worldCan(world, "timeline.manage") && world.lifecycle_status === "active"
     return (
         <>
             <h1 ref={headingRef} tabIndex={-1}>
                 {world.name}
             </h1>
+            {world.role_codes?.includes("world_owner") && !worldCan(world, "world.manage") ? (
+                <p className="authoring-note">
+                    Managing this world, sharing it and hosting campaigns on it need the game master
+                    system role. Ask an administrator to restore it.
+                </p>
+            ) : null}
+            {world.role_codes && world.role_codes.length > 0 ? (
+                <p>Your role: {world.role_codes.map((code) => ROLE_LABEL[code] ?? code).join(", ")}</p>
+            ) : null}
+            <div className="authoring-actions">
+                {worldCan(world, "world.canon.read") ? (
+                    <Link className="authoring-button" to={`${base}/canon`}>
+                        Published canon
+                    </Link>
+                ) : null}
+                {canTimeline ? (
+                    <Link className="authoring-button" to={`${base}/timelines/new`}>
+                        New timeline
+                    </Link>
+                ) : null}
+                {canHost ? (
+                    <Link className="authoring-button authoring-button--primary" to="/campaigns/new">
+                        Host a campaign here
+                    </Link>
+                ) : null}
+            </div>
             <p>
                 <span className="authoring-badge">View only</span>{" "}
                 {world.lifecycle_status === "archived" ? <LifecycleBadge status="archived" /> : null}
@@ -150,6 +188,16 @@ function WorldOverview({ world, headingRef, refetch }: WorldOverviewProps) {
                         to={`/worlds/${world.world_id}/calendars/new`}
                     >
                         New calendar
+                    </Link>
+                ) : null}
+                {worldCan(world, "world.share") ? (
+                    <Link className="authoring-button" to={`/worlds/${world.world_id}/sharing`}>
+                        Sharing
+                    </Link>
+                ) : null}
+                {worldCan(world, "world.canon.read") ? (
+                    <Link className="authoring-button" to={`/worlds/${world.world_id}/canon`}>
+                        Published canon
                     </Link>
                 ) : null}
                 {available.has("create_campaign") ? (

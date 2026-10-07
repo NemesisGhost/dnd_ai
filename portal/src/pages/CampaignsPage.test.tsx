@@ -34,14 +34,14 @@ beforeEach(() => {
 })
 
 describe("CampaignsPage", () => {
-  it("shows an empty state when the user has no campaigns", () => {
+  function renderEmpty(globalCapabilities: readonly string[]) {
     render(
       <SessionContext.Provider value={{ state: { status: "authenticated", bootstrap: sessionBootstrapFixture }, reload: vi.fn(), refresh: vi.fn() }}>
       <MemoryRouter>
         <CampaignsPage
           bootstrap={{
             ...sessionBootstrapFixture,
-            is_platform_administrator: false,
+            global_capabilities: globalCapabilities,
             startup_campaign_id: null,
             campaign_preferences: {
               startup_mode: "resume_last_visited",
@@ -54,6 +54,10 @@ describe("CampaignsPage", () => {
       </MemoryRouter>
       </SessionContext.Provider>,
     )
+  }
+
+  it("tells a player with no campaigns to ask a GM, and offers invitation acceptance only", () => {
+    renderEmpty([])
 
     expect(
       screen.getByRole("heading", {
@@ -70,6 +74,29 @@ describe("CampaignsPage", () => {
     expect(
       screen.getByRole("link", { name: "Accept a campaign invitation" }),
     ).toHaveAttribute("href", "/campaign-invitations/accept")
+    expect(screen.queryByRole("link", { name: "Create a world" })).not.toBeInTheDocument()
+    expect(screen.queryByRole("link", { name: "Create campaign" })).not.toBeInTheDocument()
+  })
+
+  it("gives a GM with no campaigns a usable starting point", () => {
+    renderEmpty(["world.create", "campaign.host", "world.administer"])
+
+    expect(screen.getByText("You are not in any campaigns yet.")).toBeInTheDocument()
+    expect(screen.getByRole("link", { name: "Create a world" })).toHaveAttribute("href", "/worlds/new")
+    expect(screen.getByRole("link", { name: "Create campaign" })).toHaveAttribute("href", "/campaigns/new")
+    expect(
+      screen.getByRole("link", { name: "Accept a campaign invitation" }),
+    ).toBeInTheDocument()
+  })
+
+  it("does not offer campaign creation to an administrator who is not a GM", () => {
+    renderEmpty(["accounts.manage", "system_roles.manage"])
+
+    expect(screen.queryByRole("link", { name: "Create campaign" })).not.toBeInTheDocument()
+    expect(screen.queryByRole("link", { name: "Create a world" })).not.toBeInTheDocument()
+    expect(
+      screen.getByText("You do not have access to any campaigns yet. Ask a GM to invite you."),
+    ).toBeInTheDocument()
   })
 
   it("lists an authorized campaign as a link", () => {
@@ -151,7 +178,6 @@ describe("CampaignsPage", () => {
         <CampaignsPage
           bootstrap={{
             ...sessionBootstrapFixture,
-            is_platform_administrator: false,
             startup_campaign_id: null,
             campaign_preferences: {
               startup_mode: "resume_last_visited",

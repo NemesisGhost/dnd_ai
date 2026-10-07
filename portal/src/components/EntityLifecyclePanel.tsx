@@ -3,6 +3,12 @@ import { useNavigate } from "react-router"
 import { entityLifecyclePath, runEntityAction } from "../api/entityLifecycle"
 import { useSession } from "../context/SessionContext"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
+import {
+    lifecycleActionNeeds,
+    useWorldCapability,
+    WORLD_CANON_EDIT,
+    WORLD_CANON_REVIEW,
+} from "../hooks/useWorldCapability"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import type {
@@ -181,7 +187,16 @@ function Panel({ campaignId, view, refetch, onChanged }: PanelProps) {
     const [action, setAction] = useState<string | null>(null)
     const [reason, setReason] = useState("")
     const [reasonError, setReasonError] = useState<string | null>(null)
-    const available = new Set(view.available_actions)
+    const canEditWorld = useWorldCapability(campaignId, WORLD_CANON_EDIT)
+    const canReviewWorld = useWorldCapability(campaignId, WORLD_CANON_REVIEW)
+    // Which actions the caller's *world* role allows (ADR 0020): editing prepares and withdraws
+    // drafts, reviewing approves, publishes, supersedes, archives and restores. The server
+    // re-checks; this keeps the panel from offering what it would refuse.
+    const worldAllows = (code: string): boolean => {
+        const needs = lifecycleActionNeeds(code, view.entity_type_code)
+        return needs === null || (needs === WORLD_CANON_EDIT ? canEditWorld : canReviewWorld)
+    }
+    const available = new Set(view.available_actions.filter(worldAllows))
     const spec = action === null ? undefined : ACTIONS[action]
 
     const mutation = useAuthoringMutation<Submission, EntityTransitionResponse>({

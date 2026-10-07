@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react"
 import { Link } from "react-router"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
+import { useWorldCapability, WORLD_CANON_EDIT } from "../hooks/useWorldCapability"
 import { describeBlockedReason } from "../utils/blockedReason"
 import type { EditableView } from "./authoring/ContentEditPage"
 import "./authoring/authoring.css"
@@ -24,8 +25,15 @@ interface AuthoringEditLinkProps {
 // `available_actions` decides whether editing is offered, and a blocked edit is
 // explained rather than silently hidden.
 export function AuthoringEditLink(props: AuthoringEditLinkProps) {
-    if (!useCampaignCapability(props.campaignId, "canon.edit")) {
+    const hasCanonEdit = useCampaignCapability(props.campaignId, "canon.edit")
+    const hasWorldEdit = useWorldCapability(props.campaignId, WORLD_CANON_EDIT)
+    if (!hasCanonEdit) {
         return null
+    }
+    if (!hasWorldEdit) {
+        // Shared canon belongs to the world: running this campaign does not confer the right to
+        // change it (ADR 0020). Explain, rather than offer an edit the server would refuse.
+        return <p className="authoring-note">Editing shared world content requires the world Editor role. Ask the world owner.</p>
     }
     return <LoadedLink {...props} />
 }

@@ -22,6 +22,12 @@ vi.mock("../components/CreateAccountPanel", () => ({
     CreateAccountPanel: () => <div>create-account-panel</div>,
 }))
 
+vi.mock("../components/SystemRolesEditor", () => ({
+    SystemRolesEditor: ({ account }: { account: { user_id: string } }) => (
+        <div>system-roles-{account.user_id}</div>
+    ),
+}))
+
 vi.mock("../components/AccountLifecycleActions", () => ({
     AccountLifecycleActions: ({ account }: { account: { user_id: string } }) => (
         <div>lifecycle-actions-{account.user_id}</div>
@@ -32,7 +38,7 @@ describe("AdminAccountsPage", () => {
     it("renders a not-found placeholder for a non-administrator bootstrap, presentation only", () => {
         render(
             <AdminAccountsPage
-                bootstrap={{ ...sessionBootstrapFixture, is_platform_administrator: false }}
+                bootstrap={{ ...sessionBootstrapFixture, global_capabilities: [] }}
             />,
         )
         expect(screen.getByRole("heading", { name: "Page not found" })).toBeInTheDocument()
@@ -49,6 +55,7 @@ describe("AdminAccountsPage", () => {
                     login_name: "gm2",
                     lifecycle_status_code: "active",
                     is_platform_administrator: true,
+                    system_roles: ["admin", "gm"],
                     has_local_credential: true,
                     has_outstanding_activation: false,
                     last_login_at: null,
@@ -60,7 +67,7 @@ describe("AdminAccountsPage", () => {
 
         render(
             <AdminAccountsPage
-                bootstrap={{ ...sessionBootstrapFixture, is_platform_administrator: true }}
+                bootstrap={{ ...sessionBootstrapFixture, global_capabilities: ["accounts.manage", "system_roles.manage"] }}
             />,
         )
 
@@ -69,6 +76,7 @@ describe("AdminAccountsPage", () => {
         expect(screen.getByText("GM Two")).toBeInTheDocument()
         expect(screen.getByLabelText("Platform administrator")).toBeInTheDocument()
         expect(screen.getByText("lifecycle-actions-user-1")).toBeInTheDocument()
+        expect(screen.getByText("system-roles-user-1")).toBeInTheDocument()
         expect(screen.queryByRole("button", { name: "Load more" })).not.toBeInTheDocument()
     })
 
@@ -82,6 +90,7 @@ describe("AdminAccountsPage", () => {
                     login_name: "admin.row",
                     lifecycle_status_code: "active",
                     is_platform_administrator: true,
+                    system_roles: ["admin", "gm"],
                     has_local_credential: true,
                     has_outstanding_activation: false,
                     last_login_at: null,
@@ -93,6 +102,7 @@ describe("AdminAccountsPage", () => {
                     login_name: "plain.row",
                     lifecycle_status_code: "active",
                     is_platform_administrator: false,
+                    system_roles: ["player"],
                     has_local_credential: true,
                     has_outstanding_activation: false,
                     last_login_at: null,
@@ -104,7 +114,7 @@ describe("AdminAccountsPage", () => {
 
         render(
             <AdminAccountsPage
-                bootstrap={{ ...sessionBootstrapFixture, is_platform_administrator: true }}
+                bootstrap={{ ...sessionBootstrapFixture, global_capabilities: ["accounts.manage", "system_roles.manage"] }}
             />,
         )
 

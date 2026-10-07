@@ -36,7 +36,7 @@ describe("CreateAccountPanel", () => {
         })
         fireEvent.click(screen.getByRole("button", { name: "Create account" }))
 
-        expect(submitMock).toHaveBeenCalledWith("new.gm", "New GM", null)
+        expect(submitMock).toHaveBeenCalledWith("new.gm", "New GM", null, ["player"])
     })
 
     it("shows the one-time activation link once the account is created", () => {

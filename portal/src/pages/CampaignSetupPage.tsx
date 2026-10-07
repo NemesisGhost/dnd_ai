@@ -126,7 +126,12 @@ function ChooseTimeline({ worldId }: { worldId: string }) {
         )
     }
     const active = state.data.timelines.filter((t) => t.lifecycle_status === "active")
-    const selected = choice ?? active.find((t) => t.is_primary)?.timeline_id ?? active[0]?.timeline_id ?? ""
+    // The server says which timelines the caller may start a campaign on (ADR 0020, D7): a
+    // timeline that already hosts a campaign needs an Owner or Editor to branch one for you.
+    const eligible = active.filter((t) => t.campaign_hosting?.eligible !== false)
+    const blocked = active.filter((t) => t.campaign_hosting?.eligible === false)
+    const selected =
+        choice ?? eligible.find((t) => t.is_primary)?.timeline_id ?? eligible[0]?.timeline_id ?? ""
 
     return (
         <>
@@ -140,12 +145,27 @@ function ChooseTimeline({ worldId }: { worldId: string }) {
                     legend="Timeline"
                     value={selected}
                     onChange={setChoice}
-                    options={active.map((t) => ({
+                    options={eligible.map((t) => ({
                         value: t.timeline_id,
                         label: t.is_primary ? `${t.name} (primary)` : t.name,
                     }))}
                 />
             )}
+            {blocked.length > 0 ? (
+                <ul className="authoring-note" aria-label="Timelines you cannot use">
+                    {blocked.map((t) => (
+                        <li key={t.timeline_id}>
+                            {t.name}:{" "}
+                            {t.campaign_hosting?.reason === "timeline_in_use"
+                                ? "already hosts a campaign. Ask a world owner or editor to branch a timeline for you."
+                                : "you may not start a campaign on it."}
+                        </li>
+                    ))}
+                </ul>
+            ) : null}
+            {active.length > 0 && eligible.length === 0 ? (
+                <p role="alert">No timeline in this world is available to you right now.</p>
+            ) : null}
             <div className="authoring-actions">
                 <button
                     type="button"
