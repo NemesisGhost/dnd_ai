@@ -119,6 +119,58 @@ def pytest_configure(config: pytest.Config) -> None:
     _cleanup_stale_pytest_run_dirs(keep=run_dir)
 
 
+# --- CI test sharding ----------------------------------------------------
+#
+# The full suite outgrew CI's 30-minute job budget in a single process
+# (PR #66: ~26 minutes of pytest alone), so .github/workflows/ci.yml runs it
+# as parallel shards, each against its own disposable PostgreSQL 18 service
+# container. CI_TEST_SHARD="<index>/<total>" (1-based) keeps only this
+# shard's test files; unset, every collected test runs, as it always has
+# locally. Whole files are assigned, never individual tests, so a module's
+# fixtures and its tests' order within the shared session database are
+# unchanged. Files are dealt round-robin in sorted order: every shard
+# collects the same checkout, so the partition is deterministic, disjoint,
+# and covers every file — and the slow, alphabetically adjacent test_api_*
+# modules spread evenly across shards instead of landing on one.
+_TEST_SHARD_ENV_VAR = "CI_TEST_SHARD"
+
+
+def _parse_test_shard(value: str) -> tuple[int, int]:
+    """'2/4' -> (2, 4). Anything else is a usage error, never a silent
+    fallback to running everything (or nothing)."""
+    index_text, separator, total_text = value.strip().partition("/")
+    try:
+        index, total = int(index_text), int(total_text)
+    except ValueError:
+        index = total = 0
+    if not separator or total < 1 or not 1 <= index <= total:
+        raise pytest.UsageError(
+            f"{_TEST_SHARD_ENV_VAR} must be '<index>/<total>' with 1 <= index <= total, "
+            f"got {value!r}"
+        )
+    return index, total
+
+
+def _shard_files(files: Sequence[str], index: int, total: int) -> set[str]:
+    """The test files shard `index` of `total` runs (round-robin over the
+    sorted, de-duplicated file list)."""
+    ordered = sorted(set(files))
+    return {path for position, path in enumerate(ordered) if position % total == index - 1}
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    raw_shard = os.environ.get(_TEST_SHARD_ENV_VAR)
+    if not raw_shard:
+        return
+    index, total = _parse_test_shard(raw_shard)
+    keep = _shard_files([item.nodeid.split("::", 1)[0] for item in items], index, total)
+    selected = [item for item in items if item.nodeid.split("::", 1)[0] in keep]
+    deselected = [item for item in items if item.nodeid.split("::", 1)[0] not in keep]
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
+    items[:] = selected
+
+
 # docs/DATABASE_CONVENTIONS.md §2.1 pins one PostgreSQL major version across
 # local, dev/staging/prod, and CI.
 REQUIRED_POSTGRES_MAJOR_VERSION = 18
