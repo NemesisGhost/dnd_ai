@@ -422,6 +422,10 @@ a.app-header__title:focus-visible {
   max-width: 48rem;
 }
 
+.placeholder-page--wide {
+  max-width: none;
+}
+
 .placeholder-page h1 {
   margin-top: 0;
   margin-bottom: 0.75rem;
@@ -2867,7 +2871,6 @@ a.app-header__title:focus-visible {
    events; Game master tools are a separate section beneath it. */
 
 .campaign-time {
-  max-width: 48rem;
   margin-top: 1.5rem;
   padding: 0.5rem 0.75rem;
   background-color: var(--color-surface);
@@ -2921,7 +2924,6 @@ a.app-header__title:focus-visible {
 }
 
 .gm-tools {
-  max-width: 48rem;
   margin-top: 1.5rem;
 }
 

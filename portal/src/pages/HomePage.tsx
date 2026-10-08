@@ -10,7 +10,7 @@ export function HomePage({
 }: HomePageProps) {
     return (
         <section
-            className="placeholder-page"
+            className="placeholder-page placeholder-page--wide"
             aria-labelledby="home-heading">
             <h1 id="home-heading">Campaign Home</h1>
             <section aria-labelledby="latest-session-heading">
