@@ -1910,6 +1910,23 @@ a.app-header__title:focus-visible {
   border-radius: 0.25rem;
 }
 
+/* A card's secondary content, below (never inside) its main link. */
+.entity-card__footer {
+  padding: 0 0.85rem 0.85rem;
+}
+
+/* "About: <subject>" row on Knowledge cards and the Knowledge detail page. */
+.knowledge-subject {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+}
+
+.knowledge-subject__label {
+  font-weight: 600;
+}
+
 @media (prefers-reduced-motion: no-preference) {
   .entity-card__link {
     transition: background-color 0.15s ease-out;

@@ -36,7 +36,11 @@ includes it in every view unless the caller passes `include_public=false`,
 and the detail route falls back to it. The
 list's `subject_entity_id`/`source_event_id`/`source_interaction_id` are
 each returned only when the caller can independently discover that
-resource (`_resolve_related_id_redaction`). These are reads: no idempotency
+resource (`_resolve_related_id_redaction`). List and detail both carry an
+optional `subject` summary (name, category, type) for display and
+navigation, returned only when the caller may open the subject itself —
+`resolve_subject_summaries`, which also decides the list's
+`subject_entity_id`. These are reads: no idempotency
 key, no `audit.change_log` row, no mutation.
 """
 
@@ -59,10 +63,15 @@ from dnd_ai.queries.knowledge_browse import (
     KnowledgeListItem,
     list_knowledge,
 )
-from dnd_ai.queries.world_explorer import discoverable_entity_ids
+from dnd_ai.queries.quest import audience_tracked_quest_ids
+from dnd_ai.queries.world_explorer import discoverable_entity_ids, world_category_for_type_code
 
 from ._shared import timeline_world_id
-from .access import require_campaign_capability, resolve_party_perspective
+from .access import (
+    PartyPerspectiveNotAuthorizedError,
+    require_campaign_capability,
+    resolve_party_perspective,
+)
 from .deps import get_connection
 from .errors import NotFoundError
 from .pagination import (
@@ -90,6 +99,23 @@ _MAX_QUERY_LEN = 200
 # ---------------------------------------------------------------------------
 
 
+SubjectCategory = Literal[
+    "location", "character", "organization", "religion", "item", "event", "quest"
+]
+
+
+class KnowledgeSubjectResponse(BaseModel):
+    """What a claim is *about*, returned only when this caller may open the
+    subject itself (`resolve_subject_summaries`). `category` picks the
+    destination route — a World Explorer category or `quest`;
+    `entity_type_code` is the finer type for the label."""
+
+    entity_id: uuid.UUID
+    name: str
+    category: SubjectCategory
+    entity_type_code: str
+
+
 class KnowledgeResponse(BaseModel):
     knowledge_item_id: uuid.UUID
     knowledge_type_code: str
@@ -99,6 +125,9 @@ class KnowledgeResponse(BaseModel):
     awareness_level: str | None
     confidence: int | None
     willing_to_share: bool | None
+    # The authorized subject summary, or `null` — for no subject and for one
+    # this caller may not open alike (the two are indistinguishable).
+    subject: KnowledgeSubjectResponse | None = None
 
 
 class KnowledgeListItemResponse(BaseModel):
@@ -121,6 +150,9 @@ class KnowledgeListItemResponse(BaseModel):
     source_event_id: uuid.UUID | None
     source_interaction_id: uuid.UUID | None
     subject_entity_id: uuid.UUID | None
+    # The same authorization decision as `subject_entity_id`, with the name
+    # and category a card needs to label and link it (`KnowledgeResponse`).
+    subject: KnowledgeSubjectResponse | None = None
     # Authoring state, present only for `canon.edit` holders (Phase 15.1).
     canon_status: str | None = None
     lifecycle_status: str | None = None
@@ -163,6 +195,117 @@ def _ground_truth_item_targets(
     return allowed, denied
 
 
+def _subject_summaries(
+    connection: Connection,
+    subject_ids: set[uuid.UUID],
+    *,
+    discoverable_world_ids: frozenset[uuid.UUID],
+    access: AccessContext,
+    world_id: uuid.UUID,
+    quest_party_id: uuid.UUID | None,
+) -> dict[uuid.UUID, KnowledgeSubjectResponse]:
+    """The summaries for those of `subject_ids` the caller may open, given
+    the already-resolved World Explorer discoverable set. See
+    `resolve_subject_summaries`. A fixed number of queries regardless of page
+    size (one when no subject is a quest)."""
+    if not subject_ids:
+        return {}
+    rows = connection.execute(
+        text(
+            "SELECT e.entity_id, e.canonical_name, et.code AS entity_type_code "
+            "FROM core.entities e "
+            "JOIN core.entity_types et ON et.entity_type_id = e.entity_type_id "
+            "WHERE e.entity_id = ANY(CAST(:ids AS uuid[])) AND e.world_id = :world"
+        ),
+        {"ids": list(subject_ids), "world": world_id},
+    ).mappings()
+    summaries: dict[uuid.UUID, KnowledgeSubjectResponse] = {}
+    quest_names: dict[uuid.UUID, str] = {}
+    for row in rows:
+        category = world_category_for_type_code(row["entity_type_code"])
+        if category is not None:
+            if row["entity_id"] in discoverable_world_ids:
+                summaries[row["entity_id"]] = KnowledgeSubjectResponse(
+                    entity_id=row["entity_id"],
+                    name=row["canonical_name"],
+                    category=cast(SubjectCategory, category),
+                    entity_type_code=row["entity_type_code"],
+                )
+        elif row["entity_type_code"] == "quest":
+            quest_names[row["entity_id"]] = row["canonical_name"]
+        # Any other type has no detail route a subject could link to.
+
+    if quest_names:
+        # The quest detail route's own contract (`dnd_ai.api.quests.
+        # resolve_quest_response`): no per-quest `campaign.view` deny, not
+        # lifecycle-hidden by reference, and tracked on this timeline for
+        # this audience — a GM any party's row, anyone else a campaign-wide
+        # row or their own authorized party's.
+        is_gm = access.has_capability(_KNOWLEDGE_GROUND_TRUTH_CAPABILITY)
+        hidden = lifecycle_hidden_entity_ids(
+            connection, world_id=world_id, mode="reference", can_edit_canon=is_gm
+        )
+        candidates = [
+            quest_id
+            for quest_id in quest_names
+            if quest_id not in hidden
+            and access.has_capability(_KNOWLEDGE_VIEW_CAPABILITY, quest_id=quest_id)
+        ]
+        for quest_id in audience_tracked_quest_ids(
+            connection,
+            candidates,
+            timeline_id=access.timeline_id,
+            world_id=world_id,
+            party_id=None if is_gm else quest_party_id,
+            include_all_parties=is_gm,
+        ):
+            summaries[quest_id] = KnowledgeSubjectResponse(
+                entity_id=quest_id,
+                name=quest_names[quest_id],
+                category="quest",
+                entity_type_code="quest",
+            )
+    return summaries
+
+
+def resolve_subject_summaries(
+    connection: Connection,
+    subject_ids: set[uuid.UUID],
+    *,
+    access: AccessContext,
+    world_id: uuid.UUID,
+    quest_party_id: uuid.UUID | None,
+) -> dict[uuid.UUID, KnowledgeSubjectResponse]:
+    """`{subject_entity_id: summary}` for the subjects this caller may open
+    — never for one they may not. Knowing a claim grants nothing about its
+    subject: a World subject must be independently discoverable under the
+    World Explorer rule (`discoverable_entity_ids` — characters gated by the
+    discover tiers, per-entity `campaign.view` denies, unpublished
+    definitions, event timeline/draft scope), and a quest subject must pass
+    the quest detail route's own visibility contract under the caller's
+    authorized party perspective (`quest_party_id`). A subject in another
+    world, of a type with no detail route, hidden, or nonexistent is simply
+    absent, so a response can never distinguish "no subject" from "a
+    subject you may not see"."""
+    if not subject_ids:
+        return {}
+    discoverable = discoverable_entity_ids(
+        connection,
+        list(subject_ids),
+        world_id=world_id,
+        timeline_id=access.timeline_id,
+        visibility=resolve_world_entity_visibility(access, connection),
+    )
+    return _subject_summaries(
+        connection,
+        subject_ids,
+        discoverable_world_ids=discoverable,
+        access=access,
+        world_id=world_id,
+        quest_party_id=quest_party_id,
+    )
+
+
 @dataclass(frozen=True)
 class _RelatedIdRedaction:
     """The per-page allow-lists for a `KnowledgeListItem`'s optional related
@@ -175,10 +318,11 @@ class _RelatedIdRedaction:
 
     discoverable_entities: frozenset[uuid.UUID]
     visible_interactions: frozenset[uuid.UUID]
+    subjects: dict[uuid.UUID, KnowledgeSubjectResponse]
 
-    def subject(self, item: KnowledgeListItem) -> uuid.UUID | None:
+    def subject(self, item: KnowledgeListItem) -> KnowledgeSubjectResponse | None:
         sid = item.subject_entity_id
-        return sid if sid is not None and sid in self.discoverable_entities else None
+        return self.subjects.get(sid) if sid is not None else None
 
     def source_event(self, item: KnowledgeListItem) -> uuid.UUID | None:
         eid = item.source_event_id
@@ -196,8 +340,10 @@ def _resolve_related_id_redaction(
     access: AccessContext,
     timeline_id: uuid.UUID,
     world_id: uuid.UUID,
+    quest_party_id: uuid.UUID | None,
 ) -> _RelatedIdRedaction:
-    entity_candidates = {i.subject_entity_id for i in items if i.subject_entity_id is not None} | {
+    subject_candidates = {i.subject_entity_id for i in items if i.subject_entity_id is not None}
+    entity_candidates = subject_candidates | {
         i.source_event_id for i in items if i.source_event_id is not None
     }
     discoverable = (
@@ -231,7 +377,16 @@ def _resolve_related_id_redaction(
             ).scalars()
         )
     return _RelatedIdRedaction(
-        discoverable_entities=discoverable, visible_interactions=visible_interactions
+        discoverable_entities=discoverable,
+        visible_interactions=visible_interactions,
+        subjects=_subject_summaries(
+            connection,
+            subject_candidates,
+            discoverable_world_ids=discoverable,
+            access=access,
+            world_id=world_id,
+            quest_party_id=quest_party_id,
+        ),
     )
 
 
@@ -355,7 +510,8 @@ def list_knowledge_endpoint(
         tuple(page.items),
         access=access,
         timeline_id=access.timeline_id,
-        world_id=timeline_world_id(connection, access.timeline_id),
+        world_id=world_id,
+        quest_party_id=authorized_party_id,
     )
 
     states = (
@@ -367,6 +523,7 @@ def list_knowledge_endpoint(
         if include_ground_truth
         else {}
     )
+    subjects = [redaction.subject(item) for item in page.items]
     return KnowledgeListResponse(
         items=[
             KnowledgeListItemResponse(
@@ -382,11 +539,12 @@ def list_knowledge_endpoint(
                 discovery_world_time_id=item.discovery_world_time_id,
                 source_event_id=redaction.source_event(item),
                 source_interaction_id=redaction.source_interaction(item),
-                subject_entity_id=redaction.subject(item),
+                subject_entity_id=None if subject is None else subject.entity_id,
+                subject=subject,
                 canon_status=states.get(item.knowledge_item_id, (None, None))[0],
                 lifecycle_status=states.get(item.knowledge_item_id, (None, None))[1],
             )
-            for item in page.items
+            for item, subject in zip(page.items, subjects, strict=True)
         ],
         next_cursor=page.next_cursor,
     )
@@ -467,6 +625,24 @@ def resolve_knowledge_response(
         allow_public=True,
     )
 
+    subject: KnowledgeSubjectResponse | None = None
+    if view.subject_entity_id is not None:
+        subject = resolve_subject_summaries(
+            connection,
+            {view.subject_entity_id},
+            access=access,
+            world_id=timeline_world_id(connection, access.timeline_id),
+            quest_party_id=_subject_quest_party(
+                connection,
+                access=access,
+                campaign_id=campaign_id,
+                character_id=character_id,
+                party_id=party_id,
+                resolved_party_id=authorized_party_id,
+                resolved=not include_ground_truth,
+            ),
+        ).get(view.subject_entity_id)
+
     return KnowledgeResponse(
         knowledge_item_id=view.knowledge_item_id,
         knowledge_type_code=view.knowledge_type_code,
@@ -476,7 +652,40 @@ def resolve_knowledge_response(
         awareness_level=view.awareness_level,
         confidence=view.confidence,
         willing_to_share=view.willing_to_share,
+        subject=subject,
     )
+
+
+def _subject_quest_party(
+    connection: Connection,
+    *,
+    access: AccessContext,
+    campaign_id: uuid.UUID,
+    character_id: uuid.UUID | None,
+    party_id: uuid.UUID | None,
+    resolved_party_id: uuid.UUID | None,
+    resolved: bool,
+) -> uuid.UUID | None:
+    """The party perspective a quest subject is checked under — the one the
+    quest detail route would resolve for the same `character_id`/`party_id`.
+    The knowledge detail skips resolving it for a caller with ground truth on
+    this item; a baseline GM needs none (they see every party's tracking),
+    but a non-GM holding only an item-targeted `canon.edit` allow still does.
+    An unauthorized pair there yields no perspective rather than an error,
+    so naming a subject never changes whether the knowledge item itself is
+    returned."""
+    if resolved or access.has_capability(_KNOWLEDGE_GROUND_TRUTH_CAPABILITY):
+        return resolved_party_id
+    try:
+        return resolve_party_perspective(
+            connection,
+            access=access,
+            campaign_id=campaign_id,
+            character_id=character_id,
+            party_id=party_id,
+        )
+    except PartyPerspectiveNotAuthorizedError:
+        return None
 
 
 @router.get(

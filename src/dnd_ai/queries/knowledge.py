@@ -76,6 +76,9 @@ class KnowledgeView:
     awareness_level: str | None
     confidence: int | None
     willing_to_share: bool | None
+    # The claim's optional subject, unredacted — the API decides whether this
+    # caller may be shown it (`dnd_ai.api.knowledge.resolve_subject_summaries`).
+    subject_entity_id: uuid.UUID | None = None
 
 
 def get_knowledge_view(
@@ -108,7 +111,8 @@ def get_knowledge_view(
         connection.execute(
             text("""
                 SELECT ki.knowledge_item_id, e.world_id, kt.code AS knowledge_type_code,
-                       ki.canonical_statement, ts.code AS truth_status_code, ki.sensitivity
+                       ki.canonical_statement, ts.code AS truth_status_code, ki.sensitivity,
+                       ki.subject_entity_id
                 FROM knowledge.knowledge_items ki
                 JOIN core.entities e ON e.entity_id = ki.knowledge_item_id
                 JOIN knowledge.knowledge_types kt ON kt.knowledge_type_id = ki.knowledge_type_id
@@ -137,6 +141,7 @@ def get_knowledge_view(
             awareness_level=None,
             confidence=None,
             willing_to_share=None,
+            subject_entity_id=row["subject_entity_id"],
         )
 
     if party_id is not None:
@@ -195,6 +200,7 @@ def get_knowledge_view(
                 awareness_level=None,
                 confidence=None,
                 willing_to_share=None,
+                subject_entity_id=row["subject_entity_id"],
             )
 
     if belief_row is None:
@@ -212,4 +218,5 @@ def get_knowledge_view(
         awareness_level=belief_row["awareness_level"],
         confidence=belief_row["confidence"],
         willing_to_share=belief_row["willing_to_share"],
+        subject_entity_id=row["subject_entity_id"],
     )

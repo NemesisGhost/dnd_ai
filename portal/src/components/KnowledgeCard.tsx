@@ -1,6 +1,7 @@
 import type { KnowledgeListItem } from "../types/knowledge"
 import { humanizeCode } from "../utils/humanize"
 import { EntityCard } from "./EntityCard"
+import { KnowledgeSubjectLink } from "./KnowledgeSubjectLink"
 
 interface KnowledgeCardProps {
     campaignId: string
@@ -43,7 +44,9 @@ function buildDetailPath(
 // Domain-specific wrapper mapping one authorized KnowledgeListItem into the
 // shared EntityCard primitive. Never infers canonical truth from scope,
 // sensitivity, confidence, or a null value — truth_status_code is shown
-// only when the API itself returned it (UI_DESIGN.md §5.6).
+// only when the API itself returned it (UI_DESIGN.md §5.6). The subject row
+// sits below the card's own link and appears only for the server's
+// authorized subject summary.
 export function KnowledgeCard({
     campaignId,
     item,
@@ -86,6 +89,16 @@ export function KnowledgeCard({
                 partyId,
             )}
             linkLabel={item.statement}
+            footer={
+                item.subject === null || item.subject === undefined ? undefined : (
+                    <KnowledgeSubjectLink
+                        campaignId={campaignId}
+                        subject={item.subject}
+                        characterId={characterId}
+                        partyId={partyId}
+                    />
+                )
+            }
         />
     )
 }

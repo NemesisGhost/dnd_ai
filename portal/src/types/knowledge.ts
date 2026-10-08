@@ -12,6 +12,25 @@ export type KnowledgeScope =
     | "character"
     | "public"
 
+export type KnowledgeSubjectCategory =
+    | "location"
+    | "character"
+    | "organization"
+    | "religion"
+    | "item"
+    | "event"
+    | "quest"
+
+/** What a claim is about. The server returns it only when the caller may
+ * open the subject itself; `null`/absent means "nothing to show", whether
+ * the claim has no subject or one this caller may not see. */
+export interface KnowledgeSubject {
+    entity_id: string
+    name: string
+    category: KnowledgeSubjectCategory
+    entity_type_code: string
+}
+
 export interface KnowledgeListItem {
     knowledge_item_id: string
     knowledge_type_code: string
@@ -26,6 +45,7 @@ export interface KnowledgeListItem {
     source_event_id: string | null
     source_interaction_id: string | null
     subject_entity_id: string | null
+    subject?: KnowledgeSubject | null
 }
 
 export interface KnowledgePage {
@@ -48,7 +68,8 @@ export interface KnowledgeSearchParameters {
 
 // Matches the backend's KnowledgeResponse (GET .../knowledge/{id}) —
 // deliberately narrower than KnowledgeListItem: no scope, discovery, or
-// source/subject ids, since the detail endpoint does not return them.
+// source ids, since the detail endpoint does not return them. The subject
+// summary is the one related resource it does return (authorized).
 export interface KnowledgeDetail {
     knowledge_item_id: string
     knowledge_type_code: string
@@ -58,4 +79,5 @@ export interface KnowledgeDetail {
     awareness_level: string | null
     confidence: number | null
     willing_to_share: boolean | null
+    subject?: KnowledgeSubject | null
 }

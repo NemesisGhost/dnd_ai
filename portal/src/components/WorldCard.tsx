@@ -1,26 +1,8 @@
-import type { WorldCategory, WorldEntityCard } from "../types/world"
+import type { WorldEntityCard } from "../types/world"
 import { isWorldDetailCategory } from "../types/world"
-import { humanizeCode } from "../utils/humanize"
+import { describeWorldType } from "../utils/worldTypeLabel"
 import { LifecycleBadge } from "./authoring/feedback"
 import { EntityCard } from "./EntityCard"
-
-const categoryLabels: Record<WorldCategory, string> = {
-    location: "Location",
-    character: "Character",
-    organization: "Organization",
-    religion: "Religion",
-    item: "Item",
-    event: "Event",
-}
-
-function describeEntity(entity: WorldEntityCard): string {
-    const categoryLabel = categoryLabels[entity.category]
-    const typeLabel = humanizeCode(entity.entity_type_code)
-
-    return typeLabel === categoryLabel
-        ? categoryLabel
-        : `${categoryLabel} - ${typeLabel}`
-}
 
 interface WorldCardProps {
     campaignId: string
@@ -34,7 +16,7 @@ interface WorldCardProps {
 // response yet — see this workstream's report) stays a non-interactive,
 // visually consistent card.
 export function WorldCard({ campaignId, entity }: WorldCardProps) {
-    const eyebrow = describeEntity(entity)
+    const eyebrow = describeWorldType(entity.category, entity.entity_type_code)
     // Only a canon.edit holder's preview ever returns a non-canon or archived
     // row; the badge says so in text, never by color alone.
     const hiddenStatus =

@@ -956,6 +956,18 @@ own content. The DTO docstrings previously implied these ids were safe to
 return because a caller "re-authorizes them later" — corrected: returning
 the id is itself the disclosure.
 
+*Phase 15 follow-up (subject forward links).* The list and the detail now
+both return an optional `subject` summary (id, name, category, entity type)
+for display and navigation, under one decision
+(`dnd_ai.api.knowledge.resolve_subject_summaries`): a World subject must be
+discoverable as above; a quest subject — previously always redacted, as a
+non-browsable type — is returned when the quest detail route would show it
+to the same audience (no per-quest deny, lifecycle-visible, tracked on the
+timeline for the caller's authorized party or campaign-wide; any party for
+a GM). The list's `subject_entity_id` now equals `subject.entity_id`, so it
+too names an authorized quest. Anything else is `null`, indistinguishable
+from no subject. See docs/UI_DESIGN.md §5.6.
+
 ### 11.2 Bootstrap advertised unusable party perspectives
 
 `get_session_bootstrap` attached a character's current party memberships

@@ -151,4 +151,86 @@ describe("KnowledgeCard", () => {
         expect(screen.queryByText("location-a")).not.toBeInTheDocument()
         expect(screen.queryByText("world-time-a")).not.toBeInTheDocument()
     })
+
+    describe("subject row", () => {
+        const location = {
+            entity_id: "location-a",
+            name: "The Rootspire",
+            category: "location" as const,
+            entity_type_code: "settlement",
+        }
+        const quest = {
+            entity_id: "quest-a",
+            name: "Clear the Old Mill",
+            category: "quest" as const,
+            entity_type_code: "quest",
+        }
+
+        it("shows the subject's name and type, linked to its World detail route", () => {
+            renderCard({ ...baseItem, subject_entity_id: "location-a", subject: location })
+
+            expect(screen.getByText("About:")).toBeInTheDocument()
+            expect(screen.getByText("(Location - Settlement)")).toBeInTheDocument()
+            expect(
+                screen.getByRole("link", { name: "The Rootspire" }),
+            ).toHaveAttribute("href", "/app/campaign-a/world/location/location-a")
+        })
+
+        it("keeps the subject link outside the card's own detail link", () => {
+            renderCard({ ...baseItem, subject_entity_id: "location-a", subject: location })
+
+            const cardLink = screen.getByRole("link", { name: baseItem.statement })
+            const subjectLink = screen.getByRole("link", { name: "The Rootspire" })
+            expect(cardLink).not.toContainElement(subjectLink)
+            expect(cardLink).toHaveAttribute("href", "/app/campaign-a/knowledge/knowledge-a")
+        })
+
+        it("does not forward the perspective to a World destination, which does not read it", () => {
+            renderCard(
+                { ...baseItem, subject_entity_id: "location-a", subject: location },
+                "character-a",
+                "party-a",
+            )
+
+            expect(
+                screen.getByRole("link", { name: "The Rootspire" }),
+            ).toHaveAttribute("href", "/app/campaign-a/world/location/location-a")
+        })
+
+        it("links a quest subject to the quest route with the party perspective pair", () => {
+            renderCard(
+                { ...baseItem, subject_entity_id: "quest-a", subject: quest },
+                "character-a",
+                "party-a",
+            )
+
+            expect(screen.getByText("(Quest)")).toBeInTheDocument()
+            expect(
+                screen.getByRole("link", { name: "Clear the Old Mill" }),
+            ).toHaveAttribute(
+                "href",
+                "/app/campaign-a/quests/quest-a?character_id=character-a&party_id=party-a",
+            )
+        })
+
+        it("sends no half perspective to the quest route", () => {
+            renderCard(
+                { ...baseItem, subject_entity_id: "quest-a", subject: quest },
+                "character-a",
+                null,
+            )
+
+            expect(
+                screen.getByRole("link", { name: "Clear the Old Mill" }),
+            ).toHaveAttribute("href", "/app/campaign-a/quests/quest-a")
+        })
+
+        it("omits the row entirely when the server returned no subject summary", () => {
+            const { container } = renderCard({ ...baseItem, subject: null })
+
+            expect(screen.queryByText("About:")).not.toBeInTheDocument()
+            expect(screen.getAllByRole("link")).toHaveLength(1)
+            expect(container.querySelector(".entity-card__footer")).toBeNull()
+        })
+    })
 })

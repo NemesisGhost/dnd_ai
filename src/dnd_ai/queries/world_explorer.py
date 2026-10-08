@@ -147,6 +147,13 @@ _TYPE_CODE_TO_CATEGORY: dict[str, str] = {
     code: category for category, codes in WORLD_CATEGORY_TYPE_CODES.items() for code in codes
 }
 
+
+def world_category_for_type_code(entity_type_code: str) -> str | None:
+    """The World Explorer category an entity type browses under, or `None`
+    for a type with no World Explorer surface (a quest, a knowledge item)."""
+    return _TYPE_CODE_TO_CATEGORY.get(entity_type_code)
+
+
 # Cursor keyset names (bind a cursor to the endpoint family that issued it
 # — see `dnd_ai.api.pagination`).
 ENTITY_SEARCH_KEYSET = "world_entities"

@@ -2,21 +2,29 @@ import { Link } from "react-router"
 import { AudiencePreviewSection } from "../components/AudiencePreviewSection"
 import { DetailPanel } from "../components/DetailPanel"
 import { FactGrid } from "../components/FactGrid"
+import { KnowledgeSubjectLink } from "../components/KnowledgeSubjectLink"
 import type { KnowledgeDetail } from "../types/knowledge"
 import { humanizeCode } from "../utils/humanize"
 
 interface KnowledgeDetailPageProps {
     campaignId: string
     item: KnowledgeDetail
+    /** The perspective this detail was requested under, forwarded to a
+     * subject destination that reads it (a quest's party perspective). */
+    characterId?: string | null
+    partyId?: string | null
 }
 
 // Full-page Knowledge detail (UI_STYLE_GUIDE.md §11.2). Scope and source
 // fields from the list contract are deliberately not shown here — the
 // detail endpoint does not independently return them, so this page never
-// copies them in from cached list state.
+// copies them in from cached list state. The subject comes from this
+// detail response's own authorized summary, likewise never from the list.
 export function KnowledgeDetailPage({
     campaignId,
     item,
+    characterId = null,
+    partyId = null,
 }: KnowledgeDetailPageProps) {
     const hasCanonicalInfo =
         item.truth_status_code !== null || item.sensitivity !== null
@@ -35,6 +43,13 @@ export function KnowledgeDetailPage({
                 {humanizeCode(item.knowledge_type_code)}
             </p>
             <h1 id="knowledge-detail-heading">{item.statement}</h1>
+
+            <KnowledgeSubjectLink
+                campaignId={campaignId}
+                subject={item.subject}
+                characterId={characterId}
+                partyId={partyId}
+            />
 
             <AudiencePreviewSection
                 campaignId={campaignId}

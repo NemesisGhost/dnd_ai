@@ -144,4 +144,60 @@ describe("KnowledgeDetailPage — audience preview (Phase 13E-B manual-acceptanc
             screen.queryByRole("button", { name: "Preview as member" }),
         ).not.toBeInTheDocument()
     })
+
+    describe("subject row", () => {
+        it("links an organization subject to its World detail page", () => {
+            renderPage({
+                ...itemFixture,
+                subject: {
+                    entity_id: "org-a",
+                    name: "The Cartographers Guild",
+                    category: "organization",
+                    entity_type_code: "organization",
+                },
+            })
+
+            expect(screen.getByText("About:")).toBeInTheDocument()
+            expect(screen.getByText("(Organization)")).toBeInTheDocument()
+            expect(
+                screen.getByRole("link", { name: "The Cartographers Guild" }),
+            ).toHaveAttribute("href", "/app/campaign-a/world/organization/org-a")
+            expect(screen.queryByText("org-a")).not.toBeInTheDocument()
+        })
+
+        it("links a quest subject with the detail's own party perspective", () => {
+            render(
+                <MemoryRouter>
+                    <KnowledgeDetailPage
+                        campaignId="campaign-a"
+                        item={{
+                            ...itemFixture,
+                            subject: {
+                                entity_id: "quest-a",
+                                name: "Clear the Old Mill",
+                                category: "quest",
+                                entity_type_code: "quest",
+                            },
+                        }}
+                        characterId="character-a"
+                        partyId="party-a"
+                    />
+                </MemoryRouter>,
+            )
+
+            expect(
+                screen.getByRole("link", { name: "Clear the Old Mill" }),
+            ).toHaveAttribute(
+                "href",
+                "/app/campaign-a/quests/quest-a?character_id=character-a&party_id=party-a",
+            )
+        })
+
+        it("omits the row when the server returned no subject summary", () => {
+            renderPage({ ...itemFixture, subject: null })
+
+            expect(screen.queryByText("About:")).not.toBeInTheDocument()
+        })
+    })
 })
+

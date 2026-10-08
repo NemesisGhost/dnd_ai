@@ -47,6 +47,8 @@ from tests.factories import (
     make_party_knowledge,
     make_party_membership,
     make_public_knowledge,
+    make_quest,
+    make_quest_state,
     make_relationship_type_capability,
     make_resource_grant,
     make_role,
@@ -273,6 +275,10 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
             ),
             (
                 "DELETE FROM campaign.party_memberships WHERE timeline_id = :t",
+                {"t": fixture.timeline_id},
+            ),
+            (
+                "DELETE FROM campaign.quest_state WHERE timeline_id = :t",
                 {"t": fixture.timeline_id},
             ),
             (
@@ -1231,6 +1237,205 @@ def test_a_same_timeline_source_interaction_id_is_returned(
             text("DELETE FROM interaction.interactions WHERE interaction_id = :i"),
             {"i": interaction_id},
         )
+
+
+# ---------------------------------------------------------------------------
+# Subject summaries: name, category, and link target — only when authorized
+# ---------------------------------------------------------------------------
+
+
+def _set_subject(engine: Engine, knowledge_item_id: uuid.UUID, subject_id: uuid.UUID) -> None:
+    with engine.begin() as setup:
+        setup.execute(
+            text(
+                "UPDATE knowledge.knowledge_items SET subject_entity_id = :s "
+                "WHERE knowledge_item_id = :k"
+            ),
+            {"s": subject_id, "k": knowledge_item_id},
+        )
+
+
+def _list_row(client: TestClient, f: Fixture, params: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    response = client.get(_url(f), params={"view": "known", "limit": 100, **params})
+    assert response.status_code == 200
+    row = next(i for i in response.json()["items"] if i["knowledge_item_id"] == str(f.fact_id))
+    return row, response.text
+
+
+def _detail(client: TestClient, f: Fixture, params: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    response = client.get(f"{_url(f)}/{f.fact_id}", params=params)
+    assert response.status_code == 200
+    return response.json(), response.text
+
+
+def test_a_discoverable_world_subject_is_summarized_on_list_and_detail(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as setup:
+        org_id = make_organization(setup, f.world_id, name="The Cartographers Guild")
+    _set_subject(postgres_engine, f.fact_id, org_id)
+    expected = {
+        "entity_id": str(org_id),
+        "name": "The Cartographers Guild",
+        "category": "organization",
+        "entity_type_code": "organization",
+    }
+    with client_factory(f.player_user_id) as player:
+        row, _ = _list_row(player, f, _perspective(f))
+        detail, _ = _detail(player, f, _perspective(f))
+        others = player.get(_url(f), params={"view": "party_shared", **_perspective(f)}).json()
+        destination = player.get(f"/campaigns/{f.campaign_id}/world/organizations/{org_id}")
+    assert destination.status_code == 200
+    assert row["subject"] == expected
+    assert row["subject_entity_id"] == str(org_id)
+    assert detail["subject"] == expected
+    # A claim with no subject carries an explicit null, not a placeholder.
+    assert all(
+        i["subject"] is None for i in others["items"] if i["knowledge_item_id"] != str(f.fact_id)
+    )
+
+
+def test_a_hidden_world_subject_leaves_no_identifying_metadata(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """Knowing the claim grants nothing about its subject: a `campaign.view`
+    denied organization and an undiscoverable character are both absent —
+    no id, name, or type anywhere in the list or detail body — while the
+    claim itself stays visible. The GM, who can open both, gets them."""
+    with postgres_engine.begin() as setup:
+        org_id = make_organization(setup, f.world_id, name="The Hidden Circle")
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.view_capability_id,
+            entity_id=org_id,
+            grantee_campaign_membership_id=f.player_membership_id,
+            effect="deny",
+        )
+    for subject_id, name in [(org_id, "The Hidden Circle"), (f.other_character_id, "Borin")]:
+        _set_subject(postgres_engine, f.fact_id, subject_id)
+        with client_factory(f.player_user_id) as player:
+            row, list_text = _list_row(player, f, _perspective(f))
+            detail, detail_text = _detail(player, f, _perspective(f))
+        assert row["subject"] is None and row["subject_entity_id"] is None
+        assert detail["subject"] is None
+        for body in (list_text, detail_text):
+            assert str(subject_id) not in body
+            assert name not in body
+        with client_factory(f.gm_user_id) as gm:
+            gm_row, _ = _list_row(gm, f, {})
+            gm_detail, _ = _detail(gm, f, {})
+        assert gm_row["subject"]["entity_id"] == str(subject_id)
+        assert gm_detail["subject"]["name"] == name
+    # The denied organization's own World page still refuses the player.
+    with client_factory(f.player_user_id) as player:
+        destination = player.get(f"/campaigns/{f.campaign_id}/world/organizations/{org_id}")
+    assert destination.status_code == 404
+
+
+def test_quest_subjects_follow_the_quest_visibility_contract(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """A quest subject is named only when the quest detail route would show
+    it to the same audience: tracked campaign-wide, or for the caller's own
+    authorized party; never one only another party tracks, one never
+    tracked here, or one denied by a per-quest `campaign.view` grant."""
+    with postgres_engine.begin() as setup:
+        campaign_quest = make_quest(setup, f.world_id, name="Clear the Old Mill")
+        make_quest_state(setup, f.timeline_id, campaign_quest)
+        own_party_quest = make_quest(setup, f.world_id, name="The Company's Oath")
+        make_quest_state(setup, f.timeline_id, own_party_quest, party_id=f.party_id)
+        rival_quest = make_quest(setup, f.world_id, name="The Rivals' Errand")
+        make_quest_state(setup, f.timeline_id, rival_quest, party_id=f.other_party_id)
+        untracked_quest = make_quest(setup, f.world_id, name="An Unstarted Rumor")
+        denied_quest = make_quest(setup, f.world_id, name="The Sealed Vault")
+        make_quest_state(setup, f.timeline_id, denied_quest)
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.view_capability_id,
+            quest_id=denied_quest,
+            grantee_campaign_membership_id=f.player_membership_id,
+            effect="deny",
+        )
+
+    expected_quest = {"category": "quest", "entity_type_code": "quest"}
+    for quest_id, name in [
+        (campaign_quest, "Clear the Old Mill"),
+        (own_party_quest, "The Company's Oath"),
+    ]:
+        _set_subject(postgres_engine, f.fact_id, quest_id)
+        with client_factory(f.player_user_id) as player:
+            row, _ = _list_row(player, f, _perspective(f))
+            detail, _ = _detail(player, f, _perspective(f))
+            quest_detail = player.get(
+                f"/campaigns/{f.campaign_id}/quests/{quest_id}", params=_perspective(f)
+            )
+        summary = {"entity_id": str(quest_id), "name": name, **expected_quest}
+        assert row["subject"] == summary
+        assert detail["subject"] == summary
+        # The link destination agrees: the same perspective may open it.
+        assert quest_detail.status_code == 200
+
+    for quest_id, name in [
+        (rival_quest, "The Rivals' Errand"),
+        (untracked_quest, "An Unstarted Rumor"),
+        (denied_quest, "The Sealed Vault"),
+    ]:
+        _set_subject(postgres_engine, f.fact_id, quest_id)
+        with client_factory(f.player_user_id) as player:
+            row, list_text = _list_row(player, f, _perspective(f))
+            detail, detail_text = _detail(player, f, _perspective(f))
+            quest_detail = player.get(
+                f"/campaigns/{f.campaign_id}/quests/{quest_id}", params=_perspective(f)
+            )
+        assert row["subject"] is None and row["subject_entity_id"] is None
+        assert detail["subject"] is None
+        for body in (list_text, detail_text):
+            assert str(quest_id) not in body
+            assert name not in body
+        # ...and the destination itself still refuses this audience.
+        assert quest_detail.status_code == 404
+
+    # The GM sees every party's tracking, so the rival quest is named for
+    # them; an untracked quest has no detail page for anyone.
+    _set_subject(postgres_engine, f.fact_id, rival_quest)
+    with client_factory(f.gm_user_id) as gm:
+        gm_row, _ = _list_row(gm, f, {})
+    assert gm_row["subject"]["entity_id"] == str(rival_quest)
+    _set_subject(postgres_engine, f.fact_id, untracked_quest)
+    with client_factory(f.gm_user_id) as gm:
+        gm_detail, _ = _detail(gm, f, {})
+    assert gm_detail["subject"] is None
+
+
+def test_an_own_party_quest_subject_needs_the_party_perspective(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """Public knowledge is listed without a perspective; its quest subject,
+    tracked only by the player's own party, is named only once that party
+    perspective is supplied — the same answer the quest route gives."""
+    with postgres_engine.begin() as setup:
+        quest_id = make_quest(setup, f.world_id, name="The Company's Oath")
+        make_quest_state(setup, f.timeline_id, quest_id, party_id=f.party_id)
+    with postgres_engine.begin() as setup:
+        setup.execute(
+            text(
+                "UPDATE knowledge.knowledge_items SET subject_entity_id = :s "
+                "WHERE knowledge_item_id = :k"
+            ),
+            {"s": quest_id, "k": f.public_id},
+        )
+    with client_factory(f.player_user_id) as player:
+        bare = player.get(_url(f), params={"view": "public"})
+        with_party = player.get(_url(f), params={"view": "public", **_perspective(f)})
+    bare_row = next(i for i in bare.json()["items"] if i["knowledge_item_id"] == str(f.public_id))
+    assert bare_row["subject"] is None
+    assert str(quest_id) not in bare.text
+    party_row = next(
+        i for i in with_party.json()["items"] if i["knowledge_item_id"] == str(f.public_id)
+    )
+    assert party_row["subject"]["entity_id"] == str(quest_id)
 
 
 # ---------------------------------------------------------------------------

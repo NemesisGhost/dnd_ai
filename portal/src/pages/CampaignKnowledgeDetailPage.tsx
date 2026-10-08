@@ -70,7 +70,12 @@ export function CampaignKnowledgeDetailPage() {
         >
             {(item) => (
                 <>
-                    <KnowledgeDetailPage campaignId={campaignId} item={item} />
+                    <KnowledgeDetailPage
+                        campaignId={campaignId}
+                        item={item}
+                        characterId={characterId}
+                        partyId={partyId}
+                    />
                     <AuthoringEditLink
                         campaignId={campaignId}
                         noun="claim"
