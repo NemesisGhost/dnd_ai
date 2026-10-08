@@ -2912,6 +2912,9 @@ a.app-header__title:focus-visible {
 }
 
 .campaign-time__form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
   margin-top: 0.75rem;
   padding-top: 0.75rem;
   border-top: 1px solid var(--color-border);

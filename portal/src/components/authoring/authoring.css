@@ -138,6 +138,18 @@
   align-items: center;
 }
 
+.world-time-picker {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1rem;
+  width: 100%;
+}
+
+.world-time-picker > .authoring-form {
+  align-self: stretch;
+}
+
 .authoring-actions {
   display: flex;
   flex-wrap: wrap;
