@@ -6,7 +6,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react"
-import { MemoryRouter } from "react-router"
+import { RouterProvider, createMemoryRouter } from "react-router"
 import {
   beforeEach,
   describe,
@@ -293,6 +293,7 @@ beforeEach(() => {
       session: campaignSessionDetail,
     },
     retry: vi.fn(),
+    refresh: vi.fn(() => Promise.resolve(true)),
   })
 
   useCampaignQuestsMock.mockReset()
@@ -346,16 +347,24 @@ beforeEach(() => {
   })
 })
 
+// A data router, because pages with unsaved-changes protection use useBlocker.
 function renderAppAt(path: string) {
-  return render(
-    <MemoryRouter initialEntries={[path]}>
-      <ThemeProvider>
-        <RouteSessionProvider>
-          <App />
-        </RouteSessionProvider>
-      </ThemeProvider>
-    </MemoryRouter>,
+  const router = createMemoryRouter(
+    [
+      {
+        path: "*",
+        element: (
+          <ThemeProvider>
+            <RouteSessionProvider>
+              <App />
+            </RouteSessionProvider>
+          </ThemeProvider>
+        ),
+      },
+    ],
+    { initialEntries: [path] },
   )
+  return render(<RouterProvider router={router} />)
 }
 
 describe("portal routing", () => {
@@ -808,10 +817,10 @@ describe("portal routing", () => {
     ).toBeInTheDocument()
 
     expect(
-      screen.getByText(
-        "The party entered the dormant facility.",
-      ),
-    ).toBeInTheDocument()
+      screen.getByLabelText("Summary"),
+    ).toHaveValue(
+      "The party entered the dormant facility.",
+    )
 
     expect(
       screen.getByRole("link", {

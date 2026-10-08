@@ -38,7 +38,7 @@ Record **Pass**, **Fail** (with a note and the issue), or **Accepted** (with the
 | 6 | Character builds | `…/characters/:id/builds`, `…/builds/new` | | | | | | | | |
 | 7 | NPC portrayal and the Run this NPC panel | `…/characters/:id/portrayal`, a character's World page | | | | | | | | |
 | 8 | Parties and party members | `…/parties`, `…/parties/:id`, `…/parties/:id/edit` | | | | | | | | |
-| 9 | Session create and edit | `…/sessions/new`, `…/sessions/:id/edit` | | | | | | | | |
+| 9 | Session create and edit | `…/sessions/new`, `…/sessions/:id` (edit in place) | | | | | | | | |
 | 10 | Session run page: start, participants, log, end, Travel, Award an item, Encounters | `…/sessions/:id/run` | | | | | | | | |
 | 11 | Events: record and correct | `…/events/new`, `…/events/:id` | | | | | | | | |
 | 12 | Quest editor and quest progress | `…/quests/new`, `…/quests/:id/edit`, `…/quests/:id/progress` | | | | | | | | |

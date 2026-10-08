@@ -11,3 +11,11 @@ export function fromLocalInput(value: string): string | null {
     const date = new Date(value)
     return Number.isNaN(date.getTime()) ? null : date.toISOString()
 }
+
+// Stable server error codes for session writes, with the sentence to show.
+export const SESSION_ERROR_MESSAGE: Readonly<Record<string, string>> = {
+    session_not_active: "This session is archived. Restore it first.",
+    session_not_archived: "This session is not archived.",
+    session_in_progress: "End the session before archiving it.",
+    session_already_started: "This session has already started, so its planned start cannot change.",
+}

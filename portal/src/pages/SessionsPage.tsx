@@ -100,8 +100,9 @@ const columns: SortableTableColumn<CampaignSessionListItem>[] = [
     },
 ]
 
-// Editors (the server sends them `available_actions`) get an Edit link per
-// session and a link to schedule a new one.
+// Editors (the server sends them `available_actions`) get a Run link where a
+// session can be run, and a link to schedule a new one. Editing happens on the
+// session detail page that the title links to.
 const editColumn: SortableTableColumn<CampaignSessionListItem> = {
     key: "session_actions",
     label: "Actions",
@@ -109,19 +110,9 @@ const editColumn: SortableTableColumn<CampaignSessionListItem> = {
     render: (session) => {
         const actions = session.available_actions ?? []
         const name = session.title ?? `session ${session.session_number}`
-        if (actions.length === 0) return null
         const runnable = actions.some((a) => a === "start" || a === "log" || a === "end")
-        return (
-            <>
-                <Link to={`${encodeURIComponent(session.session_id)}/edit`}>Edit {name}</Link>
-                {runnable ? (
-                    <>
-                        {" "}
-                        <Link to={`${encodeURIComponent(session.session_id)}/run`}>Run {name}</Link>
-                    </>
-                ) : null}
-            </>
-        )
+        if (!runnable) return null
+        return <Link to={`${encodeURIComponent(session.session_id)}/run`}>Run {name}</Link>
     },
 }
 

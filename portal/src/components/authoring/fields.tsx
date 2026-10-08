@@ -55,6 +55,8 @@ interface TextFieldProps {
     required?: boolean
     maxLength?: number
     disabled?: boolean
+    // Native read-only: the value stays focusable and selectable.
+    readOnly?: boolean
     autoComplete?: string
 }
 
@@ -68,6 +70,7 @@ export function TextField({
     required,
     maxLength,
     disabled,
+    readOnly,
     autoComplete,
 }: TextFieldProps) {
     const generated = useId()
@@ -82,6 +85,7 @@ export function TextField({
                         type="text"
                         value={value}
                         disabled={disabled}
+                        readOnly={readOnly}
                         autoComplete={autoComplete ?? "off"}
                         aria-invalid={error ? true : undefined}
                         aria-describedby={describedBy}
@@ -111,6 +115,7 @@ export function TextAreaField({
     required,
     maxLength,
     disabled,
+    readOnly,
     rows = 4,
 }: TextAreaFieldProps) {
     const generated = useId()
@@ -125,6 +130,7 @@ export function TextAreaField({
                         rows={rows}
                         value={value}
                         disabled={disabled}
+                        readOnly={readOnly}
                         aria-invalid={error ? true : undefined}
                         aria-describedby={describedBy}
                         aria-required={required ? true : undefined}

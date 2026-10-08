@@ -1,6 +1,7 @@
 import {
     useCallback,
     useEffect,
+    useRef,
     useState,
 } from "react"
 import {
@@ -31,6 +32,10 @@ export type CampaignSessionState =
 export interface UseCampaignSessionResult {
     state: CampaignSessionState
     retry: () => void
+    // Re-fetches the session in place. The displayed session stays mounted (no
+    // loading state) until the response replaces it, so callers keep their
+    // unsaved input. Resolves true when fresh data was applied.
+    refresh: () => Promise<boolean>
 }
 
 interface CampaignSessionSnapshot {
@@ -155,8 +160,71 @@ export function useCampaignSession(
         requestVersion,
     ])
 
+    const refreshController = useRef<AbortController | null>(null)
+
+    useEffect(() => {
+        return () => {
+            refreshController.current?.abort()
+        }
+    }, [campaignId, sessionId])
+
+    const refresh = useCallback(async (): Promise<boolean> => {
+        refreshController.current?.abort()
+        const controller = new AbortController()
+        refreshController.current = controller
+
+        try {
+            const session = await fetchCampaignSession(
+                campaignId,
+                sessionId,
+                controller.signal,
+            )
+
+            if (controller.signal.aborted) {
+                return false
+            }
+
+            setSnapshot({
+                campaignId,
+                sessionId,
+                requestVersion,
+                state: {
+                    status: "success",
+                    session,
+                },
+            })
+            return true
+        } catch (error: unknown) {
+            if (controller.signal.aborted) {
+                return false
+            }
+
+            if (
+                error instanceof CampaignSessionsRequestError &&
+                error.status === 401
+            ) {
+                void reload()
+            } else if (
+                error instanceof CampaignSessionsRequestError &&
+                (error.status === 403 || error.status === 404)
+            ) {
+                setSnapshot({
+                    campaignId,
+                    sessionId,
+                    requestVersion,
+                    state: {
+                        status: "unavailable",
+                    },
+                })
+            }
+
+            return false
+        }
+    }, [campaignId, sessionId, reload, requestVersion])
+
     return {
         state,
         retry,
+        refresh,
     }
 }

@@ -14,8 +14,8 @@ import { CampaignCharactersPage } from "./pages/CampaignCharactersPage"
 import { CampaignQuestsPage } from "./pages/CampaignQuestsPage"
 import { CampaignQuestDetailPage } from "./pages/CampaignQuestDetailPage"
 import { CampaignSessionsPage } from "./pages/CampaignSessionsPage"
-import { CampaignSessionDetailPage } from "./pages/CampaignSessionDetailPage"
-import { CreateSessionPage, EditSessionPage } from "./pages/SessionFormPages"
+import { CampaignSessionDetailPage, LegacySessionEditRedirect } from "./pages/CampaignSessionDetailPage"
+import { CreateSessionPage } from "./pages/SessionFormPages"
 import { SessionRunPage } from "./pages/SessionRunPage"
 import { CampaignWorldPage, } from "./pages/CampaignWorldPage"
 import { CampaignWorldDetailPage } from "./pages/CampaignWorldDetailPage"
@@ -459,7 +459,7 @@ function App() {
 
             <Route
               path="sessions/:sessionId/edit"
-              element={<EditSessionPage />}
+              element={<LegacySessionEditRedirect />}
             />
 
             <Route
