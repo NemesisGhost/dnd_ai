@@ -102,6 +102,8 @@ def test_the_first_advance_creates_the_clock_with_an_event_and_an_effect(s: Cont
     assert receipt["created"] is True and receipt["row_version"] == 1
     clock = _clock(s)
     assert clock["current"]["world_time_id"] == year3
+    # The display keeps the calendar and date, not just a label.
+    assert clock["current"]["display"] == "Common Reckoning: Year 3"
     assert clock["row_version"] == 1 and clock["inherited"] is False
     assert clock["last_event_id"] == receipt["event_id"]
     event = _event(s, receipt["event_id"])

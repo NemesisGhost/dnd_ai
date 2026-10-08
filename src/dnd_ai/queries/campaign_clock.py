@@ -12,11 +12,21 @@ from dataclasses import dataclass
 
 from sqlalchemy import Connection, text
 
-from dnd_ai.domain.world_time import display_text
+from dnd_ai.domain.world_time import display_text, full_display_text
 
 _ROW_SQL = """
     SELECT wt.world_time_id, wt.sort_key, wt.label, wt.year, wt.day,
            cm.name AS month_name, c.epoch_label
+    FROM core.world_times wt
+    LEFT JOIN core.calendars c ON c.calendar_id = wt.calendar_id
+    LEFT JOIN core.calendar_months cm
+      ON cm.calendar_id = wt.calendar_id AND cm.month_number = wt.month_number
+    WHERE wt.world_time_id = :t
+"""
+
+_FULL_ROW_SQL = """
+    SELECT wt.label, wt.year, wt.day, wt.hour, wt.minute, wt.calendar_id,
+           c.display_name AS calendar_name, cm.name AS month_name, c.epoch_label
     FROM core.world_times wt
     LEFT JOIN core.calendars c ON c.calendar_id = wt.calendar_id
     LEFT JOIN core.calendar_months cm
@@ -35,6 +45,26 @@ class EffectiveClock:
     # The own row's version, or 0 when the value is inherited or absent.
     row_version: int
     last_event_id: uuid.UUID | None
+
+
+def clock_display(connection: Connection, world_time_id: uuid.UUID) -> str:
+    """The clock's complete reading (calendar, date, clock time and label), which
+    keeps every recorded part of the point rather than just its label."""
+    row = connection.execute(text(_FULL_ROW_SQL), {"t": world_time_id}).one()
+    return (
+        full_display_text(
+            label=row.label,
+            calendar_name=row.calendar_name,
+            has_calendar=row.calendar_id is not None,
+            year=row.year,
+            month_name=row.month_name,
+            day=row.day,
+            hour=row.hour,
+            minute=row.minute,
+            epoch_label=row.epoch_label,
+        )
+        or "Unplaced time"
+    )
 
 
 def world_time_point(connection: Connection, world_time_id: uuid.UUID) -> tuple[int, str]:
@@ -59,7 +89,8 @@ def resolve_effective_clock(
         {"t": timeline_id},
     ).one_or_none()
     if own is not None:
-        sort_key, display = world_time_point(connection, own.current_world_time_id)
+        sort_key, _ = world_time_point(connection, own.current_world_time_id)
+        display = clock_display(connection, own.current_world_time_id)
         return EffectiveClock(
             own.current_world_time_id,
             sort_key,
@@ -83,5 +114,6 @@ def resolve_effective_clock(
         world_time_id = timeline.branch_world_time_id
     else:
         world_time_id = parent.world_time_id
-    sort_key, display = world_time_point(connection, world_time_id)
+    sort_key, _ = world_time_point(connection, world_time_id)
+    display = clock_display(connection, world_time_id)
     return EffectiveClock(world_time_id, sort_key, display, False, 0, None)
