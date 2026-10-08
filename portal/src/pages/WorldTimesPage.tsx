@@ -70,6 +70,28 @@ function WorldTimesContent({ campaignId, page, calendars, refetch }: WorldTimesC
 
     const next = cursor === undefined ? page.next_cursor : cursor
     const shown = [...page.items, ...older]
+    const calendarById = new Map(calendars.calendars.map((calendar) => [calendar.calendar_id, calendar]))
+
+    function recordedTime(item: WorldTimeItem): string {
+        if (item.calendar_id === null || item.year === null) return item.display
+
+        const calendar = calendarById.get(item.calendar_id)
+        const year = calendar?.epoch_label
+            ? `Year ${item.year} (${calendar.epoch_label})`
+            : `Year ${item.year}`
+        const month = item.month_number === null
+            ? null
+            : calendar?.months.find((candidate) => candidate.month_number === item.month_number)?.name ?? null
+        const parts = [year]
+        if (month !== null) parts.push(`${month}${item.day === null ? "" : ` ${item.day}`}`)
+        if (item.hour !== null) {
+            parts.push(
+                `${String(item.hour).padStart(2, "0")}:${String(item.minute ?? 0).padStart(2, "0")}`,
+            )
+        }
+        const date = `${calendar?.name ?? "Calendar"}: ${parts.join(", ")}`
+        return item.label ? `${date} — ${item.label}` : date
+    }
 
     async function loadMore() {
         if (next === null) return
@@ -96,7 +118,7 @@ function WorldTimesContent({ campaignId, page, calendars, refetch }: WorldTimesC
                     <ul className="world-times-list">
                         {shown.map((t) => (
                             <li key={t.world_time_id}>
-                                {t.display}
+                                {recordedTime(t)}
                                 <span className="visually-hidden"> ({t.precision})</span>
                             </li>
                         ))}
