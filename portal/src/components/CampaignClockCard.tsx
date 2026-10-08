@@ -95,44 +95,53 @@ export function CampaignClockCard({ campaignId }: { campaignId: string }) {
     }
 
     return (
-        <section className="authoring-aside" aria-labelledby="campaign-clock-heading">
-            <h2 id="campaign-clock-heading">Campaign time</h2>
-            <p>
-                {state.current === null
-                    ? "No time has been recorded for this campaign yet."
-                    : `Now: ${state.current.display}`}
-                {state.inherited && state.current !== null
-                    ? " (carried over from the original timeline)"
-                    : ""}
-            </p>
-            {canEdit && mode === "idle" ? (
-                <div className="authoring-actions">
-                    <button
-                        type="button"
-                        className="authoring-button"
-                        onClick={() => {
-                            mutation.reset()
-                            setMode("advance")
-                        }}
-                    >
-                        Advance time
-                    </button>
-                    {state.current !== null && !state.inherited && state.last_event_id !== null ? (
+        <section className="campaign-time" aria-labelledby="campaign-clock-heading">
+            <div className="campaign-time__bar">
+                <div className="campaign-time__summary">
+                    <h2 id="campaign-clock-heading" className="campaign-time__label">
+                        Campaign time
+                    </h2>
+                    <p className="campaign-time__now">
+                        {state.current === null
+                            ? "No time has been recorded for this campaign yet."
+                            : `Now: ${state.current.display}`}
+                        {state.inherited && state.current !== null
+                            ? " (carried over from the original timeline)"
+                            : ""}
+                    </p>
+                </div>
+                {canEdit && mode === "idle" ? (
+                    <div className="authoring-actions campaign-time__actions">
                         <button
                             type="button"
                             className="authoring-button"
                             onClick={() => {
                                 mutation.reset()
-                                setMode("correct")
+                                setMode("advance")
                             }}
                         >
-                            Correct time
+                            Advance time
                         </button>
-                    ) : null}
-                </div>
-            ) : null}
+                        {state.current !== null &&
+                        !state.inherited &&
+                        state.last_event_id !== null ? (
+                            <button
+                                type="button"
+                                className="authoring-button"
+                                onClick={() => {
+                                    mutation.reset()
+                                    setMode("correct")
+                                }}
+                            >
+                                Correct time
+                            </button>
+                        ) : null}
+                    </div>
+                ) : null}
+            </div>
             {canEdit && mode !== "idle" ? (
                 <form
+                    className="campaign-time__form"
                     aria-label={mode === "advance" ? "Advance time" : "Correct time"}
                     noValidate
                     onSubmit={(event) => {

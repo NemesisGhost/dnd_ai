@@ -10,9 +10,9 @@ export function GmToolsCard({ campaignId }: { campaignId: string }) {
     if (!canEdit) return null
     const base = `/app/${encodeURIComponent(campaignId)}`
     return (
-        <section className="authoring-aside" aria-labelledby="gm-tools-heading">
-            <h2 id="gm-tools-heading">Game master tools</h2>
-            <ul>
+        <section className="gm-tools" aria-labelledby="gm-tools-heading">
+            <h2 id="gm-tools-heading" className="gm-tools__heading">Game master tools</h2>
+            <ul className="gm-tools__links">
                 <li>
                     <Link to={`${base}/world-times`}>World times</Link>
                 </li>
