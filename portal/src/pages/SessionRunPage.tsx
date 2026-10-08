@@ -177,7 +177,7 @@ function StartControl({
     const error = mutation.status.kind === "error" ? mutation.status.error : null
     const message = useMessage(error)
     return (
-        <section aria-labelledby="start-heading">
+        <section className="session-run-start" aria-labelledby="start-heading">
             <h2 id="start-heading">Start</h2>
             <WorldTimePicker
                 campaignId={campaignId}
