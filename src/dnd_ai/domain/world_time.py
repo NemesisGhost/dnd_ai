@@ -223,3 +223,38 @@ def display_text(
     if month_name:
         parts.append(month_name + (f" {day}" if day is not None else ""))
     return ", ".join(parts)
+
+
+def full_display_text(
+    *,
+    label: str | None,
+    calendar_name: str | None,
+    has_calendar: bool,
+    year: int | None,
+    month_name: str | None,
+    day: int | None,
+    hour: int | None,
+    minute: int | None,
+    epoch_label: str | None,
+) -> str | None:
+    """The complete reading of a point for event feeds, or None when it has
+    neither a label nor a year (callers show their own "unassigned" text).
+
+    A calendar point reads "Calendar: Year Y (Epoch), Month D, HH:MM" with the
+    label, when present, appended after an em dash; a narrative point keeps its
+    label (or, without a calendar, the `display_text` reading). Year zero is a
+    real year."""
+    if not label and year is None:
+        return None
+    if not has_calendar or year is None:
+        return display_text(
+            label=label, year=year, month_name=month_name, day=day, epoch_label=epoch_label
+        )
+    date = display_text(
+        label=None, year=year, month_name=month_name, day=day, epoch_label=epoch_label
+    )
+    parts = [date]
+    if hour is not None:
+        parts.append(f"{hour:02d}:{(minute or 0):02d}")
+    text = f"{calendar_name or 'Calendar'}: {', '.join(parts)}"
+    return f"{text} — {label}" if label else text

@@ -12,6 +12,7 @@ from dnd_ai.domain.world_time import (
     calendar_precision,
     calendar_sort_key,
     display_text,
+    full_display_text,
     normalize_calendar,
     normalize_label,
 )
@@ -157,3 +158,40 @@ def test_label_and_display_text() -> None:
     assert display_text(label=None, year=None, month_name=None, day=None, epoch_label=None) == (
         "Unplaced time"
     )
+
+
+def _full(**overrides: object) -> str | None:
+    fields: dict[str, object] = {
+        "label": None,
+        "calendar_name": "Common Reckoning",
+        "has_calendar": True,
+        "year": 3,
+        "month_name": "Bloom",
+        "day": 5,
+        "hour": None,
+        "minute": None,
+        "epoch_label": "Founding",
+    }
+    fields.update(overrides)
+    return full_display_text(**fields)  # type: ignore[arg-type]
+
+
+def test_full_display_text_keeps_calendar_date_clock_and_label() -> None:
+    assert _full() == "Common Reckoning: Year 3 (Founding), Bloom 5"
+    assert _full(hour=7, minute=5) == "Common Reckoning: Year 3 (Founding), Bloom 5, 07:05"
+    assert _full(hour=14) == "Common Reckoning: Year 3 (Founding), Bloom 5, 14:00"
+    assert _full(label="Harvest feast") == (
+        "Common Reckoning: Year 3 (Founding), Bloom 5 — Harvest feast"
+    )
+
+
+def test_full_display_text_year_zero_is_a_real_year() -> None:
+    assert _full(year=0, epoch_label=None, month_name=None, day=None) == (
+        "Common Reckoning: Year 0"
+    )
+
+
+def test_full_display_text_narrative_and_missing_time() -> None:
+    narrative = {"has_calendar": False, "calendar_name": None, "year": None}
+    assert _full(label="Before the war", **narrative) == "Before the war"
+    assert _full(label=None, **narrative) is None

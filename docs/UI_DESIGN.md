@@ -342,6 +342,16 @@ Ordered sections:
 6. Relevant NPCs, factions, and relationships.
 7. Character-specific reminders, resources, or unresolved decisions.
 
+**Recent events (implemented: list and detail).** The campaign-level “Recent events” section shows a compact list of events beside the selected event's detail panel.
+
+- *Data:* the list is the campaign summary's `recent_events` exactly as the server returns it (its ordering, event limit, and draft/voided visibility filtering are untouched); there is no per-event fetch, no filtering, pagination, or character-perspective selection. Each event carries a server-formatted `world_time_display` (see *Time display*).
+- *Time display:* list entries and the detail panel show the server-formatted in-world time, which keeps every available part of the point. A calendar point reads “Calendar name: Year N (Epoch), Month D, HH:MM” (month, day, and clock appear only when recorded; year 0 is a real year), and a label on a calendar point is appended after an em dash (“… — Harvest feast”). A narrative point keeps its label. The World times page uses the same reading for calendar points. An event whose time has neither a label nor a year shows “World time unassigned”. Raw ids and the real-world creation timestamp are never shown as in-world time.
+- *Selection:* the first event is selected by default and that choice is stored like an explicit click; each list entry is a real `button` (keyboard- and screen-reader-operable, visible focus ring) and the selected one carries `aria-current="true"` plus the accent border and muted-surface treatment. Selecting an entry updates the panel in place — no navigation. The stored selection is normalized against each new list: it survives prepends, reordering, and unrelated changes; if it disappears the first remaining event is adopted and the old choice does not return if its id reappears; an empty list clears it and shows “No recent events are available.” Campaign Home remounts when the campaign changes, so a selection never crosses campaigns.
+- *Detail panel:* an `article` labelled by the event title, showing the time, the summary, and the fuller description only when it differs from the summary (“No event description is available.” when neither exists).
+- *Narrow screens:* below 48rem the list stacks above the detail panel at full width; titles wrap, so nothing scrolls horizontally. From 48rem the list is the left column and the detail the wider right column. The list scrolls vertically past 20rem; it has inner padding and scroll-padding so the focus ring of the first, middle, and last entries is never clipped.
+- *View all events:* intentionally omitted — no authorized all-events list route exists yet, and this change does not add one.
+- Loading and failure states come from the Campaign Home summary boundary.
+
 Each card is assembled for the current user and perspective. A player using Character A may receive a different dashboard than the same user viewing Character B. Observers receive only curated content. GM briefing remains feature-gated; preview is limited to the effective-access explanation and per-resource quest/knowledge panels in §6.3, not a full-portal viewing mode.
 
 ### 5.4 World explorer

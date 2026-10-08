@@ -30,6 +30,7 @@ const campaignSummaryFixture = {
             event_type_code: "location_changed",
             event_status_code: "recorded",
             world_time_id: "world-time-1",
+            world_time_display: "Year 1, Midsummer 3",
             details: null,
         },
     ],

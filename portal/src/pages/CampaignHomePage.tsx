@@ -44,7 +44,7 @@ export function CampaignHomePage() {
     >
       {(summary) => (
         <>
-          <HomePage summary={summary} />
+          <HomePage key={campaignId} summary={summary} />
           {state?.status === "authenticated" && <CampaignClockCard campaignId={campaignId} />}
           <GmToolsCard campaignId={campaignId} />
           {isEmptyCampaign(summary) && canManage && (
