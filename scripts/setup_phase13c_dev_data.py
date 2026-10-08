@@ -67,7 +67,7 @@ A gets three fixture-owned `campaign.sessions` rows — see
   alphabetical name order, so the owner can confirm the portal preserves
   backend order instead of re-sorting.
 
-  #3: `lifecycle_status = pending`, `title`/`started_at`/`ended_at`/
+  #3: `lifecycle_status = active` (unscheduled, not started), `title`/`started_at`/`ended_at`/
   `summary` all NULL, and no linked events — the portal's "Session 3"
   fallback heading, "Not recorded" timestamps, and neutral empty
   recap/events states, plus null-timestamps-sort-last in the list.
@@ -646,8 +646,10 @@ _CHARACTER_A_PREPARED_SPELL_CODES = ("magic_missile", "cure_wounds")
 # dnd_ai.commands.sessions.end_session is explicit that an ended session is
 # represented by `ended_at IS NOT NULL`, not a lifecycle transition (the
 # row stays `active`). So the two finished sessions carry `active` + a
-# non-null `ended_at`; the not-yet-started session carries `pending` and
-# no timestamps. Those are the schema-supported codes, not invented ones.
+# non-null `ended_at`; the not-yet-started session is also `active` with no
+# timestamps (its play status is derived as unscheduled). Since D-13
+# (migration 122) a session's lifecycle is only `active`/`archived`, and every
+# session command refuses any other status, so `pending` must not be seeded.
 #
 # Event ordering: the session-detail query sorts linked events by
 # `ORDER BY wt.sort_key, e.created_at` (dnd_ai.queries.session). Each event
@@ -782,7 +784,7 @@ _CAMPAIGN_A_SESSIONS: tuple[_SessionFixture, ...] = (
         session_number=3,
         title=None,
         summary=None,
-        lifecycle_status_code="pending",
+        lifecycle_status_code="active",
         started_at=None,
         ended_at=None,
         start_world_time_offset=None,

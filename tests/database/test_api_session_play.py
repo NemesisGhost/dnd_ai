@@ -142,6 +142,24 @@ def test_start_checks_version_and_state(s: ContentSetup) -> None:
     assert closed.status_code == 409 and closed.json()["error"]["code"] == "session_not_active"
 
 
+def test_a_pending_session_offers_no_actions_and_refuses_participants(s: ContentSetup) -> None:
+    # A seeded session can be `pending` (not `active`). Every play command refuses it
+    # with `session_not_active`, so the read model must not advertise actions that
+    # can only fail (the Run Session page keys its controls off `available_actions`).
+    pending = make_session(s.connection, uuid.UUID(s.cid), 90, lifecycle_status_code="pending")
+    view = detail(s, str(pending))
+    assert view["status_code"] == "pending" and view["available_actions"] == []
+    character = published_pc(s)
+    refused = post(
+        s,
+        str(pending),
+        "/participants",
+        {"character_id": character, "participation_role": "player_character"},
+    )
+    assert refused.status_code == 409
+    assert refused.json()["error"]["code"] == "session_not_active"
+
+
 # --- participants -----------------------------------------------------------------------------------
 
 

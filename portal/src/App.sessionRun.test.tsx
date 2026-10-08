@@ -216,6 +216,163 @@ describe("session run page", () => {
     expect(screen.queryByRole("button", { name: "Record entry" })).toBeNull()
   })
 
+  describe("participants", () => {
+    const person = (id: string, characterId: string, name: string, role: string, removedAt: string | null = null) => ({
+      session_participant_id: id,
+      character_id: characterId,
+      character_name: name,
+      participation_role: role,
+      added_at: "2026-10-12T19:00:00Z",
+      removed_at: removedAt,
+    })
+    const CAEL = person("p2", "c1", "Cael", "player_character")
+    const DUPLICATE = {
+      status: 409,
+      body: { error: { code: "session_participant_exists", message: "m", correlation_id: "c" } },
+    }
+
+    async function pickCael() {
+      fireEvent.focus(await screen.findByRole("combobox", { name: "Character" }))
+      fireEvent.click(await screen.findByRole("option", { name: /Cael/ }))
+    }
+
+    it("lists active participants with roles on load and the removed ones separately", async () => {
+      server.on("GET", S, {
+        body: session({
+          participants: [
+            person("p1", "c9", "Mira", "npc"),
+            person("p3", "c8", "Borin", "guest", "2026-10-12T20:00:00Z"),
+          ],
+        }),
+      })
+      openApp("/app/mundivita/sessions/s1/run")
+      expect(await screen.findByText(/Mira \(npc\)/)).toBeInTheDocument()
+      expect(screen.getByText("Left: Borin")).toBeInTheDocument()
+      expect(screen.queryByRole("button", { name: "Remove Borin" })).toBeNull()
+    })
+
+    it("shows the roster, without management controls, when participants cannot be edited", async () => {
+      server.on("GET", S, {
+        body: session({
+          play_status: "completed",
+          ended_at: "2026-10-12T22:00:00Z",
+          available_actions: ["update", "archive"],
+          participants: [person("p1", "c9", "Mira", "npc")],
+        }),
+      })
+      openApp("/app/mundivita/sessions/s1/run")
+      expect(await screen.findByText(/Mira \(npc\)/)).toBeInTheDocument()
+      expect(screen.queryByRole("button", { name: "Remove Mira" })).toBeNull()
+      expect(screen.queryByRole("button", { name: "Add participant" })).toBeNull()
+    })
+
+    it("explains a refused add on a session that is not active", async () => {
+      server.on("GET", S, { body: session({ status_code: "pending", available_actions: ["manage_participants"] }) })
+      server.on("POST", `${S}/participants`, {
+        status: 409,
+        body: { error: { code: "session_not_active", message: "m", correlation_id: "c" } },
+      })
+      openApp("/app/mundivita/sessions/s1/run")
+      await pickCael()
+      fireEvent.click(screen.getByRole("button", { name: "Add participant" }))
+      expect(await screen.findByText(/This session is not active, so it cannot be changed/)).toBeInTheDocument()
+    })
+
+    it("shows a duplicate conflict, reloads the roster, and keeps the message after the version changes", async () => {
+      let state = session()
+      server.on("GET", S, () => ({ body: state }))
+      server.on("POST", `${S}/participants`, () => {
+        // Someone else added Cael first, which also moved the row version.
+        state = session({ row_version: 4, participants: [CAEL] })
+        return DUPLICATE
+      })
+      openApp("/app/mundivita/sessions/s1/run")
+      await pickCael()
+      fireEvent.click(screen.getByRole("button", { name: "Add participant" }))
+      expect(await screen.findByText(/Cael \(player character\)/)).toBeInTheDocument()
+      expect(server.callsTo("GET", S).length).toBeGreaterThanOrEqual(2)
+      expect(screen.getByText("That character is already in this session.")).toBeInTheDocument()
+    })
+
+    it("stops a duplicate before it is sent and does not offer present characters", async () => {
+      server.on("GET", S, { body: session({ participants: [CAEL] }) })
+      openApp("/app/mundivita/sessions/s1/run")
+      await screen.findByText(/Cael \(player character\)/)
+      fireEvent.focus(screen.getByRole("combobox", { name: "Character" }))
+      await waitFor(() => expect(server.callsTo("GET", /world\/search/).length).toBeGreaterThan(0))
+      expect(screen.queryByRole("option", { name: /Cael/ })).toBeNull()
+    })
+
+    it("recovers from a stale write: loads the latest version, keeps the choice, resubmits with it", async () => {
+      let state = session()
+      server.on("GET", S, () => ({ body: state }))
+      let attempts = 0
+      server.on("POST", `${S}/participants`, () => {
+        attempts += 1
+        if (attempts === 1) {
+          state = session({ row_version: 4 })
+          return { status: 409, body: { error: { code: "stale_write", message: "m", correlation_id: "c" } } }
+        }
+        state = session({ row_version: 5, participants: [CAEL] })
+        return { status: 201, body: { session_id: "s1", row_version: 5, changed: true, session_participant_id: "p2" } }
+      })
+      openApp("/app/mundivita/sessions/s1/run")
+      await pickCael()
+      fireEvent.change(screen.getByRole("combobox", { name: "Role" }), { target: { value: "player_character" } })
+      fireEvent.click(screen.getByRole("button", { name: "Add participant" }))
+      fireEvent.click(await screen.findByRole("button", { name: "Load latest version" }))
+      await waitFor(() => expect(screen.queryByRole("button", { name: "Load latest version" })).toBeNull())
+      expect(screen.getByRole("combobox", { name: "Character" })).toHaveValue("Cael")
+      fireEvent.click(screen.getByRole("button", { name: "Add participant" }))
+      await waitFor(() => expect(server.callsTo("POST", `${S}/participants`)).toHaveLength(2))
+      expect(server.callsTo("POST", `${S}/participants`)[0]!.body).toMatchObject({ expected_row_version: 3 })
+      expect(server.callsTo("POST", `${S}/participants`)[1]!.body).toMatchObject({
+        expected_row_version: 4,
+        character_id: "c1",
+        participation_role: "player_character",
+      })
+      expect(await screen.findByText(/Cael \(player character\)/)).toBeInTheDocument()
+    })
+
+    it("falls back to a visible message for an unrecognised or non-JSON conflict", async () => {
+      server.on("GET", S, { body: session({ participants: [person("p1", "c9", "Mira", "npc")] }) })
+      server.on("POST", `${S}/participants`, { status: 409 })
+      server.on("POST", `${S}/participants/p1/remove`, { status: 409 })
+      openApp("/app/mundivita/sessions/s1/run")
+      await pickCael()
+      fireEvent.click(screen.getByRole("button", { name: "Add participant" }))
+      expect(await screen.findByRole("alert")).toHaveTextContent("conflicts with the record's current state")
+      fireEvent.click(screen.getByRole("button", { name: "Remove Mira" }))
+      await waitFor(() => expect(server.callsTo("POST", `${S}/participants/p1/remove`)).toHaveLength(1))
+      await waitFor(() => expect(screen.getAllByRole("alert")).toHaveLength(2))
+    })
+
+    it("updates the roster after a successful add and remove, and lets a removed character be added again", async () => {
+      let state = session({ participants: [CAEL] })
+      server.on("GET", S, () => ({ body: state }))
+      server.on("POST", `${S}/participants/p2/remove`, () => {
+        state = session({ row_version: 4, participants: [{ ...CAEL, removed_at: "2026-10-12T20:00:00Z" }] })
+        return { body: { session_id: "s1", row_version: 4, changed: true, session_participant_id: "p2" } }
+      })
+      server.on("POST", `${S}/participants`, () => {
+        state = session({
+          row_version: 5,
+          participants: [{ ...CAEL, removed_at: "2026-10-12T20:00:00Z" }, person("p4", "c1", "Cael", "guest")],
+        })
+        return { status: 201, body: { session_id: "s1", row_version: 5, changed: true, session_participant_id: "p4" } }
+      })
+      openApp("/app/mundivita/sessions/s1/run")
+      fireEvent.click(await screen.findByRole("button", { name: "Remove Cael" }))
+      expect(await screen.findByText("Left: Cael")).toBeInTheDocument()
+      expect(screen.getByText("No one is in this session yet.")).toBeInTheDocument()
+
+      await pickCael() // the removed character is offered again
+      fireEvent.click(screen.getByRole("button", { name: "Add participant" }))
+      expect(await screen.findByText(/Cael \(guest\)/)).toBeInTheDocument()
+      expect(server.callsTo("POST", `${S}/participants`)[0]!.body).toMatchObject({ expected_row_version: 4 })
+    })
+  })
+
   it("denies the page to a member who cannot edit canon", async () => {
     openApp("/app/mundivita/sessions/s1/run", ["campaign.view"])
     expect(await screen.findByRole("alert")).toHaveTextContent("do not have permission")

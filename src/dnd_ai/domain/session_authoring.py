@@ -34,11 +34,14 @@ def derive_play_status(
 
 
 class SessionNotActiveError(SafeMessageError):
-    """The action needs an active (not archived) session."""
+    """The action needs an active session (not archived, and not a retired status such as pending)."""
 
     safe_status_code = 409
     safe_error_code = "session_not_active"
-    safe_message = "This session is archived. Restore it first."
+    safe_message = (
+        "This session is not active, so it cannot be changed. "
+        "An archived session must be restored first."
+    )
 
 
 class SessionNotArchivedError(SafeMessageError):

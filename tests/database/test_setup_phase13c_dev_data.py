@@ -526,7 +526,7 @@ def test_apply_creates_the_expected_campaign_a_and_campaign_b_sessions(
     assert by_number[2].started_at is not None and by_number[2].ended_at is not None
     assert by_number[2].started_at > by_number[1].started_at
     assert by_number[3].started_at is None and by_number[3].ended_at is None
-    assert by_number[3].status_code == "pending"
+    assert by_number[3].status_code == "active"
 
     b_sessions = list_campaign_sessions(
         db_connection, campaign_id=campaigns[_CAMPAIGN_B].campaign_id
@@ -668,7 +668,7 @@ def test_rerun_reconciles_session_fields_and_event_ordering_after_drift(
     db_connection: Connection,
 ) -> None:
     """Item 10: a live-testing session that renamed a session, revised its
-    recap, moved its end time, and reactivated a pending session is reset by
+    recap, moved its end time, and put a session into a retired lifecycle status is reset by
     a second apply — each reported as "reconciled" — and the real
     session-detail query then shows the restored values and event order.
     (The linked events and their world times are schema-immutable, so those
@@ -696,7 +696,7 @@ def test_rerun_reconciles_session_fields_and_event_ordering_after_drift(
         text("""
             UPDATE campaign.sessions
             SET lifecycle_status_id = (
-                SELECT lifecycle_status_id FROM core.lifecycle_statuses WHERE code = 'active'
+                SELECT lifecycle_status_id FROM core.lifecycle_statuses WHERE code = 'pending'
             )
             WHERE session_id = :session
         """),
@@ -727,7 +727,7 @@ def test_rerun_reconciles_session_fields_and_event_ordering_after_drift(
         campaign_id=campaign_a_id,
         include_draft_events=True,
     )
-    assert v3.status_code == "pending"
+    assert v3.status_code == "active"
 
 
 def test_unrelated_pre_existing_session_and_event_records_remain_unchanged(

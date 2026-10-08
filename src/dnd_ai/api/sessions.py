@@ -132,6 +132,10 @@ def _actions(lifecycle_status: str, play_status: str) -> list[str]:
     status (a session being played cannot be archived)."""
     if lifecycle_status == "archived":
         return ["restore"]
+    if lifecycle_status != "active":
+        # Every session command refuses a session that is not active (for example
+        # a `pending` row), so offering actions would only lead to a 409.
+        return []
     actions = ["update"]
     if play_status in ("unscheduled", "scheduled"):
         actions.append("start")
