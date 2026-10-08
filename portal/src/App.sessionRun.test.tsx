@@ -844,8 +844,8 @@ describe("stages and sections", () => {
         "href",
         "/app/mundivita/events/ev1",
       )
-      // GM notes stay on the log, not in the review.
-      expect(within(review).queryByText(/Trapped door/)).toBeNull()
+      // The page is editors-only, so the review shows each entry's GM notes as the log does.
+      expect(within(review).getByText("GM notes: Trapped door")).toBeVisible()
       expect(within(review).getByRole("link", { name: "Change participants" })).toHaveAttribute(
         "href",
         expect.stringMatching(/\?section=participants$/),

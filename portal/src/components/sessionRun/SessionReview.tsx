@@ -107,6 +107,9 @@ export function SessionReview({
                     {session.events.map((event) => (
                         <li key={event.event_id}>
                             <Link to={`${campaign}/events/${enc(event.event_id)}`}>{event.name}</Link>
+                            {event.details !== null ? (
+                                <p className="authoring-note">GM notes: {event.details}</p>
+                            ) : null}
                         </li>
                     ))}
                 </ul>
