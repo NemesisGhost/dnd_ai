@@ -9,6 +9,8 @@ interface WorldEntityListProps {
     campaignId: string
     page: WorldEntityPage
     refreshing?: boolean
+    hasPreviousPage?: boolean
+    onPreviousPage?: () => void
     onNextPage: () => void
 }
 
@@ -16,6 +18,8 @@ export function WorldEntityList({
     campaignId,
     page,
     refreshing = false,
+    hasPreviousPage = false,
+    onPreviousPage,
     onNextPage,
 }: WorldEntityListProps) {
     return (
@@ -38,6 +42,16 @@ export function WorldEntityList({
                 </CardGrid>
             ) : (
                 <p>No world entities match the current search.</p>
+            )}
+
+            {hasPreviousPage && onPreviousPage !== undefined && (
+                <button
+                    type="button"
+                    disabled={refreshing}
+                    onClick={onPreviousPage}
+                >
+                    Previous page
+                </button>
             )}
 
             {page.next_cursor !== null && (

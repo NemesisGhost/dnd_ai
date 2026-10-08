@@ -37,8 +37,17 @@ function CampaignWorldContent({
         useState("")
     const [debouncedQuery, setDebouncedQuery] =
         useState("")
-    const [cursor, setCursor] =
-        useState<string | null>(null)
+    // The list API pages forward only (each page carries just a
+    // `next_cursor`), so the cursors that produced the pages already
+    // visited are kept here: the last entry is the current page's cursor,
+    // the first is always `null` (the first page). "Previous page" pops
+    // back to the cursor that produced the earlier page. Any change to the
+    // inputs a cursor was issued for (category, search, hidden preview)
+    // discards the whole history, never just the current entry.
+    const [cursorHistory, setCursorHistory] =
+        useState<readonly (string | null)[]>([null])
+    const cursor = cursorHistory[cursorHistory.length - 1]
+    const resetPagination = () => setCursorHistory([null])
     const [showHidden, setShowHidden] = useState(false)
     // The toggle is offered from the bootstrap's capability list; the server
     // re-checks and ignores the flags for anyone without canon.edit.
@@ -51,7 +60,7 @@ function CampaignWorldContent({
 
         const timeoutId = window.setTimeout(() => {
             setDebouncedQuery(searchInputValue)
-            setCursor(null)
+            setCursorHistory([null])
         }, SEARCH_DEBOUNCE_MS)
 
         return () => window.clearTimeout(timeoutId)
@@ -61,7 +70,7 @@ function CampaignWorldContent({
         nextCategory: WorldCategory | null,
     ) {
         setCategory(nextCategory)
-        setCursor(null)
+        resetPagination()
     }
 
     return (
@@ -74,7 +83,7 @@ function CampaignWorldContent({
             showHidden={showHidden && canPreviewHidden}
             onShowHiddenChange={(value) => {
                 setShowHidden(value)
-                setCursor(null)
+                resetPagination()
             }}
             createLinks={
                 canPreviewHidden
@@ -115,9 +124,23 @@ function CampaignWorldContent({
                         campaignId={campaignId}
                         page={page}
                         refreshing={refreshing}
-                        onNextPage={() =>
-                            setCursor(page.next_cursor)
+                        hasPreviousPage={cursorHistory.length > 1}
+                        onPreviousPage={() =>
+                            setCursorHistory((history) =>
+                                history.length > 1
+                                    ? history.slice(0, -1)
+                                    : history,
+                            )
                         }
+                        onNextPage={() => {
+                            const nextCursor = page.next_cursor
+                            if (nextCursor !== null) {
+                                setCursorHistory((history) => [
+                                    ...history,
+                                    nextCursor,
+                                ])
+                            }
+                        }}
                     />
                 )}
             </WorldEntitiesBoundary>

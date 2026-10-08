@@ -712,6 +712,7 @@ Explanations are themselves filtered; they must not reveal a hidden intermediary
 - Autocomplete never receives forbidden names or identifiers.
 - Counts describe only accessible records.
 - Pagination totals exclude inaccessible records.
+- A paged list (**Next page** / **Previous page**) keeps the cursors of the pages already visited, since list APIs page forward only, so **Previous page** returns to the exact earlier results; it is hidden on the first page. Changing a filter, search, or other list input discards that history and starts again from the first page, so a cursor issued for the old inputs is never reused. The campaign World page follows this rule.
 - Browsable collections default to responsive cards whose fields come only from the audience-safe list contract.
 - A card uses a real link when a detail route exists; navigation is not simulated with a clickable `div`.
 - Activating a card loads a campaign-scoped detail contract and performs a current authorization check; list data and client state are not proof of detail access.

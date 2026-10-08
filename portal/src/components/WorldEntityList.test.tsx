@@ -162,6 +162,66 @@ describe("WorldEntityList", () => {
         ).not.toBeInTheDocument()
     })
 
+    it("offers Previous page only past the first page, disabled while refreshing", () => {
+        const onPreviousPage = vi.fn()
+
+        const { rerender } = render(
+            <MemoryRouter>
+                <WorldEntityList
+                    campaignId="campaign-a"
+                    page={page}
+                    onPreviousPage={onPreviousPage}
+                    onNextPage={vi.fn()}
+                />
+            </MemoryRouter>,
+        )
+
+        expect(
+            screen.queryByRole("button", {
+                name: "Previous page",
+            }),
+        ).not.toBeInTheDocument()
+
+        rerender(
+            <MemoryRouter>
+                <WorldEntityList
+                    campaignId="campaign-a"
+                    page={{ ...page, next_cursor: null }}
+                    hasPreviousPage
+                    refreshing
+                    onPreviousPage={onPreviousPage}
+                    onNextPage={vi.fn()}
+                />
+            </MemoryRouter>,
+        )
+
+        expect(
+            screen.getByRole("button", {
+                name: "Previous page",
+            }),
+        ).toBeDisabled()
+
+        rerender(
+            <MemoryRouter>
+                <WorldEntityList
+                    campaignId="campaign-a"
+                    page={{ ...page, next_cursor: null }}
+                    hasPreviousPage
+                    onPreviousPage={onPreviousPage}
+                    onNextPage={vi.fn()}
+                />
+            </MemoryRouter>,
+        )
+
+        fireEvent.click(
+            screen.getByRole("button", {
+                name: "Previous page",
+            }),
+        )
+
+        expect(onPreviousPage).toHaveBeenCalledTimes(1)
+    })
+
     describe("refreshing", () => {
         beforeEach(() => {
             vi.useFakeTimers()

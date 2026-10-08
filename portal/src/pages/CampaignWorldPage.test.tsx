@@ -177,6 +177,153 @@ describe("CampaignWorldPage", () => {
         )
     })
 
+    describe("paging back", () => {
+        const secondPage: WorldEntityPage = {
+            items: [
+                {
+                    entity_id: "event-1",
+                    category: "event",
+                    entity_type_code: "historical_event",
+                    name: "The Sundering",
+                    summary: null,
+                },
+            ],
+            next_cursor: "third-cursor",
+        }
+
+        // Each cursor yields its own page, as the server's keyset would.
+        beforeEach(() => {
+            useWorldEntitiesMock.mockImplementation(
+                (_campaignId, _category, _query, cursor) => ({
+                    state: {
+                        status: "success",
+                        page: cursor === null ? worldPage : secondPage,
+                    },
+                    retry: vi.fn(),
+                }),
+            )
+        })
+
+        function clickPager(name: "Next page" | "Previous page") {
+            fireEvent.click(screen.getByRole("button", { name }))
+        }
+
+        it("returns from the next page to the original results", () => {
+            renderCampaignWorldPage()
+
+            expect(
+                screen.queryByRole("button", { name: "Previous page" }),
+            ).not.toBeInTheDocument()
+
+            clickPager("Next page")
+
+            expect(screen.getByText("The Sundering")).toBeInTheDocument()
+            expect(screen.queryByText("Glass Harbor")).not.toBeInTheDocument()
+
+            clickPager("Previous page")
+
+            expect(
+                useWorldEntitiesMock,
+            ).toHaveBeenLastCalledWith(
+                "campaign-a",
+                null,
+                "",
+                null,
+                false,
+            )
+            expect(screen.getByText("Glass Harbor")).toBeInTheDocument()
+            expect(screen.queryByText("The Sundering")).not.toBeInTheDocument()
+            expect(
+                screen.queryByRole("button", { name: "Previous page" }),
+            ).not.toBeInTheDocument()
+        })
+
+        it("steps back one page at a time through deeper history", () => {
+            renderCampaignWorldPage()
+
+            clickPager("Next page")
+            clickPager("Next page")
+
+            expect(
+                useWorldEntitiesMock,
+            ).toHaveBeenLastCalledWith(
+                "campaign-a",
+                null,
+                "",
+                "third-cursor",
+                false,
+            )
+
+            clickPager("Previous page")
+
+            expect(
+                useWorldEntitiesMock,
+            ).toHaveBeenLastCalledWith(
+                "campaign-a",
+                null,
+                "",
+                "next-cursor",
+                false,
+            )
+            expect(
+                screen.getByRole("button", { name: "Previous page" }),
+            ).toBeInTheDocument()
+        })
+
+        it("discards the page history when a filter or search changes", () => {
+            renderCampaignWorldPage()
+
+            clickPager("Next page")
+            clickPager("Next page")
+
+            fireEvent.change(
+                screen.getByRole("combobox", { name: "Category" }),
+                { target: { value: "event" } },
+            )
+
+            expect(
+                useWorldEntitiesMock,
+            ).toHaveBeenLastCalledWith(
+                "campaign-a",
+                "event",
+                "",
+                null,
+                false,
+            )
+            expect(
+                screen.queryByRole("button", { name: "Previous page" }),
+            ).not.toBeInTheDocument()
+
+            // A fresh history under the new filter steps back to its own
+            // first page, never to a cursor issued for the old filter.
+            clickPager("Next page")
+            typeInSearch("sundering")
+
+            expect(
+                screen.queryByRole("button", { name: "Previous page" }),
+            ).not.toBeInTheDocument()
+
+            clickPager("Next page")
+            clickPager("Previous page")
+
+            expect(
+                useWorldEntitiesMock,
+            ).toHaveBeenLastCalledWith(
+                "campaign-a",
+                "event",
+                "sundering",
+                null,
+                false,
+            )
+            expect(
+                useWorldEntitiesMock.mock.calls.some(
+                    ([, category, , cursor]) =>
+                        category === "event" && cursor === "third-cursor",
+                ),
+            ).toBe(false)
+        })
+    })
+
     it("keeps showing the previous results, busy, while a filter change refreshes", () => {
         renderCampaignWorldPage()
 
