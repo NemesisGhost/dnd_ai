@@ -120,6 +120,22 @@ def test_participants_can_change_side_and_initiative_and_leave(s: ContentSetup) 
     assert missing.status_code == 404
 
 
+def test_a_side_update_without_initiative_keeps_the_stored_one(s: ContentSetup) -> None:
+    session = new_session(s, title="Session 1")
+    encounter = prepare(s, session["session_id"]).json()["encounter_id"]
+    added = add(s, encounter, pc(s, "Aldric"), initiative=14).json()
+    participant = added["participants"][0]["encounter_participant_id"]
+    url = base(s, f"/{encounter}/participants/{participant}") + "/update"
+    kept = s.gm.post_raw(url, {"side": "enemy"}, key=s.gm.fresh_key())
+    assert kept.status_code == 200
+    assert (
+        kept.json()["participants"][0]["side"],
+        kept.json()["participants"][0]["initiative"],
+    ) == ("enemy", 14)
+    cleared = s.gm.post_raw(url, {"side": "enemy", "initiative": None}, key=s.gm.fresh_key())
+    assert cleared.json()["participants"][0]["initiative"] is None
+
+
 def test_the_place_and_summary_can_change_while_pending(s: ContentSetup) -> None:
     session = new_session(s, title="Session 1")
     encounter = prepare(s, session["session_id"], summary="Old").json()["encounter_id"]

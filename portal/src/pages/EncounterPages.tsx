@@ -59,13 +59,8 @@ function useSearch(campaignId: string, category: WorldCategory) {
     }
 }
 
-// Parses an optional whole-number initiative; `undefined` means the box holds something else.
-function parseInitiative(value: string, min: number, max: number): number | null | undefined {
-    const trimmed = value.trim()
-    if (trimmed === "") return null
-    const parsed = Number(trimmed)
-    return Number.isInteger(parsed) && parsed >= min && parsed <= max ? parsed : undefined
-}
+const without = (record: Record<string, string>, key: string): Record<string, string> =>
+    Object.fromEntries(Object.entries(record).filter(([k]) => k !== key))
 
 // /app/:campaignId/sessions/:sessionId/encounters/new: prepare a pending encounter.
 export function PrepareEncounterPage() {
@@ -156,8 +151,8 @@ export function PrepareEncounterPage() {
 
 type Command =
     | { op: "update"; location_id: string | null; summary: string | null }
-    | { op: "add"; participant_entity_id: string; side: string; initiative: number | null }
-    | { op: "change"; participant_id: string; side: string; initiative: number | null }
+    | { op: "add"; participant_entity_id: string; side: string }
+    | { op: "change"; participant_id: string; side: string }
     | { op: "remove"; participant_id: string }
     | { op: "start" }
     | { op: "abort" }
@@ -230,11 +225,12 @@ function Loaded({
     const [summary, setSummary] = useState(view.summary ?? "")
     const [who, setWho] = useState<ReferenceOption | null>(null)
     const [side, setSide] = useState("party")
-    const [initiative, setInitiative] = useState("")
-    const [edits, setEdits] = useState<Record<string, { side: string; initiative: string }>>({})
+    // Side drafts by participant, kept only while they differ from the saved side.
+    const [edits, setEdits] = useState<Record<string, string>>({})
+    // The command in flight, so success clears only its own draft and a failure shows beside its row.
+    const [inflight, setInflight] = useState<Command | null>(null)
     const [problem, setProblem] = useState<string | null>(null)
     const [done, setDone] = useState<string | null>(null)
-    const { initiative_min: low, initiative_max: high } = options.limits
     const [actor, setActor] = useState("")
     const [action, setAction] = useState("attack")
     const [target, setTarget] = useState("")
@@ -260,11 +256,7 @@ function Loaded({
                     return addParticipant(
                         campaignId,
                         view.encounter_id,
-                        {
-                            participant_entity_id: command.participant_entity_id,
-                            side: command.side,
-                            initiative: command.initiative,
-                        },
+                        { participant_entity_id: command.participant_entity_id, side: command.side },
                         ctx,
                     )
                 case "change":
@@ -272,7 +264,7 @@ function Loaded({
                         campaignId,
                         view.encounter_id,
                         command.participant_id,
-                        { side: command.side, initiative: command.initiative },
+                        { side: command.side },
                         ctx,
                     )
                 case "remove":
@@ -297,10 +289,13 @@ function Loaded({
         },
         onSuccess: async () => {
             const message = done
+            const finished = inflight
             setDone(null)
-            setWho(null)
-            setInitiative("")
-            setEdits({})
+            setInflight(null)
+            if (finished?.op === "add") setWho(null)
+            if (finished?.op === "change" || finished?.op === "remove") {
+                setEdits((current) => without(current, finished.participant_id))
+            }
             setActor("")
             setTarget("")
             setResult("")
@@ -316,8 +311,20 @@ function Loaded({
     const run = (command: Command, message: string) => {
         setProblem(null)
         setDone(message)
+        setInflight(command)
         mutation.submit(command)
     }
+    // A failed change or removal is reported beside its own row; every other failure stays at the top.
+    const rowFailure =
+        error !== null && inflight !== null && (inflight.op === "change" || inflight.op === "remove")
+            ? inflight.participant_id
+            : null
+    const failureNotice =
+        explained !== null ? (
+            <p role="alert">{explained}</p>
+        ) : error !== null ? (
+            <MutationStatusMessage error={error} onRetry={mutation.retry} onCheckSession={reload} />
+        ) : null
 
     return (
         <>
@@ -325,11 +332,7 @@ function Loaded({
                 Status: <strong>{view.status}</strong>
                 {view.can_prepare ? "" : ". Preparation is over; this encounter can no longer be changed here."}
             </p>
-            {explained !== null ? (
-                <p role="alert">{explained}</p>
-            ) : error !== null ? (
-                <MutationStatusMessage error={error} onRetry={mutation.retry} onCheckSession={reload} />
-            ) : null}
+            {rowFailure === null ? failureNotice : null}
             {problem !== null ? <p role="alert">{problem}</p> : null}
 
             {view.can_prepare ? (
@@ -378,115 +381,18 @@ function Loaded({
             )}
 
             <h2>Participants</h2>
-            {view.participants.length === 0 ? <p>Nobody has been added yet.</p> : null}
-            <ul className="authoring-choice-list">
-                {view.participants.map((p) => {
-                    const edit = edits[p.encounter_participant_id] ?? {
-                        side: p.side,
-                        initiative: p.initiative === null ? "" : String(p.initiative),
-                    }
-                    return (
-                        <li key={p.encounter_participant_id}>
-                            <strong>{p.name}</strong> ({humanize(p.entity_type_code)})
-                            {view.can_prepare ? (
-                                <form
-                                    noValidate
-                                    aria-label={`Change ${p.name}`}
-                                    className="authoring-form"
-                                    onSubmit={(event) => {
-                                        event.preventDefault()
-                                        const value = parseInitiative(edit.initiative, low, high)
-                                        if (value === undefined) {
-                                            setProblem(`Initiative must be a whole number from ${low} to ${high}.`)
-                                            return
-                                        }
-                                        run(
-                                            {
-                                                op: "change",
-                                                participant_id: p.encounter_participant_id,
-                                                side: edit.side,
-                                                initiative: value,
-                                            },
-                                            `${p.name} updated`,
-                                        )
-                                    }}
-                                >
-                                    <SelectField
-                                        id={`side-${p.encounter_participant_id}`}
-                                        label={`Side of ${p.name}`}
-                                        value={edit.side}
-                                        options={options.sides}
-                                        onChange={(value) =>
-                                            setEdits({
-                                                ...edits,
-                                                [p.encounter_participant_id]: { ...edit, side: value },
-                                            })
-                                        }
-                                    />
-                                    <TextField
-                                        id={`initiative-${p.encounter_participant_id}`}
-                                        label={`Initiative of ${p.name}`}
-                                        value={edit.initiative}
-                                        onChange={(value) =>
-                                            setEdits({
-                                                ...edits,
-                                                [p.encounter_participant_id]: { ...edit, initiative: value },
-                                            })
-                                        }
-                                    />
-                                    <button type="submit" className="authoring-button" disabled={busy}>
-                                        Save {p.name}
-                                    </button>{" "}
-                                    <button
-                                        type="button"
-                                        className="authoring-button"
-                                        disabled={busy}
-                                        onClick={() =>
-                                            run(
-                                                { op: "remove", participant_id: p.encounter_participant_id },
-                                                `${p.name} removed`,
-                                            )
-                                        }
-                                    >
-                                        Remove {p.name}
-                                    </button>
-                                </form>
-                            ) : (
-                                <>
-                                    {", "}
-                                    {humanize(p.side)}
-                                    {p.initiative !== null ? `, initiative ${p.initiative}` : ""}
-                                    {p.current_hit_points !== null
-                                        ? `, ${p.current_hit_points} of ${p.maximum_hit_points} hit points`
-                                        : ""}
-                                    {p.outcome !== null ? `, ${humanize(p.outcome)}` : ""}
-                                </>
-                            )}
-                        </li>
-                    )
-                })}
-            </ul>
-
             {view.can_prepare ? (
                 <form
                     noValidate
                     aria-label="Add a participant"
-                    className="authoring-form"
+                    className="encounter-roster__add"
                     onSubmit={(event) => {
                         event.preventDefault()
-                        const value = parseInitiative(initiative, low, high)
                         if (who === null) {
                             setProblem("Choose a character to add.")
                             return
                         }
-                        if (value === undefined) {
-                            setProblem(`Initiative must be a whole number from ${low} to ${high}.`)
-                            return
-                        }
-                        run(
-                            { op: "add", participant_entity_id: who.id, side, initiative: value },
-                            `${who.label} added`,
-                        )
+                        run({ op: "add", participant_entity_id: who.id, side }, `${who.label} added`)
                     }}
                 >
                     <ReferenceCombobox
@@ -498,16 +404,116 @@ function Loaded({
                         placeholder="Search characters"
                     />
                     <SelectField id="encounter-add-side" label="Side" value={side} options={options.sides} onChange={setSide} />
-                    <TextField
-                        id="encounter-add-initiative"
-                        label="Initiative (optional)"
-                        value={initiative}
-                        onChange={setInitiative}
-                    />
-                    <button type="submit" className="authoring-button" disabled={busy}>
-                        Add participant
+                    <button type="submit" className="authoring-button encounter-roster__button" disabled={busy}>
+                        {busy && inflight?.op === "add" ? "Adding…" : "Add participant"}
                     </button>
                 </form>
+            ) : null}
+            {view.participants.length === 0 ? <p>Nobody has been added yet.</p> : null}
+            {view.participants.length > 0 ? (
+                <div className="encounter-roster">
+                    <div className="encounter-roster__head" aria-hidden="true">
+                        <span>Character</span>
+                        <span>{view.can_prepare ? "Side" : "Side and condition"}</span>
+                        <span />
+                    </div>
+                    <ul className="encounter-roster__list">
+                        {view.participants.map((p) => {
+                            const draft = edits[p.encounter_participant_id]
+                            const dirty = draft !== undefined && draft !== p.side
+                            const mine = inflight !== null && "participant_id" in inflight && inflight.participant_id === p.encounter_participant_id
+                            const saving = busy && mine && inflight?.op === "change"
+                            const removing = busy && mine && inflight?.op === "remove"
+                            return (
+                                <li key={p.encounter_participant_id} className="encounter-roster__row">
+                                    <div className="encounter-roster__who">
+                                        <strong>{p.name}</strong>
+                                        <span className="encounter-roster__type">{humanize(p.entity_type_code)}</span>
+                                    </div>
+                                    {view.can_prepare ? (
+                                        <form
+                                            noValidate
+                                            aria-label={`Change ${p.name}`}
+                                            className="encounter-roster__controls"
+                                            onSubmit={(event) => {
+                                                event.preventDefault()
+                                                if (!dirty) return
+                                                run(
+                                                    {
+                                                        op: "change",
+                                                        participant_id: p.encounter_participant_id,
+                                                        side: draft,
+                                                    },
+                                                    `${p.name} updated`,
+                                                )
+                                            }}
+                                        >
+                                            <select
+                                                id={`side-${p.encounter_participant_id}`}
+                                                className="authoring-field__control encounter-roster__side"
+                                                aria-label={`Side of ${p.name}`}
+                                                value={draft ?? p.side}
+                                                disabled={busy && mine}
+                                                onChange={(event) => {
+                                                    const value = event.target.value
+                                                    setEdits((current) =>
+                                                        value === p.side
+                                                            ? without(current, p.encounter_participant_id)
+                                                            : { ...current, [p.encounter_participant_id]: value },
+                                                    )
+                                                }}
+                                            >
+                                                {options.sides.map((s) => (
+                                                    <option key={s.value} value={s.value}>
+                                                        {s.label}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                            {dirty ? (
+                                                <>
+                                                    <span className="encounter-roster__state">Unsaved</span>
+                                                    <button
+                                                        type="submit"
+                                                        className="authoring-button encounter-roster__button"
+                                                        disabled={busy}
+                                                        aria-label={`Save ${p.name}`}
+                                                    >
+                                                        {saving ? "Saving…" : "Save"}
+                                                    </button>
+                                                </>
+                                            ) : null}
+                                            <button
+                                                type="button"
+                                                className="authoring-button encounter-roster__button"
+                                                disabled={busy}
+                                                aria-label={`Remove ${p.name}`}
+                                                onClick={() =>
+                                                    run(
+                                                        { op: "remove", participant_id: p.encounter_participant_id },
+                                                        `${p.name} removed`,
+                                                    )
+                                                }
+                                            >
+                                                {removing ? "Removing…" : "Remove"}
+                                            </button>
+                                        </form>
+                                    ) : (
+                                        <div className="encounter-roster__controls">
+                                            {humanize(p.side)}
+                                            {p.current_hit_points !== null
+                                                ? `, ${p.current_hit_points} of ${p.maximum_hit_points} hit points`
+                                                : ""}
+                                            {p.outcome !== null ? `, ${humanize(p.outcome)}` : ""}
+                                        </div>
+                                    )}
+                                    {rowFailure === p.encounter_participant_id ? (
+                                        <div className="encounter-roster__error">{failureNotice}</div>
+                                    ) : null}
+                                </li>
+                            )
+                        })}
+                    </ul>
+                </div>
             ) : null}
 
             {view.can_prepare ? (

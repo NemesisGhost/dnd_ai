@@ -3105,3 +3105,98 @@ a.app-header__title:focus-visible {
     flex: 1 1 auto;
   }
 }
+
+/* Encounter participants: compact add form above an aligned roster. Columns on wide screens;
+   each row reflows into a grouped block (identity, then controls) on narrow ones. */
+
+.encounter-roster__add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.5rem 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.encounter-roster__add > * {
+  min-width: 0;
+}
+
+.encounter-roster__button {
+  width: auto;
+  padding: 0.25rem 0.75rem;
+}
+
+.encounter-roster__head,
+.encounter-roster__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.25rem 0.75rem;
+}
+
+.encounter-roster__head {
+  display: none;
+}
+
+.encounter-roster__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.encounter-roster__row {
+  padding: 0.5rem 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.encounter-roster__who {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 0.5rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.encounter-roster__type {
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+}
+
+.encounter-roster__controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.encounter-roster__side {
+  width: auto;
+  min-width: 7rem;
+  max-width: 100%;
+}
+
+.encounter-roster__state {
+  font-size: 0.875rem;
+  font-style: italic;
+}
+
+.encounter-roster__error {
+  grid-column: 1 / -1;
+}
+
+@media (min-width: 40rem) {
+  .encounter-roster__head,
+  .encounter-roster__row {
+    grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+    align-items: center;
+  }
+
+  .encounter-roster__head {
+    display: grid;
+    padding-bottom: 0.25rem;
+    color: var(--color-text-muted);
+    font-size: 0.875rem;
+    font-weight: 700;
+  }
+}

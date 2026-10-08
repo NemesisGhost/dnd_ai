@@ -295,6 +295,13 @@ def _participant(
     return str(row.side), row.initiative
 
 
+class _Keep:
+    """Marks an initiative the caller did not send: the stored value stays."""
+
+
+KEEP_INITIATIVE = _Keep()
+
+
 def update_encounter_participant(
     connection: Connection,
     *,
@@ -303,13 +310,16 @@ def update_encounter_participant(
     encounter_id: uuid.UUID,
     encounter_participant_id: uuid.UUID,
     side: str,
-    initiative: int | None,
+    initiative: int | None | _Keep = KEEP_INITIATIVE,
 ) -> PreparationResult:
     clean_side = normalize_side(side)
-    clean_initiative = normalize_initiative(initiative)
     scope, _, _ = _prepare(connection, campaign_id, actor_user_id, encounter_id)
     current_side, current_initiative = _participant(
         connection, encounter_id, encounter_participant_id
+    )
+    # Omitting the initiative leaves a stored one untouched; sending null clears it.
+    clean_initiative = (
+        current_initiative if isinstance(initiative, _Keep) else normalize_initiative(initiative)
     )
     changed = diff_fields(
         {"side": current_side, "initiative": current_initiative},

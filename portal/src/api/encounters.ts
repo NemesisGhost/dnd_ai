@@ -42,7 +42,7 @@ export function updateEncounter(
 export function addParticipant(
     campaignId: string,
     encounterId: string,
-    body: { participant_entity_id: string; side: string; initiative: number | null },
+    body: { participant_entity_id: string; side: string },
     ctx: MutationContext,
 ): Promise<PreparedEncounter> {
     return apiRequest<PreparedEncounter>("POST", `${base(campaignId, encounterId)}/participants`, {
@@ -55,7 +55,7 @@ export function updateParticipant(
     campaignId: string,
     encounterId: string,
     participantId: string,
-    body: { side: string; initiative: number | null },
+    body: { side: string },
     ctx: MutationContext,
 ): Promise<PreparedEncounter> {
     return apiRequest<PreparedEncounter>(

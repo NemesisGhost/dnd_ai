@@ -48,7 +48,7 @@ Record **Pass**, **Fail** (with a note and the issue), or **Accepted** (with the
 | 16 | Organization members and offices | `…/world/organization/:id` | | | | | | | | |
 | 17 | Item definitions | `…/item-definitions`, `…/new`, `…/:id` | | | | | | | | |
 | 18 | Items and the Run this item panel; inventories | `…/items`, `…/items/new`, `…/items/:id/edit`, an item's World page, a character's Inventory, a party's Party inventory | | | | | | | | |
-| 19 | Prepare and operate an encounter | `…/sessions/:id/encounters/new`, `…/encounters/:id` | | | | | | | | |
+| 19 | Prepare and operate an encounter (compact participant roster: add, change side with Save only when changed, remove; no initiative) | `…/sessions/:id/encounters/new`, `…/encounters/:id` | | | | | | | | |
 | 20 | Sources section and provenance | a record's Sources section, `…/world/:category/:id/provenance` | | | | | | | | |
 | 21 | Review queue | `…/review` | | | | | | | | |
 | 22 | Revision history and comparison (check the table at 2560 px and at 390 px, and with a screen reader) | `…/world/:category/:id/history` | | | | | | | | |

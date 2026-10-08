@@ -31,6 +31,7 @@ from dnd_ai.commands.encounter_operations import (
     start_prepared_encounter,
 )
 from dnd_ai.commands.encounter_preparation import (
+    KEEP_INITIATIVE,
     PreparationResult,
     add_encounter_participant,
     create_encounter,
@@ -348,7 +349,7 @@ def update_participant_endpoint(
         payload={
             "encounter_id": str(encounter_id),
             "participant_id": str(participant_id),
-            **body.model_dump(mode="json"),
+            **body.model_dump(mode="json", exclude_unset=True),
         },
         created=False,
         command=lambda: update_encounter_participant(
@@ -358,7 +359,10 @@ def update_participant_endpoint(
             encounter_id=encounter_id,
             encounter_participant_id=participant_id,
             side=body.side,
-            initiative=body.initiative,
+            # An omitted initiative keeps the stored one; an explicit null clears it.
+            initiative=(
+                body.initiative if "initiative" in body.model_fields_set else KEEP_INITIATIVE
+            ),
         ),
     )
 

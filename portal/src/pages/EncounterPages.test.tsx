@@ -151,30 +151,34 @@ describe("PrepareEncounterPage", () => {
 })
 
 describe("PreparedEncounterPage", () => {
-    it("shows the participants with their side and initiative", async () => {
+    it("shows the participants as compact rows with a side and no initiative", async () => {
         setup("/app/c1/sessions/s1/encounters/e1")
-        expect(await screen.findByText("Aldric")).toBeInTheDocument()
-        expect(screen.getByRole("combobox", { name: "Side of Aldric" })).toHaveValue("party")
-        expect(screen.getByRole("textbox", { name: "Initiative of Aldric" })).toHaveValue("14")
+        const rows = (await screen.findAllByRole("listitem")).filter((li) => li.className.includes("encounter-roster__row"))
+        expect(rows).toHaveLength(2)
+        expect(within(rows[0]!).getByText("Aldric")).toBeInTheDocument()
+        expect(within(rows[0]!).getByText("player character")).toBeInTheDocument()
+        expect(within(rows[0]!).getByRole("combobox", { name: "Side of Aldric" })).toHaveValue("party")
+        expect(within(rows[1]!).getByRole("combobox", { name: "Side of Bryn" })).toHaveValue("enemy")
+        expect(within(rows[0]!).getByRole("button", { name: "Remove Aldric" })).toBeInTheDocument()
+        expect(screen.queryByRole("textbox", { name: /Initiative/ })).not.toBeInTheDocument()
+        expect(screen.queryByText(/initiative/i)).not.toBeInTheDocument()
     })
 
-    it("adds a character with a side and initiative", async () => {
+    it("adds a character with a side, sending no initiative", async () => {
         const server = setup("/app/c1/sessions/s1/encounters/e1")
         const form = await screen.findByRole("form", { name: "Add a participant" })
         fireEvent.focus(within(form).getByRole("combobox", { name: "Character" }))
         fireEvent.click(await within(form).findByRole("option", { name: /Bryn/ }))
-        fireEvent.change(within(form).getByRole("combobox", { name: "Side" }), { target: { value: "enemy" } })
-        fireEvent.change(within(form).getByRole("textbox", { name: /Initiative/ }), { target: { value: "9" } })
+        fireEvent.change(within(form).getByRole("combobox", { name: "Side" }), { target: { value: "ally" } })
         fireEvent.click(within(form).getByRole("button", { name: "Add participant" }))
         await vi.waitFor(() => expect(server.callsTo("POST", `${BASE}/e1/participants`)).toHaveLength(1))
         expect(server.callsTo("POST", `${BASE}/e1/participants`)[0]!.body).toEqual({
             participant_entity_id: "n2",
-            side: "enemy",
-            initiative: 9,
+            side: "ally",
         })
     })
 
-    it("needs a character and a whole-number initiative", async () => {
+    it("needs a character before adding", async () => {
         const server = setup("/app/c1/sessions/s1/encounters/e1")
         const form = await screen.findByRole("form", { name: "Add a participant" })
         fireEvent.click(within(form).getByRole("button", { name: "Add participant" }))
@@ -182,21 +186,134 @@ describe("PreparedEncounterPage", () => {
         expect(server.callsTo("POST", `${BASE}/e1/participants`)).toHaveLength(0)
     })
 
-    it("changes a participant's side and initiative, and removes one", async () => {
+    it("keeps the add form's choice when adding fails, and clears it on success", async () => {
         const server = setup("/app/c1/sessions/s1/encounters/e1")
-        const form = await screen.findByRole("form", { name: "Change Aldric" })
-        fireEvent.change(within(form).getByRole("combobox", { name: "Side of Aldric" }), { target: { value: "ally" } })
-        fireEvent.change(within(form).getByRole("textbox", { name: "Initiative of Aldric" }), { target: { value: "" } })
-        fireEvent.click(within(form).getByRole("button", { name: "Save Aldric" }))
-        await vi.waitFor(() => expect(server.callsTo("POST", `${BASE}/e1/participants/p1/update`)).toHaveLength(1))
-        expect(server.callsTo("POST", `${BASE}/e1/participants/p1/update`)[0]!.body).toEqual({
-            side: "ally",
-            initiative: null,
+        let attempts = 0
+        server.on("POST", `${BASE}/e1/participants`, () => {
+            attempts += 1
+            return attempts === 1
+                ? { status: 409, body: { error: { code: "encounter_full", message: "m", correlation_id: "c" } } }
+                : { body: encounter() }
         })
-        // The first command finishes (and announces) before the next one can start.
+        const form = await screen.findByRole("form", { name: "Add a participant" })
+        fireEvent.focus(within(form).getByRole("combobox", { name: "Character" }))
+        fireEvent.click(await within(form).findByRole("option", { name: /Bryn/ }))
+        fireEvent.click(within(form).getByRole("button", { name: "Add participant" }))
+        await vi.waitFor(() => expect(attempts).toBe(1))
+        await screen.findByRole("alert")
+        expect(within(form).getByRole("combobox", { name: "Character" })).toHaveValue("Bryn")
+        fireEvent.click(within(form).getByRole("button", { name: "Add participant" }))
+        await vi.waitFor(() => expect(attempts).toBe(2))
+        await vi.waitFor(() => expect(within(form).getByRole("combobox", { name: "Character" })).toHaveValue(""))
+    })
+
+    it("offers Save only for a participant whose side differs, and only that one", async () => {
+        setup("/app/c1/sessions/s1/encounters/e1")
+        const aldric = await screen.findByRole("form", { name: "Change Aldric" })
+        const bryn = screen.getByRole("form", { name: "Change Bryn" })
+        expect(screen.queryByRole("button", { name: /^Save (Aldric|Bryn)$/ })).not.toBeInTheDocument()
+        fireEvent.change(within(aldric).getByRole("combobox"), { target: { value: "ally" } })
+        expect(within(aldric).getByRole("button", { name: "Save Aldric" })).toBeInTheDocument()
+        expect(within(aldric).getByText("Unsaved")).toBeInTheDocument()
+        expect(within(bryn).queryByRole("button", { name: "Save Bryn" })).not.toBeInTheDocument()
+        fireEvent.change(within(aldric).getByRole("combobox"), { target: { value: "party" } })
+        expect(screen.queryByRole("button", { name: "Save Aldric" })).not.toBeInTheDocument()
+    })
+
+    it("saves only the changed participant's side, without initiative, then drops the Save button", async () => {
+        const server = setup("/app/c1/sessions/s1/encounters/e1")
+        const form = await screen.findByRole("form", { name: "Change Bryn" })
+        fireEvent.change(within(form).getByRole("combobox", { name: "Side of Bryn" }), { target: { value: "neutral" } })
+        fireEvent.click(within(form).getByRole("button", { name: "Save Bryn" }))
+        await vi.waitFor(() => expect(server.callsTo("POST", /\/participants\/[^/]+\/update$/)).toHaveLength(1))
+        const [call] = server.callsTo("POST", /\/participants\/[^/]+\/update$/)
+        expect(call!.path).toBe(`${BASE}/e1/participants/p2/update`)
+        expect(call!.body).toEqual({ side: "neutral" })
+        await screen.findByText("Bryn updated")
+        await vi.waitFor(() => expect(screen.queryByRole("button", { name: "Save Bryn" })).not.toBeInTheDocument())
+    })
+
+    it("keeps the draft and shows the error beside the row when an update fails", async () => {
+        const server = setup("/app/c1/sessions/s1/encounters/e1")
+        server.on("POST", `${BASE}/e1/participants/p1/update`, {
+            status: 409,
+            body: { error: { code: "encounter_not_pending", message: "m", correlation_id: "c" } },
+        })
+        const form = await screen.findByRole("form", { name: "Change Aldric" })
+        fireEvent.change(within(form).getByRole("combobox"), { target: { value: "enemy" } })
+        fireEvent.click(within(form).getByRole("button", { name: "Save Aldric" }))
+        const row = form.closest("li") as HTMLElement
+        expect(await within(row).findByRole("alert")).toHaveTextContent(/already started or finished/)
+        expect(within(row).getByRole("combobox")).toHaveValue("enemy")
+        expect(within(row).getByRole("button", { name: "Save Aldric" })).toBeInTheDocument()
+        const other = screen.getByRole("form", { name: "Change Bryn" }).closest("li") as HTMLElement
+        expect(within(other).queryByRole("alert")).not.toBeInTheDocument()
+    })
+
+    it("keeps the draft when the write is stale", async () => {
+        const server = setup("/app/c1/sessions/s1/encounters/e1")
+        server.on("POST", `${BASE}/e1/participants/p1/update`, {
+            status: 409,
+            body: { error: { code: "stale_write", message: "m", correlation_id: "c" } },
+        })
+        const form = await screen.findByRole("form", { name: "Change Aldric" })
+        fireEvent.change(within(form).getByRole("combobox"), { target: { value: "ally" } })
+        fireEvent.click(within(form).getByRole("button", { name: "Save Aldric" }))
+        const row = form.closest("li") as HTMLElement
+        await within(row).findByRole("alert")
+        expect(within(row).getByRole("combobox")).toHaveValue("ally")
+    })
+
+    it("prevents a second submission while a save is pending", async () => {
+        const server = setup("/app/c1/sessions/s1/encounters/e1")
+        let release: () => void = () => {}
+        const gate = new Promise<void>((resolve) => {
+            release = resolve
+        })
+        server.on("POST", `${BASE}/e1/participants/p1/update`, async () => {
+            await gate
+            return { body: encounter() }
+        })
+        const form = await screen.findByRole("form", { name: "Change Aldric" })
+        fireEvent.change(within(form).getByRole("combobox"), { target: { value: "ally" } })
+        fireEvent.click(within(form).getByRole("button", { name: "Save Aldric" }))
+        const saving = await within(form).findByRole("button", { name: "Save Aldric" })
+        expect(saving).toBeDisabled()
+        expect(saving).toHaveTextContent("Saving…")
+        expect(screen.getByRole("button", { name: "Remove Bryn" })).toBeDisabled()
+        fireEvent.click(saving)
+        release()
         await screen.findByText("Aldric updated")
-        fireEvent.click(screen.getByRole("button", { name: "Remove Aldric" }))
+        expect(server.callsTo("POST", `${BASE}/e1/participants/p1/update`)).toHaveLength(1)
+    })
+
+    it("keeps another row's draft when a different participant is saved or removed", async () => {
+        setup("/app/c1/sessions/s1/encounters/e1")
+        const aldric = await screen.findByRole("form", { name: "Change Aldric" })
+        const bryn = screen.getByRole("form", { name: "Change Bryn" })
+        fireEvent.change(within(aldric).getByRole("combobox"), { target: { value: "ally" } })
+        fireEvent.change(within(bryn).getByRole("combobox"), { target: { value: "neutral" } })
+        fireEvent.click(within(bryn).getByRole("button", { name: "Save Bryn" }))
+        await screen.findByText("Bryn updated")
+        expect(within(aldric).getByRole("combobox")).toHaveValue("ally")
+        expect(within(aldric).getByRole("button", { name: "Save Aldric" })).toBeInTheDocument()
+    })
+
+    it("removes a participant", async () => {
+        const server = setup("/app/c1/sessions/s1/encounters/e1")
+        fireEvent.click(await screen.findByRole("button", { name: "Remove Aldric" }))
         await vi.waitFor(() => expect(server.callsTo("POST", `${BASE}/e1/participants/p1/remove`)).toHaveLength(1))
+    })
+
+    it("starts an encounter whose participants have no initiative", async () => {
+        const server = setup(
+            "/app/c1/sessions/s1/encounters/e1",
+            encounter({
+                participants: encounter().participants.map((p: object) => ({ ...p, initiative: null })),
+            }),
+        )
+        fireEvent.click(await screen.findByRole("button", { name: "Start encounter" }))
+        await vi.waitFor(() => expect(server.callsTo("POST", `${BASE}/e1/start`)).toHaveLength(1))
     })
 
     it("saves the place and summary", async () => {
@@ -216,7 +333,8 @@ describe("PreparedEncounterPage", () => {
         expect(await screen.findByText(/Preparation is over/)).toBeInTheDocument()
         expect(screen.queryByRole("form", { name: "Add a participant" })).not.toBeInTheDocument()
         expect(screen.queryByRole("button", { name: "Remove Aldric" })).not.toBeInTheDocument()
-        expect(screen.getByText(/initiative 14/)).toBeInTheDocument()
+        expect(screen.queryByText(/initiative/i)).not.toBeInTheDocument()
+        expect(screen.getByText(/^party/)).toBeInTheDocument()
     })
 
     it("explains a refusal because it already started", async () => {
