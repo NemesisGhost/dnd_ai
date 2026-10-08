@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import { bootstrapWith, installMockServer, renderAuthoringRoutes } from "../test/authoringHarness"
 import { PrepareEncounterPage, PreparedEncounterPage } from "./EncounterPages"
-import { SessionEncountersSection } from "../components/SessionEncountersSection"
+import { EncounterList } from "../components/EncounterList"
 
 const AUTH = "/campaigns/c1/authoring/encounters"
 const BASE = "/campaigns/c1/encounters"
@@ -98,6 +98,35 @@ function setup(entry: string, view: object = encounter(), capabilities = ["canon
     })
     return server
 }
+
+describe("return links to the run page", () => {
+    it("returns from the prepare page to Encounter preparation", async () => {
+        setup("/app/c1/sessions/s1/encounters/new")
+        expect(await screen.findByRole("link", { name: "Run the session" })).toHaveAttribute(
+            "href",
+            "/app/c1/sessions/s1/run?section=encounter-prep",
+        )
+    })
+
+    it("returns from a pending encounter to Encounter preparation", async () => {
+        setup("/app/c1/sessions/s1/encounters/e1")
+        await screen.findByRole("heading", { level: 1, name: "Encounter" })
+        expect(await screen.findByRole("link", { name: "Run the session" })).toHaveAttribute(
+            "href",
+            "/app/c1/sessions/s1/run?section=encounter-prep",
+        )
+    })
+
+    it("returns from a started encounter to Encounters", async () => {
+        setup("/app/c1/sessions/s1/encounters/e1", encounter({ status: "active", can_prepare: false }))
+        await vi.waitFor(() =>
+            expect(screen.getByRole("link", { name: "Run the session" })).toHaveAttribute(
+                "href",
+                "/app/c1/sessions/s1/run?section=encounters",
+            ),
+        )
+    })
+})
 
 describe("PrepareEncounterPage", () => {
     it("prepares a pending encounter in the session", async () => {
@@ -202,23 +231,26 @@ describe("PreparedEncounterPage", () => {
     })
 })
 
-describe("SessionEncountersSection", () => {
+describe("EncounterList", () => {
     it("lists the session's encounters with a link to prepare another", async () => {
-        const server = installMockServer()
-        server.on("GET", `${AUTH}?session_id=s1`, {
-            body: {
-                items: [
-                    { encounter_id: "e1", status: "pending", summary: "Ambush", location_name: "Stonebridge", participant_count: 2 },
-                ],
-            },
-        })
+        installMockServer()
         renderAuthoringRoutes({
             initialEntry: "/app/c1/x",
             bootstrap: bootstrapWith({
                 campaigns: [{ ...sessionBootstrapFixture.campaigns[0]!, campaign_id: "c1" }],
             }),
             routes: [
-                { path: "/app/:campaignId/x", element: <SessionEncountersSection campaignId="c1" sessionId="s1" /> },
+                { path: "/app/:campaignId/x", element: (
+                        <EncounterList
+                            campaignId="c1"
+                            sessionId="s1"
+                            items={[
+                                { encounter_id: "e1", status: "pending", summary: "Ambush", location_name: "Stonebridge", participant_count: 2 },
+                            ]}
+                            emptyText="No encounters yet."
+                            prepareLink
+                        />
+                    ) },
             ],
         })
         expect(await screen.findByRole("link", { name: "Ambush" })).toHaveAttribute(

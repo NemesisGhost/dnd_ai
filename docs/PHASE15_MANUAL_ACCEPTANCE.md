@@ -39,7 +39,7 @@ Record **Pass**, **Fail** (with a note and the issue), or **Accepted** (with the
 | 7 | NPC portrayal and the Run this NPC panel | `…/characters/:id/portrayal`, a character's World page | | | | | | | | |
 | 8 | Parties and party members | `…/parties`, `…/parties/:id`, `…/parties/:id/edit` | | | | | | | | |
 | 9 | Session create and edit | `…/sessions/new`, `…/sessions/:id` (edit in place) | | | | | | | | |
-| 10 | Session run page: start, participants, log, end, Travel, Award an item, Encounters | `…/sessions/:id/run` | | | | | | | | |
+| 10 | Session run page: stages (Prepare, Run session, Wrap up), participants, encounter preparation, log, travel, award item, encounters, review, start/end, in-world time bar | `…/sessions/:id/run[?section=…]` | | | | | | | | |
 | 11 | Events: record and correct | `…/events/new`, `…/events/:id` | | | | | | | | |
 | 12 | Quest editor and quest progress | `…/quests/new`, `…/quests/:id/edit`, `…/quests/:id/progress` | | | | | | | | |
 | 13 | Knowledge editor and Who knows this | `…/knowledge/new`, `…/knowledge/:id/edit`, `…/knowledge/:id/audience` | | | | | | | | |
@@ -54,6 +54,21 @@ Record **Pass**, **Fail** (with a note and the issue), or **Accepted** (with the
 | 22 | Revision history and comparison (check the table at 2560 px and at 390 px, and with a screen reader) | `…/world/:category/:id/history` | | | | | | | | |
 | 23 | Lifecycle panel (submit, approve, publish, supersede, archive, confirmation dialogs) | on any record | | | | | | | | |
 | 24 | Sidebar and navigation, including the capability-gated links (Review, Items, Item definitions) for a GM and for a player | every page | | | | | | | | |
+
+### Row 10 detail: the staged Run Session page
+
+Check at 390, 1280 and 2560 px, with the keyboard only, at 200% zoom, and with a screen reader. Use one scheduled, one in-progress and one completed session.
+
+1. The session list's "Run …" link opens Prepare › Participants for a scheduled session, Run session › Session log for one in progress, and Wrap up › Session review for a completed or archived one.
+2. The breadcrumb reads "Sessions › [title] › Run session": Sessions opens the list, the title opens the session page, "Run session" is not a link. The campaign context panel (world, timeline, campaign, perspective) is the same before and after.
+3. Choosing each stage never starts, ends or changes the session (no POST in the network tab). The section menu lists only the current stage's sections, and exactly one section is shown, with a heading, a purpose line and a visible border.
+4. Type a log entry and GM notes, switch to Prepare and back: the text is still there. The same for the Travel and Award choices, the Add-participant choice and a half-entered Advance time. Back and Forward move between visited sections without losing it; reloading `?section=travel` reopens Travel; `?section=bogus` opens the default with no extra Back step.
+5. Participants: add with each role (Player character, NPC, Guest); remove one and see them under "Left". Encounter preparation: prepare an encounter, return with "Run the session", start it, return again and find it under Run session › Encounters.
+6. Travel: individual travelers versus a whole party, with the optional route. Award item: only eligible items; recipients are present participants. Session log: the two audience hints read "Visible to everyone in the campaign." and "Visible only to people who can edit canon."; the optional "When" and "Record a new time" work.
+7. The "Campaign time (in-world)" bar shows in every stage; Advance/Correct appear only in Run session, and the correction confirmation works. Real-world times are labelled "Real-world start/end".
+8. Start session appears only at the top of Run session for a scheduled session and needs its button. End session (Wrap up) opens a confirmation (recap, "Ends at"); Cancel leaves the session in progress; confirming completes it and every section then explains why it is read-only.
+9. Session review shows the overview, participants, log and encounters; each "go to" link opens the right section, or a reason is shown instead.
+10. A member without `canon.edit` sees the "no permission" message and none of the stage controls.
 
 ## Carried items from earlier phases
 

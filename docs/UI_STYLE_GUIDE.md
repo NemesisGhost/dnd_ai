@@ -423,6 +423,16 @@ Shared primitives live in `portal/src/components/authoring/` and are styled by `
 - **Lifecycle badge.** A rounded pill with a decorative icon and a text label (Draft, In review, Approved, Canon, Superseded, Rejected, Archived). The label is the meaning; the icon and tint are decoration.
 - **Visually hidden text** uses the `.visually-hidden` utility (clipped, not `display: none`) so it is still read by assistive technology.
 
+### 10a.1 Staged workspace pages
+
+A long task page (the Run Session page) is organised into **stages** with a **local section menu**, not a long scroll. Stages organise the interface only; they never imply or cause a lifecycle change, so their wording ("Prepare", "Run session", "Wrap up") avoids verbs like start or end.
+
+- **Page breadcrumb.** `<nav aria-label="Breadcrumb">` with an ordered list: parent list, the record (by its title, never an identifier), and the current page (`aria-current="page"`, not a link). It is separate from the campaign context panel (world, timeline, campaign, perspective).
+- **Stage navigation.** A numbered row of links (`aria-label="Session stages"`, `aria-current="step"`), wrapping at narrow widths. The current stage is marked by weight and a heavier border, not colour alone.
+- **Section menu.** Links for the current stage's sections only (`aria-label="<Stage> sections"`, `aria-current="page"`): a left column from 64rem, a wrapping row below it. Links, not tabs or buttons, because choosing one changes the address.
+- **Section panel.** One panel visible at a time: a bordered surface with an `h2` (focused when the section changes), a one-line purpose, then the content. A section the record cannot use yet says why instead of showing a disabled form.
+- **Compact time bar.** In-world time is labelled "(in-world)" and real-world timestamps "Real-world …" so the two are never confused.
+
 ## 11. Knowledge standard
 
 ### 11.1 Collection cards

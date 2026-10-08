@@ -14,6 +14,8 @@ import "./authoring/authoring.css"
 interface Props {
     campaignId: string
     participants: SessionParticipant[]
+    // False when a surrounding panel supplies the section heading.
+    showHeading?: boolean
 }
 
 interface Award {
@@ -30,7 +32,7 @@ const CODE_MESSAGE: Readonly<Record<string, string>> = {
 // Awards an unplaced, published item to a character in the session, from the run page. The
 // campaign clock supplies the time. The item's current token is read just before the award so
 // a change made elsewhere meanwhile is reported as stale instead of overwritten.
-export function AwardItemSection({ campaignId, participants }: Props) {
+export function AwardItemSection({ campaignId, participants, showHeading = true }: Props) {
     const { reload } = useSession()
     const announce = useAnnounce()
     const items = useAuthoringResource<ItemList>(itemsPath(campaignId))
@@ -59,7 +61,8 @@ export function AwardItemSection({ campaignId, participants }: Props) {
     const error = mutation.status.kind === "error" ? mutation.status.error : null
     const explained = error?.code ? (CODE_MESSAGE[error.code] ?? null) : null
 
-    if (items.state.kind !== "ready") return null
+    if (items.state.kind === "loading") return <p role="status">Loading items…</p>
+    if (items.state.kind !== "ready") return <p role="alert">Items could not be loaded.</p>
     const available = items.state.data.items.filter(
         (item) =>
             item.canon_status === "canon" &&
@@ -67,9 +70,11 @@ export function AwardItemSection({ campaignId, participants }: Props) {
             item.holder_name === null &&
             !item.is_destroyed,
     )
+    // A surrounding panel supplies the heading and landmark when this one is hidden.
+    const Wrapper = showHeading ? "section" : "div"
     return (
-        <section aria-labelledby="award-heading">
-            <h2 id="award-heading">Award an item</h2>
+        <Wrapper aria-labelledby={showHeading ? "award-heading" : undefined}>
+            {showHeading ? <h2 id="award-heading">Award an item</h2> : null}
             {explained !== null ? (
                 <p role="alert">{explained}</p>
             ) : error !== null ? (
@@ -121,6 +126,6 @@ export function AwardItemSection({ campaignId, participants }: Props) {
                     </button>
                 </form>
             )}
-        </section>
+        </Wrapper>
     )
 }

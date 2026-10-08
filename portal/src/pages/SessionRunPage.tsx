@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
+import type { ReactNode } from "react"
 import { Link, useParams } from "react-router"
 import {
     addSessionParticipant,
@@ -8,6 +9,7 @@ import {
     sessionPath,
     startSession,
 } from "../api/sessionAuthoring"
+import { sessionEncountersPath } from "../api/encounters"
 import { fetchWorldEntities } from "../api/world"
 import { CampaignClockCard } from "../components/CampaignClockCard"
 import { ConfirmDialog } from "../components/authoring/ConfirmDialog"
@@ -26,12 +28,18 @@ import type { ReferenceOption } from "../components/authoring/ReferenceCombobox"
 import { WorldTimePicker } from "../components/authoring/WorldTimePicker"
 import { useSession } from "../context/SessionContext"
 import { AwardItemSection } from "../components/AwardItemSection"
-import { SessionEncountersSection } from "../components/SessionEncountersSection"
+import { EncounterList } from "../components/EncounterList"
 import { TravelSection } from "../components/TravelSection"
+import { RunBreadcrumb, RunSectionNav, RunSectionPanel, RunStageNav } from "../components/sessionRun/RunNav"
+import { RealWorldTime, SessionReview } from "../components/sessionRun/SessionReview"
+import { SECTIONS, panelHeadingId } from "../components/sessionRun/runStages"
+import type { SectionKey } from "../components/sessionRun/runStages"
+import { useRunNavigation } from "../components/sessionRun/useRunNavigation"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { usePageArrival } from "../hooks/usePageArrival"
+import type { EncounterSummary } from "../types/encounters"
 import type {
     CampaignSessionDetail,
     PlayReceipt,
@@ -65,9 +73,11 @@ const STATUS_LABEL: Readonly<Record<string, string>> = {
     completed: "Completed",
 }
 
-// /app/:campaignId/sessions/:sessionId/run: start, participants, log, clock, end.
-// Editors only; the server decides every outcome and each write answers with a
-// receipt, after which this page refetches the authoritative session.
+// /app/:campaignId/sessions/:sessionId/run[?section=…]: prepare, run and wrap up a session.
+// Editors only; the server decides every outcome and each write answers with a receipt, after
+// which this page refetches the authoritative session. The stages and sections are navigation
+// only (the address holds the section): choosing one never acts on the session, and every
+// section stays mounted so unfinished input survives a switch.
 export function SessionRunPage() {
     const { campaignId = "", sessionId = "" } = useParams()
     const canEdit = useCampaignCapability(campaignId, "canon.edit")
@@ -77,9 +87,11 @@ export function SessionRunPage() {
 
     return (
         <section className="authoring-page" aria-labelledby="run-session-heading">
-            <p className="authoring-page__breadcrumb">
-                <Link to={`${base(campaignId)}/sessions`}>Sessions</Link>
-            </p>
+            <RunBreadcrumb
+                campaignId={campaignId}
+                sessionId={sessionId}
+                title={data !== null ? (data.title ?? `Session ${data.session_number}`) : null}
+            />
             <h1 id="run-session-heading" ref={headingRef} tabIndex={-1}>
                 {data !== null ? `Run: ${data.title ?? `Session ${data.session_number}`}` : "Run session"}
             </h1>
@@ -96,6 +108,16 @@ export function SessionRunPage() {
     )
 }
 
+// Why a play action is not offered, in the session's own terms.
+function whyNotPlayable(session: CampaignSessionDetail, doing: string): string {
+    if (session.status_code !== "active") {
+        return "This session is not active, so it cannot be changed. An archived session must be restored first."
+    }
+    return (session.play_status ?? "unscheduled") === "completed"
+        ? `This session has ended, so you can no longer ${doing}.`
+        : `Start the session to ${doing}.`
+}
+
 function RunBody({
     campaignId,
     session,
@@ -107,45 +129,190 @@ function RunBody({
 }) {
     const actions = session.available_actions ?? []
     const status = session.play_status ?? "unscheduled"
+    const nav = useRunNavigation(session)
+    const encounterList = useAuthoringResource<{ items: EncounterSummary[] }>(
+        sessionEncountersPath(campaignId, session.session_id),
+    )
+    const encounters = encounterList.state.kind === "ready" ? encounterList.state.data.items : null
+    const [notice, setNotice] = useState<"started" | "ended" | null>(null)
+    const canLog = actions.includes("log")
+    const participants = session.participants ?? []
+
+    // Move focus to the section heading when the section changes after arrival (a link, Back or
+    // Forward), so a keyboard or screen reader user lands on the new content.
+    const lastSection = useRef(nav.section)
+    useEffect(() => {
+        if (lastSection.current !== nav.section) {
+            lastSection.current = nav.section
+            document.getElementById(panelHeadingId(nav.section))?.focus()
+        }
+    }, [nav.section])
+
+    const canPrepareEncounters = session.status_code === "active" && status !== "completed"
+    const pending = (encounters ?? []).filter((e) => e.status === "pending")
+    const started = (encounters ?? []).filter((e) => e.status !== "pending")
+    const logReason = whyNotPlayable(session, "record entries")
+    const encountersList = (empty: string, items: EncounterSummary[]) =>
+        encounterList.state.kind === "loading" ? (
+            <p role="status">Loading encounters…</p>
+        ) : encounters === null ? (
+            <p role="alert">Encounters could not be loaded.</p>
+        ) : (
+            <EncounterList
+                campaignId={campaignId}
+                sessionId={session.session_id}
+                items={items}
+                emptyText={empty}
+                prepareLink={canPrepareEncounters}
+            />
+        )
+
+    const body: Record<SectionKey, ReactNode> = {
+        participants: (
+            <>
+                {actions.includes("start") ? (
+                    <p className="authoring-note">When the table is ready, go to Run session to start.</p>
+                ) : null}
+                <Participants
+                    campaignId={campaignId}
+                    session={session}
+                    refetch={refetch}
+                    canManage={actions.includes("manage_participants")}
+                />
+            </>
+        ),
+        "encounter-prep": !canPrepareEncounters ? (
+            <p className="authoring-note">
+                {session.status_code !== "active"
+                    ? "This session is not active, so encounters cannot be prepared."
+                    : "This session has ended, so encounters can no longer be prepared."}
+            </p>
+        ) : (
+            <>
+                {encountersList("No encounter is waiting to be started.", pending)}
+                {started.length > 0 ? (
+                    <p>
+                        <Link to={nav.sectionHref("encounters")}>
+                            {started.length} started or finished: see Encounters
+                        </Link>
+                    </p>
+                ) : null}
+            </>
+        ),
+        log: (
+            <LogSection
+                campaignId={campaignId}
+                session={session}
+                refetch={refetch}
+                canLog={canLog}
+                reason={logReason}
+            />
+        ),
+        travel: canLog ? (
+            <TravelSection campaignId={campaignId} participants={participants} showHeading={false} />
+        ) : (
+            <p className="authoring-note">{whyNotPlayable(session, "record travel")}</p>
+        ),
+        "award-item": canLog ? (
+            <AwardItemSection campaignId={campaignId} participants={participants} showHeading={false} />
+        ) : (
+            <p className="authoring-note">{whyNotPlayable(session, "award items")}</p>
+        ),
+        encounters: (
+            <>
+                {encountersList("No encounter has started yet.", started)}
+                {pending.length > 0 ? (
+                    <p>
+                        <Link to={nav.sectionHref("encounter-prep")}>
+                            {pending.length} prepared and waiting: see Encounter preparation
+                        </Link>
+                    </p>
+                ) : null}
+            </>
+        ),
+        review: (
+            <SessionReview
+                campaignId={campaignId}
+                session={session}
+                encounters={encounters}
+                sectionHref={nav.sectionHref}
+                canPrepareEncounters={canPrepareEncounters}
+                reasonLog={logReason}
+            />
+        ),
+        end: actions.includes("end") ? (
+            <EndControl
+                campaignId={campaignId}
+                session={session}
+                refetch={refetch}
+                onEnded={() => setNotice("ended")}
+            />
+        ) : (
+            <>
+                {notice === "ended" ? (
+                    <p role="status">
+                        Session ended. <Link to={nav.sectionHref("review")}>Go to the session review</Link>
+                    </p>
+                ) : null}
+                <p className="authoring-note">
+                    {session.status_code !== "active"
+                        ? "This session is not active, so it cannot be changed."
+                        : status === "completed"
+                          ? "This session has ended."
+                          : "The session has not started, so there is nothing to end yet."}
+                </p>
+            </>
+        ),
+    }
+
     return (
         <>
             <p>
                 Status: <strong>{STATUS_LABEL[status] ?? status}</strong>
                 {session.status_code === "archived" ? " (archived)" : ""}
+                {session.started_at ? (
+                    <>
+                        {" · "}
+                        <RealWorldTime label="Real-world start" value={session.started_at} />
+                    </>
+                ) : null}
+                {session.ended_at ? (
+                    <>
+                        {" · "}
+                        <RealWorldTime label="Real-world end" value={session.ended_at} />
+                    </>
+                ) : null}
             </p>
-            <CampaignClockCard campaignId={campaignId} />
-            {actions.includes("start") ? (
-                <StartControl campaignId={campaignId} session={session} refetch={refetch} />
-            ) : null}
             {session.status_code !== "active" && session.status_code !== "archived" ? (
-                <p role="status">
-                    This session is not active, so it cannot be started or changed.
-                </p>
+                <p role="status">This session is not active, so it cannot be started or changed.</p>
             ) : null}
-            <Participants
-                campaignId={campaignId}
-                session={session}
-                refetch={refetch}
-                canManage={actions.includes("manage_participants")}
-            />
-            {actions.includes("log") ? (
-                <TravelSection campaignId={campaignId} participants={session.participants ?? []} />
-            ) : null}
-            {actions.includes("log") ? (
-                <AwardItemSection campaignId={campaignId} participants={session.participants ?? []} />
-            ) : null}
-            {actions.includes("log") ? (
-                <SessionEncountersSection campaignId={campaignId} sessionId={session.session_id} />
-            ) : null}
-            <LogSection
-                campaignId={campaignId}
-                session={session}
-                refetch={refetch}
-                canLog={actions.includes("log")}
-            />
-            {actions.includes("end") ? (
-                <EndControl campaignId={campaignId} session={session} refetch={refetch} />
-            ) : null}
+            <CampaignClockCard campaignId={campaignId} variant="compact" actionsVisible={nav.stage === "run"} />
+            <RunStageNav current={nav.stage} hrefFor={nav.stageHref} />
+            <div className="session-run__layout">
+                <RunSectionNav stage={nav.stage} current={nav.section} hrefFor={nav.sectionHref} />
+                <div className="session-run__content">
+                    <div hidden={nav.stage !== "run"}>
+                        {actions.includes("start") ? (
+                            <StartControl
+                                campaignId={campaignId}
+                                session={session}
+                                refetch={refetch}
+                                onStarted={() => setNotice("started")}
+                            />
+                        ) : null}
+                        {notice === "started" ? (
+                            <p role="status">
+                                Session started. <Link to={nav.sectionHref("log")}>Go to the session log</Link>
+                            </p>
+                        ) : null}
+                    </div>
+                    {SECTIONS.map((section) => (
+                        <RunSectionPanel key={section.key} section={section} active={section.key === nav.section}>
+                            {body[section.key]}
+                        </RunSectionPanel>
+                    ))}
+                </div>
+            </div>
         </>
     )
 }
@@ -158,10 +325,12 @@ function StartControl({
     campaignId,
     session,
     refetch,
+    onStarted,
 }: {
     campaignId: string
     session: CampaignSessionDetail
     refetch: () => Promise<void>
+    onStarted: () => void
 }) {
     const { reload } = useSession()
     const announce = useAnnounce()
@@ -181,13 +350,15 @@ function StartControl({
         onSuccess: async () => {
             await refetch()
             announce("Session started")
+            onStarted()
         },
     })
     const error = mutation.status.kind === "error" ? mutation.status.error : null
     const message = useMessage(error)
     return (
         <section className="session-run-start" aria-labelledby="start-heading">
-            <h2 id="start-heading">Start</h2>
+            <h2 id="start-heading">Start the session</h2>
+            <p className="authoring-page__lead">This session has not started. Start it when the table is ready.</p>
             <WorldTimePicker
                 campaignId={campaignId}
                 id="start-time"
@@ -316,8 +487,7 @@ function Participants({
     }
 
     return (
-        <section aria-labelledby="participants-heading">
-            <h2 id="participants-heading">Participants</h2>
+        <>
             {present.length === 0 ? (
                 <p>No one is in this session yet.</p>
             ) : (
@@ -405,8 +575,14 @@ function Participants({
                         cancelLabel="Clear"
                     />
                 </AuthoringForm>
-            ) : null}
-        </section>
+            ) : (
+                <p className="authoring-note">
+                    {session.status_code !== "active"
+                        ? "This session is not active, so participants cannot be changed."
+                        : "Participants can't be changed after the session ends."}
+                </p>
+            )}
+        </>
     )
 }
 
@@ -415,11 +591,13 @@ function LogSection({
     session,
     refetch,
     canLog,
+    reason,
 }: {
     campaignId: string
     session: CampaignSessionDetail
     refetch: () => Promise<void>
     canLog: boolean
+    reason: string
 }) {
     const { reload } = useSession()
     const announce = useAnnounce()
@@ -473,8 +651,7 @@ function LogSection({
     }
 
     return (
-        <section aria-labelledby="log-heading">
-            <h2 id="log-heading">Log</h2>
+        <>
             {session.events.length === 0 ? (
                 <p>Nothing has been recorded yet.</p>
             ) : (
@@ -540,8 +717,10 @@ function LogSection({
                         cancelLabel="Clear"
                     />
                 </AuthoringForm>
-            ) : null}
-        </section>
+            ) : (
+                <p className="authoring-note">{reason}</p>
+            )}
+        </>
     )
 }
 
@@ -549,10 +728,12 @@ function EndControl({
     campaignId,
     session,
     refetch,
+    onEnded,
 }: {
     campaignId: string
     session: CampaignSessionDetail
     refetch: () => Promise<void>
+    onEnded: () => void
 }) {
     const { reload } = useSession()
     const announce = useAnnounce()
@@ -576,13 +757,13 @@ function EndControl({
             setOpen(false)
             await refetch()
             announce("Session ended")
+            onEnded()
         },
     })
     const error = mutation.status.kind === "error" ? mutation.status.error : null
     const message = useMessage(error)
     return (
-        <section aria-labelledby="end-heading">
-            <h2 id="end-heading">End</h2>
+        <>
             <button
                 type="button"
                 className="authoring-button"
@@ -636,6 +817,6 @@ function EndControl({
                     onChange={setTimeId}
                 />
             </ConfirmDialog>
-        </section>
+        </>
     )
 }

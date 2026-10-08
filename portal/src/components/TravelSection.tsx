@@ -18,6 +18,8 @@ import "./authoring/authoring.css"
 interface Props {
     campaignId: string
     participants: SessionParticipant[]
+    // False when a surrounding panel supplies the section heading.
+    showHeading?: boolean
 }
 
 const CODE_MESSAGE: Readonly<Record<string, string>> = {
@@ -30,7 +32,7 @@ const CODE_MESSAGE: Readonly<Record<string, string>> = {
 // Records characters arriving at a place together, from the run page. The campaign clock
 // supplies the time; a party moves as its current members, and an optional route must join
 // the travelers' current place to the destination. One event covers the whole journey.
-export function TravelSection({ campaignId, participants }: Props) {
+export function TravelSection({ campaignId, participants, showHeading = true }: Props) {
     const { reload } = useSession()
     const announce = useAnnounce()
     const present = participants.filter((p) => p.removed_at === null)
@@ -69,11 +71,13 @@ export function TravelSection({ campaignId, participants }: Props) {
 
     const routeItems =
         destination === null || routes.state.kind !== "ready" ? [] : routes.state.data.items
+    // A surrounding panel supplies the heading and landmark when this one is hidden.
+    const Wrapper = showHeading ? "section" : "div"
     const partyItems = parties.state.kind === "ready" ? parties.state.data.items : []
 
     return (
-        <section aria-labelledby="travel-heading">
-            <h2 id="travel-heading">Travel</h2>
+        <Wrapper aria-labelledby={showHeading ? "travel-heading" : undefined}>
+            {showHeading ? <h2 id="travel-heading">Travel</h2> : null}
             <form
                 noValidate
                 aria-label="Record travel"
@@ -159,6 +163,6 @@ export function TravelSection({ campaignId, participants }: Props) {
                     Record travel
                 </button>
             </form>
-        </section>
+        </Wrapper>
     )
 }

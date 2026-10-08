@@ -25,7 +25,19 @@ const CODE_MESSAGE: Readonly<Record<string, string>> = {
 // server decides the outcome (a later time only for an advance; a correction
 // cites the event it replaces and leaves it in history) and every write answers
 // with a receipt, after which the card refetches the authoritative value.
-export function CampaignClockCard({ campaignId }: { campaignId: string }) {
+//
+// `variant="compact"` is the one-line bar on the Run Session page, labelled as in-world time.
+// With `actionsVisible={false}` Advance/Correct are not offered, but an open form stays mounted
+// (hidden), so a half-entered time survives until the actions come back.
+export function CampaignClockCard({
+    campaignId,
+    variant = "card",
+    actionsVisible = true,
+}: {
+    campaignId: string
+    variant?: "card" | "compact"
+    actionsVisible?: boolean
+}) {
     const canEdit = useCampaignCapability(campaignId, "canon.edit")
     const clock = useAuthoringResource<ClockState>(clockPath(campaignId))
     const announce = useAnnounce()
@@ -95,11 +107,14 @@ export function CampaignClockCard({ campaignId }: { campaignId: string }) {
     }
 
     return (
-        <section className="campaign-time" aria-labelledby="campaign-clock-heading">
+        <section
+            className={variant === "compact" ? "campaign-time campaign-time--compact" : "campaign-time"}
+            aria-labelledby="campaign-clock-heading"
+        >
             <div className="campaign-time__bar">
                 <div className="campaign-time__summary">
                     <h2 id="campaign-clock-heading" className="campaign-time__label">
-                        Campaign time
+                        {variant === "compact" ? "Campaign time (in-world)" : "Campaign time"}
                     </h2>
                     <p className="campaign-time__now">
                         {state.current === null
@@ -110,7 +125,7 @@ export function CampaignClockCard({ campaignId }: { campaignId: string }) {
                             : ""}
                     </p>
                 </div>
-                {canEdit && mode === "idle" ? (
+                {canEdit && actionsVisible && mode === "idle" ? (
                     <div className="authoring-actions campaign-time__actions">
                         <button
                             type="button"
@@ -142,6 +157,7 @@ export function CampaignClockCard({ campaignId }: { campaignId: string }) {
             {canEdit && mode !== "idle" ? (
                 <form
                     className="campaign-time__form"
+                    hidden={!actionsVisible}
                     aria-label={mode === "advance" ? "Advance time" : "Correct time"}
                     noValidate
                     onSubmit={(event) => {

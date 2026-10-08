@@ -43,8 +43,8 @@ const CODE_MESSAGE: Readonly<Record<string, string>> = {
 }
 
 const base = (campaignId: string): string => `/app/${encodeURIComponent(campaignId)}`
-const runPath = (campaignId: string, sessionId: string): string =>
-    `${base(campaignId)}/sessions/${encodeURIComponent(sessionId)}/run`
+const runPath = (campaignId: string, sessionId: string, section?: string): string =>
+    `${base(campaignId)}/sessions/${encodeURIComponent(sessionId)}/run${section ? `?section=${section}` : ""}`
 const encounterPath = (campaignId: string, sessionId: string, encounterId: string): string =>
     `${base(campaignId)}/sessions/${encodeURIComponent(sessionId)}/encounters/${encodeURIComponent(encounterId)}`
 
@@ -97,7 +97,7 @@ export function PrepareEncounterPage() {
     return (
         <section className="authoring-page" aria-labelledby="prepare-encounter-heading">
             <p className="authoring-page__breadcrumb">
-                <Link to={runPath(campaignId, sessionId)}>Run the session</Link>
+                <Link to={runPath(campaignId, sessionId, "encounter-prep")}>Run the session</Link>
             </p>
             <h1 id="prepare-encounter-heading" ref={headingRef} tabIndex={-1}>
                 Prepare an encounter
@@ -174,7 +174,19 @@ export function PreparedEncounterPage() {
     return (
         <section className="authoring-page" aria-labelledby="encounter-heading">
             <p className="authoring-page__breadcrumb">
-                <Link to={runPath(campaignId, sessionId)}>Run the session</Link>
+                <Link
+                    to={runPath(
+                        campaignId,
+                        sessionId,
+                        resource.state.kind === "ready"
+                            ? resource.state.data.status === "pending"
+                                ? "encounter-prep"
+                                : "encounters"
+                            : undefined,
+                    )}
+                >
+                    Run the session
+                </Link>
             </p>
             <h1 id="encounter-heading" ref={headingRef} tabIndex={-1}>
                 Encounter
