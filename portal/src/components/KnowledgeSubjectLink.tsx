@@ -6,13 +6,16 @@ import { describeWorldType } from "../utils/worldTypeLabel"
 
 interface KnowledgeSubjectLinkProps {
     campaignId: string
-    /** The server's authorized subject summary; the row is omitted when
+    /** The server's authorized subject summary; nothing is rendered when
      * absent, so "no subject" and "a subject you may not see" look alike. */
     subject: KnowledgeSubject | null | undefined
     /** The perspective the Knowledge view was requested under — forwarded
      * only to a destination that reads it (a quest's party perspective). */
     characterId: string | null
     partyId: string | null
+    /** "card" is the compact labelled area on a collection card; "claim"
+     * is the prominent block on the claim page. */
+    variant?: "card" | "claim"
 }
 
 function describeSubjectType(subject: KnowledgeSubject): string {
@@ -21,14 +24,15 @@ function describeSubjectType(subject: KnowledgeSubject): string {
         : describeWorldType(subject.category, subject.entity_type_code)
 }
 
-// The compact "About: <subject>" row shared by Knowledge cards and the
-// Knowledge detail page. A real link to the subject's own detail route,
-// which re-authorizes it on arrival; never shows a raw id.
+// The labelled "About" area shared by Knowledge cards and the claim page: the
+// subject's name (a real link to its own detail route, which re-authorizes it
+// on arrival) and its type. Never shows a raw id.
 export function KnowledgeSubjectLink({
     campaignId,
     subject,
     characterId,
     partyId,
+    variant = "card",
 }: KnowledgeSubjectLinkProps) {
     if (subject === null || subject === undefined) {
         return null
@@ -42,10 +46,16 @@ export function KnowledgeSubjectLink({
             : path
 
     return (
-        <p className="knowledge-subject">
-            <span className="knowledge-subject__label">About:</span>{" "}
-            <Link to={to}>{subject.name}</Link>{" "}
-            <span className="knowledge-subject__type">({typeLabel})</span>
-        </p>
+        <div className={`knowledge-about knowledge-about--${variant}`}>
+            <p className="knowledge-about__label">
+                {variant === "claim" ? "About this World entry" : "About"}
+            </p>
+            <p className="knowledge-about__subject">
+                <Link to={to} className="knowledge-about__name">
+                    {subject.name}
+                </Link>{" "}
+                <span className="knowledge-about__type">{typeLabel}</span>
+            </p>
+        </div>
     )
 }

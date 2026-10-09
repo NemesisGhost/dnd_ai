@@ -42,18 +42,20 @@ function buildDetailPath(
 }
 
 // Domain-specific wrapper mapping one authorized KnowledgeListItem into the
-// shared EntityCard primitive. Never infers canonical truth from scope,
-// sensitivity, confidence, or a null value — truth_status_code is shown
-// only when the API itself returned it (UI_DESIGN.md §5.6). The subject row
-// sits below the card's own link and appears only for the server's
-// authorized subject summary.
+// shared EntityCard primitive. The claim text is the card's content and its
+// one link; the claim kind is a quiet secondary label. Scope and canonical
+// truth are not repeated here: they live on the claim page, and truth is
+// never inferred from scope, sensitivity, confidence, or a null value
+// (UI_DESIGN.md §5.6). The labelled "About" area sits below the card's own
+// link and appears only for the server's authorized subject summary, so
+// opening the claim and opening its subject are separate actions.
 export function KnowledgeCard({
     campaignId,
     item,
     characterId,
     partyId,
 }: KnowledgeCardProps) {
-    const metadata: string[] = [`Scope: ${humanizeCode(item.scope)}`]
+    const metadata: string[] = [humanizeCode(item.knowledge_type_code)]
 
     if (item.awareness_level !== null) {
         metadata.push(`Awareness: ${humanizeCode(item.awareness_level)}`)
@@ -71,17 +73,11 @@ export function KnowledgeCard({
         )
     }
 
-    const status =
-        item.truth_status_code !== null
-            ? humanizeCode(item.truth_status_code)
-            : null
-
     return (
         <EntityCard
-            eyebrow={humanizeCode(item.knowledge_type_code)}
+            className="knowledge-card"
             title={item.statement}
             metadata={metadata}
-            status={status}
             to={buildDetailPath(
                 campaignId,
                 item.knowledge_item_id,
@@ -96,6 +92,7 @@ export function KnowledgeCard({
                         subject={item.subject}
                         characterId={characterId}
                         partyId={partyId}
+                        variant="card"
                     />
                 )
             }

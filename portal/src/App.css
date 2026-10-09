@@ -1818,10 +1818,25 @@ a.app-header__title:focus-visible {
   list-style: none;
 }
 
-.world-card-grid,
-.knowledge-card-grid {
+.world-card-grid {
   grid-template-columns:
     repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+}
+
+/* Knowledge claims are sentences: wider cards (about 28rem or more) keep them comfortable to read. */
+.knowledge-card-grid {
+  grid-template-columns:
+    repeat(auto-fit, minmax(min(100%, 28rem), 1fr));
+}
+
+.knowledge-card .entity-card__title {
+  font-size: 1.0625rem;
+  line-height: 1.45;
+}
+
+.knowledge-card .entity-card__metadata {
+  color: var(--color-text-muted);
+  font-size: 0.8125rem;
 }
 
 .quest-card-grid {
@@ -1918,16 +1933,47 @@ a.app-header__title:focus-visible {
   padding: 0 0.85rem 0.85rem;
 }
 
-/* "About: <subject>" row on Knowledge cards and the Knowledge detail page. */
-.knowledge-subject {
-  margin: 0;
-  font-size: 0.85rem;
-  color: var(--color-text-muted);
+/* The labelled "About" area: a compact one on Knowledge cards, a prominent block on the claim page. */
+.knowledge-about {
   overflow-wrap: anywhere;
 }
 
-.knowledge-subject__label {
-  font-weight: 600;
+.knowledge-about__label {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.knowledge-about__subject {
+  margin: 0.125rem 0 0;
+}
+
+.knowledge-about__type {
+  margin-left: 0.25rem;
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+}
+
+.knowledge-about--card {
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.knowledge-about--claim {
+  margin: 1rem 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--color-border);
+  border-left: 4px solid var(--color-primary);
+  border-radius: 0.375rem;
+  background-color: var(--color-surface);
+}
+
+.knowledge-about--claim .knowledge-about__name {
+  font-size: 1.125rem;
+  font-weight: 700;
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -3222,5 +3268,143 @@ a.app-header__title:focus-visible {
     color: var(--color-text-muted);
     font-size: 0.875rem;
     font-weight: 700;
+  }
+}
+
+/* Knowledge claim page: one page for the claim, what it is about, the GM's canonical record,
+   the selected character's knowledge and the roster of who knows it. */
+
+.knowledge-claim {
+  max-width: 60rem;
+}
+
+.knowledge-section {
+  margin: 1.5rem 0;
+}
+
+.knowledge-section > h2 {
+  margin: 0 0 0.25rem;
+  font-size: 1.25rem;
+}
+
+.knowledge-section > h2:focus {
+  outline: none;
+}
+
+.knowledge-section > h2:focus-visible {
+  outline: 3px solid var(--color-focus);
+  outline-offset: 4px;
+}
+
+.knowledge-claim__text {
+  margin: 0.25rem 0;
+  font-size: 1.375rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.knowledge-claim__kind {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+}
+
+.knowledge-claim__form,
+.knowledge-claim__subject {
+  max-width: 44rem;
+}
+
+.knowledge-claim__state {
+  align-self: center;
+  font-style: italic;
+}
+
+.knowledge-claim__fact {
+  display: contents;
+}
+
+/* Who knows this: compact rows, reflowing to grouped blocks on narrow screens. */
+
+.knowledge-roster__group {
+  margin-top: 1.25rem;
+}
+
+.knowledge-roster__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  padding-bottom: 0.25rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.knowledge-roster__head h3 {
+  margin: 0;
+  font-size: 1.0625rem;
+}
+
+.knowledge-roster__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.knowledge-roster__empty {
+  margin: 0.5rem 0 0;
+  color: var(--color-text-muted);
+}
+
+.knowledge-roster__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.knowledge-roster__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.25rem 0.75rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.knowledge-roster__name {
+  min-width: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.knowledge-roster__type,
+.knowledge-roster__state {
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+  font-weight: 400;
+}
+
+.knowledge-roster__toggle {
+  justify-self: start;
+  padding: 0.25rem 0.75rem;
+}
+
+.knowledge-roster__details,
+.knowledge-roster__form {
+  grid-column: 1 / -1;
+  max-width: 40rem;
+  margin-top: 0.5rem;
+  padding: 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.375rem;
+  background-color: var(--color-surface);
+}
+
+@media (min-width: 40rem) {
+  .knowledge-roster__row {
+    grid-template-columns: minmax(0, 2fr) minmax(0, 2fr) auto;
+    align-items: center;
+  }
+
+  .knowledge-roster__row:not(.knowledge-roster__row--knower) {
+    grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
   }
 }

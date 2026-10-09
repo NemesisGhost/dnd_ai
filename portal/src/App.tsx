@@ -25,7 +25,7 @@ import {
   CreateOrganizationPage,
   EditOrganizationPage,
 } from "./pages/OrganizationAuthoringPages"
-import { CreateKnowledgePage, EditKnowledgePage } from "./pages/KnowledgeAuthoringPages"
+import { CreateKnowledgePage } from "./pages/KnowledgeAuthoringPages"
 import { CharacterBuildsPage, CreateCharacterBuildPage } from "./pages/CharacterBuildPages"
 import { PartyMembersPage } from "./pages/PartyMembersPage"
 import { EventDetailPage, RecordEventPage } from "./pages/EventPages"
@@ -34,7 +34,7 @@ import {
   EditDungeonAreaPage,
   EditDungeonPage,
 } from "./pages/DungeonAuthoringPages"
-import { KnowledgeAudiencePage } from "./pages/KnowledgeAudiencePage"
+import { KnowledgeSectionRedirect } from "./pages/KnowledgeSectionRedirect"
 import { PrepareEncounterPage, PreparedEncounterPage } from "./pages/EncounterPages"
 import { ProvenancePage } from "./pages/ProvenancePage"
 import { ReviewQueuePage, RevisionHistoryPage } from "./pages/ReviewPages"
@@ -369,7 +369,7 @@ function App() {
 
             <Route
               path="knowledge/:knowledgeItemId/audience"
-              element={<KnowledgeAudiencePage />}
+              element={<KnowledgeSectionRedirect fragment="who-knows" />}
             />
 
             <Route
@@ -484,7 +484,7 @@ function App() {
 
             <Route
               path="knowledge/:knowledgeItemId/edit"
-              element={<EditKnowledgePage />}
+              element={<KnowledgeSectionRedirect fragment="claim" />}
             />
 
             <Route

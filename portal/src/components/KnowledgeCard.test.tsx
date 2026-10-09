@@ -40,12 +40,12 @@ function renderCard(
 }
 
 describe("KnowledgeCard", () => {
-    it("shows the statement, type, scope, awareness, confidence, and sharing", () => {
+    it("shows the claim as the content with its kind, awareness, confidence, and sharing", () => {
         renderCard(baseItem)
 
         expect(screen.getByText(baseItem.statement)).toBeInTheDocument()
         expect(screen.getByText("Fact")).toBeInTheDocument()
-        expect(screen.getByText("Scope: Party")).toBeInTheDocument()
+        expect(screen.queryByText(/Scope:/)).not.toBeInTheDocument()
         expect(screen.getByText("Awareness: Understood")).toBeInTheDocument()
         expect(screen.getByText("Confidence: 85%")).toBeInTheDocument()
         expect(screen.getByText("Willing to share")).toBeInTheDocument()
@@ -134,9 +134,9 @@ describe("KnowledgeCard", () => {
         expect(screen.queryByText(/confirmed/i)).not.toBeInTheDocument()
     })
 
-    it("shows truth status when the API intentionally returned it", () => {
+    it("leaves canonical truth to the claim page even when the API returned it", () => {
         renderCard({ ...baseItem, truth_status_code: "confirmed_false" })
-        expect(screen.getByText("Confirmed False")).toBeInTheDocument()
+        expect(screen.queryByText("Confirmed False")).not.toBeInTheDocument()
     })
 
     it("never displays source, subject, or discovery ids", () => {
@@ -169,8 +169,8 @@ describe("KnowledgeCard", () => {
         it("shows the subject's name and type, linked to its World detail route", () => {
             renderCard({ ...baseItem, subject_entity_id: "location-a", subject: location })
 
-            expect(screen.getByText("About:")).toBeInTheDocument()
-            expect(screen.getByText("(Location - Settlement)")).toBeInTheDocument()
+            expect(screen.getByText("About")).toBeInTheDocument()
+            expect(screen.getByText("Location - Settlement")).toBeInTheDocument()
             expect(
                 screen.getByRole("link", { name: "The Rootspire" }),
             ).toHaveAttribute("href", "/app/campaign-a/world/location/location-a")
@@ -204,7 +204,7 @@ describe("KnowledgeCard", () => {
                 "party-a",
             )
 
-            expect(screen.getByText("(Quest)")).toBeInTheDocument()
+            expect(screen.getByText("Quest")).toBeInTheDocument()
             expect(
                 screen.getByRole("link", { name: "Clear the Old Mill" }),
             ).toHaveAttribute(
@@ -228,7 +228,7 @@ describe("KnowledgeCard", () => {
         it("omits the row entirely when the server returned no subject summary", () => {
             const { container } = renderCard({ ...baseItem, subject: null })
 
-            expect(screen.queryByText("About:")).not.toBeInTheDocument()
+            expect(screen.queryByText("About")).not.toBeInTheDocument()
             expect(screen.getAllByRole("link")).toHaveLength(1)
             expect(container.querySelector(".entity-card__footer")).toBeNull()
         })

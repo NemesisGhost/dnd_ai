@@ -42,7 +42,7 @@ Record **Pass**, **Fail** (with a note and the issue), or **Accepted** (with the
 | 10 | Session run page: stages (Prepare, Run session, Wrap up), participants, encounter preparation, log, travel, award item, encounters, review, start/end, in-world time bar | `…/sessions/:id/run[?section=…]` | | | | | | | | |
 | 11 | Events: record and correct | `…/events/new`, `…/events/:id` | | | | | | | | |
 | 12 | Quest editor and quest progress | `…/quests/new`, `…/quests/:id/edit`, `…/quests/:id/progress` | | | | | | | | |
-| 13 | Knowledge editor and Who knows this | `…/knowledge/new`, `…/knowledge/:id/edit`, `…/knowledge/:id/audience` | | | | | | | | |
+| 13 | Knowledge claim page (claim, About, canonical information, character knowledge, Who knows this roster) and the New claim form | `…/knowledge/new`, `…/knowledge/:id` (`/edit` and `/audience` redirect here) | | | | | | | | |
 | 14 | Dungeon, areas, connections, features, hazards, interactables | `…/world/dungeon/new`, `…/dungeon/:id/edit`, `…/areas/:id/edit` | | | | | | | | |
 | 15 | Relationships panel and editor | the Relationships panel on location, organization, religion and character pages | | | | | | | | |
 | 16 | Organization members and offices | `…/world/organization/:id` | | | | | | | | |
@@ -69,6 +69,17 @@ Check at 390, 1280 and 2560 px, with the keyboard only, at 200% zoom, and with a
 8. Start session appears only at the top of Run session for a scheduled session and needs its button. End session (Wrap up) opens a confirmation (recap, "Ends at"); Cancel leaves the session in progress; confirming completes it and every section then explains why it is read-only.
 9. Session review shows the overview, participants, log and encounters; each "go to" link opens the right section, or a reason is shown instead.
 10. A member without `canon.edit` sees the "no permission" message and none of the stage controls.
+
+### Row 13 detail: the Knowledge claim page
+
+Check at 390, 1280 and 2560 px, keyboard only, and with a screen reader, as a GM, as a player with a selected character, and as a member with `campaign.view` only.
+
+1. Knowledge cards: the claim text leads, the kind is a quiet label, a labelled About area names the subject and type, and the card and its subject open separately (Tab reaches each). The grid never squeezes cards narrower than readable; search, view, party/character selection, public filter and Load more still work.
+2. A card opens the claim page with the same character and party. Order: breadcrumb (Knowledge › Claim), claim, About this World entry, GM and canonical information, Character knowledge, Who knows this.
+3. GM: fields are controls at once. Change the claim: "Unsaved changes" appears and Save claim enables; Discard restores it; Save stays on the page and "Claim saved" appears only after the save succeeds. A published claim asks for confirmation first. After someone knows the claim, claim, kind and subject are disabled with the reason.
+4. Player or reader: the same values as text, no Save/Discard, no Who knows this, and canonical truth and sensitivity absent unless the server returned them. With no character selected, Character knowledge is one message asking for a perspective.
+5. Who knows this: the three groups stay separate; each action is beside its heading and opens a compact form; Details expands a knower inline. Tell a party, record that someone learned it or told another, make it public, change a belief: each succeeds on its own, closes its form, and never touches an unsaved claim edit. A refused action keeps the form and shows its error under that group.
+6. Old addresses `…/knowledge/:id/edit` and `…/knowledge/:id/audience` land on the claim page (at the claim / Who knows this section) with character and party unchanged.
 
 ## Carried items from earlier phases
 

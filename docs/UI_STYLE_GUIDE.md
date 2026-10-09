@@ -439,13 +439,19 @@ A long task page (the Run Session page) is organised into **stages** with a **lo
 
 Knowledge cards may display authorized fields from the current list contract:
 
-- knowledge type;
-- statement;
-- scope;
+- statement (the card's content and one link);
+- knowledge type as a quiet secondary label;
+- a labelled "About" area with the subject's name and type, as a separate link;
 - awareness level;
 - confidence when meaningful to the current audience;
 - willingness to share when meaningful to the current audience;
-- truth status only where the API intentionally returns it for that audience.
+- (scope and canonical truth are not repeated on cards; they live on the claim page).
+
+Cards sit in a grid wide enough (about 28rem) to read a sentence comfortably.
+
+### 11.3 Claim page
+
+One page replaces separate view, edit and "who knows" screens: breadcrumb, claim text, a prominent About block, labelled GM/canonical information, character knowledge, and a compact "Who knows this" roster. Fields are controls only for people authorized to change them; others see text, and anything they may not see is absent. Canonical information (the GM's record of truth and sensitivity) is kept visibly apart from character knowledge (awareness, confidence, belief). The roster follows the compact-row pattern (name and type, state, inline details; actions beside group headings; forms revealed locally). The claim and each knowledge action save independently, and neither refresh overwrites the other's unsaved input.
 
 Do not label a player-facing belief false merely because canonical truth differs. Do not transform null into a suggestive “hidden” label.
 

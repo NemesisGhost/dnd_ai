@@ -1045,10 +1045,10 @@ describe("portal routing", () => {
   it("routes a Knowledge item detail through its addressable route", async () => {
     renderAppAt("/app/mundivita/knowledge/knowledge-a")
 
-    await screen.findByRole("heading", {
-      level: 1,
-      name: knowledgePageFixture.items[0].statement,
-    })
+    await screen.findByRole("heading", { level: 1, name: "Knowledge claim" })
+    expect(
+      screen.getByText(knowledgePageFixture.items[0].statement),
+    ).toBeInTheDocument()
 
     expect(fetchKnowledgeDetailMock).toHaveBeenCalledWith(
       "mundivita",
@@ -1059,7 +1059,10 @@ describe("portal routing", () => {
     )
 
     expect(
-      screen.getByRole("link", { name: "Back to Knowledge" }),
+      within(screen.getByRole("navigation", { name: "Breadcrumb" })).getByRole(
+        "link",
+        { name: "Knowledge" },
+      ),
     ).toHaveAttribute("href", "/app/mundivita/knowledge")
   })
 
