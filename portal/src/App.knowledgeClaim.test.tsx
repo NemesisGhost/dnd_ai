@@ -106,6 +106,14 @@ function setup(path = CLAIM, capabilities: string[] = ["canon.edit"]) {
   return openApp(path, capabilities)
 }
 
+// A published claim: only then can anyone be recorded as knowing it.
+function setupPublished(path = CLAIM) {
+  const rendered = setup(path)
+  current = { detail: current.detail, view: view({ canon_status: "canon" }) }
+  server.on("GET", VIEW_PATH, () => ({ body: current.view }))
+  return rendered
+}
+
 beforeEach(() => {
   server = installCampaignShellMocks()
   server.on("GET", "/campaigns/mundivita/authoring/knowledge/options", { body: OPTIONS })
@@ -365,7 +373,7 @@ describe("unified knowledge claim page", () => {
 
   describe("who knows this", () => {
     it("lists parties, individuals and public places as separate compact groups", async () => {
-      setup()
+      setupPublished()
       await screen.findByText("Red Company")
       expect(screen.getByRole("heading", { level: 3, name: "Parties" })).toBeInTheDocument()
       expect(screen.getByRole("heading", { level: 3, name: "Characters, NPCs and organizations" })).toBeInTheDocument()
@@ -380,7 +388,7 @@ describe("unified knowledge claim page", () => {
     })
 
     it("puts each group's actions beside its heading and reveals forms locally", async () => {
-      setup()
+      setupPublished()
       await screen.findByText("Red Company")
       const partiesHead = screen.getByRole("heading", { level: 3, name: "Parties" }).parentElement!
       expect(within(partiesHead).getByRole("button", { name: "Tell a party" })).toBeInTheDocument()
@@ -394,7 +402,7 @@ describe("unified knowledge claim page", () => {
     })
 
     it("tells only parties that do not know it, then closes the form after the server confirms", async () => {
-      setup()
+      setupPublished()
       fireEvent.click(await screen.findByRole("button", { name: "Tell a party" }))
       const form = screen.getByRole("form", { name: "Tell a party" })
       const select = within(form).getByRole("combobox", { name: /Party/ })
@@ -413,7 +421,7 @@ describe("unified knowledge claim page", () => {
     })
 
     it("keeps the form and what was typed when a knowledge action is refused", async () => {
-      setup()
+      setupPublished()
       server.on("POST", `${KNOWLEDGE}/k1/reveal-to-party`, {
         status: 409,
         body: { error: { code: "clock_required", message: "m", correlation_id: "c" } },
@@ -428,7 +436,7 @@ describe("unified knowledge claim page", () => {
     })
 
     it("records that someone learned it, picking them from a search", async () => {
-      setup()
+      setupPublished()
       fireEvent.click(await screen.findByRole("button", { name: "Record who learned this" }))
       const form = screen.getByRole("form", { name: "Record that someone learned this" })
       fireEvent.click(within(form).getByRole("button", { name: "Record knowledge" }))
@@ -445,7 +453,7 @@ describe("unified knowledge claim page", () => {
     })
 
     it("records a telling from an existing knower", async () => {
-      setup()
+      setupPublished()
       fireEvent.click(await screen.findByRole("button", { name: "Record a telling" }))
       const form = screen.getByRole("form", { name: "Record that someone told another" })
       fireEvent.change(within(form).getByRole("combobox", { name: /Who told/ }), { target: { value: "n1" } })
@@ -463,7 +471,7 @@ describe("unified knowledge claim page", () => {
     })
 
     it("makes it public at a searched location", async () => {
-      setup()
+      setupPublished()
       fireEvent.click(await screen.findByRole("button", { name: "Make public" }))
       const form = screen.getByRole("form", { name: "Make this public" })
       fireEvent.focus(within(form).getByRole("combobox", { name: /Location/ }))
@@ -477,7 +485,7 @@ describe("unified knowledge claim page", () => {
     })
 
     it("expands a knower's details inline and changes a belief naming the event that last wrote it", async () => {
-      setup()
+      setupPublished()
       fireEvent.click(await screen.findByRole("button", { name: "Details for Mira" }))
       expect(screen.getByText("He only seems pale.", { selector: "p" })).toBeInTheDocument()
       const form = screen.getByRole("form", { name: "Change belief of Mira" })
@@ -497,7 +505,7 @@ describe("unified knowledge claim page", () => {
     })
 
     it("offers no deletion or other operation the API lacks", async () => {
-      setup()
+      setupPublished()
       await screen.findByText("Red Company")
       expect(screen.queryByRole("button", { name: /remove|delete|forget/i })).toBeNull()
     })
@@ -505,7 +513,7 @@ describe("unified knowledge claim page", () => {
 
   describe("claim and knowledge saves stay independent", () => {
     it("keeps an unsaved claim edit through knowledge actions and their refresh", async () => {
-      setup()
+      setupPublished()
       fireEvent.change(await claimBox(), { target: { value: "My unsaved edit" } })
       fireEvent.click(screen.getByRole("button", { name: "Tell a party" }))
       fireEvent.change(
@@ -521,10 +529,11 @@ describe("unified knowledge claim page", () => {
     })
 
     it("saving the claim sends no knowledge command, and discarding does not roll knowledge back", async () => {
-      setup()
+      setupPublished()
       server.on("POST", UPDATE, { body: RECEIPT })
       fireEvent.change(await claimBox(), { target: { value: "Edited" } })
       fireEvent.click(screen.getByRole("button", { name: "Save claim" }))
+      fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Save changes" }))
       await screen.findByText("Claim saved")
       expect(server.callsTo("POST", new RegExp(`${KNOWLEDGE}/`))).toHaveLength(0)
       fireEvent.change(screen.getByRole("textbox", { name: /^Claim/ }), { target: { value: "Again" } })
@@ -535,12 +544,60 @@ describe("unified knowledge claim page", () => {
     })
   })
 
+  describe("an unpublished claim", () => {
+    it("explains that nobody can be recorded as knowing a draft, and withholds the actions", async () => {
+      setup()
+      expect(await screen.findByText(/not published yet, so no one can be recorded as knowing it/)).toBeInTheDocument()
+      for (const name of ["Tell a party", "Record who learned this", "Make public"]) {
+        expect(screen.getByRole("button", { name })).toBeDisabled()
+      }
+      expect(server.callsTo("POST", /./)).toHaveLength(0)
+    })
+
+    it("offers the lifecycle controls that publish it, and enables the roster once it is published", async () => {
+      server.on("GET", /\/entities\/k1\/lifecycle$/, {
+        body: {
+          entity_id: "k1",
+          entity_type_code: "knowledge_item",
+          canonical_name: "x",
+          canon_status: "draft",
+          lifecycle_status: "active",
+          row_version: 2,
+          lifecycle_managed: true,
+          superseded_by: null,
+          available_actions: ["submit_for_review"],
+          blocked_actions: [],
+        },
+      })
+      setup()
+      expect(await screen.findByRole("button", { name: "Submit for review" })).toBeInTheDocument()
+    })
+
+    it("enables the actions for a published claim", async () => {
+      setupPublished()
+      expect(await screen.findByRole("button", { name: "Tell a party" })).toBeEnabled()
+      expect(screen.queryByText(/not published yet/)).toBeNull()
+    })
+
+    it("gives a clear reason when the server still refuses a claim as unavailable", async () => {
+      setupPublished()
+      server.on("POST", `${KNOWLEDGE}/k1/reveal-to-party`, { status: 404 })
+      fireEvent.click(await screen.findByRole("button", { name: "Tell a party" }))
+      const form = screen.getByRole("form", { name: "Tell a party" })
+      fireEvent.change(within(form).getByRole("combobox", { name: /Party/ }), { target: { value: "p2" } })
+      fireEvent.click(within(form).getByRole("button", { name: "Tell party" }))
+      expect(await screen.findByRole("alert")).toHaveTextContent(/must be published before anyone can be recorded/)
+      expect(screen.getByRole("form", { name: "Tell a party" })).toBeInTheDocument()
+    })
+  })
+
   describe("campaign context", () => {
     it("opens, edits and records who knows a claim only under the campaign and claim in the address", async () => {
-      setup(`${CLAIM}?character_id=c1&party_id=p1`)
+      setupPublished(`${CLAIM}?character_id=c1&party_id=p1`)
       server.on("POST", UPDATE, { body: RECEIPT })
       fireEvent.change(await claimBox(), { target: { value: "Edited in its own campaign" } })
       fireEvent.click(screen.getByRole("button", { name: "Save claim" }))
+      fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Save changes" }))
       await screen.findByText("Claim saved")
       fireEvent.click(await screen.findByRole("button", { name: "Tell a party" }))
       const form = screen.getByRole("form", { name: "Tell a party" })
@@ -569,7 +626,7 @@ describe("unified knowledge claim page", () => {
     })
 
     it("offers only the active campaign's own parties", async () => {
-      setup()
+      setupPublished()
       fireEvent.click(await screen.findByRole("button", { name: "Tell a party" }))
       expect(server.callsTo("GET", /\/campaigns\/mundivita\/parties/).length).toBeGreaterThan(0)
       expect(server.calls.some((c) => c.path.includes("/parties") && !c.path.startsWith("/campaigns/mundivita/"))).toBe(false)

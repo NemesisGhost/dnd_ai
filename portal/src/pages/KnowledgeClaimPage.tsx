@@ -15,11 +15,13 @@ import { ErrorSummary, MutationStatusMessage, StaleWriteNotice } from "../compon
 import type { FieldError } from "../components/authoring/feedback"
 import { ReferenceCombobox } from "../components/authoring/ReferenceCombobox"
 import type { ReferenceOption } from "../components/authoring/ReferenceCombobox"
+import { EntityLifecyclePanel } from "../components/EntityLifecyclePanel"
 import { KnowledgeRoster } from "../components/knowledge/KnowledgeRoster"
 import { KnowledgeSubjectLink } from "../components/KnowledgeSubjectLink"
 import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
+import type { UseAuthoringResourceResult } from "../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard"
 import type { KnowledgeDetail } from "../types/knowledge"
@@ -73,6 +75,13 @@ export function KnowledgeClaimPage({
     refreshDetail,
 }: KnowledgeClaimPageProps) {
     const canEdit = useCampaignCapability(campaignId, "canon.edit")
+    // The editor's own read model, loaded once here: it feeds the claim form and tells the roster
+    // whether the claim is published.
+    const view = useAuthoringResource<KnowledgeAuthoringView>(
+        canEdit ? knowledgeAuthoringPath(campaignId, knowledgeItemId) : null,
+    )
+    const options = useAuthoringResource<KnowledgeOptions>(canEdit ? knowledgeOptionsPath(campaignId) : null)
+    const published = view.state.kind === "ready" ? view.state.data.canon_status === "canon" : null
     return (
         <section className="authoring-page knowledge-claim" aria-labelledby="knowledge-claim-heading">
             <nav aria-label="Breadcrumb" className="authoring-page__breadcrumb">
@@ -95,6 +104,8 @@ export function KnowledgeClaimPage({
             </div>
             {canEdit ? (
                 <EditableClaim
+                    view={view}
+                    options={options}
                     campaignId={campaignId}
                     knowledgeItemId={knowledgeItemId}
                     item={item}
@@ -112,17 +123,33 @@ export function KnowledgeClaimPage({
                     note={null}
                 />
             )}
-            <KnowledgeRoster campaignId={campaignId} knowledgeItemId={knowledgeItemId} />
+            {canEdit ? (
+                <section id="claim-lifecycle" className="knowledge-section" aria-label="Claim lifecycle">
+                    <EntityLifecyclePanel
+                        campaignId={campaignId}
+                        entityId={knowledgeItemId}
+                        onChanged={() => {
+                            void view.refetch()
+                            refreshDetail()
+                        }}
+                    />
+                </section>
+            ) : null}
+            <KnowledgeRoster campaignId={campaignId} knowledgeItemId={knowledgeItemId} published={published} />
         </section>
     )
 }
 
 // Loads the editor's own read model. While it loads, or when editing is not offered, the same
 // layout shows the values as text (with the server's reason when editing is blocked).
-function EditableClaim(props: KnowledgeClaimPageProps) {
-    const { campaignId, knowledgeItemId } = props
-    const view = useAuthoringResource<KnowledgeAuthoringView>(knowledgeAuthoringPath(campaignId, knowledgeItemId))
-    const options = useAuthoringResource<KnowledgeOptions>(knowledgeOptionsPath(campaignId))
+function EditableClaim({
+    view,
+    options,
+    ...props
+}: KnowledgeClaimPageProps & {
+    view: UseAuthoringResourceResult<KnowledgeAuthoringView>
+    options: UseAuthoringResourceResult<KnowledgeOptions>
+}) {
 
     if (view.state.kind === "ready" && options.state.kind === "ready") {
         if (view.state.data.available_actions.includes("update")) {

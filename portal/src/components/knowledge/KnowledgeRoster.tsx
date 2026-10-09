@@ -76,19 +76,35 @@ const stateText = (awareness: string, confidence: number | null): string =>
 // read or change it (the audience endpoint requires it), so nobody else gets a request or any of
 // its content. Every action saves on its own and refreshes only this roster: it never touches an
 // unsaved claim edit, and a failed action keeps the form (and what was typed) open.
+//
+// Only a published claim can be recorded as known (the server answers an unpublished one with the
+// same 404 as a missing record), so while `published` is false the actions are withheld and the
+// reason is shown instead of letting a submit fail with a misleading "no longer exists".
 export function KnowledgeRoster({
     campaignId,
     knowledgeItemId,
+    published,
 }: {
     campaignId: string
     knowledgeItemId: string
+    // True or false once the claim's canon status is known; null while it is not.
+    published: boolean | null
 }) {
     const canManage = useCampaignCapability(campaignId, "canon.edit")
     if (!canManage) return null
-    return <RosterBody campaignId={campaignId} knowledgeItemId={knowledgeItemId} />
+    return <RosterBody campaignId={campaignId} knowledgeItemId={knowledgeItemId} published={published} />
 }
 
-function RosterBody({ campaignId, knowledgeItemId }: { campaignId: string; knowledgeItemId: string }) {
+function RosterBody({
+    campaignId,
+    knowledgeItemId,
+    published,
+}: {
+    campaignId: string
+    knowledgeItemId: string
+    published: boolean | null
+}) {
+    const blocked = published === false
     const { reload } = useSession()
     const announce = useAnnounce()
     const { state, refetch } = useAuthoringResource<KnowledgeAudience>(
@@ -131,6 +147,11 @@ function RosterBody({ campaignId, knowledgeItemId }: { campaignId: string; knowl
             />
         ) : explained !== null ? (
             <p role="alert">{explained}</p>
+        ) : error.kind === "unavailable" ? (
+            <p role="alert">
+                That claim or record is not available. A claim must be published before anyone can be recorded
+                as knowing it.
+            </p>
         ) : (
             <MutationStatusMessage error={error} onRetry={mutation.retry} onCheckSession={reload} />
         )
@@ -175,6 +196,12 @@ function RosterBody({ campaignId, knowledgeItemId }: { campaignId: string; knowl
                 Who knows this
             </h2>
             <p className="knowledge-roster__lead">Recorded separately from the claim. Changes here save on their own.</p>
+            {blocked ? (
+                <p className="authoring-note" role="status">
+                    This claim is not published yet, so no one can be recorded as knowing it. Publish it under
+                    Lifecycle above first.
+                </p>
+            ) : null}
 
             <div className="knowledge-roster__group">
                 <div className="knowledge-roster__head">
@@ -184,6 +211,7 @@ function RosterBody({ campaignId, knowledgeItemId }: { campaignId: string; knowl
                             type="button"
                             className="authoring-button"
                             aria-expanded={open === "party"}
+                            disabled={blocked}
                             onClick={() => toggle("party")}
                         >
                             Tell a party
@@ -224,6 +252,7 @@ function RosterBody({ campaignId, knowledgeItemId }: { campaignId: string; knowl
                             type="button"
                             className="authoring-button"
                             aria-expanded={open === "learn"}
+                            disabled={blocked}
                             onClick={() => toggle("learn")}
                         >
                             Record who learned this
@@ -233,6 +262,7 @@ function RosterBody({ campaignId, knowledgeItemId }: { campaignId: string; knowl
                                 type="button"
                                 className="authoring-button"
                                 aria-expanded={open === "transfer"}
+                                disabled={blocked}
                                 onClick={() => toggle("transfer")}
                             >
                                 Record a telling
@@ -287,6 +317,7 @@ function RosterBody({ campaignId, knowledgeItemId }: { campaignId: string; knowl
                         type="button"
                         className="authoring-button"
                         aria-expanded={open === "public"}
+                        disabled={blocked}
                         onClick={() => toggle("public")}
                     >
                         Make public
