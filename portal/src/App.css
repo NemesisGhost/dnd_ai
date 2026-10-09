@@ -3110,15 +3110,24 @@ a.app-header__title:focus-visible {
    each row reflows into a grouped block (identity, then controls) on narrow ones. */
 
 .encounter-roster__add {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: end;
   gap: 0.5rem 0.75rem;
   margin-bottom: 1rem;
 }
 
 .encounter-roster__add > * {
   min-width: 0;
+}
+
+/* The picked character's Clear button sits beside the input without wrapping the row. */
+.encounter-roster__add .authoring-combobox {
+  flex-wrap: nowrap;
+}
+
+.encounter-roster__add .authoring-combobox .authoring-field__control {
+  flex: 1 1 8rem;
 }
 
 .encounter-roster__button {
@@ -3170,6 +3179,13 @@ a.app-header__title:focus-visible {
   min-width: 0;
 }
 
+.encounter-roster__remove {
+  min-width: 2rem;
+  margin-left: auto;
+  padding: 0.25rem 0.5rem;
+  line-height: 1;
+}
+
 .encounter-roster__side {
   width: auto;
   min-width: 7rem;
@@ -3186,6 +3202,14 @@ a.app-header__title:focus-visible {
 }
 
 @media (min-width: 40rem) {
+  .encounter-roster__add {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+  }
+
+  .encounter-roster__controls {
+    flex-wrap: nowrap;
+  }
+
   .encounter-roster__head,
   .encounter-roster__row {
     grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);

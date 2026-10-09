@@ -494,7 +494,7 @@ function Loaded({
                                                     )
                                                 }
                                             >
-                                                {removing ? "Removing…" : "Remove"}
+                                                {removing ? "…" : "✕"}
                                             </button>
                                         </form>
                                     ) : (
