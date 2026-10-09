@@ -174,10 +174,7 @@ function RosterBody({ campaignId, knowledgeItemId }: { campaignId: string; knowl
             <h2 id="who-knows-heading" tabIndex={-1}>
                 Who knows this
             </h2>
-            <p className="authoring-page__lead">
-                What each party, character and place holds is recorded separately from the claim and from
-                what is true. Changes here save on their own.
-            </p>
+            <p className="knowledge-roster__lead">Recorded separately from the claim. Changes here save on their own.</p>
 
             <div className="knowledge-roster__group">
                 <div className="knowledge-roster__head">

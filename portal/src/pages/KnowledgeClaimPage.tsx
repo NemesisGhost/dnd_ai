@@ -79,7 +79,16 @@ export function KnowledgeClaimPage({
                     <li aria-current="page">Claim</li>
                 </ol>
             </nav>
-            <h1 id="knowledge-claim-heading">Knowledge claim</h1>
+            <div className="knowledge-claim__header">
+                <h1 id="knowledge-claim-heading">Knowledge claim</h1>
+                {canEdit ? (
+                    <AudiencePreviewSection
+                        campaignId={campaignId}
+                        resourceType="knowledge_item"
+                        fixedResource={{ id: item.knowledge_item_id, display_name: item.statement }}
+                    />
+                ) : null}
+            </div>
             {canEdit ? (
                 <EditableClaim
                     campaignId={campaignId}
@@ -99,13 +108,6 @@ export function KnowledgeClaimPage({
                 />
             )}
             <KnowledgeRoster campaignId={campaignId} knowledgeItemId={item.knowledge_item_id} />
-            {canEdit ? (
-                <AudiencePreviewSection
-                    campaignId={campaignId}
-                    resourceType="knowledge_item"
-                    fixedResource={{ id: item.knowledge_item_id, display_name: item.statement }}
-                />
-            ) : null}
         </section>
     )
 }
@@ -183,105 +185,103 @@ function ClaimLayout({
 }) {
     const hasCanonical = item.truth_status_code !== null || item.sensitivity !== null
     useFragmentFocus("claim", true)
+    const hasSubject = item.subject !== null && item.subject !== undefined
+
+    const subjectEditor =
+        edit === null ? undefined : edit.locked ? (
+            edit.values.subject !== null ? (
+                <p className="authoring-note">The subject cannot change: {LOCK_REASON.toLowerCase()}</p>
+            ) : null
+        ) : (
+            <ReferenceCombobox
+                id={FIELD.subject}
+                label="Subject"
+                value={edit.values.subject}
+                onChange={(subject) => edit.setValues({ ...edit.values, subject })}
+                search={edit.searchSubjects}
+                error={edit.errorFor(FIELD.subject)}
+                placeholder="Search places, organizations, religions, characters, quests"
+            />
+        )
+
     return (
         <>
-            <section id="claim" className="knowledge-section" aria-labelledby="knowledge-claim-text-heading">
-                <h2 id="knowledge-claim-text-heading" tabIndex={-1}>
-                    Claim
-                </h2>
+            <section id="claim" className="knowledge-claim__claim" aria-label="Claim">
                 {note !== null ? <p className="authoring-note">{note}</p> : null}
                 {edit === null ? (
-                    <>
-                        <p className="knowledge-claim__text">{item.statement}</p>
-                        <p className="knowledge-claim__kind">{humanizeCode(item.knowledge_type_code)}</p>
-                    </>
+                    <p className="knowledge-claim__text">{item.statement}</p>
                 ) : (
-                    <div className="authoring-form">
-                        <TextAreaField
-                            id={FIELD.statement}
-                            label="Claim"
-                            hint={edit.locked ? LOCK_REASON : "The claim itself, in one or two sentences."}
-                            value={edit.values.statement}
-                            onChange={(statement) => edit.setValues({ ...edit.values, statement })}
-                            required
-                            disabled={edit.locked}
-                            maxLength={STATEMENT_MAX}
-                            error={edit.errorFor(FIELD.statement)}
-                        />
-                        <SelectField
-                            id={FIELD.type}
-                            label="Kind"
-                            hint={edit.locked ? LOCK_REASON : undefined}
-                            value={edit.values.knowledgeType}
-                            placeholder="Choose a kind"
-                            required
-                            disabled={edit.locked}
-                            options={edit.options.knowledge_types}
-                            error={edit.errorFor(FIELD.type)}
-                            onChange={(knowledgeType) => edit.setValues({ ...edit.values, knowledgeType })}
-                        />
-                    </div>
+                    <TextAreaField
+                        id={FIELD.statement}
+                        label="Claim"
+                        hideLabel
+                        className="knowledge-claim__textarea"
+                        hint={edit.locked ? LOCK_REASON : undefined}
+                        rows={3}
+                        value={edit.values.statement}
+                        onChange={(statement) => edit.setValues({ ...edit.values, statement })}
+                        required
+                        disabled={edit.locked}
+                        maxLength={STATEMENT_MAX}
+                        error={edit.errorFor(FIELD.statement)}
+                    />
                 )}
+                {edit === null && !hasCanonical ? (
+                    <p className="knowledge-claim__kind">{humanizeCode(item.knowledge_type_code)}</p>
+                ) : null}
             </section>
 
-            {item.subject !== null && item.subject !== undefined ? (
+            {hasSubject || subjectEditor !== undefined ? (
                 <KnowledgeSubjectLink
                     campaignId={campaignId}
                     subject={item.subject}
                     characterId={characterId}
                     partyId={partyId}
                     variant="claim"
-                />
-            ) : null}
-            {edit !== null ? (
-                <div className="authoring-form knowledge-claim__subject">
-                    {edit.locked ? (
-                        edit.values.subject !== null ? (
-                            <p className="authoring-note">Its subject cannot change: {LOCK_REASON.toLowerCase()}</p>
-                        ) : null
-                    ) : (
-                        <ReferenceCombobox
-                            id={FIELD.subject}
-                            label="Subject"
-                            hint="The World entry this claim is about. Optional."
-                            value={edit.values.subject}
-                            onChange={(subject) => edit.setValues({ ...edit.values, subject })}
-                            search={edit.searchSubjects}
-                            error={edit.errorFor(FIELD.subject)}
-                            placeholder="Search places, organizations, religions, characters, quests"
-                        />
-                    )}
-                </div>
+                >
+                    {subjectEditor}
+                </KnowledgeSubjectLink>
             ) : null}
 
             {edit !== null || hasCanonical ? (
-                <section className="knowledge-section" aria-labelledby="knowledge-canonical-heading">
+                <section className="knowledge-gm" aria-labelledby="knowledge-canonical-heading">
                     <h2 id="knowledge-canonical-heading">GM and canonical information</h2>
-                    <p className="authoring-page__lead">
-                        The GM&apos;s record of what is true and how sensitive it is. It is not what any
-                        character knows or believes.
-                    </p>
                     {edit === null ? (
-                        <dl className="authoring-fact-list">
+                        <dl className="knowledge-gm__grid knowledge-gm__facts">
+                            <div>
+                                <dt>Kind</dt>
+                                <dd>{humanizeCode(item.knowledge_type_code)}</dd>
+                            </div>
                             {item.truth_status_code !== null ? (
-                                <>
+                                <div>
                                     <dt>Truth</dt>
                                     <dd>{humanizeCode(item.truth_status_code)}</dd>
-                                </>
+                                </div>
                             ) : null}
                             {item.sensitivity !== null ? (
-                                <>
+                                <div>
                                     <dt>Sensitivity</dt>
                                     <dd>{humanizeCode(item.sensitivity)}</dd>
-                                </>
+                                </div>
                             ) : null}
                         </dl>
                     ) : (
-                        <div className="authoring-form">
+                        <div className="knowledge-gm__grid">
+                            <SelectField
+                                id={FIELD.type}
+                                label="Kind"
+                                hint={edit.locked ? LOCK_REASON : undefined}
+                                value={edit.values.knowledgeType}
+                                placeholder="Choose a kind"
+                                required
+                                disabled={edit.locked}
+                                options={edit.options.knowledge_types}
+                                error={edit.errorFor(FIELD.type)}
+                                onChange={(knowledgeType) => edit.setValues({ ...edit.values, knowledgeType })}
+                            />
                             <SelectField
                                 id={FIELD.truth}
                                 label="Truth"
-                                hint="What is actually true in the world, whatever anyone believes."
                                 value={edit.values.truthStatus}
                                 placeholder="Choose"
                                 required
@@ -300,19 +300,20 @@ function ClaimLayout({
                                 onChange={(sensitivity) => edit.setValues({ ...edit.values, sensitivity })}
                             />
                             {edit.canon ? (
-                                <TextField
-                                    id="change-note"
-                                    label="Change note (optional)"
-                                    hint="Recorded in the audit history with this change."
-                                    value={edit.changeNote}
-                                    onChange={edit.setChangeNote}
-                                    maxLength={REASON_MAX}
-                                    error={edit.errorFor("change-note")}
-                                />
+                                <div className="knowledge-gm__wide">
+                                    <TextField
+                                        id="change-note"
+                                        label="Change note (optional)"
+                                        value={edit.changeNote}
+                                        onChange={edit.setChangeNote}
+                                        maxLength={REASON_MAX}
+                                        error={edit.errorFor("change-note")}
+                                    />
+                                </div>
                             ) : null}
-                            {edit.actions}
                         </div>
                     )}
+                    {edit !== null ? edit.actions : null}
                 </section>
             ) : null}
 
@@ -332,17 +333,14 @@ function CharacterKnowledge({ item, characterId }: { item: KnowledgeDetail; char
             : null,
     ].filter((entry) => entry !== null)
     return (
-        <section className="knowledge-section" aria-labelledby="knowledge-character-heading">
+        <section className="knowledge-section knowledge-character" aria-labelledby="knowledge-character-heading">
             <h2 id="knowledge-character-heading">Character knowledge</h2>
             {characterId === null ? (
-                <p className="authoring-note">
-                    Select a character perspective to see what that character knows. Nothing is assumed
-                    from your role or access.
-                </p>
+                <p className="authoring-note">Select a character perspective to see what that character knows.</p>
             ) : recorded.length === 0 ? (
                 <p className="authoring-note">The selected character has no recorded knowledge of this claim.</p>
             ) : (
-                <dl className="authoring-fact-list">
+                <dl className="knowledge-character__facts">
                     {recorded.map((entry) => (
                         <div key={entry.key} className="knowledge-claim__fact">
                             <dt>{entry.label}</dt>
@@ -482,7 +480,7 @@ function ClaimForm({
             ) : error !== null && serverField === null ? (
                 <MutationStatusMessage error={error} onRetry={mutation.retry} onCheckSession={reload} />
             ) : null}
-            <div className="authoring-actions">
+            <div className="authoring-actions knowledge-claim__actions">
                 <button
                     type="submit"
                     className="authoring-button authoring-button--primary"
@@ -510,8 +508,7 @@ function ClaimForm({
                 </span>
             </div>
             <p id="discard-claim-hint" className="authoring-note">
-                Saving or discarding affects only the claim. Changes under Who knows this save on their own
-                and are not undone here.
+                Claim changes and knowledge actions save independently.
             </p>
         </>
     )

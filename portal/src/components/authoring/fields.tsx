@@ -13,17 +13,19 @@ interface FieldShellProps {
     hint?: string
     error?: string | null
     required?: boolean
+    // Keeps the label for assistive technology but not on screen (the control is labelled by context).
+    hideLabel?: boolean
     children: (describedBy: string | undefined) => ReactNode
 }
 
-function FieldShell({ id, label, hint, error, required, children }: FieldShellProps) {
+function FieldShell({ id, label, hint, error, required, hideLabel, children }: FieldShellProps) {
     const hintId = hint ? `${id}-hint` : undefined
     const errorId = error ? `${id}-error` : undefined
     const describedBy = [hintId, errorId].filter(Boolean).join(" ") || undefined
 
     return (
         <div className={error ? "authoring-field authoring-field--invalid" : "authoring-field"}>
-            <label className="authoring-field__label" htmlFor={id}>
+            <label className={hideLabel ? "authoring-field__label visually-hidden" : "authoring-field__label"} htmlFor={id}>
                 {label}
                 {required ? (
                     <span className="authoring-field__required"> (required)</span>
@@ -103,6 +105,8 @@ export function TextField({
 
 interface TextAreaFieldProps extends Omit<TextFieldProps, "autoComplete"> {
     rows?: number
+    hideLabel?: boolean
+    className?: string
 }
 
 export function TextAreaField({
@@ -117,16 +121,18 @@ export function TextAreaField({
     disabled,
     readOnly,
     rows = 4,
+    hideLabel,
+    className,
 }: TextAreaFieldProps) {
     const generated = useId()
     const fieldId = id ?? generated
     return (
-        <FieldShell id={fieldId} label={label} hint={hint} error={error} required={required}>
+        <FieldShell id={fieldId} label={label} hint={hint} error={error} required={required} hideLabel={hideLabel}>
             {(describedBy) => (
                 <>
                     <textarea
                         id={fieldId}
-                        className="authoring-field__control"
+                        className={className ? `authoring-field__control ${className}` : "authoring-field__control"}
                         rows={rows}
                         value={value}
                         disabled={disabled}

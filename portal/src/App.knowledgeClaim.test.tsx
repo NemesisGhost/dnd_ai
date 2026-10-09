@@ -138,8 +138,7 @@ describe("unified knowledge claim page", () => {
     expect(screen.getByRole("heading", { level: 1, name: "Knowledge claim" })).toBeInTheDocument()
     expect(screen.getAllByRole("main")).toHaveLength(1)
     const names = screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent)
-    expect(names.slice(0, 4)).toEqual([
-      "Claim",
+    expect(names.slice(0, 3)).toEqual([
       "GM and canonical information",
       "Character knowledge",
       "Who knows this",
@@ -192,9 +191,20 @@ describe("unified knowledge claim page", () => {
     current = { detail: detail({ subject: null }), view: view({ subject: null }) }
     server.on("GET", DETAIL, () => ({ body: current.detail }))
     server.on("GET", VIEW_PATH, () => ({ body: current.view }))
+    openApp(CLAIM, ["campaign.view"])
+    await screen.findByText("The duke is a vampire.")
+    expect(screen.queryByText("About this World entry")).toBeNull()
+  })
+
+  it("lets an editor set a subject on an unlinked claim, inside the same About block", async () => {
+    current = { detail: detail({ subject: null }), view: view({ subject: null }) }
+    server.on("GET", DETAIL, () => ({ body: current.detail }))
+    server.on("GET", VIEW_PATH, () => ({ body: current.view }))
     openApp(CLAIM, ["canon.edit"])
     await claimBox()
-    expect(screen.queryByText("About this World entry")).toBeNull()
+    const about = screen.getByText("About this World entry").parentElement as HTMLElement
+    expect(within(about).getByRole("combobox", { name: "Subject" })).toBeInTheDocument()
+    expect(within(about).queryByRole("link")).toBeNull()
   })
 
   describe("character knowledge", () => {
@@ -325,7 +335,7 @@ describe("unified knowledge claim page", () => {
       await waitFor(() => expect(box).toBeDisabled())
       expect(screen.getByRole("combobox", { name: /Kind/ })).toBeDisabled()
       expect(screen.queryByRole("combobox", { name: "Subject" })).toBeNull()
-      expect(screen.getByText(/Its subject cannot change/)).toBeInTheDocument()
+      expect(screen.getByText(/The subject cannot change/)).toBeInTheDocument()
       expect(screen.getByRole("link", { name: "Keep" })).toBeInTheDocument()
       expect(screen.getByRole("combobox", { name: /Truth/ })).toBeEnabled()
     })
@@ -521,7 +531,7 @@ describe("unified knowledge claim page", () => {
       const audienceReads = server.callsTo("GET", AUDIENCE).length
       fireEvent.click(screen.getByRole("button", { name: "Discard changes" }))
       expect(server.callsTo("GET", AUDIENCE)).toHaveLength(audienceReads)
-      expect(screen.getByText(/Changes under Who knows this save on their own/)).toBeInTheDocument()
+      expect(screen.getByText(/Claim changes and knowledge actions save independently/)).toBeInTheDocument()
     })
   })
 

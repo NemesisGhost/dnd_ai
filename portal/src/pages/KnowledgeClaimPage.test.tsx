@@ -49,7 +49,6 @@ describe("KnowledgeClaimPage character knowledge", () => {
     it("explains that a perspective is needed, in one message, when none is selected", async () => {
         render(null)
         expect(await screen.findByText(/Select a character perspective/)).toBeInTheDocument()
-        expect(screen.getByText(/Nothing is assumed from your role or access/)).toBeInTheDocument()
         expect(screen.queryByText("Not recorded")).toBeNull()
         expect(screen.queryByText("Awareness")).toBeNull()
         expect(screen.queryByText("Confidence")).toBeNull()
