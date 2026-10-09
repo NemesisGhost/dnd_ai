@@ -535,6 +535,55 @@ describe("unified knowledge claim page", () => {
     })
   })
 
+  describe("campaign context", () => {
+    it("opens, edits and records who knows a claim only under the campaign and claim in the address", async () => {
+      setup(`${CLAIM}?character_id=c1&party_id=p1`)
+      server.on("POST", UPDATE, { body: RECEIPT })
+      fireEvent.change(await claimBox(), { target: { value: "Edited in its own campaign" } })
+      fireEvent.click(screen.getByRole("button", { name: "Save claim" }))
+      await screen.findByText("Claim saved")
+      fireEvent.click(await screen.findByRole("button", { name: "Tell a party" }))
+      const form = screen.getByRole("form", { name: "Tell a party" })
+      // "Blue Company" stands in for the campaign's own party (here The Ashen Vigil).
+      fireEvent.change(within(form).getByRole("combobox", { name: /Party/ }), { target: { value: "p2" } })
+      fireEvent.change(within(form).getByRole("combobox", { name: /What the party learns/ }), {
+        target: { value: "rumored" },
+      })
+      fireEvent.click(within(form).getByRole("button", { name: "Tell party" }))
+      await waitFor(() => expect(server.callsTo("POST", `${KNOWLEDGE}/k1/reveal-to-party`)).toHaveLength(1))
+      expect(server.callsTo("POST", `${KNOWLEDGE}/k1/reveal-to-party`)[0]!.body).toEqual({
+        party_id: "p2",
+        awareness_level: "rumored",
+      })
+
+      const claimCalls = server.calls.filter((c) => /\/knowledge|\/parties/.test(c.path))
+      expect(claimCalls.length).toBeGreaterThan(5)
+      for (const call of claimCalls) {
+        expect(call.path.startsWith("/campaigns/mundivita/")).toBe(true)
+        // The only claim any request names is the one in the address.
+        const ids = call.path.match(/\/knowledge\/([^/?]+)/)
+        if (ids !== null && ids[1] !== "options" && ids[1] !== "subject-options" && ids[1] !== "knowers") {
+          expect(ids[1]).toBe("k1")
+        }
+      }
+    })
+
+    it("offers only the active campaign's own parties", async () => {
+      setup()
+      fireEvent.click(await screen.findByRole("button", { name: "Tell a party" }))
+      expect(server.callsTo("GET", /\/campaigns\/mundivita\/parties/).length).toBeGreaterThan(0)
+      expect(server.calls.some((c) => c.path.includes("/parties") && !c.path.startsWith("/campaigns/mundivita/"))).toBe(false)
+    })
+
+    it("keeps a missing or inaccessible claim a plain unavailable page, never another campaign's copy", async () => {
+      server.on("GET", /^\/campaigns\/mundivita\/knowledge\/missing(\?.*)?$/, { status: 404 })
+      openApp("/app/mundivita/knowledge/missing", ["canon.edit"])
+      expect(await screen.findByRole("heading", { level: 1, name: "Knowledge unavailable" })).toBeInTheDocument()
+      expect(screen.queryByRole("textbox")).toBeNull()
+      expect(server.calls.some((c) => c.path.includes("/authoring/knowledge/missing"))).toBe(false)
+    })
+  })
+
   describe("old addresses", () => {
     it.each([
       ["edit", "#claim"],

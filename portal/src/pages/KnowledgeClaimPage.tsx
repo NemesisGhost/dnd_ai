@@ -34,6 +34,9 @@ import "../components/authoring/authoring.css"
 
 interface KnowledgeClaimPageProps {
     campaignId: string
+    /** The claim in the address. Every request names this id with this campaign, never an id
+     * copied back out of a response. */
+    knowledgeItemId: string
     item: KnowledgeDetail
     /** The perspective this claim was requested under. */
     characterId: string | null
@@ -63,6 +66,7 @@ function useFragmentFocus(id: string, ready: boolean) {
 // see is simply absent. The claim and each knowledge action save separately.
 export function KnowledgeClaimPage({
     campaignId,
+    knowledgeItemId,
     item,
     characterId,
     partyId,
@@ -85,13 +89,14 @@ export function KnowledgeClaimPage({
                     <AudiencePreviewSection
                         campaignId={campaignId}
                         resourceType="knowledge_item"
-                        fixedResource={{ id: item.knowledge_item_id, display_name: item.statement }}
+                        fixedResource={{ id: knowledgeItemId, display_name: item.statement }}
                     />
                 ) : null}
             </div>
             {canEdit ? (
                 <EditableClaim
                     campaignId={campaignId}
+                    knowledgeItemId={knowledgeItemId}
                     item={item}
                     characterId={characterId}
                     partyId={partyId}
@@ -107,7 +112,7 @@ export function KnowledgeClaimPage({
                     note={null}
                 />
             )}
-            <KnowledgeRoster campaignId={campaignId} knowledgeItemId={item.knowledge_item_id} />
+            <KnowledgeRoster campaignId={campaignId} knowledgeItemId={knowledgeItemId} />
         </section>
     )
 }
@@ -115,8 +120,8 @@ export function KnowledgeClaimPage({
 // Loads the editor's own read model. While it loads, or when editing is not offered, the same
 // layout shows the values as text (with the server's reason when editing is blocked).
 function EditableClaim(props: KnowledgeClaimPageProps) {
-    const { campaignId, item } = props
-    const view = useAuthoringResource<KnowledgeAuthoringView>(knowledgeAuthoringPath(campaignId, item.knowledge_item_id))
+    const { campaignId, knowledgeItemId } = props
+    const view = useAuthoringResource<KnowledgeAuthoringView>(knowledgeAuthoringPath(campaignId, knowledgeItemId))
     const options = useAuthoringResource<KnowledgeOptions>(knowledgeOptionsPath(campaignId))
 
     if (view.state.kind === "ready" && options.state.kind === "ready") {
@@ -355,6 +360,7 @@ function CharacterKnowledge({ item, characterId }: { item: KnowledgeDetail; char
 
 function ClaimForm({
     campaignId,
+    knowledgeItemId,
     item,
     characterId,
     partyId,
@@ -391,8 +397,8 @@ function ClaimForm({
         ReturnType<typeof toBody> & { expected_row_version: number; change_note: string | null },
         unknown
     >({
-        scopeKey: `edit-knowledge-claim:${item.knowledge_item_id}:${view.row_version}`,
-        request: (body, ctx) => updateKnowledgeItem(campaignId, item.knowledge_item_id, body, ctx),
+        scopeKey: `edit-knowledge-claim:${knowledgeItemId}:${view.row_version}`,
+        request: (body, ctx) => updateKnowledgeItem(campaignId, knowledgeItemId, body, ctx),
         onSuccess: async () => {
             setConfirming(false)
             await refetch()

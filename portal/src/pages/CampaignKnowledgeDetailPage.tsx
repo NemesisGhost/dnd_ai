@@ -70,6 +70,7 @@ export function CampaignKnowledgeDetailPage() {
             {(item, refresh) => (
                 <KnowledgeClaimPage
                     campaignId={campaignId}
+                    knowledgeItemId={knowledgeItemId}
                     item={item}
                     characterId={characterId}
                     partyId={partyId}

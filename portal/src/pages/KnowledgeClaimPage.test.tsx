@@ -33,6 +33,7 @@ function render(characterId: string | null, capabilities: string[] = ["campaign.
                 element: (
                     <KnowledgeClaimPage
                         campaignId="c1"
+                        knowledgeItemId="k1"
                         item={item}
                         characterId={characterId}
                         partyId={null}
