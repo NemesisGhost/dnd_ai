@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { Link, useNavigate, useParams } from "react-router"
+import { useNavigate, useParams } from "react-router"
 import {
     abortEncounter,
     addParticipant,
@@ -26,6 +26,9 @@ import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { usePageArrival } from "../hooks/usePageArrival"
+import { sessionPath } from "../api/sessionAuthoring"
+import { RunBreadcrumb } from "../components/sessionRun/RunNav"
+import type { CampaignSessionDetail } from "../types/campaignSession"
 import type { EncounterOptions, PreparedEncounter } from "../types/encounters"
 import type { WorldCategory } from "../types/world"
 import "../components/authoring/authoring.css"
@@ -43,8 +46,6 @@ const CODE_MESSAGE: Readonly<Record<string, string>> = {
 }
 
 const base = (campaignId: string): string => `/app/${encodeURIComponent(campaignId)}`
-const runPath = (campaignId: string, sessionId: string, section?: string): string =>
-    `${base(campaignId)}/sessions/${encodeURIComponent(sessionId)}/run${section ? `?section=${section}` : ""}`
 const encounterPath = (campaignId: string, sessionId: string, encounterId: string): string =>
     `${base(campaignId)}/sessions/${encodeURIComponent(sessionId)}/encounters/${encodeURIComponent(encounterId)}`
 
@@ -59,6 +60,11 @@ function useSearch(campaignId: string, category: WorldCategory) {
     }
 }
 
+const sessionTitle = (state: { kind: string; data?: CampaignSessionDetail }): string | null =>
+    state.kind === "ready" && state.data !== undefined
+        ? (state.data.title ?? `Session ${state.data.session_number}`)
+        : null
+
 const without = (record: Record<string, string>, key: string): Record<string, string> =>
     Object.fromEntries(Object.entries(record).filter(([k]) => k !== key))
 
@@ -71,6 +77,7 @@ export function PrepareEncounterPage() {
     const announce = useAnnounce()
     const options = useAuthoringResource<EncounterOptions>(encounterOptionsPath(campaignId))
     const headingRef = usePageArrival(options.state.kind === "ready")
+    const session = useAuthoringResource<CampaignSessionDetail>(sessionPath(campaignId, sessionId))
     const [place, setPlace] = useState<ReferenceOption | null>(null)
     const [summary, setSummary] = useState("")
     const searchPlaces = useSearch(campaignId, "location")
@@ -91,9 +98,12 @@ export function PrepareEncounterPage() {
     const tooLong = summary.trim().length > max
     return (
         <section className="authoring-page" aria-labelledby="prepare-encounter-heading">
-            <p className="authoring-page__breadcrumb">
-                <Link to={runPath(campaignId, sessionId, "encounter-prep")}>Run the session</Link>
-            </p>
+            <RunBreadcrumb
+                campaignId={campaignId}
+                sessionId={sessionId}
+                title={sessionTitle(session.state)}
+                from={{ section: "encounter-prep", label: "Prepare an encounter" }}
+            />
             <h1 id="prepare-encounter-heading" ref={headingRef} tabIndex={-1}>
                 Prepare an encounter
             </h1>
@@ -166,23 +176,23 @@ export function PreparedEncounterPage() {
     const resource = useAuthoringResource<PreparedEncounter>(preparedEncounterPath(campaignId, encounterId))
     const options = useAuthoringResource<EncounterOptions>(encounterOptionsPath(campaignId))
     const headingRef = usePageArrival(resource.state.kind === "ready")
+    const session = useAuthoringResource<CampaignSessionDetail>(sessionPath(campaignId, sessionId))
     return (
         <section className="authoring-page" aria-labelledby="encounter-heading">
-            <p className="authoring-page__breadcrumb">
-                <Link
-                    to={runPath(
-                        campaignId,
-                        sessionId,
+            <RunBreadcrumb
+                campaignId={campaignId}
+                sessionId={sessionId}
+                title={sessionTitle(session.state)}
+                from={{
+                    section:
                         resource.state.kind === "ready"
                             ? resource.state.data.status === "pending"
                                 ? "encounter-prep"
                                 : "encounters"
                             : undefined,
-                    )}
-                >
-                    Run the session
-                </Link>
-            </p>
+                    label: "Encounter",
+                }}
+            />
             <h1 id="encounter-heading" ref={headingRef} tabIndex={-1}>
                 Encounter
             </h1>

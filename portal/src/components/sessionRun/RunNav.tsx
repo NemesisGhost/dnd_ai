@@ -11,10 +11,14 @@ export function RunBreadcrumb({
     campaignId,
     sessionId,
     title,
+    from,
 }: {
     campaignId: string
     sessionId: string
     title: string | null
+    // Set on pages reached from the run page: the run page becomes a link back (to a section)
+    // and `label` names the current page.
+    from?: { section?: string; label: string }
 }) {
     const campaign = `/app/${enc(campaignId)}`
     return (
@@ -30,7 +34,20 @@ export function RunBreadcrumb({
                         "Session"
                     )}
                 </li>
-                <li aria-current="page">Run session</li>
+                {from === undefined ? (
+                    <li aria-current="page">Run session</li>
+                ) : (
+                    <>
+                        <li>
+                            <Link
+                                to={`${campaign}/sessions/${enc(sessionId)}/run${from.section ? `?section=${from.section}` : ""}`}
+                            >
+                                Run session
+                            </Link>
+                        </li>
+                        <li aria-current="page">{from.label}</li>
+                    </>
+                )}
             </ol>
         </nav>
     )

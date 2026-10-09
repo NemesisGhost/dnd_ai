@@ -73,6 +73,9 @@ afterEach(() => {
 
 function setup(entry: string, view: object = encounter(), capabilities = ["canon.edit"]) {
     const server = installMockServer()
+    server.on("GET", "/campaigns/c1/sessions/s1", {
+        body: { session_id: "s1", session_number: 1, title: "The Hollow Road", status_code: "active" },
+    })
     server.on("GET", `${AUTH}/options`, { body: OPTIONS })
     server.on("GET", `${AUTH}/e1`, () => ({ body: view }))
     server.on("GET", /world\/search/, {
@@ -99,10 +102,30 @@ function setup(entry: string, view: object = encounter(), capabilities = ["canon
     return server
 }
 
+describe("breadcrumb", () => {
+    it("shows Sessions, the session, the run page and the current encounter page", async () => {
+        setup("/app/c1/sessions/s1/encounters/e1")
+        const crumbs = await screen.findByRole("navigation", { name: "Breadcrumb" })
+        expect(await within(crumbs).findByRole("link", { name: "The Hollow Road" })).toHaveAttribute(
+            "href",
+            "/app/c1/sessions/s1",
+        )
+        expect(within(crumbs).getByRole("link", { name: "Sessions" })).toHaveAttribute("href", "/app/c1/sessions")
+        expect(within(crumbs).getByRole("link", { name: "Run session" })).toBeInTheDocument()
+        expect(within(crumbs).getByText("Encounter")).toHaveAttribute("aria-current", "page")
+    })
+
+    it("names the prepare page as the current crumb", async () => {
+        setup("/app/c1/sessions/s1/encounters/new")
+        const crumbs = await screen.findByRole("navigation", { name: "Breadcrumb" })
+        expect(within(crumbs).getByText("Prepare an encounter")).toHaveAttribute("aria-current", "page")
+    })
+})
+
 describe("return links to the run page", () => {
     it("returns from the prepare page to Encounter preparation", async () => {
         setup("/app/c1/sessions/s1/encounters/new")
-        expect(await screen.findByRole("link", { name: "Run the session" })).toHaveAttribute(
+        expect(await screen.findByRole("link", { name: "Run session" })).toHaveAttribute(
             "href",
             "/app/c1/sessions/s1/run?section=encounter-prep",
         )
@@ -111,7 +134,7 @@ describe("return links to the run page", () => {
     it("returns from a pending encounter to Encounter preparation", async () => {
         setup("/app/c1/sessions/s1/encounters/e1")
         await screen.findByRole("heading", { level: 1, name: "Encounter" })
-        expect(await screen.findByRole("link", { name: "Run the session" })).toHaveAttribute(
+        expect(await screen.findByRole("link", { name: "Run session" })).toHaveAttribute(
             "href",
             "/app/c1/sessions/s1/run?section=encounter-prep",
         )
@@ -120,7 +143,7 @@ describe("return links to the run page", () => {
     it("returns from a started encounter to Encounters", async () => {
         setup("/app/c1/sessions/s1/encounters/e1", encounter({ status: "active", can_prepare: false }))
         await vi.waitFor(() =>
-            expect(screen.getByRole("link", { name: "Run the session" })).toHaveAttribute(
+            expect(screen.getByRole("link", { name: "Run session" })).toHaveAttribute(
                 "href",
                 "/app/c1/sessions/s1/run?section=encounters",
             ),
@@ -153,7 +176,8 @@ describe("PrepareEncounterPage", () => {
 describe("PreparedEncounterPage", () => {
     it("shows the participants as compact rows with a side and no initiative", async () => {
         setup("/app/c1/sessions/s1/encounters/e1")
-        const rows = (await screen.findAllByRole("listitem")).filter((li) => li.className.includes("encounter-roster__row"))
+        await screen.findByText("Aldric")
+        const rows = screen.getAllByRole("listitem").filter((li) => li.className.includes("encounter-roster__row"))
         expect(rows).toHaveLength(2)
         expect(within(rows[0]!).getByText("Aldric")).toBeInTheDocument()
         expect(within(rows[0]!).getByText("player character")).toBeInTheDocument()
