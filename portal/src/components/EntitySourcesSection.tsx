@@ -15,6 +15,9 @@ interface Props {
     entityId: string
     // The World category of the record, for the provenance link.
     category?: string
+    // A concise summary with the forms behind an "Add source" button. The forms stay mounted
+    // while closed, so what was typed (and any error) is still there when they are reopened.
+    compact?: boolean
 }
 
 type Command =
@@ -31,7 +34,7 @@ const CODE_MESSAGE: Readonly<Record<string, string>> = {
 // Editor-only: the sources attached to a record, with a way to attach another (an existing one,
 // or a new one written here) or detach one, and a link to the full provenance. Detaching keeps
 // the history. Mounts nothing, and sends nothing, for anyone whose provenance read is refused.
-export function EntitySourcesSection({ campaignId, entityId, category }: Props) {
+export function EntitySourcesSection({ campaignId, entityId, category, compact = false }: Props) {
     const { reload } = useSession()
     const announce = useAnnounce()
     const provenance = useAuthoringResource<Provenance>(provenancePath(campaignId, entityId))
@@ -42,6 +45,7 @@ export function EntitySourcesSection({ campaignId, entityId, category }: Props) 
     const [reference, setReference] = useState("")
     const [problem, setProblem] = useState<string | null>(null)
     const [done, setDone] = useState<string | null>(null)
+    const [adding, setAdding] = useState(false)
     const mutation = useAuthoringMutation<Command, unknown>({
         scopeKey: `sources:${entityId}`,
         request: async (command, ctx) => {
@@ -102,6 +106,19 @@ export function EntitySourcesSection({ campaignId, entityId, category }: Props) 
                 </Link>
             </p>
             {attached.length === 0 ? <p>No further sources attached.</p> : null}
+            {compact ? (
+                <p>
+                    <button
+                        type="button"
+                        className="authoring-button"
+                        aria-expanded={adding}
+                        aria-controls={`add-source-${entityId}`}
+                        onClick={() => setAdding(!adding)}
+                    >
+                        {adding ? "Hide add source" : "Add source"}
+                    </button>
+                </p>
+            ) : null}
             <ul className="authoring-choice-list">
                 {attached.map((l) => (
                     <li key={l.source_id}>
@@ -118,81 +135,83 @@ export function EntitySourcesSection({ campaignId, entityId, category }: Props) 
                     </li>
                 ))}
             </ul>
-            {available.length > 0 ? (
+            <div id={`add-source-${entityId}`} hidden={compact && !adding}>
+                {available.length > 0 ? (
+                    <form
+                        noValidate
+                        aria-label="Attach an existing source"
+                        className="authoring-form"
+                        onSubmit={(event) => {
+                            event.preventDefault()
+                            if (choice === "") {
+                                setProblem("Choose a source to attach.")
+                                return
+                            }
+                            run({ op: "attach", sourceId: choice }, "Source attached")
+                        }}
+                    >
+                        <SelectField
+                            id={`attach-source-${entityId}`}
+                            label="Source"
+                            value={choice}
+                            placeholder="Choose a source"
+                            options={available.map((s) => ({ value: s.source_id, label: `${s.title} (${s.source_type_label})` }))}
+                            onChange={setChoice}
+                        />
+                        <button type="submit" className="authoring-button" disabled={busy}>
+                            Attach source
+                        </button>
+                    </form>
+                ) : null}
                 <form
                     noValidate
-                    aria-label="Attach an existing source"
+                    aria-label="Write a new source"
                     className="authoring-form"
                     onSubmit={(event) => {
                         event.preventDefault()
-                        if (choice === "") {
-                            setProblem("Choose a source to attach.")
+                        if (type === "" || title.trim() === "") {
+                            setProblem("Choose a type and enter a title for the new source.")
                             return
                         }
-                        run({ op: "attach", sourceId: choice }, "Source attached")
+                        run(
+                            {
+                                op: "create",
+                                source_type: type,
+                                title: title.trim(),
+                                reference: reference.trim() === "" ? null : reference.trim(),
+                            },
+                            "Source written and attached",
+                        )
                     }}
                 >
                     <SelectField
-                        id={`attach-source-${entityId}`}
-                        label="Source"
-                        value={choice}
-                        placeholder="Choose a source"
-                        options={available.map((s) => ({ value: s.source_id, label: `${s.title} (${s.source_type_label})` }))}
-                        onChange={setChoice}
+                        id={`new-source-type-${entityId}`}
+                        label="Type of source"
+                        value={type}
+                        placeholder="Choose a type"
+                        options={list.source_types}
+                        onChange={setType}
+                    />
+                    <TextField
+                        id={`new-source-title-${entityId}`}
+                        label="Title"
+                        value={title}
+                        onChange={setTitle}
+                        maxLength={list.limits.title_max_length}
+                    />
+                    <TextAreaField
+                        id={`new-source-reference-${entityId}`}
+                        label="Reference (optional)"
+                        hint="A page, a section or a note. Only people who can edit canon see it."
+                        value={reference}
+                        onChange={setReference}
+                        maxLength={list.limits.reference_max_length}
                     />
                     <button type="submit" className="authoring-button" disabled={busy}>
-                        Attach source
+                        Write and attach source
                     </button>
                 </form>
-            ) : null}
-            <form
-                noValidate
-                aria-label="Write a new source"
-                className="authoring-form"
-                onSubmit={(event) => {
-                    event.preventDefault()
-                    if (type === "" || title.trim() === "") {
-                        setProblem("Choose a type and enter a title for the new source.")
-                        return
-                    }
-                    run(
-                        {
-                            op: "create",
-                            source_type: type,
-                            title: title.trim(),
-                            reference: reference.trim() === "" ? null : reference.trim(),
-                        },
-                        "Source written and attached",
-                    )
-                }}
-            >
-                <SelectField
-                    id={`new-source-type-${entityId}`}
-                    label="Type of source"
-                    value={type}
-                    placeholder="Choose a type"
-                    options={list.source_types}
-                    onChange={setType}
-                />
-                <TextField
-                    id={`new-source-title-${entityId}`}
-                    label="Title"
-                    value={title}
-                    onChange={setTitle}
-                    maxLength={list.limits.title_max_length}
-                />
-                <TextAreaField
-                    id={`new-source-reference-${entityId}`}
-                    label="Reference (optional)"
-                    hint="A page, a section or a note. Only people who can edit canon see it."
-                    value={reference}
-                    onChange={setReference}
-                    maxLength={list.limits.reference_max_length}
-                />
-                <button type="submit" className="authoring-button" disabled={busy}>
-                    Write and attach source
-                </button>
-            </form>
+            </div>
         </section>
     )
 }

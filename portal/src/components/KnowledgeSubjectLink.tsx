@@ -20,6 +20,11 @@ interface KnowledgeSubjectLinkProps {
     /** The claim page's subject editor, shown inside the same block as the link
      * (the block then appears even when there is no linked subject yet). */
     children?: ReactNode
+    /** Claim page, editors: the name is plain text and opening the World entry is its own button,
+     * so changing the subject and opening it are clearly different actions. */
+    separateOpen?: boolean
+    /** Buttons that sit with the selected subject (Change, Clear). */
+    actions?: ReactNode
 }
 
 function describeSubjectType(subject: KnowledgeSubject): string {
@@ -38,6 +43,8 @@ export function KnowledgeSubjectLink({
     partyId,
     variant = "card",
     children,
+    separateOpen = false,
+    actions,
 }: KnowledgeSubjectLinkProps) {
     const hasSubject = subject !== null && subject !== undefined
     if (!hasSubject && children === undefined) {
@@ -64,12 +71,28 @@ export function KnowledgeSubjectLink({
     return (
         <div className={`knowledge-about knowledge-about--${variant}`}>
             <p className="knowledge-about__label">{label}</p>
-            <p className="knowledge-about__subject">
-                <Link to={to} className="knowledge-about__name">
-                    {subject.name}
-                </Link>{" "}
-                <span className="knowledge-about__type">{typeLabel}</span>
-            </p>
+            <div className="knowledge-about__row">
+                <p className="knowledge-about__subject">
+                    {separateOpen ? (
+                        <strong className="knowledge-about__name">{subject.name}</strong>
+                    ) : (
+                        <Link to={to} className="knowledge-about__name">
+                            {subject.name}
+                        </Link>
+                    )}{" "}
+                    <span className="knowledge-about__type">{typeLabel}</span>
+                </p>
+                {separateOpen || actions !== undefined ? (
+                    <div className="knowledge-about__actions">
+                        {separateOpen ? (
+                            <Link to={to} className="authoring-button">
+                                Open World entry
+                            </Link>
+                        ) : null}
+                        {actions}
+                    </div>
+                ) : null}
+            </div>
             {children}
         </div>
     )

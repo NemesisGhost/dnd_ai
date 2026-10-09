@@ -3526,3 +3526,89 @@ a.app-header__title:focus-visible {
   grid-column: 1 / -1;
 }
 
+/* Lifecycle in the claim page's header: status badge, the next step, and the rest under "More". */
+
+.lifecycle-compact {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-right: auto;
+}
+
+.lifecycle-compact__status {
+  display: inline-flex;
+  gap: 0.25rem;
+}
+
+.lifecycle-compact__more {
+  position: relative;
+}
+
+.lifecycle-compact__more > summary {
+  display: inline-block;
+  cursor: pointer;
+  list-style: none;
+}
+
+.lifecycle-compact__more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.lifecycle-compact__menu {
+  position: absolute;
+  z-index: 10;
+  top: 100%;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 11rem;
+  margin-top: 0.25rem;
+  padding: 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.375rem;
+  background-color: var(--color-surface);
+}
+
+.lifecycle-compact__error {
+  flex-basis: 100%;
+}
+
+/* The selected subject as one resource field: name and type, then Open / Change / Clear. */
+
+.knowledge-about__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+.knowledge-about__row .knowledge-about__subject {
+  margin: 0.125rem 0 0;
+}
+
+.knowledge-about__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.knowledge-about__actions .authoring-button {
+  padding: 0.25rem 0.75rem;
+}
+
+.knowledge-sources .authoring-aside {
+  background: none;
+  padding: 0.75rem 0 0;
+  border-top: 1px solid var(--color-border);
+  border-radius: 0;
+}
+
+.knowledge-sources h2 {
+  margin: 0 0 0.25rem;
+  font-size: 1.125rem;
+}
+

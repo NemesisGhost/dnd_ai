@@ -78,33 +78,40 @@ const stateText = (awareness: string, confidence: number | null): string =>
 // unsaved claim edit, and a failed action keeps the form (and what was typed) open.
 //
 // Only a published claim can be recorded as known (the server answers an unpublished one with the
-// same 404 as a missing record), so while `published` is false the actions are withheld and the
-// reason is shown instead of letting a submit fail with a misleading "no longer exists".
+// same 404 as a missing record), so while a `restriction` is set the actions are withheld and the
+// reason, with the next step that is actually available, is shown instead of letting a submit
+// fail with a misleading "no longer exists".
 export function KnowledgeRoster({
     campaignId,
     knowledgeItemId,
-    published,
+    restriction,
 }: {
     campaignId: string
     knowledgeItemId: string
-    // True or false once the claim's canon status is known; null while it is not.
-    published: boolean | null
+    // Set while the claim is not published: how it is described, and the next lifecycle step the
+    // person can take (null when there is none for them).
+    restriction: Restriction | null
 }) {
     const canManage = useCampaignCapability(campaignId, "canon.edit")
     if (!canManage) return null
-    return <RosterBody campaignId={campaignId} knowledgeItemId={knowledgeItemId} published={published} />
+    return <RosterBody campaignId={campaignId} knowledgeItemId={knowledgeItemId} restriction={restriction} />
+}
+
+export interface Restriction {
+    statusLabel: string
+    nextStep: string | null
 }
 
 function RosterBody({
     campaignId,
     knowledgeItemId,
-    published,
+    restriction,
 }: {
     campaignId: string
     knowledgeItemId: string
-    published: boolean | null
+    restriction: Restriction | null
 }) {
-    const blocked = published === false
+    const blocked = restriction !== null
     const { reload } = useSession()
     const announce = useAnnounce()
     const { state, refetch } = useAuthoringResource<KnowledgeAudience>(
@@ -198,8 +205,10 @@ function RosterBody({
             <p className="knowledge-roster__lead">Recorded separately from the claim. Changes here save on their own.</p>
             {blocked ? (
                 <p className="authoring-note" role="status">
-                    This claim is not published yet, so no one can be recorded as knowing it. Publish it under
-                    Lifecycle above first.
+                    This claim is {restriction.statusLabel}, and only a published claim can be recorded as known.{" "}
+                    {restriction.nextStep !== null
+                        ? `Next: ${restriction.nextStep} (the lifecycle actions at the top of the page).`
+                        : "No lifecycle action is available to you right now."}
                 </p>
             ) : null}
 

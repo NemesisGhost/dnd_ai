@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { useNavigate } from "react-router"
 import { entityLifecyclePath, runEntityAction } from "../api/entityLifecycle"
 import { useSession } from "../context/SessionContext"
@@ -155,7 +155,7 @@ function LoadedPanel({ campaignId, entityId, category, onChanged }: EntityLifecy
     }
     return (
         <>
-            <Panel
+            <LifecycleControls
                 key={state.data.row_version}
                 campaignId={campaignId}
                 view={state.data}
@@ -172,9 +172,18 @@ interface PanelProps {
     view: EntityLifecycleView
     refetch: () => Promise<void>
     onChanged?: () => void
+    // One compact row (status badge, the next step, and the rest under "More") for a page that
+    // carries lifecycle in its header. The unavailable-action explanations are left out.
+    compact?: boolean
+    // Set while the page holds unsaved edits to the record: every action then asks first, and says
+    // the edits are not part of the change.
+    unsavedEdits?: boolean
 }
 
-function Panel({ campaignId, view, refetch, onChanged }: PanelProps) {
+// The forward steps of the state machine, in the order they are offered as "the next step".
+const FORWARD = ["submit_for_review", "approve", "publish"]
+
+export function LifecycleControls({ campaignId, view, refetch, onChanged, compact = false, unsavedEdits = false }: PanelProps) {
     const navigate = useNavigate()
     const announce = useAnnounce()
     const { reload } = useSession()
@@ -183,6 +192,8 @@ function Panel({ campaignId, view, refetch, onChanged }: PanelProps) {
     const [reasonError, setReasonError] = useState<string | null>(null)
     const available = new Set(view.available_actions)
     const spec = action === null ? undefined : ACTIONS[action]
+    const moreRef = useRef<HTMLDetailsElement>(null)
+    const asksFirst = (code: string | null) => code !== null && (ACTIONS[code]?.immediate !== true || unsavedEdits)
 
     const mutation = useAuthoringMutation<Submission, EntityTransitionResponse>({
         scopeKey: `entity:${view.entity_id}:${view.row_version}`,
@@ -209,7 +220,8 @@ function Panel({ campaignId, view, refetch, onChanged }: PanelProps) {
         setReason("")
         setReasonError(null)
         setAction(next)
-        if (ACTIONS[next]?.immediate === true) {
+        moreRef.current?.removeAttribute("open")
+        if (ACTIONS[next]?.immediate === true && !unsavedEdits) {
             mutation.submit({ action: next, body: { expected_row_version: view.row_version } })
         }
     }
@@ -264,7 +276,90 @@ function Panel({ campaignId, view, refetch, onChanged }: PanelProps) {
     const pending = mutation.status.kind === "pending"
     const visible = ORDER.filter((code) => available.has(code))
     const blocked = view.blocked_actions.filter((b) => b.action !== "all")
-    const dialogAction = action !== null && action !== "supersede" && spec !== undefined && spec.immediate !== true
+    const dialogAction = action !== null && action !== "supersede" && spec !== undefined && asksFirst(action)
+    const primary = FORWARD.find((code) => available.has(code))
+    const more = visible.filter((code) => code !== primary)
+
+    const dialogs = (
+        <>
+            {dialogAction ? (
+                <ConfirmDialog
+                    open
+                    title={spec.title}
+                    description={
+                        unsavedEdits
+                            ? `${spec.description} Your unsaved edits are not part of this change; they stay in the form.`
+                            : spec.description
+                    }
+                    confirmLabel={spec.label}
+                    onConfirm={confirm}
+                    onCancel={() => setAction(null)}
+                    pending={pending}
+                    reason={
+                        spec.reason === "none"
+                            ? undefined
+                            : {
+                                  label: spec.reason === "required" ? "Reason" : "Reason (optional)",
+                                  required: spec.reason === "required",
+                                  value: reason,
+                                  onChange: setReason,
+                                  error: reasonError,
+                              }
+                    }
+                    error={errorNode}
+                />
+            ) : null}
+            <SupersedeEntityDialog
+                open={action === "supersede"}
+                campaignId={campaignId}
+                entityId={view.entity_id}
+                entityName={view.canonical_name}
+                onConfirm={confirmSupersede}
+                onCancel={() => setAction(null)}
+                pending={pending}
+                error={errorNode}
+            />
+        </>
+    )
+
+    if (compact) {
+        const button = (code: string, primaryStyle: boolean) => (
+            <button
+                key={code}
+                type="button"
+                className={primaryStyle ? "authoring-button authoring-button--primary" : "authoring-button"}
+                disabled={pending}
+                onClick={() => open(code)}
+            >
+                {code === "supersede" ? "Supersede…" : actionLabel(code)}
+            </button>
+        )
+        return (
+            <div className="lifecycle-compact" role="group" aria-label="Lifecycle">
+                <span className="lifecycle-compact__status">
+                    <LifecycleBadge status={view.canon_status} />
+                    {view.lifecycle_status === "archived" ? <LifecycleBadge status="archived" /> : null}
+                </span>
+                {view.superseded_by !== null ? (
+                    <span className="authoring-note">Replaced by {view.superseded_by.canonical_name}.</span>
+                ) : null}
+                {primary !== undefined ? button(primary, true) : null}
+                {more.length > 0 ? (
+                    <details className="lifecycle-compact__more" ref={moreRef}>
+                        <summary className="authoring-button">More</summary>
+                        <div className="lifecycle-compact__menu">{more.map((code) => button(code, false))}</div>
+                    </details>
+                ) : null}
+                {visible.length === 0 ? (
+                    <span className="authoring-note">No lifecycle action is available right now.</span>
+                ) : null}
+                {spec?.immediate === true && !unsavedEdits ? (
+                    <div className="lifecycle-compact__error">{errorNode}</div>
+                ) : null}
+                {dialogs}
+            </div>
+        )
+    }
 
     return (
         <section className="authoring-section" aria-labelledby="entity-lifecycle-heading">
@@ -304,39 +399,7 @@ function Panel({ campaignId, view, refetch, onChanged }: PanelProps) {
                 </ul>
             ) : null}
 
-            {dialogAction ? (
-                <ConfirmDialog
-                    open
-                    title={spec.title}
-                    description={spec.description}
-                    confirmLabel={spec.label}
-                    onConfirm={confirm}
-                    onCancel={() => setAction(null)}
-                    pending={pending}
-                    reason={
-                        spec.reason === "none"
-                            ? undefined
-                            : {
-                                  label: spec.reason === "required" ? "Reason" : "Reason (optional)",
-                                  required: spec.reason === "required",
-                                  value: reason,
-                                  onChange: setReason,
-                                  error: reasonError,
-                              }
-                    }
-                    error={errorNode}
-                />
-            ) : null}
-            <SupersedeEntityDialog
-                open={action === "supersede"}
-                campaignId={campaignId}
-                entityId={view.entity_id}
-                entityName={view.canonical_name}
-                onConfirm={confirmSupersede}
-                onCancel={() => setAction(null)}
-                pending={pending}
-                error={errorNode}
-            />
+            {dialogs}
         </section>
     )
 }

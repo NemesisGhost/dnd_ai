@@ -15,9 +15,11 @@ import { ErrorSummary, MutationStatusMessage, StaleWriteNotice } from "../compon
 import type { FieldError } from "../components/authoring/feedback"
 import { ReferenceCombobox } from "../components/authoring/ReferenceCombobox"
 import type { ReferenceOption } from "../components/authoring/ReferenceCombobox"
-import { EntityLifecyclePanel } from "../components/EntityLifecyclePanel"
+import { LifecycleControls } from "../components/EntityLifecyclePanel"
+import { EntitySourcesSection } from "../components/EntitySourcesSection"
 import { KnowledgeRoster } from "../components/knowledge/KnowledgeRoster"
 import { KnowledgeSubjectLink } from "../components/KnowledgeSubjectLink"
+import { entityLifecyclePath } from "../api/entityLifecycle"
 import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
@@ -25,10 +27,12 @@ import type { UseAuthoringResourceResult } from "../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard"
 import type { KnowledgeDetail } from "../types/knowledge"
+import type { EntityLifecycleView } from "../types/entityLifecycle"
 import type { KnowledgeAuthoringView, KnowledgeOptions } from "../types/knowledgeAuthoring"
 import { ERROR_CODE_MESSAGE, REASON_MAX, fieldForErrorCode } from "../utils/authoringValidation"
 import { describeBlockedReason } from "../utils/blockedReason"
 import { humanizeCode } from "../utils/humanize"
+import { canonStatusLabel, lifecycleNextStep } from "../utils/lifecycleNextStep"
 import { FIELD, STATEMENT_MAX, fromView, same, toBody, validate } from "../utils/knowledgeForm"
 import type { KnowledgeFormValues } from "../utils/knowledgeForm"
 import { statusDetail } from "../utils/locationForm"
@@ -75,13 +79,34 @@ export function KnowledgeClaimPage({
     refreshDetail,
 }: KnowledgeClaimPageProps) {
     const canEdit = useCampaignCapability(campaignId, "canon.edit")
-    // The editor's own read model, loaded once here: it feeds the claim form and tells the roster
-    // whether the claim is published.
+    // The editor's own read model and the record's lifecycle are loaded once here: they feed the
+    // claim form, the header's status and next step, and the roster's publication gate.
     const view = useAuthoringResource<KnowledgeAuthoringView>(
         canEdit ? knowledgeAuthoringPath(campaignId, knowledgeItemId) : null,
     )
     const options = useAuthoringResource<KnowledgeOptions>(canEdit ? knowledgeOptionsPath(campaignId) : null)
-    const published = view.state.kind === "ready" ? view.state.data.canon_status === "canon" : null
+    const lifecycle = useAuthoringResource<EntityLifecycleView>(
+        canEdit ? entityLifecyclePath(campaignId, knowledgeItemId) : null,
+    )
+    // The unsaved claim edits live here, above the claim form, so the lifecycle controls in the
+    // header can say plainly that they are not part of a submit, approve or publish.
+    const [changes, setChanges] = useState<Partial<KnowledgeFormValues>>({})
+    const [changeNote, setChangeNote] = useState("")
+    const base = view.state.kind === "ready" ? fromView(view.state.data) : null
+    const unsavedEdits = base !== null && (!same({ ...base, ...changes }, base) || changeNote.trim() !== "")
+
+    const status = view.state.kind === "ready" ? view.state.data : null
+    const lifecycleView = lifecycle.state.kind === "ready" && lifecycle.state.data.lifecycle_managed ? lifecycle.state.data : null
+    const canonStatus = lifecycleView?.canon_status ?? status?.canon_status ?? null
+    const lifecycleStatus = lifecycleView?.lifecycle_status ?? status?.lifecycle_status ?? null
+    // Only a published (canon, active) claim can be recorded as known; the server enforces it.
+    const restriction =
+        canonStatus === null || (canonStatus === "canon" && lifecycleStatus === "active")
+            ? null
+            : {
+                  statusLabel: lifecycleStatus === "archived" ? "archived" : canonStatusLabel(canonStatus),
+                  nextStep: lifecycleView === null ? null : lifecycleNextStep(lifecycleView),
+              }
     return (
         <section className="authoring-page knowledge-claim" aria-labelledby="knowledge-claim-heading">
             <nav aria-label="Breadcrumb" className="authoring-page__breadcrumb">
@@ -94,6 +119,20 @@ export function KnowledgeClaimPage({
             </nav>
             <div className="knowledge-claim__header">
                 <h1 id="knowledge-claim-heading">Knowledge claim</h1>
+                {lifecycleView !== null ? (
+                    <LifecycleControls
+                        key={lifecycleView.row_version}
+                        compact
+                        campaignId={campaignId}
+                        view={lifecycleView}
+                        refetch={lifecycle.refetch}
+                        unsavedEdits={unsavedEdits}
+                        onChanged={() => {
+                            void view.refetch()
+                            refreshDetail()
+                        }}
+                    />
+                ) : null}
                 {canEdit ? (
                     <AudiencePreviewSection
                         campaignId={campaignId}
@@ -106,6 +145,10 @@ export function KnowledgeClaimPage({
                 <EditableClaim
                     view={view}
                     options={options}
+                    changes={changes}
+                    setChanges={setChanges}
+                    changeNote={changeNote}
+                    setChangeNote={setChangeNote}
                     campaignId={campaignId}
                     knowledgeItemId={knowledgeItemId}
                     item={item}
@@ -123,21 +166,21 @@ export function KnowledgeClaimPage({
                     note={null}
                 />
             )}
+            <KnowledgeRoster campaignId={campaignId} knowledgeItemId={knowledgeItemId} restriction={restriction} />
             {canEdit ? (
-                <section id="claim-lifecycle" className="knowledge-section" aria-label="Claim lifecycle">
-                    <EntityLifecyclePanel
-                        campaignId={campaignId}
-                        entityId={knowledgeItemId}
-                        onChanged={() => {
-                            void view.refetch()
-                            refreshDetail()
-                        }}
-                    />
-                </section>
+                <div className="knowledge-section knowledge-sources">
+                    <EntitySourcesSection compact campaignId={campaignId} entityId={knowledgeItemId} category="knowledge" />
+                </div>
             ) : null}
-            <KnowledgeRoster campaignId={campaignId} knowledgeItemId={knowledgeItemId} published={published} />
         </section>
     )
+}
+
+interface DraftBindings {
+    changes: Partial<KnowledgeFormValues>
+    setChanges: (changes: Partial<KnowledgeFormValues>) => void
+    changeNote: string
+    setChangeNote: (note: string) => void
 }
 
 // Loads the editor's own read model. While it loads, or when editing is not offered, the same
@@ -145,17 +188,25 @@ export function KnowledgeClaimPage({
 function EditableClaim({
     view,
     options,
+    changes,
+    setChanges,
+    changeNote,
+    setChangeNote,
     ...props
-}: KnowledgeClaimPageProps & {
-    view: UseAuthoringResourceResult<KnowledgeAuthoringView>
-    options: UseAuthoringResourceResult<KnowledgeOptions>
-}) {
-
+}: KnowledgeClaimPageProps &
+    DraftBindings & {
+        view: UseAuthoringResourceResult<KnowledgeAuthoringView>
+        options: UseAuthoringResourceResult<KnowledgeOptions>
+    }) {
     if (view.state.kind === "ready" && options.state.kind === "ready") {
         if (view.state.data.available_actions.includes("update")) {
             return (
                 <ClaimForm
                     {...props}
+                    changes={changes}
+                    setChanges={setChanges}
+                    changeNote={changeNote}
+                    setChangeNote={setChangeNote}
                     view={view.state.data}
                     options={options.state.data}
                     refreshing={view.state.refreshing}
@@ -218,23 +269,48 @@ function ClaimLayout({
     const hasCanonical = item.truth_status_code !== null || item.sensitivity !== null
     useFragmentFocus("claim", true)
     const hasSubject = item.subject !== null && item.subject !== undefined
+    const [changingSubject, setChangingSubject] = useState(false)
 
-    const subjectEditor =
-        edit === null ? undefined : edit.locked ? (
-            edit.values.subject !== null ? (
-                <p className="authoring-note">The subject cannot change: {LOCK_REASON.toLowerCase()}</p>
-            ) : null
-        ) : (
+    const savedSubjectId = item.subject?.entity_id ?? null
+    const draftSubjectChanged = edit !== null && (edit.values.subject?.id ?? null) !== savedSubjectId
+    const subjectSelector =
+        edit === null || edit.locked ? undefined : (
             <ReferenceCombobox
                 id={FIELD.subject}
                 label="Subject"
-                value={edit.values.subject}
-                onChange={(subject) => edit.setValues({ ...edit.values, subject })}
+                value={null}
+                onChange={(subject) => {
+                    edit.setValues({ ...edit.values, subject })
+                    setChangingSubject(false)
+                }}
                 search={edit.searchSubjects}
                 error={edit.errorFor(FIELD.subject)}
                 placeholder="Search places, organizations, religions, characters, quests"
             />
         )
+    const subjectActions =
+        edit === null || edit.locked ? undefined : (
+            <>
+                <button type="button" className="authoring-button" onClick={() => setChangingSubject(!changingSubject)}>
+                    {changingSubject ? "Keep subject" : "Change subject"}
+                </button>
+                <button
+                    type="button"
+                    className="authoring-button"
+                    onClick={() => {
+                        edit.setValues({ ...edit.values, subject: null })
+                        setChangingSubject(false)
+                    }}
+                >
+                    Clear subject
+                </button>
+            </>
+        )
+    const lockedSubjectNote =
+        edit !== null && edit.locked && edit.values.subject !== null ? (
+            <p className="authoring-note">The subject cannot change: {LOCK_REASON.toLowerCase()}</p>
+        ) : null
+    const subjectError = edit?.errorFor(FIELD.subject) ?? null
 
     return (
         <>
@@ -263,17 +339,58 @@ function ClaimLayout({
                 ) : null}
             </section>
 
-            {hasSubject || subjectEditor !== undefined ? (
+            {edit === null ? (
+                hasSubject ? (
+                    <KnowledgeSubjectLink
+                        campaignId={campaignId}
+                        subject={item.subject}
+                        characterId={characterId}
+                        partyId={partyId}
+                        variant="claim"
+                    />
+                ) : null
+            ) : draftSubjectChanged ? (
+                <div className="knowledge-about knowledge-about--claim">
+                    <p className="knowledge-about__label">About this World entry</p>
+                    <div className="knowledge-about__row">
+                        <p className="knowledge-about__subject">
+                            {edit.values.subject !== null ? (
+                                <>
+                                    <strong className="knowledge-about__name">{edit.values.subject.label}</strong>{" "}
+                                    <span className="knowledge-about__type">not saved yet</span>
+                                </>
+                            ) : (
+                                <span className="knowledge-about__type">No subject (not saved yet)</span>
+                            )}
+                        </p>
+                        <div className="knowledge-about__actions">{subjectActions}</div>
+                    </div>
+                    {edit.values.subject === null || changingSubject ? subjectSelector : null}
+                    {subjectError !== null && !changingSubject && edit.values.subject !== null ? (
+                        <p className="authoring-field__error" role="alert">{subjectError}</p>
+                    ) : null}
+                    {lockedSubjectNote}
+                </div>
+            ) : hasSubject ? (
                 <KnowledgeSubjectLink
                     campaignId={campaignId}
                     subject={item.subject}
                     characterId={characterId}
                     partyId={partyId}
                     variant="claim"
+                    separateOpen
+                    actions={subjectActions}
                 >
-                    {subjectEditor}
+                    {changingSubject ? subjectSelector : null}
+                    {lockedSubjectNote}
                 </KnowledgeSubjectLink>
-            ) : null}
+            ) : (
+                <div className="knowledge-about knowledge-about--claim">
+                    <p className="knowledge-about__label">About this World entry</p>
+                    {subjectSelector}
+                    {lockedSubjectNote}
+                </div>
+            )}
 
             {edit !== null || hasCanonical ? (
                 <section className="knowledge-gm" aria-labelledby="knowledge-canonical-heading">
@@ -396,7 +513,12 @@ function ClaimForm({
     options,
     refreshing,
     refetch,
-}: KnowledgeClaimPageProps & {
+    changes,
+    setChanges,
+    changeNote,
+    setChangeNote,
+}: KnowledgeClaimPageProps &
+    DraftBindings & {
     view: KnowledgeAuthoringView
     options: KnowledgeOptions
     refreshing: boolean
@@ -405,11 +527,9 @@ function ClaimForm({
     const { reload } = useSession()
     const announce = useAnnounce()
     const base = fromView(view)
-    // The unsaved claim edits: only the fields the user changed. Everything else follows the saved
-    // claim, so a refresh of it (or of anything else on the page) never overwrites an edit in
-    // progress and still brings in other people's changes to fields you have not touched.
-    const [changes, setChanges] = useState<Partial<KnowledgeFormValues>>({})
-    const [changeNote, setChangeNote] = useState("")
+    // The unsaved claim edits (held by the page): only the fields the user changed. Everything else
+    // follows the saved claim, so a refresh of it (or of a lifecycle change, a knowledge action or
+    // a source) never overwrites an edit in progress.
     const [errors, setErrors] = useState<FieldError[]>([])
     const [attempt, setAttempt] = useState(0)
     const [confirming, setConfirming] = useState(false)
