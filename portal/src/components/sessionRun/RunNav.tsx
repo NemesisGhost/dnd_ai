@@ -1,5 +1,6 @@
 import type { ReactNode } from "react"
 import { Link } from "react-router"
+import { SectionNav, SectionPanel, StageNav } from "../staged/StagedNav"
 import { STAGES, panelHeadingId, sectionsOf, stageLabel } from "./runStages"
 import type { SectionInfo, SectionKey, Stage } from "./runStages"
 
@@ -54,34 +55,8 @@ export function RunBreadcrumb({
 }
 
 // The three stages. Links, because choosing one changes the address; none of them acts on the session.
-export function RunStageNav({
-    current,
-    hrefFor,
-}: {
-    current: Stage
-    hrefFor: (stage: Stage) => string
-}) {
-    return (
-        <nav aria-label="Session stages" className="session-run__stages">
-            <ol>
-                {STAGES.map((stage, index) => (
-                    <li key={stage.key}>
-                        <Link
-                            to={hrefFor(stage.key)}
-                            aria-current={stage.key === current ? "step" : undefined}
-                            className={
-                                stage.key === current
-                                    ? "session-run__stage session-run__stage--current"
-                                    : "session-run__stage"
-                            }
-                        >
-                            {index + 1}. {stage.label}
-                        </Link>
-                    </li>
-                ))}
-            </ol>
-        </nav>
-    )
+export function RunStageNav({ current, hrefFor }: { current: Stage; hrefFor: (stage: Stage) => string }) {
+    return <StageNav ariaLabel="Session stages" stages={STAGES} current={current} hrefFor={hrefFor} />
 }
 
 // The sections of the current stage only.
@@ -95,25 +70,12 @@ export function RunSectionNav({
     hrefFor: (key: SectionKey) => string
 }) {
     return (
-        <nav aria-label={`${stageLabel(stage)} sections`} className="session-run__sections">
-            <ul>
-                {sectionsOf(stage).map((section) => (
-                    <li key={section.key}>
-                        <Link
-                            to={hrefFor(section.key)}
-                            aria-current={section.key === current ? "page" : undefined}
-                            className={
-                                section.key === current
-                                    ? "session-run__section-link session-run__section-link--current"
-                                    : "session-run__section-link"
-                            }
-                        >
-                            {section.label}
-                        </Link>
-                    </li>
-                ))}
-            </ul>
-        </nav>
+        <SectionNav
+            ariaLabel={`${stageLabel(stage)} sections`}
+            sections={sectionsOf(stage)}
+            current={current}
+            hrefFor={hrefFor}
+        />
     )
 }
 
@@ -129,16 +91,13 @@ export function RunSectionPanel({
     children: ReactNode
 }) {
     return (
-        <section
-            className="session-run__panel"
-            aria-labelledby={panelHeadingId(section.key)}
-            hidden={!active}
+        <SectionPanel
+            headingId={panelHeadingId(section.key)}
+            label={section.label}
+            purpose={section.purpose}
+            active={active}
         >
-            <h2 id={panelHeadingId(section.key)} tabIndex={-1}>
-                {section.label}
-            </h2>
-            <p className="authoring-page__lead">{section.purpose}</p>
             {children}
-        </section>
+        </SectionPanel>
     )
 }

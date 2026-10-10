@@ -252,3 +252,51 @@ def test_the_database_guards_the_link_table(s: ContentSetup, db_connection: Conn
             text("INSERT INTO core.entity_source_links (entity_id, source_id) VALUES (:e, :s)"),
             {"e": town, "s": foreign},
         )
+
+
+def test_sources_attach_and_detach_at_any_status_without_changing_the_version(
+    s: ContentSetup,
+) -> None:
+    """Sources are optional and independent of review: they never bump the claim's version."""
+    created = s.gm.post(
+        s.url("knowledge"),
+        {
+            "statement": "The duke is a vampire.",
+            "knowledge_type": "secret",
+            "truth_status": "true",
+            "sensitivity": "secret",
+        },
+        key=s.gm.fresh_key(),
+    ).json()
+    claim, version = created["knowledge_item_id"], created["row_version"]
+
+    def version_now() -> int:
+        value = s.gm.get(s.url(f"knowledge/{claim}")).json()["row_version"]
+        assert isinstance(value, int)
+        return value
+
+    def round_trip(title: str) -> str:
+        source = new_source(s, title).json()["source_id"]
+        before = version_now()
+        assert attach(s, claim, source).status_code == 200
+        assert version_now() == before
+        assert detach(s, claim, source).status_code == 200
+        assert version_now() == before
+        return str(source)
+
+    round_trip("At draft")
+    version = s.transition(claim, "submit-for-review", version)["row_version"]
+    round_trip("In review")
+    version = s.transition(claim, "approve", version)["row_version"]
+    round_trip("Approved")
+    # A source left attached while approved does not stop, or invalidate, the approval.
+    kept = new_source(s, "Kept").json()["source_id"]
+    assert attach(s, claim, kept).status_code == 200
+    assert version_now() == version
+    version = s.transition(claim, "publish", version)["row_version"]
+    round_trip("Published")
+    archived = s.transition(claim, "archive", version)
+    round_trip("Archived")
+    assert version_now() == archived["row_version"]
+    attached = [link for link in provenance(s, claim)["links"] if link["is_attached"]]
+    assert [link["source_id"] for link in attached] == [kept]

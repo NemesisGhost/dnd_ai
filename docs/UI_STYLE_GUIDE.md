@@ -425,11 +425,12 @@ Shared primitives live in `portal/src/components/authoring/` and are styled by `
 
 ### 10a.1 Staged workspace pages
 
-A long task page (the Run Session page) is organised into **stages** with a **local section menu**, not a long scroll. Stages organise the interface only; they never imply or cause a lifecycle change, so their wording ("Prepare", "Run session", "Wrap up") avoids verbs like start or end.
+A long task page (the Run Session page and the Knowledge claim page) is organised into **stages** with a **local section menu**, not a long scroll. The Knowledge claim page uses the stages Prepare, Review & publish and Use in play. The record's actual status lives in the page header, never in the stage navigation. Stages organise the interface only; they never imply or cause a lifecycle change, so their wording ("Prepare", "Run session", "Wrap up") avoids verbs like start or end.
 
 - **Page breadcrumb.** `<nav aria-label="Breadcrumb">` with an ordered list: parent list, the record (by its title, never an identifier), and the current page (`aria-current="page"`, not a link). It is separate from the campaign context panel (world, timeline, campaign, perspective).
-- **Stage navigation.** A numbered row of links (`aria-label="Session stages"`, `aria-current="step"`), wrapping at narrow widths. The current stage is marked by weight and a heavier border, not colour alone.
+- **Stage navigation.** A numbered row of links (`aria-label="Session stages"` or `"Claim stages"`, `aria-current="step"`), wrapping at narrow widths. The current stage is marked by weight and a heavier border, not colour alone.
 - **Section menu.** Links for the current stage's sections only (`aria-label="<Stage> sections"`, `aria-current="page"`): a left column from 64rem, a wrapping row below it. Links, not tabs or buttons, because choosing one changes the address.
+- **Preserved context.** Choosing a stage or section keeps every other query parameter (character and party perspective). A "Next" link in a page header is navigation to the section where a step lives, never an action.
 - **Section panel.** One panel visible at a time: a bordered surface with an `h2` (focused when the section changes), a one-line purpose, then the content. A section the record cannot use yet says why instead of showing a disabled form.
 - **Compact time bar.** In-world time is labelled "(in-world)" and real-world timestamps "Real-world …" so the two are never confused.
 
@@ -451,7 +452,7 @@ Cards sit in a grid wide enough (about 28rem) to read a sentence comfortably.
 
 ### 11.3 Claim page
 
-One page replaces separate view, edit and "who knows" screens: breadcrumb, claim text, a prominent About block, labelled GM/canonical information, character knowledge, and a compact "Who knows this" roster. Fields are controls only for people authorized to change them; others see text, and anything they may not see is absent. Canonical information (the GM's record of truth and sensitivity) is kept visibly apart from character knowledge (awareness, confidence, belief). The roster follows the compact-row pattern (name and type, state, inline details; actions beside group headings; forms revealed locally). The claim and each knowledge action save independently, and neither refresh overwrites the other's unsaved input.
+One page replaces separate view, edit and "who knows" screens. Its always-visible header holds the breadcrumb, the claim as the page heading, the prominent About block (the World subject), the actual status badge and one Next link. People who can change canon get the Guided workspace under it: **Prepare** (Claim, Sources), **Review & publish** (Review claim, Publication) and **Use in play** (Who knows this, Character knowledge), one section visible at a time (see §10a.1). Fields are controls only for people authorized to change them; others see text, and anything they may not see is absent. Canonical information (the GM's record of truth and sensitivity) is kept visibly apart from character knowledge (awareness, confidence, belief). The roster follows the compact-row pattern (name and type, state, inline details; actions beside group headings; forms revealed locally) and is read-only, with one explanatory note, while the claim is not published. Copy never says publishing tells anyone and never requires a source. The claim, each source change, each knowledge action and each lifecycle step save independently, and no refresh overwrites another's unsaved input.
 
 Do not label a player-facing belief false merely because canonical truth differs. Do not transform null into a suggestive “hidden” label.
 

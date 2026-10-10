@@ -109,9 +109,8 @@ describe("CampaignKnowledgeDetailPage", () => {
         })
 
         expect(
-            await screen.findByRole("heading", { level: 1, name: "Knowledge claim" }),
+            await screen.findByRole("heading", { level: 1, name: itemFixture.statement }),
         ).toBeInTheDocument()
-        expect(screen.getByText(itemFixture.statement)).toBeInTheDocument()
     })
 
     it("falls back to the selected character when the URL has no character_id", async () => {

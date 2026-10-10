@@ -1045,10 +1045,10 @@ describe("portal routing", () => {
   it("routes a Knowledge item detail through its addressable route", async () => {
     renderAppAt("/app/mundivita/knowledge/knowledge-a")
 
-    await screen.findByRole("heading", { level: 1, name: "Knowledge claim" })
-    expect(
-      screen.getByText(knowledgePageFixture.items[0].statement),
-    ).toBeInTheDocument()
+    await screen.findByRole("heading", {
+      level: 1,
+      name: knowledgePageFixture.items[0].statement,
+    })
 
     expect(fetchKnowledgeDetailMock).toHaveBeenCalledWith(
       "mundivita",
@@ -1063,7 +1063,10 @@ describe("portal routing", () => {
         "link",
         { name: "Knowledge" },
       ),
-    ).toHaveAttribute("href", "/app/mundivita/knowledge")
+    ).toHaveAttribute(
+      "href",
+      "/app/mundivita/knowledge?character_id=character-ixamarra",
+    )
   })
 
   it("does not disclose campaign chrome for an unknown campaign's World detail route", () => {

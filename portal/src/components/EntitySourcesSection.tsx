@@ -1,9 +1,11 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
+import type { ReactNode } from "react"
 import { Link } from "react-router"
 import { attachSource, createSource, detachSource, provenancePath, sourcesPath } from "../api/sources"
 import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
+import type { UseAuthoringResourceResult } from "../hooks/useAuthoringResource"
 import type { Provenance, SourceList } from "../types/provenance"
 import { useAnnounce } from "./authoring/announcer"
 import { SelectField, TextAreaField, TextField } from "./authoring/fields"
@@ -18,6 +20,18 @@ interface Props {
     // A concise summary with the forms behind an "Add source" button. The forms stay mounted
     // while closed, so what was typed (and any error) is still there when they are reopened.
     compact?: boolean
+    // Reports whether something typed in the forms is not yet attached or written, so the page can
+    // protect it when the person leaves.
+    onDirtyChange?: (dirty: boolean) => void
+    // Where the provenance page's back link returns to (the page that holds this section).
+    returnTo?: string
+    // Replaces the section's own heading when the page already provides one.
+    hideHeading?: boolean
+    // Plain-language context shown above the sources.
+    intro?: ReactNode
+    // The record's provenance, when the page already loads it (to show a count elsewhere), so the
+    // two never disagree after an attach or detach.
+    provenance?: UseAuthoringResourceResult<Provenance>
 }
 
 type Command =
@@ -34,10 +48,21 @@ const CODE_MESSAGE: Readonly<Record<string, string>> = {
 // Editor-only: the sources attached to a record, with a way to attach another (an existing one,
 // or a new one written here) or detach one, and a link to the full provenance. Detaching keeps
 // the history. Mounts nothing, and sends nothing, for anyone whose provenance read is refused.
-export function EntitySourcesSection({ campaignId, entityId, category, compact = false }: Props) {
+export function EntitySourcesSection({
+    campaignId,
+    entityId,
+    category,
+    compact = false,
+    onDirtyChange,
+    returnTo,
+    hideHeading = false,
+    intro,
+    provenance: shared,
+}: Props) {
     const { reload } = useSession()
     const announce = useAnnounce()
-    const provenance = useAuthoringResource<Provenance>(provenancePath(campaignId, entityId))
+    const own = useAuthoringResource<Provenance>(shared === undefined ? provenancePath(campaignId, entityId) : null)
+    const provenance = shared ?? own
     const sources = useAuthoringResource<SourceList>(sourcesPath(campaignId))
     const [choice, setChoice] = useState("")
     const [type, setType] = useState("")
@@ -50,12 +75,17 @@ export function EntitySourcesSection({ campaignId, entityId, category, compact =
         scopeKey: `sources:${entityId}`,
         request: async (command, ctx) => {
             if (command.op === "create") {
+                // Two commands, so two keys derived from this one: a retry replays each step, and
+                // the server never sees one key used for different commands.
                 const created = await createSource(
                     campaignId,
                     { source_type: command.source_type, title: command.title, reference: command.reference },
-                    ctx,
+                    { ...ctx, idempotencyKey: `${ctx.idempotencyKey}.create` },
                 )
-                return attachSource(campaignId, entityId, created.source_id, ctx)
+                return attachSource(campaignId, entityId, created.source_id, {
+                    ...ctx,
+                    idempotencyKey: `${ctx.idempotencyKey}.attach`,
+                })
             }
             return command.op === "attach"
                 ? attachSource(campaignId, entityId, command.sourceId, ctx)
@@ -74,6 +104,11 @@ export function EntitySourcesSection({ campaignId, entityId, category, compact =
     const error = mutation.status.kind === "error" ? mutation.status.error : null
     const explained = error?.code ? (CODE_MESSAGE[error.code] ?? null) : null
     const busy = mutation.status.kind === "pending"
+    const dirty = choice !== "" || title.trim() !== "" || reference.trim() !== ""
+    useEffect(() => {
+        onDirtyChange?.(dirty)
+        return () => onDirtyChange?.(false)
+    }, [dirty, onDirtyChange])
 
     if (provenance.state.kind !== "ready" || sources.state.kind !== "ready") return null
     const view = provenance.state.data
@@ -88,8 +123,12 @@ export function EntitySourcesSection({ campaignId, entityId, category, compact =
     }
 
     return (
-        <section className="authoring-aside" aria-labelledby={`sources-${entityId}`}>
-            <h2 id={`sources-${entityId}`}>Sources</h2>
+        <section
+            className="authoring-aside"
+            {...(hideHeading ? { "aria-label": "Sources" } : { "aria-labelledby": `sources-${entityId}` })}
+        >
+            {hideHeading ? null : <h2 id={`sources-${entityId}`}>Sources</h2>}
+            {intro}
             {explained !== null ? (
                 <p role="alert">{explained}</p>
             ) : error !== null ? (
@@ -101,6 +140,7 @@ export function EntitySourcesSection({ campaignId, entityId, category, compact =
                 {view.created_by_name !== null ? ` by ${view.created_by_name}` : ""}.{" "}
                 <Link
                     to={`/app/${encodeURIComponent(campaignId)}/world/${encodeURIComponent(category ?? "record")}/${encodeURIComponent(entityId)}/provenance`}
+                    state={returnTo === undefined ? undefined : { returnTo }}
                 >
                     View provenance
                 </Link>

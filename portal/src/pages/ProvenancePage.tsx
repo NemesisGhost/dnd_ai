@@ -1,4 +1,4 @@
-import { Link, useParams } from "react-router"
+import { Link, useLocation, useParams } from "react-router"
 import { provenancePath } from "../api/sources"
 import { LifecycleBadge } from "../components/authoring/feedback"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
@@ -7,6 +7,13 @@ import { usePageArrival } from "../hooks/usePageArrival"
 import type { Provenance } from "../types/provenance"
 import { isWorldDetailCategory } from "../types/world"
 import "../components/authoring/authoring.css"
+
+// The Knowledge claim page to return to, when that page opened this one.
+function knowledgeReturnPath(campaignId: string, state: unknown): string | null {
+    const returnTo = (state as { returnTo?: unknown } | null)?.returnTo
+    const prefix = `/app/${encodeURIComponent(campaignId)}/knowledge/`
+    return typeof returnTo === "string" && returnTo.startsWith(prefix) ? returnTo : null
+}
 
 const when = (value: string): string => new Date(value).toLocaleString()
 const humanize = (code: string): string => code.replace(/_/g, " ")
@@ -18,10 +25,14 @@ export function ProvenancePage() {
     const canEdit = useCampaignCapability(campaignId, "canon.edit")
     const { state } = useAuthoringResource<Provenance>(provenancePath(campaignId, entityId))
     const headingRef = usePageArrival(state.kind === "ready")
+    const { state: locationState } = useLocation()
+    // A Knowledge claim that opened this page names where to go back to (its section and the
+    // perspective); anything else, or an address outside this campaign's Knowledge, is ignored.
+    const returnTo = knowledgeReturnPath(campaignId, locationState)
     // A record with no World detail page (a quest, a dungeon) links back to the World list.
-    const detailPath = isWorldDetailCategory(category)
+    const detailPath = returnTo ?? (isWorldDetailCategory(category)
         ? `/app/${encodeURIComponent(campaignId)}/world/${encodeURIComponent(category)}/${encodeURIComponent(entityId)}`
-        : `/app/${encodeURIComponent(campaignId)}/world`
+        : `/app/${encodeURIComponent(campaignId)}/world`)
     return (
         <section className="authoring-page" aria-labelledby="provenance-heading">
             <p className="authoring-page__breadcrumb">

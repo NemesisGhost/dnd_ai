@@ -1,8 +1,7 @@
 import type { ReactNode } from "react"
 import { Link } from "react-router"
-import { questPerspectiveSearch } from "../hooks/useQuestPartyPerspective"
 import type { KnowledgeSubject } from "../types/knowledge"
-import { knowledgeSubjectPath } from "../utils/knowledgeSubject"
+import { knowledgeSubjectHref } from "../utils/knowledgeSubject"
 import { describeWorldType } from "../utils/worldTypeLabel"
 
 interface KnowledgeSubjectLinkProps {
@@ -62,11 +61,7 @@ export function KnowledgeSubjectLink({
     }
 
     const typeLabel = describeSubjectType(subject)
-    const path = knowledgeSubjectPath(campaignId, subject)
-    const to =
-        subject.category === "quest"
-            ? `${path}${questPerspectiveSearch(characterId, partyId)}`
-            : path
+    const to = knowledgeSubjectHref(campaignId, subject, characterId, partyId)
 
     return (
         <div className={`knowledge-about knowledge-about--${variant}`}>

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import type { ReactNode } from "react"
 import { Link, useLocation } from "react-router"
 import {
@@ -7,7 +7,8 @@ import {
     knowledgeOptionsPath,
     updateKnowledgeItem,
 } from "../api/knowledgeAuthoring"
-import { AudiencePreviewSection } from "../components/AudiencePreviewSection"
+import { entityLifecyclePath } from "../api/entityLifecycle"
+import { provenancePath } from "../api/sources"
 import { useAnnounce } from "../components/authoring/announcer"
 import { ConfirmDialog } from "../components/authoring/ConfirmDialog"
 import { SelectField, TextAreaField, TextField } from "../components/authoring/fields"
@@ -15,11 +16,26 @@ import { ErrorSummary, MutationStatusMessage, StaleWriteNotice } from "../compon
 import type { FieldError } from "../components/authoring/feedback"
 import { ReferenceCombobox } from "../components/authoring/ReferenceCombobox"
 import type { ReferenceOption } from "../components/authoring/ReferenceCombobox"
-import { LifecycleControls } from "../components/EntityLifecyclePanel"
+import { LifecycleActionsProvider, LifecycleReviewAction } from "../components/EntityLifecyclePanel"
 import { EntitySourcesSection } from "../components/EntitySourcesSection"
+import { ClaimPublication } from "../components/knowledge/ClaimPublication"
+import { ClaimReview } from "../components/knowledge/ClaimReview"
+import {
+    CLAIM_SECTIONS,
+    CLAIM_STAGES,
+    claimGuidance,
+    claimHeadingId,
+    claimSectionsOf,
+    claimStageLabel,
+    defaultClaimSection,
+} from "../components/knowledge/claimStages"
+import type { ClaimGuidance, ClaimSection } from "../components/knowledge/claimStages"
+import { KnowledgeClaimHeader } from "../components/knowledge/KnowledgeClaimHeader"
 import { KnowledgeRoster } from "../components/knowledge/KnowledgeRoster"
+import type { Restriction } from "../components/knowledge/KnowledgeRoster"
+import { useClaimNavigation } from "../components/knowledge/useClaimNavigation"
 import { KnowledgeSubjectLink } from "../components/KnowledgeSubjectLink"
-import { entityLifecyclePath } from "../api/entityLifecycle"
+import { SectionNav, SectionPanel, StageNav } from "../components/staged/StagedNav"
 import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
@@ -29,12 +45,14 @@ import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard"
 import type { KnowledgeDetail } from "../types/knowledge"
 import type { EntityLifecycleView } from "../types/entityLifecycle"
 import type { KnowledgeAuthoringView, KnowledgeOptions } from "../types/knowledgeAuthoring"
+import type { Provenance } from "../types/provenance"
 import { ERROR_CODE_MESSAGE, REASON_MAX, fieldForErrorCode } from "../utils/authoringValidation"
 import { describeBlockedReason } from "../utils/blockedReason"
 import { humanizeCode } from "../utils/humanize"
-import { canonStatusLabel, lifecycleNextStep } from "../utils/lifecycleNextStep"
+import { canonStatusLabel } from "../utils/lifecycleNextStep"
 import { FIELD, STATEMENT_MAX, fromView, same, toBody, validate } from "../utils/knowledgeForm"
 import type { KnowledgeFormValues } from "../utils/knowledgeForm"
+import { knowledgeSubjectHref } from "../utils/knowledgeSubject"
 import { statusDetail } from "../utils/locationForm"
 import "../components/authoring/authoring.css"
 
@@ -53,23 +71,28 @@ interface KnowledgeClaimPageProps {
 
 const LOCK_REASON = "Someone already knows this claim, so this cannot change."
 
-// Moves the reader to a section named by the address's #fragment (the old Edit and
-// "Who knows this" addresses redirect here with one), once that section exists.
-function useFragmentFocus(id: string, ready: boolean) {
-    const { hash } = useLocation()
-    useEffect(() => {
-        if (!ready || hash !== `#${id}`) return
-        const target = document.getElementById(id)
-        target?.scrollIntoView?.()
-        target?.querySelector<HTMLElement>("h2")?.focus()
-    }, [hash, id, ready])
-}
+// Stands in for the lifecycle read while it is unavailable, so the one set of lifecycle actions
+// stays mounted (and its dialogs with it) whether or not the read succeeded. It offers nothing.
+const NO_LIFECYCLE = (knowledgeItemId: string): EntityLifecycleView => ({
+    entity_id: knowledgeItemId,
+    entity_type_code: "knowledge_item",
+    canonical_name: "",
+    canon_status: "draft",
+    lifecycle_status: "active",
+    row_version: 0,
+    lifecycle_managed: false,
+    superseded_by: null,
+    available_actions: [],
+    blocked_actions: [],
+})
 
-// The one Knowledge claim page: /app/:campaignId/knowledge/:knowledgeItemId. The claim, what
-// it is about, the GM's canonical record, the selected character's knowledge and the roster of
-// who knows it, in that order. There is no view/edit toggle: whoever may change the claim gets
-// its fields as controls, everyone else gets the same values as text, and anything they may not
-// see is simply absent. The claim and each knowledge action save separately.
+// The one Knowledge claim page: /app/:campaignId/knowledge/:knowledgeItemId. Its header always
+// shows the claim, what it is about and the record's real status. People who may change canon get
+// the Guided workspace under it: three presentation stages (Prepare, Review & publish, Use in
+// play), each with its own sections, one section visible at a time. Everyone else gets the same
+// facts as text, and anything they may not see is simply absent. Stages and sections are
+// navigation only; the claim, each source change, each knowledge action and each lifecycle step
+// save separately and never overwrite one another's unsaved work.
 export function KnowledgeClaimPage({
     campaignId,
     knowledgeItemId,
@@ -79,8 +102,8 @@ export function KnowledgeClaimPage({
     refreshDetail,
 }: KnowledgeClaimPageProps) {
     const canEdit = useCampaignCapability(campaignId, "canon.edit")
-    // The editor's own read model and the record's lifecycle are loaded once here: they feed the
-    // claim form, the header's status and next step, and the roster's publication gate.
+    // The editor's own read model, the record's lifecycle and its provenance are loaded once here:
+    // they feed the claim form, the header, the review summary and the roster's publication gate.
     const view = useAuthoringResource<KnowledgeAuthoringView>(
         canEdit ? knowledgeAuthoringPath(campaignId, knowledgeItemId) : null,
     )
@@ -88,91 +111,309 @@ export function KnowledgeClaimPage({
     const lifecycle = useAuthoringResource<EntityLifecycleView>(
         canEdit ? entityLifecyclePath(campaignId, knowledgeItemId) : null,
     )
-    // The unsaved claim edits live here, above the claim form, so the lifecycle controls in the
-    // header can say plainly that they are not part of a submit, approve or publish.
+    const provenance = useAuthoringResource<Provenance>(
+        canEdit ? provenancePath(campaignId, knowledgeItemId) : null,
+    )
+    // The unsaved claim edits live here, above the claim form, so the lifecycle controls can say
+    // plainly that they are not part of a submit, approve or publish, and so they survive the form
+    // being replaced by a read-only presentation.
     const [changes, setChanges] = useState<Partial<KnowledgeFormValues>>({})
     const [changeNote, setChangeNote] = useState("")
+    const [sourcesDirty, setSourcesDirty] = useState(false)
+    const [rosterDirty, setRosterDirty] = useState(false)
     const base = view.state.kind === "ready" ? fromView(view.state.data) : null
-    const unsavedEdits = base !== null && (!same({ ...base, ...changes }, base) || changeNote.trim() !== "")
+    const claimDirty = base !== null && (!same({ ...base, ...changes }, base) || changeNote.trim() !== "")
+    // What is typed and not yet saved, named for the guard below.
+    const unsaved = [
+        claimDirty ? "the claim" : null,
+        sourcesDirty ? "a source" : null,
+        rosterDirty ? "a knowledge entry" : null,
+    ].filter((part) => part !== null)
 
     const status = view.state.kind === "ready" ? view.state.data : null
-    const lifecycleView = lifecycle.state.kind === "ready" && lifecycle.state.data.lifecycle_managed ? lifecycle.state.data : null
+    const lifecycleView =
+        lifecycle.state.kind === "ready" && lifecycle.state.data.lifecycle_managed ? lifecycle.state.data : null
     const canonStatus = lifecycleView?.canon_status ?? status?.canon_status ?? null
     const lifecycleStatus = lifecycleView?.lifecycle_status ?? status?.lifecycle_status ?? null
-    // Only a published (canon, active) claim can be recorded as known; the server enforces it.
-    const restriction =
-        canonStatus === null || (canonStatus === "canon" && lifecycleStatus === "active")
+    // The default section needs the lifecycle read, so the workspace waits for it to settle.
+    const settled = lifecycle.state.kind !== "loading"
+    const nav = useClaimNavigation(defaultClaimSection(lifecycleView), { ready: settled, enabled: canEdit })
+    const location = useLocation()
+
+    // Move focus to the section heading when the section changes after arrival (a link, Back or
+    // Forward), so a keyboard or screen reader user lands on the new content.
+    const lastSection = useRef(nav.section)
+    useEffect(() => {
+        if (lastSection.current !== nav.section) {
+            lastSection.current = nav.section
+            document.getElementById(claimHeadingId(nav.section))?.focus()
+        }
+    }, [nav.section])
+
+    const base0 = `/app/${encodeURIComponent(campaignId)}/knowledge`
+    const perspective = new URLSearchParams()
+    if (characterId !== null) perspective.set("character_id", characterId)
+    if (partyId !== null) perspective.set("party_id", partyId)
+    const perspectiveSearch = perspective.toString() === "" ? "" : `?${perspective.toString()}`
+    const listHref = `${base0}${perspectiveSearch}`
+    const claimHref = (id: string) => `${base0}/${encodeURIComponent(id)}${perspectiveSearch}`
+    const replacement = lifecycleView?.superseded_by ?? null
+    const replacementHref = replacement === null ? null : claimHref(replacement.entity_id)
+    const subjectHref =
+        item.subject == null ? null : knowledgeSubjectHref(campaignId, item.subject, characterId, partyId)
+
+    const guidance = lifecycleView === null ? null : claimGuidance(lifecycleView)
+    const hrefOf = (g: ClaimGuidance): string | null =>
+        g.target.kind === "section"
+            ? nav.sectionHref(g.target.section)
+            : g.target.kind === "replacement"
+              ? claimHref(g.target.entityId)
+              : subjectHref
+
+    // Only a published (canon, active) claim can have knowledge recorded or changed; the server
+    // enforces it. Otherwise one note says why, and where the next step is.
+    const restriction: Restriction | null =
+        !canEdit || canonStatus === null || (canonStatus === "canon" && lifecycleStatus === "active")
             ? null
             : {
-                  statusLabel: lifecycleStatus === "archived" ? "archived" : canonStatusLabel(canonStatus),
-                  nextStep: lifecycleView === null ? null : lifecycleNextStep(lifecycleView),
+                  message:
+                      lifecycleStatus === "archived" ? (
+                          <>
+                              This claim is archived. What was recorded is kept, but nothing new can be recorded or
+                              changed until it is restored.{" "}
+                              {lifecycleView !== null ? <Link to={nav.sectionHref("publication")}>Open Publication</Link> : null}
+                          </>
+                      ) : canonStatus === "superseded" ? (
+                          <>
+                              This claim was replaced
+                              {replacement !== null ? (
+                                  <>
+                                      {" "}
+                                      by{" "}
+                                      {replacementHref !== null ? (
+                                          <Link to={replacementHref}>{replacement.canonical_name}</Link>
+                                      ) : (
+                                          replacement.canonical_name
+                                      )}
+                                  </>
+                              ) : null}
+                              . What was recorded here is kept; record new knowledge on the replacement.
+                          </>
+                      ) : (
+                          <>
+                              Only a published claim can be recorded as known. This claim is{" "}
+                              {canonStatusLabel(canonStatus)}.{" "}
+                              {guidance !== null ? (
+                                  <>
+                                      Next:{" "}
+                                      {hrefOf(guidance) !== null ? (
+                                          <Link to={hrefOf(guidance) as string}>{guidance.text}</Link>
+                                      ) : (
+                                          guidance.text
+                                      )}
+                                  </>
+                              ) : null}
+                          </>
+                      ),
               }
-    return (
-        <section className="authoring-page knowledge-claim" aria-labelledby="knowledge-claim-heading">
-            <nav aria-label="Breadcrumb" className="authoring-page__breadcrumb">
-                <ol className="session-run__breadcrumb">
-                    <li>
-                        <Link to={`/app/${encodeURIComponent(campaignId)}/knowledge`}>Knowledge</Link>
-                    </li>
-                    <li aria-current="page">Claim</li>
-                </ol>
-            </nav>
-            <div className="knowledge-claim__header">
-                <h1 id="knowledge-claim-heading">Knowledge claim</h1>
-                {lifecycleView !== null ? (
-                    <LifecycleControls
-                        key={lifecycleView.row_version}
-                        compact
-                        campaignId={campaignId}
-                        view={lifecycleView}
-                        refetch={lifecycle.refetch}
-                        unsavedEdits={unsavedEdits}
-                        onChanged={() => {
-                            void view.refetch()
-                            refreshDetail()
-                        }}
-                    />
-                ) : null}
-                {canEdit ? (
-                    <AudiencePreviewSection
-                        campaignId={campaignId}
-                        resourceType="knowledge_item"
-                        fixedResource={{ id: knowledgeItemId, display_name: item.statement }}
-                    />
-                ) : null}
-            </div>
-            {canEdit ? (
-                <EditableClaim
-                    view={view}
-                    options={options}
-                    changes={changes}
-                    setChanges={setChanges}
-                    changeNote={changeNote}
-                    setChangeNote={setChangeNote}
-                    campaignId={campaignId}
-                    knowledgeItemId={knowledgeItemId}
-                    item={item}
-                    characterId={characterId}
-                    partyId={partyId}
-                    refreshDetail={refreshDetail}
-                />
-            ) : (
+
+    const headerStatus =
+        canEdit && canonStatus !== null && lifecycleStatus !== null
+            ? {
+                  canonStatus,
+                  lifecycleStatus,
+                  supersededBy:
+                      replacement === null ? null : { entityId: replacement.entity_id, name: replacement.canonical_name },
+              }
+            : null
+
+    const header = (
+        <KnowledgeClaimHeader
+            campaignId={campaignId}
+            knowledgeItemId={knowledgeItemId}
+            item={item}
+            characterId={characterId}
+            partyId={partyId}
+            listHref={listHref}
+            status={headerStatus}
+            replacementHref={replacementHref}
+            guidance={guidance}
+            guidanceHref={guidance === null ? null : hrefOf(guidance)}
+            canEdit={canEdit}
+        />
+    )
+
+    if (!canEdit) {
+        // Readers: the claim and what the server chose to show, then the selected character's
+        // knowledge. No stages, no editor requests, and a `?section=` in the address is ignored.
+        return (
+            <section className="authoring-page knowledge-claim" aria-labelledby="knowledge-claim-heading">
+                {header}
                 <ClaimLayout
                     campaignId={campaignId}
                     item={item}
                     characterId={characterId}
                     partyId={partyId}
+                    inPanel={false}
                     edit={null}
                     note={null}
                 />
+                <CharacterKnowledge item={item} characterId={characterId} heading />
+            </section>
+        )
+    }
+
+    const sourceCount =
+        provenance.state.kind === "ready" ? provenance.state.data.links.filter((l) => l.is_attached).length : null
+    const whoKnowsHref = nav.sectionHref("who-knows")
+    const claimSectionHref = nav.sectionHref("claim")
+
+    const body: Record<ClaimSection, ReactNode> = {
+        claim: (
+            <EditableClaim
+                view={view}
+                options={options}
+                changes={changes}
+                setChanges={setChanges}
+                changeNote={changeNote}
+                setChangeNote={setChangeNote}
+                claimDirty={claimDirty}
+                publicationHref={nav.sectionHref("publication")}
+                replacement={replacement === null ? null : { name: replacement.canonical_name, href: replacementHref }}
+                campaignId={campaignId}
+                knowledgeItemId={knowledgeItemId}
+                item={item}
+                characterId={characterId}
+                partyId={partyId}
+                refreshDetail={refreshDetail}
+            />
+        ),
+        sources: (
+            <EntitySourcesSection
+                compact
+                hideHeading
+                campaignId={campaignId}
+                entityId={knowledgeItemId}
+                category="knowledge"
+                provenance={provenance}
+                onDirtyChange={setSourcesDirty}
+                returnTo={`${location.pathname}${nav.sectionHref("sources")}`}
+                intro={
+                    <p className="authoring-note">
+                        Sources record where this claim came from. They are optional, can be changed at any status,
+                        and do not affect review or publication. A written source cannot be edited; write a new one
+                        and detach the old.
+                    </p>
+                }
+            />
+        ),
+        review: (
+            <ClaimReview
+                view={status}
+                options={options.state.kind === "ready" ? options.state.data : null}
+                sourceCount={sourceCount}
+                claimHref={claimSectionHref}
+                sourcesHref={nav.sectionHref("sources")}
+                unsavedEdits={claimDirty}
+            >
+                {lifecycleView !== null ? <LifecycleReviewAction /> : null}
+            </ClaimReview>
+        ),
+        publication:
+            lifecycleView !== null ? (
+                <ClaimPublication
+                    view={lifecycleView}
+                    subject={
+                        item.subject == null || subjectHref === null ? null : { name: item.subject.name, href: subjectHref }
+                    }
+                    whoKnowsHref={whoKnowsHref}
+                    replacementHref={replacementHref}
+                    claimHref={claimSectionHref}
+                    unsavedEdits={claimDirty}
+                />
+            ) : (
+                <p className="authoring-note" role="status">
+                    The claim's lifecycle could not be loaded, so no step is shown. Reload the page to try again.
+                </p>
+            ),
+        "who-knows": (
+            <KnowledgeRoster
+                campaignId={campaignId}
+                knowledgeItemId={knowledgeItemId}
+                restriction={restriction}
+                onDirtyChange={setRosterDirty}
+            />
+        ),
+        character: <CharacterKnowledge item={item} characterId={characterId} heading={false} />,
+    }
+
+    return (
+        <section className="authoring-page knowledge-claim" aria-labelledby="knowledge-claim-heading">
+            {header}
+            {!settled ? (
+                <p role="status">Loading the claim…</p>
+            ) : (
+                <LifecycleActionsProvider
+                    campaignId={campaignId}
+                    view={lifecycleView ?? NO_LIFECYCLE(knowledgeItemId)}
+                    refetch={lifecycle.refetch}
+                    unsavedEdits={claimDirty}
+                    afterDeletePath={listHref}
+                    onChanged={() => {
+                        void view.refetch()
+                        refreshDetail()
+                    }}
+                >
+                    <StageNav
+                        ariaLabel="Claim stages"
+                        stages={CLAIM_STAGES}
+                        current={nav.stage}
+                        hrefFor={nav.stageHref}
+                    />
+                    <div className="session-run__layout">
+                        <SectionNav
+                            ariaLabel={`${claimStageLabel(nav.stage)} sections`}
+                            sections={claimSectionsOf(nav.stage)}
+                            current={nav.section}
+                            hrefFor={nav.sectionHref}
+                        />
+                        <div className="session-run__content">
+                            {CLAIM_SECTIONS.map((section) => (
+                                <SectionPanel
+                                    key={section.key}
+                                    wide
+                                    headingId={claimHeadingId(section.key)}
+                                    label={section.label}
+                                    purpose={section.purpose}
+                                    active={section.key === nav.section}
+                                >
+                                    {body[section.key]}
+                                </SectionPanel>
+                            ))}
+                        </div>
+                    </div>
+                </LifecycleActionsProvider>
             )}
-            <KnowledgeRoster campaignId={campaignId} knowledgeItemId={knowledgeItemId} restriction={restriction} />
-            {canEdit ? (
-                <div className="knowledge-section knowledge-sources">
-                    <EntitySourcesSection compact campaignId={campaignId} entityId={knowledgeItemId} category="knowledge" />
-                </div>
-            ) : null}
+            <UnsavedInputGuard unsaved={unsaved} />
         </section>
+    )
+}
+
+// One guard for everything an editor has typed on the page and not yet saved (the claim, a source,
+// a knowledge entry): leaving the page asks first, and so does closing the tab
+// (docs/UI_DESIGN.md §5.11). Only mounted for editors; a reader has nothing to lose.
+function UnsavedInputGuard({ unsaved }: { unsaved: string[] }) {
+    const guard = useUnsavedChangesGuard(unsaved.length > 0)
+    return (
+        <ConfirmDialog
+            open={guard.blocked}
+            title="Discard unsaved changes?"
+            description={`You have unsaved input in ${unsaved.join(" and ")}. It has not been saved.`}
+            confirmLabel="Discard changes"
+            cancelLabel="Keep editing"
+            onConfirm={guard.discard}
+            onCancel={guard.stay}
+        />
     )
 }
 
@@ -183,8 +424,38 @@ interface DraftBindings {
     setChangeNote: (note: string) => void
 }
 
+// Why the claim cannot be edited right now, in one line, and the step that unlocks it.
+function editBlockedNote(
+    view: KnowledgeAuthoringView,
+    replacement: { name: string; href: string | null } | null,
+    publicationHref: string,
+): ReactNode {
+    const unlock = (text: string) => (
+        <>
+            {text} <Link to={publicationHref}>Open Publication</Link>
+        </>
+    )
+    if (view.lifecycle_status === "archived") return unlock("This claim is archived. Restore it before editing.")
+    switch (view.canon_status) {
+        case "proposed":
+            return unlock("This claim is in review. Return it to draft to edit it.")
+        case "approved":
+            return unlock("This claim is approved. Return it to draft to edit it.")
+        case "rejected":
+            return unlock("This claim is rejected. Return it to draft to rework it.")
+        case "superseded":
+            return replacement === null
+                ? "This claim was replaced, so it can no longer be edited."
+                : `This claim was replaced by ${replacement.name}, so it can no longer be edited.`
+        default: {
+            const reason = view.blocked_actions.find((b) => b.action === "update")?.reason
+            return reason === undefined ? null : `Editing unavailable: ${describeBlockedReason(reason)}`
+        }
+    }
+}
+
 // Loads the editor's own read model. While it loads, or when editing is not offered, the same
-// layout shows the values as text (with the server's reason when editing is blocked).
+// layout shows the values as text (with one line saying why editing is blocked).
 function EditableClaim({
     view,
     options,
@@ -192,12 +463,21 @@ function EditableClaim({
     setChanges,
     changeNote,
     setChangeNote,
+    claimDirty,
+    publicationHref,
+    replacement,
     ...props
 }: KnowledgeClaimPageProps &
     DraftBindings & {
         view: UseAuthoringResourceResult<KnowledgeAuthoringView>
         options: UseAuthoringResourceResult<KnowledgeOptions>
+        claimDirty: boolean
+        publicationHref: string
+        replacement: { name: string; href: string | null } | null
     }) {
+    if (view.state.kind === "loading" || options.state.kind === "loading") {
+        return <p role="status">Loading the claim…</p>
+    }
     if (view.state.kind === "ready" && options.state.kind === "ready") {
         if (view.state.data.available_actions.includes("update")) {
             return (
@@ -214,16 +494,60 @@ function EditableClaim({
                 />
             )
         }
-        const reason = view.state.data.blocked_actions.find((b) => b.action === "update")?.reason
+        const data = view.state.data
+        const optionData = options.state.data
         return (
-            <ClaimLayout
-                {...props}
-                edit={null}
-                note={reason === undefined ? null : `Editing unavailable: ${describeBlockedReason(reason)}`}
-            />
+            <>
+                <ClaimLayout
+                    campaignId={props.campaignId}
+                    item={props.item}
+                    characterId={props.characterId}
+                    partyId={props.partyId}
+                    inPanel
+                    edit={null}
+                    note={editBlockedNote(data, replacement, publicationHref)}
+                />
+                {claimDirty ? (
+                    <div className="authoring-message authoring-message--warning" role="status">
+                        <div>
+                            <p>
+                                <strong>Unsaved changes not applied.</strong> This claim is{" "}
+                                {data.lifecycle_status === "archived" ? "archived" : canonStatusLabel(data.canon_status)}
+                                , so these changes cannot be saved now. They stay here; discard them, or make the
+                                claim editable again to save them.
+                            </p>
+                            <DraftSummary
+                                values={{ ...fromView(data), ...changes }}
+                                options={optionData}
+                                changeNote={changeNote}
+                            />
+                            <button
+                                type="button"
+                                className="authoring-button"
+                                onClick={() => {
+                                    setChanges({})
+                                    setChangeNote("")
+                                }}
+                            >
+                                Discard changes
+                            </button>
+                        </div>
+                    </div>
+                ) : null}
+            </>
         )
     }
-    return <ClaimLayout {...props} edit={null} note={null} />
+    return (
+        <ClaimLayout
+            campaignId={props.campaignId}
+            item={props.item}
+            characterId={props.characterId}
+            partyId={props.partyId}
+            inPanel
+            edit={null}
+            note={null}
+        />
+    )
 }
 
 interface EditBindings {
@@ -253,23 +577,58 @@ function changedFields(base: KnowledgeFormValues, next: KnowledgeFormValues): Pa
 const readable = (options: { value: string; label: string }[], value: string): string =>
     options.find((o) => o.value === value)?.label ?? humanizeCode(value)
 
-// The layout shared by the editable and the read-only presentations, so what moves between
-// them is only whether a value is a control or text.
+// The edits that are held and not saved, as a list.
+function DraftSummary({
+    values,
+    options,
+    changeNote,
+}: {
+    values: KnowledgeFormValues
+    options: KnowledgeOptions
+    changeNote?: string
+}) {
+    return (
+        <dl className="authoring-fact-list">
+            <dt>Claim</dt>
+            <dd>{values.statement || "(empty)"}</dd>
+            <dt>Kind</dt>
+            <dd>{readable(options.knowledge_types, values.knowledgeType)}</dd>
+            <dt>Truth</dt>
+            <dd>{readable(options.truth_statuses, values.truthStatus)}</dd>
+            <dt>Sensitivity</dt>
+            <dd>{readable(options.sensitivities, values.sensitivity)}</dd>
+            <dt>Subject</dt>
+            <dd>{values.subject?.label ?? "(none)"}</dd>
+            {changeNote !== undefined && changeNote.trim() !== "" ? (
+                <>
+                    <dt>Change note</dt>
+                    <dd>{changeNote.trim()}</dd>
+                </>
+            ) : null}
+        </dl>
+    )
+}
+
+// The claim's own fields. The header already states the claim and its subject, so the read-only
+// presentation adds only the canonical facts (and the reason editing is blocked); the editable
+// one adds the controls. What moves between them is only whether a value is a control or text.
 function ClaimLayout({
     campaignId,
     item,
     characterId,
     partyId,
+    inPanel,
     edit,
     note,
 }: Pick<KnowledgeClaimPageProps, "campaignId" | "item" | "characterId" | "partyId"> & {
+    // Inside a section panel the panel supplies the h2, so this one is a level lower.
+    inPanel: boolean
     edit: EditBindings | null
-    note: string | null
+    note: ReactNode
 }) {
     const hasCanonical = item.truth_status_code !== null || item.sensitivity !== null
-    useFragmentFocus("claim", true)
-    const hasSubject = item.subject !== null && item.subject !== undefined
     const [changingSubject, setChangingSubject] = useState(false)
+    const Heading = inPanel ? "h3" : "h2"
 
     const savedSubjectId = item.subject?.entity_id ?? null
     const draftSubjectChanged = edit !== null && (edit.values.subject?.id ?? null) !== savedSubjectId
@@ -314,11 +673,13 @@ function ClaimLayout({
 
     return (
         <>
-            <section id="claim" className="knowledge-claim__claim" aria-label="Claim">
-                {note !== null ? <p className="authoring-note">{note}</p> : null}
-                {edit === null ? (
-                    <p className="knowledge-claim__text">{item.statement}</p>
-                ) : (
+            {note !== null ? (
+                <p className="authoring-note" role="status">
+                    {note}
+                </p>
+            ) : null}
+            {edit !== null ? (
+                <section id="claim" className="knowledge-claim__claim" aria-label="Claim">
                     <TextAreaField
                         id={FIELD.statement}
                         label="Claim"
@@ -333,23 +694,10 @@ function ClaimLayout({
                         maxLength={STATEMENT_MAX}
                         error={edit.errorFor(FIELD.statement)}
                     />
-                )}
-                {edit === null && !hasCanonical ? (
-                    <p className="knowledge-claim__kind">{humanizeCode(item.knowledge_type_code)}</p>
-                ) : null}
-            </section>
+                </section>
+            ) : null}
 
-            {edit === null ? (
-                hasSubject ? (
-                    <KnowledgeSubjectLink
-                        campaignId={campaignId}
-                        subject={item.subject}
-                        characterId={characterId}
-                        partyId={partyId}
-                        variant="claim"
-                    />
-                ) : null
-            ) : draftSubjectChanged ? (
+            {edit === null ? null : draftSubjectChanged ? (
                 <div className="knowledge-about knowledge-about--claim">
                     <p className="knowledge-about__label">About this World entry</p>
                     <div className="knowledge-about__row">
@@ -371,7 +719,7 @@ function ClaimLayout({
                     ) : null}
                     {lockedSubjectNote}
                 </div>
-            ) : hasSubject ? (
+            ) : item.subject !== null && item.subject !== undefined ? (
                 <KnowledgeSubjectLink
                     campaignId={campaignId}
                     subject={item.subject}
@@ -394,7 +742,7 @@ function ClaimLayout({
 
             {edit !== null || hasCanonical ? (
                 <section className="knowledge-gm" aria-labelledby="knowledge-canonical-heading">
-                    <h2 id="knowledge-canonical-heading">GM and canonical information</h2>
+                    <Heading id="knowledge-canonical-heading">GM and canonical information</Heading>
                     {edit === null ? (
                         <dl className="knowledge-gm__grid knowledge-gm__facts">
                             <div>
@@ -465,13 +813,20 @@ function ClaimLayout({
                     {edit !== null ? edit.actions : null}
                 </section>
             ) : null}
-
-            <CharacterKnowledge item={item} characterId={characterId} />
         </>
     )
 }
 
-function CharacterKnowledge({ item, characterId }: { item: KnowledgeDetail; characterId: string | null }) {
+function CharacterKnowledge({
+    item,
+    characterId,
+    heading,
+}: {
+    item: KnowledgeDetail
+    characterId: string | null
+    // The reader layout supplies its own heading; a section panel already has one.
+    heading: boolean
+}) {
     const recorded = [
         item.awareness_level !== null
             ? { key: "awareness", label: "Awareness", value: humanizeCode(item.awareness_level) }
@@ -482,8 +837,11 @@ function CharacterKnowledge({ item, characterId }: { item: KnowledgeDetail; char
             : null,
     ].filter((entry) => entry !== null)
     return (
-        <section className="knowledge-section knowledge-character" aria-labelledby="knowledge-character-heading">
-            <h2 id="knowledge-character-heading">Character knowledge</h2>
+        <section
+            className="knowledge-section knowledge-character"
+            {...(heading ? { "aria-labelledby": "knowledge-character-heading" } : { "aria-label": "Character knowledge" })}
+        >
+            {heading ? <h2 id="knowledge-character-heading">Character knowledge</h2> : null}
             {characterId === null ? (
                 <p className="authoring-note">Select a character perspective to see what that character knows.</p>
             ) : recorded.length === 0 ? (
@@ -519,11 +877,11 @@ function ClaimForm({
     setChangeNote,
 }: KnowledgeClaimPageProps &
     DraftBindings & {
-    view: KnowledgeAuthoringView
-    options: KnowledgeOptions
-    refreshing: boolean
-    refetch: () => Promise<void>
-}) {
+        view: KnowledgeAuthoringView
+        options: KnowledgeOptions
+        refreshing: boolean
+        refetch: () => Promise<void>
+    }) {
     const { reload } = useSession()
     const announce = useAnnounce()
     const base = fromView(view)
@@ -537,7 +895,6 @@ function ClaimForm({
     const values: KnowledgeFormValues = { ...base, ...changes }
     const setValues = (next: KnowledgeFormValues) => setChanges(changedFields(base, next))
     const dirty = !same(values, base) || changeNote.trim() !== ""
-    const guard = useUnsavedChangesGuard(dirty)
     const isCanon = view.canon_status === "canon"
 
     const mutation = useAuthoringMutation<
@@ -602,21 +959,6 @@ function ClaimForm({
         }))
     }
 
-    const summary = (v: KnowledgeFormValues) => (
-        <dl className="authoring-fact-list">
-            <dt>Claim</dt>
-            <dd>{v.statement || "(empty)"}</dd>
-            <dt>Kind</dt>
-            <dd>{readable(options.knowledge_types, v.knowledgeType)}</dd>
-            <dt>Truth</dt>
-            <dd>{readable(options.truth_statuses, v.truthStatus)}</dd>
-            <dt>Sensitivity</dt>
-            <dd>{readable(options.sensitivities, v.sensitivity)}</dd>
-            <dt>Subject</dt>
-            <dd>{v.subject?.label ?? "(none)"}</dd>
-        </dl>
-    )
-
     const actions = (
         <>
             <ErrorSummary errors={all} attempt={attempt} />
@@ -628,7 +970,7 @@ function ClaimForm({
                         mutation.reset()
                         void refetch()
                     }}
-                    yourChanges={summary(values)}
+                    yourChanges={<DraftSummary values={values} options={options} />}
                 />
             ) : error !== null && serverField === null ? (
                 <MutationStatusMessage error={error} onRetry={mutation.retry} onCheckSession={reload} />
@@ -681,6 +1023,7 @@ function ClaimForm({
                 item={item}
                 characterId={characterId}
                 partyId={partyId}
+                inPanel
                 note={null}
                 edit={{
                     values,
@@ -704,15 +1047,6 @@ function ClaimForm({
                 pending={pending}
                 onConfirm={submitNow}
                 onCancel={() => setConfirming(false)}
-            />
-            <ConfirmDialog
-                open={guard.blocked}
-                title="Discard unsaved changes?"
-                description="You have edits to this claim that have not been saved."
-                confirmLabel="Discard changes"
-                cancelLabel="Keep editing"
-                onConfirm={guard.discard}
-                onCancel={guard.stay}
             />
         </form>
     )

@@ -432,3 +432,26 @@ def test_responses_are_not_cacheable_and_idempotent_replays_match(s: ContentSetu
     assert first.json()["knowledge_item_id"] == second.json()["knowledge_item_id"]
     assert first.headers["cache-control"] == "no-store"
     assert len(s.audit("create_knowledge_item")) == 1
+
+
+def test_an_approved_claim_with_an_unpublished_subject_offers_only_return_to_draft(
+    s: ContentSetup,
+) -> None:
+    """The input the portal's "Publish its subject first" guidance is derived from."""
+    place = location(s)
+    item = create(s, subject_entity_id=place["location_id"])
+    kid = item["knowledge_item_id"]
+    for action in ("submit-for-review", "approve"):
+        item = s.transition(kid, action, item["row_version"])
+
+    lifecycle = s.gm.get(s.lifecycle(kid)).json()
+    assert lifecycle["canon_status"] == "approved"
+    assert lifecycle["available_actions"] == ["return_to_draft"]
+    assert {"action": "publish", "reason": "reference_not_published"} in lifecycle[
+        "blocked_actions"
+    ]
+    authoring = s.gm.get(s.url(f"knowledge/{kid}")).json()
+    assert "publish" not in authoring["available_actions"]
+    assert {"action": "publish", "reason": "reference_not_published"} in authoring[
+        "blocked_actions"
+    ]

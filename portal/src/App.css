@@ -3283,24 +3283,79 @@ a.app-header__title:focus-visible {
 
 .knowledge-claim__header {
   display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.knowledge-claim__headline {
+  display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
   gap: 0.5rem 1rem;
 }
 
-.knowledge-claim__header h1 {
+/* The claim is the page's headline. */
+.knowledge-claim__title {
+  flex: 1 1 20rem;
+  margin: 0;
+  font-size: 1.5rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.knowledge-claim__title:focus {
+  outline: none;
+}
+
+.knowledge-claim__title:focus-visible {
+  outline: 3px solid var(--color-focus);
+  outline-offset: 4px;
+}
+
+.knowledge-claim__status {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.knowledge-claim__replaced {
   margin: 0;
 }
 
-/* The preview action sits beside the heading; its opened form drops to a row of its own. */
-.knowledge-claim__header .audience-preview-panel {
+.knowledge-claim__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 1rem;
+  font-size: 0.9375rem;
+}
+
+/* The preview action sits with the other header facts; its opened form drops to a row of its own. */
+.knowledge-claim__meta .audience-preview-panel {
   display: contents;
 }
 
-.knowledge-claim__header .audience-preview-panel > section {
+.knowledge-claim__meta .audience-preview-panel > section {
   flex: 1 1 100%;
   margin-top: 0.5rem;
+}
+
+.knowledge-claim__next {
+  font-weight: 700;
+}
+
+/* The Guided workspace's panels fill the content column; Run Session keeps its reading width. */
+.session-run__panel--wide {
+  max-width: none;
+}
+
+.knowledge-review__facts dd {
+  overflow-wrap: anywhere;
+}
+
+.knowledge-review__statement {
+  font-size: 1.125rem;
 }
 
 .knowledge-claim__claim {
@@ -3405,12 +3460,6 @@ a.app-header__title:focus-visible {
 .knowledge-character__facts dd {
   display: inline;
   margin: 0 0 0 0.25rem;
-}
-
-.knowledge-roster__lead {
-  margin: 0;
-  color: var(--color-text-muted);
-  font-size: 0.875rem;
 }
 
 .knowledge-claim__state {
@@ -3535,11 +3584,6 @@ a.app-header__title:focus-visible {
   align-items: center;
   gap: 0.5rem;
   margin-right: auto;
-}
-
-.lifecycle-compact__status {
-  display: inline-flex;
-  gap: 0.25rem;
 }
 
 .lifecycle-compact__more {

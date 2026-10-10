@@ -369,7 +369,7 @@ function App() {
 
             <Route
               path="knowledge/:knowledgeItemId/audience"
-              element={<KnowledgeSectionRedirect fragment="who-knows" />}
+              element={<KnowledgeSectionRedirect section="who-knows" />}
             />
 
             <Route
@@ -484,7 +484,7 @@ function App() {
 
             <Route
               path="knowledge/:knowledgeItemId/edit"
-              element={<KnowledgeSectionRedirect fragment="claim" />}
+              element={<KnowledgeSectionRedirect section="claim" />}
             />
 
             <Route

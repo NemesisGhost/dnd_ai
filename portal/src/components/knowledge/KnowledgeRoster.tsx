@@ -1,4 +1,5 @@
-import { useState } from "react"
+import { useCallback, useEffect, useState } from "react"
+import type { ReactNode } from "react"
 import { knowledgeAudiencePath, runKnowledgeCommand } from "../../api/knowledgeRuntime"
 import { partiesPath } from "../../api/parties"
 import { fetchWorldEntities } from "../../api/world"
@@ -77,39 +78,60 @@ const stateText = (awareness: string, confidence: number | null): string =>
 // its content. Every action saves on its own and refreshes only this roster: it never touches an
 // unsaved claim edit, and a failed action keeps the form (and what was typed) open.
 //
-// Only a published claim can be recorded as known (the server answers an unpublished one with the
-// same 404 as a missing record), so while a `restriction` is set the actions are withheld and the
-// reason, with the next step that is actually available, is shown instead of letting a submit
-// fail with a misleading "no longer exists".
+// Only a published (canon, active) claim can be recorded as known or have a belief changed (the
+// server answers anything else with the same 404 as a missing record). While a `restriction` is
+// set the actions are left out and the roster is read-only: what was recorded stays visible, one
+// note says why and where the next step is, and nothing offers a write that would be refused.
 export function KnowledgeRoster({
     campaignId,
     knowledgeItemId,
     restriction,
+    onDirtyChange,
 }: {
     campaignId: string
     knowledgeItemId: string
-    // Set while the claim is not published: how it is described, and the next lifecycle step the
-    // person can take (null when there is none for them).
     restriction: Restriction | null
+    // Whether a form here holds typed input that has not been saved.
+    onDirtyChange?: (dirty: boolean) => void
 }) {
     const canManage = useCampaignCapability(campaignId, "canon.edit")
     if (!canManage) return null
-    return <RosterBody campaignId={campaignId} knowledgeItemId={knowledgeItemId} restriction={restriction} />
+    return (
+        <RosterBody
+            campaignId={campaignId}
+            knowledgeItemId={knowledgeItemId}
+            restriction={restriction}
+            onDirtyChange={onDirtyChange}
+        />
+    )
 }
 
+// Why nothing can be recorded, and where the person can go next. The page words it from the
+// claim's real status; the roster only shows it.
 export interface Restriction {
-    statusLabel: string
-    nextStep: string | null
+    message: ReactNode
+}
+
+type ReportDirty = (id: string, dirty: boolean) => void
+
+// Reports one form's unsaved input to the roster, and clears it when the form goes away.
+function useReportDirty(report: ReportDirty, id: string, dirty: boolean) {
+    useEffect(() => {
+        report(id, dirty)
+        return () => report(id, false)
+    }, [report, id, dirty])
 }
 
 function RosterBody({
     campaignId,
     knowledgeItemId,
     restriction,
+    onDirtyChange,
 }: {
     campaignId: string
     knowledgeItemId: string
     restriction: Restriction | null
+    onDirtyChange?: (dirty: boolean) => void
 }) {
     const blocked = restriction !== null
     const { reload } = useSession()
@@ -121,6 +143,21 @@ function RosterBody({
     const [open, setOpen] = useState<Kind | null>(null)
     const [openKnower, setOpenKnower] = useState<string | null>(null)
     const [inflight, setInflight] = useState<{ kind: Kind; message: string } | null>(null)
+    const [dirtyForms, setDirtyForms] = useState<ReadonlySet<string>>(new Set())
+    const report = useCallback<ReportDirty>((id, dirty) => {
+        setDirtyForms((current) => {
+            if (current.has(id) === dirty) return current
+            const next = new Set(current)
+            if (dirty) next.add(id)
+            else next.delete(id)
+            return next
+        })
+    }, [])
+    const anyDirty = dirtyForms.size > 0
+    useEffect(() => {
+        onDirtyChange?.(anyDirty)
+        return () => onDirtyChange?.(false)
+    }, [anyDirty, onDirtyChange])
 
     const mutation = useAuthoringMutation<KnowledgeCommand, KnowledgeRuntimeReceipt>({
         scopeKey: `knowledge-audience:${knowledgeItemId}`,
@@ -192,47 +229,48 @@ function RosterBody({
 
     const audience = state.data
     const known = new Set(audience.parties.map((p) => p.party_id))
-    const openParties = (parties.state.kind === "ready" ? parties.state.data.items : []).filter(
-        (p) => p.lifecycle_status === "active" && !known.has(p.party_id),
+    const activeParties = (parties.state.kind === "ready" ? parties.state.data.items : []).filter(
+        (p) => p.lifecycle_status === "active",
     )
+    const openParties = activeParties.filter((p) => !known.has(p.party_id))
     const toggle = (kind: Kind) => setOpen(open === kind ? null : kind)
 
     return (
-        <section id="who-knows" className="knowledge-section" aria-labelledby="who-knows-heading">
-            <h2 id="who-knows-heading" tabIndex={-1}>
-                Who knows this
-            </h2>
-            <p className="knowledge-roster__lead">Recorded separately from the claim. Changes here save on their own.</p>
+        <div className="knowledge-roster">
             {blocked ? (
                 <p className="authoring-note" role="status">
-                    This claim is {restriction.statusLabel}, and only a published claim can be recorded as known.{" "}
-                    {restriction.nextStep !== null
-                        ? `Next: ${restriction.nextStep} (the lifecycle actions at the top of the page).`
-                        : "No lifecycle action is available to you right now."}
+                    {restriction.message}
                 </p>
             ) : null}
 
             <div className="knowledge-roster__group">
                 <div className="knowledge-roster__head">
                     <h3>Parties</h3>
-                    {openParties.length > 0 ? (
+                    {!blocked && openParties.length > 0 ? (
                         <button
                             type="button"
                             className="authoring-button"
                             aria-expanded={open === "party"}
-                            disabled={blocked}
                             onClick={() => toggle("party")}
                         >
                             Tell a party
                         </button>
                     ) : null}
                 </div>
-                {open === "party" ? (
+                {!blocked && parties.state.kind === "ready" && openParties.length === 0 ? (
+                    <p className="authoring-note">
+                        {activeParties.length > 0
+                            ? "Every active party already knows this."
+                            : "There is no active party to tell."}
+                    </p>
+                ) : null}
+                {open === "party" && !blocked ? (
                     <PartyForm
                         audience={audience}
                         parties={openParties}
                         busy={busy}
                         run={run}
+                        report={report}
                         onCancel={() => setOpen(null)}
                     />
                 ) : null}
@@ -256,43 +294,45 @@ function RosterBody({
             <div className="knowledge-roster__group">
                 <div className="knowledge-roster__head">
                     <h3>Characters, NPCs and organizations</h3>
-                    <div className="knowledge-roster__actions">
-                        <button
-                            type="button"
-                            className="authoring-button"
-                            aria-expanded={open === "learn"}
-                            disabled={blocked}
-                            onClick={() => toggle("learn")}
-                        >
-                            Record who learned this
-                        </button>
-                        {audience.knowers.length > 0 ? (
+                    {!blocked ? (
+                        <div className="knowledge-roster__actions">
                             <button
                                 type="button"
                                 className="authoring-button"
-                                aria-expanded={open === "transfer"}
-                                disabled={blocked}
-                                onClick={() => toggle("transfer")}
+                                aria-expanded={open === "learn"}
+                                onClick={() => toggle("learn")}
                             >
-                                Record a telling
+                                Record who learned this
                             </button>
-                        ) : null}
-                    </div>
+                            {audience.knowers.length > 0 ? (
+                                <button
+                                    type="button"
+                                    className="authoring-button"
+                                    aria-expanded={open === "transfer"}
+                                    onClick={() => toggle("transfer")}
+                                >
+                                    Record a telling
+                                </button>
+                            ) : null}
+                        </div>
+                    ) : null}
                 </div>
-                {open === "learn" ? (
+                {open === "learn" && !blocked ? (
                     <LearnForm
                         audience={audience}
                         busy={busy}
                         run={run}
+                        report={report}
                         search={(query, signal) => searchWorld(["character", "organization"], query, signal)}
                         onCancel={() => setOpen(null)}
                     />
                 ) : null}
-                {open === "transfer" ? (
+                {open === "transfer" && !blocked ? (
                     <TellForm
                         audience={audience}
                         busy={busy}
                         run={run}
+                        report={report}
                         search={(query, signal) => searchWorld(["character", "organization"], query, signal)}
                         onCancel={() => setOpen(null)}
                     />
@@ -313,30 +353,37 @@ function RosterBody({
                                 }
                                 busy={busy}
                                 run={run}
+                                report={report}
+                                readOnly={blocked}
                             />
                         ))}
                     </ul>
                 )}
+                {audience.knowers.length > 0 || audience.parties.length > 0 || audience.public.length > 0 ? (
+                    <p className="authoring-note">To undo a record, correct the event that made it.</p>
+                ) : null}
             </div>
 
             <div className="knowledge-roster__group">
                 <div className="knowledge-roster__head">
                     <h3>Public places</h3>
-                    <button
-                        type="button"
-                        className="authoring-button"
-                        aria-expanded={open === "public"}
-                        disabled={blocked}
-                        onClick={() => toggle("public")}
-                    >
-                        Make public
-                    </button>
+                    {!blocked ? (
+                        <button
+                            type="button"
+                            className="authoring-button"
+                            aria-expanded={open === "public"}
+                            onClick={() => toggle("public")}
+                        >
+                            Make public
+                        </button>
+                    ) : null}
                 </div>
-                {open === "public" ? (
+                {open === "public" && !blocked ? (
                     <PublicForm
                         audience={audience}
                         busy={busy}
                         run={run}
+                        report={report}
                         search={(query, signal) => searchWorld(["location"], query, signal)}
                         onCancel={() => setOpen(null)}
                     />
@@ -357,7 +404,7 @@ function RosterBody({
                     </ul>
                 )}
             </div>
-        </section>
+        </div>
     )
 }
 
@@ -379,17 +426,20 @@ function PartyForm({
     parties,
     busy,
     run,
+    report,
     onCancel,
 }: {
     audience: KnowledgeAudience
     parties: PartyList["items"]
     busy: boolean
     run: Run
+    report: ReportDirty
     onCancel: () => void
 }) {
     const [party, setParty] = useState("")
     const [awareness, setAwareness] = useState("aware")
     const [problem, setProblem] = useState<string | null>(null)
+    useReportDirty(report, "party", party !== "")
     return (
         <form
             noValidate
@@ -431,12 +481,14 @@ function LearnForm({
     audience,
     busy,
     run,
+    report,
     search,
     onCancel,
 }: {
     audience: KnowledgeAudience
     busy: boolean
     run: Run
+    report: ReportDirty
     search: (query: string, signal: AbortSignal) => Promise<ReferenceOption[]>
     onCancel: () => void
 }) {
@@ -445,6 +497,7 @@ function LearnForm({
     const [confidence, setConfidence] = useState("")
     const [interpretation, setInterpretation] = useState("")
     const [problem, setProblem] = useState<string | null>(null)
+    useReportDirty(report, "learn", who !== null || confidence.trim() !== "" || interpretation.trim() !== "")
     return (
         <form
             noValidate
@@ -509,12 +562,14 @@ function TellForm({
     audience,
     busy,
     run,
+    report,
     search,
     onCancel,
 }: {
     audience: KnowledgeAudience
     busy: boolean
     run: Run
+    report: ReportDirty
     search: (query: string, signal: AbortSignal) => Promise<ReferenceOption[]>
     onCancel: () => void
 }) {
@@ -524,6 +579,7 @@ function TellForm({
     const [awareness, setAwareness] = useState("aware")
     const [conveyed, setConveyed] = useState("")
     const [problem, setProblem] = useState<string | null>(null)
+    useReportDirty(report, "transfer", source !== "" || recipient !== null || conveyed.trim() !== "")
     return (
         <form
             noValidate
@@ -598,18 +654,21 @@ function PublicForm({
     audience,
     busy,
     run,
+    report,
     search,
     onCancel,
 }: {
     audience: KnowledgeAudience
     busy: boolean
     run: Run
+    report: ReportDirty
     search: (query: string, signal: AbortSignal) => Promise<ReferenceOption[]>
     onCancel: () => void
 }) {
     const [place, setPlace] = useState<ReferenceOption | null>(null)
     const [awareness, setAwareness] = useState("aware")
     const [problem, setProblem] = useState<string | null>(null)
+    useReportDirty(report, "public", place !== null)
     return (
         <form
             noValidate
@@ -653,6 +712,8 @@ function KnowerRow({
     onToggle,
     busy,
     run,
+    report,
+    readOnly,
 }: {
     knower: KnowerAudience
     audience: KnowledgeAudience
@@ -660,12 +721,23 @@ function KnowerRow({
     onToggle: () => void
     busy: boolean
     run: Run
+    report: ReportDirty
+    // The claim is not published, so a belief cannot be changed: the details are text only.
+    readOnly: boolean
 }) {
     const [awareness, setAwareness] = useState(knower.awareness_level)
     const [confidence, setConfidence] = useState(knower.confidence === null ? "" : String(knower.confidence))
     const [interpretation, setInterpretation] = useState(knower.interpretation ?? "")
     const [problem, setProblem] = useState<string | null>(null)
     const panelId = `knower-${knower.entity_knowledge_id}`
+    useReportDirty(
+        report,
+        panelId,
+        !readOnly &&
+            (awareness !== knower.awareness_level ||
+                confidence !== (knower.confidence === null ? "" : String(knower.confidence)) ||
+                interpretation.trim() !== (knower.interpretation ?? "")),
+    )
 
     return (
         <li className="knowledge-roster__row knowledge-roster__row--knower" aria-label={knower.knower_name}>
@@ -692,6 +764,7 @@ function KnowerRow({
                         </p>
                     ) : null}
                     <p>{knower.willing_to_share ? "Willing to share." : "Not willing to share."}</p>
+                    {readOnly ? null : (
                     <form
                         noValidate
                         aria-label={`Change belief of ${knower.knower_name}`}
@@ -746,6 +819,7 @@ function KnowerRow({
                             </button>
                         </div>
                     </form>
+                    )}
                 </div>
             ) : null}
         </li>

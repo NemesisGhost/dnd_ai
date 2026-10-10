@@ -449,3 +449,65 @@ def test_authority_replay_and_foreign_claims(s: ContentSetup) -> None:
     ).json()["knowledge_item_id"]
     assert learn(s, other, npc).status_code == 404
     assert s.gm.get(f"/campaigns/{s.cid}/knowledge/{other}/audience").status_code == 404
+
+
+def claim_version(s: ContentSetup, claim: str) -> int:
+    version = s.gm.get(s.url(f"knowledge/{claim}")).json()["row_version"]
+    assert isinstance(version, int)
+    return version
+
+
+def change_belief(s: ContentSetup, knower: dict, token: str, **fields: object):  # type: ignore[no-untyped-def]
+    return s.gm.post_raw(
+        f"/campaigns/{s.cid}/knowledge/knowers/{knower['entity_knowledge_id']}/belief",
+        {"expected_last_event_id": token, **fields},
+        key=s.gm.fresh_key(),
+    )
+
+
+def test_an_archived_claim_keeps_its_knowers_but_takes_no_new_knowledge(s: ContentSetup) -> None:
+    claim, mira, bo = published_claim(s), published_npc(s), published_npc(s, "Bo")
+    set_clock(s)
+    learned = learn(s, claim, mira).json()
+
+    archived = s.transition(claim, "archive", claim_version(s, claim))
+    assert archived["lifecycle_status"] == "archived"
+    assert learn(s, claim, bo).status_code == 404
+    [knower] = audience(s, claim)["knowers"]
+    assert change_belief(s, knower, learned["event_id"], confidence=10).status_code == 404
+    # What was recorded is kept, unchanged.
+    [kept] = audience(s, claim)["knowers"]
+    assert kept["knower_entity_id"] == mira and kept["confidence"] is None
+    assert event_types(s) == ["knowledge_learned"]
+
+    s.transition(claim, "restore", archived["row_version"], reason="Back in play")
+    assert learn(s, claim, bo).status_code == 201
+    assert change_belief(s, kept, learned["event_id"], confidence=10).status_code == 200
+    assert len(audience(s, claim)["knowers"]) == 2
+
+
+def test_a_superseded_claim_keeps_its_knowers_and_moves_nothing_to_the_replacement(
+    s: ContentSetup,
+) -> None:
+    old = published_claim(s)
+    replacement = published_claim(s, "The duke was bitten.")
+    mira, bo = published_npc(s), published_npc(s, "Bo")
+    set_clock(s)
+    learn(s, old, mira)
+
+    superseded = s.transition(
+        old,
+        "supersede",
+        claim_version(s, old),
+        replacement_entity_id=replacement,
+        replacement_expected_row_version=claim_version(s, replacement),
+    )
+    assert superseded["canon_status"] == "superseded"
+    assert [k["knower_entity_id"] for k in audience(s, old)["knowers"]] == [mira]
+    assert audience(s, replacement)["knowers"] == []
+    assert learn(s, old, bo).status_code == 404
+    [knower] = audience(s, old)["knowers"]
+    assert change_belief(s, knower, knower["last_event_id"], confidence=10).status_code == 404
+    # New knowledge goes on the replacement.
+    assert learn(s, replacement, bo).status_code == 201
+    assert [k["knower_entity_id"] for k in audience(s, replacement)["knowers"]] == [bo]

@@ -14,6 +14,7 @@ const AUDIENCE = "/campaigns/mundivita/knowledge/k1/audience"
 const VIEW_PATH = "/campaigns/mundivita/authoring/knowledge/k1"
 const UPDATE = `${VIEW_PATH}/update`
 const KNOWLEDGE = "/campaigns/mundivita/knowledge"
+const LIFECYCLE = "/campaigns/mundivita/entities/k1/lifecycle"
 
 const OPTIONS = {
   can_create: true,
@@ -64,6 +65,23 @@ const view = (extra: Record<string, unknown> = {}) => ({
   ...extra,
 })
 
+const lifecycle = (extra: Record<string, unknown> = {}) => ({
+  entity_id: "k1",
+  entity_type_code: "knowledge_item",
+  canonical_name: "x",
+  canon_status: "draft",
+  lifecycle_status: "active",
+  row_version: 2,
+  lifecycle_managed: true,
+  superseded_by: null,
+  available_actions: ["submit_for_review", "reject", "archive", "delete_draft"],
+  blocked_actions: [
+    { action: "approve", reason: "wrong_canon_status" },
+    { action: "publish", reason: "wrong_canon_status" },
+  ],
+  ...extra,
+})
+
 const audience = () => ({
   knowledge_item_id: "k1",
   awareness_levels: ["aware", "rumored", "suspected"],
@@ -93,11 +111,33 @@ const PARTIES = {
   ],
 }
 
+const PROVENANCE = {
+  entity_id: "k1",
+  name: "x",
+  entity_type_code: "knowledge_item",
+  canon_status: "draft",
+  lifecycle_status: "active",
+  created_at: "2026-10-04T00:00:00Z",
+  created_by_name: "Platform Administrator",
+  origin: { source_id: "s0", source_type: "gm_entry", source_type_label: "GM entry", title: "GM entry", reference: null, created_by_name: null, attached_count: 1 },
+  links: [],
+  transitions: [],
+  superseded_by: null,
+  supersedes: [],
+}
+const SOURCES = {
+  items: [],
+  source_types: [{ value: "note", label: "Note" }],
+  limits: { title_max_length: 200, reference_max_length: 2000 },
+}
+
 const RECEIPT = { knowledge_item_id: "k1", record_id: "r1", changed: true, event_id: "e1" }
 const STALE = { status: 409, body: { error: { code: "stale_write", message: "m", correlation_id: "c" } } }
 
 let server: MockServer
 let current: { detail: object; view: object }
+
+const at = (section: string, query = "") => `${CLAIM}?${query === "" ? "" : `${query}&`}section=${section}`
 
 function setup(path = CLAIM, capabilities: string[] = ["canon.edit"]) {
   current = { detail: detail(), view: view() }
@@ -112,6 +152,10 @@ function setupPublished(path = CLAIM) {
   current = { detail: current.detail, view: view({ canon_status: "canon" }) }
   server.on("GET", VIEW_PATH, () => ({ body: current.view }))
   return rendered
+}
+
+const withLifecycle = (body: object) => {
+  server.on("GET", LIFECYCLE, () => ({ body }))
 }
 
 beforeEach(() => {
@@ -129,6 +173,8 @@ beforeEach(() => {
     },
   })
   server.on("GET", /\/entities\/k1\/lifecycle$/, { status: 404 })
+  server.on("GET", /\/entities\/k1\/provenance$/, { body: PROVENANCE })
+  server.on("GET", "/campaigns/mundivita/sources", { body: SOURCES })
   server.on("GET", /audience-preview|audience_preview/, { status: 404 })
   server.on("POST", /\/campaigns\/mundivita\/knowledge\//, { body: RECEIPT })
 })
@@ -138,93 +184,355 @@ afterEach(() => {
 })
 
 const claimBox = () => screen.findByRole("textbox", { name: /^Claim/ })
+const stageLink = (n: number) => screen.getByRole("link", { name: new RegExp(`^${n}\\.`) })
+const panelOf = (key: string) => document.getElementById(`claim-section-${key}-heading`)!.closest("section")!
+// The workspace renders once the lifecycle read has settled, so wait for a panel before using it.
+const findPanel = async (key: string) => {
+  await waitFor(() => expect(document.getElementById(`claim-section-${key}-heading`)).not.toBeNull())
+  return panelOf(key)
+}
+const breadcrumbKnowledge = () =>
+  within(screen.getByRole("navigation", { name: "Breadcrumb" })).getByRole("link", { name: "Knowledge" })
 
 describe("unified knowledge claim page", () => {
-  it("orders the claim, canonical information, character knowledge and who knows this", async () => {
-    setup()
-    await screen.findByRole("heading", { level: 2, name: "Who knows this" })
-    expect(screen.getByRole("heading", { level: 1, name: "Knowledge claim" })).toBeInTheDocument()
-    expect(screen.getAllByRole("main")).toHaveLength(1)
-    const names = screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent)
-    expect(names.slice(0, 3)).toEqual([
-      "GM and canonical information",
-      "Character knowledge",
-      "Who knows this",
-    ])
-    const crumbs = screen.getByRole("navigation", { name: "Breadcrumb" })
-    expect(within(crumbs).getByRole("link", { name: "Knowledge" })).toHaveAttribute("href", "/app/mundivita/knowledge")
-    expect(within(crumbs).getByText("Claim")).toHaveAttribute("aria-current", "page")
-    // The subject block sits between the claim and the canonical information.
-    const about = screen.getByText("About this World entry")
-    const canonical = screen.getByRole("heading", { name: "GM and canonical information" })
-    expect(about.compareDocumentPosition(canonical) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(screen.getByRole("link", { name: "Open World entry" })).toHaveAttribute(
-      "href",
-      "/app/mundivita/world/location/l1",
-    )
+  describe("header", () => {
+    it("shows the claim, its subject and the actual status apart from the stage navigation", async () => {
+      withLifecycle(lifecycle())
+      setup(`${CLAIM}?character_id=c1`)
+      expect(await screen.findByRole("heading", { level: 1, name: "The duke is a vampire." })).toBeInTheDocument()
+      expect(screen.getAllByRole("main")).toHaveLength(1)
+      const crumbs = screen.getByRole("navigation", { name: "Breadcrumb" })
+      expect(within(crumbs).getByRole("link", { name: "Knowledge" })).toHaveAttribute(
+        "href",
+        "/app/mundivita/knowledge?character_id=c1",
+      )
+      expect(within(crumbs).getByText("Claim")).toHaveAttribute("aria-current", "page")
+      const status = await screen.findByRole("group", { name: "Record status" })
+      expect(within(status).getByText("Draft")).toBeInTheDocument()
+      expect(screen.getAllByText("About this World entry")).not.toHaveLength(0)
+      expect(screen.getAllByRole("link", { name: "Open World entry" })[0]).toHaveAttribute(
+        "href",
+        "/app/mundivita/world/location/l1",
+      )
+      // Navigation says nothing about status.
+      const stages = screen.getByRole("navigation", { name: "Claim stages" })
+      expect(within(stages).getAllByRole("link").map((l) => l.textContent)).toEqual([
+        "1. Prepare",
+        "2. Review & publish",
+        "3. Use in play",
+      ])
+      expect(within(stages).queryByText("Draft")).toBeNull()
+    })
+
+    it("marks an archived record as archived next to its canon status", async () => {
+      withLifecycle(lifecycle({ canon_status: "canon", lifecycle_status: "archived", available_actions: ["restore"] }))
+      setup()
+      const status = await screen.findByRole("group", { name: "Record status" })
+      expect(within(status).getByText("Canon")).toBeInTheDocument()
+      expect(within(status).getByText("Archived")).toBeInTheDocument()
+    })
+
+    it("cuts a very long claim in the headline and keeps it whole in the Claim section", async () => {
+      const long = "A long claim. ".repeat(40).trim()
+      current = { detail: detail({ statement: long }), view: view({ statement: long }) }
+      server.on("GET", DETAIL, () => ({ body: current.detail }))
+      server.on("GET", VIEW_PATH, () => ({ body: current.view }))
+      openApp(CLAIM, ["canon.edit"])
+      const heading = await screen.findByRole("heading", { level: 1, name: /^A long claim/ })
+      expect(heading.textContent!.endsWith("…")).toBe(true)
+      expect(heading.textContent!.length).toBeLessThan(long.length)
+      expect(await claimBox()).toHaveValue(long)
+    })
   })
 
-  it("renders editable controls straight away, with no view or edit toggle", async () => {
-    setup()
-    expect(await claimBox()).toHaveValue("The duke is a vampire.")
-    expect(screen.getByRole("combobox", { name: /Kind/ })).toHaveValue("secret")
-    expect(screen.getByRole("combobox", { name: /Truth/ })).toHaveValue("true")
-    expect(screen.getByRole("combobox", { name: /Sensitivity/ })).toHaveValue("secret")
-    // The subject is one readable field with separate actions, not a name repeated in an input.
-    const about = screen.getByText("About this World entry").parentElement as HTMLElement
-    expect(within(about).getByText("Keep")).toBeInTheDocument()
-    expect(within(about).getByRole("link", { name: "Open World entry" })).toBeInTheDocument()
-    expect(within(about).getByRole("button", { name: "Change subject" })).toBeInTheDocument()
-    expect(within(about).getByRole("button", { name: "Clear subject" })).toBeInTheDocument()
-    expect(within(about).queryByRole("combobox")).toBeNull()
-    expect(screen.queryByRole("button", { name: /^Edit/ })).toBeNull()
-    expect(screen.queryByRole("link", { name: /Edit knowledge claim|Who knows this/ })).toBeNull()
+  describe("staged workspace", () => {
+    it("opens the claim for a draft, with one visible section and every panel kept mounted", async () => {
+      withLifecycle(lifecycle())
+      const { router } = setup()
+      expect(await claimBox()).toHaveValue("The duke is a vampire.")
+      await waitFor(() => expect(router.state.location.search).toBe("?section=claim"))
+      expect(screen.getByRole("heading", { level: 2, name: "Claim" })).toBeInTheDocument()
+      for (const hidden of ["sources", "review", "publication", "who-knows", "character"]) {
+        expect(panelOf(hidden)).not.toBeVisible()
+      }
+      expect(panelOf("claim")).toBeVisible()
+      expect(stageLink(1)).toHaveAttribute("aria-current", "step")
+      const sections = screen.getByRole("navigation", { name: "Prepare sections" })
+      expect(within(sections).getAllByRole("link").map((l) => l.textContent)).toEqual(["Claim", "Sources"])
+      expect(within(sections).getByRole("link", { name: "Claim" })).toHaveAttribute("aria-current", "page")
+    })
+
+    it.each([
+      ["draft", {}, "claim"],
+      ["rejected", { available_actions: ["return_to_draft", "archive"] }, "claim"],
+      ["proposed", { available_actions: ["approve", "return_to_draft", "reject"] }, "review"],
+      ["approved", { available_actions: ["publish", "return_to_draft"] }, "review"],
+      ["canon", { available_actions: ["supersede", "archive"] }, "who-knows"],
+    ])("opens a %s claim at its %s section", async (status, extra, section) => {
+      withLifecycle(lifecycle({ canon_status: status, ...extra }))
+      const { router } = setup()
+      await waitFor(() => expect(router.state.location.search).toBe(`?section=${section}`))
+      expect(router.state.historyAction).toBe("REPLACE")
+    })
+
+    it("opens an archived claim at Publication", async () => {
+      withLifecycle(lifecycle({ canon_status: "canon", lifecycle_status: "archived", available_actions: ["restore"] }))
+      const { router } = setup()
+      await waitFor(() => expect(router.state.location.search).toBe("?section=publication"))
+    })
+
+    it("opens the claim when the lifecycle could not be read", async () => {
+      server.on("GET", /\/entities\/k1\/lifecycle$/, { status: 500 })
+      const { router } = setup()
+      await claimBox()
+      await waitFor(() => expect(router.state.location.search).toBe("?section=claim"))
+      fireEvent.click(stageLink(2))
+      fireEvent.click(screen.getByRole("link", { name: "Publication" }))
+      expect(await screen.findByText(/lifecycle could not be loaded/)).toBeInTheDocument()
+    })
+
+    it("walks the stages and sections with links that send no request and change no status", async () => {
+      withLifecycle(lifecycle())
+      const { router } = setup(`${CLAIM}?character_id=c1&party_id=p1`)
+      await claimBox()
+      await waitFor(() => expect(server.callsTo("GET", AUDIENCE).length).toBeGreaterThan(0))
+      await waitFor(() => expect(server.callsTo("GET", "/campaigns/mundivita/sources").length).toBeGreaterThan(0))
+      await waitFor(() => expect(router.state.location.search).toContain("section=claim"))
+      const before = server.calls.length
+
+      fireEvent.click(stageLink(2))
+      expect(router.state.location.search).toBe("?character_id=c1&party_id=p1&section=review")
+      expect(await screen.findByRole("heading", { level: 2, name: "Review claim" })).toBeInTheDocument()
+      expect(screen.queryByRole("heading", { level: 2, name: "Claim" })).toBeNull()
+      fireEvent.click(screen.getByRole("link", { name: "Publication" }))
+      expect(router.state.location.search).toBe("?character_id=c1&party_id=p1&section=publication")
+      fireEvent.click(stageLink(3))
+      expect(router.state.location.search).toBe("?character_id=c1&party_id=p1&section=who-knows")
+      fireEvent.click(screen.getByRole("link", { name: "Character knowledge" }))
+      expect(router.state.location.search).toBe("?character_id=c1&party_id=p1&section=character")
+      // A stage reopens on the section last used in it.
+      fireEvent.click(stageLink(2))
+      expect(router.state.location.search).toBe("?character_id=c1&party_id=p1&section=publication")
+      expect(router.state.location.pathname).toBe(CLAIM)
+
+      expect(server.calls.length).toBe(before)
+      expect(server.calls.filter((c) => c.method !== "GET")).toHaveLength(0)
+    })
+
+    it("walks back through the sections with the browser history", async () => {
+      withLifecycle(lifecycle())
+      const { router } = setup()
+      await claimBox()
+      await waitFor(() => expect(router.state.location.search).toBe("?section=claim"))
+      fireEvent.click(screen.getByRole("link", { name: "Sources" }))
+      fireEvent.click(stageLink(3))
+      expect(router.state.location.search).toBe("?section=who-knows")
+      await router.navigate(-1)
+      await waitFor(() => expect(router.state.location.search).toBe("?section=sources"))
+      expect(await screen.findByRole("heading", { level: 2, name: "Sources" })).toBeInTheDocument()
+      await router.navigate(-1)
+      await waitFor(() => expect(router.state.location.search).toBe("?section=claim"))
+    })
+
+    it("replaces an unknown section, and maps the old fragments, keeping the perspective", async () => {
+      withLifecycle(lifecycle())
+      const first = setup(`${CLAIM}?character_id=c1&section=nonsense`)
+      await waitFor(() => expect(first.router.state.location.search).toBe("?character_id=c1&section=claim"))
+      expect(first.router.state.historyAction).toBe("REPLACE")
+      first.unmount()
+
+      const second = setup(`${CLAIM}?party_id=p1#who-knows`)
+      await waitFor(() => expect(second.router.state.location.search).toBe("?party_id=p1&section=who-knows"))
+      expect(second.router.state.location.hash).toBe("")
+      expect(await screen.findByRole("heading", { level: 2, name: "Who knows this" })).toBeInTheDocument()
+    })
+
+    it("keeps a typed claim draft, source title and open roster form while another section is shown", async () => {
+      withLifecycle(lifecycle({ canon_status: "canon", available_actions: ["supersede", "archive"] }))
+      setup(at("claim"))
+      current = { detail: detail(), view: view({ canon_status: "canon" }) }
+      server.on("GET", VIEW_PATH, () => ({ body: current.view }))
+      fireEvent.change(await claimBox(), { target: { value: "Draft kept" } })
+
+      fireEvent.click(screen.getByRole("link", { name: "Sources" }))
+      fireEvent.click(await screen.findByRole("button", { name: "Add source" }))
+      fireEvent.change(screen.getByRole("textbox", { name: "Title" }), { target: { value: "Ledger page" } })
+
+      fireEvent.click(stageLink(3))
+      fireEvent.click(await screen.findByRole("button", { name: "Make public" }))
+      expect(screen.getByRole("form", { name: "Make this public" })).toBeInTheDocument()
+
+      // Prepare reopens on the section last used in it (Sources).
+      fireEvent.click(stageLink(1))
+      expect(screen.getByRole("textbox", { name: "Title" })).toHaveValue("Ledger page")
+      fireEvent.click(screen.getByRole("link", { name: "Claim" }))
+      expect(screen.getByRole("textbox", { name: /^Claim/ })).toHaveValue("Draft kept")
+      fireEvent.click(screen.getByRole("link", { name: "Sources" }))
+      expect(screen.getByRole("textbox", { name: "Title" })).toHaveValue("Ledger page")
+      fireEvent.click(stageLink(3))
+      expect(screen.getByRole("form", { name: "Make this public" })).toBeInTheDocument()
+      expect(server.calls.filter((c) => c.method !== "GET")).toHaveLength(0)
+    })
   })
 
-  it("shows readable values, with no editing actions and no authoring or audience requests, to a reader", async () => {
-    setup(CLAIM, ["campaign.view"])
-    expect(await screen.findByText("The duke is a vampire.")).toBeInTheDocument()
-    expect(screen.queryByRole("textbox")).toBeNull()
-    expect(screen.queryByRole("combobox", { name: /Kind|Truth|Sensitivity|Subject/ })).toBeNull()
-    expect(screen.queryByRole("button", { name: /Save claim|Discard changes/ })).toBeNull()
-    expect(screen.getByRole("heading", { name: "GM and canonical information" })).toBeInTheDocument()
-    expect(screen.getByText("Truth")).toBeInTheDocument()
-    expect(screen.queryByRole("heading", { name: "Who knows this" })).toBeNull()
-    expect(server.calls.some((c) => c.path.includes("/authoring/") || c.path.endsWith("/audience"))).toBe(false)
+  describe("claim section", () => {
+    it("renders editable controls straight away, with no view or edit toggle", async () => {
+      setup()
+      expect(await claimBox()).toHaveValue("The duke is a vampire.")
+      expect(screen.getByRole("combobox", { name: /Kind/ })).toHaveValue("secret")
+      expect(screen.getByRole("combobox", { name: /Truth/ })).toHaveValue("true")
+      expect(screen.getByRole("combobox", { name: /Sensitivity/ })).toHaveValue("secret")
+      // The subject is one readable field with separate actions, not a name repeated in an input.
+      const about = within(panelOf("claim")).getByText("About this World entry").parentElement as HTMLElement
+      expect(within(about).getByText("Keep")).toBeInTheDocument()
+      expect(within(about).getByRole("link", { name: "Open World entry" })).toBeInTheDocument()
+      expect(within(about).getByRole("button", { name: "Change subject" })).toBeInTheDocument()
+      expect(within(about).getByRole("button", { name: "Clear subject" })).toBeInTheDocument()
+      expect(within(about).queryByRole("combobox")).toBeNull()
+      expect(screen.queryByRole("button", { name: /^Edit/ })).toBeNull()
+    })
+
+    it("lets an editor set a subject on an unlinked claim, inside the same About block", async () => {
+      current = { detail: detail({ subject: null }), view: view({ subject: null }) }
+      server.on("GET", DETAIL, () => ({ body: current.detail }))
+      server.on("GET", VIEW_PATH, () => ({ body: current.view }))
+      openApp(CLAIM, ["canon.edit"])
+      await claimBox()
+      const about = within(panelOf("claim")).getByText("About this World entry").parentElement as HTMLElement
+      expect(within(about).getByRole("combobox", { name: "Subject" })).toBeInTheDocument()
+      expect(within(about).queryByRole("link")).toBeNull()
+    })
+
+    it("shows the subject once, with Open, Change and Clear as separate actions", async () => {
+      withLifecycle(lifecycle())
+      setup()
+      await claimBox()
+      const aboutBlock = () => within(panelOf("claim")).getByText("About this World entry").parentElement as HTMLElement
+      expect(within(aboutBlock()).getAllByText("Keep")).toHaveLength(1)
+      expect(within(aboutBlock()).getByRole("link", { name: "Open World entry" })).toHaveAttribute(
+        "href",
+        "/app/mundivita/world/location/l1",
+      )
+      fireEvent.click(within(aboutBlock()).getByRole("button", { name: "Change subject" }))
+      expect(within(aboutBlock()).getByRole("combobox", { name: "Subject" })).toBeInTheDocument()
+      fireEvent.focus(within(aboutBlock()).getByRole("combobox", { name: "Subject" }))
+      fireEvent.click(await within(aboutBlock()).findByRole("option", { name: /Harbor/ }))
+      // The unsaved choice is shown as such, with no stale link to open.
+      expect(within(aboutBlock()).getByText("Harbor")).toBeInTheDocument()
+      expect(within(aboutBlock()).getByText("not saved yet")).toBeInTheDocument()
+      expect(within(aboutBlock()).queryByRole("link", { name: "Open World entry" })).toBeNull()
+      expect(screen.getByText("Unsaved changes to the claim")).toBeInTheDocument()
+    })
+
+    it("clears the subject as an unsaved change that Discard undoes, and saves it as null", async () => {
+      server.on("POST", UPDATE, { body: RECEIPT })
+      setup()
+      await claimBox()
+      const aboutBlock = () => within(panelOf("claim")).getByText("About this World entry").parentElement as HTMLElement
+      fireEvent.click(within(aboutBlock()).getByRole("button", { name: "Clear subject" }))
+      expect(within(aboutBlock()).getByText("No subject (not saved yet)")).toBeInTheDocument()
+      expect(within(aboutBlock()).getByRole("combobox", { name: "Subject" })).toBeInTheDocument()
+      fireEvent.click(screen.getByRole("button", { name: "Discard changes" }))
+      expect(within(aboutBlock()).getByText("Keep")).toBeInTheDocument()
+      fireEvent.click(within(aboutBlock()).getByRole("button", { name: "Clear subject" }))
+      fireEvent.click(screen.getByRole("button", { name: "Save claim" }))
+      await waitFor(() => expect(server.callsTo("POST", UPDATE)).toHaveLength(1))
+      expect(server.callsTo("POST", UPDATE)[0]!.body).toMatchObject({ subject_entity_id: null })
+    })
+
+    it("freezes claim, kind and subject once someone knows it, and says why", async () => {
+      setup()
+      current = { detail: detail(), view: view({ in_use: true, field_locks: ["statement", "knowledge_type", "subject"] }) }
+      server.on("GET", VIEW_PATH, () => ({ body: current.view }))
+      const box = await claimBox()
+      await waitFor(() => expect(box).toBeDisabled())
+      expect(screen.getByRole("combobox", { name: /Kind/ })).toBeDisabled()
+      expect(screen.queryByRole("combobox", { name: "Subject" })).toBeNull()
+      expect(screen.queryByRole("button", { name: /Change subject|Clear subject/ })).toBeNull()
+      expect(screen.getByText(/The subject cannot change/)).toBeInTheDocument()
+      expect(within(panelOf("claim")).getByRole("link", { name: "Open World entry" })).toBeInTheDocument()
+      expect(screen.getByRole("combobox", { name: /Truth/ })).toBeEnabled()
+    })
+
+    it.each([
+      ["proposed", "in review", "Return it to draft to edit it."],
+      ["approved", "approved", "Return it to draft to edit it."],
+      ["rejected", "rejected", "Return it to draft to rework it."],
+    ])("shows a %s claim as text with one line saying how to edit it", async (status, word, step) => {
+      withLifecycle(lifecycle({ canon_status: status, available_actions: ["return_to_draft"] }))
+      setup(at("claim"))
+      current = {
+        detail: detail(),
+        view: view({
+          canon_status: status,
+          available_actions: [],
+          blocked_actions: [{ action: "update", reason: "review_in_progress" }],
+        }),
+      }
+      server.on("GET", VIEW_PATH, () => ({ body: current.view }))
+      const note = await screen.findByText(new RegExp(`This claim is ${word}. ${step}`))
+      expect(within(note).getByRole("link", { name: "Open Publication" })).toHaveAttribute(
+        "href",
+        `${CLAIM}?section=publication`,
+      )
+      expect(screen.queryByRole("textbox", { name: /^Claim/ })).toBeNull()
+      expect(screen.queryByRole("button", { name: "Save claim" })).toBeNull()
+      expect(screen.getByRole("heading", { name: "GM and canonical information" })).toBeInTheDocument()
+    })
+
+    it("keeps the claim editable when nobody may see who knows it", async () => {
+      setup()
+      server.on("GET", AUDIENCE, { status: 403 })
+      expect(await claimBox()).toBeEnabled()
+      await waitFor(() => expect(server.callsTo("GET", AUDIENCE).length).toBeGreaterThan(0))
+      expect(within(panelOf("who-knows")).queryByText(/Red Company/)).toBeNull()
+    })
   })
 
-  it("keeps restricted canonical fields absent when the server withheld them", async () => {
-    current = { detail: detail({ truth_status_code: null, sensitivity: null }), view: view() }
-    server.on("GET", DETAIL, () => ({ body: current.detail }))
-    openApp(CLAIM, ["campaign.view"])
-    await screen.findByText("The duke is a vampire.")
-    expect(screen.queryByRole("heading", { name: "GM and canonical information" })).toBeNull()
-    expect(screen.queryByText("Truth")).toBeNull()
-    expect(screen.queryByText("Sensitivity")).toBeNull()
-    expect(screen.queryByText("Not recorded")).toBeNull()
-  })
+  describe("a reader", () => {
+    it("shows readable values, with no stages, no editing actions and no editor requests", async () => {
+      setup(CLAIM, ["campaign.view"])
+      expect(await screen.findByRole("heading", { level: 1, name: "The duke is a vampire." })).toBeInTheDocument()
+      expect(screen.queryByRole("textbox")).toBeNull()
+      expect(screen.queryByRole("navigation", { name: "Claim stages" })).toBeNull()
+      expect(screen.queryByRole("combobox", { name: /Kind|Truth|Sensitivity|Subject/ })).toBeNull()
+      expect(screen.queryByRole("button", { name: /Save claim|Discard changes/ })).toBeNull()
+      expect(screen.getByRole("heading", { name: "GM and canonical information" })).toBeInTheDocument()
+      expect(screen.getByText("Truth")).toBeInTheDocument()
+      expect(screen.getByRole("heading", { name: "Character knowledge" })).toBeInTheDocument()
+      expect(screen.queryByRole("heading", { name: "Who knows this" })).toBeNull()
+      expect(screen.queryByRole("group", { name: "Record status" })).toBeNull()
+      expect(screen.getByRole("link", { name: "Keep" })).toHaveAttribute("href", "/app/mundivita/world/location/l1")
+      expect(server.calls.some((c) => /\/authoring\/|\/audience$|lifecycle|provenance|\/sources/.test(c.path))).toBe(false)
+    })
 
-  it("omits the About block when the server returned no subject", async () => {
-    current = { detail: detail({ subject: null }), view: view({ subject: null }) }
-    server.on("GET", DETAIL, () => ({ body: current.detail }))
-    server.on("GET", VIEW_PATH, () => ({ body: current.view }))
-    openApp(CLAIM, ["campaign.view"])
-    await screen.findByText("The duke is a vampire.")
-    expect(screen.queryByText("About this World entry")).toBeNull()
-  })
+    it("ignores a section in the address and does not rewrite it", async () => {
+      const { router } = setup(`${CLAIM}?section=publication`, ["campaign.view"])
+      await screen.findByRole("heading", { level: 1, name: "The duke is a vampire." })
+      expect(router.state.location.search).toBe("?section=publication")
+      expect(screen.queryByRole("navigation", { name: "Claim stages" })).toBeNull()
+    })
 
-  it("lets an editor set a subject on an unlinked claim, inside the same About block", async () => {
-    current = { detail: detail({ subject: null }), view: view({ subject: null }) }
-    server.on("GET", DETAIL, () => ({ body: current.detail }))
-    server.on("GET", VIEW_PATH, () => ({ body: current.view }))
-    openApp(CLAIM, ["canon.edit"])
-    await claimBox()
-    const about = screen.getByText("About this World entry").parentElement as HTMLElement
-    expect(within(about).getByRole("combobox", { name: "Subject" })).toBeInTheDocument()
-    expect(within(about).queryByRole("link")).toBeNull()
-  })
+    it("keeps restricted canonical fields absent when the server withheld them", async () => {
+      current = { detail: detail({ truth_status_code: null, sensitivity: null }), view: view() }
+      server.on("GET", DETAIL, () => ({ body: current.detail }))
+      openApp(CLAIM, ["campaign.view"])
+      await screen.findByRole("heading", { level: 1, name: "The duke is a vampire." })
+      expect(screen.queryByRole("heading", { name: "GM and canonical information" })).toBeNull()
+      expect(screen.queryByText("Truth")).toBeNull()
+      expect(screen.queryByText("Sensitivity")).toBeNull()
+      expect(screen.queryByText("Not recorded")).toBeNull()
+    })
 
-  describe("character knowledge", () => {
+    it("omits the About block when the server returned no subject", async () => {
+      current = { detail: detail({ subject: null }), view: view({ subject: null }) }
+      server.on("GET", DETAIL, () => ({ body: current.detail }))
+      server.on("GET", VIEW_PATH, () => ({ body: current.view }))
+      openApp(CLAIM, ["campaign.view"])
+      await screen.findByRole("heading", { level: 1, name: "The duke is a vampire." })
+      expect(screen.queryByText("About this World entry")).toBeNull()
+    })
+
     it("shows only what is recorded for the perspective in the address", async () => {
       current = {
         detail: detail({ awareness_level: "understood", confidence: 85, willing_to_share: null }),
@@ -241,6 +549,18 @@ describe("unified knowledge claim page", () => {
     it("says so when the selected character has nothing recorded", async () => {
       setup(`${CLAIM}?character_id=c1`, ["campaign.view"])
       expect(await screen.findByText(/no recorded knowledge of this claim/)).toBeInTheDocument()
+    })
+
+    it("shows an editor the same character knowledge in Use in play", async () => {
+      current = {
+        detail: detail({ awareness_level: "understood", confidence: 85, willing_to_share: true }),
+        view: view(),
+      }
+      server.on("GET", DETAIL, () => ({ body: current.detail }))
+      server.on("GET", VIEW_PATH, () => ({ body: current.view }))
+      openApp(at("character", "character_id=c1"), ["canon.edit"])
+      expect(await screen.findByText("Understood")).toBeInTheDocument()
+      expect(screen.getByText("Willing to share")).toBeInTheDocument()
     })
   })
 
@@ -343,47 +663,325 @@ describe("unified knowledge claim page", () => {
     })
   })
 
-  describe("subject lock and restrictions", () => {
-    it("freezes claim, kind and subject once someone knows it, and says why", async () => {
-      setup()
-      current = { detail: detail(), view: view({ in_use: true, field_locks: ["statement", "knowledge_type", "subject"] }) }
-      server.on("GET", VIEW_PATH, () => ({ body: current.view }))
-      const box = await claimBox()
-      await waitFor(() => expect(box).toBeDisabled())
-      expect(screen.getByRole("combobox", { name: /Kind/ })).toBeDisabled()
-      expect(screen.queryByRole("combobox", { name: "Subject" })).toBeNull()
-      expect(screen.queryByRole("button", { name: /Change subject|Clear subject/ })).toBeNull()
-      expect(screen.getByText(/The subject cannot change/)).toBeInTheDocument()
-      expect(screen.getByRole("link", { name: "Open World entry" })).toBeInTheDocument()
-      expect(screen.getByRole("combobox", { name: /Truth/ })).toBeEnabled()
-    })
-
-    it("shows text and the server's reason when editing is blocked, while who-knows stays manageable", async () => {
-      setup()
-      current = {
-        detail: detail(),
-        view: view({ available_actions: [], blocked_actions: [{ action: "update", reason: "archived" }] }),
+  describe("Review & publish", () => {
+    it("explains a draft and offers the next step with no list of unavailable actions", async () => {
+      withLifecycle(lifecycle())
+      setup(at("publication"))
+      const group = await screen.findByRole("group", { name: "Lifecycle" })
+      expect(screen.getByText(/Submit it for review when it is ready/)).toBeInTheDocument()
+      expect(within(group).getByRole("button", { name: "Submit for review" })).toBeInTheDocument()
+      expect(within(group).queryByRole("button", { name: "Reject" })).not.toBeVisible()
+      fireEvent.click(within(group).getByText("More"))
+      for (const name of ["Reject", "Archive", "Delete draft"]) {
+        expect(within(group).getByRole("button", { name })).toBeInTheDocument()
       }
-      server.on("GET", VIEW_PATH, () => ({ body: current.view }))
-      expect(await screen.findByText(/Editing unavailable/)).toBeInTheDocument()
-      expect(screen.queryByRole("textbox", { name: /^Claim/ })).toBeNull()
-      expect(screen.queryByRole("button", { name: "Save claim" })).toBeNull()
-      expect(screen.getByRole("button", { name: "Make public" })).toBeInTheDocument()
+      expect(screen.queryByText(/unavailable:/)).toBeNull()
+      expect(screen.queryByRole("heading", { name: "Lifecycle" })).toBeNull()
     })
 
-    it("keeps the claim editable when nobody may see who knows it", async () => {
+    it.each([
+      ["draft", ["submit_for_review", "reject", "archive"], "Submit for review", "publication"],
+      ["proposed", ["approve", "return_to_draft", "reject"], "Approve", "review"],
+      ["approved", ["publish", "return_to_draft"], "Publish as canon", "publication"],
+      ["rejected", ["return_to_draft", "archive"], "Return it to draft to rework it", "publication"],
+    ])("points a %s claim at the real next step in the header", async (status, actions, text, section) => {
+      withLifecycle(lifecycle({ canon_status: status, available_actions: actions }))
       setup()
-      server.on("GET", AUDIENCE, { status: 403 })
-      expect(await claimBox()).toBeEnabled()
-      await waitFor(() => expect(server.callsTo("GET", AUDIENCE).length).toBeGreaterThan(0))
-      expect(screen.queryByRole("heading", { name: "Who knows this" })).toBeNull()
-      expect(screen.queryByText(/Red Company/)).toBeNull()
+      const next = await screen.findByRole("link", { name: new RegExp(text) })
+      expect(next).toHaveAttribute("href", `${CLAIM}?section=${section}`)
+      // Never points at an action the person cannot take.
+      if (status !== "approved") expect(screen.queryByRole("button", { name: "Publish as canon" })).toBeNull()
+    })
+
+    it("sends no request when the Next link is followed", async () => {
+      withLifecycle(lifecycle())
+      const { router } = setup(at("claim"))
+      await claimBox()
+      const before = server.calls.length
+      fireEvent.click(screen.getByRole("link", { name: /Submit for review/ }))
+      expect(router.state.location.search).toBe("?section=publication")
+      expect(server.calls.length).toBe(before)
+    })
+
+    it("says no step is available rather than naming one that is not there", async () => {
+      withLifecycle(lifecycle({ available_actions: [] }))
+      setup(at("publication"))
+      expect(await screen.findByText(/No lifecycle action is available to you right now/)).toBeInTheDocument()
+      expect(screen.queryByText(/Next:/)).toBeNull()
+    })
+
+    it("names the subject as the blocker of an approved claim whose subject is not published (D1)", async () => {
+      withLifecycle(
+        lifecycle({
+          canon_status: "approved",
+          available_actions: ["return_to_draft"],
+          blocked_actions: [{ action: "publish", reason: "reference_not_published" }],
+        }),
+      )
+      setup(at("publication"))
+      const next = await screen.findByRole("link", { name: /Publish its subject first/ })
+      expect(next).toHaveAttribute("href", "/app/mundivita/world/location/l1")
+      expect(screen.queryByText(/then submit it for review/)).toBeNull()
+      const panel = panelOf("publication")
+      expect(within(panel).getByText(/must be published first/)).toHaveTextContent("Its subject, Keep,")
+      expect(within(panel).getByRole("link", { name: "Open World entry" })).toHaveAttribute(
+        "href",
+        "/app/mundivita/world/location/l1",
+      )
+      expect(within(panel).queryByRole("button", { name: "Publish as canon" })).toBeNull()
+    })
+
+    it("says publishing tells nobody, and points to Use in play, for a published claim", async () => {
+      withLifecycle(lifecycle({ canon_status: "canon", available_actions: ["supersede", "archive"] }))
+      setup(at("publication"))
+      const note = await screen.findByText(/Publishing does not tell anyone/)
+      expect(within(note).getByRole("link", { name: "record who knows it" })).toHaveAttribute(
+        "href",
+        `${CLAIM}?section=who-knows`,
+      )
+      expect(screen.getByRole("link", { name: /Record who knows it/ })).toHaveAttribute("href", `${CLAIM}?section=who-knows`)
+      expect(within(panelOf("publication")).queryByText(/source/i)).toBeNull()
+    })
+
+    it("summarises exactly what a reviewer approves and ends with the Approve button", async () => {
+      withLifecycle(lifecycle({ canon_status: "proposed", available_actions: ["approve", "return_to_draft", "reject"] }))
+      server.on("GET", /\/entities\/k1\/provenance$/, {
+        body: {
+          ...PROVENANCE,
+          links: [
+            { source_id: "s1", source_type_label: "Note", title: "Ledger", reference: null, attached_at: "2026-10-04T00:00:00Z", attached_by_name: null, detached_at: null, detached_by_name: null, is_attached: true },
+          ],
+        },
+      })
+      setup(at("review"))
+      current = { detail: detail(), view: view({ canon_status: "proposed", available_actions: [], in_use: true }) }
+      server.on("GET", VIEW_PATH, () => ({ body: current.view }))
+      const panel = await findPanel("review")
+      expect(await within(panel).findByText("1 attached")).toBeInTheDocument()
+      expect(within(panel).getByText("The duke is a vampire.")).toBeInTheDocument()
+      expect(within(panel).getByText("Keep")).toBeInTheDocument()
+      expect(within(panel).getAllByText("Secret")).toHaveLength(2)
+      expect(within(panel).getByText(/Someone has already been recorded as knowing it/)).toBeInTheDocument()
+      expect(within(panel).getByRole("link", { name: "Edit in Claim" })).toHaveAttribute("href", `${CLAIM}?section=claim`)
+      server.on("POST", `${LIFECYCLE}/approve`, { body: { entity_id: "k1", canon_status: "approved", row_version: 3 } })
+      fireEvent.click(within(panel).getByRole("button", { name: "Approve" }))
+      const dialog = await screen.findByRole("dialog", { name: "Approve this record?" })
+      expect(server.callsTo("POST", /./)).toHaveLength(0)
+      fireEvent.click(within(dialog).getByRole("button", { name: "Approve" }))
+      await waitFor(() => expect(server.callsTo("POST", `${LIFECYCLE}/approve`)).toHaveLength(1))
+      expect(server.callsTo("POST", `${LIFECYCLE}/approve`)[0]!.body).toEqual({ expected_row_version: 2 })
+    })
+
+    it("offers no decision in Review when the person cannot approve or publish", async () => {
+      withLifecycle(lifecycle({ canon_status: "proposed", available_actions: [] }))
+      setup(at("review"))
+      const panel = await findPanel("review")
+      await within(panel).findByText("The duke is a vampire.")
+      expect(within(panel).queryByRole("button")).toBeNull()
+    })
+
+    it("warns in Review and Publication about unsaved claim edits, which are not part of the step", async () => {
+      withLifecycle(lifecycle())
+      setup()
+      fireEvent.change(await claimBox(), { target: { value: "Not saved yet" } })
+      fireEvent.click(stageLink(2))
+      const review = panelOf("review")
+      expect(within(review).getByText(/unsaved changes to the claim/i)).toHaveTextContent("not part of review or publication")
+      expect(within(review).getByText("The duke is a vampire.", { selector: "dd" })).toBeInTheDocument()
+      fireEvent.click(screen.getByRole("link", { name: "Publication" }))
+      expect(within(panelOf("publication")).getByText(/unsaved changes to the claim/i)).toBeInTheDocument()
+    })
+
+    it("asks first when a lifecycle step meets unsaved claim edits, keeps the edits and shows them as not applied (D4)", async () => {
+      let submitted = false
+      server.on("GET", LIFECYCLE, () => ({
+        body: submitted
+          ? lifecycle({ canon_status: "proposed", row_version: 3, available_actions: ["approve", "return_to_draft", "reject"] })
+          : lifecycle(),
+      }))
+      server.on("POST", `${LIFECYCLE}/submit-for-review`, () => {
+        submitted = true
+        current = {
+          detail: current.detail,
+          view: view({
+            canon_status: "proposed",
+            row_version: 3,
+            available_actions: [],
+            blocked_actions: [{ action: "update", reason: "review_in_progress" }],
+          }),
+        }
+        return { body: { entity_id: "k1", canon_status: "proposed", row_version: 3, changed: true } }
+      })
+      setup()
+      fireEvent.change(await claimBox(), { target: { value: "Not saved yet" } })
+      fireEvent.click(stageLink(2))
+      fireEvent.click(screen.getByRole("link", { name: "Publication" }))
+      fireEvent.click(await screen.findByRole("button", { name: "Submit for review" }))
+      const dialog = await screen.findByRole("dialog", { name: "Submit for review?" })
+      expect(dialog).toHaveTextContent(/unsaved edits are not part of this change/)
+      expect(server.callsTo("POST", /./)).toHaveLength(0)
+      fireEvent.click(within(dialog).getByRole("button", { name: "Submit for review" }))
+      await waitFor(() => expect(server.callsTo("POST", `${LIFECYCLE}/submit-for-review`)).toHaveLength(1))
+      expect(server.callsTo("POST", UPDATE)).toHaveLength(0)
+
+      // The form is gone, but the draft is not invisible: it is shown as not applied.
+      fireEvent.click(stageLink(1))
+      const notice = await screen.findByText(/Unsaved changes not applied/)
+      expect(notice.closest("div")).toHaveTextContent("Not saved yet")
+      expect(screen.queryByRole("textbox", { name: /^Claim/ })).toBeNull()
+      fireEvent.click(screen.getByRole("button", { name: "Discard changes" }))
+      expect(screen.queryByText(/Unsaved changes not applied/)).toBeNull()
+      // With the draft discarded a later step no longer warns.
+      fireEvent.click(stageLink(2))
+      expect(within(panelOf("review")).queryByText(/unsaved changes/i)).toBeNull()
+    })
+
+    it("submits for review at once when there are no unsaved edits", async () => {
+      withLifecycle(lifecycle())
+      server.on("POST", `${LIFECYCLE}/submit-for-review`, {
+        body: { entity_id: "k1", canon_status: "proposed", row_version: 3, changed: true },
+      })
+      setup(at("publication"))
+      fireEvent.click(await screen.findByRole("button", { name: "Submit for review" }))
+      await waitFor(() => expect(server.callsTo("POST", `${LIFECYCLE}/submit-for-review`)).toHaveLength(1))
+      expect(screen.queryByRole("dialog")).toBeNull()
+    })
+
+    it("keeps a destructive lifecycle action behind its confirmation", async () => {
+      withLifecycle(lifecycle())
+      setup(at("publication"))
+      const group = await screen.findByRole("group", { name: "Lifecycle" })
+      fireEvent.click(within(group).getByText("More"))
+      fireEvent.click(within(group).getByRole("button", { name: "Delete draft" }))
+      const dialog = await screen.findByRole("dialog", { name: "Delete this draft?" })
+      expect(server.callsTo("POST", /./)).toHaveLength(0)
+      fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }))
+      expect(server.callsTo("POST", /./)).toHaveLength(0)
+    })
+
+    it("keeps the claim draft when a lifecycle step fails", async () => {
+      withLifecycle(lifecycle())
+      server.on("POST", `${LIFECYCLE}/submit-for-review`, { status: 500 })
+      setup()
+      fireEvent.change(await claimBox(), { target: { value: "Mine" } })
+      fireEvent.click(stageLink(2))
+      fireEvent.click(screen.getByRole("link", { name: "Publication" }))
+      fireEvent.click(await screen.findByRole("button", { name: "Submit for review" }))
+      const dialog = await screen.findByRole("dialog", { name: "Submit for review?" })
+      fireEvent.click(within(dialog).getByRole("button", { name: "Submit for review" }))
+      expect(await within(await screen.findByRole("dialog")).findByRole("alert")).toBeInTheDocument()
+      fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }))
+      fireEvent.click(stageLink(1))
+      expect(screen.getByRole("textbox", { name: /^Claim/ })).toHaveValue("Mine")
+    })
+
+    it("sends a deleted draft to the Knowledge list, not the World list (D5)", async () => {
+      withLifecycle(lifecycle())
+      server.on("POST", `${LIFECYCLE}/delete-draft`, { body: { entity_id: "k1", deleted: true } })
+      const { router } = setup(at("publication", "character_id=c1"))
+      const group = await screen.findByRole("group", { name: "Lifecycle" })
+      fireEvent.click(within(group).getByText("More"))
+      fireEvent.click(within(group).getByRole("button", { name: "Delete draft" }))
+      const dialog = await screen.findByRole("dialog", { name: "Delete this draft?" })
+      fireEvent.change(within(dialog).getByRole("textbox", { name: /Reason/ }), { target: { value: "Duplicate" } })
+      fireEvent.click(within(dialog).getByRole("button", { name: "Delete draft" }))
+      await waitFor(() => expect(router.state.location.pathname).toBe("/app/mundivita/knowledge"))
+      expect(router.state.location.search).toBe("?character_id=c1")
     })
   })
 
-  describe("who knows this", () => {
+  describe("sources", () => {
+    it("says sources are optional and allowed at any status, and keeps the add form compact", async () => {
+      withLifecycle(lifecycle({ canon_status: "approved", available_actions: ["publish", "return_to_draft"] }))
+      setup(at("sources"))
+      expect(await screen.findByText(/They are optional, can be changed at any status/)).toHaveTextContent(
+        "do not affect review or publication",
+      )
+      expect(screen.getByText("GM entry", { selector: "strong" })).toBeInTheDocument()
+      expect(screen.getByRole("link", { name: "View provenance" })).toBeInTheDocument()
+      expect(screen.queryByRole("form", { name: "Write a new source" })).toBeNull()
+      expect(screen.getByRole("button", { name: "Add source" })).toHaveAttribute("aria-expanded", "false")
+      expect(screen.queryByRole("heading", { level: 2, name: "Sources" })).toBeInTheDocument()
+      expect(screen.getAllByRole("heading", { name: "Sources" })).toHaveLength(1)
+    })
+
+    it("keeps what was typed when the add form is closed, and after a failed write", async () => {
+      server.on("POST", /\/campaigns\/mundivita\/sources/, { status: 500 })
+      setup(at("sources"))
+      fireEvent.click(await screen.findByRole("button", { name: "Add source" }))
+      const form = screen.getByRole("form", { name: "Write a new source" })
+      fireEvent.change(within(form).getByRole("combobox"), { target: { value: "note" } })
+      fireEvent.change(within(form).getByRole("textbox", { name: "Title" }), { target: { value: "Ledger page" } })
+      fireEvent.click(within(form).getByRole("button", { name: "Write and attach source" }))
+      expect(await screen.findAllByRole("alert")).not.toHaveLength(0)
+      fireEvent.click(screen.getByRole("button", { name: "Hide add source" }))
+      expect(screen.queryByRole("form", { name: "Write a new source" })).toBeNull()
+      fireEvent.click(screen.getByRole("button", { name: "Add source" }))
+      expect(
+        within(screen.getByRole("form", { name: "Write a new source" })).getByRole("textbox", { name: "Title" }),
+      ).toHaveValue("Ledger page")
+    })
+
+    it("sends two different idempotency keys when it writes and attaches a source (D8)", async () => {
+      server.on("POST", /\/campaigns\/mundivita\/sources$/, {
+        body: { source_id: "s9", source_type: "note", source_type_label: "Note", title: "Ledger page", reference: null, created_by_name: null, attached_count: 0 },
+      })
+      server.on("POST", /\/entities\/k1\/sources\/attach$/, { body: PROVENANCE })
+      setup(at("sources"))
+      fireEvent.click(await screen.findByRole("button", { name: "Add source" }))
+      const form = screen.getByRole("form", { name: "Write a new source" })
+      fireEvent.change(within(form).getByRole("combobox"), { target: { value: "note" } })
+      fireEvent.change(within(form).getByRole("textbox", { name: "Title" }), { target: { value: "Ledger page" } })
+      fireEvent.click(within(form).getByRole("button", { name: "Write and attach source" }))
+      await waitFor(() => expect(server.callsTo("POST", /\/entities\/k1\/sources\/attach$/)).toHaveLength(1))
+      const create = server.callsTo("POST", /\/campaigns\/mundivita\/sources$/)[0]!.headers["Idempotency-Key"]!
+      const attach = server.callsTo("POST", /\/entities\/k1\/sources\/attach$/)[0]!.headers["Idempotency-Key"]!
+      expect(create).not.toBe(attach)
+      expect(create).toMatch(/\.create$/)
+      expect(attach).toMatch(/\.attach$/)
+      expect(create.replace(/\.create$/, "")).toBe(attach.replace(/\.attach$/, ""))
+      // Header-safe characters only, as the server requires.
+      expect(create).toMatch(/^[A-Za-z0-9._~-]{1,255}$/)
+    })
+
+    it("opens the provenance page and returns to the Sources section with the perspective (D6)", async () => {
+      const { router } = setup(at("sources", "character_id=c1"))
+      fireEvent.click(await screen.findByRole("link", { name: "View provenance" }))
+      expect(await screen.findByRole("heading", { level: 1, name: "Provenance" })).toBeInTheDocument()
+      const back = await screen.findByRole("link", { name: "x" })
+      expect(back).toHaveAttribute("href", "/app/mundivita/knowledge/k1?character_id=c1&section=sources")
+      fireEvent.click(back)
+      await waitFor(() => expect(router.state.location.pathname).toBe(CLAIM))
+      expect(router.state.location.search).toBe("?character_id=c1&section=sources")
+    })
+
+    it("protects a typed source with the unsaved-changes dialog when the person leaves (D7)", async () => {
+      const { router } = setup(at("sources"))
+      fireEvent.click(await screen.findByRole("button", { name: "Add source" }))
+      fireEvent.change(screen.getByRole("textbox", { name: "Title" }), { target: { value: "Ledger page" } })
+      fireEvent.click(breadcrumbKnowledge())
+      const dialog = await screen.findByRole("dialog", { name: "Discard unsaved changes?" })
+      expect(dialog).toHaveTextContent("a source")
+      expect(router.state.location.pathname).toBe(CLAIM)
+      fireEvent.click(within(dialog).getByRole("button", { name: "Keep editing" }))
+      expect(screen.getByRole("textbox", { name: "Title" })).toHaveValue("Ledger page")
+      fireEvent.click(breadcrumbKnowledge())
+      fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Discard changes" }))
+      await waitFor(() => expect(router.state.location.pathname).toBe("/app/mundivita/knowledge"))
+    })
+
+    it("does not block leaving when nothing is unsaved", async () => {
+      const { router } = setup(at("sources"))
+      await screen.findByRole("button", { name: "Add source" })
+      fireEvent.click(breadcrumbKnowledge())
+      await waitFor(() => expect(router.state.location.pathname).toBe("/app/mundivita/knowledge"))
+      expect(screen.queryByRole("dialog", { name: "Discard unsaved changes?" })).toBeNull()
+    })
+  })
+
+  describe("Use in play", () => {
     it("lists parties, individuals and public places as separate compact groups", async () => {
-      setupPublished()
+      setupPublished(at("who-knows"))
       await screen.findByText("Red Company")
       expect(screen.getByRole("heading", { level: 3, name: "Parties" })).toBeInTheDocument()
       expect(screen.getByRole("heading", { level: 3, name: "Characters, NPCs and organizations" })).toBeInTheDocument()
@@ -392,13 +990,14 @@ describe("unified knowledge claim page", () => {
       expect(within(mira).getByText("Npc")).toBeInTheDocument()
       expect(within(mira).getByText("Suspects, 60% sure")).toBeInTheDocument()
       expect(screen.getByText("Stonebridge")).toBeInTheDocument()
+      expect(screen.getByText(/To undo a record, correct the event that made it/)).toBeInTheDocument()
       // Details stay collapsed until asked for.
       expect(screen.queryByText("He only seems pale.")).toBeNull()
       expect(screen.queryByRole("form", { name: /Tell a party|Make this public|learned this|told another|belief/ })).toBeNull()
     })
 
     it("puts each group's actions beside its heading and reveals forms locally", async () => {
-      setupPublished()
+      setupPublished(at("who-knows"))
       await screen.findByText("Red Company")
       const partiesHead = screen.getByRole("heading", { level: 3, name: "Parties" }).parentElement!
       expect(within(partiesHead).getByRole("button", { name: "Tell a party" })).toBeInTheDocument()
@@ -412,7 +1011,7 @@ describe("unified knowledge claim page", () => {
     })
 
     it("tells only parties that do not know it, then closes the form after the server confirms", async () => {
-      setupPublished()
+      setupPublished(at("who-knows"))
       fireEvent.click(await screen.findByRole("button", { name: "Tell a party" }))
       const form = screen.getByRole("form", { name: "Tell a party" })
       const select = within(form).getByRole("combobox", { name: /Party/ })
@@ -430,8 +1029,23 @@ describe("unified knowledge claim page", () => {
       await waitFor(() => expect(screen.queryByRole("form", { name: "Tell a party" })).toBeNull())
     })
 
+    it("says so when every active party already knows it", async () => {
+      server.on("GET", AUDIENCE, () => ({
+        body: {
+          ...audience(),
+          parties: [
+            ...audience().parties,
+            { party_knowledge_id: "pk2", party_id: "p2", party_name: "Blue Company", awareness_level: "aware" },
+          ],
+        },
+      }))
+      setupPublished(at("who-knows"))
+      expect(await screen.findByText("Every active party already knows this.")).toBeInTheDocument()
+      expect(screen.queryByRole("button", { name: "Tell a party" })).toBeNull()
+    })
+
     it("keeps the form and what was typed when a knowledge action is refused", async () => {
-      setupPublished()
+      setupPublished(at("who-knows"))
       server.on("POST", `${KNOWLEDGE}/k1/reveal-to-party`, {
         status: 409,
         body: { error: { code: "clock_required", message: "m", correlation_id: "c" } },
@@ -446,7 +1060,7 @@ describe("unified knowledge claim page", () => {
     })
 
     it("records that someone learned it, picking them from a search", async () => {
-      setupPublished()
+      setupPublished(at("who-knows"))
       fireEvent.click(await screen.findByRole("button", { name: "Record who learned this" }))
       const form = screen.getByRole("form", { name: "Record that someone learned this" })
       fireEvent.click(within(form).getByRole("button", { name: "Record knowledge" }))
@@ -463,7 +1077,7 @@ describe("unified knowledge claim page", () => {
     })
 
     it("records a telling from an existing knower", async () => {
-      setupPublished()
+      setupPublished(at("who-knows"))
       fireEvent.click(await screen.findByRole("button", { name: "Record a telling" }))
       const form = screen.getByRole("form", { name: "Record that someone told another" })
       fireEvent.change(within(form).getByRole("combobox", { name: /Who told/ }), { target: { value: "n1" } })
@@ -481,7 +1095,7 @@ describe("unified knowledge claim page", () => {
     })
 
     it("makes it public at a searched location", async () => {
-      setupPublished()
+      setupPublished(at("who-knows"))
       fireEvent.click(await screen.findByRole("button", { name: "Make public" }))
       const form = screen.getByRole("form", { name: "Make this public" })
       fireEvent.focus(within(form).getByRole("combobox", { name: /Location/ }))
@@ -495,7 +1109,7 @@ describe("unified knowledge claim page", () => {
     })
 
     it("expands a knower's details inline and changes a belief naming the event that last wrote it", async () => {
-      setupPublished()
+      setupPublished(at("who-knows"))
       fireEvent.click(await screen.findByRole("button", { name: "Details for Mira" }))
       expect(screen.getByText("He only seems pale.", { selector: "p" })).toBeInTheDocument()
       const form = screen.getByRole("form", { name: "Change belief of Mira" })
@@ -515,9 +1129,31 @@ describe("unified knowledge claim page", () => {
     })
 
     it("offers no deletion or other operation the API lacks", async () => {
-      setupPublished()
+      setupPublished(at("who-knows"))
       await screen.findByText("Red Company")
       expect(screen.queryByRole("button", { name: /remove|delete|forget/i })).toBeNull()
+    })
+
+    it("protects a half-filled knowledge form when the person leaves (D7)", async () => {
+      setupPublished(at("who-knows"))
+      fireEvent.click(await screen.findByRole("button", { name: "Tell a party" }))
+      fireEvent.change(
+        within(screen.getByRole("form", { name: "Tell a party" })).getByRole("combobox", { name: /Party/ }),
+        { target: { value: "p2" } },
+      )
+      fireEvent.click(breadcrumbKnowledge())
+      expect(await screen.findByRole("dialog", { name: "Discard unsaved changes?" })).toHaveTextContent("a knowledge entry")
+    })
+
+    it("gives a clear reason when the server still refuses a claim as unavailable", async () => {
+      setupPublished(at("who-knows"))
+      server.on("POST", `${KNOWLEDGE}/k1/reveal-to-party`, { status: 404 })
+      fireEvent.click(await screen.findByRole("button", { name: "Tell a party" }))
+      const form = screen.getByRole("form", { name: "Tell a party" })
+      fireEvent.change(within(form).getByRole("combobox", { name: /Party/ }), { target: { value: "p2" } })
+      fireEvent.click(within(form).getByRole("button", { name: "Tell party" }))
+      expect(await screen.findByRole("alert")).toHaveTextContent(/must be published before anyone can be recorded/)
+      expect(screen.getByRole("form", { name: "Tell a party" })).toBeInTheDocument()
     })
   })
 
@@ -525,7 +1161,8 @@ describe("unified knowledge claim page", () => {
     it("keeps an unsaved claim edit through knowledge actions and their refresh", async () => {
       setupPublished()
       fireEvent.change(await claimBox(), { target: { value: "My unsaved edit" } })
-      fireEvent.click(screen.getByRole("button", { name: "Tell a party" }))
+      fireEvent.click(stageLink(3))
+      fireEvent.click(await screen.findByRole("button", { name: "Tell a party" }))
       fireEvent.change(
         within(screen.getByRole("form", { name: "Tell a party" })).getByRole("combobox", { name: /Party/ }),
         { target: { value: "p2" } },
@@ -534,8 +1171,23 @@ describe("unified knowledge claim page", () => {
       await waitFor(() => expect(server.callsTo("POST", `${KNOWLEDGE}/k1/reveal-to-party`)).toHaveLength(1))
       await waitFor(() => expect(screen.queryByRole("form", { name: "Tell a party" })).toBeNull())
       expect(server.callsTo("GET", AUDIENCE).length).toBeGreaterThanOrEqual(2)
+      fireEvent.click(stageLink(1))
       expect(screen.getByRole("textbox", { name: /^Claim/ })).toHaveValue("My unsaved edit")
       expect(server.callsTo("POST", UPDATE)).toHaveLength(0)
+    })
+
+    it("keeps an open knowledge form through a claim save and its refresh", async () => {
+      setupPublished(at("who-knows"))
+      server.on("POST", UPDATE, { body: RECEIPT })
+      fireEvent.click(await screen.findByRole("button", { name: "Make public" }))
+      expect(screen.getByRole("form", { name: "Make this public" })).toBeInTheDocument()
+      fireEvent.click(stageLink(1))
+      fireEvent.change(await claimBox(), { target: { value: "Edited" } })
+      fireEvent.click(screen.getByRole("button", { name: "Save claim" }))
+      fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Save changes" }))
+      await screen.findByText("Claim saved")
+      fireEvent.click(stageLink(3))
+      expect(screen.getByRole("form", { name: "Make this public" })).toBeInTheDocument()
     })
 
     it("saving the claim sends no knowledge command, and discarding does not roll knowledge back", async () => {
@@ -554,273 +1206,105 @@ describe("unified knowledge claim page", () => {
     })
   })
 
-  describe("an unpublished claim", () => {
-    it("explains that nobody can be recorded as knowing a draft, and withholds the actions", async () => {
-      setup()
-      expect(
-        await screen.findByText(/This claim is a draft, and only a published claim can be recorded as known/),
-      ).toBeInTheDocument()
-      // The lifecycle read is unavailable here, so no action is pointed at.
-      expect(screen.getByText(/No lifecycle action is available to you right now/)).toBeInTheDocument()
-      for (const name of ["Tell a party", "Record who learned this", "Make public"]) {
-        expect(screen.getByRole("button", { name })).toBeDisabled()
+  describe("when knowledge cannot be recorded", () => {
+    it("explains a draft once, withholds every action and names the real next step", async () => {
+      withLifecycle(lifecycle())
+      setup(at("who-knows"))
+      const note = await screen.findByText(/Only a published claim can be recorded as known/)
+      expect(note).toHaveTextContent("This claim is a draft.")
+      expect(within(note).getByRole("link", { name: "Submit for review" })).toHaveAttribute("href", `${CLAIM}?section=publication`)
+      for (const name of ["Tell a party", "Record who learned this", "Record a telling", "Make public"]) {
+        expect(screen.queryByRole("button", { name })).toBeNull()
       }
+      // What was recorded stays visible.
+      expect(screen.getByText("Red Company")).toBeInTheDocument()
+      expect(screen.getByText("Mira")).toBeInTheDocument()
       expect(server.callsTo("POST", /./)).toHaveLength(0)
     })
 
-    it("offers the lifecycle controls that publish it, and enables the roster once it is published", async () => {
-      server.on("GET", /\/entities\/k1\/lifecycle$/, {
-        body: {
-          entity_id: "k1",
-          entity_type_code: "knowledge_item",
-          canonical_name: "x",
-          canon_status: "draft",
-          lifecycle_status: "active",
-          row_version: 2,
-          lifecycle_managed: true,
-          superseded_by: null,
-          available_actions: ["submit_for_review"],
-          blocked_actions: [],
-        },
-      })
-      setup()
-      expect(await screen.findByRole("button", { name: "Submit for review" })).toBeInTheDocument()
-    })
-
-    it("enables the actions for a published claim", async () => {
-      setupPublished()
-      expect(await screen.findByRole("button", { name: "Tell a party" })).toBeEnabled()
-      expect(screen.queryByText(/only a published claim can be recorded as known/)).toBeNull()
-    })
-
-    it("gives a clear reason when the server still refuses a claim as unavailable", async () => {
-      setupPublished()
-      server.on("POST", `${KNOWLEDGE}/k1/reveal-to-party`, { status: 404 })
-      fireEvent.click(await screen.findByRole("button", { name: "Tell a party" }))
-      const form = screen.getByRole("form", { name: "Tell a party" })
-      fireEvent.change(within(form).getByRole("combobox", { name: /Party/ }), { target: { value: "p2" } })
-      fireEvent.click(within(form).getByRole("button", { name: "Tell party" }))
-      expect(await screen.findByRole("alert")).toHaveTextContent(/must be published before anyone can be recorded/)
-      expect(screen.getByRole("form", { name: "Tell a party" })).toBeInTheDocument()
-    })
-  })
-
-  describe("lifecycle, sources and the subject field", () => {
-    const LIFECYCLE = "/campaigns/mundivita/entities/k1/lifecycle"
-    const lifecycle = (extra: Record<string, unknown> = {}) => ({
-      entity_id: "k1",
-      entity_type_code: "knowledge_item",
-      canonical_name: "x",
-      canon_status: "draft",
-      lifecycle_status: "active",
-      row_version: 2,
-      lifecycle_managed: true,
-      superseded_by: null,
-      available_actions: ["submit_for_review", "reject", "archive", "delete_draft"],
-      blocked_actions: [
-        { action: "approve", reason: "wrong_canon_status" },
-        { action: "publish", reason: "wrong_canon_status" },
-      ],
-      ...extra,
-    })
-    const PROVENANCE = {
-      entity_id: "k1",
-      name: "x",
-      entity_type_code: "knowledge_item",
-      canon_status: "draft",
-      lifecycle_status: "active",
-      created_at: "2026-10-04T00:00:00Z",
-      created_by_name: "Platform Administrator",
-      origin: { source_id: "s0", source_type: "gm_entry", source_type_label: "GM entry", title: "GM entry", reference: null, created_by_name: null, attached_count: 1 },
-      links: [],
-      transitions: [],
-      superseded_by: null,
-      supersedes: [],
-    }
-    const SOURCES = {
-      items: [],
-      source_types: [{ value: "note", label: "Note" }],
-      limits: { title_max_length: 200, reference_max_length: 2000 },
-    }
-    const withLifecycle = (body: object) => {
-      server.on("GET", LIFECYCLE, () => ({ body }))
-    }
-
-    it("shows the status once, the next step, and the rest under More, with no list of unavailable actions", async () => {
-      withLifecycle(lifecycle())
-      setup()
-      const group = await screen.findByRole("group", { name: "Lifecycle" })
-      expect(within(group).getAllByText("Draft")).toHaveLength(1)
-      expect(within(group).getByRole("button", { name: "Submit for review" })).toBeInTheDocument()
-      expect(within(group).queryByRole("button", { name: "Reject" })).not.toBeVisible()
-      fireEvent.click(within(group).getByText("More"))
-      for (const name of ["Reject", "Archive", "Delete draft"]) {
-        expect(within(group).getByRole("button", { name })).toBeInTheDocument()
-      }
-      expect(screen.queryByText(/unavailable:/)).toBeNull()
-      expect(screen.queryByRole("heading", { name: "Lifecycle" })).toBeNull()
-    })
-
-    it.each([
-      ["draft", ["submit_for_review", "reject", "archive"], "Submit for review", "submit it for review, then approve and publish it"],
-      ["proposed", ["approve", "return_to_draft", "reject"], "Approve", "approve it, then publish it"],
-      ["approved", ["publish", "return_to_draft"], "Publish as canon", "publish it"],
-    ])("offers the real next step for a %s claim, and names it in the roster note", async (status, actions, label, step) => {
-      withLifecycle(lifecycle({ canon_status: status, available_actions: actions }))
-      setup()
-      const group = await screen.findByRole("group", { name: "Lifecycle" })
-      expect(within(group).getByRole("button", { name: label })).toBeInTheDocument()
-      expect(await screen.findByText(new RegExp(`Next: ${step}`))).toBeInTheDocument()
-      // Never points at an action the person cannot take.
-      if (status !== "approved") expect(screen.queryByRole("button", { name: "Publish as canon" })).toBeNull()
-    })
-
-    it("says no action is available rather than naming one that is not there", async () => {
+    it("names no next step when the person has none available", async () => {
       withLifecycle(lifecycle({ available_actions: [] }))
-      setup()
-      expect(await screen.findByText(/No lifecycle action is available to you right now/)).toBeInTheDocument()
-      expect(screen.queryByText(/Next:/)).toBeNull()
+      setup(at("who-knows"))
+      const note = await screen.findByText(/Only a published claim can be recorded as known/)
+      expect(note).not.toHaveTextContent("Next:")
     })
 
     it("lifts the restriction for a published claim", async () => {
       withLifecycle(lifecycle({ canon_status: "canon", available_actions: ["supersede", "archive"] }))
-      setupPublished()
-      const group = await screen.findByRole("group", { name: "Lifecycle" })
-      expect(within(group).getByText("Canon")).toBeInTheDocument()
-      await waitFor(() => expect(screen.getByRole("button", { name: "Tell a party" })).toBeEnabled())
+      setupPublished(at("who-knows"))
+      expect(await screen.findByRole("button", { name: "Tell a party" })).toBeEnabled()
       expect(screen.queryByText(/only a published claim can be recorded as known/)).toBeNull()
     })
 
-    it("asks first when a lifecycle action meets unsaved claim edits, and keeps the edits", async () => {
-      withLifecycle(lifecycle())
-      server.on("POST", `${LIFECYCLE}/submit-for-review`, () => {
-        current = { detail: current.detail, view: view({ canon_status: "proposed", row_version: 2 }) }
-        return { body: { entity_id: "k1", canon_status: "proposed", row_version: 3, changed: true } }
-      })
-      setup()
-      fireEvent.change(await claimBox(), { target: { value: "Not saved yet" } })
-      fireEvent.click(await screen.findByRole("button", { name: "Submit for review" }))
-      const dialog = await screen.findByRole("dialog", { name: "Submit for review?" })
-      expect(dialog).toHaveTextContent(/unsaved edits are not part of this change/)
-      expect(server.callsTo("POST", /./)).toHaveLength(0)
-      fireEvent.click(within(dialog).getByRole("button", { name: "Submit for review" }))
-      await waitFor(() => expect(server.callsTo("POST", `${LIFECYCLE}/submit-for-review`)).toHaveLength(1))
-      expect(server.callsTo("POST", UPDATE)).toHaveLength(0)
-      expect(screen.getByRole("textbox", { name: /^Claim/ })).toHaveValue("Not saved yet")
+    it("keeps an archived claim's knowledge readable and offers nothing to change it (D2, D3)", async () => {
+      withLifecycle(lifecycle({ canon_status: "canon", lifecycle_status: "archived", available_actions: ["restore"] }))
+      setup(at("who-knows"))
+      current = {
+        detail: detail(),
+        view: view({
+          canon_status: "canon",
+          lifecycle_status: "archived",
+          available_actions: [],
+          blocked_actions: [{ action: "update", reason: "entity_archived" }],
+        }),
+      }
+      server.on("GET", VIEW_PATH, () => ({ body: current.view }))
+      const note = await within(await findPanel("who-knows")).findByText(/This claim is archived/)
+      expect(note).toHaveTextContent("nothing new can be recorded or changed until it is restored")
+      expect(within(note).getByRole("link", { name: "Open Publication" })).toHaveAttribute("href", `${CLAIM}?section=publication`)
+      expect(screen.getByRole("link", { name: /Restore it to use it in play/ })).toBeInTheDocument()
+      for (const name of ["Tell a party", "Record who learned this", "Record a telling", "Make public"]) {
+        expect(screen.queryByRole("button", { name })).toBeNull()
+      }
+      fireEvent.click(await screen.findByRole("button", { name: "Details for Mira" }))
+      expect(screen.getByText("He only seems pale.", { selector: "p" })).toBeInTheDocument()
+      expect(screen.queryByRole("button", { name: "Save belief" })).toBeNull()
+      expect(screen.queryByRole("form", { name: "Change belief of Mira" })).toBeNull()
+
+      fireEvent.click(stageLink(2))
+      fireEvent.click(screen.getByRole("link", { name: "Publication" }))
+      // The only way forward is not tucked under "More".
+      expect(await screen.findByRole("button", { name: "Restore" })).toBeVisible()
+      expect(screen.getByText(/Archived\. It is hidden from players/)).toBeInTheDocument()
     })
 
-    it("submits for review at once when there are no unsaved edits", async () => {
-      withLifecycle(lifecycle())
-      server.on("POST", `${LIFECYCLE}/submit-for-review`, {
-        body: { entity_id: "k1", canon_status: "proposed", row_version: 3, changed: true },
-      })
-      setup()
-      fireEvent.click(await screen.findByRole("button", { name: "Submit for review" }))
-      await waitFor(() => expect(server.callsTo("POST", `${LIFECYCLE}/submit-for-review`)).toHaveLength(1))
-      expect(screen.queryByRole("dialog")).toBeNull()
-    })
-
-    it("keeps a destructive lifecycle action behind its confirmation", async () => {
-      withLifecycle(lifecycle())
-      setup()
+    it("offers Return to draft directly for a rejected claim, with Archive under More", async () => {
+      withLifecycle(lifecycle({ canon_status: "rejected", available_actions: ["return_to_draft", "archive", "delete_draft"] }))
+      setup(at("publication"))
       const group = await screen.findByRole("group", { name: "Lifecycle" })
-      fireEvent.click(within(group).getByText("More"))
-      fireEvent.click(within(group).getByRole("button", { name: "Delete draft" }))
-      const dialog = await screen.findByRole("dialog", { name: "Delete this draft?" })
-      expect(server.callsTo("POST", /./)).toHaveLength(0)
-      fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }))
-      expect(server.callsTo("POST", /./)).toHaveLength(0)
+      expect(within(group).getByRole("button", { name: "Return to draft" })).toBeVisible()
+      expect(within(group).getByRole("button", { name: "Archive" })).not.toBeVisible()
     })
 
-    it("keeps Who knows this directly after the claim sections, and sources after it", async () => {
-      withLifecycle(lifecycle())
-      server.on("GET", /\/entities\/k1\/provenance$/, { body: PROVENANCE })
-      server.on("GET", "/campaigns/mundivita/sources", { body: SOURCES })
+    it("sends a restore of a non-canon archived claim back through review, not straight to play", async () => {
+      withLifecycle(lifecycle({ canon_status: "draft", lifecycle_status: "archived", available_actions: ["restore"] }))
       setup()
-      const roster = await screen.findByRole("heading", { level: 2, name: "Who knows this" })
-      const sources = await screen.findByRole("heading", { level: 2, name: "Sources" })
-      const character = screen.getByRole("heading", { name: "Character knowledge" })
-      expect(character.compareDocumentPosition(roster) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-      expect(roster.compareDocumentPosition(sources) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-      const between = screen
-        .getAllByRole("heading", { level: 2 })
-        .map((h) => h.textContent)
-        .filter((name) => name === "Lifecycle")
-      expect(between).toHaveLength(0)
+      expect(await screen.findByRole("link", { name: /Restore it, then continue review/ })).toBeInTheDocument()
     })
 
-    it("keeps sources compact until Add source is opened, and keeps what was typed when it is closed", async () => {
-      withLifecycle(lifecycle())
-      server.on("GET", /\/entities\/k1\/provenance$/, { body: PROVENANCE })
-      server.on("GET", "/campaigns/mundivita/sources", { body: SOURCES })
-      server.on("POST", /\/campaigns\/mundivita\/sources/, { status: 500 })
-      setup()
-      expect(await screen.findByText("GM entry", { selector: "strong" })).toBeInTheDocument()
-      expect(screen.getByRole("link", { name: "View provenance" })).toBeInTheDocument()
-      expect(screen.queryByRole("form", { name: "Write a new source" })).toBeNull()
-      const add = screen.getByRole("button", { name: "Add source" })
-      expect(add).toHaveAttribute("aria-expanded", "false")
-      fireEvent.click(add)
-      const form = screen.getByRole("form", { name: "Write a new source" })
-      fireEvent.change(within(form).getByRole("combobox"), { target: { value: "note" } })
-      fireEvent.change(within(form).getByRole("textbox", { name: "Title" }), { target: { value: "Ledger page" } })
-      fireEvent.click(within(form).getByRole("button", { name: "Write and attach source" }))
-      expect(await screen.findAllByRole("alert")).not.toHaveLength(0)
-      // Closing and reopening keeps the draft and the error.
-      fireEvent.click(screen.getByRole("button", { name: "Hide add source" }))
-      expect(screen.queryByRole("form", { name: "Write a new source" })).toBeNull()
-      fireEvent.click(screen.getByRole("button", { name: "Add source" }))
-      expect(
-        within(screen.getByRole("form", { name: "Write a new source" })).getByRole("textbox", { name: "Title" }),
-      ).toHaveValue("Ledger page")
-    })
-
-    it("shows the subject once, with Open, Change and Clear as separate actions", async () => {
-      withLifecycle(lifecycle())
-      setup()
-      await claimBox()
-      const aboutBlock = () => screen.getByText("About this World entry").parentElement as HTMLElement
-      expect(within(aboutBlock()).getAllByText("Keep")).toHaveLength(1)
-      expect(within(aboutBlock()).getByRole("link", { name: "Open World entry" })).toHaveAttribute(
-        "href",
-        "/app/mundivita/world/location/l1",
+    it("links a superseded claim to its replacement and keeps its roster read-only", async () => {
+      withLifecycle(
+        lifecycle({
+          canon_status: "superseded",
+          available_actions: ["archive"],
+          superseded_by: { entity_id: "k2", canonical_name: "The duke was bitten." },
+        }),
       )
-      fireEvent.click(within(aboutBlock()).getByRole("button", { name: "Change subject" }))
-      expect(within(aboutBlock()).getByRole("combobox", { name: "Subject" })).toBeInTheDocument()
-      fireEvent.focus(within(aboutBlock()).getByRole("combobox", { name: "Subject" }))
-      fireEvent.click(await within(aboutBlock()).findByRole("option", { name: /Harbor/ }))
-      // The unsaved choice is shown as such, with no stale link to open.
-      expect(within(aboutBlock()).getByText("Harbor")).toBeInTheDocument()
-      expect(within(aboutBlock()).getByText("not saved yet")).toBeInTheDocument()
-      expect(within(aboutBlock()).queryByRole("link", { name: "Open World entry" })).toBeNull()
-      expect(screen.getByText("Unsaved changes to the claim")).toBeInTheDocument()
-    })
-
-    it("clears the subject as an unsaved change that Discard undoes, and saves it as null", async () => {
-      withLifecycle(lifecycle())
-      server.on("POST", UPDATE, { body: RECEIPT })
-      setup()
-      await claimBox()
-      const aboutBlock = () => screen.getByText("About this World entry").parentElement as HTMLElement
-      fireEvent.click(within(aboutBlock()).getByRole("button", { name: "Clear subject" }))
-      expect(within(aboutBlock()).getByText("No subject (not saved yet)")).toBeInTheDocument()
-      expect(within(aboutBlock()).getByRole("combobox", { name: "Subject" })).toBeInTheDocument()
-      fireEvent.click(screen.getByRole("button", { name: "Discard changes" }))
-      expect(within(aboutBlock()).getByText("Keep")).toBeInTheDocument()
-      fireEvent.click(within(aboutBlock()).getByRole("button", { name: "Clear subject" }))
-      fireEvent.click(screen.getByRole("button", { name: "Save claim" }))
-      await waitFor(() => expect(server.callsTo("POST", UPDATE)).toHaveLength(1))
-      expect(server.callsTo("POST", UPDATE)[0]!.body).toMatchObject({ subject_entity_id: null })
-    })
-
-    it("shows a reader nothing of lifecycle, sources or the roster", async () => {
-      setup(CLAIM, ["campaign.view"])
-      await screen.findByText("The duke is a vampire.")
-      expect(screen.queryByRole("group", { name: "Lifecycle" })).toBeNull()
-      expect(screen.queryByRole("button", { name: "Add source" })).toBeNull()
-      expect(screen.queryByRole("heading", { name: "Sources" })).toBeNull()
-      expect(server.calls.some((c) => /lifecycle|provenance|\/sources/.test(c.path))).toBe(false)
-      expect(screen.getByRole("link", { name: "Keep" })).toBeInTheDocument()
+      setup(`${CLAIM}?character_id=c1`)
+      const header = (await screen.findByRole("heading", { level: 1, name: "The duke is a vampire." })).closest("header") as HTMLElement
+      const banner = await within(header).findByRole("status")
+      expect(banner).toHaveTextContent("Replaced by The duke was bitten.")
+      expect(within(banner).getByRole("link", { name: "The duke was bitten." })).toHaveAttribute(
+        "href",
+        "/app/mundivita/knowledge/k2?character_id=c1",
+      )
+      const note = await within(await findPanel("who-knows")).findByText(/This claim was replaced by/)
+      expect(note).toHaveTextContent("record new knowledge on the replacement")
+      for (const name of ["Tell a party", "Record who learned this", "Make public"]) {
+        expect(screen.queryByRole("button", { name })).toBeNull()
+      }
+      expect(screen.getByText("Mira")).toBeInTheDocument()
+      expect(within(header).getByRole("link", { name: /Replaced by The duke was bitten\./ })).toBeInTheDocument()
     })
   })
 
@@ -832,6 +1316,7 @@ describe("unified knowledge claim page", () => {
       fireEvent.click(screen.getByRole("button", { name: "Save claim" }))
       fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Save changes" }))
       await screen.findByText("Claim saved")
+      fireEvent.click(stageLink(3))
       fireEvent.click(await screen.findByRole("button", { name: "Tell a party" }))
       const form = screen.getByRole("form", { name: "Tell a party" })
       // "Blue Company" stands in for the campaign's own party (here The Ashen Vigil).
@@ -859,7 +1344,7 @@ describe("unified knowledge claim page", () => {
     })
 
     it("offers only the active campaign's own parties", async () => {
-      setupPublished()
+      setupPublished(at("who-knows"))
       fireEvent.click(await screen.findByRole("button", { name: "Tell a party" }))
       expect(server.callsTo("GET", /\/campaigns\/mundivita\/parties/).length).toBeGreaterThan(0)
       expect(server.calls.some((c) => c.path.includes("/parties") && !c.path.startsWith("/campaigns/mundivita/"))).toBe(false)
@@ -876,16 +1361,19 @@ describe("unified knowledge claim page", () => {
 
   describe("old addresses", () => {
     it.each([
-      ["edit", "#claim"],
-      ["audience", "#who-knows"],
-    ])("redirects /%s to the unified page, keeping character and party context", async (old, hash) => {
+      ["edit", "claim"],
+      ["audience", "who-knows"],
+    ])("redirects /%s to the matching section, keeping character and party context", async (old, section) => {
+      withLifecycle(lifecycle())
       const { router } = setup(`${CLAIM}/${old}?character_id=c1&party_id=p1`)
-      await screen.findByRole("heading", { level: 1, name: "Knowledge claim" })
+      await screen.findByRole("heading", { level: 1, name: "The duke is a vampire." })
       expect(router.state.location.pathname).toBe(CLAIM)
-      expect(router.state.location.search).toBe("?character_id=c1&party_id=p1")
-      expect(router.state.location.hash).toBe(hash)
-      expect(router.state.historyAction).toBe("REPLACE")
+      expect(router.state.location.search).toBe(`?character_id=c1&party_id=p1&section=${section}`)
+      expect(router.state.location.hash).toBe("")
       expect(server.calls.some((c) => c.path.includes("character_id=c1") && c.path.includes("party_id=p1"))).toBe(true)
+      expect(
+        await screen.findByRole("heading", { level: 2, name: section === "claim" ? "Claim" : "Who knows this" }),
+      ).toBeInTheDocument()
     })
 
     it("links cards to the unified page carrying the perspective", async () => {
