@@ -11,6 +11,7 @@ import {
     Routes,
     useLocation,
     useNavigate,
+    useParams,
 } from "react-router"
 import {
     afterEach,
@@ -24,6 +25,8 @@ import { useWorldBackPath } from "../hooks/useWorldBackPath"
 import { useWorldEntities } from "../hooks/useWorldEntities"
 import type { WorldEntityPage } from "../types/world"
 import { CampaignWorldPage } from "./CampaignWorldPage"
+import { WorldOrganizationDetailPage } from "./WorldOrganizationDetailPage"
+import type { OrganizationDetail } from "../types/world"
 
 vi.mock("../hooks/useWorldEntities", () => ({
     useWorldEntities: vi.fn(),
@@ -80,13 +83,37 @@ function EntryStub() {
     return <Link to={back}>Back to World</Link>
 }
 
+const guild: OrganizationDetail = {
+    organization_id: "org-1",
+    name: "The Cartographers' Guild",
+    summary: null,
+    kind_code: "business",
+    organization_type_code: "business",
+    public_description: null,
+    parent: { entity_id: "org-parent", name: "The Crown" },
+    headquarters: { entity_id: "loc-hq", name: "Mapmakers' Hall" },
+    religion: { entity_id: "rel-1", name: "The Sun Faith" },
+    status_code: "active",
+}
+
+// Organizations render the real detail page (it links to related entries);
+// every other entry is a plain stub.
+function EntryRoute() {
+    const { category } = useParams()
+    return category === "organization" ? (
+        <WorldOrganizationDetailPage campaignId="campaign-a" organization={guild} />
+    ) : (
+        <EntryStub />
+    )
+}
+
 function renderAt(initial: string) {
     return render(
         <MemoryRouter initialEntries={[initial]}>
             <LocationProbe />
             <Routes>
                 <Route path="/app/:campaignId/world" element={<CampaignWorldPage />} />
-                <Route path="/app/:campaignId/world/:category/:entityId" element={<EntryStub />} />
+                <Route path="/app/:campaignId/world/:category/:entityId" element={<EntryRoute />} />
             </Routes>
         </MemoryRouter>,
     )
@@ -203,6 +230,47 @@ describe("CampaignWorldPage browsing state in the address", () => {
             false,
         )
         expect(screen.getByRole("searchbox", { name: "Search" })).toHaveValue("glass")
+    })
+
+    it("keeps the originating browse state across links between related entries", () => {
+        const origin = `${path}?category=organization&q=guild&cursor=c1`
+        useWorldEntitiesMock.mockReturnValue({
+            state: {
+                status: "success",
+                page: {
+                    items: [
+                        {
+                            entity_id: "org-1",
+                            category: "organization",
+                            entity_type_code: "business",
+                            name: "The Cartographers' Guild",
+                            summary: null,
+                        },
+                    ],
+                    next_cursor: null,
+                },
+            },
+            retry: vi.fn(),
+        })
+        renderAt(origin)
+
+        for (const related of ["The Crown", "Mapmakers' Hall", "The Sun Faith"]) {
+            fireEvent.click(screen.getByRole("link", { name: /Cartographers/ }))
+            fireEvent.click(screen.getByRole("link", { name: related }))
+            expect(here()).not.toBe(origin)
+
+            fireEvent.click(screen.getByRole("link", { name: "Back to World" }))
+
+            expect(here()).toBe(origin)
+        }
+    })
+
+    it("falls back to the plain World address for a detail route opened directly", () => {
+        renderAt(`${path}/location/loc-1`)
+
+        fireEvent.click(screen.getByRole("link", { name: "Back to World" }))
+
+        expect(here()).toBe(path)
     })
 
     it("follows browser Back and Forward across category and page changes", () => {
