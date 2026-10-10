@@ -28,6 +28,10 @@ import {
     CampaignWorldPage,
 } from "./CampaignWorldPage"
 
+vi.mock("../hooks/useWorldCategoryCounts", () => ({
+    useWorldCategoryCounts: vi.fn(() => null),
+}))
+
 vi.mock("../hooks/useWorldEntities", () => ({
     useWorldEntities: vi.fn(),
 }))
@@ -83,6 +87,17 @@ function typeInSearch(value: string) {
     })
 }
 
+function chooseCategory(name: string) {
+    fireEvent.click(screen.getByRole("link", { name }))
+}
+
+// Previous page is shown with the Next page control but disabled on page one.
+function expectNoPreviousPage() {
+    expect(
+        screen.getByRole("button", { name: "Previous page" }),
+    ).toBeDisabled()
+}
+
 function renderCampaignWorldPage(
     path = "/app/campaign-a/world",
 ) {
@@ -114,7 +129,7 @@ describe("CampaignWorldPage", () => {
 
         expect(
             screen.getByRole("heading", {
-                name: "World",
+                name: "Campaign World",
                 level: 1,
             }),
         ).toBeInTheDocument()
@@ -143,16 +158,7 @@ describe("CampaignWorldPage", () => {
             false,
         )
 
-        fireEvent.change(
-            screen.getByRole("combobox", {
-                name: "Category",
-            }),
-            {
-                target: {
-                    value: "event",
-                },
-            },
-        )
+        chooseCategory("Events")
 
         expect(
             useWorldEntitiesMock,
@@ -177,6 +183,142 @@ describe("CampaignWorldPage", () => {
         )
     })
 
+    describe("paging back", () => {
+        const secondPage: WorldEntityPage = {
+            items: [
+                {
+                    entity_id: "event-1",
+                    category: "event",
+                    entity_type_code: "historical_event",
+                    name: "The Sundering",
+                    summary: null,
+                },
+            ],
+            next_cursor: "third-cursor",
+        }
+
+        // Each cursor yields its own page, as the server's keyset would.
+        beforeEach(() => {
+            useWorldEntitiesMock.mockImplementation(
+                (_campaignId, _category, _query, cursor) => ({
+                    state: {
+                        status: "success",
+                        page: cursor === null ? worldPage : secondPage,
+                    },
+                    retry: vi.fn(),
+                }),
+            )
+        })
+
+        function clickPager(name: "Next page" | "Previous page") {
+            fireEvent.click(screen.getByRole("button", { name }))
+        }
+
+        it("returns from the next page to the original results", () => {
+            renderCampaignWorldPage()
+
+            expectNoPreviousPage()
+
+            clickPager("Next page")
+
+            expect(screen.getByText("The Sundering")).toBeInTheDocument()
+            expect(screen.queryByText("Glass Harbor")).not.toBeInTheDocument()
+
+            clickPager("Previous page")
+
+            expect(
+                useWorldEntitiesMock,
+            ).toHaveBeenLastCalledWith(
+                "campaign-a",
+                null,
+                "",
+                null,
+                false,
+            )
+            expect(screen.getByText("Glass Harbor")).toBeInTheDocument()
+            expect(screen.queryByText("The Sundering")).not.toBeInTheDocument()
+            expectNoPreviousPage()
+        })
+
+        it("steps back one page at a time through deeper history", () => {
+            renderCampaignWorldPage()
+
+            clickPager("Next page")
+            clickPager("Next page")
+
+            expect(
+                useWorldEntitiesMock,
+            ).toHaveBeenLastCalledWith(
+                "campaign-a",
+                null,
+                "",
+                "third-cursor",
+                false,
+            )
+
+            clickPager("Previous page")
+
+            expect(
+                useWorldEntitiesMock,
+            ).toHaveBeenLastCalledWith(
+                "campaign-a",
+                null,
+                "",
+                "next-cursor",
+                false,
+            )
+            expect(
+                screen.getByRole("button", { name: "Previous page" }),
+            ).toBeInTheDocument()
+        })
+
+        it("discards the page history when a filter or search changes", () => {
+            renderCampaignWorldPage()
+
+            clickPager("Next page")
+            clickPager("Next page")
+
+            chooseCategory("Events")
+
+            expect(
+                useWorldEntitiesMock,
+            ).toHaveBeenLastCalledWith(
+                "campaign-a",
+                "event",
+                "",
+                null,
+                false,
+            )
+            expectNoPreviousPage()
+
+            // A fresh history under the new filter steps back to its own
+            // first page, never to a cursor issued for the old filter.
+            clickPager("Next page")
+            typeInSearch("sundering")
+
+            expectNoPreviousPage()
+
+            clickPager("Next page")
+            clickPager("Previous page")
+
+            expect(
+                useWorldEntitiesMock,
+            ).toHaveBeenLastCalledWith(
+                "campaign-a",
+                "event",
+                "sundering",
+                null,
+                false,
+            )
+            expect(
+                useWorldEntitiesMock.mock.calls.some(
+                    ([, category, , cursor]) =>
+                        category === "event" && cursor === "third-cursor",
+                ),
+            ).toBe(false)
+        })
+    })
+
     it("keeps showing the previous results, busy, while a filter change refreshes", () => {
         renderCampaignWorldPage()
 
@@ -192,16 +334,7 @@ describe("CampaignWorldPage", () => {
             retry: vi.fn(),
         })
 
-        fireEvent.change(
-            screen.getByRole("combobox", {
-                name: "Category",
-            }),
-            {
-                target: {
-                    value: "event",
-                },
-            },
-        )
+        chooseCategory("Events")
 
         const resultsRegion = screen.getByRole(
             "region",
@@ -250,7 +383,7 @@ describe("CampaignWorldPage", () => {
 
         expect(
             screen.getByRole("heading", {
-                name: "World",
+                name: "Campaign World",
                 level: 1,
             }),
         ).toBeInTheDocument()
@@ -282,7 +415,7 @@ describe("CampaignWorldPage", () => {
 
         expect(
             screen.getByRole("heading", {
-                name: "World",
+                name: "Campaign World",
                 level: 1,
             }),
         ).toBeInTheDocument()
@@ -427,7 +560,7 @@ describe("CampaignWorldPage", () => {
 
         expect(
             screen.getByRole("heading", {
-                name: "World",
+                name: "Campaign World",
                 level: 1,
             }),
         ).toBeInTheDocument()
@@ -466,16 +599,7 @@ describe("CampaignWorldPage", () => {
             </MemoryRouter>,
         )
 
-        fireEvent.change(
-            screen.getByRole("combobox", {
-                name: "Category",
-            }),
-            {
-                target: {
-                    value: "event",
-                },
-            },
-        )
+        chooseCategory("Events")
 
         typeInSearch("sundering")
 
@@ -518,10 +642,8 @@ describe("CampaignWorldPage", () => {
         ).toHaveValue("")
 
         expect(
-            screen.getByRole("combobox", {
-                name: "Category",
-            }),
-        ).toHaveValue("")
+            screen.getByRole("link", { name: "All entries" }),
+        ).toHaveAttribute("aria-current", "page")
     })
 
     it("does not request World data without a campaign ID", () => {

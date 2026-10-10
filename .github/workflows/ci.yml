@@ -112,9 +112,9 @@ jobs:
         run: node packaging/package.mjs
 
   postgres-verification:
-    name: Migrations and Tests (PostgreSQL 18)
+    name: Migrations (PostgreSQL 18)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     # Per docs/adr/0012-self-hosted-docker-deployment-and-ci-verification.md,
     # containerized PostgreSQL 18 is the CI merge gate — the same major
     # version pinned for local/self-hosted use (docs/DATABASE_CONVENTIONS.md
@@ -125,10 +125,8 @@ jobs:
     # equivalent to what tests/conftest.py already expects locally. Steps
     # below mirror scripts/verify.sh's `full` stage: migrate empty to head,
     # confirm state, round-trip the downgrade, check seed idempotency,
-    # confirm autogenerate produces an empty diff, then run the complete
-    # test suite. tests/conftest.py provisions its own ephemeral database
-    # off DATABASE_URL for the pytest run, exactly as it does against a
-    # developer's local server.
+    # confirm autogenerate produces an empty diff. The complete test suite
+    # runs in the separate, sharded postgres-tests job below.
     services:
       postgres:
         image: postgres:18.4
@@ -184,7 +182,60 @@ jobs:
       - name: Schema comparison (autogenerate must produce empty diff)
         run: uv run alembic -c database/alembic.ini check
 
-      - name: Run full test suite (unit, database, scenario)
+  postgres-tests:
+    name: Tests (PostgreSQL 18, shard ${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # The complete unit/database/scenario suite outgrew a single 30-minute
+    # job (PR #66: ~26 minutes of pytest alone), so it runs as parallel
+    # shards. Each shard gets its own fresh postgres:18.4 service container
+    # and tests/conftest.py provisions its own ephemeral database on it,
+    # exactly as in a single-process run; CI_TEST_SHARD selects which
+    # test files this shard runs (tests/conftest.py's sharding hook — whole
+    # files, dealt round-robin, disjoint and covering every file; proven by
+    # tests/unit/test_conftest_sharding.py). Changing the shard count means
+    # updating both the matrix and the "/4" in CI_TEST_SHARD and the
+    # job name together.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    services:
+      postgres:
+        image: postgres:18.4
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: dnd_ai_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d dnd_ai_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/dnd_ai_ci
+      CI_TEST_SHARD: ${{ matrix.shard }}/4
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Run test suite shard (unit, database, scenario)
         run: uv run pytest -v --tb=short
 
   docker-build:

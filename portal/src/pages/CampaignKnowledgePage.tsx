@@ -24,15 +24,10 @@ import {
     useSession,
 } from "../context/SessionContext"
 import type {
-    SessionBootstrapState,
-} from "../hooks/useSessionBootstrap"
-import type {
-    AuthorizedParty,
-} from "../types/bootstrap"
-import type {
     KnowledgePage as KnowledgeResultsPage,
     KnowledgeView,
 } from "../types/knowledge"
+import { resolveAuthorizedParties } from "../utils/authorizedParties"
 import PlaceholderPage from "./PlaceholderPage"
 import { KnowledgePage } from "./KnowledgePage"
 
@@ -41,33 +36,6 @@ import { KnowledgePage } from "./KnowledgePage"
 // delayed — KnowledgeItemsBoundary/useKnowledgeItems keep the previous
 // results visible (as "refreshing") while the new one is in flight.
 const SEARCH_DEBOUNCE_MS = 180
-
-// The authorized-party list lives on the selected character's perspective
-// in the session bootstrap, not the knowledge API itself — a character can
-// only filter by a party they are actually authorized to see.
-function resolveAuthorizedParties(
-    sessionState: SessionBootstrapState,
-    campaignId: string,
-    characterId: string | null,
-): AuthorizedParty[] {
-    if (sessionState.status !== "authenticated") {
-        return []
-    }
-
-    const campaign = sessionState.bootstrap.campaigns.find(
-        (candidate) => candidate.campaign_id === campaignId,
-    )
-
-    if (campaign === undefined) {
-        return []
-    }
-
-    const character = campaign.character_perspectives.find(
-        (candidate) => candidate.character_id === characterId,
-    )
-
-    return character?.authorized_parties ?? []
-}
 
 interface KnowledgeItemListProps {
     campaignId: string
@@ -153,6 +121,10 @@ function CampaignKnowledgeContent({
         useState("")
     const [cursor, setCursor] =
         useState<string | null>(null)
+    // Public knowledge is part of every view by default, whatever the
+    // perspective; leaving it out is only ever the user's explicit choice.
+    const [includePublic, setIncludePublic] =
+        useState(true)
 
     // A perspective switch changes what's authorized to see, same as a
     // category change: never leave a stale cursor (or a party filter that
@@ -202,6 +174,11 @@ function CampaignKnowledgeContent({
         setCursor(null)
     }
 
+    function handleIncludePublicChange(nextIncludePublic: boolean) {
+        setIncludePublic(nextIncludePublic)
+        setCursor(null)
+    }
+
     return (
         <KnowledgePage
             campaignId={campaignId}
@@ -209,9 +186,11 @@ function CampaignKnowledgeContent({
             query={searchInputValue}
             partyId={partyId}
             parties={parties}
+            includePublic={includePublic}
             onViewChange={handleViewChange}
             onQueryChange={setSearchInputValue}
             onPartyChange={handlePartyChange}
+            onIncludePublicChange={handleIncludePublicChange}
         >
             <KnowledgeItemsBoundary
                 campaignId={campaignId}
@@ -221,6 +200,9 @@ function CampaignKnowledgeContent({
                 query={debouncedQuery}
                 knowledgeType={null}
                 cursor={cursor}
+                // The Public view *is* the public-only filter, so the
+                // opt-out never applies to it.
+                includePublic={includePublic || view === "public"}
             >
                 {(page, refreshing) => (
                     <KnowledgeItemList

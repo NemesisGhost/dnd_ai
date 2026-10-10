@@ -240,6 +240,7 @@ from dnd_ai.domain.authoring_policy import (
     timeline_blocked_reason,
     world_blocked_reason,
 )
+from dnd_ai.domain.data_classification import audit_change
 from dnd_ai.domain.errors import DomainAuthorizationError
 from dnd_ai.domain.world_authority import CAMPAIGN_CREATE
 from dnd_ai.queries.world_authority import resolve_world_authority
@@ -790,7 +791,9 @@ def update_campaign(
     if clean_name != campaign.name:
         changed["name"] = {"from": campaign.name, "to": clean_name}
     if clean_description != campaign.description:
-        changed["description"] = {"from": campaign.description, "to": clean_description}
+        changed["description"] = audit_change(
+            "description", campaign.description, clean_description
+        )
     if not changed:
         return CampaignMutationResult(
             campaign_id=campaign_id,

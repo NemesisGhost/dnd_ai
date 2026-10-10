@@ -38,6 +38,7 @@ import type { FieldError } from "./feedback"
 import { ReferenceCombobox } from "./ReferenceCombobox"
 import type { ReferenceOption } from "./ReferenceCombobox"
 import "./authoring.css"
+import type { QuestReceipt } from "../../types/contentAuthoring"
 
 // The Quest definition editor: one reloadable page with the quest's details and
 // its stages and objectives as inline panels. Every change is one idempotent
@@ -250,7 +251,7 @@ export function QuestEditor({ campaignId, view, options, refreshing, refetch }: 
         null,
     )
 
-    const mutation = useAuthoringMutation<QuestCommand, QuestAuthoringView>({
+    const mutation = useAuthoringMutation<QuestCommand, QuestReceipt>({
         scopeKey: `quest:${view.quest_id}`,
         request: (command, ctx) => runQuestCommand(campaignId, view.quest_id, command, ctx),
         onSuccess: async () => {

@@ -158,6 +158,7 @@ describe("useKnowledgeItems", () => {
                 query: "glass",
                 knowledgeType: "fact",
                 cursor: null,
+                includePublic: true,
             },
             expect.any(AbortSignal),
         )
@@ -364,6 +365,7 @@ describe("useKnowledgeItems", () => {
                 query: "shard",
                 knowledgeType: "rumor",
                 cursor: "next-knowledge-page",
+                includePublic: true,
             },
             expect.any(AbortSignal),
         )

@@ -64,6 +64,7 @@ function renderBoundary() {
             campaignId="campaign-a"
             questId="quest-a"
             characterId="character-a"
+            partyId="party-a"
         >
             {(quest) => (
                 <p>{quest.name}</p>
@@ -104,6 +105,7 @@ describe("QuestDetailBoundary", () => {
             "campaign-a",
             "quest-a",
             "character-a",
+            "party-a",
         )
     })
 

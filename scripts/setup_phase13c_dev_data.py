@@ -67,7 +67,7 @@ A gets three fixture-owned `campaign.sessions` rows — see
   alphabetical name order, so the owner can confirm the portal preserves
   backend order instead of re-sorting.
 
-  #3: `lifecycle_status = pending`, `title`/`started_at`/`ended_at`/
+  #3: `lifecycle_status = active` (unscheduled, not started), `title`/`started_at`/`ended_at`/
   `summary` all NULL, and no linked events — the portal's "Session 3"
   fallback heading, "Not recorded" timestamps, and neutral empty
   recap/events states, plus null-timestamps-sort-last in the list.
@@ -228,7 +228,7 @@ that environment variable is unset or fails the local password policy):
   `access.manage`) plus an `owner`-type character relationship to
   Character A (the same relationship type/capability seed this script
   already establishes for `--user-id`'s own perspectives — see
-  `_ensure_relationship_type_capabilities`). No membership in, or
+  the relationship-type capability defaults from migration 114). No membership in, or
   character relationship reaching, Campaign B.
 
   "Phase13E Dev Observer A" (`phase13e.observer_a`): a Campaign A member
@@ -378,25 +378,13 @@ what the task this script supports says not to do. Every inserted/
 reconciled row's shape mirrors tests/factories.py's `make_character_state`/
 `make_character_condition`/`make_character_resource` exactly.
 
-One notable, pre-existing gap this script works around rather than papers
-over: `security.character_relationship_type_capabilities` (the table
-`dnd_ai.domain.access.resolve_access_context`'s own character-capability
-join depends on) ships with **zero rows** in every environment — no
-migration or seed file populates it (confirmed: only
-`security.character_relationship_types`/`.capabilities` have seed files;
-grep across database/migrations/versions finds no INSERT into the
-capabilities join table). Without at least one row there, no character
-relationship of any type is ever selectable as a perspective, on any
-campaign, regardless of how it's granted — campaign ownership alone does
-not imply it either (`campaign_owner`'s own capabilities are
-`access.manage`/`campaign.view`/`canon.edit`, none of them `character.*`).
-This script seeds the `owner` relationship type with the full
-`character.*` capability set (all nine `security.capabilities` rows whose
-code starts with `character.`) the FIRST time it finds that join table
-completely empty, and leaves it untouched otherwise — global, one-time
-config, not per-fixture data, and exactly what the platform needs before
-*any* character perspective can work anywhere. Flagged in this script's own
-CLI output every time it runs so it is never silently assumed.
+Relationship-type capability defaults are **production reference data** (migration
+`114_relationship_defaults`, Phase 15 checkpoint 15.2A-1), not something this fixture
+supplies. `security.character_relationship_type_capabilities` must already be populated by
+`alembic upgrade head`; this script only checks that (`_require_relationship_type_capabilities`)
+and stops with a clear message on a database that has not been migrated. It never inserts
+into that table, and the unit guard `tests/unit/test_scripts_no_authored_content_direct_inserts.py`
+forbids doing so without exception.
 """
 
 from __future__ import annotations
@@ -405,6 +393,7 @@ import argparse
 import os
 import sys
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -422,17 +411,41 @@ from dnd_ai.commands.access_grants import (
     revoke_resource_grant,
 )
 from dnd_ai.commands.campaigns import create_campaign
+from dnd_ai.commands.character_builds import (
+    activate_character_build,
+    create_character_build,
+    initialize_character_state,
+)
+from dnd_ai.commands.entity_lifecycle import (
+    approve_entity,
+    publish_entity_as_canon,
+    submit_entity_for_review,
+)
 from dnd_ai.commands.local_auth import (
     _activate_local_account_impl,
     _create_local_account_impl,
     _disable_local_account_impl,
     normalize_login_name,
 )
-from dnd_ai.commands.memberships import assign_membership_role, create_campaign_membership
+from dnd_ai.commands.memberships import (
+    assign_membership_role,
+    create_campaign_membership,
+    end_campaign_membership,
+)
+from dnd_ai.commands.parties import create_party
+from dnd_ai.commands.party_members import add_party_member
+from dnd_ai.commands.player_characters import create_player_character
 from dnd_ai.commands.timelines import create_timeline
+from dnd_ai.commands.world_time import create_calendar, create_world_time
 from dnd_ai.commands.worlds import create_world
 from dnd_ai.config import settings
 from dnd_ai.domain.access import resolve_access_context
+from dnd_ai.domain.character_builds import (
+    BuildInput,
+    ClassLevelInput,
+    ProficiencyInput,
+    SpellcastingInput,
+)
 from dnd_ai.domain.passwords import PasswordPolicyError, validate_password_policy
 from dnd_ai.queries.access_overview import get_campaign_access_overview
 from dnd_ai.queries.bootstrap import get_session_bootstrap
@@ -470,6 +483,7 @@ _RULESET_CODE = "dnd5e"
 _RELATIONSHIP_TYPE_CODE = "owner"
 
 _CREATED_CHANGE_ACTION = "created"
+_UPDATED_CHANGE_ACTION = "updated"
 
 # --------------------------------------------------------------------------
 # Phase 13E-A access-overview manual-verification fixture
@@ -632,8 +646,10 @@ _CHARACTER_A_PREPARED_SPELL_CODES = ("magic_missile", "cure_wounds")
 # dnd_ai.commands.sessions.end_session is explicit that an ended session is
 # represented by `ended_at IS NOT NULL`, not a lifecycle transition (the
 # row stays `active`). So the two finished sessions carry `active` + a
-# non-null `ended_at`; the not-yet-started session carries `pending` and
-# no timestamps. Those are the schema-supported codes, not invented ones.
+# non-null `ended_at`; the not-yet-started session is also `active` with no
+# timestamps (its play status is derived as unscheduled). Since D-13
+# (migration 122) a session's lifecycle is only `active`/`archived`, and every
+# session command refuses any other status, so `pending` must not be seeded.
 #
 # Event ordering: the session-detail query sorts linked events by
 # `ORDER BY wt.sort_key, e.created_at` (dnd_ai.queries.session). Each event
@@ -768,7 +784,7 @@ _CAMPAIGN_A_SESSIONS: tuple[_SessionFixture, ...] = (
         session_number=3,
         title=None,
         summary=None,
-        lifecycle_status_code="pending",
+        lifecycle_status_code="active",
         started_at=None,
         ended_at=None,
         start_world_time_offset=None,
@@ -1932,59 +1948,19 @@ def _get_or_create_timeline(
     return result.timeline_id
 
 
-def _ensure_relationship_type_capabilities(connection: Connection, summary: _Summary) -> None:
-    """One-time global seed for `security.character_relationship_type_
-    capabilities` — see this module's own docstring for why this table
-    ships empty and why that blocks every character perspective, not just
-    this fixture's. Only ever adds rows when the whole table is empty;
-    never touches it again once any row exists (even for an unrelated
-    relationship type), since that would mean some other process — a future
-    real seed migration — has since taken ownership of this configuration."""
-    already_configured = connection.execute(
+def _require_relationship_type_capabilities(connection: Connection) -> None:
+    """The mapping table is production reference data (migration
+    `114_relationship_defaults`). Fail fast on a database that has not been
+    migrated rather than supplying product security defaults from a fixture."""
+    configured = connection.execute(
         text("SELECT 1 FROM security.character_relationship_type_capabilities LIMIT 1")
     ).scalar()
-    if already_configured is not None:
-        summary.add(
-            created=False,
-            label="security.character_relationship_type_capabilities (global)",
-            record_id="already configured, left untouched",
+    if configured is None:
+        raise SystemExit(
+            "security.character_relationship_type_capabilities is empty: run "
+            "`alembic upgrade head` (migration 114_relationship_defaults) first. "
+            "This script no longer seeds relationship-capability defaults."
         )
-        return
-
-    relationship_type_id = lookup_id(
-        connection,
-        "security",
-        "character_relationship_types",
-        "character_relationship_type_id",
-        _RELATIONSHIP_TYPE_CODE,
-    )
-    capability_ids = (
-        connection.execute(
-            text(
-                "SELECT capability_id FROM security.capabilities WHERE code LIKE 'character.%' AND is_active"
-            )
-        )
-        .scalars()
-        .all()
-    )
-    if not capability_ids:
-        raise SystemExit("no active security.capabilities rows found with code LIKE 'character.%'.")
-    for capability_id in capability_ids:
-        connection.execute(
-            text(
-                "INSERT INTO security.character_relationship_type_capabilities "
-                "(character_relationship_type_id, capability_id) VALUES (:type, :capability)"
-            ),
-            {"type": relationship_type_id, "capability": capability_id},
-        )
-    summary.add(
-        created=True,
-        label=(
-            f"security.character_relationship_type_capabilities (global): all "
-            f"{len(capability_ids)} character.* capabilities -> '{_RELATIONSHIP_TYPE_CODE}'"
-        ),
-        record_id=relationship_type_id,
-    )
 
 
 def _get_or_create_campaign(
@@ -2064,6 +2040,7 @@ def _get_or_create_character(
     world_id: uuid.UUID,
     name: str,
     species_code: str,
+    campaign_id: uuid.UUID,
     ruleset_version_id: uuid.UUID,
     owner_user_id: uuid.UUID,
 ) -> uuid.UUID:
@@ -2090,47 +2067,27 @@ def _get_or_create_character(
             f"{ruleset_version_id} — none found. This script only reuses existing species content."
         )
 
-    player_character_type_id = lookup_id(
-        connection, "core", "entity_types", "entity_type_id", "player_character"
+    # The production commands own the entity, subtype, and marker rows (Phase 15.2B-1);
+    # `player_user_id` stays NULL (D-8) -- the access relationship below is the link.
+    created = create_player_character(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=owner_user_id,
+        name=name,
+        summary=None,
+        species_id=species_id,
+        size_category=_CHARACTER_SIZE_CATEGORY,
     )
-    canon_status_id = lookup_id(connection, "core", "canon_statuses", "canon_status_id", "canon")
-    active_status_id = lookup_id(
-        connection, "core", "lifecycle_statuses", "lifecycle_status_id", "active"
-    )
-
-    entity_id = connection.execute(
-        text("""
-            INSERT INTO core.entities
-                (world_id, entity_type_id, canonical_name, canon_status_id, lifecycle_status_id,
-                 created_by_user_id)
-            VALUES (:world, :entity_type, :name, :canon, :lifecycle, :created_by)
-            RETURNING entity_id
-        """),
-        {
-            "world": world_id,
-            "entity_type": player_character_type_id,
-            "name": name,
-            "canon": canon_status_id,
-            "lifecycle": active_status_id,
-            "created_by": owner_user_id,
-        },
-    ).scalar()
-    assert isinstance(entity_id, uuid.UUID)
-
-    connection.execute(
-        text("""
-            INSERT INTO character.characters (character_id, species_id, size_category)
-            VALUES (:character, :species, :size)
-        """),
-        {"character": entity_id, "species": species_id, "size": _CHARACTER_SIZE_CATEGORY},
-    )
-    connection.execute(
-        text("""
-            INSERT INTO character.player_characters (player_character_id, player_user_id)
-            VALUES (:character, :player_user)
-        """),
-        {"character": entity_id, "player_user": owner_user_id},
-    )
+    entity_id = created.entity_id
+    version = created.row_version
+    for transition in (submit_entity_for_review, approve_entity, publish_entity_as_canon):
+        version = transition(
+            connection,
+            campaign_id=campaign_id,
+            entity_id=entity_id,
+            actor_user_id=owner_user_id,
+            expected_row_version=version,
+        ).row_version
     summary.add(created=True, label=f"character {name!r} ({species_code})", record_id=entity_id)
     return entity_id
 
@@ -2139,6 +2096,8 @@ def _ensure_character_state(
     connection: Connection,
     summary: _Summary,
     *,
+    campaign_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
     timeline_id: uuid.UUID,
     character_id: uuid.UUID,
     character_label: str,
@@ -2177,19 +2136,33 @@ def _ensure_character_state(
     }
 
     if existing is None:
-        connection.execute(
-            text("""
-                INSERT INTO campaign.character_state
-                    (timeline_id, character_id, current_hit_points, maximum_hit_points,
-                     temporary_hit_points, exhaustion_level, death_save_successes,
-                     death_save_failures)
-                VALUES (:timeline, :character, :current, :maximum, :temporary, :exhaustion,
-                        :successes, :failures)
-            """),
-            params,
+        # Created through the production command (Phase 15.2B-2); the vitals it
+        # does not take (temporary hit points, exhaustion, death saves) are
+        # reconciled below, exactly as for a pre-existing row.
+        initialize_character_state(
+            connection,
+            campaign_id=campaign_id,
+            actor_user_id=actor_user_id,
+            character_id=character_id,
+            maximum_hit_points=state.maximum_hit_points,
+            current_hit_points=state.current_hit_points,
         )
-        summary.add(created=True, label=label, record_id=character_id)
-        return
+        existing = (
+            connection.execute(
+                text("""
+                    SELECT current_hit_points, maximum_hit_points, temporary_hit_points,
+                           exhaustion_level, death_save_successes, death_save_failures
+                    FROM campaign.character_state
+                    WHERE timeline_id = :timeline AND character_id = :character
+                """),
+                {"timeline": timeline_id, "character": character_id},
+            )
+            .mappings()
+            .one()
+        )
+        created_now = True
+    else:
+        created_now = False
 
     matches = (
         existing["current_hit_points"] == state.current_hit_points
@@ -2200,7 +2173,7 @@ def _ensure_character_state(
         and existing["death_save_failures"] == state.death_save_failures
     )
     if matches:
-        summary.add(created=False, changed=False, label=label, record_id=character_id)
+        summary.add(created=created_now, changed=False, label=label, record_id=character_id)
         return
 
     connection.execute(
@@ -2214,7 +2187,7 @@ def _ensure_character_state(
         """),
         params,
     )
-    summary.add(created=False, changed=True, label=label, record_id=character_id)
+    summary.add(created=created_now, changed=not created_now, label=label, record_id=character_id)
 
 
 def _resolve_condition_id(
@@ -2455,380 +2428,6 @@ def _resolve_subclass_id(connection: Connection, *, class_id: uuid.UUID, code: s
     return value
 
 
-def _ensure_character_build(
-    connection: Connection,
-    summary: _Summary,
-    *,
-    character_id: uuid.UUID,
-    character_label: str,
-    ruleset_version_id: uuid.UUID,
-) -> uuid.UUID:
-    """The fixture's one build per character, identified by its fixed
-    _BUILD_LABEL (character_builds carries no other natural key)."""
-    existing = connection.execute(
-        text(
-            "SELECT character_build_id FROM character.character_builds "
-            "WHERE character_id = :character AND label = :label"
-        ),
-        {"character": character_id, "label": _BUILD_LABEL},
-    ).scalar()
-    label = f"build {_BUILD_LABEL!r}: {character_label}"
-    if existing is not None:
-        assert isinstance(existing, uuid.UUID)
-        summary.add(created=False, label=label, record_id=existing)
-        return existing
-
-    build_id = connection.execute(
-        text("""
-            INSERT INTO character.character_builds (character_id, ruleset_version_id, label)
-            VALUES (:character, :ruleset_version, :label)
-            RETURNING character_build_id
-        """),
-        {"character": character_id, "ruleset_version": ruleset_version_id, "label": _BUILD_LABEL},
-    ).scalar()
-    assert isinstance(build_id, uuid.UUID)
-    summary.add(created=True, label=label, record_id=build_id)
-    return build_id
-
-
-def _ensure_character_ability_score(
-    connection: Connection,
-    summary: _Summary,
-    *,
-    character_build_id: uuid.UUID,
-    character_label: str,
-    ability_id: uuid.UUID,
-    ability_code: str,
-    score: int,
-) -> None:
-    existing = connection.execute(
-        text(
-            "SELECT score FROM character.character_ability_scores "
-            "WHERE character_build_id = :build AND ability_id = :ability"
-        ),
-        {"build": character_build_id, "ability": ability_id},
-    ).scalar()
-    label = f"ability score {ability_code!r} ({score}): {character_label}"
-    if existing is None:
-        connection.execute(
-            text("""
-                INSERT INTO character.character_ability_scores
-                    (character_build_id, ability_id, score)
-                VALUES (:build, :ability, :score)
-            """),
-            {"build": character_build_id, "ability": ability_id, "score": score},
-        )
-        summary.add(created=True, label=label, record_id=character_build_id)
-        return
-    if existing == score:
-        summary.add(created=False, changed=False, label=label, record_id=character_build_id)
-        return
-    connection.execute(
-        text("""
-            UPDATE character.character_ability_scores SET score = :score, updated_at = now()
-            WHERE character_build_id = :build AND ability_id = :ability
-        """),
-        {"build": character_build_id, "ability": ability_id, "score": score},
-    )
-    summary.add(created=False, changed=True, label=label, record_id=character_build_id)
-
-
-def _ensure_character_class_level(
-    connection: Connection,
-    summary: _Summary,
-    *,
-    character_build_id: uuid.UUID,
-    character_label: str,
-    class_id: uuid.UUID,
-    class_code: str,
-    level: int,
-    subclass_id: uuid.UUID | None = None,
-) -> None:
-    existing = (
-        connection.execute(
-            text("""
-                SELECT level, subclass_id FROM character.character_class_levels
-                WHERE character_build_id = :build AND class_id = :class_id
-            """),
-            {"build": character_build_id, "class_id": class_id},
-        )
-        .mappings()
-        .one_or_none()
-    )
-    label = f"class level {class_code!r} {level}: {character_label}"
-    if existing is None:
-        connection.execute(
-            text("""
-                INSERT INTO character.character_class_levels
-                    (character_build_id, class_id, level, subclass_id)
-                VALUES (:build, :class_id, :level, :subclass_id)
-            """),
-            {
-                "build": character_build_id,
-                "class_id": class_id,
-                "level": level,
-                "subclass_id": subclass_id,
-            },
-        )
-        summary.add(created=True, label=label, record_id=character_build_id)
-        return
-    if existing["level"] == level and existing["subclass_id"] == subclass_id:
-        summary.add(created=False, changed=False, label=label, record_id=character_build_id)
-        return
-    connection.execute(
-        text("""
-            UPDATE character.character_class_levels
-            SET level = :level, subclass_id = :subclass_id, updated_at = now()
-            WHERE character_build_id = :build AND class_id = :class_id
-        """),
-        {
-            "build": character_build_id,
-            "class_id": class_id,
-            "level": level,
-            "subclass_id": subclass_id,
-        },
-    )
-    summary.add(created=False, changed=True, label=label, record_id=character_build_id)
-
-
-def _ensure_character_skill_proficiency(
-    connection: Connection,
-    summary: _Summary,
-    *,
-    character_build_id: uuid.UUID,
-    character_label: str,
-    proficiency_type_id: uuid.UUID,
-    skill_id: uuid.UUID,
-    skill_code: str,
-    is_expertise: bool,
-) -> None:
-    existing = connection.execute(
-        text(
-            "SELECT is_expertise FROM character.character_proficiencies "
-            "WHERE character_build_id = :build AND skill_id = :skill"
-        ),
-        {"build": character_build_id, "skill": skill_id},
-    ).scalar()
-    label = f"skill proficiency {skill_code!r} (expertise={is_expertise}): {character_label}"
-    if existing is None:
-        connection.execute(
-            text("""
-                INSERT INTO character.character_proficiencies
-                    (character_build_id, proficiency_type_id, skill_id, is_expertise)
-                VALUES (:build, :type, :skill, :expertise)
-            """),
-            {
-                "build": character_build_id,
-                "type": proficiency_type_id,
-                "skill": skill_id,
-                "expertise": is_expertise,
-            },
-        )
-        summary.add(created=True, label=label, record_id=character_build_id)
-        return
-    if existing == is_expertise:
-        summary.add(created=False, changed=False, label=label, record_id=character_build_id)
-        return
-    connection.execute(
-        text(
-            "UPDATE character.character_proficiencies SET is_expertise = :expertise "
-            "WHERE character_build_id = :build AND skill_id = :skill"
-        ),
-        {"build": character_build_id, "skill": skill_id, "expertise": is_expertise},
-    )
-    summary.add(created=False, changed=True, label=label, record_id=character_build_id)
-
-
-def _ensure_character_saving_throw_proficiency(
-    connection: Connection,
-    summary: _Summary,
-    *,
-    character_build_id: uuid.UUID,
-    character_label: str,
-    proficiency_type_id: uuid.UUID,
-    ability_id: uuid.UUID,
-    ability_code: str,
-) -> None:
-    existing = connection.execute(
-        text(
-            "SELECT 1 FROM character.character_proficiencies "
-            "WHERE character_build_id = :build AND saving_throw_ability_id = :ability"
-        ),
-        {"build": character_build_id, "ability": ability_id},
-    ).scalar()
-    label = f"saving throw proficiency {ability_code!r}: {character_label}"
-    if existing is not None:
-        summary.add(created=False, label=label, record_id=character_build_id)
-        return
-    connection.execute(
-        text("""
-            INSERT INTO character.character_proficiencies
-                (character_build_id, proficiency_type_id, saving_throw_ability_id)
-            VALUES (:build, :type, :ability)
-        """),
-        {"build": character_build_id, "type": proficiency_type_id, "ability": ability_id},
-    )
-    summary.add(created=True, label=label, record_id=character_build_id)
-
-
-def _ensure_character_free_text_proficiency(
-    connection: Connection,
-    summary: _Summary,
-    *,
-    character_build_id: uuid.UUID,
-    character_label: str,
-    proficiency_type_id: uuid.UUID,
-    target_label: str,
-) -> None:
-    existing = connection.execute(
-        text(
-            "SELECT 1 FROM character.character_proficiencies "
-            "WHERE character_build_id = :build AND target_label = :target_label"
-        ),
-        {"build": character_build_id, "target_label": target_label},
-    ).scalar()
-    label = f"proficiency {target_label!r}: {character_label}"
-    if existing is not None:
-        summary.add(created=False, label=label, record_id=character_build_id)
-        return
-    connection.execute(
-        text("""
-            INSERT INTO character.character_proficiencies
-                (character_build_id, proficiency_type_id, target_label)
-            VALUES (:build, :type, :target_label)
-        """),
-        {"build": character_build_id, "type": proficiency_type_id, "target_label": target_label},
-    )
-    summary.add(created=True, label=label, record_id=character_build_id)
-
-
-def _ensure_character_feature(
-    connection: Connection,
-    summary: _Summary,
-    *,
-    character_build_id: uuid.UUID,
-    character_label: str,
-    feature_id: uuid.UUID,
-    feature_code: str,
-) -> None:
-    existing = connection.execute(
-        text(
-            "SELECT 1 FROM character.character_features "
-            "WHERE character_build_id = :build AND feature_id = :feature"
-        ),
-        {"build": character_build_id, "feature": feature_id},
-    ).scalar()
-    label = f"feature {feature_code!r}: {character_label}"
-    if existing is not None:
-        summary.add(created=False, label=label, record_id=character_build_id)
-        return
-    connection.execute(
-        text("""
-            INSERT INTO character.character_features (character_build_id, feature_id)
-            VALUES (:build, :feature)
-        """),
-        {"build": character_build_id, "feature": feature_id},
-    )
-    summary.add(created=True, label=label, record_id=character_build_id)
-
-
-def _ensure_character_spellcasting_profile(
-    connection: Connection,
-    summary: _Summary,
-    *,
-    character_build_id: uuid.UUID,
-    character_label: str,
-    class_id: uuid.UUID,
-    spellcasting_ability_id: uuid.UUID,
-) -> uuid.UUID:
-    existing = connection.execute(
-        text(
-            "SELECT character_spellcasting_profile_id FROM character.character_spellcasting_profiles "
-            "WHERE character_build_id = :build AND class_id = :class_id"
-        ),
-        {"build": character_build_id, "class_id": class_id},
-    ).scalar()
-    label = f"spellcasting profile: {character_label}"
-    if existing is not None:
-        assert isinstance(existing, uuid.UUID)
-        summary.add(created=False, label=label, record_id=existing)
-        return existing
-    profile_id = connection.execute(
-        text("""
-            INSERT INTO character.character_spellcasting_profiles
-                (character_build_id, class_id, spellcasting_ability_id)
-            VALUES (:build, :class_id, :ability)
-            RETURNING character_spellcasting_profile_id
-        """),
-        {"build": character_build_id, "class_id": class_id, "ability": spellcasting_ability_id},
-    ).scalar()
-    assert isinstance(profile_id, uuid.UUID)
-    summary.add(created=True, label=label, record_id=profile_id)
-    return profile_id
-
-
-def _ensure_character_known_spell(
-    connection: Connection,
-    summary: _Summary,
-    *,
-    character_spellcasting_profile_id: uuid.UUID,
-    character_label: str,
-    spell_id: uuid.UUID,
-    spell_code: str,
-) -> None:
-    existing = connection.execute(
-        text(
-            "SELECT 1 FROM character.character_known_spells "
-            "WHERE character_spellcasting_profile_id = :profile AND spell_id = :spell"
-        ),
-        {"profile": character_spellcasting_profile_id, "spell": spell_id},
-    ).scalar()
-    label = f"known spell {spell_code!r}: {character_label}"
-    if existing is not None:
-        summary.add(created=False, label=label, record_id=character_spellcasting_profile_id)
-        return
-    connection.execute(
-        text("""
-            INSERT INTO character.character_known_spells
-                (character_spellcasting_profile_id, spell_id)
-            VALUES (:profile, :spell)
-        """),
-        {"profile": character_spellcasting_profile_id, "spell": spell_id},
-    )
-    summary.add(created=True, label=label, record_id=character_spellcasting_profile_id)
-
-
-def _ensure_character_prepared_spell(
-    connection: Connection,
-    summary: _Summary,
-    *,
-    character_spellcasting_profile_id: uuid.UUID,
-    character_label: str,
-    spell_id: uuid.UUID,
-    spell_code: str,
-) -> None:
-    existing = connection.execute(
-        text(
-            "SELECT 1 FROM character.character_prepared_spells "
-            "WHERE character_spellcasting_profile_id = :profile AND spell_id = :spell"
-        ),
-        {"profile": character_spellcasting_profile_id, "spell": spell_id},
-    ).scalar()
-    label = f"prepared spell {spell_code!r}: {character_label}"
-    if existing is not None:
-        summary.add(created=False, label=label, record_id=character_spellcasting_profile_id)
-        return
-    connection.execute(
-        text("""
-            INSERT INTO character.character_prepared_spells
-                (character_spellcasting_profile_id, spell_id)
-            VALUES (:profile, :spell)
-        """),
-        {"profile": character_spellcasting_profile_id, "spell": spell_id},
-    )
-    summary.add(created=True, label=label, record_id=character_spellcasting_profile_id)
-
-
 def _ensure_character_language(
     connection: Connection,
     summary: _Summary,
@@ -2945,20 +2544,60 @@ def _ensure_character_movement(
     summary.add(created=False, changed=True, label=label, record_id=character_id)
 
 
+def _ensure_character_build(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    campaign_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    character_id: uuid.UUID,
+    character_label: str,
+    build: BuildInput,
+) -> uuid.UUID:
+    """The fixture's one build per character, identified by its fixed label
+    (a build has no other natural key). Created once, whole, through
+    `create_character_build` (Phase 15.2B-2: builds are immutable, so an existing
+    build is reused as-is and never reconciled)."""
+    existing = connection.execute(
+        text(
+            "SELECT character_build_id FROM character.character_builds "
+            "WHERE character_id = :character AND label = :label"
+        ),
+        {"character": character_id, "label": _BUILD_LABEL},
+    ).scalar()
+    label = f"build {_BUILD_LABEL!r}: {character_label}"
+    if existing is not None:
+        assert isinstance(existing, uuid.UUID)
+        summary.add(created=False, label=label, record_id=existing)
+        return existing
+    created = create_character_build(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        character_id=character_id,
+        build=build,
+    )
+    summary.add(created=True, label=label, record_id=created.character_build_id)
+    return created.character_build_id
+
+
 def _ensure_active_build_selection(
     connection: Connection,
     summary: _Summary,
     *,
+    campaign_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
     timeline_id: uuid.UUID,
     character_id: uuid.UUID,
     character_label: str,
     character_build_id: uuid.UUID,
 ) -> None:
-    """Selects character_build_id as the active build for character_id on
-    timeline_id — campaign.character_state.character_build_id is the sole
-    active-build resolution rule (dnd_ai.queries.character_sheet's own
-    docstring); this fixture's own campaign.character_state row already
-    exists by the time this runs (_ensure_character_state, above)."""
+    """Selects character_build_id as the active build through
+    `activate_character_build` (the first activation is the administrative
+    baseline: no event, `last_event_id` NULL). A character that already has a
+    *different* active build is left alone and reported: a later change is an
+    event that needs a published character and a campaign time, which a fixture
+    run must not invent."""
     existing = connection.execute(
         text(
             "SELECT character_build_id FROM campaign.character_state "
@@ -2967,22 +2606,96 @@ def _ensure_active_build_selection(
         {"timeline": timeline_id, "character": character_id},
     ).scalar()
     label = f"active build selection: {character_label}"
-    if existing == character_build_id:
-        summary.add(created=False, changed=False, label=label, record_id=character_id)
+    if existing is not None:
+        summary.add(
+            created=False,
+            changed=False,
+            label=label if existing == character_build_id else f"{label} (left as is)",
+            record_id=character_id,
+        )
         return
-    # existing is NULL the first time this fixture runs (_ensure_character_
-    # state never sets character_build_id) — selecting a build for the
-    # first time is this row's "creation" from the fixture's point of view,
-    # not a reconciliation of a previously-wrong value.
-    was_unset = existing is None
-    connection.execute(
-        text("""
-            UPDATE campaign.character_state SET character_build_id = :build, updated_at = now()
-            WHERE timeline_id = :timeline AND character_id = :character
-        """),
-        {"timeline": timeline_id, "character": character_id, "build": character_build_id},
+    activate_character_build(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        character_id=character_id,
+        character_build_id=character_build_id,
+        expected_active_build_id=None,
     )
-    summary.add(created=was_unset, changed=not was_unset, label=label, record_id=character_id)
+    summary.add(created=True, label=label, record_id=character_id)
+
+
+# World times are created through the production command (Phase 15, checkpoint
+# 15.2W-1). A fixture needs *exact* sort keys, and every non-negative key is a
+# calendar date on a one-month, 400-day calendar, so keys, ordering, and existing
+# rows are unchanged. The acting user is the world owner, who holds `canon.edit`
+# in the campaigns this script creates.
+_FIXTURE_CALENDAR_NAME = "Dev Fixture Reckoning"
+_FIXTURE_CALENDAR_DAYS = 400
+_world_time_actor_user_id: uuid.UUID | None = None
+
+
+def _fixture_calendar_id(
+    connection: Connection, *, world_id: uuid.UUID, actor_user_id: uuid.UUID
+) -> uuid.UUID:
+    existing = connection.execute(
+        text("SELECT calendar_id FROM core.calendars WHERE world_id = :w AND display_name = :n"),
+        {"w": world_id, "n": _FIXTURE_CALENDAR_NAME},
+    ).scalar()
+    if isinstance(existing, uuid.UUID):
+        return existing
+    return create_calendar(
+        connection,
+        world_id=world_id,
+        actor_user_id=actor_user_id,
+        name=_FIXTURE_CALENDAR_NAME,
+        description=None,
+        days_per_week=None,
+        epoch_label=None,
+        months=[("Only", _FIXTURE_CALENDAR_DAYS)],
+    ).calendar_id
+
+
+def _create_fixture_world_time(
+    connection: Connection, *, world_id: uuid.UUID, label: str, sort_key: int
+) -> uuid.UUID:
+    assert _world_time_actor_user_id is not None, "the fixture user is set at the start of _run"
+    actor = _world_time_actor_user_id
+    campaign_id = connection.execute(
+        text("""
+            SELECT c.campaign_id
+            FROM campaign.campaigns c
+            JOIN campaign.timelines t ON t.timeline_id = c.timeline_id
+            JOIN security.campaign_memberships cm
+              ON cm.campaign_id = c.campaign_id AND cm.user_id = :u AND cm.ended_at IS NULL
+            WHERE t.world_id = :w
+            ORDER BY c.campaign_id
+            LIMIT 1
+        """),
+        {"w": world_id, "u": actor},
+    ).scalar()
+    if not isinstance(campaign_id, uuid.UUID):
+        raise SystemExit(
+            f"no campaign of world {world_id} has {actor} as a member, so a world time cannot "
+            "be recorded through the production command."
+        )
+    calendar_id = _fixture_calendar_id(connection, world_id=world_id, actor_user_id=actor)
+    minutes_per_year = _FIXTURE_CALENDAR_DAYS * 24 * 60
+    year, remainder = divmod(sort_key, minutes_per_year)
+    day, remainder = divmod(remainder, 24 * 60)
+    hour, minute = divmod(remainder, 60)
+    return create_world_time(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor,
+        calendar_id=calendar_id,
+        year=year,
+        month_number=1,
+        day=day + 1,
+        hour=hour,
+        minute=minute,
+        label=label,
+    ).world_time_id
 
 
 def _get_or_create_world_time(
@@ -3005,11 +2718,14 @@ def _get_or_create_world_time(
     reads it."""
     existing = (
         connection.execute(
+            # `btrim`: the production command stores a stripped label, and a few
+            # fixture labels are cut mid-sentence and end in a space; rows created
+            # before the command was used keep that space.
             text(
                 "SELECT world_time_id, sort_key FROM core.world_times "
-                "WHERE world_id = :world AND label = :label"
+                "WHERE world_id = :world AND btrim(label) = :label"
             ),
-            {"world": world_id, "label": label},
+            {"world": world_id, "label": label.strip()},
         )
         .mappings()
         .one_or_none()
@@ -3017,25 +2733,9 @@ def _get_or_create_world_time(
     report_label = f"world time {label!r}"
 
     if existing is None:
-        precision_id = lookup_id(
-            connection, "core", "world_time_precisions", "world_time_precision_id", "exact"
+        world_time_id = _create_fixture_world_time(
+            connection, world_id=world_id, label=label, sort_key=sort_key
         )
-        world_time_id = connection.execute(
-            text("""
-                INSERT INTO core.world_times
-                    (world_id, world_time_precision_id, year, label, sort_key)
-                VALUES (:world, :precision, :year, :label, :sort_key)
-                RETURNING world_time_id
-            """),
-            {
-                "world": world_id,
-                "precision": precision_id,
-                "year": 1000 + (sort_key - _SESSION_SORT_KEY_BASE),
-                "label": label,
-                "sort_key": sort_key,
-            },
-        ).scalar()
-        assert isinstance(world_time_id, uuid.UUID)
         summary.add(created=True, label=report_label, record_id=world_time_id)
         return world_time_id
 
@@ -3139,6 +2839,10 @@ def _ensure_session(
     if existing is None:
         session_id = connection.execute(
             text("""
+                -- the fixture needs sessions with fixed historical start/end timestamps
+                -- and numbers, which the play commands (always now(), server numbers)
+                -- cannot produce
+                -- authored-content-direct-insert: allowed
                 INSERT INTO campaign.sessions
                     (campaign_id, session_number, lifecycle_status_id, title, summary,
                      started_at, ended_at, start_world_time_id, end_world_time_id)
@@ -3287,6 +2991,8 @@ def _ensure_session_event(
         assert isinstance(event_id, uuid.UUID)
         connection.execute(
             text("""
+                -- fixture events in states such as draft and voided, at fixed times, exercise audience visibility
+                -- authored-content-direct-insert: allowed
                 INSERT INTO narrative.events
                     (event_id, timeline_id, campaign_id, session_id, event_type_id,
                      event_status_id, world_time_id, details)
@@ -3438,7 +3144,12 @@ def _objective_visible_to_non_gm(objective: _ObjectiveFixture) -> bool:
 
 
 def _get_or_create_party(
-    connection: Connection, summary: _Summary, *, world_id: uuid.UUID, name: str
+    connection: Connection,
+    summary: _Summary,
+    *,
+    world_id: uuid.UUID,
+    campaign_id: uuid.UUID,
+    name: str,
 ) -> uuid.UUID:
     """Create-or-reuse one fixture-owned `campaign.parties` row, located by
     its distinctive `(world_id, name)`. No party-membership rows are
@@ -3465,15 +3176,25 @@ def _get_or_create_party(
         party_id = existing[0]
         assert isinstance(party_id, uuid.UUID)
         summary.add(created=False, label=f"party {name!r}", record_id=party_id)
+        _ensure_campaign_party(
+            connection, summary, campaign_id=campaign_id, party_id=party_id, party_name=name
+        )
         return party_id
-    party_id = connection.execute(
-        text(
-            "INSERT INTO campaign.parties (world_id, name) VALUES (:world, :name) RETURNING party_id"
-        ),
-        {"world": world_id, "name": name},
-    ).scalar()
-    assert isinstance(party_id, uuid.UUID)
+    # Created and attached to the campaign through the production command
+    # (Phase 15.2C-1), acting as the world owner.
+    assert _world_time_actor_user_id is not None, "the fixture user is set at the start of _run"
+    party_id = create_party(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=_world_time_actor_user_id,
+        name=name,
+    ).party_id
     summary.add(created=True, label=f"party {name!r}", record_id=party_id)
+    summary.add(
+        created=True,
+        label=f"campaign/party association ({name!r})",
+        record_id=f"{campaign_id}/{party_id}",
+    )
     return party_id
 
 
@@ -3494,6 +3215,8 @@ def _ensure_campaign_party(
         summary.add(created=False, label=label, record_id=f"{campaign_id}/{party_id}")
         return
     connection.execute(
+        # authored-content-direct-insert: allowed (attaches a party that already existed
+        # before this run; a new party is attached by create_party)
         text("INSERT INTO campaign.campaign_parties (campaign_id, party_id) VALUES (:c, :p)"),
         {"c": campaign_id, "p": party_id},
     )
@@ -3786,6 +3509,7 @@ def _ensure_quest_state(
     if existing is None:
         state_id = connection.execute(
             text("""
+                -- phase14-direct-insert: allowed (fixture state at a fixed status, no clock or events)
                 INSERT INTO campaign.quest_state
                     (timeline_id, quest_id, party_id, quest_status_id)
                 VALUES (:timeline, :quest, :party, :status)
@@ -3844,6 +3568,7 @@ def _ensure_objective_state(
     if existing is None:
         state_id = connection.execute(
             text("""
+                -- phase14-direct-insert: allowed (fixture state at a fixed status, no clock or events)
                 INSERT INTO campaign.objective_state
                     (timeline_id, quest_objective_id, party_id, objective_status_id)
                 VALUES (:timeline, :objective, :party, :status)
@@ -4189,6 +3914,75 @@ def _ensure_phase13e_membership(
     return result.campaign_membership_id
 
 
+def _ensure_phase13e_no_membership(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    campaign_id: uuid.UUID,
+    user_id: uuid.UUID,
+    ended_by_membership_id: uuid.UUID,
+    label: str,
+    actor_user_id: uuid.UUID,
+) -> None:
+    """Reconcile the documented cross-campaign isolation for the one shape
+    that is never useful: a fixture account that this dataset says has *no*
+    membership in `campaign_id` holding one that grants no `campaign.view`
+    (for example from the Access page's "Add member", which creates a
+    membership with no role). Such a membership is not offered by the session
+    bootstrap and opens nothing, yet still shows on the Access overview. It is
+    ended through the real `dnd_ai.commands.memberships.end_campaign_membership`
+    — never deleted — and audited like the API's own removal.
+
+    A stray membership that *does* grant `campaign.view` was given a role on
+    purpose during manual testing; it is left in place and reported, never
+    ended by a fixture re-run. No open membership: nothing to do."""
+    open_membership_id = connection.execute(
+        text("""
+            SELECT campaign_membership_id FROM security.campaign_memberships
+            WHERE campaign_id = :campaign AND user_id = :user AND ended_at IS NULL
+        """),
+        {"campaign": campaign_id, "user": user_id},
+    ).scalar()
+    if open_membership_id is None:
+        return
+    assert isinstance(open_membership_id, uuid.UUID)
+    access = resolve_access_context(connection, user_id=user_id, campaign_id=campaign_id)
+    if access is not None and access.has_capability("campaign.view"):
+        summary.lines.append(
+            f"  [kept] membership with campaign.view: {label}: {open_membership_id}"
+        )
+        return
+    result = end_campaign_membership(
+        connection,
+        campaign_membership_id=open_membership_id,
+        campaign_id=campaign_id,
+        ended_by_membership_id=ended_by_membership_id,
+    )
+    if not result.ended:
+        return
+    record_change_log(
+        connection,
+        change_action_code=_UPDATED_CHANGE_ACTION,
+        schema_name="security",
+        table_name="campaign_memberships",
+        record_id=open_membership_id,
+        entity_id=None,
+        world_id=None,
+        actor_user_id=actor_user_id,
+        correlation_id=None,
+        command_name=_COMMAND_NAME,
+        event_id=None,
+        previous_status="active",
+        new_status="revoked",
+    )
+    summary.add(
+        created=False,
+        changed=True,
+        label=f"ended unintended membership: {label}",
+        record_id=open_membership_id,
+    )
+
+
 def _resolve_system_role_id(connection: Connection, role_code: str) -> uuid.UUID:
     """Resolves a system-template role (`security.roles.campaign_id IS
     NULL`) by code — narrower than the generic `lookup_id` helper, which
@@ -4209,6 +4003,38 @@ def _resolve_system_role_id(connection: Connection, role_code: str) -> uuid.UUID
         )
     assert isinstance(role_id, uuid.UUID)
     return role_id
+
+
+def _phase13e_account_is_active(connection: Connection, user_id: uuid.UUID) -> bool:
+    return bool(
+        connection.execute(
+            text("""
+                SELECT ls.code = 'active' FROM security.users u
+                JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
+                WHERE u.user_id = :u
+            """),
+            {"u": user_id},
+        ).scalar()
+    )
+
+
+def _phase13e_has_active_role(
+    connection: Connection, *, campaign_membership_id: uuid.UUID, role_code: str
+) -> bool:
+    return bool(
+        connection.execute(
+            text("""
+                SELECT EXISTS (
+                    SELECT 1 FROM security.membership_roles mr
+                    JOIN security.roles r ON r.role_id = mr.role_id
+                    WHERE mr.campaign_membership_id = :m AND r.code = :code
+                      AND r.campaign_id IS NULL AND mr.revoked_at IS NULL
+                      AND (mr.expires_at IS NULL OR mr.expires_at > now())
+                )
+            """),
+            {"m": campaign_membership_id, "code": role_code},
+        ).scalar()
+    )
 
 
 def _ensure_phase13e_role(
@@ -4284,10 +4110,8 @@ def _ensure_phase13e_character_relationship(
     (a GM's own membership, not the grantee's own — unlike `--user-id`'s
     self-owned Character A/B, a player does not grant their own
     relationship). Uses `_RELATIONSHIP_TYPE_CODE` ("owner"), the one
-    relationship type this script's `_ensure_relationship_type_
-    capabilities` seeds with the full `character.*` capability set — the
-    only relationship type currently capable of authorizing a character
-    perspective at all in a fresh environment."""
+    relationship type that, per migration 114's matrix, confers the perspective
+    capability (`character.view_knowledge`) together with the full read tier."""
     relationship_type_id = lookup_id(
         connection,
         "security",
@@ -4470,7 +4294,9 @@ def _ensure_phase13e_access_fixtures(
     verification. `campaign_a_membership_id`/`campaign_b_membership_id`
     are the pre-existing `--user-id` account's own memberships — used
     only as the GM-side `granted_by_membership_id` for every role/
-    relationship/grant below, never as a target of any change."""
+    relationship/grant below (and `ended_by_membership_id` for a stray
+    membership `_ensure_phase13e_no_membership` closes), never as a target
+    of any change."""
     gm2_user_id = _get_or_create_phase13e_dev_account(
         connection,
         summary,
@@ -4605,6 +4431,40 @@ def _ensure_phase13e_access_fixtures(
         label=f"{_PHASE13E_PLAYER_B_DISPLAY_NAME} (second manager)",
     )
 
+    # Documented isolation (module docstring): GM2, Player A, and Observer A
+    # have no Campaign B membership, and Player B none in Campaign A. End any
+    # that a manual session added, so the fixture describes the database.
+    for stray_campaign_id, stray_user_id, ended_by_membership_id, stray_label in (
+        (campaign_b_id, gm2_user_id, campaign_b_membership_id, _PHASE13E_GM2_DISPLAY_NAME),
+        (
+            campaign_b_id,
+            player_a_user_id,
+            campaign_b_membership_id,
+            _PHASE13E_PLAYER_A_DISPLAY_NAME,
+        ),
+        (
+            campaign_b_id,
+            observer_a_user_id,
+            campaign_b_membership_id,
+            _PHASE13E_OBSERVER_A_DISPLAY_NAME,
+        ),
+        (
+            campaign_a_id,
+            player_b_user_id,
+            campaign_a_membership_id,
+            _PHASE13E_PLAYER_B_DISPLAY_NAME,
+        ),
+    ):
+        _ensure_phase13e_no_membership(
+            connection,
+            summary,
+            campaign_id=stray_campaign_id,
+            user_id=stray_user_id,
+            ended_by_membership_id=ended_by_membership_id,
+            label=f"{stray_label} (not a fixture member of this campaign)",
+            actor_user_id=admin_user_id,
+        )
+
     disabled_user_id = _get_or_create_phase13e_dev_account(
         connection,
         summary,
@@ -4621,16 +4481,30 @@ def _ensure_phase13e_access_fixtures(
         label=_PHASE13E_DISABLED_DISPLAY_NAME,
         actor_user_id=admin_user_id,
     )
-    _ensure_phase13e_role(
+    # The role is granted while the account is still active (first run). A
+    # disabled account cannot be given a role by the real command, so if a
+    # manual session revoked it afterwards, a re-run reports that instead of
+    # failing; the membership itself — what the Access overview shows — stays.
+    if _phase13e_account_is_active(connection, disabled_user_id) or _phase13e_has_active_role(
         connection,
-        summary,
-        campaign_id=campaign_a_id,
         campaign_membership_id=disabled_membership_id,
         role_code=_PHASE13E_PLAYER_ROLE_CODE,
-        granted_by_membership_id=campaign_a_membership_id,
-        actor_user_id=admin_user_id,
-        label=_PHASE13E_DISABLED_DISPLAY_NAME,
-    )
+    ):
+        _ensure_phase13e_role(
+            connection,
+            summary,
+            campaign_id=campaign_a_id,
+            campaign_membership_id=disabled_membership_id,
+            role_code=_PHASE13E_PLAYER_ROLE_CODE,
+            granted_by_membership_id=campaign_a_membership_id,
+            actor_user_id=admin_user_id,
+            label=_PHASE13E_DISABLED_DISPLAY_NAME,
+        )
+    else:
+        summary.lines.append(
+            f"  [skipped] role '{_PHASE13E_PLAYER_ROLE_CODE}': {_PHASE13E_DISABLED_DISPLAY_NAME} "
+            "(revoked after the account was disabled; a disabled account cannot be given a role)"
+        )
     _ensure_phase13e_account_disabled(
         connection,
         summary,
@@ -4860,11 +4734,13 @@ def _ensure_location_tree(
             )
         elif fixture.entity_type_code == "dungeon":
             connection.execute(
+                # authored-content-direct-insert: allowed (Phase 13C fixture; replaced in 15.3A-1)
                 text("INSERT INTO world.dungeons (dungeon_id, danger_level) VALUES (:l, :d)"),
                 {"l": location_id, "d": fixture.danger_level},
             )
         elif fixture.entity_type_code == "dungeon_area":
             connection.execute(
+                # authored-content-direct-insert: allowed (Phase 13C fixture; replaced in 15.3A-1)
                 text("INSERT INTO world.dungeon_areas (dungeon_area_id) VALUES (:l)"),
                 {"l": location_id},
             )
@@ -4906,6 +4782,7 @@ def _ensure_location_state(
         return
     connection.execute(
         text("""
+            -- authored-content-direct-insert: allowed (fixture state at fixed values, no events)
             INSERT INTO campaign.location_state
                 (timeline_id, location_id, is_searched, is_destroyed, alarm_level, condition_notes)
             VALUES (:t, :l, :searched, :destroyed, :alarm, :notes)
@@ -4950,6 +4827,7 @@ def _ensure_npc(
         entity_type_code="npc",
     )
     connection.execute(
+        # authored-content-direct-insert: allowed (Phase 13C NPC fixture; replaced with the NPC command later)
         text(
             "INSERT INTO character.characters (character_id, species_id, size_category) "
             "VALUES (:c, :s, :size)"
@@ -5129,6 +5007,7 @@ def _get_or_create_item_definition(
         raise SystemExit("expected a seeded rules.item_categories row (code='wondrous_item').")
     item_definition_id = connection.execute(
         text("""
+            -- authored-content-direct-insert: allowed (dev fixture: an item with state and custody for the dev world)
             INSERT INTO rules.item_definitions
                 (ruleset_version_id, item_category_id, code, display_name, rarity,
                  requires_attunement)
@@ -5164,6 +5043,7 @@ def _ensure_item_instance(
     )
     connection.execute(
         text(
+            # authored-content-direct-insert: allowed (dev fixture: an item with state and custody for the dev world)
             "INSERT INTO world.item_instances (item_instance_id, item_definition_id, origin_notes) "
             "VALUES (:id, :def, :notes)"
         ),
@@ -5193,6 +5073,7 @@ def _ensure_item_state(
         return
     connection.execute(
         text("""
+            -- authored-content-direct-insert: allowed (dev fixture: an item with state and custody for the dev world)
             INSERT INTO campaign.item_state
                 (timeline_id, item_instance_id, quantity, charges_current, charges_maximum)
             VALUES (:t, :i, 1, :cur, :max)
@@ -5226,6 +5107,7 @@ def _ensure_inventory_entry(
         return
     connection.execute(
         text("""
+            -- authored-content-direct-insert: allowed (dev fixture: an item with state and custody for the dev world)
             INSERT INTO campaign.inventory_entries
                 (timeline_id, item_instance_id, holder_entity_id, location_id)
             VALUES (:t, :i, :h, :l)
@@ -5277,6 +5159,8 @@ def _ensure_historical_event(
         )
         connection.execute(
             text("""
+                -- fixture events in states such as draft and voided, at fixed times, exercise audience visibility
+                -- authored-content-direct-insert: allowed
                 INSERT INTO narrative.events
                     (event_id, timeline_id, campaign_id, event_type_id, event_status_id,
                      world_time_id, details)
@@ -5295,6 +5179,8 @@ def _ensure_historical_event(
         for participant_name, role_code in fixture.participant_names:
             connection.execute(
                 text("""
+                    -- participants of the fixture events above
+                    -- authored-content-direct-insert: allowed
                     INSERT INTO narrative.event_participants
                         (event_id, participant_entity_id, participant_role_id)
                     VALUES (
@@ -5343,6 +5229,7 @@ def _ensure_world_relationship(
         return existing
     relationship_id = connection.execute(
         text("""
+            -- authored-content-direct-insert: allowed (Phase 13C fixture; replaced in 15.3A-2a)
             INSERT INTO world.relationships (world_id, relationship_type_id, description)
             VALUES (
                 :w,
@@ -5360,6 +5247,7 @@ def _ensure_world_relationship(
     ):
         connection.execute(
             text("""
+                -- authored-content-direct-insert: allowed (Phase 13C fixture; replaced in 15.3A-2a)
                 INSERT INTO world.relationship_participants
                     (relationship_id, entity_id, participant_role_id)
                 VALUES (
@@ -5451,6 +5339,7 @@ def _ensure_party_knowledge(
         return
     connection.execute(
         text("""
+            -- phase14-direct-insert: allowed (fixture knowledge at fixed times, with no clock or events)
             INSERT INTO campaign.party_knowledge
                 (timeline_id, party_id, knowledge_item_id, awareness_level, confidence,
                  interpretation, willing_to_share)
@@ -5491,6 +5380,7 @@ def _ensure_entity_knowledge(
         return
     connection.execute(
         text("""
+            -- phase14-direct-insert: allowed (fixture knowledge at fixed times, with no clock or events)
             INSERT INTO knowledge.entity_knowledge
                 (timeline_id, knowledge_item_id, knower_entity_id, awareness_level, confidence,
                  interpretation, willing_to_share)
@@ -5532,6 +5422,7 @@ def _ensure_public_knowledge(
         return
     connection.execute(
         text("""
+            -- phase14-direct-insert: allowed (fixture knowledge at fixed times, with no clock or events)
             INSERT INTO knowledge.public_knowledge
                 (timeline_id, knowledge_item_id, location_id, awareness_level,
                  known_since_world_time_id)
@@ -5571,6 +5462,7 @@ def _ensure_party_discovery(
         return
     connection.execute(
         text("""
+            -- phase14-direct-insert: allowed (fixture knowledge at fixed times, with no clock or events)
             INSERT INTO knowledge.party_discoveries
                 (timeline_id, knowledge_item_id, party_id, discovered_at_world_time_id,
                  discovered_via_event_id)
@@ -5591,6 +5483,7 @@ def _ensure_party_membership(
     connection: Connection,
     summary: _Summary,
     *,
+    campaign_id: uuid.UUID,
     timeline_id: uuid.UUID,
     party_id: uuid.UUID,
     member_entity_id: uuid.UUID,
@@ -5609,18 +5502,21 @@ def _ensure_party_membership(
     if existing is not None:
         summary.add(created=False, label=label, record_id=member_entity_id)
         return
-    connection.execute(
-        text("""
-            INSERT INTO campaign.party_memberships
-                (timeline_id, party_id, member_entity_id, effective_from_world_time_id)
-            VALUES (:t, :p, :m, :from_time)
-        """),
-        {
-            "t": timeline_id,
-            "p": party_id,
-            "m": member_entity_id,
-            "from_time": effective_from_world_time_id,
-        },
+    # Through the production command (Phase 15.2C-2): one join event per member,
+    # at the membership's own start time, acting as the world owner.
+    assert _world_time_actor_user_id is not None, "the fixture user is set at the start of _run"
+    version = connection.execute(
+        text("SELECT row_version FROM campaign.parties WHERE party_id = :p"), {"p": party_id}
+    ).scalar()
+    assert isinstance(version, int)
+    add_party_member(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=_world_time_actor_user_id,
+        party_id=party_id,
+        character_id=member_entity_id,
+        effective_from_world_time_id=effective_from_world_time_id,
+        expected_party_row_version=version,
     )
     summary.add(created=True, label=label, record_id=member_entity_id)
 
@@ -5762,9 +5658,12 @@ def _ensure_world_and_knowledge_fixtures(
     )
 
     # --- knowledge party + memberships --------------------------------
-    party_id = _get_or_create_party(connection, summary, world_id=world_id, name=_WK_PARTY_NAME)
-    _ensure_campaign_party(
-        connection, summary, campaign_id=campaign_a_id, party_id=party_id, party_name=_WK_PARTY_NAME
+    party_id = _get_or_create_party(
+        connection,
+        summary,
+        world_id=world_id,
+        campaign_id=campaign_a_id,
+        name=_WK_PARTY_NAME,
     )
     membership_start = _wk_world_time(
         connection, summary, world_id=world_id, suffix="party membership start", offset=10
@@ -5772,6 +5671,7 @@ def _ensure_world_and_knowledge_fixtures(
     _ensure_party_membership(
         connection,
         summary,
+        campaign_id=campaign_a_id,
         timeline_id=timeline_a_id,
         party_id=party_id,
         member_entity_id=character_a_id,
@@ -5781,6 +5681,7 @@ def _ensure_world_and_knowledge_fixtures(
     _ensure_party_membership(
         connection,
         summary,
+        campaign_id=campaign_a_id,
         timeline_id=timeline_a_id,
         party_id=party_id,
         member_entity_id=character_b_id,
@@ -6037,6 +5938,8 @@ def _run(connection: Connection, *, user_id: uuid.UUID, dev_password: str) -> _S
     summary = _Summary()
 
     user = _resolve_user(connection, user_id)
+    global _world_time_actor_user_id
+    _world_time_actor_user_id = user.user_id
     print(
         f"Target account: user_id={user.user_id} display_name={user.display_name!r} "
         f"login_name={user.login_name!r} is_platform_administrator={user.is_platform_administrator}"
@@ -6054,7 +5957,7 @@ def _run(connection: Connection, *, user_id: uuid.UUID, dev_password: str) -> _S
         ruleset_id=ruleset_id,
         created_with_world=world_created,
     )
-    _ensure_relationship_type_capabilities(connection, summary)
+    _require_relationship_type_capabilities(connection)
 
     timeline_a_id = _get_or_create_timeline(
         connection, summary, world_id=world_id, name=_TIMELINE_A_NAME, user=user
@@ -6084,6 +5987,7 @@ def _run(connection: Connection, *, user_id: uuid.UUID, dev_password: str) -> _S
         connection,
         summary,
         world_id=world_id,
+        campaign_id=campaign_a_id,
         name=_CHARACTER_A_NAME,
         species_code=_CHARACTER_A_SPECIES_CODE,
         ruleset_version_id=ruleset_version_id,
@@ -6093,6 +5997,7 @@ def _run(connection: Connection, *, user_id: uuid.UUID, dev_password: str) -> _S
         connection,
         summary,
         world_id=world_id,
+        campaign_id=campaign_a_id,
         name=_CHARACTER_B_NAME,
         species_code=_CHARACTER_B_SPECIES_CODE,
         ruleset_version_id=ruleset_version_id,
@@ -6123,6 +6028,8 @@ def _run(connection: Connection, *, user_id: uuid.UUID, dev_password: str) -> _S
     _ensure_character_state(
         connection,
         summary,
+        campaign_id=campaign_a_id,
+        actor_user_id=user.user_id,
         timeline_id=timeline_a_id,
         character_id=character_a_id,
         character_label=_CHARACTER_A_NAME,
@@ -6131,6 +6038,8 @@ def _run(connection: Connection, *, user_id: uuid.UUID, dev_password: str) -> _S
     _ensure_character_state(
         connection,
         summary,
+        campaign_id=campaign_a_id,
+        actor_user_id=user.user_id,
         timeline_id=timeline_a_id,
         character_id=character_b_id,
         character_label=_CHARACTER_B_NAME,
@@ -6170,6 +6079,8 @@ def _run(connection: Connection, *, user_id: uuid.UUID, dev_password: str) -> _S
         connection,
         summary,
         ruleset_version_id=ruleset_version_id,
+        campaign_id=campaign_a_id,
+        actor_user_id=user.user_id,
         timeline_id=timeline_a_id,
         character_a_id=character_a_id,
         character_b_id=character_b_id,
@@ -6206,14 +6117,11 @@ def _run(connection: Connection, *, user_id: uuid.UUID, dev_password: str) -> _S
     # Phase 13D quest list/detail fixtures
     # ----------------------------------------------------------------------
     quest_party_id = _get_or_create_party(
-        connection, summary, world_id=world_id, name=_QUEST_A_PARTY_NAME
-    )
-    _ensure_campaign_party(
         connection,
         summary,
+        world_id=world_id,
         campaign_id=campaign_a_id,
-        party_id=quest_party_id,
-        party_name=_QUEST_A_PARTY_NAME,
+        name=_QUEST_A_PARTY_NAME,
     )
     campaign_a_quest_ids = _ensure_campaign_quests(
         connection,
@@ -6283,6 +6191,8 @@ def _ensure_character_sheet_fixture(
     summary: _Summary,
     *,
     ruleset_version_id: uuid.UUID,
+    campaign_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
     timeline_id: uuid.UUID,
     character_a_id: uuid.UUID,
     character_b_id: uuid.UUID,
@@ -6301,24 +6211,6 @@ def _ensure_character_sheet_fixture(
     }
 
     # --- Character A: populated build ---------------------------------
-    build_a_id = _ensure_character_build(
-        connection,
-        summary,
-        character_id=character_a_id,
-        character_label=_CHARACTER_A_NAME,
-        ruleset_version_id=ruleset_version_id,
-    )
-    for ability_code, score in _CHARACTER_A_ABILITY_SCORES.items():
-        _ensure_character_ability_score(
-            connection,
-            summary,
-            character_build_id=build_a_id,
-            character_label=_CHARACTER_A_NAME,
-            ability_id=ability_ids[ability_code],
-            ability_code=ability_code,
-            score=score,
-        )
-
     fighter_class_id = _resolve_ruleset_code_id(
         connection,
         "classes",
@@ -6336,172 +6228,75 @@ def _ensure_character_sheet_fixture(
         ruleset_version_id=ruleset_version_id,
         code=_CHARACTER_A_SECOND_CLASS_CODE,
     )
-    _ensure_character_class_level(
-        connection,
-        summary,
-        character_build_id=build_a_id,
-        character_label=_CHARACTER_A_NAME,
-        class_id=fighter_class_id,
-        class_code=_CHARACTER_A_CLASS_CODE,
-        level=_CHARACTER_A_CLASS_LEVEL,
-        subclass_id=champion_subclass_id,
-    )
-    _ensure_character_class_level(
-        connection,
-        summary,
-        character_build_id=build_a_id,
-        character_label=_CHARACTER_A_NAME,
-        class_id=wizard_class_id,
-        class_code=_CHARACTER_A_SECOND_CLASS_CODE,
-        level=_CHARACTER_A_SECOND_CLASS_LEVEL,
-    )
 
-    skill_proficiency_type_id = _resolve_ruleset_code_id(
-        connection,
-        "proficiency_types",
-        "proficiency_type_id",
-        ruleset_version_id=ruleset_version_id,
-        code="skill",
-    )
-    saving_throw_proficiency_type_id = _resolve_ruleset_code_id(
-        connection,
-        "proficiency_types",
-        "proficiency_type_id",
-        ruleset_version_id=ruleset_version_id,
-        code="saving_throw",
-    )
-    weapon_proficiency_type_id = _resolve_ruleset_code_id(
-        connection,
-        "proficiency_types",
-        "proficiency_type_id",
-        ruleset_version_id=ruleset_version_id,
-        code="weapon",
-    )
-    armor_proficiency_type_id = _resolve_ruleset_code_id(
-        connection,
-        "proficiency_types",
-        "proficiency_type_id",
-        ruleset_version_id=ruleset_version_id,
-        code="armor",
-    )
-
-    proficient_skill_id = _resolve_ruleset_code_id(
-        connection,
-        "skills",
-        "skill_id",
-        ruleset_version_id=ruleset_version_id,
-        code=_CHARACTER_A_PROFICIENT_SKILL_CODE,
-    )
-    _ensure_character_skill_proficiency(
-        connection,
-        summary,
-        character_build_id=build_a_id,
-        character_label=_CHARACTER_A_NAME,
-        proficiency_type_id=skill_proficiency_type_id,
-        skill_id=proficient_skill_id,
-        skill_code=_CHARACTER_A_PROFICIENT_SKILL_CODE,
-        is_expertise=False,
-    )
-    expertise_skill_id = _resolve_ruleset_code_id(
-        connection,
-        "skills",
-        "skill_id",
-        ruleset_version_id=ruleset_version_id,
-        code=_CHARACTER_A_EXPERTISE_SKILL_CODE,
-    )
-    _ensure_character_skill_proficiency(
-        connection,
-        summary,
-        character_build_id=build_a_id,
-        character_label=_CHARACTER_A_NAME,
-        proficiency_type_id=skill_proficiency_type_id,
-        skill_id=expertise_skill_id,
-        skill_code=_CHARACTER_A_EXPERTISE_SKILL_CODE,
-        is_expertise=True,
-    )
-    _ensure_character_saving_throw_proficiency(
-        connection,
-        summary,
-        character_build_id=build_a_id,
-        character_label=_CHARACTER_A_NAME,
-        proficiency_type_id=saving_throw_proficiency_type_id,
-        ability_id=ability_ids[_CHARACTER_A_PROFICIENT_SAVING_THROW_CODE],
-        ability_code=_CHARACTER_A_PROFICIENT_SAVING_THROW_CODE,
-    )
-    _ensure_character_free_text_proficiency(
-        connection,
-        summary,
-        character_build_id=build_a_id,
-        character_label=_CHARACTER_A_NAME,
-        proficiency_type_id=weapon_proficiency_type_id,
-        target_label=_CHARACTER_A_WEAPON_PROFICIENCY_LABEL,
-    )
-    _ensure_character_free_text_proficiency(
-        connection,
-        summary,
-        character_build_id=build_a_id,
-        character_label=_CHARACTER_A_NAME,
-        proficiency_type_id=armor_proficiency_type_id,
-        target_label=_CHARACTER_A_ARMOR_PROFICIENCY_LABEL,
-    )
-
-    for feature_code in _CHARACTER_A_FEATURE_CODES:
-        feature_id = _resolve_ruleset_code_id(
+    def type_id(code: str) -> uuid.UUID:
+        return _resolve_ruleset_code_id(
             connection,
-            "features",
-            "feature_id",
+            "proficiency_types",
+            "proficiency_type_id",
             ruleset_version_id=ruleset_version_id,
-            code=feature_code,
-        )
-        _ensure_character_feature(
-            connection,
-            summary,
-            character_build_id=build_a_id,
-            character_label=_CHARACTER_A_NAME,
-            feature_id=feature_id,
-            feature_code=feature_code,
+            code=code,
         )
 
-    profile_id = _ensure_character_spellcasting_profile(
+    def skill_id(code: str) -> uuid.UUID:
+        return _resolve_ruleset_code_id(
+            connection, "skills", "skill_id", ruleset_version_id=ruleset_version_id, code=code
+        )
+
+    def rule_ids(table: str, column: str, codes: Iterable[str]) -> tuple[uuid.UUID, ...]:
+        return tuple(
+            _resolve_ruleset_code_id(
+                connection, table, column, ruleset_version_id=ruleset_version_id, code=code
+            )
+            for code in codes
+        )
+
+    build_a = BuildInput(
+        label=_BUILD_LABEL,
+        ability_scores=tuple(
+            (ability_ids[code], score) for code, score in _CHARACTER_A_ABILITY_SCORES.items()
+        ),
+        class_levels=(
+            ClassLevelInput(fighter_class_id, champion_subclass_id, _CHARACTER_A_CLASS_LEVEL),
+            ClassLevelInput(wizard_class_id, None, _CHARACTER_A_SECOND_CLASS_LEVEL),
+        ),
+        proficiencies=(
+            ProficiencyInput(
+                type_id("skill"), skill_id=skill_id(_CHARACTER_A_PROFICIENT_SKILL_CODE)
+            ),
+            ProficiencyInput(
+                type_id("skill"),
+                skill_id=skill_id(_CHARACTER_A_EXPERTISE_SKILL_CODE),
+                is_expertise=True,
+            ),
+            ProficiencyInput(
+                type_id("saving_throw"),
+                saving_throw_ability_id=ability_ids[_CHARACTER_A_PROFICIENT_SAVING_THROW_CODE],
+            ),
+            ProficiencyInput(type_id("weapon"), target_label=_CHARACTER_A_WEAPON_PROFICIENCY_LABEL),
+            ProficiencyInput(type_id("armor"), target_label=_CHARACTER_A_ARMOR_PROFICIENCY_LABEL),
+        ),
+        feature_ids=rule_ids("features", "feature_id", _CHARACTER_A_FEATURE_CODES),
+        spellcasting=(
+            SpellcastingInput(
+                wizard_class_id,
+                ability_ids[_CHARACTER_A_SPELLCASTING_ABILITY_CODE],
+                known_spell_ids=rule_ids("spells", "spell_id", _CHARACTER_A_KNOWN_SPELL_CODES),
+                prepared_spell_ids=rule_ids(
+                    "spells", "spell_id", _CHARACTER_A_PREPARED_SPELL_CODES
+                ),
+            ),
+        ),
+    )
+    build_a_id = _ensure_character_build(
         connection,
         summary,
-        character_build_id=build_a_id,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        character_id=character_a_id,
         character_label=_CHARACTER_A_NAME,
-        class_id=wizard_class_id,
-        spellcasting_ability_id=ability_ids[_CHARACTER_A_SPELLCASTING_ABILITY_CODE],
+        build=build_a,
     )
-    for spell_code in _CHARACTER_A_KNOWN_SPELL_CODES:
-        spell_id = _resolve_ruleset_code_id(
-            connection,
-            "spells",
-            "spell_id",
-            ruleset_version_id=ruleset_version_id,
-            code=spell_code,
-        )
-        _ensure_character_known_spell(
-            connection,
-            summary,
-            character_spellcasting_profile_id=profile_id,
-            character_label=_CHARACTER_A_NAME,
-            spell_id=spell_id,
-            spell_code=spell_code,
-        )
-    for spell_code in _CHARACTER_A_PREPARED_SPELL_CODES:
-        spell_id = _resolve_ruleset_code_id(
-            connection,
-            "spells",
-            "spell_id",
-            ruleset_version_id=ruleset_version_id,
-            code=spell_code,
-        )
-        _ensure_character_prepared_spell(
-            connection,
-            summary,
-            character_spellcasting_profile_id=profile_id,
-            character_label=_CHARACTER_A_NAME,
-            spell_id=spell_id,
-            spell_code=spell_code,
-        )
 
     language_id = _resolve_ruleset_code_id(
         connection,
@@ -6537,6 +6332,8 @@ def _ensure_character_sheet_fixture(
     _ensure_active_build_selection(
         connection,
         summary,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
         timeline_id=timeline_id,
         character_id=character_a_id,
         character_label=_CHARACTER_A_NAME,
@@ -6544,35 +6341,25 @@ def _ensure_character_sheet_fixture(
     )
 
     # --- Character B: legitimate minimal build -------------------------
+    # Deliberately no proficiencies, features, or spellcasting profile for
+    # Character B -- see this module's constants-block comment above for
+    # why that is a legitimate minimal state, not an oversight.
+    build_b = BuildInput(
+        label=_BUILD_LABEL,
+        ability_scores=tuple(
+            (ability_ids[code], score) for code, score in _CHARACTER_B_ABILITY_SCORES.items()
+        ),
+        class_levels=(ClassLevelInput(fighter_class_id, None, 1),),
+    )
     build_b_id = _ensure_character_build(
         connection,
         summary,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
         character_id=character_b_id,
         character_label=_CHARACTER_B_NAME,
-        ruleset_version_id=ruleset_version_id,
+        build=build_b,
     )
-    for ability_code, score in _CHARACTER_B_ABILITY_SCORES.items():
-        _ensure_character_ability_score(
-            connection,
-            summary,
-            character_build_id=build_b_id,
-            character_label=_CHARACTER_B_NAME,
-            ability_id=ability_ids[ability_code],
-            ability_code=ability_code,
-            score=score,
-        )
-    _ensure_character_class_level(
-        connection,
-        summary,
-        character_build_id=build_b_id,
-        character_label=_CHARACTER_B_NAME,
-        class_id=fighter_class_id,
-        class_code=_CHARACTER_A_CLASS_CODE,
-        level=1,
-    )
-    # Deliberately no proficiencies, features, or spellcasting profile for
-    # Character B — see this module's constants-block comment above for
-    # why that is a legitimate minimal state, not an oversight.
     _ensure_character_movement(
         connection,
         summary,
@@ -6584,6 +6371,8 @@ def _ensure_character_sheet_fixture(
     _ensure_active_build_selection(
         connection,
         summary,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
         timeline_id=timeline_id,
         character_id=character_b_id,
         character_label=_CHARACTER_B_NAME,
@@ -6786,7 +6575,7 @@ def _print_bootstrap_verification(*, user_id: uuid.UUID) -> None:
         connection.execute(text("SET default_transaction_read_only = on"))
         view = get_session_bootstrap(connection, user_id=user_id)
     print(f"\n-- get_session_bootstrap(user_id={user_id}) --")
-    print(f"display_name={view.display_name!r} selected_campaign_id={view.selected_campaign_id}")
+    print(f"display_name={view.display_name!r} startup_campaign_id={view.startup_campaign_id}")
     for campaign in view.campaigns:
         perspectives = ", ".join(
             f"{p.character_name} ({p.character_id})" for p in campaign.character_perspectives

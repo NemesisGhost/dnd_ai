@@ -7,7 +7,6 @@ import pytest
 from dnd_ai.domain import entity_lifecycle as el
 from dnd_ai.domain.authoring import AuthoringValidationError
 from dnd_ai.domain.content_authoring import (
-    AUDIT_VALUE_MAX_LENGTH,
     AUTHORABLE_LOCATION_CATEGORIES,
     LOCATION_CATEGORIES,
     UPDATE,
@@ -100,7 +99,7 @@ def test_a_type_specific_block_only_hides_an_action_the_table_allows() -> None:
 
 def test_ineligible_types_report_one_blocked_pseudo_action() -> None:
     available, blocked = evaluate_content_actions(
-        entity_type_code="dungeon", canon_status="draft", lifecycle_status="active"
+        entity_type_code="event", canon_status="draft", lifecycle_status="active"
     )
     assert available == [UPDATE]
     assert [b.action for b in blocked] == ["all"]
@@ -138,12 +137,21 @@ def test_location_field_normalization() -> None:
             normalize_location_fields(**kwargs)  # type: ignore[arg-type]
 
 
-def test_diff_lists_only_changed_fields_and_bounds_text() -> None:
-    assert diff_fields({"a": 1, "b": "x"}, {"a": 1, "b": "y"}) == {"b": {"from": "x", "to": "y"}}
-    assert diff_fields({}, {"a": None}) == {}
-    long = "z" * (AUDIT_VALUE_MAX_LENGTH + 5)
-    assert diff_fields({"a": ""}, {"a": long})["a"]["to"] == {
-        "value": "z" * AUDIT_VALUE_MAX_LENGTH,
-        "truncated": True,
+def test_diff_lists_only_changed_fields_and_redacts_content() -> None:
+    # Structural fields keep their values; unlisted (content) fields are redacted.
+    assert diff_fields({"population": 1, "name": "x"}, {"population": 1, "name": "y"}) == {
+        "name": {"from": "x", "to": "y"}
     }
-    assert initial_fields({"a": None, "b": 2}) == {"b": 2}
+    assert diff_fields({}, {"summary": None}) == {}
+    changed = diff_fields({"summary": "old narrative"}, {"summary": "new narrative"})
+    assert changed == {"summary": {"from": {"redacted": True}, "to": {"redacted": True}}}
+    assert "narrative" not in str(changed)
+    # An unknown field is redacted by default (default deny).
+    assert diff_fields({}, {"brand_new_field": "secret"}) == {
+        "brand_new_field": {"from": None, "to": {"redacted": True}}
+    }
+    long_name = "z" * 500
+    shown = diff_fields({"name": ""}, {"name": long_name})["name"]["to"]
+    assert shown == {"value": "z" * 200, "truncated": True}
+    assert initial_fields({"summary": None, "population": 2}) == {"population": 2}
+    assert initial_fields({"notes": "private"}) == {"notes": {"redacted": True}}

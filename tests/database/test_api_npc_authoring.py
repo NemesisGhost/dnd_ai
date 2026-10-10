@@ -290,7 +290,8 @@ def test_update_changes_identity_and_audits_a_bounded_diff(s: ContentSetup) -> N
     diff = s.audit("update_npc")[0].changed_fields
     assert diff["name"] == {"from": "Mira", "to": "Mira Vale"}
     assert diff["size_category"] == {"from": "medium", "to": "small"}
-    assert diff["notes"] == {"from": "old note", "to": "new note"}
+    assert diff["notes"] == {"from": {"redacted": True}, "to": {"redacted": True}}
+    assert "old note" not in str(diff) and "new note" not in str(diff)
 
 
 def test_no_op_stale_and_review_states(s: ContentSetup) -> None:

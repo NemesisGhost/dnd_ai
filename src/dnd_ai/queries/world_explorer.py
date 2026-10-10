@@ -147,6 +147,13 @@ _TYPE_CODE_TO_CATEGORY: dict[str, str] = {
     code: category for category, codes in WORLD_CATEGORY_TYPE_CODES.items() for code in codes
 }
 
+
+def world_category_for_type_code(entity_type_code: str) -> str | None:
+    """The World Explorer category an entity type browses under, or `None`
+    for a type with no World Explorer surface (a quest, a knowledge item)."""
+    return _TYPE_CODE_TO_CATEGORY.get(entity_type_code)
+
+
 # Cursor keyset names (bind a cursor to the endpoint family that issued it
 # — see `dnd_ai.api.pagination`).
 ENTITY_SEARCH_KEYSET = "world_entities"
@@ -239,6 +246,127 @@ def _escape_like(term: str) -> str:
     return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+# The visibility/search filter shared by the result list and the category
+# counts, so a count can never disagree with the rows it counts. Callers bind
+# the parameters built by `_search_params`.
+_VISIBLE_ENTITIES_SQL = """
+FROM core.entities e
+JOIN core.entity_types et ON et.entity_type_id = e.entity_type_id
+JOIN core.canon_statuses cs ON cs.canon_status_id = e.canon_status_id
+JOIN core.lifecycle_statuses lst ON lst.lifecycle_status_id = e.lifecycle_status_id
+LEFT JOIN narrative.events ev ON ev.event_id = e.entity_id
+LEFT JOIN narrative.event_statuses es
+       ON es.event_status_id = ev.event_status_id
+WHERE e.world_id = :world_id
+  AND et.code = ANY(CAST(:type_codes AS text[]))
+  AND (
+        CAST(:like_pattern AS text) IS NULL
+        OR e.canonical_name ILIKE CAST(:like_pattern AS text) ESCAPE '\\'
+        OR e.summary ILIKE CAST(:like_pattern AS text) ESCAPE '\\'
+      )
+  AND NOT (e.entity_id = ANY(CAST(:cv_denied AS uuid[])))
+  AND (CAST(:canon_statuses AS text[]) IS NULL
+       OR cs.code = ANY(CAST(:canon_statuses AS text[])))
+  AND (
+    CASE
+      WHEN et.code = ANY(CAST(:character_codes AS text[])) THEN
+        (CAST(:discover_all AS boolean)
+         AND NOT (e.entity_id = ANY(CAST(:char_hidden AS uuid[]))))
+        OR e.entity_id = ANY(CAST(:char_visible AS uuid[]))
+      WHEN et.code = 'event' THEN
+        ev.event_id IS NOT NULL
+        AND ev.timeline_id = :timeline_id
+        AND es.code <> 'voided'
+        AND (
+          es.code <> 'draft'
+          OR (
+            NOT (e.entity_id = ANY(CAST(:draft_denied AS uuid[])))
+            AND (
+              CAST(:include_draft AS boolean)
+              OR e.entity_id = ANY(CAST(:draft_allowed AS uuid[]))
+            )
+          )
+        )
+      ELSE TRUE
+    END
+  )
+"""
+
+
+def _search_params(
+    *,
+    world_id: uuid.UUID,
+    timeline_id: uuid.UUID,
+    category_type_codes: Sequence[str],
+    query_text: str | None,
+    campaign_view_denied_entity_ids: frozenset[uuid.UUID],
+    character_visibility: CharacterVisibility,
+    include_draft_events: bool,
+    draft_event_allowed_ids: frozenset[uuid.UUID],
+    draft_event_denied_ids: frozenset[uuid.UUID],
+    canon_status_codes: Sequence[str] | None,
+) -> dict[str, object]:
+    return {
+        "world_id": world_id,
+        "timeline_id": timeline_id,
+        "type_codes": list(category_type_codes),
+        "character_codes": list(_CHARACTER_TYPE_CODES),
+        "like_pattern": f"%{_escape_like(query_text)}%" if query_text else None,
+        "cv_denied": list(campaign_view_denied_entity_ids),
+        "discover_all": character_visibility.discover_all,
+        "char_visible": list(character_visibility.force_visible),
+        "char_hidden": list(character_visibility.force_hidden),
+        "include_draft": include_draft_events,
+        "draft_allowed": list(draft_event_allowed_ids),
+        "draft_denied": list(draft_event_denied_ids),
+        "canon_statuses": list(canon_status_codes) if canon_status_codes else None,
+    }
+
+
+def count_world_entities(
+    connection: Connection,
+    *,
+    world_id: uuid.UUID,
+    timeline_id: uuid.UUID,
+    category_type_codes: Sequence[str],
+    query_text: str | None,
+    campaign_view_denied_entity_ids: frozenset[uuid.UUID],
+    character_visibility: CharacterVisibility,
+    include_draft_events: bool,
+    draft_event_allowed_ids: frozenset[uuid.UUID],
+    draft_event_denied_ids: frozenset[uuid.UUID],
+    canon_status_codes: Sequence[str] | None = None,
+) -> dict[str, int]:
+    """The complete number of entities `search_world_entities` would list over
+    every page, per World category (a category with none is `0`). It applies
+    the identical visibility and search filter (one shared SQL fragment) and
+    never looks at a cursor, so the counts are authorized totals."""
+    params = _search_params(
+        world_id=world_id,
+        timeline_id=timeline_id,
+        category_type_codes=category_type_codes,
+        query_text=query_text,
+        campaign_view_denied_entity_ids=campaign_view_denied_entity_ids,
+        character_visibility=character_visibility,
+        include_draft_events=include_draft_events,
+        draft_event_allowed_ids=draft_event_allowed_ids,
+        draft_event_denied_ids=draft_event_denied_ids,
+        canon_status_codes=canon_status_codes,
+    )
+    rows = connection.execute(
+        text(f"""
+            SELECT et.code AS entity_type_code, count(*) AS total
+            {_VISIBLE_ENTITIES_SQL}
+            GROUP BY et.code
+        """),
+        params,
+    ).mappings()
+    counts = dict.fromkeys(WORLD_CATEGORY_TYPE_CODES, 0)
+    for row in rows:
+        counts[_TYPE_CODE_TO_CATEGORY[row["entity_type_code"]]] += int(row["total"])
+    return counts
+
+
 def search_world_entities(
     connection: Connection,
     *,
@@ -269,72 +397,33 @@ def search_world_entities(
     `summary` only — never over `core.entity_names` aliases, some of which
     (`secret`, `mistaken`) would themselves be a disclosure.
     """
-    like_pattern = f"%{_escape_like(query_text)}%" if query_text else None
-    params: dict[str, object] = {
-        "world_id": world_id,
-        "timeline_id": timeline_id,
-        "type_codes": list(category_type_codes),
-        "character_codes": list(_CHARACTER_TYPE_CODES),
-        "like_pattern": like_pattern,
-        "cv_denied": list(campaign_view_denied_entity_ids),
-        "discover_all": character_visibility.discover_all,
-        "char_visible": list(character_visibility.force_visible),
-        "char_hidden": list(character_visibility.force_hidden),
-        "include_draft": include_draft_events,
-        "draft_allowed": list(draft_event_allowed_ids),
-        "draft_denied": list(draft_event_denied_ids),
-        "limit_plus_one": limit + 1,
-        "after_name": after_name,
-        "after_entity_id": after_entity_id,
-        "has_cursor": after_name is not None and after_entity_id is not None,
-        "canon_statuses": list(canon_status_codes) if canon_status_codes else None,
-    }
+    params = _search_params(
+        world_id=world_id,
+        timeline_id=timeline_id,
+        category_type_codes=category_type_codes,
+        query_text=query_text,
+        campaign_view_denied_entity_ids=campaign_view_denied_entity_ids,
+        character_visibility=character_visibility,
+        include_draft_events=include_draft_events,
+        draft_event_allowed_ids=draft_event_allowed_ids,
+        draft_event_denied_ids=draft_event_denied_ids,
+        canon_status_codes=canon_status_codes,
+    )
+    params.update(
+        {
+            "limit_plus_one": limit + 1,
+            "after_name": after_name,
+            "after_entity_id": after_entity_id,
+            "has_cursor": after_name is not None and after_entity_id is not None,
+        }
+    )
 
     rows = connection.execute(
         text(f"""
             SELECT e.entity_id, e.canonical_name, e.summary, et.code AS entity_type_code,
                    lower(left(e.canonical_name, {_NAME_SORT_PREFIX})) AS name_sort,
                    cs.code AS canon_status, lst.code AS lifecycle_status
-            FROM core.entities e
-            JOIN core.entity_types et ON et.entity_type_id = e.entity_type_id
-            JOIN core.canon_statuses cs ON cs.canon_status_id = e.canon_status_id
-            JOIN core.lifecycle_statuses lst ON lst.lifecycle_status_id = e.lifecycle_status_id
-            LEFT JOIN narrative.events ev ON ev.event_id = e.entity_id
-            LEFT JOIN narrative.event_statuses es
-                   ON es.event_status_id = ev.event_status_id
-            WHERE e.world_id = :world_id
-              AND et.code = ANY(CAST(:type_codes AS text[]))
-              AND (
-                    CAST(:like_pattern AS text) IS NULL
-                    OR e.canonical_name ILIKE CAST(:like_pattern AS text) ESCAPE '\\'
-                    OR e.summary ILIKE CAST(:like_pattern AS text) ESCAPE '\\'
-                  )
-              AND NOT (e.entity_id = ANY(CAST(:cv_denied AS uuid[])))
-              AND (CAST(:canon_statuses AS text[]) IS NULL
-                   OR cs.code = ANY(CAST(:canon_statuses AS text[])))
-              AND (
-                CASE
-                  WHEN et.code = ANY(CAST(:character_codes AS text[])) THEN
-                    (CAST(:discover_all AS boolean)
-                     AND NOT (e.entity_id = ANY(CAST(:char_hidden AS uuid[]))))
-                    OR e.entity_id = ANY(CAST(:char_visible AS uuid[]))
-                  WHEN et.code = 'event' THEN
-                    ev.event_id IS NOT NULL
-                    AND ev.timeline_id = :timeline_id
-                    AND es.code <> 'voided'
-                    AND (
-                      es.code <> 'draft'
-                      OR (
-                        NOT (e.entity_id = ANY(CAST(:draft_denied AS uuid[])))
-                        AND (
-                          CAST(:include_draft AS boolean)
-                          OR e.entity_id = ANY(CAST(:draft_allowed AS uuid[]))
-                        )
-                      )
-                    )
-                  ELSE TRUE
-                END
-              )
+            {_VISIBLE_ENTITIES_SQL}
               AND (
                     NOT CAST(:has_cursor AS boolean)
                     OR (lower(left(e.canonical_name, {_NAME_SORT_PREFIX})), e.entity_id)
@@ -505,6 +594,7 @@ def list_world_relationships(
     visibility: WorldEntityVisibility,
     limit: int,
     after_relationship_id: uuid.UUID | None,
+    include_private: bool = False,
 ) -> tuple[RelationshipCard, ...]:
     """Up to `limit + 1` relationships in the world, ordered by
     `relationship_id`.
@@ -537,6 +627,7 @@ def list_world_relationships(
         "limit_plus_one": limit + 1,
         "after_relationship_id": after_relationship_id,
         "has_cursor": after_relationship_id is not None,
+        "include_private": include_private,
         **_entity_visibility_params(
             world_id=world_id, timeline_id=timeline_id, visibility=visibility
         ),
@@ -549,6 +640,28 @@ def list_world_relationships(
             JOIN world.relationship_types rt
               ON rt.relationship_type_id = r.relationship_type_id
             WHERE r.world_id = :world_id
+              AND (
+                    CAST(:include_private AS boolean)
+                    OR (
+                        NOT EXISTS (
+                            SELECT 1 FROM core.lifecycle_statuses rls
+                            WHERE rls.lifecycle_status_id = r.lifecycle_status_id
+                              AND rls.code <> 'active'
+                        )
+                        AND NOT EXISTS (
+                            SELECT 1 FROM world.ownership_relationships orl
+                            WHERE orl.relationship_id = r.relationship_id AND NOT orl.is_public
+                        )
+                        AND NOT EXISTS (
+                            SELECT 1 FROM world.organization_memberships oml
+                            WHERE oml.relationship_id = r.relationship_id AND NOT oml.is_public
+                        )
+                        AND NOT EXISTS (
+                            SELECT 1 FROM world.route_relationships rrl
+                            WHERE rrl.relationship_id = r.relationship_id AND rrl.is_hidden
+                        )
+                    )
+                  )
               AND (CAST(:type_code AS text) IS NULL OR rt.code = CAST(:type_code AS text))
               AND (
                     CAST(:like_pattern AS text) IS NULL

@@ -67,23 +67,27 @@ ENTITY_LIFECYCLE_ELIGIBLE_TYPE_CODES: frozenset[str] = frozenset(
         "political_faction",
         # Beliefs
         "religion",
-        # Characters (Phase 15.1 NPC identity; player characters stay excluded)
+        # Characters (Phase 15.1 NPC identity; Phase 15.2B-1 player-character identity)
         "npc",
+        "player_character",
         # Narrative definitions (Phase 15.1; progress is timeline state, never here)
         "quest",
         # Claims (Phase 15.1; who knows them is per-knower state, never here)
         "knowledge_item",
+        # Dungeons and their areas (Phase 15.3A-1; runtime state and discovery are
+        # timeline state and knowledge, never here)
+        "dungeon",
+        "dungeon_area",
+        # Item instances (Phase 15.3B-1b; where one is, who carries it and its condition are
+        # timeline state, never here)
+        "item_instance",
     }
 )
 
 # Deliberately excluded, each for a model reason (docs/PLAN.md Phase 14, D5).
 ENTITY_LIFECYCLE_EXCLUDED_TYPE_CODES: dict[str, str] = {
-    "character": "archiving revokes relationship-derived capabilities; PC identity is Phase 16 (an NPC archive is guarded instead)",
-    "player_character": "PC identity and build approval are Phase 16",
+    "character": "the bare supertype has no authoring surface; NPC and player-character identity are lifecycle-eligible subtypes",
     "event": "has its own draft/recorded/voided/corrected status machine (Phase 15E)",
-    "item_instance": "instance/state/inventory semantics (Phase 15F)",
-    "dungeon": "structural-mutation guards and discovery state (Phase 15A)",
-    "dungeon_area": "structural-mutation guards and discovery state (Phase 15A)",
 }
 
 

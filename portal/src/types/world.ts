@@ -23,6 +23,12 @@ export interface WorldEntityPage {
     next_cursor: string | null
 }
 
+// Authorized totals per World category for one search, over every page.
+export interface WorldCategoryCounts {
+    counts: Record<WorldCategory, number>
+    total: number
+}
+
 export interface WorldEntitySearchParameters {
     category: WorldCategory | null
     query: string

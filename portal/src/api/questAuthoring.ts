@@ -1,9 +1,5 @@
-import type {
-    CreateQuestBody,
-    QuestAuthoringView,
-    QuestCommand,
-    QuestTargetOptionPage,
-} from "../types/questAuthoring"
+import type { QuestReceipt } from "../types/contentAuthoring"
+import type { CreateQuestBody, QuestCommand, QuestTargetOptionPage } from "../types/questAuthoring"
 import { apiRequest } from "./http"
 import type { MutationContext } from "./worlds"
 
@@ -36,8 +32,8 @@ export function createQuest(
     campaignId: string,
     body: CreateQuestBody,
     ctx: MutationContext,
-): Promise<QuestAuthoringView> {
-    return apiRequest<QuestAuthoringView>("POST", base(campaignId), { body, ...ctx })
+): Promise<QuestReceipt> {
+    return apiRequest<QuestReceipt>("POST", base(campaignId), { body, ...ctx })
 }
 
 // Runs one quest command and returns the whole authoring view.
@@ -46,10 +42,10 @@ export function runQuestCommand(
     questId: string,
     command: QuestCommand,
     ctx: MutationContext,
-): Promise<QuestAuthoringView> {
+): Promise<QuestReceipt> {
     const quest = questAuthoringPath(campaignId, questId)
     const post = (path: string, body: unknown) =>
-        apiRequest<QuestAuthoringView>("POST", `${quest}${path}`, { body, ...ctx })
+        apiRequest<QuestReceipt>("POST", `${quest}${path}`, { body, ...ctx })
     switch (command.op) {
         case "update_quest":
             return post("/update", command.body)
@@ -73,6 +69,32 @@ export function runQuestCommand(
                 `/stages/${enc(command.stageId)}/objectives/${enc(command.objectiveId)}/update`,
                 command.body,
             )
+        case "add_dependency":
+            return post("/dependencies", command.body)
+        case "remove_dependency":
+            return post(`/dependencies/${enc(command.dependencyId)}/remove`, {
+                expected_row_version: command.expected_row_version,
+            })
+        case "add_participant":
+            return post("/participants", command.body)
+        case "remove_participant":
+            return post(`/participants/${enc(command.participantId)}/remove`, {
+                expected_row_version: command.expected_row_version,
+            })
+        case "add_outcome":
+            return post("/outcomes", command.body)
+        case "update_outcome":
+            return post(`/outcomes/${enc(command.outcomeId)}/update`, command.body)
+        case "remove_outcome":
+            return post(`/outcomes/${enc(command.outcomeId)}/remove`, {
+                expected_row_version: command.expected_row_version,
+            })
+        case "add_reward":
+            return post(`/outcomes/${enc(command.outcomeId)}/rewards`, command.body)
+        case "remove_reward":
+            return post(`/rewards/${enc(command.rewardId)}/remove`, {
+                expected_row_version: command.expected_row_version,
+            })
         case "remove_objective":
             return post(
                 `/stages/${enc(command.stageId)}/objectives/${enc(command.objectiveId)}/remove`,

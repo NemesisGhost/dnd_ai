@@ -16,8 +16,12 @@ from dnd_ai.domain.content_authoring import evaluate_content_actions
 from dnd_ai.domain.entity_lifecycle import BlockedAction
 from dnd_ai.domain.quest_authoring import (
     COMPLETION_MODES,
+    DEPENDENCY_TYPES,
     OBJECTIVE_TARGET_TYPE_CODES,
+    OUTCOME_CATEGORIES,
+    PARTICIPANT_ROLES,
     REQUIREMENT_LEVELS,
+    REWARD_TYPES,
     STAGE_TYPES,
     VISIBILITY_POLICIES,
 )
@@ -28,8 +32,26 @@ QUEST_HAS_PROGRESS = "quest_has_progress"
 
 # Child actions available while the quest is editable; the first three are
 # structural and are blocked once progress exists.
-STRUCTURAL_QUEST_ACTIONS = ("reorder_stages", "remove_stage", "remove_objective")
-FREE_QUEST_ACTIONS = ("add_stage", "update_stage", "add_objective", "update_objective")
+STRUCTURAL_QUEST_ACTIONS = (
+    "reorder_stages",
+    "remove_stage",
+    "remove_objective",
+    "add_dependency",
+    "remove_dependency",
+)
+FREE_QUEST_ACTIONS = (
+    "add_stage",
+    "update_stage",
+    "add_objective",
+    "update_objective",
+    "add_participant",
+    "remove_participant",
+    "add_outcome",
+    "update_outcome",
+    "remove_outcome",
+    "add_reward",
+    "remove_reward",
+)
 
 
 @dataclass(frozen=True)
@@ -58,6 +80,39 @@ class StageView:
 
 
 @dataclass(frozen=True)
+class DependencyView:
+    objective_dependency_id: uuid.UUID
+    objective_id: uuid.UUID
+    depends_on_objective_id: uuid.UUID
+    dependency_type: str
+
+
+@dataclass(frozen=True)
+class ParticipantView:
+    quest_participant_id: uuid.UUID
+    participant: ReferenceSummary | None
+    participant_role: str
+
+
+@dataclass(frozen=True)
+class RewardView:
+    quest_reward_id: uuid.UUID
+    reward_type: str
+    description: str
+    knowledge: ReferenceSummary | None
+
+
+@dataclass(frozen=True)
+class OutcomeView:
+    quest_outcome_id: uuid.UUID
+    code: str
+    name: str
+    description: str | None
+    outcome_category: str
+    rewards: list[RewardView]
+
+
+@dataclass(frozen=True)
 class QuestAuthoringView:
     quest_id: uuid.UUID
     name: str
@@ -70,6 +125,11 @@ class QuestAuthoringView:
     available_actions: list[str]
     blocked_actions: list[BlockedAction]
     field_locks: list[str] = field(default_factory=list)
+    # Phase 15.2E-2a. `gm_notes` is GM-only: this authoring view is for editors alone.
+    gm_notes: str | None = None
+    dependencies: list[DependencyView] = field(default_factory=list)
+    participants: list[ParticipantView] = field(default_factory=list)
+    outcomes: list[OutcomeView] = field(default_factory=list)
 
 
 def list_objective_types(connection: Connection) -> list[tuple[str, str]]:
@@ -84,7 +144,7 @@ def get_quest_authoring(
 ) -> QuestAuthoringView | None:
     row = connection.execute(
         text("""
-            SELECT e.canonical_name, e.summary, e.row_version,
+            SELECT e.canonical_name, e.summary, e.row_version, q.gm_notes,
                    cs.code AS canon_status, ls.code AS lifecycle_status
             FROM core.entities e
             JOIN core.entity_types et ON et.entity_type_id = e.entity_type_id
@@ -151,6 +211,78 @@ def get_quest_authoring(
         for s in stage_rows
     ]
 
+    dependencies = [
+        DependencyView(
+            objective_dependency_id=d.objective_dependency_id,
+            objective_id=d.objective_id,
+            depends_on_objective_id=d.depends_on_objective_id,
+            dependency_type=str(d.dependency_type),
+        )
+        for d in connection.execute(
+            text("""
+                SELECT od.objective_dependency_id, od.objective_id, od.depends_on_objective_id,
+                       od.dependency_type
+                FROM narrative.objective_dependencies od
+                JOIN narrative.quest_objectives qo ON qo.quest_objective_id = od.objective_id
+                JOIN narrative.quest_stages qs ON qs.quest_stage_id = qo.quest_stage_id
+                WHERE qs.quest_id = :q ORDER BY od.created_at, od.objective_dependency_id
+            """),
+            {"q": quest_id},
+        )
+    ]
+    participants = [
+        ParticipantView(
+            quest_participant_id=p.quest_participant_id,
+            participant=_reference(connection, p.participant_entity_id),
+            participant_role=str(p.participant_role),
+        )
+        for p in connection.execute(
+            text(
+                "SELECT quest_participant_id, participant_entity_id, participant_role "
+                "FROM narrative.quest_participants WHERE quest_id = :q "
+                "ORDER BY created_at, quest_participant_id"
+            ),
+            {"q": quest_id},
+        )
+    ]
+    reward_rows = connection.execute(
+        text("""
+            SELECT r.quest_outcome_id, r.quest_reward_id, r.reward_type, r.description,
+                   r.reward_knowledge_item_id
+            FROM narrative.quest_rewards r
+            JOIN narrative.quest_outcomes o ON o.quest_outcome_id = r.quest_outcome_id
+            WHERE o.quest_id = :q ORDER BY r.created_at, r.quest_reward_id
+        """),
+        {"q": quest_id},
+    ).all()
+    rewards_by_outcome: dict[uuid.UUID, list[RewardView]] = {}
+    for r in reward_rows:
+        rewards_by_outcome.setdefault(r.quest_outcome_id, []).append(
+            RewardView(
+                quest_reward_id=r.quest_reward_id,
+                reward_type=str(r.reward_type),
+                description=str(r.description),
+                knowledge=_reference(connection, r.reward_knowledge_item_id),
+            )
+        )
+    outcomes = [
+        OutcomeView(
+            quest_outcome_id=o.quest_outcome_id,
+            code=str(o.code),
+            name=str(o.name),
+            description=o.description,
+            outcome_category=str(o.outcome_category),
+            rewards=rewards_by_outcome.get(o.quest_outcome_id, []),
+        )
+        for o in connection.execute(
+            text(
+                "SELECT quest_outcome_id, code, name, description, outcome_category "
+                "FROM narrative.quest_outcomes WHERE quest_id = :q ORDER BY created_at, code"
+            ),
+            {"q": quest_id},
+        )
+    ]
+
     progress = quest_has_progress(connection, quest_id)
     extra = type_specific_blocks(connection, entity_id=quest_id, entity_type_code="quest")
     available, blocked = evaluate_content_actions(
@@ -180,6 +312,10 @@ def get_quest_authoring(
         available_actions=available,
         blocked_actions=blocked,
         field_locks=["structure"] if progress else [],
+        gm_notes=row.gm_notes,
+        dependencies=dependencies,
+        participants=participants,
+        outcomes=outcomes,
     )
 
 
@@ -189,6 +325,10 @@ def quest_option_catalogs() -> dict[str, list[tuple[str, str]]]:
         "requirement_levels": list(REQUIREMENT_LEVELS),
         "completion_modes": list(COMPLETION_MODES),
         "visibility_policies": list(VISIBILITY_POLICIES),
+        "dependency_types": list(DEPENDENCY_TYPES),
+        "participant_roles": list(PARTICIPANT_ROLES),
+        "outcome_categories": list(OUTCOME_CATEGORIES),
+        "reward_types": list(REWARD_TYPES),
     }
 
 

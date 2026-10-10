@@ -12,7 +12,9 @@ from dnd_ai.domain.authoring import (
 pytestmark = pytest.mark.unit
 
 
-@pytest.mark.parametrize("action", ["update", "create_timeline", "create_campaign"])
+@pytest.mark.parametrize(
+    "action", ["update", "create_timeline", "create_campaign", "create_calendar"]
+)
 def test_world_edits_need_an_active_world(action: str) -> None:
     assert (
         policy.world_blocked_reason(action, lifecycle_status="active", has_blocking_campaigns=False)

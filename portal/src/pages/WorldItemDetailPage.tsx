@@ -1,3 +1,4 @@
+import { useWorldBackPath } from "../hooks/useWorldBackPath"
 import { Link } from "react-router"
 import { DetailPanel } from "../components/DetailPanel"
 import { FactGrid } from "../components/FactGrid"
@@ -21,13 +22,14 @@ export function WorldItemDetailPage({
     campaignId,
     item,
 }: WorldItemDetailPageProps) {
+    const worldBackPath = useWorldBackPath(campaignId)
     const hasCharges =
         item.charges_current !== null || item.charges_maximum !== null
 
     return (
         <section aria-labelledby="world-item-heading">
             <p>
-                <Link to={`/app/${encodeURIComponent(campaignId)}/world`}>
+                <Link to={worldBackPath}>
                     Back to World
                 </Link>
             </p>

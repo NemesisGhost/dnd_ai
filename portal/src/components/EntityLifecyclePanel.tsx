@@ -1,4 +1,5 @@
-import { useState } from "react"
+import { createContext, useContext, useRef, useState } from "react"
+import type { ReactNode, RefObject } from "react"
 import { useNavigate } from "react-router"
 import { entityLifecyclePath, runEntityAction } from "../api/entityLifecycle"
 import { useSession } from "../context/SessionContext"
@@ -17,6 +18,7 @@ import { describeBlockedReason } from "../utils/blockedReason"
 import { useAnnounce } from "./authoring/announcer"
 import { ConfirmDialog } from "./authoring/ConfirmDialog"
 import { LifecycleBadge, MutationStatusMessage } from "./authoring/feedback"
+import { EntitySourcesSection } from "./EntitySourcesSection"
 import { SupersedeEntityDialog } from "./SupersedeEntityDialog"
 import "./authoring/authoring.css"
 
@@ -126,6 +128,8 @@ function actionLabel(code: string): string {
 interface EntityLifecyclePanelProps {
     campaignId: string
     entityId: string
+    // The World category, so the sources section can link to the provenance page.
+    category?: string
     // Called after a successful transition so the page above can refetch.
     onChanged?: () => void
 }
@@ -134,16 +138,16 @@ interface EntityLifecyclePanelProps {
 // campaign member whose bootstrap lists `canon.edit`, and only the actions the
 // server's `available_actions` reports; blocked actions are explained, not
 // disabled in place. Players (no capability) trigger no request at all.
-export function EntityLifecyclePanel({ campaignId, entityId, onChanged }: EntityLifecyclePanelProps) {
+export function EntityLifecyclePanel({ campaignId, entityId, category, onChanged }: EntityLifecyclePanelProps) {
     // Players (and any render without a session) mount nothing and send no
     // request; the loading hooks live in the inner component.
     if (!useCampaignCapability(campaignId, "canon.edit")) {
         return null
     }
-    return <LoadedPanel campaignId={campaignId} entityId={entityId} onChanged={onChanged} />
+    return <LoadedPanel campaignId={campaignId} entityId={entityId} category={category} onChanged={onChanged} />
 }
 
-function LoadedPanel({ campaignId, entityId, onChanged }: EntityLifecyclePanelProps) {
+function LoadedPanel({ campaignId, entityId, category, onChanged }: EntityLifecyclePanelProps) {
     const { state, refetch } = useAuthoringResource<EntityLifecycleView>(
         entityLifecyclePath(campaignId, entityId),
     )
@@ -151,13 +155,16 @@ function LoadedPanel({ campaignId, entityId, onChanged }: EntityLifecyclePanelPr
         return null
     }
     return (
-        <Panel
-            key={state.data.row_version}
-            campaignId={campaignId}
-            view={state.data}
-            refetch={refetch}
-            onChanged={onChanged}
-        />
+        <>
+            <LifecycleControls
+                key={state.data.row_version}
+                campaignId={campaignId}
+                view={state.data}
+                refetch={refetch}
+                onChanged={onChanged}
+            />
+            <EntitySourcesSection campaignId={campaignId} entityId={entityId} category={category} />
+        </>
     )
 }
 
@@ -166,17 +173,62 @@ interface PanelProps {
     view: EntityLifecycleView
     refetch: () => Promise<void>
     onChanged?: () => void
+    // One compact row (the next step, and the rest under "More") for a page that carries the
+    // lifecycle in a section of its own. The status and the unavailable-action explanations are
+    // left out: the page states the status itself.
+    compact?: boolean
+    // Set while the page holds unsaved edits to the record: every action then asks first, and says
+    // the edits are not part of the change.
+    unsavedEdits?: boolean
+    // Where a deleted draft goes next (default: the World list).
+    afterDeletePath?: string
 }
 
-function Panel({ campaignId, view, refetch, onChanged }: PanelProps) {
+// The forward steps of the state machine, in the order they are offered as "the next step".
+const FORWARD = ["submit_for_review", "approve", "publish"]
+
+interface LifecycleActions {
+    view: EntityLifecycleView
+    available: Set<string>
+    pending: boolean
+    open: (code: string) => void
+    errorNode: ReactNode
+    // Submitting for review has no dialog, so its failure is shown inline.
+    inlineError: boolean
+    moreRef: RefObject<HTMLDetailsElement | null>
+}
+
+const ActionsContext = createContext<LifecycleActions | null>(null)
+
+// The state and dialogs of the lifecycle actions for one record. Mounted once, by
+// `LifecycleActionsProvider`, so every place that offers an action (a primary button in a review
+// section, the full set in a publication section) drives the same mutation and the same dialog.
+function useLifecycleActions({
+    campaignId,
+    view,
+    refetch,
+    onChanged,
+    unsavedEdits = false,
+    afterDeletePath,
+}: PanelProps): { actions: LifecycleActions; dialogs: ReactNode } {
     const navigate = useNavigate()
     const announce = useAnnounce()
     const { reload } = useSession()
     const [action, setAction] = useState<string | null>(null)
     const [reason, setReason] = useState("")
     const [reasonError, setReasonError] = useState<string | null>(null)
+    const [version, setVersion] = useState(view.row_version)
+    // A new version of the record (an action took effect, or it was reloaded) closes any dialog.
+    if (version !== view.row_version) {
+        setVersion(view.row_version)
+        setAction(null)
+        setReason("")
+        setReasonError(null)
+    }
     const available = new Set(view.available_actions)
     const spec = action === null ? undefined : ACTIONS[action]
+    const moreRef = useRef<HTMLDetailsElement>(null)
+    const asksFirst = (code: string | null) => code !== null && (ACTIONS[code]?.immediate !== true || unsavedEdits)
 
     const mutation = useAuthoringMutation<Submission, EntityTransitionResponse>({
         scopeKey: `entity:${view.entity_id}:${view.row_version}`,
@@ -187,7 +239,7 @@ function Panel({ campaignId, view, refetch, onChanged }: PanelProps) {
             setAction(null)
             setReason("")
             if (result.deleted === true) {
-                void navigate(`/app/${encodeURIComponent(campaignId)}/world`, {
+                void navigate(afterDeletePath ?? `/app/${encodeURIComponent(campaignId)}/world`, {
                     state: { announce: message },
                 })
                 return
@@ -203,7 +255,8 @@ function Panel({ campaignId, view, refetch, onChanged }: PanelProps) {
         setReason("")
         setReasonError(null)
         setAction(next)
-        if (ACTIONS[next]?.immediate === true) {
+        moreRef.current?.removeAttribute("open")
+        if (ACTIONS[next]?.immediate === true && !unsavedEdits) {
             mutation.submit({ action: next, body: { expected_row_version: view.row_version } })
         }
     }
@@ -256,53 +309,19 @@ function Panel({ campaignId, view, refetch, onChanged }: PanelProps) {
             <MutationStatusMessage error={error} onRetry={mutation.retry} onCheckSession={reload} />
         )
     const pending = mutation.status.kind === "pending"
-    const visible = ORDER.filter((code) => available.has(code))
-    const blocked = view.blocked_actions.filter((b) => b.action !== "all")
-    const dialogAction = action !== null && action !== "supersede" && spec !== undefined && spec.immediate !== true
+    const dialogAction = action !== null && action !== "supersede" && spec !== undefined && asksFirst(action)
 
-    return (
-        <section className="authoring-section" aria-labelledby="entity-lifecycle-heading">
-            <h2 id="entity-lifecycle-heading">Lifecycle</h2>
-            <p>
-                <LifecycleBadge status={view.canon_status} />{" "}
-                {view.lifecycle_status === "archived" ? <LifecycleBadge status="archived" /> : null}
-                <span className="authoring-field__hint"> {STATUS_LABEL[view.canon_status] ?? view.canon_status}</span>
-            </p>
-            {view.superseded_by !== null ? <p>Replaced by {view.superseded_by.canonical_name}.</p> : null}
-            {spec?.immediate === true ? errorNode : null}
-            {visible.length > 0 ? (
-                <div className="authoring-actions">
-                    {visible.map((code) => (
-                        <button
-                            key={code}
-                            type="button"
-                            className="authoring-button"
-                            disabled={pending}
-                            onClick={() => open(code)}
-                        >
-                            {code === "supersede" ? "Supersede…" : actionLabel(code)}
-                        </button>
-                    ))}
-                </div>
-            ) : (
-                <p className="authoring-note">No lifecycle actions are available right now.</p>
-            )}
-            {blocked.length > 0 ? (
-                <ul className="authoring-note" aria-label="Unavailable lifecycle actions">
-                    {blocked.map((b) => (
-                        <li key={b.action}>
-                            {actionLabel(b.action)} unavailable:{" "}
-                            {describeBlockedReason(b.reason)}
-                        </li>
-                    ))}
-                </ul>
-            ) : null}
-
+    const dialogs = (
+        <>
             {dialogAction ? (
                 <ConfirmDialog
                     open
                     title={spec.title}
-                    description={spec.description}
+                    description={
+                        unsavedEdits
+                            ? `${spec.description} Your unsaved edits are not part of this change; they stay in the form.`
+                            : spec.description
+                    }
                     confirmLabel={spec.label}
                     onConfirm={confirm}
                     onCancel={() => setAction(null)}
@@ -331,6 +350,147 @@ function Panel({ campaignId, view, refetch, onChanged }: PanelProps) {
                 pending={pending}
                 error={errorNode}
             />
-        </section>
+        </>
+    )
+    return {
+        actions: {
+            view,
+            available,
+            pending,
+            open,
+            errorNode,
+            inlineError: spec?.immediate === true && !unsavedEdits,
+            moreRef,
+        },
+        dialogs,
+    }
+}
+
+// Shares one set of lifecycle actions (and their confirmation dialogs) with every control below
+// it, so a page can offer an action in more than one section without a second mutation.
+export function LifecycleActionsProvider({ children, ...props }: PanelProps & { children: ReactNode }) {
+    const { actions, dialogs } = useLifecycleActions(props)
+    return (
+        <ActionsContext.Provider value={actions}>
+            {children}
+            {dialogs}
+        </ActionsContext.Provider>
+    )
+}
+
+function useActions(): LifecycleActions {
+    const actions = useContext(ActionsContext)
+    if (actions === null) throw new Error("Lifecycle controls need a LifecycleActionsProvider.")
+    return actions
+}
+
+const actionButtonLabel = (code: string): string => (code === "supersede" ? "Supersede…" : actionLabel(code))
+
+// Only the approve or publish step, as the primary button of a review section. Renders nothing
+// when neither is available to the person.
+export function LifecycleReviewAction() {
+    const { available, pending, open, errorNode, inlineError } = useActions()
+    const code = ["approve", "publish"].find((c) => available.has(c))
+    if (code === undefined) return null
+    return (
+        <div className="lifecycle-compact" role="group" aria-label="Review decision">
+            <button
+                type="button"
+                className="authoring-button authoring-button--primary"
+                disabled={pending}
+                onClick={() => open(code)}
+            >
+                {actionLabel(code)}
+            </button>
+            {inlineError ? <div className="lifecycle-compact__error">{errorNode}</div> : null}
+        </div>
+    )
+}
+
+// Every action the server offers: the next step, then the rest under "More" (compact), or all of
+// them as plain buttons with the unavailable ones explained (not compact).
+export function LifecycleActionList({ compact = false }: { compact?: boolean }) {
+    const { view, available, pending, open, errorNode, inlineError, moreRef } = useActions()
+    const visible = ORDER.filter((code) => available.has(code))
+    // The next forward step. When there is none, the step that leads out of a dead end is the
+    // primary one instead of hiding under "More": Restore for an archived record, and Return to
+    // draft for a rejected one.
+    const primary =
+        FORWARD.find((code) => available.has(code)) ??
+        (available.has("restore")
+            ? "restore"
+            : view.canon_status === "rejected" && available.has("return_to_draft")
+              ? "return_to_draft"
+              : undefined)
+    const more = visible.filter((code) => code !== primary)
+    const blocked = view.blocked_actions.filter((b) => b.action !== "all")
+    const button = (code: string, primaryStyle: boolean) => (
+        <button
+            key={code}
+            type="button"
+            className={primaryStyle ? "authoring-button authoring-button--primary" : "authoring-button"}
+            disabled={pending}
+            onClick={() => open(code)}
+        >
+            {actionButtonLabel(code)}
+        </button>
+    )
+    if (compact) {
+        return (
+            <div className="lifecycle-compact" role="group" aria-label="Lifecycle">
+                {primary !== undefined ? button(primary, true) : null}
+                {more.length > 0 ? (
+                    <details className="lifecycle-compact__more" ref={moreRef}>
+                        <summary className="authoring-button">More</summary>
+                        <div className="lifecycle-compact__menu">{more.map((code) => button(code, false))}</div>
+                    </details>
+                ) : null}
+                {visible.length === 0 ? (
+                    <span className="authoring-note">No lifecycle action is available to you right now.</span>
+                ) : null}
+                {inlineError ? <div className="lifecycle-compact__error">{errorNode}</div> : null}
+            </div>
+        )
+    }
+    return (
+        <>
+            {inlineError ? errorNode : null}
+            {visible.length > 0 ? (
+                <div className="authoring-actions">{visible.map((code) => button(code, false))}</div>
+            ) : (
+                <p className="authoring-note">No lifecycle actions are available right now.</p>
+            )}
+            {blocked.length > 0 ? (
+                <ul className="authoring-note" aria-label="Unavailable lifecycle actions">
+                    {blocked.map((b) => (
+                        <li key={b.action}>
+                            {actionLabel(b.action)} unavailable: {describeBlockedReason(b.reason)}
+                        </li>
+                    ))}
+                </ul>
+            ) : null}
+        </>
+    )
+}
+
+export function LifecycleControls(props: PanelProps) {
+    const { view, compact = false } = props
+    return (
+        <LifecycleActionsProvider {...props}>
+            {compact ? (
+                <LifecycleActionList compact />
+            ) : (
+                <section className="authoring-section" aria-labelledby="entity-lifecycle-heading">
+                    <h2 id="entity-lifecycle-heading">Lifecycle</h2>
+                    <p>
+                        <LifecycleBadge status={view.canon_status} />{" "}
+                        {view.lifecycle_status === "archived" ? <LifecycleBadge status="archived" /> : null}
+                        <span className="authoring-field__hint"> {STATUS_LABEL[view.canon_status] ?? view.canon_status}</span>
+                    </p>
+                    {view.superseded_by !== null ? <p>Replaced by {view.superseded_by.canonical_name}.</p> : null}
+                    <LifecycleActionList />
+                </section>
+            )}
+        </LifecycleActionsProvider>
     )
 }

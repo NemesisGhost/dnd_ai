@@ -24,6 +24,7 @@ import {
     valuesFromOrganizationView,
 } from "../utils/organizationForm"
 import type { OrganizationFormValues } from "../utils/organizationForm"
+import type { OrganizationReceipt } from "../types/contentAuthoring"
 
 const worldPath = (campaignId: string): string => `/app/${encodeURIComponent(campaignId)}/world`
 
@@ -36,7 +37,7 @@ const createConfig: ContentCreateConfig<
     OrganizationOptions,
     OrganizationFormValues,
     CreateOrganizationBody,
-    OrganizationAuthoringView
+    OrganizationReceipt
 > = {
     noun: "organization",
     heading: "New organization",

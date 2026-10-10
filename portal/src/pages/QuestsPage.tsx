@@ -4,6 +4,7 @@ import { AudiencePreviewSection } from "../components/AudiencePreviewSection"
 import { CardGrid } from "../components/CardGrid"
 import { QuestCard } from "../components/QuestCard"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
+import type { AuthorizedParty } from "../types/bootstrap"
 import type { CampaignQuestListItem } from "../types/quest"
 import { sortQuests } from "../utils/questSorting"
 import type { QuestSortColumn } from "../utils/questSorting"
@@ -12,17 +13,26 @@ import type { SortDirection } from "../utils/sorting"
 interface QuestsPageProps {
     campaignId: string
     quests: CampaignQuestListItem[]
+    characterId?: string | null
+    partyId?: string | null
+    parties?: AuthorizedParty[]
+    onPartyChange?: (partyId: string | null) => void
 }
 
 export function QuestsPage({
     campaignId,
     quests,
+    characterId = null,
+    partyId = null,
+    parties = [],
+    onPartyChange,
 }: QuestsPageProps) {
     const [sortColumn, setSortColumn] = useState<QuestSortColumn>("name")
     const [direction, setDirection] = useState<SortDirection>("asc")
 
     const sortColumnId = useId()
     const directionId = useId()
+    const partySelectId = useId()
     // Offered from the bootstrap's capability list; the server re-checks.
     const canAuthor = useCampaignCapability(campaignId, "canon.edit")
 
@@ -44,6 +54,38 @@ export function QuestsPage({
             ) : null}
 
             <AudiencePreviewSection campaignId={campaignId} resourceType="quest" />
+
+            {characterId !== null && onPartyChange !== undefined ? (
+                // Campaign-wide quests always show; a party adds its own
+                // quests and statuses. Only the selected character's
+                // authorized parties are offered, and a single one is
+                // already selected (see useQuestPartyPerspective).
+                <div className="quests-page__sort-field">
+                    <label htmlFor={partySelectId}>Party</label>
+                    <select
+                        id={partySelectId}
+                        value={partyId ?? ""}
+                        disabled={parties.length < 2}
+                        onChange={(event) => {
+                            const value = event.currentTarget.value
+                            onPartyChange(value === "" ? null : value)
+                        }}
+                    >
+                        {parties.length !== 1 ? (
+                            <option value="">
+                                {parties.length === 0
+                                    ? "No party available"
+                                    : "No party selected"}
+                            </option>
+                        ) : null}
+                        {parties.map((party) => (
+                            <option key={party.party_id} value={party.party_id}>
+                                {party.party_name}
+                            </option>
+                        ))}
+                    </select>
+                </div>
+            ) : null}
 
             {quests.length > 0 ? (
                 <>
@@ -93,6 +135,8 @@ export function QuestsPage({
                                 key={quest.quest_id}
                                 campaignId={campaignId}
                                 quest={quest}
+                                characterId={characterId}
+                                partyId={partyId}
                             />
                         ))}
                     </CardGrid>

@@ -1,5 +1,7 @@
 # Database Recovery Operations
 
+> **Before upgrading to revision `135_scrub_narrative_text`:** it permanently scrubs narrative text from audit and replay rows. Take a fresh backup immediately before `upgrade`; after it, take another and retire older backups under the ADR 0016 backup policy. A downgrade does not restore the scrubbed values; restore the pre-upgrade backup if they are needed.
+
 > **Status: accepted production deliverable.** The recovery
 > implementation completed its final production review at commit `f0572d0`.
 > Further speculative review is not an acceptance gate. Validate it in
@@ -153,6 +155,8 @@ folded into an ordinary pass. Every example in this document below uses
 **What a `pg_dump` backup does *not* cover.** `pg_dump` captures exactly one database's schemas, tables, data, and the grants recorded inside that database — nothing that lives outside it. PostgreSQL roles (`CREATE ROLE ...`) are **cluster-wide**, not database-local: they live in the cluster's shared catalog rather than inside any one database, so `pg_dump -d dnd_ai` never includes them. This project's six roles — `migration_owner`, `migration_runner`, `app_read_write`, `app_read_only`, `integration_worker`, `admin_maintenance` — are created once, cluster-wide, by the `001_bootstrap` Alembic revision ([DATABASE_CONVENTIONS.md §27.1](../DATABASE_CONVENTIONS.md#271-database-roles)), and every schema object and default privilege throughout the database is owned by, or granted to, one of them. **A `dnd_ai.dump` file by itself is not a complete recovery artifact for a brand-new PostgreSQL cluster** — restoring it onto a fresh server with no roles yet created fails as soon as `pg_restore` reaches the first statement referencing `migration_owner` or any of the other five.
 
 The repository-native fix is to let Alembic recreate the roles before restoring data — the same `001_bootstrap` revision that created them on the original server, applied to the fresh one. `restore` (below) does this for you, in the right order for whichever of fresh-cluster or existing-cluster mode applies. (`pg_dumpall --globals-only` is a built-in alternative for capturing roles; it's discussed, and why it isn't the default recommendation here, further down.)
+
+**Role grants are part of the restored database.** Table privileges, including the deny-by-default `app_read_only` boundary from migration `115_reporting_role_boundary`, live inside the database and come back with `pg_restore`; only role definitions and passwords live outside it.
 
 **What role bootstrap does *not* recover.** Recreating the six *role definitions* — and the grants/ownership `001_bootstrap` assigns to them — is not the same as reproducing everything about the roles' live state on the server you backed up from:
 

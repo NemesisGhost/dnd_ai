@@ -36,7 +36,12 @@ from dnd_ai.domain.authoring import (
     WorldArchivedError,
     WorldHasActiveCampaignsError,
 )
-from tests.builders import dnd5e_ids, make_authored_campaign, make_authored_world
+from tests.builders import (
+    dnd5e_ids,
+    make_authored_campaign,
+    make_authored_world,
+    make_world_creator,
+)
 from tests.factories import make_external_identity, make_location, make_user, oidc_principal
 
 pytestmark = pytest.mark.database
@@ -78,6 +83,14 @@ def _purge_user_worlds(engine: Engine, user_id: uuid.UUID) -> None:
             )
             cleanup.execute(
                 text(
+                    "DELETE FROM campaign.session_participants WHERE session_id IN "
+                    f"(SELECT session_id FROM campaign.sessions WHERE {scoped})"
+                ),
+                {"w": world_id},
+            )
+            cleanup.execute(text(f"DELETE FROM campaign.sessions WHERE {scoped}"), {"w": world_id})
+            cleanup.execute(
+                text(
                     "DELETE FROM campaign.campaigns WHERE timeline_id IN "
                     "(SELECT timeline_id FROM campaign.timelines WHERE world_id = :w)"
                 ),
@@ -105,6 +118,24 @@ def _purge_user_worlds(engine: Engine, user_id: uuid.UUID) -> None:
                 "(SELECT entity_id FROM core.entities WHERE world_id = :w)",
                 "DELETE FROM narrative.quests WHERE quest_id IN "
                 "(SELECT entity_id FROM core.entities WHERE world_id = :w)",
+                # Phase 15 operation state and character records (the purge runs with
+                # triggers and foreign keys off, so nothing cascades).
+                "DELETE FROM campaign.party_memberships WHERE timeline_id IN (SELECT timeline_id FROM campaign.timelines WHERE world_id = :w)",
+                "DELETE FROM campaign.timeline_clocks WHERE timeline_id IN (SELECT timeline_id FROM campaign.timelines WHERE world_id = :w)",
+                "DELETE FROM campaign.character_state WHERE timeline_id IN (SELECT timeline_id FROM campaign.timelines WHERE world_id = :w)",
+                "DELETE FROM core.entity_revisions WHERE world_id = :w",
+                "DELETE FROM character.character_known_spells WHERE character_spellcasting_profile_id IN (SELECT character_spellcasting_profile_id FROM character.character_spellcasting_profiles WHERE character_build_id IN (SELECT character_build_id FROM character.character_builds WHERE character_id IN (SELECT entity_id FROM core.entities WHERE world_id = :w)))",
+                "DELETE FROM character.character_prepared_spells WHERE character_spellcasting_profile_id IN (SELECT character_spellcasting_profile_id FROM character.character_spellcasting_profiles WHERE character_build_id IN (SELECT character_build_id FROM character.character_builds WHERE character_id IN (SELECT entity_id FROM core.entities WHERE world_id = :w)))",
+                "DELETE FROM character.character_spellcasting_profiles WHERE character_build_id IN (SELECT character_build_id FROM character.character_builds WHERE character_id IN (SELECT entity_id FROM core.entities WHERE world_id = :w))",
+                "DELETE FROM character.character_features WHERE character_build_id IN (SELECT character_build_id FROM character.character_builds WHERE character_id IN (SELECT entity_id FROM core.entities WHERE world_id = :w))",
+                "DELETE FROM character.character_proficiencies WHERE character_build_id IN (SELECT character_build_id FROM character.character_builds WHERE character_id IN (SELECT entity_id FROM core.entities WHERE world_id = :w))",
+                "DELETE FROM character.character_class_levels WHERE character_build_id IN (SELECT character_build_id FROM character.character_builds WHERE character_id IN (SELECT entity_id FROM core.entities WHERE world_id = :w))",
+                "DELETE FROM character.character_ability_scores WHERE character_build_id IN (SELECT character_build_id FROM character.character_builds WHERE character_id IN (SELECT entity_id FROM core.entities WHERE world_id = :w))",
+                "DELETE FROM character.character_builds WHERE character_id IN (SELECT entity_id FROM core.entities WHERE world_id = :w)",
+                "DELETE FROM character.character_descriptions WHERE character_id IN (SELECT entity_id FROM core.entities WHERE world_id = :w)",
+                "DELETE FROM character.player_characters WHERE player_character_id IN (SELECT entity_id FROM core.entities WHERE world_id = :w)",
+                "DELETE FROM character.npcs WHERE npc_id IN (SELECT entity_id FROM core.entities WHERE world_id = :w)",
+                "DELETE FROM character.characters WHERE character_id IN (SELECT entity_id FROM core.entities WHERE world_id = :w)",
                 "DELETE FROM campaign.parties WHERE world_id = :w",
                 "DELETE FROM knowledge.knowledge_items WHERE knowledge_item_id IN "
                 "(SELECT entity_id FROM core.entities WHERE world_id = :w)",
@@ -167,7 +198,7 @@ def _purge_user_worlds(engine: Engine, user_id: uuid.UUID) -> None:
 @pytest.fixture
 def committed_owner(postgres_engine: Engine) -> Iterator[uuid.UUID]:
     with postgres_engine.begin() as setup:
-        user_id = make_user(setup, "Race Owner")
+        user_id = make_world_creator(setup, make_user(setup, "Race Owner"))
     yield user_id
     _purge_user_worlds(postgres_engine, user_id)
 

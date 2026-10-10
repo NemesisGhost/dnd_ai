@@ -448,6 +448,9 @@ def test_update_replaces_fields_and_audits_a_bounded_diff(s: ContentSetup) -> No
     diff = s.audit("update_organization")[0].changed_fields
     assert diff["name"] == {"from": "Old", "to": "New"}
     assert diff["reputation"] == {"from": None, "to": -20}
+    # Narrative fields are recorded as changed, never with their values.
+    assert diff["internal_description"] == {"from": None, "to": {"redacted": True}}
+    assert "Fronts for the guild" not in str(diff)
     assert "kind" not in diff
 
 
@@ -635,7 +638,7 @@ def test_religion_lifecycle_of_authoring(s: ContentSetup) -> None:
     ).json()
     assert view["summary"] == "Worship of dawn" and view["changed"] is True
     assert s.audit("update_religion")[0].changed_fields == {
-        "summary": {"from": None, "to": "Worship of dawn"}
+        "summary": {"from": None, "to": {"redacted": True}}
     }
     noop = s.gm.post(
         s.url(f"religions/{religion['religion_id']}/update"),

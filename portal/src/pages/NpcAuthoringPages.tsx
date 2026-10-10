@@ -1,5 +1,13 @@
 import { fetchLocationParentOptions } from "../api/locationAuthoring"
 import { createNpc, npcAuthoringPath, npcOptionsPath, updateNpc } from "../api/npcAuthoring"
+import {
+    createPlayerCharacter,
+    playerCharacterAuthoringPath,
+    playerCharacterOptionsPath,
+    updatePlayerCharacter,
+} from "../api/playerCharacterAuthoring"
+import { useAuthoringResource } from "../hooks/useAuthoringResource"
+import { Link, useParams } from "react-router"
 import { ContentCreatePage } from "../components/authoring/ContentCreatePage"
 import type { ContentCreateConfig } from "../components/authoring/ContentCreatePage"
 import { ContentEditPage } from "../components/authoring/ContentEditPage"
@@ -13,6 +21,7 @@ import type {
     NpcAuthoringView,
     NpcFieldsBody,
     NpcOptions,
+    PlayerCharacterAuthoringView,
 } from "../types/npcAuthoring"
 import {
     DESCRIPTION_MAX,
@@ -21,6 +30,7 @@ import {
     validateName,
 } from "../utils/authoringValidation"
 import { statusDetail } from "../utils/locationForm"
+import type { NpcReceipt, PlayerCharacterReceipt } from "../types/contentAuthoring"
 
 interface NpcFormValues {
     name: string
@@ -243,7 +253,22 @@ function Fields({
     )
 }
 
-const createConfig: ContentCreateConfig<NpcOptions, NpcFormValues, CreateNpcBody, NpcAuthoringView> = {
+const renderCreateFields: ContentCreateConfig<
+    NpcOptions,
+    NpcFormValues,
+    CreateNpcBody,
+    unknown
+>["renderFields"] = ({ campaignId, options, values, setValues, errorFor }) => (
+    <Fields
+        campaignId={campaignId}
+        options={options}
+        values={values}
+        setValues={setValues}
+        errorFor={errorFor}
+    />
+)
+
+const createConfig: ContentCreateConfig<NpcOptions, NpcFormValues, CreateNpcBody, NpcReceipt> = {
     noun: "NPC",
     heading: "New NPC",
     lead: "A new NPC is saved as a draft. Only people who can edit canon see it until it is published. This sets who the character is; stats, inventory, and behavior are managed elsewhere.",
@@ -261,21 +286,60 @@ const createConfig: ContentCreateConfig<NpcOptions, NpcFormValues, CreateNpcBody
     announce: "NPC created as a draft",
     saveLabel: "Create NPC",
     pendingLabel: "Creating…",
-    renderFields: ({ campaignId, options, values, setValues, errorFor }) => (
-        <Fields
-            campaignId={campaignId}
-            options={options}
-            values={values}
-            setValues={setValues}
-            errorFor={errorFor}
-        />
-    ),
+    renderFields: renderCreateFields,
 }
 
 // Create an NPC draft: /app/:campaignId/characters/npc/new.
 export function CreateNpcPage() {
     return <ContentCreatePage config={createConfig} />
 }
+
+const playerCharacterCreateConfig: ContentCreateConfig<
+    NpcOptions,
+    NpcFormValues,
+    CreateNpcBody,
+    PlayerCharacterReceipt
+> = {
+    ...createConfig,
+    noun: "player character",
+    heading: "New player character",
+    lead: "A new player character is saved as a draft. Only people who can edit canon see it until it is published. Linking a player to it is done in Access, after it is published.",
+    optionsPath: playerCharacterOptionsPath,
+    create: createPlayerCharacter,
+    resultPath: (campaignId, created) =>
+        `${worldBase(campaignId)}/character/${encodeURIComponent(created.player_character_id)}`,
+    announce: "Player character created as a draft",
+    saveLabel: "Create player character",
+}
+
+// Create a player-character draft: /app/:campaignId/characters/pc/new.
+export function CreatePlayerCharacterPage() {
+    return <ContentCreatePage config={playerCharacterCreateConfig} />
+}
+
+const summarize: ContentEditConfig<
+    NpcAuthoringView,
+    NpcOptions,
+    NpcFormValues,
+    NpcFieldsBody
+>["summarize"] = (values) => (
+    <dl className="authoring-fact-list">
+        <dt>Name</dt>
+        <dd>{values.name}</dd>
+        <dt>Summary</dt>
+        <dd>{values.summary || "(empty)"}</dd>
+        <dt>Size</dt>
+        <dd>{values.size || "(none)"}</dd>
+        <dt>Origin</dt>
+        <dd>{values.origin?.label ?? "(none)"}</dd>
+        <dt>Background</dt>
+        <dd>{values.background || "(empty)"}</dd>
+        <dt>Appearance</dt>
+        <dd>{values.appearance || "(empty)"}</dd>
+        <dt>GM notes</dt>
+        <dd>{values.notes || "(empty)"}</dd>
+    </dl>
+)
 
 const editConfig: ContentEditConfig<NpcAuthoringView, NpcOptions, NpcFormValues, NpcFieldsBody> = {
     noun: "NPC",
@@ -302,30 +366,84 @@ const editConfig: ContentEditConfig<NpcAuthoringView, NpcOptions, NpcFormValues,
             currentSpeciesName={view.species.name}
         />
     ),
-    summarize: (values) => (
-        <dl className="authoring-fact-list">
-            <dt>Name</dt>
-            <dd>{values.name}</dd>
-            <dt>Summary</dt>
-            <dd>{values.summary || "(empty)"}</dd>
-            <dt>Size</dt>
-            <dd>{values.size || "(none)"}</dd>
-            <dt>Origin</dt>
-            <dd>{values.origin?.label ?? "(none)"}</dd>
-            <dt>Background</dt>
-            <dd>{values.background || "(empty)"}</dd>
-            <dt>Appearance</dt>
-            <dd>{values.appearance || "(empty)"}</dd>
-            <dt>GM notes</dt>
-            <dd>{values.notes || "(empty)"}</dd>
-        </dl>
-    ),
+    summarize,
     canonWarning:
         "This NPC is published. People with access will see the change. For a change in meaning, create a replacement and supersede this NPC instead.",
     saved: "NPC saved",
 }
 
-// Edit an NPC's identity: /app/:campaignId/characters/:characterId/edit.
+// Edit an NPC's identity (reached through EditCharacterPage).
 export function EditNpcPage() {
     return <ContentEditPage config={editConfig} />
+}
+
+const playerCharacterEditConfig: ContentEditConfig<
+    PlayerCharacterAuthoringView,
+    NpcOptions,
+    NpcFormValues,
+    NpcFieldsBody
+> = {
+    ...(editConfig as unknown as ContentEditConfig<
+        PlayerCharacterAuthoringView,
+        NpcOptions,
+        NpcFormValues,
+        NpcFieldsBody
+    >),
+    noun: "player character",
+    heading: "Edit player character",
+    viewPath: playerCharacterAuthoringPath,
+    optionsPath: playerCharacterOptionsPath,
+    update: updatePlayerCharacter,
+    canonWarning:
+        "This player character is published. People with access will see the change. For a change in meaning, create a replacement and supersede this character instead.",
+    saved: "Player character saved",
+}
+
+export function EditPlayerCharacterPage() {
+    return <ContentEditPage config={playerCharacterEditConfig} />
+}
+
+// One edit route for both kinds: /app/:campaignId/characters/:characterId/edit.
+// Each kind's authoring read is a 404 for the other, so the NPC read decides:
+// found -> the NPC editor; otherwise -> the player-character editor, which shows
+// its own "does not exist or no access" state for anything else.
+export function EditCharacterPage() {
+    const params = useParams()
+    const probe = useAuthoringResource<NpcAuthoringView>(
+        npcAuthoringPath(params.campaignId ?? "", params.characterId ?? ""),
+    )
+    if (probe.state.kind === "loading") {
+        return <p role="status">Loading character…</p>
+    }
+    return probe.state.kind === "ready" ? <EditNpcPage /> : <EditPlayerCharacterPage />
+}
+
+// Create a character: /app/:campaignId/characters/new. The two kinds are never
+// guessed -- the author chooses one explicitly.
+export function ChooseCharacterTypePage() {
+    const params = useParams()
+    const base = `/app/${encodeURIComponent(params.campaignId ?? "")}/characters`
+    return (
+        <section className="authoring-page" aria-labelledby="choose-character-heading">
+            <h1 id="choose-character-heading">New character</h1>
+            <p className="authoring-page__lead">What kind of character is this?</p>
+            <ul className="authoring-choice-list">
+                <li>
+                    <Link className="authoring-button" to={`${base}/npc/new`}>
+                        New NPC
+                    </Link>
+                    <p>A character the GM or AI portrays.</p>
+                </li>
+                <li>
+                    <Link className="authoring-button" to={`${base}/pc/new`}>
+                        New player character
+                    </Link>
+                    <p>
+                        A character a player will control. Link the player in Access once it is
+                        published.
+                    </p>
+                </li>
+            </ul>
+        </section>
+    )
 }

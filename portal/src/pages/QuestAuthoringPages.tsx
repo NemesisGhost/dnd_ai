@@ -4,6 +4,7 @@ import { ContentCreatePage } from "../components/authoring/ContentCreatePage"
 import type { ContentCreateConfig } from "../components/authoring/ContentCreatePage"
 import type { FieldError } from "../components/authoring/feedback"
 import { TextAreaField, TextField } from "../components/authoring/fields"
+import { QuestCompletionEditor } from "../components/authoring/QuestCompletionEditor"
 import { QuestEditor } from "../components/authoring/QuestEditor"
 import { EntityLifecyclePanel } from "../components/EntityLifecyclePanel"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
@@ -16,6 +17,7 @@ import {
     validateName,
 } from "../utils/authoringValidation"
 import "../components/authoring/authoring.css"
+import type { QuestReceipt } from "../types/contentAuthoring"
 
 interface QuestFormValues {
     name: string
@@ -30,7 +32,7 @@ const createConfig: ContentCreateConfig<
     QuestOptions,
     QuestFormValues,
     CreateQuestBody,
-    QuestAuthoringView
+    QuestReceipt
 > = {
     noun: "quest",
     heading: "New quest",
@@ -127,6 +129,20 @@ export function EditQuestPage() {
                         view={state.data}
                         options={options.state.data}
                         refreshing={state.refreshing}
+                        refetch={refetch}
+                    />
+                    {state.data.canon_status === "canon" ? (
+                        <p>
+                            <Link to={`/app/${encodeURIComponent(campaignId)}/quests/${encodeURIComponent(questId)}/progress`}>
+                                Run this quest
+                            </Link>
+                        </p>
+                    ) : null}
+                    <QuestCompletionEditor
+                        key={state.data.row_version}
+                        campaignId={campaignId}
+                        view={state.data}
+                        options={options.state.data}
                         refetch={refetch}
                     />
                     <EntityLifecyclePanel

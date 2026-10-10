@@ -48,12 +48,11 @@ afterEach(() => {
 })
 
 describe("knowledge authoring routes", () => {
-  it.each([
-    ["/app/mundivita/knowledge/new", "New knowledge claim"],
-    ["/app/mundivita/knowledge/k1/edit", "Edit knowledge claim"],
-  ])("%s loads directly with one main and one h1", async (path, heading) => {
-    openApp(path)
-    expect(await screen.findByRole("heading", { level: 1, name: heading })).toBeInTheDocument()
+  it("/app/mundivita/knowledge/new loads directly with one main and one h1", async () => {
+    openApp("/app/mundivita/knowledge/new")
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "New knowledge claim" }),
+    ).toBeInTheDocument()
     expect(screen.getAllByRole("main")).toHaveLength(1)
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1)
     expect(screen.queryByText(/Unexpected Application Error/i)).toBeNull()

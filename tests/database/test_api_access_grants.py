@@ -47,7 +47,6 @@ from tests.factories import (
     make_knowledge_item,
     make_membership_role,
     make_quest,
-    make_relationship_type_capability,
     make_role,
     make_role_capability,
     make_session,
@@ -777,17 +776,6 @@ def test_a_granted_relationship_appears_on_bootstrap_and_a_revoked_one_disappear
     get_session_bootstrap` re-resolves fresh every call, so no code change
     is needed for either direction to take effect immediately."""
     with postgres_engine.begin() as connection:
-        view_summary_capability_id = lookup_id(
-            connection, "security", "capabilities", "capability_id", "character.view_summary"
-        )
-        viewer_type_id = lookup_id(
-            connection,
-            "security",
-            "character_relationship_types",
-            "character_relationship_type_id",
-            "viewer",
-        )
-
         # target_membership_id otherwise holds no role at all — the
         # character-detail endpoint's own coarser base gate requires
         # campaign.view before its finer, character-scoped tier check ever
@@ -801,71 +789,50 @@ def test_a_granted_relationship_appears_on_bootstrap_and_a_revoked_one_disappear
         make_role_capability(connection, viewer_role_id, view_capability_id)
         make_membership_role(connection, f.target_membership_id, viewer_role_id)
 
-    # security.character_relationship_type_capabilities has no seed file and
-    # "viewer" is a shared lookup row (unlike the fixture's own extra,
-    # per-test relationship types) — added/removed around the request
-    # section below rather than left to the fixture's own teardown, so this
-    # test never leaks a permanent capability mapping onto a row every other
-    # test in the shared database also reads.
-    try:
-        with postgres_engine.begin() as connection:
-            make_relationship_type_capability(
-                connection, viewer_type_id, view_summary_capability_id
-            )
-
-        with client_factory(f.admin_user_id) as admin_client:
-            grant = admin_client.post(
-                _relationships_url(f),
-                json={"character_id": str(f.character_id), "relationship_type_code": "viewer"},
-            )
-        assert grant.status_code == 201, grant.text
-        relationship_id = uuid.UUID(grant.json()["membership_character_relationship_id"])
-
-        with client_factory(f.target_user_id) as target_client:
-            session_after_grant = target_client.get("/auth/session")
-            detail_after_grant = target_client.get(
-                f"/campaigns/{f.campaign_id}/characters/{f.character_id}"
-            )
-        assert session_after_grant.status_code == 200, session_after_grant.text
-        campaign_after_grant = next(
-            c
-            for c in session_after_grant.json()["campaigns"]
-            if c["campaign_id"] == str(f.campaign_id)
+    # "owner" is a built-in relationship type whose production defaults
+    # (migration 114) already confer the perspective capability
+    # (`character.view_knowledge`) and the summary tier, so no mapping is
+    # added or removed here.
+    with client_factory(f.admin_user_id) as admin_client:
+        grant = admin_client.post(
+            _relationships_url(f),
+            json={"character_id": str(f.character_id), "relationship_type_code": "owner"},
         )
-        perspective_ids = {
-            p["character_id"] for p in campaign_after_grant["character_perspectives"]
-        }
-        assert str(f.character_id) in perspective_ids
-        assert campaign_after_grant["selected_character_id"] == str(f.character_id)
-        assert detail_after_grant.status_code == 200, detail_after_grant.text
+    assert grant.status_code == 201, grant.text
+    relationship_id = uuid.UUID(grant.json()["membership_character_relationship_id"])
 
-        with client_factory(f.admin_user_id) as admin_client:
-            revoke = admin_client.post(_revoke_relationship_url(f, relationship_id))
-        assert revoke.status_code == 200, revoke.text
-
-        with client_factory(f.target_user_id) as target_client:
-            session_after_revoke = target_client.get("/auth/session")
-            detail_after_revoke = target_client.get(
-                f"/campaigns/{f.campaign_id}/characters/{f.character_id}"
-            )
-        assert session_after_revoke.status_code == 200, session_after_revoke.text
-        campaign_after_revoke = next(
-            c
-            for c in session_after_revoke.json()["campaigns"]
-            if c["campaign_id"] == str(f.campaign_id)
+    with client_factory(f.target_user_id) as target_client:
+        session_after_grant = target_client.get("/auth/session")
+        detail_after_grant = target_client.get(
+            f"/campaigns/{f.campaign_id}/characters/{f.character_id}"
         )
-        assert campaign_after_revoke["character_perspectives"] == []
-        assert campaign_after_revoke["selected_character_id"] is None
-        assert detail_after_revoke.status_code == 404, detail_after_revoke.text
-    finally:
-        with postgres_engine.begin() as cleanup:
-            cleanup.execute(
-                text(
-                    "DELETE FROM security.character_relationship_type_capabilities "
-                    "WHERE character_relationship_type_id = :t AND capability_id = :c"
-                ),
-                {"t": viewer_type_id, "c": view_summary_capability_id},
-            )
+    assert session_after_grant.status_code == 200, session_after_grant.text
+    campaign_after_grant = next(
+        c for c in session_after_grant.json()["campaigns"] if c["campaign_id"] == str(f.campaign_id)
+    )
+    perspective_ids = {p["character_id"] for p in campaign_after_grant["character_perspectives"]}
+    assert str(f.character_id) in perspective_ids
+    assert campaign_after_grant["selected_character_id"] == str(f.character_id)
+    assert detail_after_grant.status_code == 200, detail_after_grant.text
+
+    with client_factory(f.admin_user_id) as admin_client:
+        revoke = admin_client.post(_revoke_relationship_url(f, relationship_id))
+    assert revoke.status_code == 200, revoke.text
+
+    with client_factory(f.target_user_id) as target_client:
+        session_after_revoke = target_client.get("/auth/session")
+        detail_after_revoke = target_client.get(
+            f"/campaigns/{f.campaign_id}/characters/{f.character_id}"
+        )
+    assert session_after_revoke.status_code == 200, session_after_revoke.text
+    campaign_after_revoke = next(
+        c
+        for c in session_after_revoke.json()["campaigns"]
+        if c["campaign_id"] == str(f.campaign_id)
+    )
+    assert campaign_after_revoke["character_perspectives"] == []
+    assert campaign_after_revoke["selected_character_id"] is None
+    assert detail_after_revoke.status_code == 404, detail_after_revoke.text
 
 
 # ---------------------------------------------------------------------------

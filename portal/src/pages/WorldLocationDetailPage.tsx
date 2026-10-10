@@ -1,5 +1,7 @@
+import { useWorldBackPath } from "../hooks/useWorldBackPath"
 import { Link } from "react-router"
 import { DetailPanel } from "../components/DetailPanel"
+import { areaAuthoringPath, dungeonAuthoringPath } from "../api/dungeonAuthoring"
 import { AuthoringEditLink } from "../components/AuthoringEditLink"
 import { locationAuthoringPath } from "../api/locationAuthoring"
 import { usePageArrival } from "../hooks/usePageArrival"
@@ -26,11 +28,21 @@ export function WorldLocationDetailPage({
     campaignId,
     location,
 }: WorldLocationDetailPageProps) {
+    const worldBackPath = useWorldBackPath(campaignId)
     const headingRef = usePageArrival(true)
+    const root = `/app/${encodeURIComponent(campaignId)}`
+    const isDungeonType =
+        location.location_type_code === "dungeon" || location.location_type_code === "dungeon_area"
+    const editPath =
+        location.location_type_code === "dungeon"
+            ? `${root}/world/dungeon/${encodeURIComponent(location.location_id)}/edit`
+            : location.location_type_code === "dungeon_area" && location.parent_location_id !== null
+              ? `${root}/world/dungeon/${encodeURIComponent(location.parent_location_id)}/areas/${encodeURIComponent(location.location_id)}/edit`
+              : `${root}/world/location/${encodeURIComponent(location.location_id)}/edit`
     return (
         <section aria-labelledby="world-location-heading">
             <p>
-                <Link to={`/app/${encodeURIComponent(campaignId)}/world`}>
+                <Link to={worldBackPath}>
                     Back to World
                 </Link>
             </p>
@@ -44,9 +56,15 @@ export function WorldLocationDetailPage({
 
             <AuthoringEditLink
                 campaignId={campaignId}
-                noun="location"
-                viewPath={locationAuthoringPath(campaignId, location.location_id)}
-                editPath={`/app/${encodeURIComponent(campaignId)}/world/location/${encodeURIComponent(location.location_id)}/edit`}
+                noun={isDungeonType ? location.location_type_code.replace("_", " ") : "location"}
+                viewPath={
+                    location.location_type_code === "dungeon"
+                        ? dungeonAuthoringPath(campaignId, location.location_id)
+                        : location.location_type_code === "dungeon_area"
+                          ? areaAuthoringPath(campaignId, location.location_id)
+                          : locationAuthoringPath(campaignId, location.location_id)
+                }
+                editPath={editPath}
                 detail={location}
             />
 

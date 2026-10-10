@@ -103,6 +103,43 @@ describe("fetchKnowledgeItems", () => {
         )
     })
 
+    it("sends include_public only for an explicit opt-out", async () => {
+        const emptyPage = {
+            items: [],
+            next_cursor: null,
+        } satisfies KnowledgePage
+
+        const fetchMock = vi.fn().mockImplementation(
+            () =>
+                Promise.resolve(
+                    new Response(JSON.stringify(emptyPage), {
+                        status: 200,
+                        headers: {
+                            "Content-Type": "application/json",
+                        },
+                    }),
+                ),
+        )
+
+        vi.stubGlobal("fetch", fetchMock)
+
+        const base = {
+            view: "known" as const,
+            characterId: null,
+            partyId: null,
+            query: "",
+            knowledgeType: null,
+        }
+
+        await fetchKnowledgeItems("campaign-a", { ...base, includePublic: true })
+        await fetchKnowledgeItems("campaign-a", { ...base, includePublic: false })
+
+        expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+            "/api/campaigns/campaign-a/knowledge?view=known",
+            "/api/campaigns/campaign-a/knowledge?view=known&include_public=false",
+        ])
+    })
+
     it("omits empty optional parameters while preserving the required view", async () => {
         const emptyPage = {
             items: [],
@@ -140,6 +177,29 @@ describe("fetchKnowledgeItems", () => {
                 cache: "no-store",
                 signal: undefined,
             },
+        )
+    })
+
+    it("sends the selected character on its own, never requiring a party", async () => {
+        const fetchMock = vi.fn().mockResolvedValue(
+            new Response(JSON.stringify({ items: [], next_cursor: null }), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+            }),
+        )
+
+        vi.stubGlobal("fetch", fetchMock)
+
+        await fetchKnowledgeItems("campaign-a", {
+            view: "known",
+            characterId: "character-a",
+            partyId: null,
+            query: "",
+            knowledgeType: null,
+        })
+
+        expect(fetchMock.mock.calls[0][0]).toBe(
+            "/api/campaigns/campaign-a/knowledge?view=known&character_id=character-a",
         )
     })
 

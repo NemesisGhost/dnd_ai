@@ -541,3 +541,366 @@ def test_the_gm_quest_preview_is_byte_identical_to_the_subjects_own_request(
 
     assert preview_response.status_code == direct_response.status_code == 200
     assert preview_response.json() == direct_response.json()
+
+
+# ---------------------------------------------------------------------------
+# Audit: metadata-only `sensitive_read` rows (checkpoint 15.2A-3)
+# ---------------------------------------------------------------------------
+
+
+def _preview_audit_rows(
+    engine: Engine, *, actor_user_id: uuid.UUID, command_name: str | None = None
+) -> list[dict]:
+    with engine.connect() as connection:
+        rows = connection.execute(
+            text("""
+                SELECT ca.code AS action, cl.command_name, cl.record_id, cl.entity_id,
+                       cl.actor_user_id, cl.correlation_id, cl.changed_fields, cl.reason
+                FROM audit.change_log cl
+                JOIN audit.change_actions ca ON ca.change_action_id = cl.change_action_id
+                WHERE cl.actor_user_id = :u
+                  AND ca.code = 'sensitive_read'
+                  AND (CAST(:c AS text) IS NULL OR cl.command_name = :c)
+                ORDER BY cl.change_log_id
+            """),
+            {"u": actor_user_id, "c": command_name},
+        ).mappings()
+        return [dict(row) for row in rows]
+
+
+def test_a_shown_preview_writes_one_metadata_only_sensitive_read_row(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with client_factory(f.actor_user_id) as client:
+        response = client.get(
+            _quest_preview_url(f, f.gm_membership_id),
+            headers={"X-Correlation-Id": "preview-audit-shown-0001"},
+        )
+    assert response.status_code == 200
+    rows = _preview_audit_rows(
+        postgres_engine, actor_user_id=f.actor_user_id, command_name="preview_quest"
+    )
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["record_id"] == f.quest_id and row["entity_id"] == f.quest_id
+    assert row["changed_fields"] == {
+        "resource_kind": "quest",
+        "subject_membership_id": str(f.gm_membership_id),
+        "outcome": "shown",
+        "character_perspective_supplied": False,
+        "party_perspective_supplied": False,
+    }
+    # No projected response, narrative, or reason is ever stored.
+    stored = str(row)
+    assert "Secret GM note" not in stored and row["reason"] is None
+
+
+def test_a_refused_preview_is_still_audited_with_the_identical_404(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with client_factory(f.actor_user_id) as client:
+        refused = client.get(_knowledge_preview_url(f, f.denied_membership_id))
+        unknown = client.get(_knowledge_preview_url(f, uuid.uuid4()))
+    assert refused.status_code == 404 and unknown.status_code == 404
+    assert refused.json()["error"]["code"] == unknown.json()["error"]["code"]
+    assert refused.json()["error"]["message"] == unknown.json()["error"]["message"]
+    rows = _preview_audit_rows(
+        postgres_engine, actor_user_id=f.actor_user_id, command_name="preview_knowledge"
+    )
+    assert [r["changed_fields"]["outcome"] for r in rows] == ["refused", "refused"]
+    assert all(r["changed_fields"]["resource_kind"] == "knowledge_item" for r in rows)
+    # The 404 body never reveals why (and the audit row holds no reason either).
+    assert all(r["reason"] is None for r in rows)
+
+
+def test_perspective_parameters_are_recorded_only_as_booleans(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    character = uuid.uuid4()
+    party = uuid.uuid4()
+    with client_factory(f.actor_user_id) as client:
+        client.get(
+            _quest_preview_url(f, f.player_membership_id),
+            params={"character_id": str(character), "party_id": str(party)},
+        )
+    rows = _preview_audit_rows(
+        postgres_engine, actor_user_id=f.actor_user_id, command_name="preview_quest"
+    )
+    last = rows[-1]["changed_fields"]
+    assert last["character_perspective_supplied"] is True
+    assert last["party_perspective_supplied"] is True
+    assert str(character) not in str(last) and str(party) not in str(last)
+
+
+def test_an_unauthorized_actor_writes_no_preview_audit_row(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with client_factory(f.capless_user_id) as client:
+        assert client.get(_quest_preview_url(f, f.player_membership_id)).status_code == 403
+    with client_factory(f.outsider_user_id) as client:
+        assert client.get(_quest_preview_url(f, f.player_membership_id)).status_code == 404
+    for user in (f.capless_user_id, f.outsider_user_id):
+        assert _preview_audit_rows(postgres_engine, actor_user_id=user) == []
+
+
+@pytest.mark.parametrize("method", ["post", "put", "patch", "delete"])
+def test_a_preview_path_accepts_only_get(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, method: str
+) -> None:
+    with client_factory(f.actor_user_id) as client:
+        response = getattr(client, method)(_quest_preview_url(f, f.gm_membership_id))
+    assert response.status_code == 405
+
+
+def test_an_unregistered_resource_cannot_be_previewed(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.actor_user_id) as client:
+        for kind in ("sessions", "characters", "items", "notes"):
+            response = client.get(
+                f"/campaigns/{f.campaign_id}/members/{f.gm_membership_id}/preview/{kind}/{uuid.uuid4()}"
+            )
+            assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# The Knowledge collection preview
+# ---------------------------------------------------------------------------
+
+
+def _knowledge_list_preview_url(f: Fixture, membership_id: uuid.UUID) -> str:
+    return f"/campaigns/{f.campaign_id}/members/{membership_id}/preview/knowledge"
+
+
+def test_the_knowledge_collection_preview_is_byte_identical_to_the_subjects_own_list(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    # An unauthorized perspective is refused for the subject's own request too, so the preview
+    # must refuse it identically (compared by status and body, not assumed to be 200).
+    for subject_user, membership in (
+        (f.player_user_id, f.player_membership_id),
+        (f.gm_user_id, f.gm_membership_id),
+    ):
+        for query, expect_ok in (
+            ("?view=public", True),
+            ("?view=known&q=idol&include_public=false", True),
+            ("?view=recent&limit=5", True),
+            ("", True),
+            (f"?view=known&party_id={f.party_id}&character_id={f.character_id}", False),
+        ):
+            with client_factory(f.actor_user_id) as client:
+                preview = client.get(_knowledge_list_preview_url(f, membership) + query)
+            with client_factory(subject_user) as client:
+                direct = client.get(f"/campaigns/{f.campaign_id}/knowledge{query}")
+            assert preview.status_code == direct.status_code, query
+            assert preview.json() == direct.json() or direct.status_code == 404, query
+            if expect_ok:
+                assert preview.status_code == 200, query
+
+
+def test_a_player_preview_with_only_a_character_matches_what_the_player_sees(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    """The selected character alone is the player's perspective (its eligible
+    party's knowledge included), so the preview — list and claim — must show
+    exactly that, and a leftover party with no character stays public-only."""
+    item_id = str(f.knowledge_item_id)
+    belief = "Everyone says it's cursed, but I've heard it grants wishes."
+    for query, item_expected in (
+        (f"?character_id={f.character_id}", True),
+        (f"?view=party_shared&character_id={f.character_id}", True),
+        (f"?party_id={f.party_id}", False),
+        ("", False),
+    ):
+        with client_factory(f.actor_user_id) as client:
+            preview = client.get(_knowledge_list_preview_url(f, f.player_membership_id) + query)
+            preview_claim = client.get(_knowledge_preview_url(f, f.player_membership_id) + query)
+        with client_factory(f.player_user_id) as client:
+            direct = client.get(f"/campaigns/{f.campaign_id}/knowledge{query}")
+            direct_claim = client.get(f"/campaigns/{f.campaign_id}/knowledge/{item_id}{query}")
+        assert preview.status_code == direct.status_code == 200, query
+        assert preview.json() == direct.json(), query
+        assert preview_claim.status_code == direct_claim.status_code, query
+        assert preview_claim.json() == direct_claim.json() or direct_claim.status_code == 404
+        rows = [i for i in direct.json()["items"] if i["knowledge_item_id"] == item_id]
+        if item_expected:
+            assert [r["statement"] for r in rows] == [belief], query
+            assert direct_claim.status_code == 200
+            assert direct_claim.json()["statement"] == belief
+        else:
+            assert rows == [], query
+            assert direct_claim.status_code == 404
+
+
+def test_a_player_preview_claim_reports_the_same_character_knowledge_path_as_the_player(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    query = f"?character_id={f.character_id}"
+    with client_factory(f.actor_user_id) as client:
+        preview = client.get(_knowledge_preview_url(f, f.player_membership_id) + query)
+    with client_factory(f.player_user_id) as client:
+        direct = client.get(f"/campaigns/{f.campaign_id}/knowledge/{f.knowledge_item_id}{query}")
+    assert preview.status_code == direct.status_code == 200
+    assert preview.json() == direct.json()
+    body = direct.json()
+    assert body["scope"] == "party"
+    assert body["character_knowledge"] == {
+        "path": "party",
+        "awareness_level": "aware",
+        "confidence": 60,
+        "willing_to_share": True,
+    }
+
+
+def test_the_collection_preview_shows_the_subjects_audience_not_the_actors(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    item_id = str(f.knowledge_item_id)
+    with client_factory(f.actor_user_id) as client:
+        player = client.get(_knowledge_list_preview_url(f, f.player_membership_id)).json()
+        gm = client.get(_knowledge_list_preview_url(f, f.gm_membership_id)).json()
+    # The GM subject holds ground truth for unpublished and party-only claims; the player does
+    # not, and the actor's own (access.manage) view changes neither.
+    assert item_id in {i["knowledge_item_id"] for i in gm["items"]}
+    assert item_id not in {i["knowledge_item_id"] for i in player["items"]}
+    assert all(i["canon_status"] is None for i in player["items"])
+
+
+@pytest.mark.parametrize(
+    "who",
+    ["other_campaign_membership_id", "departed_membership_id", "disabled_membership_id"],
+)
+def test_the_collection_preview_refuses_an_unresolvable_subject_with_a_404(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, who: str
+) -> None:
+    with client_factory(f.actor_user_id) as client:
+        response = client.get(_knowledge_list_preview_url(f, getattr(f, who)))
+        unknown = client.get(_knowledge_list_preview_url(f, uuid.uuid4()))
+    assert response.status_code == unknown.status_code == 404
+    assert response.json()["error"] == {
+        **unknown.json()["error"],
+        "correlation_id": response.json()["error"]["correlation_id"],
+    }
+
+
+def test_the_collection_preview_needs_access_manage(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.capless_user_id) as client:
+        assert client.get(_knowledge_list_preview_url(f, f.player_membership_id)).status_code == 403
+    with client_factory(f.outsider_user_id) as client:
+        assert client.get(_knowledge_list_preview_url(f, f.player_membership_id)).status_code == 404
+    # A player cannot preview another member, or themselves, through it either.
+    with client_factory(f.player_user_id) as client:
+        assert client.get(_knowledge_list_preview_url(f, f.gm_membership_id)).status_code == 403
+
+
+def test_the_collection_preview_reads_perspectives_against_the_subject(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    query = f"?view=known&character_id={uuid.uuid4()}"
+    with client_factory(f.actor_user_id) as client:
+        preview = client.get(_knowledge_list_preview_url(f, f.player_membership_id) + query)
+    with client_factory(f.player_user_id) as client:
+        direct = client.get(f"/campaigns/{f.campaign_id}/knowledge{query}")
+    assert preview.status_code == direct.status_code
+    assert preview.json() == direct.json()
+
+
+def test_a_collection_preview_is_audited_without_the_response_or_perspective_ids(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with client_factory(f.actor_user_id) as client:
+        ok = client.get(
+            _knowledge_list_preview_url(f, f.player_membership_id)
+            + f"?party_id={f.party_id}&character_id={f.character_id}"
+        )
+        refused = client.get(_knowledge_list_preview_url(f, f.departed_membership_id))
+    assert ok.status_code == 200 and refused.status_code == 404
+    rows = _preview_audit_rows(
+        postgres_engine, actor_user_id=f.actor_user_id, command_name="preview_knowledge"
+    )
+    assert [r["changed_fields"]["outcome"] for r in rows] == ["shown", "refused"]
+    assert all(r["changed_fields"]["scope"] == "collection" for r in rows)
+    assert rows[0]["changed_fields"]["party_perspective_supplied"] is True
+    assert rows[0]["record_id"] is None
+    stored = str(rows)
+    assert "idol" not in stored and str(f.party_id) not in stored
+
+
+@pytest.mark.parametrize("method", ["post", "put", "patch", "delete"])
+def test_the_collection_preview_accepts_only_get(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, method: str
+) -> None:
+    with client_factory(f.actor_user_id) as client:
+        response = getattr(client, method)(_knowledge_list_preview_url(f, f.gm_membership_id))
+    assert response.status_code == 405
+
+
+# ---------------------------------------------------------------------------
+# The subject's Knowledge perspectives
+# ---------------------------------------------------------------------------
+
+
+def _activate_campaign(engine: Engine, f: Fixture) -> None:
+    """The fixture's campaigns are pending; a session bootstrap lists only active ones."""
+    with engine.begin() as connection:
+        connection.execute(
+            text("""
+                UPDATE campaign.campaigns SET lifecycle_status_id = (
+                    SELECT lifecycle_status_id FROM core.lifecycle_statuses WHERE code = 'active'
+                ) WHERE campaign_id = :c
+            """),
+            {"c": f.campaign_id},
+        )
+
+
+def _perspectives_url(f: Fixture, membership_id: uuid.UUID) -> str:
+    return f"/campaigns/{f.campaign_id}/members/{membership_id}/preview/knowledge/perspectives"
+
+
+def test_the_perspectives_are_the_subjects_own_bootstrap_perspectives(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    _activate_campaign(postgres_engine, f)
+    with client_factory(f.actor_user_id) as client:
+        preview = client.get(_perspectives_url(f, f.player_membership_id))
+    with client_factory(f.player_user_id) as client:
+        own = client.get("/auth/session")
+    assert preview.status_code == 200, preview.text
+    body = preview.json()
+    assert body["display_name"] == "Preview Player Subject"
+    if own.status_code == 200:
+        [campaign] = [c for c in own.json()["campaigns"] if c["campaign_id"] == str(f.campaign_id)]
+        assert body["character_perspectives"] == campaign["character_perspectives"]
+        assert body["roles"] == campaign["roles"]
+
+
+@pytest.mark.parametrize(
+    "who",
+    ["other_campaign_membership_id", "departed_membership_id", "disabled_membership_id"],
+)
+def test_the_perspectives_of_an_unresolvable_subject_are_a_404(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, who: str
+) -> None:
+    with client_factory(f.actor_user_id) as client:
+        assert client.get(_perspectives_url(f, getattr(f, who))).status_code == 404
+        assert client.get(_perspectives_url(f, uuid.uuid4())).status_code == 404
+
+
+def test_the_perspectives_need_access_manage_and_the_fixed_segment_is_not_an_item_id(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    _activate_campaign(postgres_engine, f)
+    with client_factory(f.capless_user_id) as client:
+        assert client.get(_perspectives_url(f, f.player_membership_id)).status_code == 403
+    with client_factory(f.player_user_id) as client:
+        assert client.get(_perspectives_url(f, f.player_membership_id)).status_code == 403
+    with client_factory(f.actor_user_id) as client:
+        assert client.get(_perspectives_url(f, f.player_membership_id)).status_code == 200
+        # A real item id still previews as an item.
+        assert client.get(_knowledge_preview_url(f, f.gm_membership_id)).status_code == 200
+    rows = _preview_audit_rows(
+        postgres_engine, actor_user_id=f.actor_user_id, command_name="preview_knowledge"
+    )
+    assert any(r["changed_fields"].get("scope") == "perspectives" for r in rows)

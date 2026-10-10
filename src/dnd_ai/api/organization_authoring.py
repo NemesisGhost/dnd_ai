@@ -61,6 +61,7 @@ from ._content_support import (
     clean_note,
     decode_name_cursor,
     reference_options_page,
+    write_receipt,
 )
 from ._shared import timeline_world_id
 from .access import require_campaign_capability
@@ -321,6 +322,9 @@ def create_organization_endpoint(
         access=access,
         correlation_id=correlation_id,
         reason=None,
+        view_loader=lambda: get_organization_authoring(
+            connection, world_id=result.world_id, organization_id=result.entity_id
+        ),
     )
     response = _organization_response(connection, result, changed=True)
     finish_campaign_idempotency(connection, idem, status_code=201, body=response)
@@ -385,6 +389,9 @@ def update_organization_endpoint(
             access=access,
             correlation_id=correlation_id,
             reason=clean_note(body.change_note),
+            view_loader=lambda: get_organization_authoring(
+                connection, world_id=result.world_id, organization_id=result.entity_id
+            ),
         )
     response = _organization_response(connection, result, changed=result.changed)
     finish_campaign_idempotency(connection, idem, status_code=200, body=response)
@@ -394,11 +401,8 @@ def update_organization_endpoint(
 def _organization_response(
     connection: Connection, result: ContentWriteResult, *, changed: bool
 ) -> dict[str, Any]:
-    view = get_organization_authoring(
-        connection, world_id=result.world_id, organization_id=result.entity_id
-    )
-    assert view is not None
-    return _organization_json(view, changed=changed)
+    del connection
+    return write_receipt(result, "organization_id", changed=changed)
 
 
 # --- Religions ---------------------------------------------------------------------------------
@@ -483,6 +487,9 @@ def create_religion_endpoint(
         access=access,
         correlation_id=correlation_id,
         reason=None,
+        view_loader=lambda: get_religion_authoring(
+            connection, world_id=result.world_id, religion_id=result.entity_id
+        ),
     )
     response = _religion_response(connection, result, changed=True)
     finish_campaign_idempotency(connection, idem, status_code=201, body=response)
@@ -540,6 +547,9 @@ def update_religion_endpoint(
             access=access,
             correlation_id=correlation_id,
             reason=clean_note(body.change_note),
+            view_loader=lambda: get_religion_authoring(
+                connection, world_id=result.world_id, religion_id=result.entity_id
+            ),
         )
     response = _religion_response(connection, result, changed=result.changed)
     finish_campaign_idempotency(connection, idem, status_code=200, body=response)
@@ -549,8 +559,5 @@ def update_religion_endpoint(
 def _religion_response(
     connection: Connection, result: ContentWriteResult, *, changed: bool
 ) -> dict[str, Any]:
-    view = get_religion_authoring(
-        connection, world_id=result.world_id, religion_id=result.entity_id
-    )
-    assert view is not None
-    return _religion_json(view, changed=changed)
+    del connection
+    return write_receipt(result, "religion_id", changed=changed)

@@ -77,8 +77,11 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy import Connection
 
+from dnd_ai.commands.item_operations import UNSET
 from dnd_ai.commands.items import _identify_item_impl, _transfer_item_possession_impl
 from dnd_ai.domain.access import AccessContext
+from dnd_ai.domain.session_authoring import SessionTimeRequiredError
+from dnd_ai.queries.campaign_clock import resolve_effective_clock
 
 from .access import require_campaign_capability
 from .audit import record_change_log
@@ -115,7 +118,13 @@ _UPDATED_CHANGE_ACTION = "updated"
 
 
 class TransferItemPossessionRequest(BaseModel):
-    world_time_id: uuid.UUID
+    # Omitted: the campaign clock (Phase 15.3B-1b).
+    world_time_id: uuid.UUID | None = None
+    # The event the caller last saw for this item (`null` when it had no state yet). Omit the key
+    # to skip the check (adapters that predate it).
+    expected_last_event_id: uuid.UUID | None = None
+    # Make the new holder the owner as well.
+    transfer_ownership: bool = False
     holder_entity_id: uuid.UUID | None = None
     container_id: uuid.UUID | None = None
     location_id: uuid.UUID | None = None
@@ -144,6 +153,18 @@ class IdentifyItemResponse(BaseModel):
     event_id: uuid.UUID
     previous_level: str | None
     new_level: str
+
+
+def _time_or_clock(
+    connection: Connection, timeline_id: uuid.UUID, world_time_id: uuid.UUID | None
+) -> uuid.UUID:
+    """The explicit world time, or the campaign clock's when the caller omitted it."""
+    if world_time_id is not None:
+        return world_time_id
+    clock = resolve_effective_clock(connection, timeline_id=timeline_id)
+    if clock is None:
+        raise SessionTimeRequiredError("the campaign clock is not set")
+    return clock.world_time_id
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +209,7 @@ def transfer_item_possession_endpoint(
         connection,
         item_instance_id=item_instance_id,
         timeline_id=access.timeline_id,
-        world_time_id=body.world_time_id,
+        world_time_id=_time_or_clock(connection, access.timeline_id, body.world_time_id),
         holder_entity_id=body.holder_entity_id,
         container_id=body.container_id,
         location_id=body.location_id,
@@ -196,7 +217,14 @@ def transfer_item_possession_endpoint(
         campaign_id=campaign_id,
         session_id=body.session_id,
         event_details=body.event_details,
+        expected_last_event_id=(
+            body.expected_last_event_id
+            if "expected_last_event_id" in body.model_fields_set
+            else UNSET
+        ),
+        transfer_ownership=body.transfer_ownership,
     )
+    assert result.inventory_entry_id is not None
 
     record_change_log(
         connection,
@@ -210,6 +238,7 @@ def transfer_item_possession_endpoint(
         correlation_id=correlation_id,
         command_name=_TRANSFER_COMMAND_NAME,
         event_id=result.event_id,
+        changed_fields=result.changed_fields or None,
     )
 
     response = TransferItemPossessionResponse(

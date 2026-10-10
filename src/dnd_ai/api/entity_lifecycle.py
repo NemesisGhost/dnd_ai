@@ -23,8 +23,9 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import Connection
+from sqlalchemy import Connection, text
 
+from dnd_ai.commands._revisions import REVISION_LIFECYCLE, capture_revision
 from dnd_ai.commands.entity_lifecycle import (
     EntityTransitionResult,
     approve_entity,
@@ -184,6 +185,20 @@ def _audit_transition(
     else:
         action = "status_changed"
         previous, new = result.previous_canon_status, result.canon_status
+    changed_fields: dict[str, object] = dict(result.changed_fields or {})
+    if command_name == "approve_entity" and not result.deleted:
+        # Decision D-25: approving one's own work is allowed and audited. The approver is the
+        # author of the latest revision before this one (the submission or the last edit).
+        latest_author = connection.execute(
+            text("""
+                SELECT created_by_user_id FROM core.entity_revisions
+                WHERE entity_id = :e AND row_version < :v
+                ORDER BY row_version DESC LIMIT 1
+            """),
+            {"e": result.entity_id, "v": result.row_version},
+        ).scalar()
+        if latest_author is not None and latest_author == access.user_id:
+            changed_fields["self_approved"] = True
     record_change_log(
         connection,
         change_action_code=action,
@@ -198,9 +213,24 @@ def _audit_transition(
         event_id=None,
         previous_status=previous,
         new_status=new,
-        changed_fields=result.changed_fields or None,
+        changed_fields=changed_fields or None,
         reason=reason,
     )
+    if not result.deleted:
+        # Canonical revision history (15.2R): the statuses as of this version.
+        capture_revision(
+            connection,
+            entity_id=result.entity_id,
+            world_id=result.world_id,
+            row_version=result.row_version,
+            kind=REVISION_LIFECYCLE,
+            snapshot={
+                "canon_status": result.canon_status,
+                "lifecycle_status": result.lifecycle_status,
+            },
+            actor_user_id=access.user_id,
+            correlation_id=correlation_id,
+        )
 
 
 def _run(

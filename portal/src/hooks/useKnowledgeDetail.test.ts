@@ -196,6 +196,34 @@ describe("useKnowledgeDetail", () => {
         })
     })
 
+    it("refreshes in place, keeping the current item on screen while it reloads", async () => {
+        fetchKnowledgeDetailMock.mockResolvedValueOnce(itemFixture)
+        const { result } = renderHook(() =>
+            useKnowledgeDetail("campaign-a", "knowledge-a", null, null),
+        )
+        await waitFor(() => expect(result.current.state.status).toBe("success"))
+
+        let release: (item: KnowledgeDetail) => void = () => {}
+        fetchKnowledgeDetailMock.mockReturnValueOnce(
+            new Promise<KnowledgeDetail>((resolve) => {
+                release = resolve
+            }),
+        )
+        act(() => {
+            result.current.refresh()
+        })
+        expect(fetchKnowledgeDetailMock).toHaveBeenCalledTimes(2)
+        expect(result.current.state).toEqual({ status: "success", item: itemFixture })
+
+        const updated = { ...itemFixture, statement: "Changed." }
+        await act(async () => {
+            release(updated)
+        })
+        await waitFor(() =>
+            expect(result.current.state).toEqual({ status: "success", item: updated }),
+        )
+    })
+
     it("aborts the request when the hook unmounts", () => {
         fetchKnowledgeDetailMock.mockReturnValue(
             new Promise<KnowledgeDetail>(() => {}),

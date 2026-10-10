@@ -55,16 +55,27 @@ MIGRATIONS_DIR = REPO_ROOT / "database" / "migrations" / "versions"
 # check. `tests/database/test_login_failure_audit_action_migration.py`
 # covers the equivalent idempotency/content guarantee for the `denied` row
 # specifically, against the exact migration that owns it.
+#
+# `("core", "source_types", "source_type_id")` was here until migration 134 (Phase 15.3C-1,
+# decision D-26): it adds the authorable source types `published_reference`,
+# `homebrew_document` and `session_notes` by explicit INSERT, leaving
+# `database/seeds/core.source_types.yaml` as revision 003's frozen input. So
+# `core.source_types` no longer comes entirely from that one file, and
+# `tests/database/test_entity_source_links_migration.py` covers the added rows against the exact
+# migration that owns them.
+#
+# `("security", "world_roles", "world_role_id")` was here until migration 136: it adds
+# `world_viewer` by explicit INSERT, leaving `database/seeds/security.world_roles.yaml` as
+# revision 110's frozen input. `tests/database/test_world_viewer_role_migration.py` covers the
+# added row against the migration that owns it.
 SEEDED_LOOKUPS = [
     ("core", "canon_statuses", "canon_status_id"),
     ("core", "lifecycle_statuses", "lifecycle_status_id"),
-    ("core", "source_types", "source_type_id"),
     ("core", "name_types", "name_type_id"),
     ("core", "world_time_precisions", "world_time_precision_id"),
     ("security", "membership_statuses", "membership_status_id"),
     ("security", "character_relationship_types", "character_relationship_type_id"),
     ("security", "capabilities", "capability_id"),
-    ("security", "world_roles", "world_role_id"),
 ]
 
 

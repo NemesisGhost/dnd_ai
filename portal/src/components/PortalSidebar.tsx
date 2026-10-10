@@ -3,10 +3,13 @@ import type { KeyboardEvent as ReactKeyboardEvent } from "react"
 import { NavLink, useMatch } from "react-router"
 import type { LucideIcon } from "lucide-react"
 import {
+  Backpack,
   BookOpen,
   CalendarDays,
+  ClipboardCheck,
   LayoutList,
   MessageCircleQuestion,
+  Package,
   PanelLeftClose,
   PanelLeftOpen,
   ScrollText,
@@ -19,9 +22,11 @@ import { useSelectCampaign } from "../hooks/useSelectCampaign"
 import { useSidebarCollapsed } from "../hooks/useSidebarCollapsed"
 import type { NavigationDrawerControl } from "../hooks/useNavigationDrawer"
 import { resolveNavigationCampaign } from "../utils/resolveNavigationCampaign"
+import { canCreateWorlds } from "../utils/worldAccess"
 import { AccessNavGroup } from "./AccessNavGroup"
 import { CampaignHomeNavGroup } from "./CampaignHomeNavGroup"
 import { DisabledNavItem } from "./DisabledNavItem"
+import { KnowledgeNavGroup } from "./KnowledgeNavGroup"
 import { SELECT_CAMPAIGN_FIRST } from "./navigationReasons"
 import { WorldsNavGroup } from "./WorldsNavGroup"
 
@@ -29,6 +34,8 @@ interface NavigationItem {
   path: string
   label: string
   icon: LucideIcon
+  // Shown only on a campaign that grants this capability.
+  capability?: string
 }
 
 // Campaign Home is rendered by CampaignHomeNavGroup; the campaign world page
@@ -38,6 +45,24 @@ const campaignNavigationItems: NavigationItem[] = [
   { path: "quests", label: "Quests", icon: ScrollText },
   { path: "sessions", label: "Sessions", icon: CalendarDays },
   { path: "knowledge", label: "Knowledge", icon: BookOpen },
+  {
+    path: "review",
+    label: "Review",
+    icon: ClipboardCheck,
+    capability: "canon.edit",
+  },
+  {
+    path: "items",
+    label: "Items",
+    icon: Package,
+    capability: "canon.edit",
+  },
+  {
+    path: "item-definitions",
+    label: "Item definitions",
+    icon: Backpack,
+    capability: "canon.edit",
+  },
 ]
 
 const NAVIGATION_LIST_ID = "main-navigation-list"
@@ -71,7 +96,8 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
   // World and timeline context come from the route-derived hierarchy, which
   // confirms them against server data (WorkspaceHierarchyProvider) — never a
   // raw route ID.
-  const { authoringWorldId, authoringTimelineId } = useWorkspaceHierarchy()
+  const { authoringWorldId, authoringTimelineId, authoringWorldAccess } =
+    useWorkspaceHierarchy()
   const navigationRef = useRef<HTMLElement>(null)
   const { open: drawerOpen, closeAndFocusToggle, close } = drawer
 
@@ -218,21 +244,45 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
               />
 
               <WorldsNavGroup
-                activeWorldId={authoringWorldId}
+                activeWorldId={
+                  authoringWorldAccess === "none" ? null : authoringWorldId
+                }
                 activeTimelineId={authoringTimelineId}
+                canAuthorWorld={authoringWorldAccess === "edit"}
                 campaignWorldPath={
                   campaignPath === null ? null : `${campaignPath}/world`
                 }
-                canCreateWorld={
-                  bootstrap.global_capabilities?.includes("world.create") ===
-                  true
-                }
+                canCreateWorld={canCreateWorlds(bootstrap)}
                 collapsed={collapsed}
                 onNavigate={close}
               />
 
-              {campaignNavigationItems.map((item) => {
+              {campaignNavigationItems
+                .filter(
+                  (item) =>
+                    item.capability === undefined ||
+                    resolvedCampaign?.capabilities.includes(item.capability) ===
+                      true,
+                )
+                .map((item) => {
                 const Icon = item.icon
+                // Knowledge expands into Claims and Member preview for anyone who can
+                // preview a member; everyone else keeps the plain link below.
+                if (
+                  item.path === "knowledge" &&
+                  campaignPath !== null &&
+                  resolvedCampaign?.capabilities.includes("access.manage") ===
+                    true
+                ) {
+                  return (
+                    <KnowledgeNavGroup
+                      key={item.path}
+                      campaignPath={campaignPath}
+                      collapsed={collapsed}
+                      onNavigate={close}
+                    />
+                  )
+                }
                 return (
                   <li key={item.path}>
                     {campaignPath === null ? (

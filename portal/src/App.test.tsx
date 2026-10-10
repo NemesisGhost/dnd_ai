@@ -6,7 +6,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react"
-import { MemoryRouter } from "react-router"
+import { RouterProvider, createMemoryRouter } from "react-router"
 import {
   beforeEach,
   describe,
@@ -293,6 +293,7 @@ beforeEach(() => {
       session: campaignSessionDetail,
     },
     retry: vi.fn(),
+    refresh: vi.fn(() => Promise.resolve(true)),
   })
 
   useCampaignQuestsMock.mockReset()
@@ -346,16 +347,24 @@ beforeEach(() => {
   })
 })
 
+// A data router, because pages with unsaved-changes protection use useBlocker.
 function renderAppAt(path: string) {
-  return render(
-    <MemoryRouter initialEntries={[path]}>
-      <ThemeProvider>
-        <RouteSessionProvider>
-          <App />
-        </RouteSessionProvider>
-      </ThemeProvider>
-    </MemoryRouter>,
+  const router = createMemoryRouter(
+    [
+      {
+        path: "*",
+        element: (
+          <ThemeProvider>
+            <RouteSessionProvider>
+              <App />
+            </RouteSessionProvider>
+          </ThemeProvider>
+        ),
+      },
+    ],
+    { initialEntries: [path] },
   )
+  return render(<RouterProvider router={router} />)
 }
 
 describe("portal routing", () => {
@@ -668,6 +677,8 @@ describe("portal routing", () => {
     ).toHaveBeenCalledWith(
       "mundivita",
       "character-ixamarra",
+      // The character's only authorized party, sent with its character.
+      "party-primary",
     )
 
     expect(
@@ -683,7 +694,7 @@ describe("portal routing", () => {
       }),
     ).toHaveAttribute(
       "href",
-      "/app/mundivita/quests/quest-detail",
+      "/app/mundivita/quests/quest-detail?character_id=character-ixamarra&party_id=party-primary",
     )
   })
 
@@ -698,6 +709,7 @@ describe("portal routing", () => {
       "mundivita",
       "quest-detail",
       "character-ixamarra",
+      "party-primary",
     )
 
     expect(
@@ -805,10 +817,10 @@ describe("portal routing", () => {
     ).toBeInTheDocument()
 
     expect(
-      screen.getByText(
-        "The party entered the dormant facility.",
-      ),
-    ).toBeInTheDocument()
+      screen.getByLabelText("Summary"),
+    ).toHaveValue(
+      "The party entered the dormant facility.",
+    )
 
     expect(
       screen.getByRole("link", {
@@ -955,7 +967,7 @@ describe("portal routing", () => {
 
     expect(
       screen.getByRole("heading", {
-        name: "World",
+        name: "Campaign World",
         level: 1,
       }),
     ).toBeInTheDocument()
@@ -968,11 +980,16 @@ describe("portal routing", () => {
   it("routes Knowledge through the authorized Knowledge boundary", () => {
     renderAppAt("/app/mundivita/knowledge")
 
+    // This person can manage access, so Knowledge expands into Claims and Member preview.
     expect(
-      screen.getByRole("link", {
-        name: "Knowledge",
-      }),
+      screen.getByRole("button", { name: "Knowledge" }),
+    ).toHaveAttribute("aria-expanded", "true")
+    expect(
+      screen.getByRole("link", { name: "Claims" }),
     ).toHaveAttribute("aria-current", "page")
+    expect(
+      screen.getByRole("link", { name: "Member preview" }),
+    ).not.toHaveAttribute("aria-current")
 
     expect(
       useKnowledgeItemsMock,
@@ -984,6 +1001,7 @@ describe("portal routing", () => {
       "",
       null,
       null,
+      true,
     )
 
     expect(
@@ -1046,8 +1064,14 @@ describe("portal routing", () => {
     )
 
     expect(
-      screen.getByRole("link", { name: "Back to Knowledge" }),
-    ).toHaveAttribute("href", "/app/mundivita/knowledge")
+      within(screen.getByRole("navigation", { name: "Breadcrumb" })).getByRole(
+        "link",
+        { name: "Knowledge" },
+      ),
+    ).toHaveAttribute(
+      "href",
+      "/app/mundivita/knowledge?character_id=character-ixamarra",
+    )
   })
 
   it("does not disclose campaign chrome for an unknown campaign's World detail route", () => {

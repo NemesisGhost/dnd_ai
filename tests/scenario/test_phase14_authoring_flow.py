@@ -61,11 +61,13 @@ def _search_names(actor: Actor, campaign_id: str, **flags: str) -> set[str]:
 def test_a_gm_can_author_a_world_a_campaign_a_branch_and_canon_through_the_portal_api(
     harness: AuthoringHarness, db_connection: Connection
 ) -> None:
-    gm = harness.new_actor("GM")
+    gm = harness.new_actor("GM", world_creator=True)
     stranger = harness.new_actor("Stranger")
 
-    # 1. The session says this human may create worlds (server-computed).
+    # 1. The session says this human may create worlds (server-computed), and
+    #    that an ordinary user may not.
     assert _ok(gm.get("/auth/session"))["global_capabilities"] == ["world.create"]
+    assert _ok(stranger.get("/auth/session"))["global_capabilities"] == []
 
     # 2. Rulesets come from the server.
     ruleset = next(r for r in _ok(gm.get("/rulesets"))["items"] if r["code"] == "dnd5e")

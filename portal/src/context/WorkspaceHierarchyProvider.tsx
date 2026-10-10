@@ -4,6 +4,7 @@ import { useLocation, useMatch } from "react-router"
 import { worldPath } from "../api/worlds"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import type { WorldDetail } from "../types/worldAuthoring"
+import { worldAccess } from "../utils/worldAccess"
 import { useSession } from "./SessionContext"
 import { WorkspaceHierarchyContext } from "./WorkspaceHierarchyContext"
 import type { WorkspaceHierarchy } from "./WorkspaceHierarchyContext"
@@ -102,12 +103,17 @@ export function WorkspaceHierarchyProvider({ children }: { children: ReactNode }
         if (!campaignRoute) {
             activeTimelineId = authoringTimelineId
         }
+        const authoringWorldAccess =
+            worldState.kind === "ready" && authoringWorldId !== null
+                ? worldAccess(worldState.data)
+                : null
 
         return {
             activeWorldId,
             activeTimelineId,
             authoringWorldId,
             authoringTimelineId,
+            authoringWorldAccess,
             world: requestedWorldId === null ? null : worldState,
             refetchWorld: refetch,
         }

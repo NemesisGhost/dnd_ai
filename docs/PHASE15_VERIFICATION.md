@@ -1,6 +1,8 @@
 # Phase 15.1 Verification
 
-Evidence for Phase 15.1 (GM world-content definitions) on branch `phase15/gm-authoring`, recorded against [PLAN.md Phase 15](PLAN.md) and [ADR 0015](adr/0015-typed-world-content-authoring.md). **Status: implementation complete; automated gates green; manual browser and accessibility verification NOT performed** (see below). Phase 15.2 (campaign operations) is a separate later branch and is not claimed here.
+Evidence for Phase 15.1 (GM world-content definitions) on branch `phase15/gm-authoring`, recorded against [PLAN.md Phase 15](PLAN.md) and [ADR 0015](adr/0015-typed-world-content-authoring.md). **Status: implementation complete and merged (PR #65, `60d5bc9`); automated gates green; manual browser and accessibility verification NOT performed** (see below). Phase 15.1 is a **subset** of Phase 15: **Phase 15 as a whole is incomplete**, and the remaining campaign-operations and world-structure work is the checkpoint sequence in [PLAN.md Phase 15](PLAN.md). Phase 16 is blocked by the Phase 15 completion gate.
+
+**Disclosed limitations (2026-10-05):** audit rows written by the 15.1 commands *before checkpoint 15.2A-3* copy up to 1,000 characters of narrative per field into `audit.change_log.changed_fields`, and the 15.1 authoring routes stored the full authoring view, including GM-only notes and background, in idempotency replay rows. **New writes no longer do either (15.2A-3, resolved).** Existing rows were scrubbed by checkpoint 15.2A-4 (migration 135, owner decision recorded in the working session); only backups taken before it still hold the old content. Audience-preview reads are audited as of 15.2A-3.
 
 ## What was delivered
 
@@ -56,3 +58,629 @@ Sessions, events and corrections, world-time authoring, timeline state, quest ac
 ## Commits
 
 Merge base with `main`: `3046714`. Branch commits, oldest first: `db6b501` docs/ADR 0015, `03bd97d` no-store, `6eb917b` state-command guards, `e62166e` Location backend, `e1c622a` Location portal, `c4af6e8` migration 113, `1711426` Organization/Religion backend, `7583741` Organization/Religion portal, `8649edd` NPC backend, `a024b2c` NPC portal, `8f62ded` Quest backend, `79a125d` Quest portal, `241aaaa` Knowledge, `fa8261c` cross-record isolation, `cb816a4` dev data, `5f04460` scenario.
+
+## Checkpoint 15.2A-1 — production relationship-capability defaults
+
+Branch `phase15/2a1-relationship-defaults` (stacked on the 15.2-0 documentation branch; no code overlap). **Status: implemented; automated gates below green locally; CI on the pushed head not observed; manual Compose walkthrough not performed.**
+
+| Area | Delivered |
+|---|---|
+| Migration | `114_relationship_defaults`: seeds the approved matrix as production reference data and reconciles the seven built-in types on upgrade (adds missing pairs, deletes pairs outside the matrix, lists removals in a NOTICE and one `audit.change_log` maintenance row with `actor_service = 'migration'`; custom-type rows left in place). The matrix is a literal in the migration (frozen-seed rule), not a YAML file. Downgrade deletes exactly the matrix pairs and does not restore removed extras. |
+| Resolver | `domain/access.py`: `BUILTIN_RELATIONSHIP_CAPABILITIES`, `ADMITTED_RELATIONSHIP_TYPES`, `relationship_capability_permitted`. A relationship-derived capability is effective only with a database row **and** code-matrix permission **and** an active type. The effective-access panel applies the same conjunction. Role capabilities and resource grants are untouched. |
+| Bootstrap | A character is a selectable perspective only when the user holds `character.view_knowledge` for it (owner, primary_controller, co_controller, portrayer). Previously any relationship-derived capability listed the character. |
+| Dev data | `setup_phase13c_dev_data.py` no longer seeds the mapping; it exits with a clear message if the table is empty. Script guard forbids inserts into the mapping table with no marker exception. |
+| Tests | `tests/database/test_relationship_capability_defaults.py` (35): clean-install matrix, migration/code matrix agreement, idempotent insert, per-type resolver results, former_controller/custom/inactive/stray-row denial, bootstrap perspective selection per type and revocation on the next call, and a throwaway-database upgrade over dev-style rows with reconciliation, audit row, custom row kept, downgrade, re-upgrade, and `alembic check`. Existing tests updated: bootstrap perspective tests, `test_api_access_grants` (owner type), vertical-slice scenario (`player2` is a `viewer` so the direct grant is their only source). |
+
+Test seams (tests only): an autouse fixture relaxes the code-matrix check for the many legacy access tests that build arbitrary custom relationship types (opt out with `@pytest.mark.real_relationship_policy`), and an autouse guard restores the built-in matrix after each database test because 30 existing cleanups delete mapping pairs by (type, capability) and would otherwise remove seeded production rows from the shared session database. `make_relationship_type_capability` is now `ON CONFLICT DO NOTHING`.
+
+### Commands run (local PostgreSQL 18)
+
+| Check | Result |
+|---|---|
+| `uv run ruff format --check .` / `ruff check .` / `mypy src` | clean (170 source files) |
+| `uv run pytest tests/unit tests/database tests/scenario` | 5838 tests: 5837 passed, 1 failed (below) |
+| Migration round trip on a throwaway database (in the new test file): `upgrade 113` → seed dev-style rows → `upgrade 114` → `downgrade 113` → `upgrade head` → `alembic check` | all passed, no drift |
+
+Explained non-pass: `tests/unit/test_config.py::test_local_session_allowed_origins_defaults_to_dev_topology_outside_production` fails because the developer `.env` adds an extra origin (environment-only, identical on the baseline).
+
+### Not verified
+
+- CI on the pushed head; portal `npm test`/lint/build (no portal code changed); the manual Compose walkthrough (migrate → invite → grant `owner` → select perspective) from the plan.
+- Existing developer databases: running the migration over one removes the old `owner` → `edit_*`/`control`/`interact`/`discover` extras that the dev script created; the removed pairs are in the migration NOTICE and the maintenance audit row.
+
+## Checkpoint 15.2A-2 — reporting-role (`app_read_only`) boundary
+
+Commit on `phase15/completion`. **Status: implemented; local automated gates green; CI and manual checks not observed.** Decision D-5 (owner decision, plan recommendation option a, deny by default) was applied as recommended.
+
+| Area | Delivered |
+|---|---|
+| Migration | `115_reporting_role_boundary`: revokes `SELECT` on all tables in the 13 application schemas from `app_read_only`, revokes the default privilege for future tables created by `migration_owner`, then grants `SELECT` only on an allowlist of 31 lookup tables plus 17 seeded `rules.*` reference tables (`REPORTING_READABLE_TABLES`). Excluded on purpose: `rules.item_definitions` (gains world-owned homebrew in a later checkpoint) and `rules.world_rulesets`. Sequences unchanged. Downgrade restores revision 001's grants. No row-level security. |
+| Consumer inventory | None at runtime: Compose `api` uses `app_read_write`; `database_recovery.py` only asserts the role exists; Terraform lists it for IAM login; remaining references are docs and grant tests. |
+| Tests | `tests/database/test_reporting_role_boundary.py` (32): 25 named sensitive tables denied (credential/token hashes, session and CSRF storage, idempotency stores, audit log, AI context, GM-only content); every table outside the allowlist denied and every allowlisted table readable; real `SET ROLE app_read_only` reads refused for secrets and allowed for a lookup; a new table created by `migration_owner` in `security`/`core`/`campaign` is denied to `app_read_only` and granted DML to `app_read_write`; runtime role unchanged; throwaway-database upgrade from 114 → 115 → downgrade → head → `alembic check`. `test_role_grants.py` no longer asserts a blanket `app_read_only` `SELECT` (its write-denial test remains). |
+| Docs | DATABASE_CONVENTIONS §27.1/§27.4 (deny-by-default, reporting is not administrator access, reviewed-views contract, no RLS), DATABASE_RECOVERY note that grants restore with the dump. |
+
+### Commands run (local PostgreSQL 18)
+
+| Check | Result |
+|---|---|
+| `uv run ruff format --check .` / `ruff check .` / `mypy src` | clean |
+| `uv run pytest tests/unit tests/database tests/scenario` | 5683 tests: 5682 passed, 1 failed (below) |
+| Round trip on a throwaway database (in the new test file) | passed, no drift |
+
+The test count fell from 5838 to 5683 because the ≈190 parametrized blanket `app_read_only` grant checks were replaced by the targeted boundary tests above. Explained non-pass: `tests/unit/test_config.py::test_local_session_allowed_origins_defaults_to_dev_topology_outside_production` (developer `.env` adds an origin; environment-only).
+
+### Not verified
+
+CI on the pushed head; the recovery script `verify` against a live restore (it only asserts the role exists and is unchanged by this migration).
+
+## Checkpoint 15.2A-3 — stop narrative leakage; audited, closed preview
+
+Commit on `phase15/completion`. **Status: implemented; local automated gates green; CI and manual checks not observed.** Owner decisions D-3, D-4, and D-27 were applied as the plan recommended (GM-only fields hidden from non-editors; `sensitive_read` action in `audit.change_log`; receipts-only responses and replay bodies).
+
+| Area | Delivered |
+|---|---|
+| Classification | `domain/data_classification.py`: `DataClass`, `COLUMN_CLASSES` (every TEXT/JSONB column of the authored and state tables; lookup/reference tables exempt), default-deny audit builders (`audit_change`/`audit_initial`/`audit_diff`; only `AUDIT_STRUCTURAL_FIELDS` keep values, everything else records `{"redacted": true}`), and `content_receipt`. `PLAYER_PRIVATE` is reserved and unused. |
+| Audit | 15.1 commands now write redacted diffs; world, timeline, and campaign `description` diffs are redacted too. `reason` (the GM change note) is kept, GM-only. |
+| Replay storage | Every 15.1 create/update/structural route (locations, organizations, religions, NPCs, knowledge, quests incl. stages/objectives) stores and returns a receipt: ids, `row_version`, `created`, `changed` (+ `record_id` for a quest child). Lifecycle routes already stored receipt-shaped bodies. |
+| Preview | `api/preview.py`: closed `PREVIEW_ADAPTERS` registry (`quests`, `knowledge`; read-only, fixed GET routes, no dispatch parameter, ceilings exclude `PLAYER_PRIVATE`/`SECRET`). Every request that passes the actor's `access.manage` writes one metadata-only `sensitive_read` row (actor, world, resource kind/id, subject membership id, `shown`/`refused`, perspective-supplied booleans, correlation id); refusals are committed before the identical 404, including refusals raised by the resolver. Preview rows are not in the audit-history allowlist. |
+| Migration | `116_sensitive_read_action`: seeds the `sensitive_read` action; conditional downgrade (refuses once referencing audit rows exist), like revision 103. |
+| Projection (D-3) | `item_instances.origin_notes`, `campaign.location_state.condition_notes`, and `narrative.events.details` (world-explorer event detail and session detail) are returned only to callers holding `canon.edit`. |
+| Portal | Write functions and `ContentCreate/EditPage`/`QuestEditor` types take receipts; the create flow navigates by the receipt id, edit/quest flows already refetched. |
+| Tests | New: `test_data_classification.py`, `test_preview_registry.py`, `test_data_classification_schema.py` (live-schema introspection), `test_private_data_not_stored.py` (sentinel proof across every route family incl. replay and conflict), `test_sensitive_read_action_migration.py`, preview audit tests, D-3 projection test. Harness: `Actor.post` follows a receipt with the authoritative GET (`post_raw` returns the raw receipt); existing audit assertions updated to the redacted contract. |
+
+### Commands run (local PostgreSQL 18)
+
+| Check | Result |
+|---|---|
+| `uv run ruff format --check .` / `ruff check .` / `mypy src` | clean |
+| `uv run pytest tests/unit tests/database tests/scenario` | one full run: 5719 tests, 5717 passed, 2 failed; the one real failure (`test_seeded_change_actions_cover_the_lifecycle`, which pins the action list) was fixed, and that file plus the new migration test were re-run green on their own (the full suite was not repeated after that one-line fix); the other failure is the known developer-`.env` origins test |
+| Portal `npm test` / `npm run lint` / `npm run build` | 268 files, 1950 tests passed / clean / build OK |
+
+### Not verified
+
+CI on the pushed head; manual browser checks. Idempotency rows written before this checkpoint still hold full views until checkpoint 15.2A-4. Decision recorded: world/timeline/campaign replay bodies (public or campaign-visible descriptions) were not changed.
+
+## Checkpoint 15.2A-5 — private-data policy foundation (Phase 16 prerequisite)
+
+Commit on `phase15/completion`. **Status: implemented; focused tests green.** Decision D-6 applied as proposed.
+
+- ADR 0016 (`docs/adr/0016-data-classification-and-private-data-handling.md`): the data classes, the handling matrix, retention/deletion/export/backup/log defaults, the host-administrator statement, and the Phase 16 obligations (classification, receipt-only mutations, no reporting grant, no preview adapter without a new decision). The existing-row scrub (D-2/D-28) is decided separately at 15.2A-4 and recorded as an addendum.
+- SYSTEM_ARCHITECTURE §19: what telemetry may contain.
+- `tests/unit/test_privacy_guards.py` (4): no column is `PLAYER_PRIVATE`/`SECRET`; any future private field would be redacted by every audit builder; no preview adapter can expose private data; a rejected request body is neither echoed nor logged.
+- Checks run: `uv run pytest tests/unit/test_privacy_guards.py` (4 passed); ruff clean. The full suite was not re-run (no production behaviour changed in this checkpoint).
+
+## Checkpoint 15.2R — canonical revision capture
+
+Commit on `phase15/completion`. **Status: implemented; focused tests green; full suite run below.** Decision D-24 (option a: full GM-only snapshots, no diffs) applied as recommended.
+
+- Migration `117_entity_revisions`: `core.entity_revisions` (`UNIQUE (entity_id, row_version)`, kind check, JSON-object check, append-only trigger on `UPDATE`, same-world trigger, `UPDATE`/`DELETE`/`TRUNCATE` revoked from the application roles, no access for `app_read_only`, `ON DELETE CASCADE` from the entity so deleting a draft removes its revisions). Matching SQLAlchemy metadata (`persistence/tables/core.py`) so `alembic check` is clean.
+- `commands/_revisions.py`: `snapshot_from_view` (JSON-safe authored record, minus server-computed presentation fields) and `capture_revision`. `audit_content_write` takes a `view_loader` and captures one revision per real create/update (a quest stage/objective change is an *update* of the quest aggregate); every typed route (locations, organizations, religions, NPCs, knowledge, quests) passes its authoring view loader; lifecycle transitions capture a status-only revision. No-ops, replays, stale writes, and refusals capture nothing.
+- Revision capture never reads audit: the capture module has no audit dependency and a test pins it. Audit redaction (15.2A-3) deployed before this checkpoint.
+- Tests: `tests/database/test_entity_revisions.py` (10): full GM-only snapshot at the entity version, prior version preserved on update, no revision for no-op/replay/stale write, lifecycle revisions, quest child snapshot, append-only update refusal, same-world trigger, grants (app roles cannot update/delete; reporting role cannot read), draft-delete cascade, audit-independence guard, and a throwaway-database migration round trip with `alembic check`.
+- Limitation: history begins here; edits before this checkpoint have no snapshot and nothing is backfilled from audit. No read path or UI until 15.3C-2.
+
+Commands run (local PostgreSQL 18): `ruff format --check`, `ruff check`, `mypy src` clean. Full Python suite once: 5737 tests, 5732 passed, 5 failed — the known `.env` origins test, plus four consequences of adding a table that were then fixed (the expected table lists in `test_persistence_tables_package.py`, the live-schema classification of `core.entity_revisions`, and the entity-FK classification registry, where `entity_revisions.entity_id` is a reviewed owned cascade). Those four test files, plus the new revision tests and the role-grant tests, were re-run green on their own; the full suite was not repeated after those fixes. Portal unchanged by this checkpoint.
+
+## Checkpoint 15.2W-1 — calendars and world-time points
+
+Commit on `phase15/completion`. **Status: implemented; local automated gates below; CI and manual browser/accessibility checks not performed.** Decisions D-11 (calendar dates in minutes from year zero; narrative points server-allocated into gaps) and D-12 (minimal calendar authoring, no editing after use) applied as recommended. No migration (the tables already existed).
+
+| Area | Delivered |
+|---|---|
+| Domain | `domain/world_time.py`: calendar normalization, `calendar_sort_key`, derived precision, `allocate_narrative_sort_key` (strictly between neighbours, `world_time_no_gap` when none fits), display text, error codes `calendar_id_invalid`/`world_time_id_invalid`/`world_time_no_gap`. |
+| Commands | `commands/_operations.py::lock_operation_scope` (the shared start for campaign operations, delegating to `lock_authoring_scope` and adding the campaign's own timeline); `commands/world_time.py`: `create_calendar` (world row `FOR SHARE`, `world.manage` re-resolved under lock) and `create_world_time` (operation scope, calendar `FOR SHARE`, per-world advisory lock for allocation). |
+| API | `GET/POST /worlds/{id}/calendars` (view/manage; actor idempotency), `GET /campaigns/{id}/calendars`, `GET/POST /campaigns/{id}/world-times` (`canon.edit`; keyset-paged latest first; campaign idempotency). Id-only receipts; audit rows hold structural values only (labels and descriptions redacted); human principals only; the world's `available_actions` gain `create_calendar`. |
+| Portal | `/worlds/:worldId/calendars/new`, `/app/:campaignId/world-times`, reusable `WorldTimePicker`/`WorldTimeForm`, "New calendar" on the world page, and a Campaign Home "Game master tools" card (the home for later checkpoints' entry points). |
+| Dev data | `setup_phase13c_dev_data.py` creates its world times through `create_world_time` on a one-month 400-day fixture calendar (every non-negative fixture key is exactly representable, so keys and ordering are unchanged); the guard now covers `core.calendars`, `core.calendar_months`, `core.world_times` (the AI smoke test keeps one marked direct insert). |
+| Tests | Unit policy tests (46 incl. gaps and invariants), 28 API/concurrency tests (receipts, authority per world, foreign ids indistinguishable from missing, CSRF/Origin/Foundry, replay and conflict, redacted audit, paging, narrative placement, closed gap, archived campaign; a real-PostgreSQL race where two placements into one gap serialize and stay ordered), 22 portal tests (validation util, calendar page, world-times page), and the first steps of `tests/scenario/test_phase15_completion_flow.py`. |
+
+Commands run (local PostgreSQL 18): ruff format/check and mypy clean; portal `npm test` (271 files, 1972 tests) / `npm run lint` / `npm run build` clean; the focused Python suites above and the dev-data tests (`test_setup_phase13c_dev_data.py`, `test_setup_phase15_world_content.py`) green. Full Python suite (once, on the final tree of this checkpoint): 5787 tests, 5786 passed, 1 failed (the known developer-`.env` origins test).
+
+Not verified: CI; manual browser/accessibility (keyboard operation of the picker and calendar form, narrow width); the dev-data script against a pre-existing developer database (the label lookup tolerates the trailing space older fixture rows kept, but this was exercised only on throwaway databases).
+
+## Checkpoint 15.2W-2 — campaign clock
+
+Commit on `phase15/completion`. **Status: implemented; local automated gates below; CI and manual browser/accessibility checks not performed.** Decision D-10 (typed state `campaign.timeline_clocks`, branch-aware read) applied as recommended.
+
+| Area | Delivered |
+|---|---|
+| Migration | `118_campaign_clock`: `campaign.timeline_clocks (timeline_id PK, current_world_time_id, last_event_id, row_version, …)` with `core.set_updated_at`, `core.bump_row_version`, the shared same-timeline event guard, and a world-agreement trigger; event types `time_advanced` and `time_corrected`. Metadata, table lists, and grants tests updated. |
+| Domain / queries | `domain/campaign_clock.py` (errors `clock_not_advanced`, `clock_not_set`, `clock_unchanged`); `queries/campaign_clock.py::resolve_effective_clock`: the timeline's own row, else its parent's effective clock bounded by the branch point, else the branch point itself. |
+| Commands | `advance_campaign_clock` (strictly later than the effective value; first write on a timeline creates its own row at `expected_row_version` 0) and `correct_campaign_clock` (own clock only; cites the event it corrects, which must still be the clock's last event; any different time). Each writes one event, one `current_world_time_id` effect, and the clock row atomically. A concurrent first write is classified as a stale write (`ON CONFLICT DO NOTHING`). Lock order recorded in SYSTEM_ARCHITECTURE §7.1 (operations section). |
+| API | `GET /campaigns/{id}/clock` (`campaign.view`), `POST …/clock/advance` and `…/clock/correct` (`canon.edit`, campaign idempotency, id-only receipts incl. `event_id`, one audit row citing the event, human principals only). |
+| Portal | `CampaignClockCard` on Campaign Home: current time for every member (branch carry-over labelled); editors advance or correct (confirmation for a correction); messages for a non-later time, an unavailable time, and a stale clock. |
+| Tests | 14 API tests (events, effects, chaining, refusals, stale, replay, correction and its cause, foreign ids, authority/CSRF/Origin/Foundry, archived campaign, branch inheritance, bounding and divergence, DB invariants), 2 real-PostgreSQL races (two advances at one version; two first advances), a migration round trip with `alembic check`, 7 portal tests, and scenario step 9. |
+
+Commands run (local PostgreSQL 18): focused Python suites above green; portal `npm test` (272 files, 1979 tests) / `npm run lint` / `npm run build` clean. Full Python suite on the final tree: 5809 passed, 1 failed (the known developer-`.env` test `test_local_session_allowed_origins_defaults_to_dev_topology_outside_production`), 933 s.
+
+Known behaviours: clock events are ordinary recorded events and so appear in event lists; a later checkpoint (events, 15.2E-1) decides whether system events are filtered from player feeds. Not verified: CI; manual browser/accessibility; keyboard operation of the correction dialog.
+
+## Checkpoint 15.2B-1 — player-character identity and lifecycle
+
+Commit(s) on `phase15/completion`. **Status: implemented; local automated gates below; CI and manual browser/accessibility checks not performed.** Decisions D-7 (PCs join the lifecycle registry; draft then publish; archive refused while a user is linked) and D-8 (`player_user_id` never set or read; authorization only through relationships) applied as recommended. No migration.
+
+| Area | Delivered |
+|---|---|
+| Registry | `player_character` is lifecycle-eligible (so every lifecycle-gated read surface, the state-target guard, and the draft-delete flow cover it); the registry text that deferred PC identity to Phase 16 is corrected; `character.player_characters` is owned (cascade) for an unreferenced draft. |
+| Access | A relationship confers capabilities only for a `canon` and `active` character (a draft PC grants no perspective even with a relationship in place). |
+| Commands | `create_player_character` / `update_player_character` are thin wrappers over the shared `create_character_identity` / `update_character_identity` (the NPC commands are wrappers over the same functions), so lock order, species and origin validation, descriptions, and the audit/revision shape are identical. |
+| API | `/campaigns/{id}/authoring/player-characters` (`GET options`, `POST`, `GET {id}`, `POST {id}/update`); each kind is a 404 at the other kind's route. |
+| Portal | Character kind chooser, PC create page, one edit route for both kinds, edit link and **Link a player** on the World detail (Access opens with the character preselected). |
+| Dev data | `setup_phase13c_dev_data.py` creates its player characters through the command and publishes them (no direct `character.player_characters` insert, `player_user_id` unset); the guard now covers `character.characters`, `character.player_characters` and `character.character_descriptions` (two fixture exceptions are marked). |
+| Tests | 11 API tests (draft PC and unset `player_user_id`, round trip with redacted audit and revisions, route isolation both ways and a bare character, authority, publish waits for origin, archive guard and revoke, draft delete removes identity rows, draft invisible on every character read then visible once published with no GM notes, perspective appears after publish and disappears after revoke/archive under the real policy, replay and conflict, atomic failure), 2 real-PostgreSQL races (archive vs grant, both orders), portal route/control tests. |
+
+Commands run (local PostgreSQL 18): ruff format/check and mypy clean; portal `npm test` (273 files, 1987 tests) / `npm run lint` / `npm run build` clean. Full Python suite: 5831 passed, 1 failed (the known developer-`.env` test `test_local_session_allowed_origins_defaults_to_dev_topology_outside_production`), 1209 s. The tests added after that run started (atomic failure, the corrected replay count, both races, scenario steps 5-6, the dev-data guard) were rerun on their own: 18 passed. One mid-run caveat: a second pytest session ran against the same database during the full suite; no table-count test failed.
+
+Not verified: CI; manual browser/accessibility at 390/1280/2560 px (planned for B-1 and still owed); keyboard operation of the chooser and the preselected Access control; the dev-data script against a pre-existing developer database.
+
+## Checkpoint 15.2B-2 — character builds and bootstrap state
+
+Commit(s) on `phase15/completion`. **Status: implemented; local automated gates below; CI and manual browser/accessibility checks not performed.** Decision D-9 (builds immutable once created; a change is a new build plus an activation event; the first activation is administrative) applied as recommended.
+
+| Area | Delivered |
+|---|---|
+| Migration | `119_character_build_activated`: the `character_build_activated` event type only (no new tables). |
+| Domain / commands | `domain/character_builds.py` (input shapes, bounds, fixed-code errors) and `commands/character_builds.py`: `create_character_build` (build and all children in one transaction; every referenced ability, class, subclass, skill, proficiency type, feature and spell must be canon content of the campaign's pinned ruleset version, a subclass must belong to its class, a proficiency's target must match its type's kind; one non-disclosing `build_option_not_available`), `initialize_character_state` (administrative, once), `activate_character_build` (first activation administrative; later ones record an event and effect with the replaced value). |
+| Resolver | `resolve_effective_character_build_id` now recovers the baseline when an ancestor changed the build by event only after the branch point. |
+| API | `GET /campaigns/{id}/authoring/character-build-options`, `GET|POST …/characters/{id}/builds`, `POST …/builds/{id}/activate`, `POST …/state/initialize`; all `canon.edit`, campaign idempotency, id-only receipts, redacted audit. |
+| Portal | Builds page (state, list, activate with confirmation), new-build form (incl. known and prepared spells), "Builds and starting state" link on a character. |
+| Dev data | `setup_phase13c_dev_data.py` creates builds and starting state through the commands (one `create_character_build` per character, first activation administrative); the per-row insert helpers were removed and the guard now covers the build tables and `campaign.character_state`. Temporary hit points, exhaustion and death saves, which the starting-state command does not take, are still reconciled by a direct administrative update, as before. |
+| Tests | 18 API tests (options, administrative state once, atomic build creation without events, NPC and PC, bare/foreign characters refused, invalid shapes, rules scoping incl. spells, replay, list/state, administrative then event activation with effect, stale and repeat, foreign build, a branch keeping its branch-point build), a migration round trip, a real-PostgreSQL race (two activations from one view), 8 portal tests, and scenario step 5. |
+
+Decisions I made that you may want to review (not owner decisions in the plan): (1) the optimistic token for an activation is `expected_active_build_id` (the build the editor saw as active) rather than the character's `row_version`, because an activation changes timeline state, not the definition, and a definition version bump would add a revision with no content change; (2) an event activation requires the character to be published (a draft cannot take part in an event) and the campaign clock to be set (the event is recorded at the clock's time), each with its own error code; (3) expertise can be sent through the API but the form does not offer it yet.
+
+Not verified: CI; manual browser/accessibility (keyboard operation of the build form, narrow width).
+
+Commands run (local PostgreSQL 18): ruff format/check and mypy clean; portal `npm test` (274 files, 1995 tests) / `npm run lint` / `npm run build` clean. Full Python suite on the final tree, run with no other database session active: 5854 passed, 1 failed (the known developer-`.env` test `test_local_session_allowed_origins_defaults_to_dev_topology_outside_production`), 1077 s. The dev-data tests (`test_setup_phase13c_dev_data.py`, `test_setup_phase15_world_content.py`) are part of that run.
+
+## Checkpoint 15.2C-1 — party definition
+
+Commit(s) on `phase15/completion`. **Status: implemented; local automated gates below; CI and manual browser/accessibility checks not performed.** Decision D-30 (an archived party stays referenced by history, is hidden from pickers, and refuses new membership and knowledge writes) applied as recommended.
+
+| Area | Delivered |
+|---|---|
+| Migration | `120_party_definition`: `campaign.parties` gains `row_version` (bumped by `core.bump_row_version()`), `lifecycle_status_id` (backfilled `active`; a `BEFORE INSERT` trigger defaults it so pre-existing inserts keep working), `archived_at`, `created_by_user_id`, and indexes for the two foreign keys. Metadata, round trip with a populated party, and `alembic check` covered. |
+| Commands | `create_party` (party and campaign attachment in one transaction), `update_party`, `archive_party`, `restore_party`; lock order operation scope then the party row `FOR UPDATE`; a party is reachable only through a campaign it is attached to (any other id is the same non-disclosing 404). |
+| Shared check | `validate_campaign_party(..., require_active=True)` refuses an archived party; the knowledge reveal to a party uses it. Reads (perspective, quest progress) keep resolving an archived party, so history stays intact. Membership writes use it in 15.2C-2. |
+| API | `GET|POST /campaigns/{id}/parties`, `GET …/parties/{id}`, `POST …/update|archive|restore`; list and detail are `campaign.view` (archived parties only for an editor who asks), writes `canon.edit`, campaign idempotency, id-only receipts, redacted audit (name structural, description redacted). |
+| Portal | Parties list (show archived, archive/restore with confirmation), create form, edit form (stale-write handling), link from Game master tools. |
+| Dev data | `setup_phase13c_dev_data.py` creates and attaches its parties through `create_party`; a fixture party that pre-exists but is unattached is attached by a marked direct insert. The guard covers `campaign.parties` and `campaign.campaign_parties` (two throwaway smoke-test inserts are marked). |
+| Tests | 14 API tests (creation and attachment, validation, authority and read access, update/no-op/stale, archive and restore with audit codes, foreign and unattached parties indistinguishable from missing, replay, atomic failure, the shared active check, legacy parties start active), 2 real-PostgreSQL races (two edits; edit versus archive), a populated migration round trip, 7 portal tests. |
+
+Not verified: CI; manual browser/accessibility (list at narrow width, keyboard operation of the archive dialog).
+
+Commands run (local PostgreSQL 18): ruff format/check and mypy clean; portal `npm test` (275 files, 2002 tests) / `npm run lint` / `npm run build` clean. Full Python suite on the final tree, no other database session active: 5872 passed, 1 failed (the known developer-`.env` test `test_local_session_allowed_origins_defaults_to_dev_topology_outside_production`), 1120 s.
+
+## Checkpoint 15.2C-2 — temporal party membership
+
+Commit(s) on `phase15/completion`. **Status: implemented; local automated gates below; CI and manual browser/accessibility checks not performed.** No new owner decision.
+
+| Area | Delivered |
+|---|---|
+| Migration | `121_party_membership_events`: `narrative.event_types` `party_member_joined` and `party_member_left`; `campaign.party_memberships.joined_event_id` and `left_event_id` (nullable, `ON DELETE SET NULL`, partial indexes), a check that a left event needs an end, and a trigger that both events belong to the membership's own timeline. Metadata, round trip and `alembic check` covered. |
+| Commands | `add_party_member` and `end_party_membership`. Each records an event at the membership's own world time (the character is the participant) and a `party_membership` effect (previous to new party id), writes the membership citing the event, and bumps the party version, which is the optimistic token (`expected_party_row_version`). Lock order: operation scope, the party row `FOR UPDATE`, the member entity `FOR SHARE`, the membership rows. The member must be a published, active NPC or player character of the world; the party must be active to add (ending is allowed on an archived party); the overlap is checked under the party lock (`party_membership_overlap`) and a database exclusion violation is classified the same way; a membership ends once and strictly after it began. |
+| API | `GET|POST /campaigns/{id}/parties/{id}/members`, `POST …/members/{id}/end`; all `canon.edit` (membership is not exposed to other members), campaign idempotency, receipts with the event id, redacted audit (reasons are GM-only). |
+| Portal | Party page with current members and history tables, an add form (character search, time picker, reason) and an end-membership dialog; "Members of …" link on the party list. |
+| Dev data | `setup_phase13c_dev_data.py` adds its two fixture members through the command; the guard covers `campaign.party_memberships` (one smoke-test insert is marked). |
+| Tests | 14 API tests (event, effect and version bump with redacted audit; ineligible members; time, version and archived-party checks; overlap and adjacency; end rules and the left event; foreign ids indistinguishable from missing; player authority; replay; atomic failure; a branch starting without rows; the party perspective appearing on join and going on leave under the real policy; database event guards), 4 real-PostgreSQL races (two adds from one version, an overlap that is a conflict not a 500, add versus archive in both orders), a migration round trip, 5 portal tests, and scenario step 7. |
+
+Known behaviours: a branch has no membership rows of its own until something is written there (the existing timeline-scoped model; inheritance up to a branch point is not implemented for memberships and is not claimed). Not verified: CI; manual browser/accessibility (keyboard operation of the tables and dialog).
+
+Commands run (local PostgreSQL 18): ruff format/check and mypy clean; portal `npm test` (276 files, 2007 tests) / `npm run lint` / `npm run build` clean. Full Python suite on the final tree, no other database session active: 5891 passed, 1 failed (the known developer-`.env` test `test_local_session_allowed_origins_defaults_to_dev_topology_outside_production`), 1147 s. An earlier full run of this checkpoint's tree had four failures in `tests/database/test_party_memberships.py`: the new race tests committed membership rows that the shared `_purge_user_worlds` helper (which runs with triggers and foreign keys off) did not delete, and those older tests read the table unscoped. The helper now also removes party memberships, clocks, character state, builds, their children, character subtype rows, and entity revisions; the rerun above is clean.
+
+## Checkpoint 15.2D-1 — session definition and lifecycle
+
+Commit(s) on `phase15/completion`. **Status: implemented; local automated gates below; CI and manual browser/accessibility checks not performed.** Decision D-13 (play status derived from `scheduled_for`, `started_at` and `ended_at`; `lifecycle_status` only for archive) applied as recommended. The at-most-one-in-progress rule belongs to the start command (checkpoint 15.2D-2).
+
+| Area | Delivered |
+|---|---|
+| Migration | `122_session_definition`: `campaign.sessions` gains `row_version` (bumped by `core.bump_row_version()`), `scheduled_for`, `archived_at`, `created_by_user_id` and a partial index. `(campaign_id, session_number)` was already unique. Metadata, a populated round trip and `alembic check` covered. |
+| Domain / commands | `domain/session_authoring.py` (derived play status, fixed-code errors) and `commands/session_authoring.py`: `schedule_session` (number from `max + 1` under a per-campaign advisory lock), `update_session`, `archive_session` (refused while in progress), `restore_session` (reason required). The session row is locked without a join and its status read separately, because a join inside a locking statement is re-evaluated after a wait and can return nothing (found by the edit-versus-archive race test). |
+| Read model / API | The existing list and detail now return `scheduled_for` and the derived `play_status`; editors also get `row_version` and `available_actions`; archived sessions are hidden from, and a 404 for, anyone without `canon.edit`. New `POST /campaigns/{id}/sessions` and `…/{id}/update|archive|restore` (`canon.edit`, campaign idempotency, receipts carrying the number, redacted audit: number and planned start structural, title and summary redacted). |
+| Portal | Session list status and planned-start columns, Schedule and Edit links for editors, a schedule form and an edit form (stale handling, planned start disabled after start) with archive and restore dialogs. |
+| Dev data | The guard now covers `campaign.sessions`. The dev-data fixture still inserts its played sessions (with start and end times) directly, with a marked exception, because only the 15.2D-2 play commands can create played sessions; it is replaced there. |
+| Tests | 15 API tests (consecutive numbers and creator, validation, derived status for all four states, authority, update/no-op/stale, a started session keeps its plan but can be retitled and cannot be archived, archive hides and restore returns with audit codes, foreign ids indistinguishable from missing, replay, atomic failure, numbering after gaps, legacy rows), 3 real-PostgreSQL races (six concurrent schedules get consecutive numbers; two edits; edit versus archive), a populated migration round trip, 12 portal tests, and scenario step 10. |
+
+Not verified: CI; manual browser/accessibility (the datetime-local input, keyboard operation of the dialogs).
+
+Commands run (local PostgreSQL 18): ruff format/check and mypy clean; portal `npm test` (277 files, 2016 tests) / `npm run lint` / `npm run build` clean. Full Python suite on the final tree, no other database session active: 5910 passed, 1 failed (the known developer-`.env` test), 1134 s; a second failure in that run (the dev-script guard, because the marked exception sat three lines above its INSERT instead of within two) was fixed, and the guard test and the dev-data tests were rerun: 51 passed.
+
+## Checkpoint 15.2D-2 — session participation, run, and manual log
+
+Commit(s) on `phase15/completion`. **Status: implemented; local automated gates below; CI and manual browser/accessibility checks not performed.** Decision D-14 (participants are characters only) applied as recommended; the one-in-progress rule of D-13 is enforced here.
+
+| Area | Delivered |
+|---|---|
+| Migration | `123_session_participants`: `campaign.session_participants` (role check, one open row per session and character, a same-world trigger) and `ux_sessions_one_in_progress` (a unique partial index on started-but-not-ended sessions). Metadata, grants and package lists updated; populated round trip with `alembic check`. |
+| Commands | `commands/session_play.py`: `start_session`, `add_session_participant`, `remove_session_participant`, `record_session_log_entry`, `end_session`. Start serializes on a per-campaign advisory lock; end and participant changes serialize on the session row; a log entry takes the row `FOR SHARE`, so it either lands before an end or sees the ended session. A participant is a published, active character of the world and a `player_character` or `npc` role must match its kind. The time of a start, end or log entry is the caller's or the campaign clock's (`clock_required` otherwise). |
+| API | `POST /campaigns/{id}/sessions/{id}/start|end|participants|log` and `…/participants/{id}/remove` (`canon.edit`, campaign idempotency, id-only receipts, redacted audit). The earlier ungated end route is replaced: ending now needs the version the editor saw and a session in progress (ending an ended session is a 409, not a silent no-op). Session detail gains `participants` (editors only) and the derived actions now include start, manage participants, log and end. |
+| Portal | The run page (status, clock card, start, participants, log, end) and **Run** links on the session list. |
+| Dev data | Unchanged apart from the guard: the fixture still inserts its sessions directly (marked exception) because it needs fixed historical start and end timestamps and fixed numbers, which the play commands (always the current time, server numbers) cannot produce. |
+| Tests | 19 API tests (start time rules, one session in progress, participant eligibility and roles, removal and re-adding, no changes after the end, log event shape with GM-only details hidden from players, entry validation, time validation, replay, atomic failure, end rules, authority, foreign sessions indistinguishable from missing, branch isolation, database guards), 3 real-PostgreSQL races (two starts; an end versus a participant change; a log entry versus an end), a migration round trip, 8 portal tests, scenario step 11, and the legacy end-session API and vertical-slice tests updated to the hardened command. |
+
+Decisions I made that you may want to review: (1) ending a session that is not in progress is now a 409 instead of a silent no-op, and a start is required before an end (the plan's "end before start 409"); the legacy `end_session` tests and the vertical-slice scenario were updated, and the legacy test fixture's campaign was made active; (2) participant lists are visible only to editors (presence can name characters a player may not see); (3) start and end do not themselves record a campaign event: a session is not timeline state, and the manual log is the narrative record.
+
+Not verified: CI; manual browser/accessibility of the run page at all widths, keyboard log entry and live-region announcements (planned for this checkpoint and still owed).
+
+Commands run (local PostgreSQL 18): ruff format/check and mypy clean; portal `npm test` (278 files, 2024 tests) / `npm run lint` / `npm run build` clean. Full Python suite on the tree before two fixes, no other database session active: 5937 passed, 3 failed (the known developer-`.env` test and two real failures): the 15.2D-1 test that listed an editor's actions (they now include start, participants, log and end, so the expectation was updated) and the entity-reference classification test (the new `session_participants.character_id` reference is classified as blocking: a character that took part in a session keeps that history). The two affected test files were rerun after the fixes: 19 passed.
+
+## Checkpoint 15.2E-1 — event recording and correction
+
+Commit(s) on `phase15/completion`. **Status: implemented; local automated gates below; CI and manual browser/accessibility checks not performed.** Decision D-15 (option a: a correcting event with compensating effects and a link, applied atomically; refused with `correction_not_reversible` when state has moved on) applied as recommended.
+
+| Area | Delivered |
+|---|---|
+| Migration | `124_event_corrections`: `narrative.event_corrections` (unique corrected event, kind, GM-only reason, optional replacement), a same-timeline trigger, an append-only trigger, and a deferred constraint trigger on `narrative.events` that refuses `voided` / `corrected` without a matching link. Metadata, grants and package lists updated; round trip with `alembic check`. |
+| Commands | `commands/event_corrections.py`: `assess_event` (read-only, per-effect reversibility), `void_event`, `correct_event`. Lock order: operation scope, the event row, then the state rows reversed. Supported reversals: hit points, the active build, and party membership (join, leave). Any other effect kind, an effect that was not applied, a changed state, a correction, or an already corrected event refuses with its own fixed code (`correction_not_reversible`, `event_not_correctable`, `event_already_corrected`). Events of the campaign's own timeline only (ancestor, sibling and foreign events are one 404). |
+| API | `GET /campaigns/{id}/events/{id}`, `GET …/correction-preview`, `POST …/void`, `POST …/correct` (`canon.edit`, campaign idempotency, id-only receipts, two audit rows with the reason redacted). A recorded narrative event is recorded through the existing `POST /campaigns/{id}/events`, unchanged. Foundry principals and anyone without `canon.edit` are refused; AI proposals have no path to these routes. |
+| Portal | A record-event page, an event page with the effects, the preview and the Void and Correct dialogs, a Game master tools link, and session log entries that link to their event. |
+| Dev data | The guard now covers `narrative.events`, `narrative.event_participants` and `narrative.event_effects`; the two fixture sites that insert events (and their participants) are marked because they need events in states such as draft and voided, at fixed times, to exercise audience visibility. |
+| Tests | 14 API tests (voiding and correcting a narrative event with the link, the compensating effects and redacted audit; effective history excluding a voided event; a replacement; repeat, nested and missing reason; hit points restored and refused once the state moved on, then undone in order; an activation event restoring the previous build; a join removed and a leave reopened, with the dependent join refused while the membership has ended; the clock event refusing as unsupported; one 404 for branch, foreign and missing events; authority and Foundry refusal; replay; atomic failure; the status-link trigger; append-only and self-correction guards), 2 real-PostgreSQL races (two voids; a void versus a later hit-point change), a migration round trip, 7 portal tests, and scenario step 12. |
+
+Known limits: reversals exist only for the three effect kinds above; location, condition, resource, clock, quest-objective, knowledge and relationship events cannot be corrected through this surface yet (each refuses plainly) and extend the catalog as their checkpoints land. Bulk correction is deferred as the plan says. Not verified: CI; manual browser/accessibility (correction dialog focus and the preview at narrow width).
+
+Commands run (local PostgreSQL 18): ruff format/check and mypy clean; portal `npm test` (280 files, 2031 tests) / `npm run lint` / `npm run build` clean. Full Python suite on the final tree, no other database session active: 5961 passed, 1 failed (the known developer-`.env` test), 1322 s.
+
+## Checkpoint 15.2E-2a — quest definition completion
+
+Commit(s) on `phase15/completion`. **Status: implemented; local automated gates below; CI and manual browser/accessibility checks not performed.**
+
+| Area | Delivered |
+|---|---|
+| Migration | `125_quest_gm_notes`: `narrative.quests.gm_notes` (GM-only, at most 4000 characters) with its check and comment; round trip with `alembic check`. |
+| Commands | `commands/quest_children.py`: add and remove objective dependencies (prerequisite loops refused with `objective_dependency_cycle`; both objectives must belong to the quest; structural, so refused once progress exists), add and remove participants (published characters or organizations, one row per participant and role), add, update and remove outcomes (code immutable, unique per quest; removal deletes its rewards), add and remove rewards (a knowledge reward must name a usable knowledge item). `update_quest` gains `gm_notes` (omitted keeps, empty clears). All run under the authoring kernel: locks, expected version, idempotency, default-deny audit, revision snapshots. |
+| API | Routes under `/campaigns/{id}/authoring/quests/{quest_id}`: `dependencies`, `participants`, `outcomes`, `outcomes/{id}/update`, `outcomes/{id}/rewards`, `rewards/{id}/remove` and the matching removals; the view and options gain the new collections and catalogs. |
+| Portal | A completion section under the quest editor: notes, dependencies, participants, outcomes and rewards, each with validation messages and fixed-code error text. |
+| Tests | 11 API tests, 2 real-PostgreSQL races (opposite prerequisites cannot both land; two edits from one version, one is stale), a migration round trip, 9 portal tests, the dev-script guard extended to the four quest tables, and scenario step 13. |
+
+Decisions applied (not owner decisions): dependencies stop counting as quest progress and are themselves structural; item rewards are free text (no item domain target yet); only knowledge rewards carry a typed reference.
+
+Not verified: CI; manual browser/accessibility of the completion section.
+
+
+Commands run (local PostgreSQL 18): ruff format/check and mypy clean; portal `npm test` (280 files, 2041 tests) / `npm run lint` / `npm run build` clean. Full Python suite on the final tree, no other database session active: 5975 passed, 1 failed (the known developer-`.env` test), 1234 s.
+
+## Checkpoint 15.2E-2b — quest runtime
+
+Commit(s) on `phase15/completion`. **Status: implemented; local automated gates below; CI and manual browser/accessibility checks not performed.** Decision D-16 (option a: explicit GM commands only; the read model hints when all required objectives are complete) applied as recommended.
+
+| Area | Delivered |
+|---|---|
+| Migration | `126_quest_runtime_events`: seven event types (`quest_activated|completed|suspended|resumed|abandoned`, `objective_activated|skipped`); `quest_failed` already existed and is not touched. Round trip with `alembic check`. |
+| Commands | `commands/quest_runtime.py`: `change_quest_status` (activate, complete, fail, suspend, resume, abandon) and `set_objective_status` (available, active, completed, failed, skipped), with per-scope advisory lock, quest `FOR SHARE`, from-status guard (`expected_status`, stale otherwise), published-quest requirement, party validation, and world time from the request or the clock. The adapter `advance_objective` shares the lock and now refuses a suspended or finished quest. |
+| Event correction | The E-1 catalog gains `quest_status_id` and `objective_status_id` (reversible while the state row is still the one the event last wrote; a first write is undone by removing the state). The adapter route's existing objective events become correctable too. |
+| API | `GET /campaigns/{id}/quests/{quest_id}/progress`, `POST .../{quest_id}/activate|complete|fail|suspend|resume|abandon`, `POST .../quests/objectives/{id}/status` (`canon.edit`, campaign idempotency, id-only receipts, audit rows without the note). |
+| Portal | Run quest page with per-scope cards, confirmed finishing actions, objective moves, and a link from the published quest's editor; event pages label the new effects. |
+| Dev data | The guard now covers `campaign.quest_state` and `campaign.objective_state`; the two fixture sites in the dev-data script are marked (fixed statuses without a clock or events). |
+| Tests | 15 API tests (a full run; the matrix; stale; unpublished and foreign quests; time from clock or request; party scopes; objective rules; hint without completion; adapter route interplay; authority, replay, audit; corrections restoring status and removing a first activation; refused after the state moved; unpublished quests stop running), 4 real-PostgreSQL races (complete vs fail, two first activations, suspend vs objective change, structural edit vs first activation), a migration round trip, 10 portal tests, and scenario step 14. |
+
+Decisions applied (not owner decisions): prerequisites between objectives are shown to authors but not enforced at runtime (the GM decides); objective changes need an `active` quest for that audience; the quest-level note is stored as the event's GM-only details; a quest with no state row stays untracked for the adapter route.
+
+Not verified: CI; manual browser/accessibility (confirmation dialog, objective buttons); the player-facing quest read model is unchanged and was not re-verified beyond the existing suites.
+
+
+Commands run (local PostgreSQL 18): ruff format/check and mypy clean; portal `npm test` (281 files, 2051 tests) / `npm run lint` / `npm run build` clean. Full Python suite on the final tree, no other database session active: 5995 passed, 1 failed (the known developer-`.env` test), 1288 s.
+
+## Checkpoint 15.2E-3 — knowledge runtime
+
+Commit(s) on `phase15/completion`. **Status: implemented; local automated gates below; CI and manual browser/accessibility checks not performed.** Decision D-17 (the audiences the schema already has: party, character, NPC, organization and public-at-location; no new audience type) applied as recommended.
+
+| Area | Delivered |
+|---|---|
+| Migration | `127_knowledge_runtime`: event types `knowledge_learned`, `knowledge_transferred`, `belief_changed`, `knowledge_made_public`; `last_event_id` (nullable, partial index, shared same-timeline trigger) on `knowledge.entity_knowledge` and `knowledge.public_knowledge`. Round trip with `alembic check`. |
+| Commands | `commands/knowledge_runtime.py`: `reveal_knowledge_to_party` (the existing writer behind the kernel), `record_character_knowledge`, `record_knowledge_transfer`, `change_belief` (token: the event that last wrote the belief), `make_knowledge_public`. Published claim and knowers required, per-(timeline, claim, knower) advisory lock, claim and entities `FOR SHARE`, world time from the request or the clock. |
+| Event correction | The E-1 catalog reverses learning and telling (belief and transfer removed), public records, party reveals and belief changes (previous values restored), while the row is still the one the event last wrote. |
+| API | `GET /campaigns/{id}/knowledge/{item}/audience`, `POST .../reveal-to-party|learn|transfer|make-public`, `POST .../knowledge/knowers/{id}/belief` (`canon.edit`, campaign idempotency, id-only receipts, audit rows with interpretation text redacted). |
+| Portal | A Who knows this page (parties, individual beliefs with Change belief, learned, told and public forms) linked from the claim editor; event pages label the new effects. |
+| Dev data | The guard now covers the five knowledge state tables; four fixture sites in the dev-data script are marked. |
+| Tests | 13 API tests (learn with belief, audit redaction and an unchanged truth; the statement freeze; knower and claim validity; one belief per knower and the clock; transfers with conveyed interpretation; belief changes with stale, no-op and empty cases; public locations seen by a player; party reveals; corrections of each kind and refusals after the state moved; branch isolation; authority, replay and foreign claims), 4 real-PostgreSQL races (two first learnings, two belief changes from one token, a statement edit vs the first learning, a correction vs a belief change), a migration round trip, 8 portal tests, and scenario step 15. |
+
+Decisions applied (not owner decisions): transferring to someone who already knows the claim is refused (use Change belief); distorted versions (`knowledge_version_id`) are not written by these commands; the belief token is the last event rather than a new row version column; every command takes its time from the request or the campaign clock (the page uses the clock).
+
+Not verified: CI; manual browser/accessibility (the forms and comboboxes with a screen reader); the player-facing knowledge reads are unchanged and were not re-verified beyond the existing suites.
+
+
+Commands run (local PostgreSQL 18): ruff format/check and mypy clean; portal `npm test` (282 files, 2059 tests) / `npm run lint` / `npm run build` clean. Full Python suite on the final tree, no other database session active: 6013 passed, 1 failed (the known developer-`.env` test), 1221 s.
+
+## Checkpoint 15.3A-1 — dungeon structure and GM state
+
+Commit(s) on `phase15/completion`. **Status: implemented; local automated gates below; CI and manual browser/accessibility checks not performed.** Decision D-31 (option a: the dungeon root `row_version` covers its structural children; an area versions its own fields) applied as recommended.
+
+| Area | Delivered |
+|---|---|
+| Registry and gating | `dungeon` and `dungeon_area` join the lifecycle registry (and so every read-side visibility gate that uses it). Publish preconditions: a dungeon needs a published parent location, an area a published dungeon. Archive precondition: a dungeon with active areas cannot be archived (`dungeon_has_active_areas`). The player-facing dungeon-area read now answers not-found for an unpublished area or dungeon and omits connections to areas the reader cannot see. The five structural child FKs are classified `OWNED_CASCADE`. |
+| Migration | `128_dungeon_state_event`: the event type `dungeon_state_changed` (the plan expected no migration; one event type was needed). Round trip with `alembic check`. |
+| Commands | `commands/dungeons.py` (create and update a dungeon and an area; add, update and remove connections, features, hazards and interactables, all against the dungeon version; removal only while a draft) and `commands/dungeon_state.py` (`set_dungeon_state` for an area, a connection, a feature, a hazard or an interactable, with a last-event token, an event and one effect per component). |
+| Event correction | The E-1 catalog reverses dungeon state (restoring previous values, or removing a state row a first write created), including the interaction commands' own effects on the same rows, while the row is still the one the event last wrote. |
+| API | `/campaigns/{id}/authoring/dungeons...` and `.../dungeon-areas/{id}` (read and update), and `POST /campaigns/{id}/dungeon-areas/{id}/state`; `canon.edit`, campaign idempotency, audit rows with content redacted, a revision of the authored aggregate for each real change. |
+| Portal | Create and edit pages for a dungeon and an area, with areas, connections, contents and the state panel; an edit link on dungeon and area detail pages; the content-edit shell gains an optional sections-after-the-form hook. |
+| Dev data | The guard now covers the dungeon tables and the five dungeon state tables; three fixture sites in the dev-data script are marked. |
+| Tests | 13 API tests (drafts and areas; the dungeon and area versions; publish order and the archive block; a published parent location; versions of children and connections; connection rules; removal only while a draft; what players see; each kind of state; tokens, values and targets; published areas and the clock; correcting a state change; authority, replay and foreign dungeons), 3 real-PostgreSQL races (two structural edits from one version, an archive vs adding an area, two first state writes), a migration round trip, 11 portal tests, and scenario step 16. |
+
+Decisions applied (not owner decisions): authoring joins areas of one dungeon (the schema still allows teleportation links across dungeons; existing ones are untouched); a conditional route's machine-checkable requirement fields are not authored yet (only the description); state changes use the campaign clock or a time given in the request; connection state is shown on both of its areas.
+
+Not verified: CI; manual browser/accessibility (the inline forms and the state panel; narrow width); the discovery of hidden children is unchanged and was not re-verified beyond the existing suites.
+
+
+Commands run (local PostgreSQL 18): ruff format/check and mypy clean; portal `npm test` (283 files, 2070 tests; two unrelated tests flaked once under load and passed on rerun) / `npm run lint` / `npm run build` clean. Full Python suite on the final tree, no other database session active: 6054 passed, 1 failed (the known developer-`.env` test), 1585 s. (An earlier run showed two downgrade-ordering failures that came from an orphaned second pytest session sharing the database; they pass alone and in the clean rerun.)
+
+## Checkpoint 15.3A-2a — relationship authoring kernel and world relationships
+
+Commit(s) on `phase15/completion`. **Status: implemented; local automated gates below; CI and manual browser/accessibility checks not performed.** Decision D-18 (option a: a version and an archive lifecycle, projection to readers who can see every participant and whose subtype allows it; no canon status for edges) applied as recommended and recorded in ADR 0017 (which also resolves ADR 0015 decision 8).
+
+| Area | Delivered |
+|---|---|
+| Migration | `129_relationship_definition`: `world.relationships.row_version` (bumped by `core.bump_row_version()`), `lifecycle_status_id` (existing rows `active`, defaulted on insert), `archived_at`, `created_by_user_id`. Round trip with `alembic check`. |
+| Commands | `commands/world_relationships.py`: `create_relationship` (family, employment, ownership, political, general; participants and typed fields atomically), `update_relationship`, `end_relationship`, `archive_relationship`, `restore_relationship`, `set_relationship_perspective`. Lock order: participants `FOR SHARE`, then the relationship `FOR UPDATE`; every command names the relationship version. `evolve_relationship_reaction` now refuses an archived relationship. |
+| Projection | The world relationship list and the relationship detail hide an archived relationship and one whose ownership or membership row is not public from readers who cannot edit (the same not-found as a missing one); editors see all. The NPC portrayal context ignores archived edges. Existing participant-visibility rules are unchanged. |
+| API | `/campaigns/{id}/authoring/relationships` (options, a per-entity list, create, read, update, end, archive, restore, perspectives); `canon.edit`, campaign idempotency, audit rows with content redacted (no revision snapshots: a relationship is not an entity). |
+| Portal | A Relationships panel on location, organization, religion and character detail pages for editors: list, per-relationship editor (fields, end, archive, restore, perspectives) and an add form. |
+| Dev data | The guard now covers the seven relationship tables; the two fixture sites in the dev-data script are marked. |
+| Tests | 12 API tests (each kind, invalid shapes, update limits and versions, ending rules, a political end, archive and restore for readers and editors, a private ownership edge, an edge to an unpublished participant, perspectives, an archived relationship refusing a state change, the editor list, authority and replay), 3 real-PostgreSQL races (two edits from one version, an archive vs a state change, an archived participant vs create), a migration round trip, 6 portal tests, and scenario step 17. |
+
+Decisions applied (not owner decisions): editors may reference draft participants (the edge stays unseen until they are published); the kind, type and participants are fixed at creation; membership, offices and routes are left to the next checkpoints; relationship perspectives are authored as a full replacement per holder.
+
+Not verified: CI; manual browser/accessibility (the expanding editors, the participant search); character and religion detail pages were not individually exercised in a browser.
+
+
+Commands run (local PostgreSQL 18): ruff format/check and mypy clean; portal `npm test` (284 files, 2076 tests; one unrelated test flaked once under load and passed on rerun) / `npm run lint` / `npm run build` clean. Full Python suite on the final tree, no other database session active: 6071 passed, 1 failed (the known developer-`.env` test), 1612 s.
+
+## Checkpoint 15.3A-2b — organization membership, offices and operational status
+
+Commit(s) on `phase15/completion`. **Status: implemented; local automated gates below; CI and manual browser/accessibility checks not performed.** Decision D-19 (option a: an office is the membership's `role` and `rank`; no vacancy table) applied as recommended. No migration (the plan expected none).
+
+| Area | Delivered |
+|---|---|
+| Membership | A new `membership` kind in the relationship kernel (member and organization roles, a required start, `role`, `rank`, `is_public`), written through `create_relationship`, `update_relationship`, `end_relationship`, `archive_relationship` and `restore_relationship`. The organization must be an organization and the member a character or another organization. The existing exclusion constraint rejects overlapping stints (surfaced as `membership_overlap`, also on moving a start); rejoining is a new relationship. |
+| Roster | `GET /campaigns/{id}/organizations/{id}/members`: readers see active, public stints of members they can discover; editors see every stint with its flags, the organization's current status and the status choices. Unpublished organizations are not found by readers. |
+| Status | `update_organization_status` is hardened: the optional `expected_status` token (a mismatch is a stale write), repeating the current status is refused (`organization_status_unchanged`), and the event correction catalog now reverses `organization_status_id`. Adapters that do not send the token keep working. |
+| Portal | A Members and offices section on organization pages (roster for everyone; add member and status control for editors); the relationship editor gains the office, rank and public fields for a membership. |
+| Dev data | The guard now covers the membership and organization-state tables; no fixture sites needed marking. |
+| Tests | 10 API tests (a member joins with an office; invalid shapes; one stint at a time and rejoin; edited offices; moving a start into an overlap; reader and editor rosters; unpublished organizations; hardened status and its token; correcting a status change; authority and replay), 1 real-PostgreSQL race (two overlapping stints written at once), 7 portal tests, and scenario step 18. |
+
+Decisions applied (not owner decisions): a member may be a character or another organization; ending a membership keeps the row as history (the roster flags it ended); vacancies and succession are deferred, as the plan says.
+
+Not verified: CI; manual browser/accessibility (the member search and the time pickers).
+
+
+Commands run (local PostgreSQL 18): ruff format/check and mypy clean; portal `npm test` (285 files, 2083 tests) / `npm run lint` / `npm run build` clean. Full Python suite on the final tree, no other database session active: 6082 passed, 1 failed (the known developer-`.env` test), 1516 s.
+
+## Checkpoint 15.3A-2c — routes and travel
+
+Commit(s) on `phase15/completion`. **Status: implemented; local automated gates below; CI and manual browser/accessibility checks not performed.** Decision D-20 (option a: a relationship subtype under a new `route` type, no table of its own) applied as recommended.
+
+| Area | Delivered |
+|---|---|
+| Migration | `130_routes`: relationship type `route`, participant roles `origin` and `destination`, `world.route_relationships (relationship_id, distance_text, travel_time_text, travel_mode, is_hidden)` with bounded text, and the event type `characters_traveled`. Round trip with `alembic check`. |
+| Routes | A `route` kind in the relationship kernel (two places of the world as origin and destination; typed fields; create, edit, end, archive and restore through the relationship commands). A concealed route is hidden from every non-editor read (list and detail). `GET /campaigns/{id}/authoring/routes?location_id=` lists the routes that touch a place (the plan named `/authoring/routes`; creation uses the relationship endpoint). |
+| Travel | `commands/travel.py` `record_travel` and `POST /campaigns/{id}/travel`: characters and/or a party's current members, a published destination place, the campaign clock or a given time (which must follow each mover's arrival), an optional route that must be active and join the mover's place to the destination. One `characters_traveled` event with an effect per mover; location history closed and opened atomically; already-there travelers reported; one bad traveler stops the whole journey; an advisory lock per traveler serializes journeys that start from "nowhere". |
+| Portal | A Travel section on the session run page and route fields in the relationship editors. |
+| Dev data | The guard now covers `world.route_relationships` and `campaign.character_location_history`; no fixture sites needed marking. |
+| Tests | 9 API tests (a route with its details; invalid shapes; a concealed route hidden from readers; several characters in one event, repeats and a second journey; a party; one bad traveler; route mismatches and an archived route; time rules; authority and replay), 1 real-PostgreSQL race (two journeys from nowhere), a migration round trip, 5 portal tests, and scenario step 19. |
+
+Decisions applied (not owner decisions): routes join places only (a dungeon or an area counts as a place); travel takes its time from the clock unless one is given; an optional route is checked in both directions; event correction does not yet reverse location changes (unchanged from before); pathfinding is deferred, as the plan says.
+
+Not verified: CI; manual browser/accessibility (the traveler checkboxes and the destination search).
+
+
+Commands run (local PostgreSQL 18): ruff format/check and mypy clean; portal `npm test` (286 files, 2088 tests) / `npm run lint` / `npm run build` clean. Full Python suite, no other database session active: 6093 passed, 4 failed in the first run (the known developer-`.env` test, and three table-list tests that had not yet been told about `world.route_relationships`: the persistence package lists and the role-grants coverage list). Those lists were updated and the affected files rerun (581 and 19 passed); the full suite was not rerun because nothing else changed.
+
+## Checkpoint 15.3A-3 — NPC portrayal and NPC runtime operations
+
+Commit(s) on `phase15/completion`. **Status: implemented; local automated gates below; CI and manual browser/accessibility checks not performed.** Decision D-21 (option a: one versioned `npc_portrayal_profiles` plus `npcs.detail_level`; goals, routines and emotional state deferred to Phase 20) applied as recommended.
+
+| Area | Delivered |
+|---|---|
+| Migration | `131_npc_portrayal`: `character.npcs.detail_level` (default `standard`) and the append-only, GM-only `character.npc_portrayal_profiles` (nine bounded text fields, change note, author, unique `(npc_id, version_number)`), with a trigger refusing update and any delete but the cascade from deleting the NPC. Round trip with `alembic check`. |
+| Commands | `commands/npc_portrayal.py`: `update_npc_detail_level` (against the NPC `row_version`) and `save_npc_portrayal_profile` (appends the next version; the token is the version number seen, `0` for none; saving the current version again is a no-op). The NPC entity is locked `FOR UPDATE`, which serializes two saves. |
+| API | `GET/POST /campaigns/{id}/authoring/npcs/{id}/portrayal` (with `?version=`), `POST .../detail-level`, and `GET /campaigns/{id}/authoring/npc-runtime-options` (the rules conditions and resources of the campaign ruleset). `canon.edit`, campaign idempotency, audit rows with content redacted. |
+| Privacy | The profile never appears in a player read, the character read model, the world explorer, or the NPC authoring read; the AI context builders do not read it (a source-level test pins this until Phase 20). |
+| Runtime | The GM controls for an NPC (hit points, conditions, resources, location) use the existing character-state routes and the travel command; the panel only reaches them. No new hardening of those routes was needed beyond what earlier checkpoints added. |
+| Portal | A portrayal page and a Run this NPC panel (published NPCs only) on the character detail page, with a link to the portrayal. |
+| Dev data | The guard now covers `character.npc_portrayal_profiles`. |
+| Tests | 11 API tests (no profile and the default level; appended versions and the token; invalid saves; append-only enforcement; a deleted draft removes its profile; the detail level and its version; an archived NPC; nothing leaks to players or read models, and the AI builders do not read it; runtime options; replay and other worlds), 1 real-PostgreSQL race (two saves from one version), a migration round trip, 16 portal tests, and scenario step 20. |
+
+Decisions applied (not owner decisions): the runtime panel handles hit points, conditions, resources and a move (no new route was needed); conditions and resources are picked from the campaign ruleset version; the panel is offered for published NPCs only because the state commands require it.
+
+Not verified: CI; manual browser/accessibility (the portrayal form and the runtime panel at narrow width).
+
+
+Local gates for 15.3A-3: `ruff format`/`ruff check` and `mypy src` clean; portal 2104 tests passed, lint and build clean; full Python suite 6118 passed, 1 failed (the known developer-`.env` origin test in `tests/unit/test_config.py`). The first full run found four schema-registry gaps (the `detail_level` column classification, the `npc_id` entity-reference classification as owned cascade, an index on `created_by_user_id`, and the matching SQLAlchemy index); all were fixed and the full suite rerun clean.
+
+## Checkpoint 15.3B-1a — Item definitions
+
+Commit(s) on `phase15/completion`. **Status: implemented; local automated gates below; CI and manual browser/accessibility checks not performed.** Decision D-22 option c (generic seeds plus world-owned homebrew) applied as recommended.
+
+| Area | Delivered |
+|---|---|
+| Migration | `132_item_definition_authoring`: `owning_world_id`, `row_version` (bumped by `core.bump_row_version()`) and `created_by_user_id` on `rules.item_definitions`; code uniqueness split into a ruleset-wide partial unique index (keeping the old index name) and a per-world one; `owning_world_id` immutable with `ruleset_version_id`; the item-instance guard now also refuses another world's homebrew; 24 generic mundane definitions seeded for the current `dnd5e` version (no licensed text). Round trip with `alembic check`; the downgrade deletes homebrew and unreferenced seeds. |
+| Commands | `commands/item_definitions.py`: `create_item_definition` (code from the name, made unique per world under a world advisory lock) and `update_item_definition` (world-owned only, against `row_version`, `FOR UPDATE`, no-op when nothing changed). A seeded or foreign definition looks missing. |
+| API | `GET/POST /campaigns/{id}/authoring/item-definitions`, `GET .../options`, `GET .../{id}`, `POST .../{id}/update`; `canon.edit`, campaign idempotency, audit rows with content redacted. |
+| Portal | Item definitions list, new and edit pages; a sidebar link shown only to `canon.edit`. |
+| Tests | 9 API tests (seeds and options; derived unique codes; invalid input; versioned update; world isolation; permissions; the database guard against another world's homebrew; immutable ownership; replay and redacted audit), 2 real-PostgreSQL races (same-name creates, same-version updates), a migration round trip, 8 page tests plus a sidebar test, and scenario step 21. |
+
+Decisions applied (not owner decisions): a new definition starts as `draft` and can be set to `canon` by editing (item instances will be limited to canon definitions in 15.3B-1b); the code is derived and never edited; properties_jsonb and licensed catalogs are not authored here; archive is deferred.
+
+Not verified: CI; manual browser/accessibility (the form with keyboard only and at narrow width).
+
+
+Local gates for 15.3B-1a: `ruff format`/`ruff check` and `mypy src` clean; portal 2113 tests passed, lint and build clean; full Python suite 6131 passed, 1 failed (the known developer-`.env` origin test in `tests/unit/test_config.py`). The first test run found that the seed filter used the pre-rename ruleset code; it was corrected to `dnd5e` before the full run.
+
+## Checkpoint 15.3B-1b — Item instances, inventory and custody
+
+Commit(s) on `phase15/completion`. **Status: implemented; local automated gates below; CI and manual browser/accessibility checks not performed.** No new owner decisions were required (decision D-22 was applied in 15.3B-1a).
+
+| Area | Delivered |
+|---|---|
+| Migration | `133_item_runtime_events`: seven event types (equipped, unequipped, consumed, damaged, repaired, attuned, attunement ended). `item_acquired`, `item_destroyed`, `item_transferred` and `item_identified` already existed and are reused. No table changes. |
+| Lifecycle | `item_instance` is now lifecycle-eligible (removed from the excluded set); the entity-reference classification marks the subtype and container rows owned and the timeline state, custody, attunement, identification and combat rows blocking. |
+| Authoring | `commands/item_instances.py`: `create_item_instance` (a draft; the definition must be published and usable by the world, locked `FOR SHARE`) and `update_item_instance` (name, summary, origin notes; definition fixed). |
+| Operations | `commands/item_operations.py`: award, transfer, equip, unequip, consume, damage, repair, destroy, attune, end attunement. One shared lock order and the item's last-event token (`item_state.last_event_id`); a destroyed item takes nothing more; an equipped or attuned item does not change holder or get destroyed; holders must be published characters; containers must be real containers and cannot form a loop (serialized by a per-timeline advisory lock); attunement needs the carrier, a definition that requires it, one attuner per item and at most three per character (per-character advisory lock); ending must be strictly after beginning. |
+| Adapter | `POST /campaigns/{id}/items/{id}/transfer` is the same implementation now. It keeps API-layer authority and an optional token, accepts no `world_time_id` (campaign clock), and can carry ownership. It still works for pending campaigns, unlike the scope-locked operation routes (a residual: a role revoked mid-request is not re-checked on this route, as before). |
+| Corrections | `commands/event_corrections.py` reverses all five item components while the item's token still names the event; the `item_state` effect carries the token before and after (recorded for every operation), so voiding the latest event puts the previous token back and the earlier one can be voided next. |
+| API | `/authoring/items` (list, options, get, create, update), `/items/{id}/award|equip|unequip|consume|damage|repair|destroy|attune|end-attunement`, `GET /parties/{id}/inventory`; the character inventory read gains the instance name and the token and hides draft and archived instances from non-editors. |
+| Portal | Items list, create and edit pages; the Run this item panel and lifecycle panel on an item's World page; character and party inventory panels; the run-page Award an item section; an Items sidebar link. |
+| Tests | 15 API tests (instances, definition rules, permissions, award, targetability, token transfer, places and adapter, containers, equipment and condition, destroy, attunement, party inventory, character inventory, replay, explorer visibility), 6 correction tests, 3 real-PostgreSQL races, a migration round trip, 30 portal tests (the operations panel, item pages, inventory panels and the award section) plus a sidebar assertion, and scenario step 22. Five existing adapter tests that counted effects per transfer now filter by component. |
+
+Decisions applied (not owner decisions): holders are published characters of any kind (`npc`, `player_character`, and the bare `character` fixtures use); equipped or attuned items do not change holder (unequip first); destroy is refused while attuned; a consumed last unit destroys the item; party inventory is for editors, players see their own character's; containers have no authoring UI (only existing container rows can hold items); a transfer that changes nothing is refused.
+
+Not verified: CI; manual browser/accessibility (the operations panel with keyboard only and at narrow width); Foundry sync was not exercised against a live Foundry (the sync commands' own tests pass).
+
+Local gates for 15.3B-1b: `ruff format`/`ruff check` and `mypy src` clean; portal 2142 tests passed, lint and build clean; full Python suite 6168 passed, 1 failed (the known developer-`.env` origin test in `tests/unit/test_config.py`). Earlier runs during the work found: the adapter route cannot require an active campaign (its fixtures use pending campaigns), so it keeps API-layer authority; a correction chain needed the previous token restored; and the attunement end needed to be strictly after its start.
+
+## Checkpoint 15.3B-2a — Encounter preparation
+
+Commit(s) on `phase15/completion`. **Status: implemented; local automated gates below; CI and manual browser/accessibility checks not performed.** Decision D-23 (existing characters only; creatures are Phase 19) applied as recommended.
+
+| Area | Delivered |
+|---|---|
+| Migration | None. `narrative.encounters` already allowed `pending` and `narrative.encounter_participants` already carried side and initiative. |
+| Commands | `commands/encounter_preparation.py`: `create_encounter` (pending, in an active session of the campaign, explicit time or campaign clock, optional published place), `update_encounter`, `add_encounter_participant` (a published `npc`, `player_character` or bare `character` of the world; at most 50; no duplicates), `update_encounter_participant`, `remove_encounter_participant`. Lock order: operation scope, the session `FOR SHARE`, the encounter `FOR UPDATE`, then named entities `FOR SHARE`. Only a pending encounter can change. No event is recorded. |
+| API | `POST /campaigns/{id}/encounters/prepare`, `POST .../encounters/{id}/update`, `.../participants`, `.../participants/{pid}/update|remove`, `GET .../authoring/encounters[?session_id=]`, `.../options`, `.../{id}`; `canon.edit`, campaign idempotency, one audit row per change (summary redacted). The existing `POST .../encounters` (starts an active encounter) and its read are unchanged. |
+| Portal | Prepare page, the pending encounter page (details, participants, add), and an Encounters section on the run page. |
+| Tests | 8 API tests (prepared pending with place and summary and redacted audit; participants, side, initiative, duplicates, drafts and foreign entities; side and initiative edits and removal; place and summary edits; nothing changes after start; session membership and archive; permissions and other worlds; replay), 2 real-PostgreSQL races (two adds of one character; an add against a start), 10 portal tests, and scenario step 23. |
+
+Decisions applied (not owner decisions): an encounter is prepared only in an active session; a prepared encounter with no place is allowed; sides are party, ally, enemy, neutral with party the default; there is no way to delete a pending encounter until `abort_encounter` (15.3B-2b).
+
+Not verified: CI; manual browser/accessibility (the participant forms with keyboard only and at narrow width).
+
+
+Local gates for 15.3B-2a: `ruff format`/`ruff check` and `mypy src` clean; portal 2152 tests passed, lint and build clean; full Python suite 6178 passed, 1 failed (the known developer-`.env` origin test in `tests/unit/test_config.py`).
+
+## Checkpoint 15.3B-2b — Encounter operation
+
+Commit(s) on `phase15/completion`. **Status: implemented; local automated gates below; CI, manual browser/accessibility checks and a live Foundry combat sync not performed.** No new owner decisions.
+
+| Area | Delivered |
+|---|---|
+| Migration | None. Rounds, turns, outcomes and the `aborted` status already existed; start, abort and end events use the `other` event type with the encounter as cause. |
+| Commands | `commands/encounter_operations.py`: `start_prepared_encounter` (pending to active; needs a participant, all published; opens round 1; one event; the encounter time becomes the start time) and `abort_encounter` (pending to aborted with no event; active to aborted with an event that becomes the resulting event). `commands/encounters.py`: a turn's round and order are optional and computed under the encounter lock, the current round advances, hit points never go below zero. The Foundry sync still calls the same implementations. |
+| API | `POST /campaigns/{id}/encounters/{eid}/start` and `/abort` (scope-locked authority, campaign idempotency, one audit row with the status change). The existing `/turns` and `/end` take an optional time (the campaign clock), run on the campaign idempotency store and write an audit row; they keep their API-layer authority (the adapter fixtures use pending campaigns), a residual as for the item transfer. The authoring read adds the round, outcomes, hit points and the turn log. |
+| Portal | The encounter page operates the encounter: start or discard, record turns, end with outcomes, abort, and a read-only record. |
+| Tests | 9 API tests (start needs participants and records one event; an unpublished participant blocks it; turns default and apply hit points; participants and activity; end with outcomes; abort of a pending and an active encounter; permissions; replay), 2 real-PostgreSQL races (two automatic turns; a turn against an abort), 8 more portal tests, and scenario step 24. All 29 existing encounter API tests and the Foundry sync tests pass unchanged. |
+
+Decisions applied (not owner decisions): a pending encounter is closed with abort (shown as Discard); at most one turn per participant per round is the existing constraint and is reported as a conflict; damage lowers hit points only through a turn on a tracked character; hit points are not typed on the encounter page.
+
+Not verified: CI; manual browser/accessibility (turn entry with keyboard only, reduced motion); a live Foundry combat sync.
+
+
+Local gates for 15.3B-2b: `ruff format`/`ruff check` and `mypy src` clean; portal 2160 tests passed, lint and build clean; full Python suite 6189 passed, 1 failed (the known developer-`.env` origin test in `tests/unit/test_config.py`).
+
+## Checkpoint 15.3C-1 — Source attachment and provenance
+
+Commit(s) on `phase15/completion`. **Status: implemented; local automated gates below; CI and manual browser/accessibility checks not performed.** Decision D-26 (closed source types, a title and GM-only reference text, no upload, no URL fetch) applied as recommended.
+
+| Area | Delivered |
+|---|---|
+| Migration | `134_entity_source_links`: `core.entity_source_links` (entity, source, attached by and at, detached by and at) with a unique index for one active link per pair, a guard trigger (a source of another world is refused; a link only ever changes by being detached once), and the three new source types as explicit inserts (the 003 seed file stays frozen). Round trip with `alembic check`. |
+| Commands | `commands/sources.py`: `create_source`, `attach_source`, `detach_source`. Lock order: authority scope, entity `FOR SHARE`, source `FOR SHARE`, a per-pair advisory lock. A source of another world is refused as invalid; attaching what is attached and detaching what is not are conflicts. Not a definition edit: no `row_version` change and no revision. |
+| API | `GET/POST /campaigns/{id}/sources`, `POST .../entities/{id}/sources/attach|detach`, `GET .../entities/{id}/provenance`; `canon.edit`, campaign idempotency, one audit row per change with title and reference redacted. A player is refused with 403 like every authoring route (the plan said 404; the codebase answers a missing capability with 403 and a foreign world with 404). The source list leaves out the creation source every entity cites. |
+| Provenance | Creator and creation source, the links attached now and detached with who and when, lifecycle transitions from the audit rows of the lifecycle commands (action, statuses, actor, time; never the reason or changed fields), and supersession both ways. |
+| Portal | A Sources section under each record's lifecycle panel and a provenance page. The item page showed two lifecycle panels (a defect from 15.3B-1b: the boundary and the item controls each mounted one); the boundary now skips its own panel for items. |
+| Tests | 9 API tests (typed source with redacted audit; world-scoped list; attach and detach history and the unchanged row version; another world's source; provenance with creator, origin and transitions; supersession links; permissions and other worlds; replay; the database guards), 2 real-PostgreSQL races, a migration round trip, 8 portal tests, and scenario step 25. |
+
+Decisions applied (not owner decisions): a link can attach any lifecycle state of a record (provenance is not an edit); only world-owned sources are attached; the creation source is shown as the origin, not as a link; reference text is shown to editors only.
+
+Not verified: CI; manual browser/accessibility (the provenance page at narrow width).
+
+
+Local gates for 15.3C-1: `ruff format`/`ruff check` and `mypy src` clean; portal 2168 tests passed (one unrelated page test failed once under load and passed alone), lint and build clean; full Python suite 6205 passed, 2 failed: the known developer-`.env` origin test and `tests/database/test_seed_idempotency.py::test_database_matches_seed_file[core-source_types-source_type_id]`, which asserted the table equals its frozen seed file and now excludes it, as migration 103 did for `audit.change_actions` (the added rows are covered by `test_entity_source_links_migration.py`). After that fix only `test_seed_idempotency.py` was rerun (54 passed); the full suite was not rerun.
+
+## Checkpoint 15.3C-2 — Review queues and revision comparison
+
+Commit(s) on `phase15/completion`. **Status: implemented; local automated gates below; CI and manual browser/accessibility checks not performed.** Decision D-25 (self-approval allowed and audited for self-hosted use) applied as recommended.
+
+| Area | Delivered |
+|---|---|
+| Migration | None. Reads only, over `core.entities`, `core.entity_revisions` (15.2R) and the existing approve audit row. |
+| Queue | `GET /campaigns/{id}/review-queue?status=&type=&cursor=&limit=`: statuses `pending` (default), `draft`, `in_review`, `approved`, `rejected`, `archived`; kind filter over the lifecycle-eligible types; keyset paging by update time then id; the latest change's author (and whether it was the viewer) from the revision of the current version; a count per status. An unknown status or a bad cursor is a 422. Only the campaign's world. |
+| History and compare | `GET .../entities/{id}/revisions` and `.../revisions/compare?from=&to=`. `domain/revision_compare.py` flattens both snapshots (lists of objects matched by an identifier when unique) and reports added, removed and changed paths, with long values cut and flagged; a lifecycle revision resolves to the latest authored snapshot at or before it. Unknown versions, other worlds and missing records are 404. |
+| Self-approval | The approve audit row gains `self_approved` when the approver authored the latest revision before the approval. A different approver is not flagged. |
+| Portal | The review page (filters with counts, list, Load more) and the revision history page (list, compare as a table), a Review sidebar link, and links from the provenance page. |
+| Tests | 10 unit tests for the comparison (including a 2,000-field snapshot), 6 API tests (statuses and counts, kind filter and paging, other worlds and players, history and compare, refusals, self-approval flagged and not), 10 portal tests, and scenario step 26. As with the other authoring routes a player is refused with 403 (the plan said 404). |
+
+Decisions applied (not owner decisions): the queue's default is every active, unpublished record; "author of the latest change" for self-approval is the author of the latest revision before the approval; the comparison covers authored fields only, never audit data.
+
+Not verified: CI; manual browser/accessibility (the comparison at ultrawide and narrow width and with a screen reader).
+
+
+Local gates for 15.3C-2: `ruff format`/`ruff check` and `mypy src` clean; portal 2178 tests passed, lint and build clean; full Python suite 6219 passed, 1 failed (the known developer-`.env` origin test in `tests/unit/test_config.py`).
+
+## Checkpoint 15.2A-4 — Existing-data scrub (owner-gated)
+
+Commit(s) on `phase15/completion`. **Status: implemented; local automated gates below; CI not performed.** There is no manual step for this checkpoint.
+
+**Owner decision (written, in the working session; the date was not recorded): "Let's go with your recommendations for D-2 & D-28." The recommendations were: scrub existing audit `changed_fields` prose (limited to the frozen prose keys of the frozen pre-15.2A-3 authoring commands); keep `reason`; rewrite existing completed idempotency response bodies of those commands to receipts; mark every modified row and record one bounded maintenance audit row.**
+
+| Area | Delivered |
+|---|---|
+| Decision applied | D-2: scrub existing audit prose (frozen commands and keys), keep `reason`. D-28: rewrite existing authoring-view replay bodies to receipts. Marker on each modified row plus one maintenance audit row. Pre-validation aborts on any unexpected shape. Irreversible; backups. |
+| Migration | `135_scrub_narrative_text` (the id is kept within Alembic's 32-character limit). Frozen lists in the file: 19 audit commands with their prose keys, the 28 structural keys as of 15.2A-3, and seven replay-view shapes. Plans every row first (raising on an unexpected shape before any update), then updates, then writes one maintenance row with counts. A row already redacted is neither changed nor counted. Keys added after 15.2A-3 are accepted only when their value is already safe (redacted, null, number, boolean or id). |
+| Future-write prevention | `replay_body` (domain) now filters every response stored through the authoring idempotency helper to ids, flags, numbers and closed codes. **Defect found while preparing the scrub:** routes added after 15.2A-3 (relationships, NPC portrayal, items, item definitions, dungeons, encounters, sources) stored full views with GM-only text in replay rows; fixed here, and the migration's replay predicate covers those shapes. A replay of those routes now returns a receipt; ten tests that compared the first response with the replay now compare the replay with `replay_body(first)`. The audit builders were already default-deny and a survey of the full scenario found no prose in audit rows. The clean-database scenario now ends with a permanent guard over every audit and replay row it wrote. |
+| Tests | 9 migration tests on a throwaway database populated at the previous revision (exact scrub per the frozen lists; every non-prose column and key identical; `reason` kept; rows with nothing to scrub untouched; markers; the maintenance row and counts; downgrade restores nothing and a second run finds nothing; six unexpected shapes each abort with zero changes and the version unchanged; empty database and `alembic check`), 3 API tests (replay of a scrubbed key returns the receipt and writes no audit or entity row; replay storage is minimal; audit carries no prose), 4 unit tests for `replay_body`, and the scenario guard. |
+
+Residual risk: backups taken before the migration contain the narrative until retired. The access-group family keeps full resource bodies in its replay rows (no narrative; their replay validates into models). The actor-scoped store (`/worlds`) keeps world, timeline and campaign views, whose descriptions are public or campaign-visible; both are outside the frozen predicate.
+
+
+Local gates for 15.2A-4: `ruff format`/`ruff check` and `mypy src` clean; full Python suite 6235 passed, 1 failed (the known developer-`.env` origin test in `tests/unit/test_config.py`). No portal code changed in this checkpoint, so the portal suite was not rerun.
+
+## Checkpoint 15.4 — Completion and acceptance (automated part)
+
+Commit(s) on `phase15/completion`. **Status: the automated part is done; the checkpoint is NOT closed.** What remains is the owner's manual acceptance (recorded in [PHASE15_MANUAL_ACCEPTANCE.md](PHASE15_MANUAL_ACCEPTANCE.md)), a CI run on the final head (none has been made on this branch), and the merge. **Phase 15 must not be called complete until those exist.**
+
+| Requirement (plan 15.4) | Evidence |
+|---|---|
+| Clean-database exit scenario | `tests/scenario/test_phase15_completion_flow.py` runs the whole GM flow (the numbered steps 1 to 26: world, campaign, the player's invitation, acceptance and role through the Access routes, calendar and times, player characters, party, clock, session, events and corrections, quests, knowledge, dungeons, relationships, organization membership, routes and travel, NPC portrayal, items, encounters, sources and provenance, review queue and history) through the HTTP API with a real cookie session, CSRF token and Origin check, against a database freshly created and migrated to head for the test session. Run alone it passes. |
+| Capabilities | `tests/scenario/phase15_route_manifest.py` classifies every operation of the application (from the OpenAPI document) as GM-only, player-safe read, world-scoped, or out of scope with a reason; an operation that matches no rule fails the suite, and the counts are pinned. `tests/scenario/test_phase15_acceptance_guards.py` then shows, for every GM-only and world-scoped route (see the 15.4 correction section for the count): a plain member is refused (403; 404 on world routes), an unauthenticated caller gets 401, an outsider gets 404 with a body identical to a nonexistent campaign's, a paired Foundry device is refused (401/403/404), and the machine credential shapes (retired `FoundrySystem`, an unissued device token) get 401. Player-safe reads are not refused to a player and are 404 to an outsider. |
+| Scope | A second world's location, NPC, portrayal, item, provenance, revisions and comparison are 404 from this campaign (reads and writes), and never appear in its review queue. |
+| Lifecycle | A branch made at a point does not see an event recorded on its parent afterwards (404 through the explorer; absent from `campaign.effective_events`). |
+| Optimistic | A stale write is a 409 `stale_write`; rereading and retrying succeeds. |
+| Idempotency | A retried create and a retried state command (travel) each have one effect and replay a receipt. |
+| Audit and replay | The scenario ends with a permanent guard: every replay row it wrote equals its minimal receipt, and no audit row it wrote holds a sentence outside structural fields. |
+| Errors | A hidden (draft) record and a missing one give a player identical 404 bodies for location, item and character reads. |
+| Dev data | `tests/unit/test_scripts_no_authored_content_direct_inserts.py` (the guard also covers the item definition, instance and custody tables) passes; the one script that inserts items directly marks them as a justified dev fixture. |
+| Gates | See the final gate line below. |
+
+Defects found while closing the phase (all fixed): replay storage of routes added after 15.2A-3 (15.2A-4), the item page's duplicate lifecycle panel (15.3C-1), the adapter route's effect-count change (15.3B-1b), and a vacuous-pass risk in the first draft of the route guards (caught by an assertion that the route table is non-empty).
+
+**Not verified, and required before closure:** the manual matrix (390, 1280 and 2560 px; keyboard-only; NVDA or Narrator spot checks; 200% zoom; reduced motion; the carried Phase 14 and 15.1 items) on ports 8001 and 5174 against a throwaway database; CI on the final head; the accessibility and responsive behaviour of every portal page added in Phase 15 (each checkpoint above lists its own pending item); a live Foundry sync.
+
+
+Final local gate line (head of `phase15/completion` before this commit): `ruff format`/`ruff check` and `mypy src` clean; full Python suite 6244 passed, 1 failed (the known developer-`.env` origin test in `tests/unit/test_config.py`, which fails only because the developer `.env` adds a tunnel origin); portal 2178 tests passed (296 files), `tsc`, lint and build clean. **No CI run exists for this branch, and the manual acceptance is not done.**
+
+## Checkpoint 15.4 correction — supported-interface scenario and route-manifest guard
+
+Corrections after an independent acceptance review of `cabe08b`. **Phase 15 is still NOT complete:** the manual matrix ([PHASE15_MANUAL_ACCEPTANCE.md](PHASE15_MANUAL_ACCEPTANCE.md)) is unfilled and no CI run on the final head has been recorded. Phase 16 stays blocked.
+
+| Area | Result |
+|---|---|
+| Repository gates | Trailing blank lines removed from `docs/ENTITY_LIFECYCLE.md`, `portal/src/components/authoring/authoring.css`, `portal/src/utils/sessionForm.ts`; migration `130_routes.py` formatted with ruff. `git diff --check origin/main...HEAD`, `ruff format --check`, `ruff check`, `mypy src` clean. |
+| Scenario | The completion scenario no longer uses the `add_member` fixture helper or any SQL to create or discover the membership. The player is enrolled by `POST /campaigns/{id}/invitations`, `POST /campaign-invitations/accept` (as the player), the Access overview (to read the membership id; acceptance grants no role, relationship or grant), and `POST .../memberships/{id}/roles`; the character relationship is then granted through the existing relationship route. The scenario's only database access is read-only verification (the player's session bootstrap and the closing audit/replay guard). `ContentSetup` gained an opt-out (`enrol_player=False`); other tests are unchanged. A static test keeps the helper and membership SQL out of the scenario. |
+| Route guard | `tests/scenario/phase15_route_manifest.py` classifies all 315 operations of the application: 232 guarded (190 Phase 15 GM routes, 40 earlier-phase GM routes, 2 world-scoped calendar routes), 25 player-safe reads, the rest out of scope with a stated reason. An unclassified route fails the suite; the counts are pinned. Cases per guarded route: player 403 (404 on world routes), unauthenticated 401, outsider 404 with a body identical to a nonexistent campaign's, paired Foundry device 401/403/404, retired `FoundrySystem` key and an unissued device token 401. Player-safe reads: not refused to a player, 404 to an outsider. |
+| Scope notes | AI, reference-corpus, Foundry pairing-code issue and integration sync-state are member-level routes with their own checks and tests and are classified out of scope. No Phase 15 reporting-administration route exists beyond the audit-history route (guarded). An in-process principal of the retired `foundry_system` type is not refused by the capability dependency, but no authentication path can produce it (the header is rejected with 401 before any route; the guard covers that); noted, not changed. |
+| Tests | `test_phase15_completion_flow.py` + `test_phase15_acceptance_guards.py`: 15 passed. Full backend suite: 6249 passed, 1 failed (the known `.env` origin test `test_local_session_allowed_origins_defaults_to_dev_topology_outside_production`). Portal `npm test` 2178 passed (296 files); `npm run lint` and `npm run build` clean. Foundry module `npm test`: 77 passed. `alembic heads`: single head `135_scrub_narrative_text`. |
+| Documentation | Stale "last reviewed" corrected; the future-dated owner-decision date removed (the date was not recorded); migration `Create Date` headers of 131, 134 and 135 still read 2026-10-07 (cosmetic, left unchanged). |
+| Not verified | CI on the final head; the whole manual matrix; live Foundry sync. The developer's normal database was not migrated. |
+
+## Knowledge claim page: Guided workspace
+
+The unified Knowledge claim page was reorganised into the header and three presentation stages (Prepare, Review & publish, Use in play) described in [UI_DESIGN.md](UI_DESIGN.md). No business rule, API contract or migration changed.
+
+| Area | Result |
+|---|---|
+| Defects fixed | D1 an approved claim whose subject is unpublished is told to publish its subject, not to return to draft; D2 archived and superseded claims get their own guidance; D3 Save belief is no longer offered where the server refuses it; D4 unsaved claim edits that can no longer be saved are shown as not applied, with Discard; D5 Delete draft returns to the Knowledge list; D6 View provenance returns to the claim's Sources section with the perspective; D7 the unsaved-changes guard covers typed sources and knowledge forms; D8 write-and-attach sends two derived idempotency keys (`.create`, `.attach`; the server's key pattern forbids `:`). Also found in the browser: with no forward step the only way out of an archived or rejected claim sat under More, so Restore and Return to draft (rejected) are now shown directly. |
+| Backend evidence (tests only) | archived keeps its knowers and takes no new knowledge or belief change, restore allows it again; a superseded claim keeps its knowers and moves nothing to the replacement; sources attach and detach at every status without changing the version, and an approval stays publishable; an approved claim with an unpublished subject offers only `return_to_draft` with `publish: reference_not_published`. |
+| Portal tests | `App.knowledgeClaim.test.tsx` (88), `claimStages.test.ts`, the Run Session tests unchanged against the shared staged navigation; the full portal suite, `tsc -b` and `eslint` pass. |
+| Real-browser pass (scripted, headless Chrome, a throwaway database on ports 8001/5174) | Draft preparation, sources (D8 reproduced with one shared key: create 201, attach 409; fixed: two keys, both accepted), submit with an unsaved edit, Review → Approve → Publish, an unpublished subject, published knowledge assignment (party, knower, telling, public, belief), archived/restored, superseded, rejected → draft, deprecated, a failed knowledge request keeping its form, a server-refused statement edit keeping the draft, a read-only member with a targeted `canon.edit` allow (no stages, no editor requests), 360/768/1280/1920 px with no horizontal scroll, keyboard activation and focus on the section heading, Back/Forward, and the armed `beforeunload` prompt. |
+| Not verified | Screen-reader (NVDA/Narrator) landmarks and announcements; a plain `campaign.view` member who knows a claim through a character perspective (covered by the page tests, not seeded in the browser pass); a targeted `canon.edit` deny; the real browser's own `beforeunload` prompt (the handler was observed to be armed, the prompt itself was not driven); CI on the final head. |
+
+## Knowledge Member preview workspace
+
+Knowledge is an expandable sidebar item (Claims, Member preview) for callers with `access.manage`, and a read-only Member preview workspace replaces the per-page "Preview as member" controls on the Knowledge collection and claim pages. Documented in [UI_DESIGN.md](UI_DESIGN.md) §5.6 and [PHASE13E_ACCESS_CONTRACT.md](PHASE13E_ACCESS_CONTRACT.md) §3r.
+
+| Area | Result |
+|---|---|
+| Backend | Two reads join the existing audience-preview family under the Knowledge adapter: the member's Knowledge collection (`resolve_knowledge_list`, extracted from the member's own list route so one derivation serves both) and the member's selectable character and party perspectives (`get_session_bootstrap` for the subject). Both reuse the actor/subject separation, the non-disclosing 404 and the metadata-only `sensitive_read` audit (`scope` = `collection` / `perspectives`). `tests/database/test_api_preview.py` adds: the collection byte-identical to the subject's own list (several views and queries, and a refused perspective), the subject's audience rather than the actor's, 404 for unresolvable subjects, 403/404 for unauthorized actors, perspective parameters read against the subject, audit without the response or ids, GET only, and perspectives equal to the subject's own bootstrap. The registry unit pin and the route-manifest guard counts were updated deliberately. |
+| Portal | `App.knowledgeMemberPreview.test.tsx` (35 tests): unauthorized access, the choose-a-member state, eligible members, the banner, perspective validation and options, no stale results under a new member, invalid member/character/party, filters and paging in the address, claim preview read-only with the context preserved, the claim's knowledge section headed as party knowledge with a party selected and as character knowledge otherwise, neutral wording when the projection omits or nulls awareness, confidence and sharing (for both perspectives), return to normal Knowledge without contamination, sidebar group and active states, normal pages without the old control. The full portal suite, `tsc -b`, `eslint` and the build pass. |
+| Real-browser pass (scripted, headless Chrome, throwaway database on 8001/5174) | Sidebar group and active child; no old control on the normal pages; the choose-a-member state with no Knowledge request; previewing a player (own characters only; party perspective revealing the party's claim; drafts absent; far fewer claims than the GM's own page); the claim inside the preview with the context preserved and no editor or mutation request; Back, reload and Return to Knowledge (no preview context in the normal list request); unknown member, foreign character and partyless-claim errors with no Knowledge request; a draft not visible to the player; the GM member showing ground truth; a player refused at the preview address; 360/768/1280/1920 px with no horizontal scroll; keyboard activation. |
+| Not verified | Screen-reader landmarks and announcements; a member previewed while holding a targeted resource deny; a campaign switch while a preview is open (covered by the remount-on-campaign design, not driven); CI on the final head. |

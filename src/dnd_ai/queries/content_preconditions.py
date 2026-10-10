@@ -22,6 +22,15 @@ from dnd_ai.domain.organization_authoring import ORGANIZATION_ENTITY_TYPE_CODES
 REFERENCE_NOT_PUBLISHED = "reference_not_published"
 CHARACTER_HAS_USER_RELATIONSHIPS = "character_has_user_relationships"
 QUEST_DEFINITION_INCOMPLETE = "quest_definition_incomplete"
+DUNGEON_HAS_ACTIVE_AREAS = "dungeon_has_active_areas"
+
+# A dungeon and its areas are places too: each names its parent location (a dungeon's own
+# parent, an area's dungeon), which must be published first.
+_PLACE_TYPE_CODES = AUTHORABLE_LOCATION_CATEGORIES | {"dungeon", "dungeon_area"}
+
+# Characters whose identity is authored (NPC and player character): both reference an
+# origin location and both are guarded against archive while a user is linked.
+CHARACTER_IDENTITY_TYPE_CODES = frozenset({"npc", "player_character"})
 
 
 def publish_reference_ids(
@@ -30,14 +39,14 @@ def publish_reference_ids(
     """The entities a definition must see published before it can be published.
     Empty for a type with no such references."""
     ids: list[uuid.UUID] = []
-    if entity_type_code in AUTHORABLE_LOCATION_CATEGORIES:
+    if entity_type_code in _PLACE_TYPE_CODES:
         parent = connection.execute(
             text("SELECT parent_location_id FROM world.locations WHERE location_id = :e"),
             {"e": entity_id},
         ).scalar()
         if parent is not None:
             ids.append(parent)
-    elif entity_type_code == "npc":
+    elif entity_type_code in CHARACTER_IDENTITY_TYPE_CODES:
         origin = connection.execute(
             text("SELECT origin_location_id FROM character.characters WHERE character_id = :e"),
             {"e": entity_id},
@@ -153,11 +162,27 @@ def replacement_publish_blocked_reason(
 def archive_blocked_reason(
     connection: Connection, *, entity_id: uuid.UUID, entity_type_code: str
 ) -> str | None:
-    """Type-specific archive blocks. An NPC that a player or account is linked to
+    """Type-specific archive blocks. An NPC or player character that a player or account is linked to
     through a current `security.membership_character_relationships` row cannot be
     archived: `resolve_access_context` stops honoring a relationship to an archived
     character, so archiving would silently revoke what the link grants."""
-    if entity_type_code != "npc":
+    if entity_type_code == "dungeon":
+        active_areas = connection.execute(
+            text("""
+                SELECT EXISTS (
+                    SELECT 1 FROM world.locations l
+                    JOIN core.entities e ON e.entity_id = l.location_id
+                    JOIN core.lifecycle_statuses ls
+                      ON ls.lifecycle_status_id = e.lifecycle_status_id
+                    WHERE l.parent_location_id = :e AND ls.code = 'active'
+                      AND EXISTS (SELECT 1 FROM world.dungeon_areas da
+                                  WHERE da.dungeon_area_id = l.location_id)
+                )
+            """),
+            {"e": entity_id},
+        ).scalar()
+        return DUNGEON_HAS_ACTIVE_AREAS if active_areas else None
+    if entity_type_code not in CHARACTER_IDENTITY_TYPE_CODES:
         return None
     linked = connection.execute(
         text("""

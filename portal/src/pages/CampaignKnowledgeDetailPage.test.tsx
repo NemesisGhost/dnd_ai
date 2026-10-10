@@ -109,10 +109,7 @@ describe("CampaignKnowledgeDetailPage", () => {
         })
 
         expect(
-            screen.getByRole("heading", {
-                level: 1,
-                name: itemFixture.statement,
-            }),
+            await screen.findByRole("heading", { level: 1, name: itemFixture.statement }),
         ).toBeInTheDocument()
     })
 
@@ -412,4 +409,29 @@ describe("CampaignKnowledgeDetailPage", () => {
             expect(syncCharacterFromUrl).toHaveBeenCalledTimes(1)
         })
     })
+
+    it("forwards the URL's party perspective to a quest subject link", async () => {
+        fetchKnowledgeDetailMock.mockResolvedValue({
+            ...itemFixture,
+            subject: {
+                entity_id: "quest-a",
+                name: "Clear the Old Mill",
+                category: "quest",
+                entity_type_code: "quest",
+            },
+        })
+
+        renderAt(
+            "/app/campaign-a/knowledge/knowledge-a?character_id=character-a&party_id=party-a",
+            "character-a",
+        )
+
+        expect(
+            await screen.findByRole("link", { name: "Clear the Old Mill" }),
+        ).toHaveAttribute(
+            "href",
+            "/app/campaign-a/quests/quest-a?character_id=character-a&party_id=party-a",
+        )
+    })
 })
+

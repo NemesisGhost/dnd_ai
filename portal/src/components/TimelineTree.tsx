@@ -6,13 +6,16 @@ import "./authoring/authoring.css"
 interface TimelineTreeProps {
     worldId: string
     timelines: readonly TimelineSummary[]
+    // False on a read-only world page: names are plain text, so a view-only
+    // caller is offered no timeline-authoring destination.
+    linked?: boolean
 }
 
 // The world's timelines as an indented lineage: each branch nests under its
 // parent. Roots are timelines with no parent (the primary first, then other
 // roots). A timeline whose parent is missing from the list (it cannot happen
 // for a consistent response) is shown as a root rather than dropped.
-export function TimelineTree({ worldId, timelines }: TimelineTreeProps) {
+export function TimelineTree({ worldId, timelines, linked = true }: TimelineTreeProps) {
     const byParent = new Map<string | null, TimelineSummary[]>()
     const known = new Set(timelines.map((t) => t.timeline_id))
     for (const timeline of timelines) {
@@ -32,9 +35,13 @@ export function TimelineTree({ worldId, timelines }: TimelineTreeProps) {
             <ul className="authoring-tree" role={parentId === null ? "tree" : "group"}>
                 {children.map((timeline) => (
                     <li key={timeline.timeline_id} role="treeitem" aria-expanded={undefined}>
-                        <Link to={`/worlds/${worldId}/timelines/${timeline.timeline_id}`}>
-                            {timeline.name}
-                        </Link>{" "}
+                        {linked ? (
+                            <Link to={`/worlds/${worldId}/timelines/${timeline.timeline_id}`}>
+                                {timeline.name}
+                            </Link>
+                        ) : (
+                            <span>{timeline.name}</span>
+                        )}{" "}
                         {timeline.is_primary ? (
                             <span className="authoring-badge">Primary</span>
                         ) : null}{" "}

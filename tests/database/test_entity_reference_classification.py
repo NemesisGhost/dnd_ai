@@ -83,6 +83,10 @@ def test_only_the_reviewed_owned_rows_are_cascade_deleted(db_connection: Connect
     assert {t for _s, t, _c in owned} == {
         "entity_names",
         "entity_tags",
+        # Phase 15.2R: the definition's canonical revision history.
+        "entity_revisions",
+        # Phase 15.3C-1: the sources attached to the entity.
+        "entity_source_links",
         "locations",
         "settlements",
         "buildings",
@@ -100,6 +104,11 @@ def test_only_the_reviewed_owned_rows_are_cascade_deleted(db_connection: Connect
         "character_languages",
         "character_movements",
         "character_senses",
+        # Phase 15.3A-3: the NPC's versioned portrayal profile.
+        "npc_portrayal_profiles",
+        # Phase 15.3B-1b: an item instance's own subtype and container rows.
+        "item_instances",
+        "item_containers",
         # Phase 15.1: a quest's own definition rows.
         "quests",
         "quest_stages",
@@ -107,6 +116,13 @@ def test_only_the_reviewed_owned_rows_are_cascade_deleted(db_connection: Connect
         "quest_outcomes",
         # Phase 15.1: a knowledge claim's own row.
         "knowledge_items",
+        # Phase 15.2B-1: a player character's marker row is part of its identity.
+        "player_characters",
+        # Phase 15.3A-1: a dungeon aggregate's own structural rows.
+        "area_connections",
+        "area_features",
+        "area_hazards",
+        "area_interactables",
     }
     assert all(v in (OWNED_CASCADE, BLOCKING) for v in ENTITY_REFERENCE_CLASSIFICATION.values())
 

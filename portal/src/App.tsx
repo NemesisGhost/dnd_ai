@@ -14,7 +14,9 @@ import { CampaignCharactersPage } from "./pages/CampaignCharactersPage"
 import { CampaignQuestsPage } from "./pages/CampaignQuestsPage"
 import { CampaignQuestDetailPage } from "./pages/CampaignQuestDetailPage"
 import { CampaignSessionsPage } from "./pages/CampaignSessionsPage"
-import { CampaignSessionDetailPage } from "./pages/CampaignSessionDetailPage"
+import { CampaignSessionDetailPage, LegacySessionEditRedirect } from "./pages/CampaignSessionDetailPage"
+import { CreateSessionPage } from "./pages/SessionFormPages"
+import { SessionRunPage } from "./pages/SessionRunPage"
 import { CampaignWorldPage, } from "./pages/CampaignWorldPage"
 import { CampaignWorldDetailPage } from "./pages/CampaignWorldDetailPage"
 import { CreateLocationPage } from "./pages/CreateLocationPage"
@@ -23,8 +25,32 @@ import {
   CreateOrganizationPage,
   EditOrganizationPage,
 } from "./pages/OrganizationAuthoringPages"
-import { CreateKnowledgePage, EditKnowledgePage } from "./pages/KnowledgeAuthoringPages"
-import { CreateNpcPage, EditNpcPage } from "./pages/NpcAuthoringPages"
+import { CreateKnowledgePage } from "./pages/KnowledgeAuthoringPages"
+import { CharacterBuildsPage, CreateCharacterBuildPage } from "./pages/CharacterBuildPages"
+import { PartyMembersPage } from "./pages/PartyMembersPage"
+import { EventDetailPage, RecordEventPage } from "./pages/EventPages"
+import {
+  CreateDungeonPage,
+  EditDungeonAreaPage,
+  EditDungeonPage,
+} from "./pages/DungeonAuthoringPages"
+import { KnowledgeMemberPreviewClaimPage } from "./pages/KnowledgeMemberPreviewClaimPage"
+import { KnowledgeMemberPreviewPage } from "./pages/KnowledgeMemberPreviewPage"
+import { KnowledgeSectionRedirect } from "./pages/KnowledgeSectionRedirect"
+import { PrepareEncounterPage, PreparedEncounterPage } from "./pages/EncounterPages"
+import { ProvenancePage } from "./pages/ProvenancePage"
+import { ReviewQueuePage, RevisionHistoryPage } from "./pages/ReviewPages"
+import { ItemDefinitionFormPage, ItemDefinitionsPage } from "./pages/ItemDefinitionPages"
+import { CreateItemPage, EditItemPage, ItemsPage } from "./pages/ItemPages"
+import { NpcPortrayalPage } from "./pages/NpcPortrayalPage"
+import { QuestProgressPage } from "./pages/QuestProgressPage"
+import { CreatePartyPage, EditPartyPage, PartiesPage } from "./pages/PartyPages"
+import {
+  ChooseCharacterTypePage,
+  CreateNpcPage,
+  CreatePlayerCharacterPage,
+  EditCharacterPage,
+} from "./pages/NpcAuthoringPages"
 import { CreateQuestPage, EditQuestPage } from "./pages/QuestAuthoringPages"
 import { CreateReligionPage, EditReligionPage } from "./pages/ReligionAuthoringPages"
 import { CampaignKnowledgePage } from "./pages/CampaignKnowledgePage"
@@ -39,17 +65,18 @@ import { ResetPasswordPage } from "./pages/ResetPasswordPage"
 import { AccountPage } from "./pages/AccountPage"
 import { SettingsPage } from "./pages/SettingsPage"
 import { WorldsPage } from "./pages/WorldsPage"
-import { CreateWorldPage } from "./pages/CreateWorldPage"
 import { WorldOverviewPage } from "./pages/WorldOverviewPage"
-import { EditWorldPage } from "./pages/EditWorldPage"
 import { CampaignSetupPage } from "./pages/CampaignSetupPage"
 import { CampaignSettingsPage } from "./pages/CampaignSettingsPage"
 import { CreateTimelinePage } from "./pages/CreateTimelinePage"
 import { TimelinePage } from "./pages/TimelinePage"
 import { TimelinesPage } from "./pages/TimelinesPage"
 import { WorldWorkspaceLayout } from "./layouts/WorldWorkspaceLayout"
+import { CreateCalendarPage } from "./pages/CreateCalendarPage"
+import { WorldTimesPage } from "./pages/WorldTimesPage"
 import { EditTimelinePage } from "./pages/EditTimelinePage"
 import { CreateTimelineBranchPage } from "./pages/CreateTimelineBranchPage"
+import { CreateWorldRoute, EditWorldRoute } from "./layouts/WorldAccessRoutes"
 
 function CampaignsRoute() {
   const { bootstrap } = useAuthenticatedSession()
@@ -146,7 +173,7 @@ function App() {
 
             <Route
               path="/worlds/new"
-              element={<CreateWorldPage />}
+              element={<CreateWorldRoute />}
             />
 
             <Route
@@ -156,7 +183,12 @@ function App() {
 
             <Route
               path="/worlds/:worldId/edit"
-              element={<EditWorldPage />}
+              element={<EditWorldRoute />}
+            />
+
+            <Route
+              path="/worlds/:worldId/calendars/new"
+              element={<CreateCalendarPage />}
             />
 
             <Route
@@ -215,6 +247,21 @@ function App() {
             />
 
             <Route
+              path="world/dungeon/new"
+              element={<CreateDungeonPage />}
+            />
+
+            <Route
+              path="world/dungeon/:dungeonId/edit"
+              element={<EditDungeonPage />}
+            />
+
+            <Route
+              path="world/dungeon/:dungeonId/areas/:areaId/edit"
+              element={<EditDungeonAreaPage />}
+            />
+
+            <Route
               path="world/location/new"
               element={<CreateLocationPage />}
             />
@@ -245,6 +292,18 @@ function App() {
             />
 
             <Route
+              path="world/:category/:entityId/provenance"
+              element={<ProvenancePage />}
+            />
+
+            <Route
+              path="world/:category/:entityId/history"
+              element={<RevisionHistoryPage />}
+            />
+
+            <Route path="review" element={<ReviewQueuePage />} />
+
+            <Route
               path="world/:category/:entityId"
               element={<CampaignWorldDetailPage />}
             />
@@ -255,13 +314,104 @@ function App() {
             />
 
             <Route
+              path="characters/new"
+              element={<ChooseCharacterTypePage />}
+            />
+
+            <Route
               path="characters/npc/new"
               element={<CreateNpcPage />}
             />
 
             <Route
+              path="characters/pc/new"
+              element={<CreatePlayerCharacterPage />}
+            />
+
+            <Route
+              path="characters/:characterId/builds"
+              element={<CharacterBuildsPage />}
+            />
+
+            <Route
+              path="characters/:characterId/builds/new"
+              element={<CreateCharacterBuildPage />}
+            />
+
+            <Route
+              path="characters/:characterId/portrayal"
+              element={<NpcPortrayalPage />}
+            />
+
+            <Route path="items" element={<ItemsPage />} />
+
+            <Route path="items/new" element={<CreateItemPage />} />
+
+            <Route path="items/:itemId/edit" element={<EditItemPage />} />
+
+            <Route
+              path="item-definitions"
+              element={<ItemDefinitionsPage />}
+            />
+
+            <Route
+              path="item-definitions/new"
+              element={<ItemDefinitionFormPage />}
+            />
+
+            <Route
+              path="item-definitions/:definitionId"
+              element={<ItemDefinitionFormPage />}
+            />
+
+            <Route
               path="characters/:characterId/edit"
-              element={<EditNpcPage />}
+              element={<EditCharacterPage />}
+            />
+
+            <Route
+              path="knowledge/:knowledgeItemId/audience"
+              element={<KnowledgeSectionRedirect section="who-knows" />}
+            />
+
+            <Route
+              path="quests/:questId/progress"
+              element={<QuestProgressPage />}
+            />
+
+            <Route
+              path="events/new"
+              element={<RecordEventPage />}
+            />
+
+            <Route
+              path="events/:eventId"
+              element={<EventDetailPage />}
+            />
+
+            <Route
+              path="parties"
+              element={<PartiesPage />}
+            />
+
+            <Route
+              path="parties/new"
+              element={<CreatePartyPage />}
+            />
+
+            <Route
+              path="parties/:partyId"
+              element={<PartyMembersPage />}
+            />
+
+            <Route
+              path="parties/:partyId/edit"
+              element={<EditPartyPage />}
+            />
+
+            <Route
+              path="world-times"
+              element={<WorldTimesPage />}
             />
 
             <Route
@@ -290,6 +440,31 @@ function App() {
             />
 
             <Route
+              path="sessions/new"
+              element={<CreateSessionPage />}
+            />
+
+            <Route
+              path="sessions/:sessionId/run"
+              element={<SessionRunPage />}
+            />
+
+            <Route
+              path="sessions/:sessionId/encounters/new"
+              element={<PrepareEncounterPage />}
+            />
+
+            <Route
+              path="sessions/:sessionId/encounters/:encounterId"
+              element={<PreparedEncounterPage />}
+            />
+
+            <Route
+              path="sessions/:sessionId/edit"
+              element={<LegacySessionEditRedirect />}
+            />
+
+            <Route
               path="sessions/:sessionId"
               element={<CampaignSessionDetailPage />}
             />
@@ -304,6 +479,17 @@ function App() {
               element={<CreateKnowledgePage />}
             />
 
+            {/* Static preview routes, so "member-preview" is never read as a claim id. */}
+            <Route
+              path="knowledge/member-preview"
+              element={<KnowledgeMemberPreviewPage />}
+            />
+
+            <Route
+              path="knowledge/member-preview/:knowledgeItemId"
+              element={<KnowledgeMemberPreviewClaimPage />}
+            />
+
             <Route
               path="knowledge/:knowledgeItemId"
               element={<CampaignKnowledgeDetailPage />}
@@ -311,7 +497,7 @@ function App() {
 
             <Route
               path="knowledge/:knowledgeItemId/edit"
-              element={<EditKnowledgePage />}
+              element={<KnowledgeSectionRedirect section="claim" />}
             />
 
             <Route

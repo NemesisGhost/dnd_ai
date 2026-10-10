@@ -7,7 +7,9 @@ import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { useSelectCampaign } from "../hooks/useSelectCampaign"
 import type { CampaignContext } from "../types/bootstrap"
 import type { WorldListResponse } from "../types/worldAuthoring"
+import { buildWorldChoices, worldAccess } from "../utils/worldAccess"
 import { CharacterContextDetails } from "./CharacterContextDetails"
+import { CharacterParties } from "./CharacterParties"
 import { CharacterPerspectiveSelector } from "./CharacterPerspectiveSelector"
 
 interface HierarchyContextPanelProps {
@@ -106,27 +108,33 @@ export function HierarchyContextPanel({
     state.status === "authenticated" ? state.bootstrap.campaigns : []
   const worldDetail = world?.kind === "ready" ? world.data : null
 
-  // World
+  // World: the same deduplicated choices All worlds shows — explicit world
+  // authority from GET /worlds, plus every world visible through an
+  // authorized campaign (opened via that campaign's World Explorer, preferring
+  // the route campaign). The list does not depend on the current route.
+  const worldChoices = buildWorldChoices(
+    worlds.state.kind === "ready" ? worlds.state.data.items : [],
+    bootstrapCampaigns,
+    campaign?.campaign_id ?? null,
+  )
   const worldName =
     activeWorldId === null
       ? null
-      : (worlds.state.kind === "ready"
-          ? worlds.state.data.items.find((item) => item.world_id === activeWorldId)?.name
-          : undefined) ??
+      : (worldChoices.find((item) => item.world_id === activeWorldId)?.name ??
         worldDetail?.name ??
         campaign?.world_name ??
-        null
+        null)
   const worldOptions = withCurrent(
-    worlds.state.kind === "ready"
-      ? worlds.state.data.items.map((item) => ({ id: item.world_id, label: item.name }))
-      : [],
+    worldChoices.map((item) => ({ id: item.world_id, label: item.name })),
     activeWorldId !== null && worldName !== null
       ? { id: activeWorldId, label: worldName }
       : null,
   )
 
-  // Timeline
-  const timelineListReady = activeWorldId !== null && worldDetail !== null
+  // Timeline: choosing one opens a timeline-authoring route, so it is offered
+  // only for a world the caller may author (server-computed capabilities).
+  const timelineListReady =
+    activeWorldId !== null && worldDetail !== null && worldAccess(worldDetail) === "edit"
   const timelineName =
     activeTimelineId === null
       ? null
@@ -192,7 +200,12 @@ export function HierarchyContextPanel({
             value={activeWorldId ?? ""}
             options={worldOptions}
             enabled={worldOptions.length > 0}
-            onSelect={(worldId) => navigate(`/worlds/${encodeURIComponent(worldId)}`)}
+            onSelect={(worldId) => {
+              const choice = worldChoices.find((item) => item.world_id === worldId)
+              if (choice !== undefined) {
+                navigate(choice.to)
+              }
+            }}
           />
         </section>
 
@@ -274,6 +287,14 @@ export function HierarchyContextPanel({
               perspectives={campaign.character_perspectives}
               selectedCharacterId={selectedCharacterId}
               onSelectCharacter={onSelectCharacter}
+            />
+          )}
+
+          {campaign !== null && selectedCharacterId !== null && (
+            <CharacterParties
+              key={`${campaign.campaign_id}/${selectedCharacterId}`}
+              campaignId={campaign.campaign_id}
+              characterId={selectedCharacterId}
             />
           )}
 

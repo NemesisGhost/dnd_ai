@@ -1,13 +1,12 @@
 import { useEffect } from "react"
 import { useParams, useSearchParams } from "react-router"
-import { AuthoringEditLink } from "../components/AuthoringEditLink"
 import { KnowledgeDetailBoundary } from "../components/KnowledgeDetailBoundary"
-import { knowledgeAuthoringPath } from "../api/knowledgeAuthoring"
 import { usePerspective } from "../context/CharacterPerspectiveContext"
-import { KnowledgeDetailPage } from "./KnowledgeDetailPage"
+import { KnowledgeClaimPage } from "./KnowledgeClaimPage"
 import PlaceholderPage from "./PlaceholderPage"
 
-// Route-based Knowledge detail (UI_STYLE_GUIDE.md §11.2):
+// Route-based Knowledge claim page (UI_STYLE_GUIDE.md §11.2), now also where a claim is
+// edited and where who knows it is managed:
 // /app/:campaignId/knowledge/:knowledgeItemId. The character perspective
 // is carried in the URL's own `character_id` query parameter when present
 // — the only addressable place that survives a direct refresh or bookmark
@@ -68,17 +67,15 @@ export function CampaignKnowledgeDetailPage() {
             characterId={characterId}
             partyId={partyId}
         >
-            {(item) => (
-                <>
-                    <KnowledgeDetailPage campaignId={campaignId} item={item} />
-                    <AuthoringEditLink
-                        campaignId={campaignId}
-                        noun="claim"
-                        viewPath={knowledgeAuthoringPath(campaignId, knowledgeItemId)}
-                        editPath={`/app/${encodeURIComponent(campaignId)}/knowledge/${encodeURIComponent(knowledgeItemId)}/edit`}
-                        detail={item}
-                    />
-                </>
+            {(item, refresh) => (
+                <KnowledgeClaimPage
+                    campaignId={campaignId}
+                    knowledgeItemId={knowledgeItemId}
+                    item={item}
+                    characterId={characterId}
+                    partyId={partyId}
+                    refreshDetail={refresh}
+                />
             )}
         </KnowledgeDetailBoundary>
     )

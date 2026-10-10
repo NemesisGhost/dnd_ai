@@ -17,6 +17,7 @@ import { usePageArrival } from "../hooks/usePageArrival"
 import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard"
 import { useSession } from "../context/SessionContext"
 import { useAuthenticatedSession } from "../layouts/useAuthenticatedSession"
+import { NotFoundContent } from "./NotFoundPage"
 import type {
     CreateWorldRequest,
     CreateWorldResponse,
@@ -32,6 +33,7 @@ import {
     validateName,
     validateRulesetSelection,
 } from "../utils/authoringValidation"
+import { canCreateWorlds } from "../utils/worldAccess"
 import "../components/authoring/authoring.css"
 
 const DEFAULT_TIMELINE_NAME = "Main Timeline"
@@ -42,11 +44,21 @@ function safeReturnTarget(value: string | null): string | null {
     return value === "/campaigns/new" ? value : null
 }
 
+// The route guard in App.tsx (CreateWorldRoute) keeps a user without the
+// server-computed `world.create` from mounting this page at all. This repeats
+// that check as defense in depth, before any request or form state exists; the
+// server's own authorization of POST /worlds remains the enforcement boundary.
 export function CreateWorldPage() {
     const { bootstrap } = useAuthenticatedSession()
+    if (!canCreateWorlds(bootstrap)) {
+        return <NotFoundContent />
+    }
+    return <AuthorizedCreateWorldPage />
+}
+
+function AuthorizedCreateWorldPage() {
     const { state } = useAuthoringResource<RulesetListResponse>(RULESETS_PATH)
     const headingRef = usePageArrival(state.kind !== "loading")
-    const canCreate = bootstrap.global_capabilities?.includes("world.create") === true
 
     return (
         <div className="world-page">
@@ -57,9 +69,7 @@ export function CreateWorldPage() {
                 <h1 ref={headingRef} tabIndex={-1}>
                     Create a world
                 </h1>
-                {!canCreate ? (
-                    <p role="alert">You do not have permission to create worlds.</p>
-                ) : state.kind === "loading" ? (
+                {state.kind === "loading" ? (
                     <p role="status">Loading rulesets…</p>
                 ) : state.kind === "ready" ? (
                     state.data.items.length === 0 ? (

@@ -60,6 +60,7 @@ from dnd_ai.domain.authoring_policy import (
     timeline_blocked_reason,
     world_blocked_reason,
 )
+from dnd_ai.domain.data_classification import audit_change
 from dnd_ai.domain.world_authority import TIMELINE_MANAGE
 from dnd_ai.queries.timelines import timeline_has_blocking_campaigns
 from dnd_ai.queries.world_authority import resolve_world_authority
@@ -288,7 +289,9 @@ def update_timeline(
     if clean_name != timeline.name:
         changed["name"] = {"from": timeline.name, "to": clean_name}
     if clean_description != timeline.description:
-        changed["description"] = {"from": timeline.description, "to": clean_description}
+        changed["description"] = audit_change(
+            "description", timeline.description, clean_description
+        )
     if not changed:
         return TimelineMutationResult(
             timeline_id=timeline_id,

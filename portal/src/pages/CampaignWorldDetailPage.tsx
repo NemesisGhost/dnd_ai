@@ -1,4 +1,5 @@
 import { Link, useParams } from "react-router"
+import { useWorldBackPath } from "../hooks/useWorldBackPath"
 import {
     fetchEventDetail,
     fetchItemDetail,
@@ -7,7 +8,11 @@ import {
     fetchReligionDetail,
 } from "../api/world"
 import { CharacterBoundary } from "../components/CharacterBoundary"
+import { CharacterInventoryPanel } from "../components/InventoryPanels"
+import { ItemAuthoringControls } from "../components/ItemAuthoringControls"
 import { NpcAuthoringControls } from "../components/NpcAuthoringControls"
+import { OrganizationMembers } from "../components/OrganizationMembers"
+import { RelationshipsPanel } from "../components/RelationshipsPanel"
 import { WorldEntityDetailBoundary } from "../components/WorldEntityDetailBoundary"
 import { isWorldDetailCategory } from "../types/world"
 import { CharacterDetailPage } from "./CharacterDetailPage"
@@ -29,6 +34,7 @@ export function CampaignWorldDetailPage() {
         category: string
         entityId: string
     }>()
+    const worldBackPath = useWorldBackPath(campaignId ?? "")
 
     if (
         campaignId === undefined ||
@@ -53,10 +59,13 @@ export function CampaignWorldDetailPage() {
                 resourceLabel="location"
             >
                 {(location) => (
-                    <WorldLocationDetailPage
-                        campaignId={campaignId}
-                        location={location}
-                    />
+                    <>
+                        <WorldLocationDetailPage
+                            campaignId={campaignId}
+                            location={location}
+                        />
+                        <RelationshipsPanel campaignId={campaignId} entityId={entityId} />
+                    </>
                 )}
             </WorldEntityDetailBoundary>
         )
@@ -71,10 +80,14 @@ export function CampaignWorldDetailPage() {
                 resourceLabel="organization"
             >
                 {(organization) => (
-                    <WorldOrganizationDetailPage
-                        campaignId={campaignId}
-                        organization={organization}
-                    />
+                    <>
+                        <WorldOrganizationDetailPage
+                            campaignId={campaignId}
+                            organization={organization}
+                        />
+                        <OrganizationMembers campaignId={campaignId} organizationId={entityId} />
+                        <RelationshipsPanel campaignId={campaignId} entityId={entityId} />
+                    </>
                 )}
             </WorldEntityDetailBoundary>
         )
@@ -89,10 +102,13 @@ export function CampaignWorldDetailPage() {
                 resourceLabel="religion"
             >
                 {(religion) => (
-                    <WorldReligionDetailPage
-                        campaignId={campaignId}
-                        religion={religion}
-                    />
+                    <>
+                        <WorldReligionDetailPage
+                            campaignId={campaignId}
+                            religion={religion}
+                        />
+                        <RelationshipsPanel campaignId={campaignId} entityId={entityId} />
+                    </>
                 )}
             </WorldEntityDetailBoundary>
         )
@@ -105,12 +121,16 @@ export function CampaignWorldDetailPage() {
                 entityId={entityId}
                 fetchDetail={fetchItemDetail}
                 resourceLabel="item"
+                lifecycle={false}
             >
                 {(item) => (
-                    <WorldItemDetailPage
-                        campaignId={campaignId}
-                        item={item}
-                    />
+                    <>
+                        <WorldItemDetailPage
+                            campaignId={campaignId}
+                            item={item}
+                        />
+                        <ItemAuthoringControls campaignId={campaignId} itemId={entityId} />
+                    </>
                 )}
             </WorldEntityDetailBoundary>
         )
@@ -142,14 +162,12 @@ export function CampaignWorldDetailPage() {
             {(character) => (
                 <div>
                     <p>
-                        <Link
-                            to={`/app/${encodeURIComponent(campaignId)}/world`}
-                        >
-                            Back to World
-                        </Link>
+                        <Link to={worldBackPath}>Back to World</Link>
                     </p>
                     <CharacterDetailPage character={character} />
+                    <CharacterInventoryPanel campaignId={campaignId} characterId={entityId} />
                     <NpcAuthoringControls campaignId={campaignId} characterId={entityId} />
+                    <RelationshipsPanel campaignId={campaignId} entityId={entityId} />
                 </div>
             )}
         </CharacterBoundary>

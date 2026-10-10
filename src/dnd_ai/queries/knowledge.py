@@ -22,17 +22,17 @@ module resolves exactly the two audiences that split already implies:
 Per §15's own words ("A user may be allowed to inspect a claim because the
 user's selected character knows it, because the user's party knows it,
 because it is public, ... or because an explicit resource grant allows
-it"), party-scoped access is the only path this first cut resolves —
-public knowledge (`knowledge.public_knowledge`, location-scoped) and
-individual (non-party) `knowledge.entity_knowledge` are deferred until a
-caller actually needs them, not invented speculatively here. A non-GM
-caller with no authorized party perspective, or an authorized party with
-no `campaign.party_knowledge` row for this item at all, gets nothing —
-`campaign.party_knowledge`'s own row existing is itself the "does this
-party know this at all" signal, and a knowledge item's very existence can
-be sensitive (`sensitivity` up to `'dangerous'`), so this module raises
-the same fixed, non-disclosing error for "the item doesn't exist" and "the
-party has no belief about it" identically.
+it"), a non-GM caller is resolved through, in order: the selected
+character's own `knowledge.entity_knowledge` belief, an authorized party's
+`campaign.party_knowledge` belief (the explicit party filter, or the
+character's eligible parties when none is chosen), then — when the caller
+allows it — the public projection (`knowledge.public_knowledge`). A non-GM
+with none of these for the item gets nothing: a belief row's existence is
+itself the "does this audience know this at all" signal, and a knowledge
+item's very existence can be sensitive (`sensitivity` up to
+`'dangerous'`), so this module raises the same fixed, non-disclosing error
+for "the item doesn't exist" and "this audience has no belief about it"
+identically.
 
 This module is framework-free and performs no authorization of its own:
 `include_ground_truth` and `party_id` must already be authorized decisions
@@ -76,6 +76,14 @@ class KnowledgeView:
     awareness_level: str | None
     confidence: int | None
     willing_to_share: bool | None
+    # The claim's optional subject, unredacted — the API decides whether this
+    # caller may be shown it (`dnd_ai.api.knowledge.resolve_subject_summaries`).
+    subject_entity_id: uuid.UUID | None = None
+    # The knowledge path that produced this view — the same vocabulary as the
+    # list's `scope`: `canonical` (ground truth), `character` (the knower's own
+    # record), `party` (an authorized party's record) or `public` (public lore,
+    # no personal record at all).
+    scope: str = "canonical"
 
 
 def get_knowledge_view(
@@ -88,27 +96,33 @@ def get_knowledge_view(
     include_ground_truth: bool,
     knower_entity_id: uuid.UUID | None = None,
     allow_public: bool = False,
+    eligible_party_ids: tuple[uuid.UUID, ...] = (),
 ) -> KnowledgeView:
     """The effective view of one knowledge item: ground truth for a GM
-    (`include_ground_truth=True`), the authorized `party_id`'s own current
-    belief (`campaign.party_knowledge`), or — when `party_id` is `None` and
-    `knower_entity_id` is set (an authorized character-private lookup, the
-    Phase 13D Knowledge screen's `character_private` view) — that knower's
-    own `knowledge.entity_knowledge` belief. Raises
+    (`include_ground_truth=True`); otherwise the authorized
+    `knower_entity_id`'s own `knowledge.entity_knowledge` belief when one is
+    recorded, else the belief of the authorized `party_id` — or, with no
+    party filter, of the lowest-`party_knowledge_id` row among
+    `eligible_party_ids` — (`campaign.party_knowledge`), else (with
+    `allow_public`) the public projection. That is the precedence
+    `dnd_ai.queries.knowledge_browse` resolves for the list. Raises
     `KnowledgeNotAuthorizedError` for a nonexistent item, one in a
     different world than `expected_world_id` (always the caller's own
     resolved-timeline world — `dnd_ai.api._shared.timeline_world_id`, never
     caller-supplied), or — for a non-GM caller — one the authorized
     party/knower has no belief record for.
 
-    `knower_entity_id` must already be an authorized decision (the caller
-    holds `character.view_knowledge` for it) exactly like `party_id` —
-    this query performs no authorization of its own."""
+    `knower_entity_id` and `eligible_party_ids` must already be authorized
+    decisions (the caller holds `character.view_knowledge` for the knower,
+    and each party passes `dnd_ai.api.access.resolve_party_perspective`)
+    exactly like `party_id` — this query performs no authorization of its
+    own."""
     row = (
         connection.execute(
             text("""
                 SELECT ki.knowledge_item_id, e.world_id, kt.code AS knowledge_type_code,
-                       ki.canonical_statement, ts.code AS truth_status_code, ki.sensitivity
+                       ki.canonical_statement, ts.code AS truth_status_code, ki.sensitivity,
+                       ki.subject_entity_id
                 FROM knowledge.knowledge_items ki
                 JOIN core.entities e ON e.entity_id = ki.knowledge_item_id
                 JOIN knowledge.knowledge_types kt ON kt.knowledge_type_id = ki.knowledge_type_id
@@ -137,23 +151,16 @@ def get_knowledge_view(
             awareness_level=None,
             confidence=None,
             willing_to_share=None,
+            subject_entity_id=row["subject_entity_id"],
+            scope="canonical",
         )
 
-    if party_id is not None:
-        belief_row = (
-            connection.execute(
-                text("""
-                    SELECT awareness_level, confidence, interpretation, willing_to_share
-                    FROM campaign.party_knowledge
-                    WHERE timeline_id = :timeline AND party_id = :party
-                      AND knowledge_item_id = :item
-                """),
-                {"timeline": timeline_id, "party": party_id, "item": knowledge_item_id},
-            )
-            .mappings()
-            .one_or_none()
-        )
-    elif knower_entity_id is not None:
+    party_ids = (party_id,) if party_id is not None else eligible_party_ids
+    belief_row = None
+    scope = "character"
+    if knower_entity_id is not None:
+        # The selected character's own belief is the most specific projection
+        # and wins over any party's (the list's precedence, too).
         belief_row = (
             connection.execute(
                 text("""
@@ -167,8 +174,23 @@ def get_knowledge_view(
             .mappings()
             .one_or_none()
         )
-    else:
-        belief_row = None
+    if belief_row is None and party_ids:
+        scope = "party"
+        belief_row = (
+            connection.execute(
+                text("""
+                    SELECT awareness_level, confidence, interpretation, willing_to_share
+                    FROM campaign.party_knowledge
+                    WHERE timeline_id = :timeline AND party_id = ANY(CAST(:parties AS uuid[]))
+                      AND knowledge_item_id = :item
+                    ORDER BY party_knowledge_id
+                    LIMIT 1
+                """),
+                {"timeline": timeline_id, "parties": list(party_ids), "item": knowledge_item_id},
+            )
+            .mappings()
+            .first()
+        )
 
     if belief_row is None and allow_public:
         # Public lore fallback (Phase 13D Knowledge screen `public` view):
@@ -177,30 +199,45 @@ def get_knowledge_view(
         # caller — its canonical statement only, never the GM-only
         # `truth_status`/`sensitivity` metadata. This keeps the `public`
         # list and this detail route in agreement.
-        is_public = connection.execute(
-            text("""
-                SELECT 1 FROM knowledge.public_knowledge
-                WHERE timeline_id = :timeline AND knowledge_item_id = :item
-                LIMIT 1
-            """),
-            {"timeline": timeline_id, "item": knowledge_item_id},
-        ).scalar()
-        if is_public is not None:
+        # The representative row is the list's own (`knowledge_browse.
+        # _PUBLIC_ITEMS_CTE`): public longest, earliest `known_since`, so the
+        # awareness shown here is the awareness the list card shows.
+        public_row = (
+            connection.execute(
+                text("""
+                    SELECT pub.awareness_level
+                    FROM knowledge.public_knowledge pub
+                    LEFT JOIN core.world_times pwt
+                           ON pwt.world_time_id = pub.known_since_world_time_id
+                    WHERE pub.timeline_id = :timeline AND pub.knowledge_item_id = :item
+                    ORDER BY pwt.sort_key ASC NULLS LAST, pub.public_knowledge_id
+                    LIMIT 1
+                """),
+                {"timeline": timeline_id, "item": knowledge_item_id},
+            )
+            .mappings()
+            .first()
+        )
+        if public_row is not None:
+            # Public lore has no personal record: confidence and willingness to
+            # share are never invented for it.
             return KnowledgeView(
                 knowledge_item_id=row["knowledge_item_id"],
                 knowledge_type_code=row["knowledge_type_code"],
                 statement=row["canonical_statement"],
                 truth_status_code=None,
                 sensitivity=None,
-                awareness_level=None,
+                awareness_level=public_row["awareness_level"],
                 confidence=None,
                 willing_to_share=None,
+                subject_entity_id=row["subject_entity_id"],
+                scope="public",
             )
 
     if belief_row is None:
         raise KnowledgeNotAuthorizedError(
             f"no belief recorded for knowledge item {knowledge_item_id} on timeline "
-            f"{timeline_id} (party={party_id}, knower={knower_entity_id})"
+            f"{timeline_id} (parties={party_ids}, knower={knower_entity_id})"
         )
 
     return KnowledgeView(
@@ -212,4 +249,6 @@ def get_knowledge_view(
         awareness_level=belief_row["awareness_level"],
         confidence=belief_row["confidence"],
         willing_to_share=belief_row["willing_to_share"],
+        subject_entity_id=row["subject_entity_id"],
+        scope=scope,
     )

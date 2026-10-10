@@ -75,6 +75,9 @@ Accepted limitations of the correction:
 
 ## Accepted limitations and remaining work
 
+- **Provenance and history (disclosed 2026-10-05):** safe source/provenance attachment, provenance presentation, and prior-version history/revision comparison are **not provided** by Phase 14 (only the `gm_entry` source and the audit trail exist). They are scheduled in Phase 15 checkpoints 15.2R (revision capture), 15.3C-1 (sources and provenance), and 15.3C-2 (review queues and comparison).
+- **Clean-install access defaults (disclosed 2026-10-05; resolved by Phase 15 checkpoint 15.2A-1):** a clean database had no relationship-type capability mappings; migration `114_relationship_defaults` now seeds them.
+
 - Phase 15 supplies authoring of world content (entity creation/editing per type); only the lifecycle kernel and its portal controls exist now.
 - Invitation delivery and collaboration (Phase 16) are untouched; the scenario adds a player membership directly.
 - No import, AI, Foundry UI, or deployment packaging was added.

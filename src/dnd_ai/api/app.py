@@ -56,41 +56,61 @@ from .ai_synthesis import router as ai_synthesis_router
 from .audit_history import router as audit_history_router
 from .auth import dispose_jwks_client
 from .cache_control import NoStoreMiddleware
+from .campaign_clock import router as campaign_clock_router
 from .campaign_invitations import router as campaign_invitations_router
 from .campaigns import router as campaigns_router
+from .character_builds import router as character_builds_router
 from .character_state import router as character_state_router
 from .characters import router as characters_router
 from .correlation import CorrelationIdMiddleware
 from .deps import dispose_engine, get_engine, verify_database_identity
 from .dungeon import router as dungeon_router
+from .dungeon_authoring import router as dungeon_authoring_router
+from .encounter_preparation import router as encounter_preparation_router
 from .encounters import router as encounters_router
 from .entity_lifecycle import router as entity_lifecycle_router
 from .errors import install_error_handlers
+from .event_corrections import router as event_corrections_router
 from .events import router as events_router
 from .foundry_pairing import router as foundry_pairing_router
 from .integration import router as integration_router
 from .interactions import router as interactions_router
 from .invitation_onboarding import router as invitation_onboarding_router
+from .item_authoring import router as item_authoring_router
+from .item_definition_authoring import router as item_definition_authoring_router
 from .items import router as items_router
 from .knowledge import router as knowledge_router
 from .knowledge_authoring import router as knowledge_authoring_router
+from .knowledge_runtime import router as knowledge_runtime_router
 from .local_auth import router as local_auth_router
 from .location_authoring import router as location_authoring_router
 from .memberships import router as memberships_router
 from .movement import router as movement_router
 from .npc_authoring import router as npc_authoring_router
+from .npc_portrayal import router as npc_portrayal_router
 from .organization_authoring import router as organization_authoring_router
+from .organization_members import router as organization_members_router
+from .parties import router as parties_router
+from .player_character_authoring import router as player_character_authoring_router
 from .preview import router as preview_router
 from .quest_authoring import router as quest_authoring_router
+from .quest_runtime import router as quest_runtime_router
 from .quests import router as quests_router
 from .reference_corpus import router as reference_corpus_router
+from .relationship_authoring import router as relationship_authoring_router
 from .relationships import router as relationships_router
+from .review_queue import router as review_queue_router
 from .rulesets import router as rulesets_router
+from .session_authoring import router as session_authoring_router
+from .session_play import router as session_play_router
 from .sessions import router as sessions_router
+from .sources import router as sources_router
 from .summary import router as summary_router
 from .timelines import router as timelines_router
+from .travel import router as travel_router
 from .user_preferences import router as user_preferences_router
 from .world_explorer import router as world_explorer_router
+from .world_time import router as world_time_router
 from .worlds import router as worlds_router
 
 logger = logging.getLogger(__name__)
@@ -157,13 +177,19 @@ def create_app() -> FastAPI:
     app.include_router(ai_synthesis_router)
     app.include_router(audit_history_router)
     app.include_router(campaign_invitations_router)
+    app.include_router(campaign_clock_router)
     app.include_router(campaigns_router)
+    app.include_router(character_builds_router)
     app.include_router(character_state_router)
     app.include_router(characters_router)
     app.include_router(dungeon_router)
+    app.include_router(encounter_preparation_router)
+    app.include_router(review_queue_router)
+    app.include_router(sources_router)
     app.include_router(encounters_router)
     app.include_router(entity_lifecycle_router)
     app.include_router(events_router)
+    app.include_router(event_corrections_router)
     app.include_router(foundry_pairing_router)
     app.include_router(integration_router)
     app.include_router(interactions_router)
@@ -175,6 +201,8 @@ def create_app() -> FastAPI:
     app.include_router(memberships_router)
     app.include_router(movement_router)
     app.include_router(npc_authoring_router)
+    app.include_router(parties_router)
+    app.include_router(player_character_authoring_router)
     app.include_router(knowledge_authoring_router)
     app.include_router(organization_authoring_router)
     app.include_router(preview_router)
@@ -184,10 +212,22 @@ def create_app() -> FastAPI:
     app.include_router(relationships_router)
     app.include_router(rulesets_router)
     app.include_router(sessions_router)
+    app.include_router(session_authoring_router)
+    app.include_router(session_play_router)
+    app.include_router(quest_runtime_router)
+    app.include_router(knowledge_runtime_router)
+    app.include_router(dungeon_authoring_router)
+    app.include_router(relationship_authoring_router)
+    app.include_router(organization_members_router)
+    app.include_router(travel_router)
+    app.include_router(item_authoring_router)
+    app.include_router(item_definition_authoring_router)
+    app.include_router(npc_portrayal_router)
     app.include_router(summary_router)
     app.include_router(timelines_router)
     app.include_router(user_preferences_router)
     app.include_router(world_explorer_router)
+    app.include_router(world_time_router)
     app.include_router(worlds_router)
 
     @app.get("/healthz")

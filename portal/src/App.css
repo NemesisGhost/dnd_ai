@@ -422,6 +422,10 @@ a.app-header__title:focus-visible {
   max-width: 48rem;
 }
 
+.placeholder-page--wide {
+  max-width: none;
+}
+
 .placeholder-page h1 {
   margin-top: 0;
   margin-bottom: 0.75rem;
@@ -958,12 +962,145 @@ a.app-header__title:focus-visible {
 
 /* World page */
 
-.world-page__filters {
+.world-page {
+  min-width: 0;
+}
+
+.world-page__toolbar {
   display: flex;
   flex-wrap: wrap;
   gap: 1rem 1.5rem;
   align-items: flex-end;
+  justify-content: space-between;
   margin-bottom: 1.5rem;
+}
+
+.world-page__toolbar .authoring-page__actions-row {
+  margin: 0;
+}
+
+.world-page__search {
+  display: flex;
+  flex: 1 1 20rem;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.5rem;
+  align-items: flex-end;
+  max-width: 36rem;
+}
+
+.world-page__search .world-page__field {
+  flex: 1 1 14rem;
+}
+
+.world-page__toggle {
+  min-height: 2.25rem;
+  display: inline-flex;
+  align-items: center;
+}
+
+.world-page__body {
+  display: grid;
+  grid-template-columns: 10.5rem minmax(0, 1fr);
+  gap: 1.5rem;
+  align-items: start;
+}
+
+.world-categories__list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.world-categories__link {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
+  color: var(--color-text);
+  text-decoration: none;
+  border: 1px solid transparent;
+  border-radius: 0.375rem;
+}
+
+.world-categories__count {
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.world-categories__link[aria-current="page"] .world-categories__count {
+  color: inherit;
+}
+
+.world-categories__link:hover {
+  background-color: var(--color-surface-hover);
+}
+
+.world-categories__link[aria-current="page"] {
+  color: var(--color-primary-foreground);
+  background-color: var(--color-primary);
+  font-weight: 700;
+}
+
+.world-categories__link:focus-visible {
+  outline: 3px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.world-page__results {
+  min-width: 0;
+  container-type: inline-size;
+}
+
+.world-page__results .card-grid {
+  margin-top: 0;
+}
+
+.world-empty {
+  padding: 1.5rem;
+  border: 1px dashed var(--color-border);
+  border-radius: 0.5rem;
+  overflow-wrap: anywhere;
+}
+
+.world-empty p {
+  margin-top: 0;
+}
+
+.world-pager {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+  margin-top: 1.5rem;
+}
+
+.world-pager__position {
+  color: var(--color-text-muted);
+}
+
+@media (max-width: 48rem) {
+  .world-page__body {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1rem;
+  }
+
+  .world-categories__list {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .world-categories__link {
+    gap: 0.4rem;
+    padding: 0.4rem 0.8rem;
+    border-color: var(--color-border);
+    border-radius: 999px;
+  }
 }
 
 .world-page__field {
@@ -1139,7 +1276,6 @@ a.app-header__title:focus-visible {
 
 .infobox__related-list {
   margin: 0;
-  padding: 0;
   list-style: none;
   display: flex;
   flex-direction: column;
@@ -1253,6 +1389,43 @@ a.app-header__title:focus-visible {
   margin: 0.5rem 0 0;
   font-size: 0.85rem;
   color: var(--color-infobox-muted);
+}
+
+/* Party memberships: a native disclosure under the character selector, in the Info Box's own
+   colours, with long party names wrapping instead of overflowing a narrow panel. */
+.campaign-context-panel__parties {
+  margin: 0.5rem 0 0;
+  font-size: 0.85rem;
+}
+
+.campaign-context-panel__parties > summary {
+  font-weight: 600;
+  color: var(--color-infobox-text);
+  cursor: pointer;
+}
+
+.campaign-context-panel__party-list {
+  margin: 0.35rem 0 0;
+  padding-left: 1.25rem;
+}
+
+.campaign-context-panel__party-list li {
+  padding: 0.1rem 0;
+  overflow-wrap: anywhere;
+}
+
+.campaign-context-panel__party-list a,
+.campaign-context-panel__link-button {
+  color: var(--color-infobox-link);
+}
+
+.campaign-context-panel__link-button {
+  padding: 0;
+  font: inherit;
+  text-decoration: underline;
+  background: none;
+  border: 0;
+  cursor: pointer;
 }
 
 .campaign-context-panel__section .character-perspective-selector label {
@@ -1815,10 +1988,56 @@ a.app-header__title:focus-visible {
   list-style: none;
 }
 
-.world-card-grid,
+.world-card-grid {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1.25rem;
+}
+
+/* Two columns once the results area itself (not the viewport, which also
+   holds the sidebar and Info Box) is wide enough. */
+@container (min-width: 34rem) {
+  .world-card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.world-card .entity-card__link {
+  height: 100%;
+  gap: 0.5rem;
+  padding: 1.1rem 1.25rem;
+}
+
+.world-card .entity-card__title {
+  font-size: 1.2rem;
+  line-height: 1.3;
+}
+
+.world-card .entity-card__eyebrow {
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.world-card .entity-card__summary {
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
+/* Knowledge claims are sentences: wider cards (about 28rem or more) keep them comfortable to read. */
 .knowledge-card-grid {
   grid-template-columns:
-    repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+    repeat(auto-fit, minmax(min(100%, 28rem), 1fr));
+}
+
+.knowledge-card .entity-card__title {
+  font-size: 1.0625rem;
+  line-height: 1.45;
+}
+
+.knowledge-card .entity-card__metadata {
+  color: var(--color-text-muted);
+  font-size: 0.8125rem;
 }
 
 .quest-card-grid {
@@ -1908,6 +2127,55 @@ a.app-header__title:focus-visible {
   color: var(--color-text);
   background-color: var(--color-surface-muted);
   border-radius: 0.25rem;
+}
+
+/* A card's secondary content, below (never inside) its main link. */
+.entity-card__footer {
+  padding: 0 0.85rem 0.85rem;
+}
+
+/* The labelled "About" area: a compact one on Knowledge cards, a prominent block on the claim page. */
+.knowledge-about {
+  overflow-wrap: anywhere;
+}
+
+.knowledge-about__label {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.knowledge-about__subject {
+  margin: 0.125rem 0 0;
+}
+
+.knowledge-about__type {
+  margin-left: 0.25rem;
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+}
+
+.knowledge-about--card {
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.knowledge-about--claim {
+  margin: 1rem 0;
+  max-width: none;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--color-border);
+  border-left: 4px solid var(--color-primary);
+  border-radius: 0.375rem;
+  background-color: var(--color-surface);
+}
+
+.knowledge-about--claim .knowledge-about__name {
+  font-size: 1.125rem;
+  font-weight: 700;
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -2760,4 +3028,895 @@ a.app-header__title:focus-visible {
   max-width: 64rem;
   margin-top: 1rem;
   min-width: 0;
+}
+
+/* Campaign Home recent events: compact list beside the selected event's
+   detail on wide screens, stacked on narrow ones. */
+
+.recent-events {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem;
+}
+
+.recent-events__list {
+  margin: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  max-height: 20rem;
+  overflow-y: auto;
+  /* Room for the 2px focus ring + 2px offset, which the scroll container
+     would otherwise clip at its edges; scroll-padding keeps it unclipped when
+     keyboard focus scrolls an entry into view. */
+  padding: 0.25rem;
+  scroll-padding: 0.25rem;
+}
+
+.recent-events__item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.125rem;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  color: var(--color-text);
+  font: inherit;
+  text-align: left;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-left: 4px solid transparent;
+  border-radius: 0.375rem;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.recent-events__item:hover {
+  background-color: var(--color-surface-hover);
+}
+
+.recent-events__item:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.recent-events__item[aria-current="true"] {
+  background-color: var(--color-surface-muted);
+  border-color: var(--color-accent);
+  border-left-color: var(--color-accent);
+  font-weight: 600;
+}
+
+.recent-events__item-time,
+.recent-events__detail-time {
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+  font-weight: 400;
+}
+
+.recent-events__detail {
+  min-width: 0;
+  padding: 0.75rem 1rem;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 0.375rem;
+  overflow-wrap: anywhere;
+}
+
+.recent-events__detail h3 {
+  margin-top: 0;
+}
+
+@media (min-width: 48rem) {
+  .recent-events {
+    grid-template-columns: minmax(12rem, 1fr) minmax(0, 2fr);
+    align-items: start;
+  }
+}
+
+/* Campaign Home: Campaign time is a compact, content-height bar below Recent
+   events; Game master tools are a separate section beneath it. */
+
+.campaign-time {
+  margin-top: 1.5rem;
+  padding: 0.5rem 0.75rem;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 0.375rem;
+}
+
+.campaign-time__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+.campaign-time__summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.75rem;
+  min-width: 0;
+  flex: 1 1 16rem;
+}
+
+.campaign-time__label {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.campaign-time__now {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.campaign-time__actions {
+  gap: 0.5rem;
+}
+
+.campaign-time__actions .authoring-button {
+  padding: 0.25rem 0.75rem;
+}
+
+.campaign-time__form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.gm-tools {
+  margin-top: 1.5rem;
+}
+
+.gm-tools__heading {
+  margin: 0 0 0.5rem;
+  padding-bottom: 0.5rem;
+  font-size: 1rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.gm-tools__links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.session-run-start {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.session-run-start h2 {
+  margin: 0;
+}
+
+/* Run Session: breadcrumb, compact in-world time bar, stage and section navigation, and the
+   bordered section panel. Navigation only; nothing here depends on colour alone. */
+
+.session-run__breadcrumb {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.session-run__breadcrumb li + li::before {
+  content: "›";
+  margin-right: 0.25rem;
+}
+
+.campaign-time--compact {
+  margin-top: 0.5rem;
+  padding: 0.25rem 0.75rem;
+}
+
+.campaign-time--compact .campaign-time__label {
+  font-size: 0.9375rem;
+}
+
+.campaign-time__form[hidden] {
+  display: none;
+}
+
+.session-run__stages {
+  margin: 0.75rem 0;
+}
+
+.session-run__stages ol {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.session-run__stage {
+  display: inline-block;
+  padding: 0.375rem 0.875rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.375rem;
+  background-color: var(--color-surface);
+  color: inherit;
+  text-decoration: none;
+}
+
+.session-run__stage:hover,
+.session-run__stage:focus-visible {
+  border-color: var(--color-primary);
+}
+
+.session-run__stage--current {
+  border-width: 2px;
+  border-color: var(--color-primary);
+  font-weight: 700;
+}
+
+.session-run__layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.75rem;
+}
+
+.session-run__sections ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.session-run__section-link {
+  display: inline-block;
+  padding: 0.25rem 0;
+  border-bottom: 2px solid transparent;
+  color: inherit;
+}
+
+.session-run__section-link--current {
+  border-bottom-color: var(--color-primary);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.session-run__content {
+  min-width: 0;
+}
+
+.session-run__panel {
+  max-width: 44rem;
+  padding: 0.75rem 1rem 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.375rem;
+  background-color: var(--color-surface);
+}
+
+.session-run__panel[hidden] {
+  display: none;
+}
+
+.session-run__panel > h2 {
+  margin: 0 0 0.25rem;
+  font-size: 1.25rem;
+}
+
+.session-run__panel > h2:focus {
+  outline: none;
+}
+
+.session-run__panel > h2:focus-visible {
+  outline: 3px solid var(--color-focus);
+  outline-offset: 4px;
+}
+
+.session-run__panel > .authoring-page__lead {
+  margin: 0 0 0.75rem;
+}
+
+.session-run__review h3 {
+  margin: 1rem 0 0.25rem;
+  font-size: 1rem;
+}
+
+.session-run-start {
+  margin-bottom: 0.75rem;
+}
+
+@media (min-width: 64rem) {
+  .session-run__layout {
+    grid-template-columns: 12rem minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .session-run__sections ul {
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 40rem) {
+  .session-run__stage {
+    flex: 1 1 auto;
+  }
+}
+
+/* Encounter participants: compact add form above an aligned roster. Columns on wide screens;
+   each row reflows into a grouped block (identity, then controls) on narrow ones. */
+
+.encounter-roster__add {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: end;
+  gap: 0.5rem 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.encounter-roster__add > * {
+  min-width: 0;
+}
+
+/* The picked character's Clear button sits beside the input without wrapping the row. */
+.encounter-roster__add .authoring-combobox {
+  flex-wrap: nowrap;
+}
+
+.encounter-roster__add .authoring-combobox .authoring-field__control {
+  flex: 1 1 8rem;
+}
+
+.encounter-roster__button {
+  width: auto;
+  padding: 0.25rem 0.75rem;
+}
+
+.encounter-roster__head,
+.encounter-roster__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.25rem 0.75rem;
+}
+
+.encounter-roster__head {
+  display: none;
+}
+
+.encounter-roster__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.encounter-roster__row {
+  padding: 0.5rem 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.encounter-roster__who {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 0.5rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.encounter-roster__type {
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+}
+
+.encounter-roster__controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.encounter-roster__remove {
+  min-width: 2rem;
+  margin-left: auto;
+  padding: 0.25rem 0.5rem;
+  line-height: 1;
+}
+
+.encounter-roster__side {
+  width: auto;
+  min-width: 7rem;
+  max-width: 100%;
+}
+
+.encounter-roster__state {
+  font-size: 0.875rem;
+  font-style: italic;
+}
+
+.encounter-roster__error {
+  grid-column: 1 / -1;
+}
+
+@media (min-width: 40rem) {
+  .encounter-roster__add {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+  }
+
+  .encounter-roster__controls {
+    flex-wrap: nowrap;
+  }
+
+  .encounter-roster__head,
+  .encounter-roster__row {
+    grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+    align-items: center;
+  }
+
+  .encounter-roster__head {
+    display: grid;
+    padding-bottom: 0.25rem;
+    color: var(--color-text-muted);
+    font-size: 0.875rem;
+    font-weight: 700;
+  }
+}
+
+/* Knowledge claim page: one page for the claim, what it is about, the GM's canonical record,
+   the selected character's knowledge and the roster of who knows it. */
+
+/* The claim page uses the whole main-content width (the page container's own cap applies);
+   the generic 40rem form column is lifted here so nothing on it is narrower than its content. */
+.knowledge-claim .authoring-form {
+  max-width: none;
+}
+
+.knowledge-claim__header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.knowledge-claim__headline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+}
+
+/* The claim is the page's headline. */
+.knowledge-claim__title {
+  flex: 1 1 20rem;
+  margin: 0;
+  font-size: 1.5rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.knowledge-claim__title:focus {
+  outline: none;
+}
+
+.knowledge-claim__title:focus-visible {
+  outline: 3px solid var(--color-focus);
+  outline-offset: 4px;
+}
+
+.knowledge-claim__status {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.knowledge-claim__replaced {
+  margin: 0;
+}
+
+.knowledge-claim__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 1rem;
+  font-size: 0.9375rem;
+}
+
+/* The preview action sits with the other header facts; its opened form drops to a row of its own. */
+.knowledge-claim__meta .audience-preview-panel {
+  display: contents;
+}
+
+.knowledge-claim__meta .audience-preview-panel > section {
+  flex: 1 1 100%;
+  margin-top: 0.5rem;
+}
+
+.knowledge-claim__next {
+  font-weight: 700;
+}
+
+/* The Guided workspace's panels fill the content column; Run Session keeps its reading width. */
+.session-run__panel--wide {
+  max-width: none;
+}
+
+.knowledge-review__facts dd {
+  overflow-wrap: anywhere;
+}
+
+.knowledge-review__statement {
+  font-size: 1.125rem;
+}
+
+.knowledge-claim__claim {
+  margin: 1rem 0;
+}
+
+.knowledge-claim__textarea {
+  min-height: 4.5rem;
+  field-sizing: content;
+  font-size: 1.25rem;
+  line-height: 1.4;
+}
+
+.knowledge-section {
+  margin: 1.25rem 0;
+}
+
+.knowledge-section > h2 {
+  margin: 0 0 0.25rem;
+  font-size: 1.25rem;
+}
+
+.knowledge-section > h2:focus {
+  outline: none;
+}
+
+.knowledge-section > h2:focus-visible {
+  outline: 3px solid var(--color-focus);
+  outline-offset: 4px;
+}
+
+.knowledge-claim__text {
+  margin: 0;
+  font-size: 1.5rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.knowledge-claim__kind {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+}
+
+.knowledge-claim__actions {
+  align-items: center;
+  margin-top: 0.75rem;
+}
+
+.knowledge-gm {
+  margin: 1.25rem 0;
+}
+
+.knowledge-gm > h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.125rem;
+}
+
+.knowledge-gm__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
+  gap: 0.75rem 1rem;
+  margin: 0;
+}
+
+.knowledge-gm__facts > div {
+  display: flex;
+  flex-direction: column;
+}
+
+.knowledge-gm__facts dt {
+  color: var(--color-text-muted);
+  font-size: 0.8125rem;
+  font-weight: 700;
+}
+
+.knowledge-gm__facts dd {
+  margin: 0;
+}
+
+.knowledge-gm__wide {
+  grid-column: 1 / -1;
+}
+
+/* Knowledge details: the claim's kind and what the selected perspective knows, as one compact
+   surface. Labels sit above values; the grid is four columns when they fit, then two, then one. */
+.knowledge-details {
+  margin: 1.25rem 0;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.375rem;
+  background-color: var(--color-surface);
+}
+
+.knowledge-details__heading {
+  margin: 0 0 0.5rem;
+  font-size: 1.125rem;
+}
+
+.knowledge-details__perspective {
+  margin: 0 0 0.5rem;
+  color: var(--color-text-muted);
+  font-weight: 600;
+}
+
+.knowledge-details > .authoring-note {
+  margin: 0 0 0.75rem;
+}
+
+.knowledge-details__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 8rem), 1fr));
+  gap: 1rem 1.25rem;
+  margin: 0;
+}
+
+.knowledge-details__item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-width: 0;
+}
+
+.knowledge-details__item dt {
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.knowledge-details__item dd {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 1.25rem;
+  font-weight: 600;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.knowledge-claim__state {
+  align-self: center;
+  font-style: italic;
+}
+
+/* Who knows this: compact rows, reflowing to grouped blocks on narrow screens. */
+
+.knowledge-roster__group {
+  margin-top: 1rem;
+}
+
+.knowledge-roster__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  padding-bottom: 0.25rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.knowledge-roster__head h3 {
+  margin: 0;
+  font-size: 1.0625rem;
+}
+
+.knowledge-roster__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.knowledge-roster__empty {
+  margin: 0.375rem 0 0;
+  color: var(--color-text-muted);
+  font-size: 0.9375rem;
+}
+
+.knowledge-roster__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.knowledge-roster__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.25rem 0.75rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.knowledge-roster__name {
+  min-width: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.knowledge-roster__type,
+.knowledge-roster__state {
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+  font-weight: 400;
+}
+
+.knowledge-roster__toggle {
+  justify-self: start;
+  padding: 0.25rem 0.75rem;
+}
+
+.knowledge-roster__details,
+.knowledge-roster__form {
+  grid-column: 1 / -1;
+  max-width: 48rem;
+  margin-top: 0.5rem;
+  padding: 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.375rem;
+  background-color: var(--color-surface);
+}
+
+@media (min-width: 40rem) {
+  .knowledge-roster__row {
+    grid-template-columns: minmax(0, 2fr) minmax(0, 2fr) auto;
+    align-items: center;
+  }
+
+  .knowledge-roster__row:not(.knowledge-roster__row--knower) {
+    grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  }
+}
+
+.knowledge-about--claim .authoring-field {
+  max-width: 40rem;
+  margin-top: 0.5rem;
+}
+
+/* A belief's fields sit side by side when there is room; the free text and actions take the full row. */
+.knowledge-roster__details .authoring-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
+  gap: 0.75rem 1rem;
+  max-width: none;
+}
+
+.knowledge-roster__details .authoring-form > :nth-child(n + 3) {
+  grid-column: 1 / -1;
+}
+
+/* Lifecycle in the claim page's header: status badge, the next step, and the rest under "More". */
+
+.lifecycle-compact {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-right: auto;
+}
+
+.lifecycle-compact__more {
+  position: relative;
+}
+
+.lifecycle-compact__more > summary {
+  display: inline-block;
+  cursor: pointer;
+  list-style: none;
+}
+
+.lifecycle-compact__more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.lifecycle-compact__menu {
+  position: absolute;
+  z-index: 10;
+  top: 100%;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 11rem;
+  margin-top: 0.25rem;
+  padding: 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.375rem;
+  background-color: var(--color-surface);
+}
+
+.lifecycle-compact__error {
+  flex-basis: 100%;
+}
+
+/* The selected subject as one resource field: name and type, then Open / Change / Clear. */
+
+.knowledge-about__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+.knowledge-about__row .knowledge-about__subject {
+  margin: 0.125rem 0 0;
+}
+
+.knowledge-about__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.knowledge-about__actions .authoring-button {
+  padding: 0.25rem 0.75rem;
+}
+
+.knowledge-sources .authoring-aside {
+  background: none;
+  padding: 0.75rem 0 0;
+  border-top: 1px solid var(--color-border);
+  border-radius: 0;
+}
+
+.knowledge-sources h2 {
+  margin: 0 0 0.25rem;
+  font-size: 1.125rem;
+}
+
+
+/* Knowledge Member preview: the persistent "Previewing as" banner and the choose-a-member state.
+   Distinct from the ordinary authoring surface by a heavier frame and a label, not colour alone. */
+
+.member-preview__banner {
+  margin: 0.75rem 0;
+  padding: 0.5rem 1rem;
+  border: 2px solid var(--color-primary);
+  border-radius: 0.375rem;
+  background-color: var(--color-surface);
+}
+
+.member-preview__banner p {
+  margin: 0.25rem 0;
+}
+
+.member-preview__banner-title {
+  font-size: 1.125rem;
+}
+
+.member-preview__empty {
+  margin: 0.75rem 0;
+  padding: 0.75rem 1rem;
+  border: 1px dashed var(--color-border);
+  border-radius: 0.375rem;
+}
+
+.member-preview__empty h2 {
+  margin: 0 0 0.25rem;
+  font-size: 1.25rem;
+}
+
+.member-preview__claim {
+  overflow-wrap: anywhere;
 }

@@ -44,6 +44,7 @@ from ._content_support import (
     clean_note,
     decode_name_cursor,
     reference_options_page,
+    write_receipt,
 )
 from ._shared import timeline_world_id
 from .access import require_campaign_capability
@@ -113,11 +114,8 @@ def _view_json(view: KnowledgeAuthoringView, *, changed: bool | None = None) -> 
 def _response(
     connection: Connection, result: ContentWriteResult, *, changed: bool
 ) -> dict[str, Any]:
-    view = get_knowledge_authoring(
-        connection, world_id=result.world_id, knowledge_item_id=result.entity_id
-    )
-    assert view is not None
-    return _view_json(view, changed=changed)
+    del connection
+    return write_receipt(result, "knowledge_item_id", changed=changed)
 
 
 @router.get(_BASE + "/options")
@@ -203,6 +201,9 @@ def create_knowledge_endpoint(
         access=access,
         correlation_id=correlation_id,
         reason=None,
+        view_loader=lambda: get_knowledge_authoring(
+            connection, world_id=result.world_id, knowledge_item_id=result.entity_id
+        ),
     )
     response = _response(connection, result, changed=True)
     finish_campaign_idempotency(connection, idem, status_code=201, body=response)
@@ -265,6 +266,9 @@ def update_knowledge_endpoint(
             access=access,
             correlation_id=correlation_id,
             reason=clean_note(body.change_note),
+            view_loader=lambda: get_knowledge_authoring(
+                connection, world_id=result.world_id, knowledge_item_id=result.entity_id
+            ),
         )
     response = _response(connection, result, changed=result.changed)
     finish_campaign_idempotency(connection, idem, status_code=200, body=response)

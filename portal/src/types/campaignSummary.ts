@@ -17,6 +17,8 @@ export interface RecentCampaignEvent {
     event_type_code: string
     event_status_code: string
     world_time_id: string
+    // Readable in-world time; null when the event's time has no label or year.
+    world_time_display: string | null
     details: string | null
 }
 

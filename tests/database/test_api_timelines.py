@@ -21,7 +21,7 @@ def harness(db_connection: Connection) -> Iterator[AuthoringHarness]:
 class Setup:
     def __init__(self, harness: AuthoringHarness, connection: Connection) -> None:
         self.connection = connection
-        self.gm: Actor = harness.new_actor("GM")
+        self.gm: Actor = harness.new_actor("GM", world_creator=True)
         ruleset_id, _ = dnd5e_ids(connection)
         created = self.gm.post(
             "/worlds",

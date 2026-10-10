@@ -1,3 +1,4 @@
+import { useWorldBackPath, useWorldReturnState } from "../hooks/useWorldBackPath"
 import { Link } from "react-router"
 import { organizationAuthoringPath } from "../api/organizationAuthoring"
 import { AuthoringEditLink } from "../components/AuthoringEditLink"
@@ -20,12 +21,14 @@ export function WorldOrganizationDetailPage({
     campaignId,
     organization,
 }: WorldOrganizationDetailPageProps) {
+    const worldBackPath = useWorldBackPath(campaignId)
+    const worldReturnState = useWorldReturnState()
     const headingRef = usePageArrival(true)
     const base = `/app/${encodeURIComponent(campaignId)}/world`
     return (
         <section aria-labelledby="world-organization-heading">
             <p>
-                <Link to={base}>Back to World</Link>
+                <Link to={worldBackPath}>Back to World</Link>
             </p>
 
             <p className="world-detail__eyebrow">{humanizeCode(organization.kind_code)}</p>
@@ -87,7 +90,7 @@ export function WorldOrganizationDetailPage({
                         {organization.parent !== null && (
                             <li>
                                 Part of{" "}
-                                <Link to={`${base}/organization/${encodeURIComponent(organization.parent.entity_id)}`}>
+                                <Link state={worldReturnState} to={`${base}/organization/${encodeURIComponent(organization.parent.entity_id)}`}>
                                     {organization.parent.name}
                                 </Link>
                             </li>
@@ -95,7 +98,7 @@ export function WorldOrganizationDetailPage({
                         {organization.headquarters !== null && (
                             <li>
                                 Headquarters{" "}
-                                <Link to={`${base}/location/${encodeURIComponent(organization.headquarters.entity_id)}`}>
+                                <Link state={worldReturnState} to={`${base}/location/${encodeURIComponent(organization.headquarters.entity_id)}`}>
                                     {organization.headquarters.name}
                                 </Link>
                             </li>
@@ -103,7 +106,7 @@ export function WorldOrganizationDetailPage({
                         {organization.religion !== null && (
                             <li>
                                 Serves{" "}
-                                <Link to={`${base}/religion/${encodeURIComponent(organization.religion.entity_id)}`}>
+                                <Link state={worldReturnState} to={`${base}/religion/${encodeURIComponent(organization.religion.entity_id)}`}>
                                     {organization.religion.name}
                                 </Link>
                             </li>

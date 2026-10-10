@@ -1,6 +1,6 @@
 import { useState } from "react"
-import { Link, useNavigate, useParams } from "react-router"
-import { updateWorld, worldPath } from "../api/worlds"
+import { Link, useNavigate } from "react-router"
+import { updateWorld } from "../api/worlds"
 import { ConfirmDialog } from "../components/authoring/ConfirmDialog"
 import { TextAreaField, TextField } from "../components/authoring/fields"
 import {
@@ -13,7 +13,6 @@ import {
 import type { FieldError } from "../components/authoring/feedback"
 import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
-import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { usePageArrival } from "../hooks/usePageArrival"
 import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard"
 import type {
@@ -29,10 +28,17 @@ import {
 } from "../utils/authoringValidation"
 import "../components/authoring/authoring.css"
 
-export function EditWorldPage() {
-    const { worldId = "" } = useParams()
-    const { state, refetch } = useAuthoringResource<WorldDetail>(worldPath(worldId))
-    const headingRef = usePageArrival(state.kind === "ready")
+interface EditWorldPageProps {
+    // The authorized world read model the route guard (App.tsx EditWorldRoute)
+    // already loaded and confirmed to carry the server's `update` action. This
+    // page never mounts for a world the caller may not edit.
+    world: WorldDetail
+    refreshing: boolean
+    refetch: () => Promise<void>
+}
+
+export function EditWorldPage({ world, refreshing, refetch }: EditWorldPageProps) {
+    const headingRef = usePageArrival(true)
     // The user's unsaved values at the moment a stale write was detected. They
     // stay visible after the form reloads from the server, so nothing typed is
     // lost, and are dropped on save or cancel.
@@ -45,37 +51,20 @@ export function EditWorldPage() {
             <div className="authoring-page">
                 <p className="authoring-page__breadcrumb">
                     <Link to="/worlds">Worlds</Link>
-                    {state.kind === "ready" ? (
-                        <>
-                            {" / "}
-                            <Link to={`/worlds/${worldId}`}>{state.data.name}</Link>
-                        </>
-                    ) : null}
+                    {" / "}
+                    <Link to={`/worlds/${world.world_id}`}>{world.name}</Link>
                 </p>
                 <h1 ref={headingRef} tabIndex={-1}>
                     Edit world
                 </h1>
-                {state.kind === "loading" ? (
-                    <p role="status">Loading world…</p>
-                ) : state.kind === "unavailable" || state.kind === "denied" ? (
-                    <p role="alert">This world does not exist, or you do not have access to it.</p>
-                ) : state.kind === "error" ? (
-                    <p role="alert">The world could not be loaded. Try reloading the page.</p>
-                ) : !state.data.available_actions.includes("update") ? (
-                    <p role="alert">
-                        This world cannot be edited right now.{" "}
-                        <Link to={`/worlds/${worldId}`}>Back to the world</Link>
-                    </p>
-                ) : (
-                    <EditWorldForm
-                        key={state.data.row_version}
-                        world={state.data}
-                        refreshing={state.refreshing}
-                        keptChanges={keptChanges}
-                        onKeepChanges={setKeptChanges}
-                        refetch={refetch}
-                    />
-                )}
+                <EditWorldForm
+                    key={world.row_version}
+                    world={world}
+                    refreshing={refreshing}
+                    keptChanges={keptChanges}
+                    onKeepChanges={setKeptChanges}
+                    refetch={refetch}
+                />
             </div>
         </div>
     )

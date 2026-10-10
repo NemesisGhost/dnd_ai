@@ -78,6 +78,7 @@ class RecentEventResponse(BaseModel):
     event_type_code: str
     event_status_code: str
     world_time_id: uuid.UUID
+    world_time_display: str | None
     details: str | None
 
 
@@ -137,6 +138,7 @@ def get_campaign_summary_endpoint(
                 event_type_code=e.event_type_code,
                 event_status_code=e.event_status_code,
                 world_time_id=e.world_time_id,
+                world_time_display=e.world_time_display,
                 details=e.details,
             )
             for e in view.recent_events

@@ -14,6 +14,7 @@ from sqlalchemy import Connection, text
 
 from dnd_ai.commands.campaigns import create_campaign
 from dnd_ai.commands.worlds import CreateWorldResult, create_world
+from dnd_ai.queries.world_authority import may_create_worlds
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,24 @@ def dnd5e_ids(connection: Connection) -> tuple[uuid.UUID, uuid.UUID]:
     return row.ruleset_id, row.ruleset_version_id
 
 
+def make_world_creator(connection: Connection, user_id: uuid.UUID) -> uuid.UUID:
+    """Make `user_id` a legitimate world creator (docs/adr/0018-world-
+    creation-eligibility.md) by giving the account platform administration —
+    the creation path with no campaign prerequisite. A no-op for a user who
+    already qualifies (an administrator, or an effective built-in `gm`).
+
+    Administration grants no authority over any existing world or campaign, so
+    promoting the actor that authors a test world changes nothing else the
+    test observes about that actor's world or campaign access. Tests of the
+    policy itself build their actors explicitly instead."""
+    if not may_create_worlds(connection, user_id=user_id):
+        connection.execute(
+            text("UPDATE security.users SET is_platform_administrator = true WHERE user_id = :u"),
+            {"u": user_id},
+        )
+    return user_id
+
+
 def make_authored_world(
     connection: Connection,
     *,
@@ -47,7 +66,9 @@ def make_authored_world(
     timeline_name: str = "Primary Timeline",
 ) -> AuthoredWorld:
     """A world created through `create_world` (owner membership, allow-list,
-    and primary timeline included) using the seeded dnd5e ruleset."""
+    and primary timeline included) using the seeded dnd5e ruleset. The owner
+    is first made a legitimate world creator (`make_world_creator`)."""
+    make_world_creator(connection, owner_user_id)
     ruleset_id, ruleset_version_id = dnd5e_ids(connection)
     result: CreateWorldResult = create_world(
         connection,
