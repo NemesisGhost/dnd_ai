@@ -409,15 +409,17 @@ describe("Knowledge Member preview", () => {
 
     it("labels values as character knowledge for a character perspective", async () => {
       setup(`${PREVIEW}/k1?member=m1&character_id=c1`)
-      expect(await screen.findByRole("heading", { level: 3, name: "Character knowledge: Ixa" })).toBeInTheDocument()
-      expect(screen.queryByRole("heading", { name: /Party knowledge/ })).toBeNull()
+      expect(await screen.findByRole("heading", { level: 3, name: "Knowledge details" })).toBeInTheDocument()
+      expect(screen.getByText("Character knowledge: Ixa")).toBeInTheDocument()
+      expect(screen.queryByText(/Party knowledge/)).toBeNull()
       expect(screen.getByText("70%")).toBeInTheDocument()
     })
 
     it("labels values as party knowledge when a party is selected", async () => {
       setup(`${PREVIEW}/k1?member=m1&character_id=c1&party_id=p1`)
-      expect(await screen.findByRole("heading", { level: 3, name: "Party knowledge: Red Company" })).toBeInTheDocument()
-      expect(screen.queryByRole("heading", { name: /Character knowledge/ })).toBeNull()
+      expect(await screen.findByRole("heading", { level: 3, name: "Knowledge details" })).toBeInTheDocument()
+      expect(screen.getByText("Party knowledge: Red Company")).toBeInTheDocument()
+      expect(screen.queryByText(/Character knowledge/)).toBeNull()
       expect(screen.getByText("Aware")).toBeInTheDocument()
     })
 
@@ -438,7 +440,8 @@ describe("Knowledge Member preview", () => {
         },
       })
       setup(`${PREVIEW}/k1?member=m1&character_id=c1&party_id=p1`)
-      expect(await screen.findByRole("heading", { level: 3, name: "Public knowledge" })).toBeInTheDocument()
+      expect(await screen.findByRole("heading", { level: 3, name: "Knowledge details" })).toBeInTheDocument()
+      expect(screen.getByText("Public knowledge")).toBeInTheDocument()
       expect(screen.getByText(/no personal record of it/)).toBeInTheDocument()
       expect(screen.getByText("Aware")).toBeInTheDocument()
       expect(screen.queryByText("Confidence")).toBeNull()
@@ -466,7 +469,8 @@ describe("Knowledge Member preview", () => {
         },
       })
       setup(`${PREVIEW}/k1?member=m1&character_id=c1&party_id=p1`)
-      expect(await screen.findByRole("heading", { level: 3, name: "Character knowledge: Ixa" })).toBeInTheDocument()
+      expect(await screen.findByRole("heading", { level: 3, name: "Knowledge details" })).toBeInTheDocument()
+      expect(screen.getByText("Character knowledge: Ixa")).toBeInTheDocument()
       expect(screen.getByText("Known directly by the character.")).toBeInTheDocument()
       expect(screen.getByText("15%")).toBeInTheDocument()
     })

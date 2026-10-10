@@ -48,7 +48,8 @@ import type { KnowledgeAuthoringView, KnowledgeOptions } from "../types/knowledg
 import type { Provenance } from "../types/provenance"
 import { ERROR_CODE_MESSAGE, REASON_MAX, fieldForErrorCode } from "../utils/authoringValidation"
 import { describeBlockedReason } from "../utils/blockedReason"
-import { characterKnowledgeOf, characterKnowledgePathSentence } from "../utils/characterKnowledge"
+import { KnowledgeDetailsPanel } from "../components/knowledge/KnowledgeDetailsPanel"
+import { characterKnowledgeOf } from "../utils/characterKnowledge"
 import { humanizeCode } from "../utils/humanize"
 import { canonStatusLabel } from "../utils/lifecycleNextStep"
 import { FIELD, STATEMENT_MAX, fromView, same, toBody, validate } from "../utils/knowledgeForm"
@@ -745,10 +746,12 @@ function ClaimLayout({
                     <Heading id="knowledge-canonical-heading">GM and canonical information</Heading>
                     {edit === null ? (
                         <dl className="knowledge-gm__grid knowledge-gm__facts">
-                            <div>
-                                <dt>Kind</dt>
-                                <dd>{humanizeCode(item.knowledge_type_code)}</dd>
-                            </div>
+                            {inPanel ? (
+                                <div>
+                                    <dt>Kind</dt>
+                                    <dd>{humanizeCode(item.knowledge_type_code)}</dd>
+                                </div>
+                            ) : null}
                             {item.truth_status_code !== null ? (
                                 <div>
                                     <dt>Truth</dt>
@@ -827,33 +830,14 @@ function CharacterKnowledge({
     // The reader layout supplies its own heading; a section panel already has one.
     heading: boolean
 }) {
-    const known = characterKnowledgeOf(item)
+    // The reader layout supplies the panel's own h2; inside a section panel it is one level lower.
     return (
-        <section
-            className="knowledge-section knowledge-character"
-            {...(heading ? { "aria-labelledby": "knowledge-character-heading" } : { "aria-label": "Character knowledge" })}
-        >
-            {heading ? <h2 id="knowledge-character-heading">Character knowledge</h2> : null}
-            {characterId === null ? (
-                <p className="authoring-note">Select a character perspective to see what that character knows.</p>
-            ) : known === null ? (
-                <p className="authoring-note">The selected character has no recorded knowledge of this claim.</p>
-            ) : (
-                <>
-                    {known.path !== null ? (
-                        <p className="authoring-note">{characterKnowledgePathSentence(known.path)}</p>
-                    ) : null}
-                    <dl className="knowledge-character__facts">
-                        {known.facts.map((entry) => (
-                            <div key={entry.key} className="knowledge-claim__fact">
-                                <dt>{entry.label}</dt>
-                                <dd>{entry.value}</dd>
-                            </div>
-                        ))}
-                    </dl>
-                </>
-            )}
-        </section>
+        <KnowledgeDetailsPanel
+            kindCode={item.knowledge_type_code}
+            known={characterId === null ? undefined : characterKnowledgeOf(item)}
+            headingLevel={heading ? 2 : 3}
+            ariaLabel={heading ? undefined : "Character knowledge"}
+        />
     )
 }
 

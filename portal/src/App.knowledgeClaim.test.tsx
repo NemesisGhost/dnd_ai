@@ -501,7 +501,10 @@ describe("unified knowledge claim page", () => {
       expect(screen.queryByRole("button", { name: /Save claim|Discard changes/ })).toBeNull()
       expect(screen.getByRole("heading", { name: "GM and canonical information" })).toBeInTheDocument()
       expect(screen.getByText("Truth")).toBeInTheDocument()
-      expect(screen.getByRole("heading", { name: "Character knowledge" })).toBeInTheDocument()
+      expect(screen.getByRole("heading", { name: "Knowledge details" })).toBeInTheDocument()
+      // The kind is shown once, inside the panel, not as a separate line.
+      expect(screen.queryByText(/^Kind:/)).toBeNull()
+      expect(screen.getAllByText("Kind")).toHaveLength(1)
       expect(screen.queryByRole("heading", { name: "Who knows this" })).toBeNull()
       expect(screen.queryByRole("group", { name: "Record status" })).toBeNull()
       expect(screen.getByRole("link", { name: "Keep" })).toHaveAttribute("href", "/app/mundivita/world/location/l1")

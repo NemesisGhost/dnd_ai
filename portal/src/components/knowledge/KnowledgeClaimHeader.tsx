@@ -91,15 +91,18 @@ export function KnowledgeClaimHeader({
                     )}
                 </p>
             ) : null}
-            <div className="knowledge-claim__meta">
-                <span>Kind: {humanizeCode(item.knowledge_type_code)}</span>
-                {guidance !== null ? (
-                    <span className="knowledge-claim__next">
-                        Next:{" "}
-                        {guidanceHref !== null ? <Link to={guidanceHref}>{guidance.text} ›</Link> : guidance.text}
-                    </span>
-                ) : null}
-            </div>
+            {canEdit || guidance !== null ? (
+                <div className="knowledge-claim__meta">
+                    {/* Readers see the kind inside the Knowledge details panel, not here. */}
+                    {canEdit ? <span>Kind: {humanizeCode(item.knowledge_type_code)}</span> : null}
+                    {guidance !== null ? (
+                        <span className="knowledge-claim__next">
+                            Next:{" "}
+                            {guidanceHref !== null ? <Link to={guidanceHref}>{guidance.text} ›</Link> : guidance.text}
+                        </span>
+                    ) : null}
+                </div>
+            ) : null}
         </header>
     )
 }

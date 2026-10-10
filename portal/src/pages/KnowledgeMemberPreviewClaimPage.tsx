@@ -4,7 +4,8 @@ import { MemberPreviewShell } from "../components/knowledge/MemberPreviewShell"
 import type { ReadyMemberPreview } from "../components/knowledge/MemberPreviewShell"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import type { KnowledgeDetail } from "../types/knowledge"
-import { characterKnowledgeOf, characterKnowledgePathSentence } from "../utils/characterKnowledge"
+import { KnowledgeDetailsPanel } from "../components/knowledge/KnowledgeDetailsPanel"
+import { characterKnowledgeOf } from "../utils/characterKnowledge"
 import { humanizeCode } from "../utils/humanize"
 import { memberPreviewPath, memberPreviewSearch, parseMemberPreviewContext } from "../utils/memberPreviewContext"
 import type { MemberPreviewContext } from "../utils/memberPreviewContext"
@@ -63,19 +64,19 @@ function PreviewClaim({
 
     const item = state.data
     const known = characterKnowledgeOf(item)
-    const recorded = known?.facts ?? []
+    const hasBlock = item.character_knowledge !== undefined
 
-    // The server says how the character knows the claim; the heading follows that path rather than
+    // The server says how the character knows the claim; the label follows that path rather than
     // the selection, so a direct record is never labelled as the party's (or the reverse). A
     // payload without a path keeps the selection-based wording.
     const partyKnowledge = ready.partyId !== null
     const perspectiveName = partyKnowledge ? (ready.partyName ?? "the party") : (ready.characterName ?? "the character")
-    const characterHeading = `Character knowledge: ${ready.characterName ?? "the character"}`
-    const knowledgeHeading =
+    const characterLabel = `Character knowledge: ${ready.characterName ?? "the character"}`
+    const perspectiveLabel =
         ready.characterId === null
             ? "Perspective knowledge"
-            : known?.path === "character" || (known === null && item.character_knowledge !== undefined)
-              ? characterHeading
+            : known?.path === "character" || (known === null && hasBlock)
+              ? characterLabel
               : known?.path === "party"
                 ? partyKnowledge
                     ? `Party knowledge: ${ready.partyName ?? "the party"}`
@@ -84,7 +85,8 @@ function PreviewClaim({
                   ? "Public knowledge"
                   : partyKnowledge
                     ? `Party knowledge: ${perspectiveName}`
-                    : characterHeading
+                    : characterLabel
+    const hasCanonicalFacts = item.truth_status_code != null || item.sensitivity != null
 
     return (
         <article aria-labelledby="member-preview-claim-heading">
@@ -97,52 +99,31 @@ function PreviewClaim({
                     <span className="knowledge-about__type">{humanizeCode(item.subject.entity_type_code)}</span>
                 </p>
             ) : null}
-            <dl className="authoring-fact-list">
-                <dt>Kind</dt>
-                <dd>{humanizeCode(item.knowledge_type_code)}</dd>
-                {item.truth_status_code != null ? (
-                    <>
-                        <dt>Truth</dt>
-                        <dd>{humanizeCode(item.truth_status_code)}</dd>
-                    </>
-                ) : null}
-                {item.sensitivity != null ? (
-                    <>
-                        <dt>Sensitivity</dt>
-                        <dd>{humanizeCode(item.sensitivity)}</dd>
-                    </>
-                ) : null}
-            </dl>
-            <section aria-labelledby="member-preview-knowledge-heading">
-                <h3 id="member-preview-knowledge-heading">{knowledgeHeading}</h3>
-                {ready.characterId === null ? (
-                    <p className="authoring-note">
-                        No character or party perspective is selected, so no perspective-specific knowledge is shown.
-                    </p>
-                ) : known === null && item.character_knowledge !== undefined ? (
-                    <p className="authoring-note">
-                        {ready.characterName ?? "The selected character"} has no recorded knowledge of this claim.
-                    </p>
-                ) : recorded.length === 0 && known?.path == null ? (
-                    <p className="authoring-note">
-                        This projection includes no awareness, confidence or sharing details for {perspectiveName}.
-                    </p>
-                ) : (
-                    <>
-                        {known?.path != null ? (
-                            <p className="authoring-note">{characterKnowledgePathSentence(known.path)}</p>
-                        ) : null}
-                        <dl className="authoring-fact-list">
-                            {recorded.map((entry) => (
-                                <div key={entry.key}>
-                                    <dt>{entry.label}</dt>
-                                    <dd>{entry.value}</dd>
-                                </div>
-                            ))}
-                        </dl>
-                    </>
-                )}
-            </section>
+            {hasCanonicalFacts ? (
+                <dl className="authoring-fact-list">
+                    {item.truth_status_code != null ? (
+                        <>
+                            <dt>Truth</dt>
+                            <dd>{humanizeCode(item.truth_status_code)}</dd>
+                        </>
+                    ) : null}
+                    {item.sensitivity != null ? (
+                        <>
+                            <dt>Sensitivity</dt>
+                            <dd>{humanizeCode(item.sensitivity)}</dd>
+                        </>
+                    ) : null}
+                </dl>
+            ) : null}
+            <KnowledgeDetailsPanel
+                kindCode={item.knowledge_type_code}
+                known={ready.characterId === null ? undefined : (known ?? (hasBlock ? null : { path: null, facts: [] }))}
+                headingLevel={3}
+                perspective={ready.characterId === null ? null : perspectiveLabel}
+                noPerspectiveNote="No character or party perspective is selected, so no perspective-specific knowledge is shown."
+                noKnowledgeNote={`${ready.characterName ?? "The selected character"} has no recorded knowledge of this claim.`}
+                neutralNote={`This projection includes no awareness, confidence or sharing details for ${perspectiveName}.`}
+            />
             {back}
         </article>
     )
