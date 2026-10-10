@@ -404,7 +404,58 @@ describe("Knowledge Member preview", () => {
       setup(`${PREVIEW}/k1?member=m1`)
       expect(await screen.findByText("Truth")).toBeInTheDocument()
       expect(screen.getByText("True")).toBeInTheDocument()
-      expect(screen.getByText(/No character perspective is selected/)).toBeInTheDocument()
+      expect(screen.getByText(/No character or party perspective is selected/)).toBeInTheDocument()
+    })
+
+    it("labels values as character knowledge for a character perspective", async () => {
+      setup(`${PREVIEW}/k1?member=m1&character_id=c1`)
+      expect(await screen.findByRole("heading", { level: 3, name: "Character knowledge: Ixa" })).toBeInTheDocument()
+      expect(screen.queryByRole("heading", { name: /Party knowledge/ })).toBeNull()
+      expect(screen.getByText("70%")).toBeInTheDocument()
+    })
+
+    it("labels values as party knowledge when a party is selected", async () => {
+      setup(`${PREVIEW}/k1?member=m1&character_id=c1&party_id=p1`)
+      expect(await screen.findByRole("heading", { level: 3, name: "Party knowledge: Red Company" })).toBeInTheDocument()
+      expect(screen.queryByRole("heading", { name: /Character knowledge/ })).toBeNull()
+      expect(screen.getByText("Aware")).toBeInTheDocument()
+    })
+
+    it.each([
+      ["c1", "p1", "Red Company"],
+      ["c1", null, "Ixa"],
+    ])("uses neutral wording when the projection omits the details (%s, %s)", async (character, party, name) => {
+      server.on("GET", /\/members\/m1\/preview\/knowledge\/k1(\?.*)?$/, {
+        body: {
+          knowledge_item_id: "k1",
+          knowledge_type_code: "rumor",
+          statement: "Mira can see this.",
+          subject: null,
+        },
+      })
+      setup(`${PREVIEW}/k1?member=m1&character_id=${character}${party === null ? "" : `&party_id=${party}`}`)
+      const note = await screen.findByText(/This projection includes no awareness, confidence or sharing details/)
+      expect(note).toHaveTextContent(`for ${name}`)
+      expect(screen.queryByText(/has no recorded knowledge/)).toBeNull()
+    })
+
+    it("uses the same neutral wording when the details are explicitly null", async () => {
+      server.on("GET", /\/members\/m1\/preview\/knowledge\/k1(\?.*)?$/, {
+        body: {
+          knowledge_item_id: "k1",
+          knowledge_type_code: "rumor",
+          statement: "Mira can see this.",
+          truth_status_code: null,
+          sensitivity: null,
+          awareness_level: null,
+          confidence: null,
+          willing_to_share: null,
+          subject: null,
+        },
+      })
+      setup(`${PREVIEW}/k1?member=m1&character_id=c1&party_id=p1`)
+      expect(await screen.findByText(/This projection includes no awareness, confidence or sharing details for Red Company/)).toBeInTheDocument()
+      expect(screen.queryByText(/has no recorded knowledge/)).toBeNull()
     })
 
     it("does not read the preview address as a claim id", async () => {

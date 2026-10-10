@@ -62,10 +62,20 @@ function PreviewClaim({
 
     const item = state.data
     const recorded = [
-        item.awareness_level !== null ? { label: "Awareness", value: humanizeCode(item.awareness_level) } : null,
-        item.confidence !== null ? { label: "Confidence", value: `${item.confidence}%` } : null,
-        item.willing_to_share !== null ? { label: "Willing to share", value: item.willing_to_share ? "Yes" : "No" } : null,
+        item.awareness_level != null ? { label: "Awareness", value: humanizeCode(item.awareness_level) } : null,
+        item.confidence != null ? { label: "Confidence", value: `${item.confidence}%` } : null,
+        item.willing_to_share != null ? { label: "Willing to share", value: item.willing_to_share ? "Yes" : "No" } : null,
     ].filter((entry) => entry !== null)
+
+    // With a party selected the server projects these values from the party's knowledge record,
+    // otherwise from the character's; null values only mean the projection did not include them.
+    const partyKnowledge = ready.partyId !== null
+    const perspectiveName = partyKnowledge ? (ready.partyName ?? "the party") : (ready.characterName ?? "the character")
+    const knowledgeHeading = partyKnowledge
+        ? `Party knowledge: ${perspectiveName}`
+        : ready.characterId !== null
+          ? `Character knowledge: ${perspectiveName}`
+          : "Perspective knowledge"
 
     return (
         <article aria-labelledby="member-preview-claim-heading">
@@ -81,25 +91,29 @@ function PreviewClaim({
             <dl className="authoring-fact-list">
                 <dt>Kind</dt>
                 <dd>{humanizeCode(item.knowledge_type_code)}</dd>
-                {item.truth_status_code !== null ? (
+                {item.truth_status_code != null ? (
                     <>
                         <dt>Truth</dt>
                         <dd>{humanizeCode(item.truth_status_code)}</dd>
                     </>
                 ) : null}
-                {item.sensitivity !== null ? (
+                {item.sensitivity != null ? (
                     <>
                         <dt>Sensitivity</dt>
                         <dd>{humanizeCode(item.sensitivity)}</dd>
                     </>
                 ) : null}
             </dl>
-            <section aria-labelledby="member-preview-character-heading">
-                <h3 id="member-preview-character-heading">Character knowledge</h3>
+            <section aria-labelledby="member-preview-knowledge-heading">
+                <h3 id="member-preview-knowledge-heading">{knowledgeHeading}</h3>
                 {ready.characterId === null ? (
-                    <p className="authoring-note">No character perspective is selected, so no character knowledge is shown.</p>
+                    <p className="authoring-note">
+                        No character or party perspective is selected, so no perspective-specific knowledge is shown.
+                    </p>
                 ) : recorded.length === 0 ? (
-                    <p className="authoring-note">The selected character has no recorded knowledge of this claim.</p>
+                    <p className="authoring-note">
+                        This projection includes no awareness, confidence or sharing details for {perspectiveName}.
+                    </p>
                 ) : (
                     <dl className="authoring-fact-list">
                         {recorded.map((entry) => (

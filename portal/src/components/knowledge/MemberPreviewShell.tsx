@@ -16,7 +16,9 @@ export interface ReadyMemberPreview {
     membershipId: string
     memberName: string
     characterId: string | null
+    characterName: string | null
     partyId: string | null
+    partyName: string | null
 }
 
 interface Props {
@@ -228,7 +230,9 @@ function PermittedShell({
         membershipId: member.campaign_membership_id,
         memberName: data.display_name,
         characterId: character?.character_id ?? null,
+        characterName: character?.character_name ?? null,
         partyId: party?.party_id ?? null,
+        partyName: party?.party_name ?? null,
     }
     const key = `${ready.membershipId}|${ready.characterId ?? ""}|${ready.partyId ?? ""}`
 
