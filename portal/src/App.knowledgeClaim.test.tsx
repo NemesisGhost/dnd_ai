@@ -970,6 +970,43 @@ describe("unified knowledge claim page", () => {
       await waitFor(() => expect(router.state.location.pathname).toBe("/app/mundivita/knowledge"))
     })
 
+    it("protects a source type chosen without a title or reference", async () => {
+      setup(at("sources"))
+      fireEvent.click(await screen.findByRole("button", { name: "Add source" }))
+      const type = within(screen.getByRole("form", { name: "Write a new source" })).getByRole("combobox")
+      fireEvent.change(type, { target: { value: "note" } })
+      fireEvent.click(breadcrumbKnowledge())
+      const dialog = await screen.findByRole("dialog", { name: "Discard unsaved changes?" })
+      expect(dialog).toHaveTextContent("a source")
+      fireEvent.click(within(dialog).getByRole("button", { name: "Keep editing" }))
+      expect(type).toHaveValue("note")
+    })
+
+    it.each([
+      ["Record who learned this", "Record that someone learned this", /How they hold it/, "rumored", "learn"],
+      ["Record a telling", "Record that someone told another", /How they hold it/, "suspected", "awareness"],
+      ["Record a telling", "Record that someone told another", /^How$/, "rumor", "method"],
+      ["Tell a party", "Tell a party", /What the party learns/, "rumored", "party"],
+      ["Make public", "Make this public", /How it is known there/, "rumored", "public"],
+    ])("protects a choice-only change in %s (%s)", async (open, formName, label, value) => {
+      setupPublished(at("who-knows"))
+      fireEvent.click(await screen.findByRole("button", { name: open }))
+      const select = within(screen.getByRole("form", { name: formName })).getByRole("combobox", { name: label })
+      fireEvent.change(select, { target: { value } })
+      fireEvent.click(breadcrumbKnowledge())
+      const dialog = await screen.findByRole("dialog", { name: "Discard unsaved changes?" })
+      expect(dialog).toHaveTextContent("a knowledge entry")
+      fireEvent.click(within(dialog).getByRole("button", { name: "Keep editing" }))
+      expect(select).toHaveValue(value)
+    })
+
+    it("does not warn about an untouched source or knowledge form", async () => {
+      setupPublished(at("who-knows"))
+      fireEvent.click(await screen.findByRole("button", { name: "Record who learned this" }))
+      fireEvent.click(breadcrumbKnowledge())
+      expect(screen.queryByRole("dialog", { name: "Discard unsaved changes?" })).toBeNull()
+    })
+
     it("does not block leaving when nothing is unsaved", async () => {
       const { router } = setup(at("sources"))
       await screen.findByRole("button", { name: "Add source" })

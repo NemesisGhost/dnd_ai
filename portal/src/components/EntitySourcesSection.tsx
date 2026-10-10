@@ -95,6 +95,7 @@ export function EntitySourcesSection({
             const message = done
             setDone(null)
             setChoice("")
+            setType("")
             setTitle("")
             setReference("")
             await Promise.all([provenance.refetch(), sources.refetch()])
@@ -104,7 +105,7 @@ export function EntitySourcesSection({
     const error = mutation.status.kind === "error" ? mutation.status.error : null
     const explained = error?.code ? (CODE_MESSAGE[error.code] ?? null) : null
     const busy = mutation.status.kind === "pending"
-    const dirty = choice !== "" || title.trim() !== "" || reference.trim() !== ""
+    const dirty = choice !== "" || type !== "" || title.trim() !== "" || reference.trim() !== ""
     useEffect(() => {
         onDirtyChange?.(dirty)
         return () => onDirtyChange?.(false)

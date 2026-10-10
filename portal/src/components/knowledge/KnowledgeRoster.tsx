@@ -439,7 +439,7 @@ function PartyForm({
     const [party, setParty] = useState("")
     const [awareness, setAwareness] = useState("aware")
     const [problem, setProblem] = useState<string | null>(null)
-    useReportDirty(report, "party", party !== "")
+    useReportDirty(report, "party", party !== "" || awareness !== "aware")
     return (
         <form
             noValidate
@@ -497,7 +497,11 @@ function LearnForm({
     const [confidence, setConfidence] = useState("")
     const [interpretation, setInterpretation] = useState("")
     const [problem, setProblem] = useState<string | null>(null)
-    useReportDirty(report, "learn", who !== null || confidence.trim() !== "" || interpretation.trim() !== "")
+    useReportDirty(
+        report,
+        "learn",
+        who !== null || awareness !== "aware" || confidence.trim() !== "" || interpretation.trim() !== "",
+    )
     return (
         <form
             noValidate
@@ -579,7 +583,15 @@ function TellForm({
     const [awareness, setAwareness] = useState("aware")
     const [conveyed, setConveyed] = useState("")
     const [problem, setProblem] = useState<string | null>(null)
-    useReportDirty(report, "transfer", source !== "" || recipient !== null || conveyed.trim() !== "")
+    useReportDirty(
+        report,
+        "transfer",
+        source !== "" ||
+            recipient !== null ||
+            method !== "dialogue" ||
+            awareness !== "aware" ||
+            conveyed.trim() !== "",
+    )
     return (
         <form
             noValidate
@@ -668,7 +680,7 @@ function PublicForm({
     const [place, setPlace] = useState<ReferenceOption | null>(null)
     const [awareness, setAwareness] = useState("aware")
     const [problem, setProblem] = useState<string | null>(null)
-    useReportDirty(report, "public", place !== null)
+    useReportDirty(report, "public", place !== null || awareness !== "aware")
     return (
         <form
             noValidate
