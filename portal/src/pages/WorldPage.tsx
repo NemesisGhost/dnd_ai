@@ -1,7 +1,7 @@
 import { useId } from "react"
 import type { ReactNode } from "react"
 import { Link } from "react-router"
-import type { WorldCategory } from "../types/world"
+import type { WorldCategory, WorldCategoryCounts } from "../types/world"
 import { WORLD_CATEGORY_NAV } from "../utils/worldCategories"
 
 interface WorldPageProps {
@@ -11,6 +11,9 @@ interface WorldPageProps {
     // The address a category link opens: it keeps the search and draft
     // preview, and restarts paging.
     categoryHref: (category: WorldCategory | null) => string
+    // Authorized totals for the current search, or null while unknown (loading
+    // or failed): no count is shown then, never a zero.
+    counts?: WorldCategoryCounts | null
     // Offered only to canon.edit holders; players never see the toggle.
     canPreviewHidden?: boolean
     showHidden?: boolean
@@ -26,6 +29,7 @@ export function WorldPage({
     query,
     onQueryChange,
     categoryHref,
+    counts = null,
     canPreviewHidden = false,
     showHidden = false,
     onShowHiddenChange,
@@ -86,7 +90,17 @@ export function WorldPage({
                                         className="world-categories__link"
                                         aria-current={selected ? "page" : undefined}
                                     >
-                                        {item.label}
+                                        <span>{item.label}</span>
+                                        {counts !== null && " "}
+                                        {counts !== null && (
+                                            <span className="world-categories__count">
+                                                {"("}
+                                                {item.category === null
+                                                    ? counts.total
+                                                    : counts.counts[item.category]}
+                                                {")"}
+                                            </span>
+                                        )}
                                     </Link>
                                 </li>
                             )

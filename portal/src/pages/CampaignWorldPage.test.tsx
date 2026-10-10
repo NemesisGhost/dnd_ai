@@ -28,6 +28,10 @@ import {
     CampaignWorldPage,
 } from "./CampaignWorldPage"
 
+vi.mock("../hooks/useWorldCategoryCounts", () => ({
+    useWorldCategoryCounts: vi.fn(() => null),
+}))
+
 vi.mock("../hooks/useWorldEntities", () => ({
     useWorldEntities: vi.fn(),
 }))

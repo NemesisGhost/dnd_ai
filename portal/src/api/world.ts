@@ -4,6 +4,7 @@ import type {
     LocationDetail,
     OrganizationDetail,
     ReligionDetail,
+    WorldCategoryCounts,
     WorldEntityPage,
     WorldEntitySearchParameters,
 } from "../types/world"
@@ -91,6 +92,41 @@ export async function fetchWorldEntities(
     }
 
     return (await response.json()) as WorldEntityPage
+}
+
+export async function fetchWorldCategoryCounts(
+    campaignId: string,
+    parameters: { query: string; includeHidden?: boolean },
+    signal?: AbortSignal,
+): Promise<WorldCategoryCounts> {
+    const searchParameters = new URLSearchParams()
+
+    if (parameters.query !== "") {
+        searchParameters.set("q", parameters.query)
+    }
+
+    if (parameters.includeHidden === true) {
+        searchParameters.set("include_noncanon", "true")
+        searchParameters.set("include_archived", "true")
+    }
+
+    const queryString = searchParameters.toString()
+    const path = `/api/campaigns/${encodeURIComponent(campaignId)}/world/search/counts`
+    const response = await fetch(
+        queryString === "" ? path : `${path}?${queryString}`,
+        {
+            method: "GET",
+            headers: { Accept: "application/json" },
+            cache: "no-store",
+            signal,
+        },
+    )
+
+    if (!response.ok) {
+        throw new WorldRequestError(response.status)
+    }
+
+    return (await response.json()) as WorldCategoryCounts
 }
 
 async function fetchWorldDetail<T>(

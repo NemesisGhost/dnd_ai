@@ -41,6 +41,7 @@ from dnd_ai.queries.world_explorer import (
     WORLD_CATEGORY_TYPE_CODES,
     CharacterVisibility,
     WorldEntityVisibility,
+    count_world_entities,
     get_event_view,
     get_item_view,
     get_location_view,
@@ -195,6 +196,14 @@ class WorldEntityCardResponse(BaseModel):
 class WorldEntitySearchResponse(BaseModel):
     items: list[WorldEntityCardResponse]
     next_cursor: str | None
+
+
+class WorldCategoryCountsResponse(BaseModel):
+    """Authorized totals per World category for the same search, over every
+    page — never a count of what is loaded."""
+
+    counts: dict[WorldCategory, int]
+    total: int
 
 
 class RelationshipCardResponse(BaseModel):
@@ -402,6 +411,54 @@ def search_world_entities_endpoint(
             for card in page.items
         ],
         next_cursor=page.next_cursor,
+    )
+
+
+@router.get(
+    "/campaigns/{campaign_id}/world/search/counts",
+    response_model=WorldCategoryCountsResponse,
+    status_code=200,
+)
+def count_world_entities_endpoint(
+    access: Annotated[AccessContext, Depends(require_campaign_capability(_VIEW_CAPABILITY))],
+    connection: Annotated[Connection, Depends(get_connection)],
+    q: Annotated[str | None, Query(max_length=_MAX_QUERY_LEN)] = None,
+    include_noncanon: Annotated[bool, Query()] = False,
+    include_archived: Annotated[bool, Query()] = False,
+) -> WorldCategoryCountsResponse:
+    """The complete number of entries per World category (every category is
+    present, `0` included) and in total for the same search, under exactly the
+    visibility `GET .../world/search` applies — the same campaign and timeline,
+    per-entity denies, character tiers, event scope and the `canon.edit`-only
+    draft/archived preview flags. Each category is counted independently of
+    any selected category, and the total is the sum, so "All entries" equals
+    the result set a client would page through."""
+    world_id = timeline_world_id(connection, access.timeline_id)
+    draft_denied, draft_allowed = access.resource_grant_targets(_GM_CAPABILITY, "event_id")
+    type_codes = [code for codes in WORLD_CATEGORY_TYPE_CODES.values() for code in codes]
+    counts = count_world_entities(
+        connection,
+        world_id=world_id,
+        timeline_id=access.timeline_id,
+        category_type_codes=type_codes,
+        query_text=q,
+        campaign_view_denied_entity_ids=_grant_denied_entity_ids(access)
+        | lifecycle_hidden_entity_ids(
+            connection,
+            world_id=world_id,
+            mode="browse",
+            can_edit_canon=access.has_capability(_GM_CAPABILITY),
+            include_noncanon=include_noncanon,
+            include_archived=include_archived,
+        ),
+        character_visibility=resolve_world_character_visibility(access),
+        include_draft_events=access.has_capability(_GM_CAPABILITY),
+        draft_event_allowed_ids=draft_allowed,
+        draft_event_denied_ids=draft_denied,
+    )
+    return WorldCategoryCountsResponse(
+        counts=counts,  # type: ignore[arg-type]
+        total=sum(counts.values()),
     )
 
 

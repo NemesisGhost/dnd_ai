@@ -506,6 +506,7 @@ detail; the tier decisions themselves are unchanged.
 |---|---|---|
 | `GET /auth/session` | +`campaigns[].world_id`/`world_name`; +`campaigns[].character_perspectives[].authorized_parties[]` (`party_id`,`party_name`) — additive, all prior fields/behavior preserved | `dnd_ai.queries.bootstrap.get_session_bootstrap` |
 | `GET /campaigns/{campaign_id}/world/search` | Unified type-filtered text search / browse across `location`, `character`, `organization`, `religion`, `item`, `event` | `dnd_ai.queries.world_explorer.search_world_entities` |
+| `GET /campaigns/{campaign_id}/world/search/counts` | Complete per-category totals (all six categories, zeros included) plus their sum for the same `q` and `canon.edit`-only preview flags, under the identical visibility filter (one shared SQL fragment) — not affected by `category`, `limit` or `cursor` | `dnd_ai.queries.world_explorer.count_world_entities` |
 | `GET /campaigns/{campaign_id}/world/relationships` | Relationship list | `.list_world_relationships` |
 | `GET /campaigns/{campaign_id}/world/locations/{location_id}` | Location detail (any `world.locations` row) + containment breadcrumbs | `.get_location_view` |
 | `GET /campaigns/{campaign_id}/world/religions/{religion_id}` | Religion detail | `.get_religion_view` |

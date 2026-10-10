@@ -11,7 +11,7 @@ import {
     it,
     vi,
 } from "vitest"
-import type { WorldCategory } from "../types/world"
+import type { WorldCategory, WorldCategoryCounts } from "../types/world"
 import { WorldPage } from "./WorldPage"
 
 interface RenderOverrides {
@@ -20,6 +20,7 @@ interface RenderOverrides {
     onQueryChange?: (query: string) => void
     canPreviewHidden?: boolean
     createLinks?: { label: string; to: string }[]
+    counts?: WorldCategoryCounts | null
     children?: React.ReactNode
 }
 
@@ -89,6 +90,28 @@ describe("WorldPage", () => {
             "aria-current",
         )
         expect(document.querySelectorAll('[aria-current="page"]')).toHaveLength(1)
+    })
+
+    it("shows each category's total beside it, zero included, and none while unknown", () => {
+        const counts: WorldCategoryCounts = {
+            counts: { location: 9, character: 1, organization: 0, religion: 2, item: 3, event: 10 },
+            total: 25,
+        }
+        const { unmount } = renderPage({ category: "location", counts })
+
+        expect(screen.getByRole("link", { name: "All entries (25)" })).toBeInTheDocument()
+        expect(screen.getByRole("link", { name: "Locations (9)" })).toHaveAttribute("aria-current", "page")
+        expect(screen.getByRole("link", { name: "People (1)" })).toBeInTheDocument()
+        // A zero-count category keeps its link and shows its zero.
+        expect(screen.getByRole("link", { name: "Organizations (0)" })).toHaveAttribute(
+            "href",
+            "/?category=organization",
+        )
+        unmount()
+
+        renderPage({ counts: null })
+        expect(screen.getByRole("link", { name: "Organizations" })).toBeInTheDocument()
+        expect(screen.queryByText(/\(\d+\)/)).not.toBeInTheDocument()
     })
 
     it("selects All entries when no category is chosen", () => {

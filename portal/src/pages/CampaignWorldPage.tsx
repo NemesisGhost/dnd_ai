@@ -6,6 +6,7 @@ import {
     useParams,
 } from "react-router"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
+import { useWorldCategoryCounts } from "../hooks/useWorldCategoryCounts"
 import { useWorldBrowseState } from "../hooks/useWorldBrowseState"
 import {
     WorldEntitiesBoundary,
@@ -60,6 +61,7 @@ function CampaignWorldContent({
         return () => window.clearTimeout(timeoutId)
     }, [searchInputValue, browse.query, setQuery])
 
+    const counts = useWorldCategoryCounts(campaignId, browse.query, includeHidden)
     const categoryItem = worldCategoryNavItem(browse.category)
 
     function clearSearch() {
@@ -72,6 +74,7 @@ function CampaignWorldContent({
             category={browse.category}
             query={searchInputValue}
             onQueryChange={setSearchInputValue}
+            counts={counts}
             categoryHref={(category) => browse.hrefFor({ category }) || "?"}
             canPreviewHidden={canPreviewHidden}
             showHidden={includeHidden}

@@ -22,17 +22,23 @@ import {
     vi,
 } from "vitest"
 import { useWorldBackPath } from "../hooks/useWorldBackPath"
+import { useWorldCategoryCounts } from "../hooks/useWorldCategoryCounts"
 import { useWorldEntities } from "../hooks/useWorldEntities"
 import type { WorldEntityPage } from "../types/world"
 import { CampaignWorldPage } from "./CampaignWorldPage"
 import { WorldOrganizationDetailPage } from "./WorldOrganizationDetailPage"
 import type { OrganizationDetail } from "../types/world"
 
+vi.mock("../hooks/useWorldCategoryCounts", () => ({
+    useWorldCategoryCounts: vi.fn(() => null),
+}))
+
 vi.mock("../hooks/useWorldEntities", () => ({
     useWorldEntities: vi.fn(),
 }))
 
 const useWorldEntitiesMock = vi.mocked(useWorldEntities)
+const useCountsMock = vi.mocked(useWorldCategoryCounts)
 
 const worldPage: WorldEntityPage = {
     items: [
@@ -52,6 +58,7 @@ const path = "/app/campaign-a/world"
 beforeEach(() => {
     vi.useFakeTimers()
     useWorldEntitiesMock.mockReset()
+    useCountsMock.mockReturnValue(null)
     useWorldEntitiesMock.mockReturnValue({
         state: { status: "success", page: worldPage },
         retry: vi.fn(),
@@ -135,6 +142,24 @@ function chooseCategory(name: string) {
 }
 
 describe("CampaignWorldPage browsing state in the address", () => {
+    it("counts for the search (not the category) and shows them beside every category", () => {
+        useCountsMock.mockReturnValue({
+            counts: { location: 9, character: 1, organization: 0, religion: 2, item: 3, event: 10 },
+            total: 25,
+        })
+        renderAt(`${path}?category=event&q=harbor`)
+
+        expect(useCountsMock).toHaveBeenLastCalledWith("campaign-a", "harbor", false)
+        expect(screen.getByRole("link", { name: "All entries (25)" })).toBeInTheDocument()
+        expect(screen.getByRole("link", { name: "Events (10)" })).toHaveAttribute("aria-current", "page")
+        expect(screen.getByRole("link", { name: "Organizations (0)" })).toBeInTheDocument()
+
+        chooseCategory("Items (3)")
+
+        // A category change keeps the same count request.
+        expect(useCountsMock).toHaveBeenLastCalledWith("campaign-a", "harbor", false)
+    })
+
     it("starts on All entries for a missing or unknown category", () => {
         renderAt(`${path}?category=relationship`)
 
