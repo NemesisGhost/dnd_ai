@@ -1493,7 +1493,9 @@ def test_a_perspective_adds_audience_records_without_removing_public_ones(
         recent = client.get(
             _url(f), params={"view": "recent", **_perspective(f), "limit": 100}
         ).json()
-    assert set(_ids(known)) == {str(f.fact_id), str(f.public_id)}
+    # `known` is the character's settled knowledge: the party's fact and
+    # Aria's own (settled) secret alike.
+    assert set(_ids(known)) == {str(f.fact_id), str(f.private_id), str(f.public_id)}
     assert set(_ids(private)) == {str(f.private_id), str(f.public_id)}
     assert set(_ids(recent)) == {str(f.fact_id), str(f.rumor_id), str(f.public_id)}
     # Another audience's records never ride along with the public ones.
@@ -1672,3 +1674,243 @@ def test_every_default_listed_item_is_fetchable_via_detail_without_a_perspective
                 )
                 assert detail.status_code == 200, (view, item, detail.text)
                 assert detail.json()["statement"] == item["statement"]
+
+
+# ---------------------------------------------------------------------------
+# The selected character is the perspective; a party is only a filter
+# ---------------------------------------------------------------------------
+
+
+def _character_only(f: Fixture) -> dict[str, str]:
+    return {"character_id": str(f.character_id)}
+
+
+def _detail_url(f: Fixture, item_id: uuid.UUID) -> str:
+    return f"/campaigns/{f.campaign_id}/knowledge/{item_id}"
+
+
+def test_a_character_without_a_party_sees_its_own_eligible_party_and_public_knowledge(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    """Regression: a player with a character selected but no party used to see
+    only public lore in the default view."""
+    with client_factory(f.player_user_id) as client:
+        known = client.get(_url(f), params={**_character_only(f), "limit": 100}).json()
+        rumors = client.get(
+            _url(f), params={"view": "rumors", **_character_only(f), "limit": 100}
+        ).json()
+        shared = client.get(
+            _url(f), params={"view": "party_shared", **_character_only(f), "limit": 100}
+        ).json()
+        recent = client.get(
+            _url(f), params={"view": "recent", **_character_only(f), "limit": 100}
+        ).json()
+        details = {
+            item_id: client.get(_detail_url(f, item_id), params=_character_only(f))
+            for item_id in (f.fact_id, f.rumor_id, f.private_id, f.public_id)
+        }
+
+    known_by_id = {i["knowledge_item_id"]: i for i in known["items"]}
+    assert set(known_by_id) == {str(f.fact_id), str(f.private_id), str(f.public_id)}
+    assert known_by_id[str(f.private_id)]["scope"] == "character"
+    assert known_by_id[str(f.private_id)]["statement"] == "I am certain it was the seneschal."
+    assert known_by_id[str(f.fact_id)]["scope"] == "party"
+    assert known_by_id[str(f.public_id)]["scope"] == "public"
+    # The party's rumor, as the party's own interpretation, never the truth.
+    assert _ids(rumors) == [str(f.rumor_id)]
+    assert rumors["items"][0]["statement"] == "Some say the mayor was replaced last winter."
+    assert set(_ids(shared)) == {str(f.fact_id), str(f.rumor_id), str(f.public_id)}
+    assert set(_ids(recent)) == {str(f.fact_id), str(f.rumor_id), str(f.public_id)}
+    for body in (known, rumors, shared, recent):
+        assert str(f.other_party_only_id) not in _ids(body)
+        assert all(i["statement"] != "Borin's private notes." for i in body["items"])
+        assert all(i["truth_status_code"] is None for i in body["items"])
+        assert all(i["sensitivity"] is None for i in body["items"])
+    # Detail agrees with the list under the same character-only perspective.
+    for body in (known, rumors):
+        for item in body["items"]:
+            detail = details[uuid.UUID(item["knowledge_item_id"])]
+            assert detail.status_code == 200
+            assert detail.json()["statement"] == item["statement"]
+
+
+def test_party_derived_knowledge_needs_a_current_membership_in_a_party_of_this_campaign(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """Without a party filter only the eligible parties count: a party Aria
+    left, and a party outside this campaign, contribute nothing — nor does a
+    campaign party she never joined (The Rivals)."""
+    with postgres_engine.begin() as setup:
+        former_party = make_party(setup, f.world_id, name="The Former Company")
+        make_campaign_party(setup, f.campaign_id, former_party)
+        make_party_membership(
+            setup,
+            f.timeline_id,
+            former_party,
+            f.character_id,
+            f.wt_early,
+            effective_to_world_time_id=f.wt_late,
+        )
+        outside_party = make_party(setup, f.world_id, name="Another Campaign's Party")
+        make_party_membership(setup, f.timeline_id, outside_party, f.character_id, f.wt_early)
+        former_item = make_knowledge_item(setup, f.world_id, statement="Former party lore.")
+        outside_item = make_knowledge_item(setup, f.world_id, statement="Outside party lore.")
+        make_party_knowledge(setup, f.timeline_id, former_party, former_item)
+        make_party_knowledge(setup, f.timeline_id, outside_party, outside_item)
+    with client_factory(f.player_user_id) as client:
+        known = client.get(_url(f), params={**_character_only(f), "limit": 100}).json()
+        details = [
+            client.get(_detail_url(f, item_id), params=_character_only(f))
+            for item_id in (former_item, outside_item, f.other_party_only_id)
+        ]
+        explicit_outside = client.get(
+            _url(f), params={"character_id": str(f.character_id), "party_id": str(outside_party)}
+        )
+    assert set(_ids(known)) == {str(f.fact_id), str(f.private_id), str(f.public_id)}
+    assert [d.status_code for d in details] == [404, 404, 404]
+    assert explicit_outside.status_code == 404
+
+
+def test_choosing_a_party_filters_party_knowledge_but_keeps_the_characters_own(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as setup:
+        second_party = make_party(setup, f.world_id, name="The Night Watch")
+        make_campaign_party(setup, f.campaign_id, second_party)
+        make_party_membership(setup, f.timeline_id, second_party, f.character_id, f.wt_early)
+        watch_item = make_knowledge_item(setup, f.world_id, statement="The watch rotates at dusk.")
+        make_party_knowledge(setup, f.timeline_id, second_party, watch_item)
+    with client_factory(f.player_user_id) as client:
+        unfiltered = client.get(_url(f), params={**_character_only(f), "limit": 100}).json()
+        company = client.get(_url(f), params={**_perspective(f), "limit": 100}).json()
+        watch = client.get(
+            _url(f),
+            params={"character_id": str(f.character_id), "party_id": str(second_party)},
+        ).json()
+        watch_detail = client.get(_detail_url(f, watch_item), params=_perspective(f))
+    assert set(_ids(unfiltered)) == {
+        str(f.fact_id),
+        str(f.private_id),
+        str(watch_item),
+        str(f.public_id),
+    }
+    assert set(_ids(company)) == {str(f.fact_id), str(f.private_id), str(f.public_id)}
+    assert set(_ids(watch)) == {str(watch_item), str(f.private_id), str(f.public_id)}
+    # The filtered-out party's item is not reachable through the other party.
+    assert watch_detail.status_code == 404
+
+
+def test_the_characters_own_belief_wins_over_its_partys_in_list_and_detail(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as setup:
+        make_entity_knowledge(
+            setup,
+            f.timeline_id,
+            f.rumor_id,
+            f.character_id,
+            confidence=90,
+            interpretation="Aria watched the mayor's face slip at the feast.",
+        )
+    with client_factory(f.player_user_id) as client:
+        for params in (_character_only(f), _perspective(f)):
+            rumors = client.get(_url(f), params={"view": "rumors", **params}).json()
+            detail = client.get(_detail_url(f, f.rumor_id), params=params).json()
+            assert _ids(rumors) == [str(f.rumor_id)]
+            row = rumors["items"][0]
+            assert row["scope"] == "character"
+            assert row["statement"] == "Aria watched the mayor's face slip at the feast."
+            assert row["confidence"] == 90
+            assert detail["statement"] == row["statement"]
+            assert detail["confidence"] == 90
+        # `party_shared` remains the party's own collective belief.
+        shared = client.get(
+            _url(f), params={"view": "party_shared", **_perspective(f), "limit": 100}
+        ).json()
+    shared_row = next(i for i in shared["items"] if i["knowledge_item_id"] == str(f.rumor_id))
+    assert shared_row["scope"] == "party"
+    assert shared_row["statement"] == "Some say the mayor was replaced last winter."
+
+
+@pytest.mark.parametrize("leftover_party", [False, True])
+def test_no_character_means_public_only_even_with_a_leftover_party(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, leftover_party: bool
+) -> None:
+    params = {"party_id": str(f.party_id)} if leftover_party else {}
+    with client_factory(f.player_user_id) as client:
+        for view in ("known", "rumors", "party_shared", "character_private", "recent"):
+            response = client.get(_url(f), params={"view": view, **params, "limit": 100})
+            assert response.status_code == 200, view
+            # The public item is a settled fact, so `rumors` has nothing at all.
+            expected = [] if view == "rumors" else [str(f.public_id)]
+            assert _ids(response.json()) == expected, view
+        for item_id in (f.fact_id, f.rumor_id, f.private_id):
+            assert client.get(_detail_url(f, item_id), params=params).status_code == 404
+        assert client.get(_detail_url(f, f.public_id), params=params).status_code == 200
+
+
+def test_an_unauthorized_or_foreign_character_adds_nothing_and_a_bad_pair_is_refused(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """Borin is in this world but not the player's character; a character
+    from another world is not in this campaign at all. Alone, each yields
+    only public lore (non-disclosing); paired with a party, the pair is the
+    fixed 404 `resolve_party_perspective` returns."""
+    with postgres_engine.begin() as setup:
+        foreign_world = make_world(setup, slug=f"knowledge-foreign-{uuid.uuid4().hex[:8]}")
+        foreign_character = make_character(setup, foreign_world, name="Stranger")
+    try:
+        with client_factory(f.player_user_id) as client:
+            for character_id in (f.other_character_id, foreign_character):
+                alone = client.get(
+                    _url(f), params={"character_id": str(character_id), "limit": 100}
+                )
+                assert alone.status_code == 200
+                assert _ids(alone.json()) == [str(f.public_id)]
+                detail = client.get(
+                    _detail_url(f, f.rumor_id), params={"character_id": str(character_id)}
+                )
+                assert detail.status_code == 404
+                paired = client.get(
+                    _url(f),
+                    params={"character_id": str(character_id), "party_id": str(f.party_id)},
+                )
+                assert paired.status_code == 404
+    finally:
+        with postgres_engine.begin() as cleanup:
+            cleanup.execute(
+                text("DELETE FROM core.entities WHERE world_id = :w"), {"w": foreign_world}
+            )
+            cleanup.execute(
+                text("DELETE FROM core.worlds WHERE world_id = :w"), {"w": foreign_world}
+            )
+
+
+def test_a_gms_views_are_unchanged_by_a_selected_character(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """The player default does not replace a GM's management views: with
+    only a character the GM still sees the canonical projection, and with a
+    pair the party's view — never the character's private records mixed in."""
+    with postgres_engine.begin() as setup:
+        make_membership_character_relationship(
+            setup,
+            f.gm_membership_id,
+            f.character_id,
+            f.relationship_type_id,
+            timeline_id=f.timeline_id,
+        )
+    with client_factory(f.gm_user_id) as client:
+        plain = client.get(_url(f), params={"limit": 100}).json()
+        character_only = client.get(_url(f), params={**_character_only(f), "limit": 100}).json()
+        pair = client.get(_url(f), params={**_perspective(f), "limit": 100}).json()
+        detail = client.get(_detail_url(f, f.rumor_id), params=_perspective(f)).json()
+    assert character_only == plain
+    assert {i["scope"] for i in plain["items"]} == {"canonical"}
+    assert set(_ids(pair)) == {str(f.fact_id), str(f.public_id)}
+    assert (
+        next(i for i in pair["items"] if i["knowledge_item_id"] == str(f.fact_id))["scope"]
+        == "party"
+    )
+    assert detail["statement"] == "The mayor is secretly a doppelganger."
+    assert detail["truth_status_code"] == "false"

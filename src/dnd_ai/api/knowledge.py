@@ -11,11 +11,11 @@ split are all documented on `dnd_ai.queries.knowledge_browse`.
 `GET /campaigns/{campaign_id}/knowledge/{knowledge_item_id}` is the
 pre-existing single-item read (`dnd_ai.queries.knowledge.
 get_knowledge_view`), unchanged for its existing GM / party-perspective
-callers and extended (backward-compatibly) to also serve a
-character-private lookup: a non-GM caller who supplies `character_id`
-without `party_id` and holds `character.view_knowledge` for that character
-gets that character's own `knowledge.entity_knowledge` belief — so the
-`character_private` list and this route agree.
+callers and extended to resolve a player's character perspective the way
+the list does (`resolve_member_knowledge_perspective`): the selected
+character's own `knowledge.entity_knowledge` belief, else a party belief
+(the chosen party, or the character's eligible parties when none is
+chosen), else public lore.
 
 Authorization: every route requires `campaign.view`. Whether the caller
 may *discover* an item is `campaign.view` (a targeted deny hides it from
@@ -24,10 +24,11 @@ GM-only fields* is a separate, per-item `canon.edit` decision (baseline, or
 a targeted allow, minus a targeted deny) — a `canon.edit` deny only strips
 those fields, it never hides an item the caller could otherwise see
 (`dnd_ai.queries.knowledge_browse` documents the split). Anyone without
-ground truth for an item must prove an authorized party
-(`dnd_ai.api.access.resolve_party_perspective`, `character.view_knowledge`
-+ current party membership) or, for character-private, hold
-`character.view_knowledge` for the named character. An omitted perspective
+ground truth for an item must hold `character.view_knowledge` for the
+named character; a party then counts only as an authorized pair
+(`dnd_ai.api.access.resolve_party_perspective` — current membership in a
+party of this campaign), named explicitly or, with no party filter, each
+such eligible party. A party with no character is ignored. An omitted perspective
 contributes no audience-specific records to a list page, or — for the
 detail route — yields the identical fixed, non-disclosing 404 a nonexistent
 item produces (a knowledge item's own existence can be sensitive). Public
@@ -390,6 +391,93 @@ def _resolve_related_id_redaction(
     )
 
 
+@dataclass(frozen=True)
+class MemberKnowledgePerspective:
+    """The audience a player's Knowledge request resolves to (see
+    `resolve_member_knowledge_perspective`). Every id is already authorized."""
+
+    party_id: uuid.UUID | None
+    """The explicit party filter, authorized as a `(character, party)` pair."""
+    eligible_party_ids: tuple[uuid.UUID, ...]
+    """With no party filter: every party the character may be seen through."""
+    knower_id: uuid.UUID | None
+    """The selected character, when the caller holds `character.view_knowledge`."""
+
+
+_NO_MEMBER_PERSPECTIVE = MemberKnowledgePerspective(None, (), None)
+
+
+def _eligible_party_ids(
+    connection: Connection,
+    *,
+    access: AccessContext,
+    campaign_id: uuid.UUID,
+    character_id: uuid.UUID,
+) -> tuple[uuid.UUID, ...]:
+    """The parties `character_id` is currently a member of on the caller's
+    timeline and that belong to `campaign_id` — the per-party checks of
+    `resolve_party_perspective`, and the session bootstrap's
+    `authorized_parties` derivation, for every party at once. The caller has
+    already proven `character.view_knowledge` for the character."""
+    return tuple(
+        connection.execute(
+            text("""
+                SELECT DISTINCT pm.party_id
+                FROM campaign.party_memberships pm
+                JOIN campaign.campaign_parties cp
+                  ON cp.party_id = pm.party_id AND cp.campaign_id = :campaign
+                WHERE pm.timeline_id = :timeline
+                  AND pm.member_entity_id = :character
+                  AND pm.effective_to_world_time_id IS NULL
+                ORDER BY pm.party_id
+            """),
+            {"campaign": campaign_id, "timeline": access.timeline_id, "character": character_id},
+        ).scalars()
+    )
+
+
+def resolve_member_knowledge_perspective(
+    connection: Connection,
+    *,
+    access: AccessContext,
+    campaign_id: uuid.UUID,
+    character_id: uuid.UUID | None,
+    party_id: uuid.UUID | None,
+) -> MemberKnowledgePerspective:
+    """The player Knowledge perspective: the selected character is the
+    perspective and a party only *filters* its party-derived part.
+
+    - No character: no audience at all (public only) — a leftover `party_id`
+      is ignored, never trusted on its own.
+    - Character and party: `resolve_party_perspective` authorizes the pair
+      (an unauthorized pair is its fixed, non-disclosing 404); the
+      character's own knowledge stays in view.
+    - Character only: if the caller holds `character.view_knowledge` for it,
+      the character's own knowledge plus that of its eligible parties
+      (`_eligible_party_ids`); otherwise nothing audience-specific, exactly as
+      an omitted perspective."""
+    if character_id is None:
+        return _NO_MEMBER_PERSPECTIVE
+    if party_id is not None:
+        authorized_party_id = resolve_party_perspective(
+            connection,
+            access=access,
+            campaign_id=campaign_id,
+            character_id=character_id,
+            party_id=party_id,
+        )
+        return MemberKnowledgePerspective(authorized_party_id, (), character_id)
+    if not access.has_capability(_CHARACTER_KNOWLEDGE_CAPABILITY, character_id=character_id):
+        return _NO_MEMBER_PERSPECTIVE
+    return MemberKnowledgePerspective(
+        None,
+        _eligible_party_ids(
+            connection, access=access, campaign_id=campaign_id, character_id=character_id
+        ),
+        character_id,
+    )
+
+
 @router.get(
     "/campaigns/{campaign_id}/knowledge",
     response_model=KnowledgeListResponse,
@@ -412,11 +500,10 @@ def list_knowledge_endpoint(
 ) -> KnowledgeListResponse:
     """The audience-filtered Knowledge screen list. See
     `dnd_ai.queries.knowledge_browse` for the `view` vocabulary and
-    semantics. `character_id`/`party_id` are the perspective: the
-    audience-specific part of `known`/`rumors`/`party_shared` needs an
-    authorized `(character_id, party_id)` pair; `character_private` needs
-    `character_id` (with `character.view_knowledge` held for it); `recent`
-    uses either or both. Public knowledge needs no perspective and is
+    semantics. `character_id` is the perspective and `party_id` an
+    optional filter of its party-derived part (`resolve_member_knowledge_
+    perspective`); a GM still selects a party view only by an authorized
+    `(character_id, party_id)` pair. Public knowledge needs no perspective and is
     included in every view by default — an omitted perspective yields just
     the public items, never an error or an existence hint. `include_public=
     false` is the explicit opt-out; `view=public` is the public-only
@@ -456,18 +543,33 @@ def resolve_knowledge_list(
     resolved `AccessContext` in place of the actor's."""
     include_ground_truth = access.has_capability(_KNOWLEDGE_GROUND_TRUTH_CAPABILITY)
 
-    authorized_party_id = resolve_party_perspective(
-        connection,
-        access=access,
-        campaign_id=campaign_id,
-        character_id=character_id,
-        party_id=party_id,
-    )
+    eligible_party_ids: tuple[uuid.UUID, ...] = ()
     authorized_knower_id: uuid.UUID | None = None
-    if character_id is not None and access.has_capability(
-        _CHARACTER_KNOWLEDGE_CAPABILITY, character_id=character_id
-    ):
-        authorized_knower_id = character_id
+    if include_ground_truth:
+        # A GM's management views keep their own contract: an explicit pair
+        # selects that party's view, otherwise the canonical projection.
+        authorized_party_id = resolve_party_perspective(
+            connection,
+            access=access,
+            campaign_id=campaign_id,
+            character_id=character_id,
+            party_id=party_id,
+        )
+        if character_id is not None and access.has_capability(
+            _CHARACTER_KNOWLEDGE_CAPABILITY, character_id=character_id
+        ):
+            authorized_knower_id = character_id
+    else:
+        perspective = resolve_member_knowledge_perspective(
+            connection,
+            access=access,
+            campaign_id=campaign_id,
+            character_id=character_id,
+            party_id=party_id,
+        )
+        authorized_party_id = perspective.party_id
+        eligible_party_ids = perspective.eligible_party_ids
+        authorized_knower_id = perspective.knower_id
 
     time_ordered = view == "recent"
     keyset_name = RECENT_KEYSET if time_ordered else KNOWN_KEYSET
@@ -510,6 +612,8 @@ def resolve_knowledge_list(
         include_ground_truth=include_ground_truth,
         authorized_party_id=authorized_party_id,
         authorized_knower_id=authorized_knower_id,
+        eligible_party_ids=eligible_party_ids,
+        include_character_knowledge=not include_ground_truth,
         query_text=q,
         knowledge_type_code=type,
         denied_item_ids=_denied_item_ids(access) | lifecycle_hidden,
@@ -622,10 +726,12 @@ def resolve_knowledge_response(
         can_edit_canon=include_ground_truth,
     ):
         return None
-    authorized_party_id = (
-        None
+    # The same player perspective the list resolves: the character's own
+    # belief, then its (filtered or eligible) parties', then public lore.
+    perspective = (
+        _NO_MEMBER_PERSPECTIVE
         if include_ground_truth
-        else resolve_party_perspective(
+        else resolve_member_knowledge_perspective(
             connection,
             access=access,
             campaign_id=campaign_id,
@@ -633,18 +739,7 @@ def resolve_knowledge_response(
             party_id=party_id,
         )
     )
-    # Character-private fallback: a non-GM caller who named only a
-    # character (no party) and holds character.view_knowledge for it gets
-    # that character's own entity_knowledge belief — keeping this route in
-    # agreement with the `character_private` list view.
-    knower_entity_id: uuid.UUID | None = None
-    if (
-        not include_ground_truth
-        and authorized_party_id is None
-        and character_id is not None
-        and access.has_capability(_CHARACTER_KNOWLEDGE_CAPABILITY, character_id=character_id)
-    ):
-        knower_entity_id = character_id
+    authorized_party_id = perspective.party_id
 
     view = get_knowledge_view(
         connection,
@@ -653,8 +748,9 @@ def resolve_knowledge_response(
         expected_world_id=timeline_world_id(connection, access.timeline_id),
         party_id=authorized_party_id,
         include_ground_truth=include_ground_truth,
-        knower_entity_id=knower_entity_id,
+        knower_entity_id=perspective.knower_id,
         allow_public=True,
+        eligible_party_ids=perspective.eligible_party_ids,
     )
 
     subject: KnowledgeSubjectResponse | None = None

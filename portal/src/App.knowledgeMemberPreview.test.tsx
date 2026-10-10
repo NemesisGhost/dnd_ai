@@ -206,7 +206,7 @@ describe("Knowledge Member preview", () => {
       expect(screen.getByRole("combobox", { name: "Party to preview" })).toBeEnabled()
       expect(
         within(screen.getByRole("combobox", { name: "Party to preview" })).getAllByRole("option").map((o) => o.textContent),
-      ).toEqual(["No party perspective", "Red Company"])
+      ).toEqual(["All parties", "Red Company"])
       fireEvent.change(screen.getByRole("combobox", { name: "Party to preview" }), { target: { value: "p1" } })
       await waitFor(() => expect(requestsTo(/party_id=p1/).length).toBeGreaterThan(0))
       const banner = screen.getByRole("region", { name: "Preview context" })

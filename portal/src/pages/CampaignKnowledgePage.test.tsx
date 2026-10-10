@@ -251,7 +251,7 @@ describe("CampaignKnowledgePage", () => {
                 )
                 .map((option) => option.textContent),
         ).toEqual([
-            "No party selected",
+            "All parties",
             "The Adventuring Party",
             "The Merchant Council",
         ])

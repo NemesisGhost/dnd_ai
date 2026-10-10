@@ -135,7 +135,7 @@ export function KnowledgePage({
                             disabled={!hasParties}
                         >
                             {hasParties
-                                ? "No party selected"
+                                ? "All parties"
                                 : "No party available"}
                         </option>
 

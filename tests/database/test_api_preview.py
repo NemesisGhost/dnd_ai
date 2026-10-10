@@ -698,6 +698,40 @@ def test_the_knowledge_collection_preview_is_byte_identical_to_the_subjects_own_
                 assert preview.status_code == 200, query
 
 
+def test_a_player_preview_with_only_a_character_matches_what_the_player_sees(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    """The selected character alone is the player's perspective (its eligible
+    party's knowledge included), so the preview — list and claim — must show
+    exactly that, and a leftover party with no character stays public-only."""
+    item_id = str(f.knowledge_item_id)
+    belief = "Everyone says it's cursed, but I've heard it grants wishes."
+    for query, item_expected in (
+        (f"?character_id={f.character_id}", True),
+        (f"?view=party_shared&character_id={f.character_id}", True),
+        (f"?party_id={f.party_id}", False),
+        ("", False),
+    ):
+        with client_factory(f.actor_user_id) as client:
+            preview = client.get(_knowledge_list_preview_url(f, f.player_membership_id) + query)
+            preview_claim = client.get(_knowledge_preview_url(f, f.player_membership_id) + query)
+        with client_factory(f.player_user_id) as client:
+            direct = client.get(f"/campaigns/{f.campaign_id}/knowledge{query}")
+            direct_claim = client.get(f"/campaigns/{f.campaign_id}/knowledge/{item_id}{query}")
+        assert preview.status_code == direct.status_code == 200, query
+        assert preview.json() == direct.json(), query
+        assert preview_claim.status_code == direct_claim.status_code, query
+        assert preview_claim.json() == direct_claim.json() or direct_claim.status_code == 404
+        rows = [i for i in direct.json()["items"] if i["knowledge_item_id"] == item_id]
+        if item_expected:
+            assert [r["statement"] for r in rows] == [belief], query
+            assert direct_claim.status_code == 200
+            assert direct_claim.json()["statement"] == belief
+        else:
+            assert rows == [], query
+            assert direct_claim.status_code == 404
+
+
 def test_the_collection_preview_shows_the_subjects_audience_not_the_actors(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
 ) -> None:

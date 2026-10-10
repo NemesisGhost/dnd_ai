@@ -180,6 +180,29 @@ describe("fetchKnowledgeItems", () => {
         )
     })
 
+    it("sends the selected character on its own, never requiring a party", async () => {
+        const fetchMock = vi.fn().mockResolvedValue(
+            new Response(JSON.stringify({ items: [], next_cursor: null }), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+            }),
+        )
+
+        vi.stubGlobal("fetch", fetchMock)
+
+        await fetchKnowledgeItems("campaign-a", {
+            view: "known",
+            characterId: "character-a",
+            partyId: null,
+            query: "",
+            knowledgeType: null,
+        })
+
+        expect(fetchMock.mock.calls[0][0]).toBe(
+            "/api/campaigns/campaign-a/knowledge?view=known&character_id=character-a",
+        )
+    })
+
     it("passes an opaque cursor without interpreting it", async () => {
         const fetchMock = vi.fn().mockResolvedValue(
             new Response(

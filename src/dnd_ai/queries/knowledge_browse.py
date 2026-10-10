@@ -11,12 +11,38 @@ of the screen — across the documented views.
 
 | `view` | Source table | Audience |
 |---|---|---|
-| `known` | `campaign.party_knowledge` (authorized party), `knowledge_type` NOT in the rumor set | the party's settled knowledge |
-| `rumors` | `campaign.party_knowledge` (authorized party), `knowledge_type` IN the rumor set | the party's unsettled beliefs |
-| `party_shared` | `campaign.party_knowledge` (authorized party), every row | the party's collective knowledge |
+| `known` | `campaign.party_knowledge` (authorized parties) + the character's `knowledge.entity_knowledge`, `knowledge_type` NOT in the rumor set | the perspective's settled knowledge |
+| `rumors` | the same sources, `knowledge_type` IN the rumor set | the perspective's unsettled beliefs |
+| `party_shared` | `campaign.party_knowledge` (authorized parties), every row | the parties' collective knowledge |
 | `character_private` | `knowledge.entity_knowledge` where `knower_entity_id` = the authorized character | that one character's individual beliefs |
-| `recent` | `knowledge.party_discoveries` for the authorized party and/or character | the audience's discovery stream, newest first |
+| `recent` | `knowledge.party_discoveries` for the authorized parties and/or character | the audience's discovery stream, newest first |
 | `public` | `knowledge.public_knowledge` on the timeline | the explicit public-only filter — any `campaign.view` caller |
+
+## Character perspective (player default)
+
+For a caller without baseline `canon.edit`, the character selected in the
+portal is the perspective; a party is an optional *filter*, never a
+prerequisite. The API resolves (`dnd_ai.api.knowledge.
+resolve_member_knowledge_perspective`):
+
+- **character, no party** — the character's own `entity_knowledge`
+  (`authorized_knower_id`) plus the `party_knowledge` of every party the
+  character is *eligible* to see through (`eligible_party_ids`): exactly the
+  pairs `dnd_ai.api.access.resolve_party_perspective` would accept, i.e.
+  `character.view_knowledge` held for the character, the party associated
+  with the campaign, and a current membership on the caller's timeline.
+  Membership alone grants nothing, and other parties' records never appear;
+- **character + party** — that one authorized party (`authorized_party_id`)
+  plus the character's own knowledge, which selecting a party never hides;
+- **no character** — no audience records at all (public only), even if a
+  `party_id` is still supplied.
+
+An item known to the character directly and through a party is listed once,
+as the character's own belief (the more specific projection). A baseline
+`canon.edit` caller keeps the older contract unchanged: an explicit
+`(character, party)` pair selects that party's view, otherwise the
+canonical projection; the character's own knowledge stays in
+`character_private`/`recent`.
 
 ## Public knowledge is additive
 
@@ -223,6 +249,8 @@ def list_knowledge(
     include_ground_truth: bool,
     authorized_party_id: uuid.UUID | None,
     authorized_knower_id: uuid.UUID | None,
+    eligible_party_ids: tuple[uuid.UUID, ...] = (),
+    include_character_knowledge: bool = False,
     query_text: str | None,
     knowledge_type_code: str | None,
     denied_item_ids: frozenset[uuid.UUID],
@@ -254,15 +282,27 @@ def list_knowledge(
     (`_GROUND_TRUTH_EXPR` composes them the same way `has_capability` does).
     A `canon.edit` deny never removes an item — it only nulls that item's
     `truth_status`/`sensitivity` and, where a view would otherwise project
-    the canonical statement, drops it back to the belief projection."""
+    the canonical statement, drops it back to the belief projection.
+
+    **Party-derived knowledge** comes from `authorized_party_id` (an explicit,
+    authorized party filter) when one is given, else from
+    `eligible_party_ids` (the parties the authorized character is currently
+    eligible to see through, resolved by the API without a party filter —
+    see "Character perspective" in the module docstring).
+    `include_character_knowledge` adds the authorized knower's own
+    `entity_knowledge` to `known`/`rumors` alongside party knowledge; the
+    caller passes it only for a player perspective, so a GM's views are
+    unchanged."""
     if view not in KNOWLEDGE_VIEWS:
         raise ValueError(f"unknown knowledge view {view!r}")
+
+    party_ids = (authorized_party_id,) if authorized_party_id is not None else eligible_party_ids
 
     like_pattern = f"%{_escape_like(query_text)}%" if query_text else None
     common: dict[str, object] = {
         "timeline_id": timeline_id,
         "world_id": world_id,
-        "party_id": authorized_party_id,
+        "party_ids": list(party_ids),
         "knower_id": authorized_knower_id,
         "like_pattern": like_pattern,
         "type_code": knowledge_type_code,
@@ -294,9 +334,18 @@ def list_knowledge(
     item_filters = _item_filters(view)
     sources: list[str] = []
     if view in ("known", "rumors", "party_shared"):
-        if authorized_party_id is not None:
+        if party_ids:
             sources.append(_party_source(item_filters))
-        elif include_ground_truth or ground_truth_allowed_item_ids:
+        if (
+            include_character_knowledge
+            and authorized_knower_id is not None
+            and view in ("known", "rumors")
+        ):
+            # The selected character's directly recorded knowledge belongs in
+            # their settled/rumor views whether or not a party is chosen —
+            # choosing one only narrows the *party-derived* part.
+            sources.append(_character_source(item_filters))
+        if authorized_party_id is None and (include_ground_truth or ground_truth_allowed_item_ids):
             # The canonical (ground-truth) projection — reachable for a
             # baseline GM, or for a non-GM who holds a targeted `canon.edit`
             # allow for at least one item (`_canonical_source` itself keeps
@@ -410,21 +459,25 @@ def _candidate_columns(
     """
 
 
-# Projection precedence for one item (lower wins): the caller's own
-# audience-specific belief — party, character — or the ground-truth
-# canonical projection, ahead of the public lore projection. The same order
-# `dnd_ai.queries.knowledge.get_knowledge_view` resolves for the detail
-# route, so list and detail show the same statement for the same item.
-_AUDIENCE_PRECEDENCE = 1
-_PUBLIC_PRECEDENCE = 2
+# Projection precedence for one item (lower wins): the ground-truth
+# canonical projection (only ever a source for a caller who may see it), then
+# the selected character's own belief, then a party's belief, then public
+# lore. The same order `dnd_ai.queries.knowledge.get_knowledge_view` resolves
+# for the detail route, so list and detail show the same statement for the
+# same item. Among several eligible parties' beliefs the lowest
+# `party_knowledge_id` wins, in both places.
+_CANONICAL_PRECEDENCE = 0
+_CHARACTER_PRECEDENCE = 1
+_PARTY_PRECEDENCE = 2
+_PUBLIC_PRECEDENCE = 3
 
 
 def _party_source(item_filters: str) -> str:
     columns = _candidate_columns(
         statement_expr="COALESCE(pk.interpretation, ki.canonical_statement)",
-        record_id="ki.knowledge_item_id",
+        record_id="pk.party_knowledge_id",
         scope="'party'",
-        precedence=_AUDIENCE_PRECEDENCE,
+        precedence=_PARTY_PRECEDENCE,
         awareness="pk.awareness_level",
         confidence="pk.confidence",
         willing_to_share="pk.willing_to_share",
@@ -435,7 +488,7 @@ def _party_source(item_filters: str) -> str:
         FROM campaign.party_knowledge pk
         {_ITEM_JOINS.format(item_col="pk.knowledge_item_id")}
         WHERE pk.timeline_id = :timeline_id
-          AND pk.party_id = :party_id
+          AND pk.party_id = ANY(CAST(:party_ids AS uuid[]))
           {item_filters}
     """
 
@@ -445,7 +498,7 @@ def _character_source(item_filters: str) -> str:
         statement_expr="COALESCE(ek.interpretation, ki.canonical_statement)",
         record_id="ek.entity_knowledge_id",
         scope="'character'",
-        precedence=_AUDIENCE_PRECEDENCE,
+        precedence=_CHARACTER_PRECEDENCE,
         awareness="ek.awareness_level",
         confidence="ek.confidence",
         willing_to_share="ek.willing_to_share",
@@ -468,7 +521,7 @@ def _canonical_source(item_filters: str) -> str:
         statement_expr="ki.canonical_statement",
         record_id="ki.knowledge_item_id",
         scope="'canonical'",
-        precedence=_AUDIENCE_PRECEDENCE,
+        precedence=_CANONICAL_PRECEDENCE,
     )
     return f"""
         {columns}
@@ -626,7 +679,7 @@ def _list_recent(
     `canon.edit` and *no* perspective sees every discovery on the timeline;
     everyone else — including a GM who selected a perspective, and a non-GM
     with a targeted `canon.edit` allow — sees only the discoveries their
-    authorized party (`pd.party_id = :party_id`) or character
+    authorized parties (`pd.party_id = ANY(:party_ids)`) or character
     (`pd.knower_entity_id = :knower_id`) made. A targeted `canon.edit`
     allow grants ground truth *for an item*, never a wider view of who
     discovered what.
@@ -658,11 +711,11 @@ def _list_recent(
     (`party_discovery_id` / `public_knowledge_id`) is the tie-breaker.
     """
     gm_baseline = params["gm"] is True
-    no_perspective = params["party_id"] is None and params["knower_id"] is None
+    no_perspective = not params["party_ids"] and params["knower_id"] is None
     audience_clause = (
         "TRUE"
         if (gm_baseline and no_perspective)
-        else "(pd.party_id = :party_id OR pd.knower_entity_id = :knower_id)"
+        else "(pd.party_id = ANY(CAST(:party_ids AS uuid[])) OR pd.knower_entity_id = :knower_id)"
     )
 
     gt = _GROUND_TRUTH_EXPR
@@ -700,7 +753,7 @@ def _list_recent(
         statement_expr=statement_expr,
         record_id="pd.party_discovery_id",
         scope=scope_expr,
-        precedence=_AUDIENCE_PRECEDENCE,
+        precedence=_PARTY_PRECEDENCE,
         awareness=awareness_expr,
         confidence=confidence_expr,
         willing_to_share=share_expr,
@@ -741,7 +794,8 @@ def _list_recent(
             LEFT JOIN campaign.party_knowledge pk
                    ON pk.timeline_id = pd.timeline_id
                   AND pk.knowledge_item_id = pd.knowledge_item_id
-                  AND pk.party_id = :party_id
+                  AND pk.party_id = pd.party_id
+                  AND pk.party_id = ANY(CAST(:party_ids AS uuid[]))
             LEFT JOIN knowledge.entity_knowledge ek
                    ON ek.timeline_id = pd.timeline_id
                   AND ek.knowledge_item_id = pd.knowledge_item_id

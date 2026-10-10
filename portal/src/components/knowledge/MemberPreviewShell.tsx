@@ -294,7 +294,7 @@ function PermittedShell({
                                     ? "Choose a character first"
                                     : character.authorized_parties.length === 0
                                       ? "No party available"
-                                      : "No party perspective"}
+                                      : "All parties"}
                             </option>
                             {(character?.authorized_parties ?? []).map((p) => (
                                 <option key={p.party_id} value={p.party_id}>
