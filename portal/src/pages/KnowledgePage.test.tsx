@@ -314,8 +314,8 @@ describe("KnowledgePage", () => {
     })
 })
 
-describe("KnowledgePage — audience preview (Phase 13E-B manual-acceptance fix)", () => {
-    it("shows 'Preview as member' to a GM/admin campaign membership", () => {
+describe("KnowledgePage — no per-page member preview", () => {
+    it("offers no 'Preview as member' control, even to someone who can manage access (it lives in Knowledge > Member preview)", () => {
         accessOverviewStateRef.current = {
             status: "success",
             overview: {
@@ -368,7 +368,7 @@ describe("KnowledgePage — audience preview (Phase 13E-B manual-acceptance fix)
             </SessionContext.Provider>,
         )
 
-        expect(screen.getByRole("button", { name: "Preview as member" })).toBeInTheDocument()
+        expect(screen.queryByRole("button", { name: "Preview as member" })).toBeNull()
     })
 
     it("does not show 'Preview as member' without access.manage", () => {

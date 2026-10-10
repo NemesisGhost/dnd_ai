@@ -230,7 +230,6 @@ export function KnowledgeClaimPage({
     const header = (
         <KnowledgeClaimHeader
             campaignId={campaignId}
-            knowledgeItemId={knowledgeItemId}
             item={item}
             characterId={characterId}
             partyId={partyId}

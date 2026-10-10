@@ -26,6 +26,7 @@ import { canCreateWorlds } from "../utils/worldAccess"
 import { AccessNavGroup } from "./AccessNavGroup"
 import { CampaignHomeNavGroup } from "./CampaignHomeNavGroup"
 import { DisabledNavItem } from "./DisabledNavItem"
+import { KnowledgeNavGroup } from "./KnowledgeNavGroup"
 import { SELECT_CAMPAIGN_FIRST } from "./navigationReasons"
 import { WorldsNavGroup } from "./WorldsNavGroup"
 
@@ -265,6 +266,23 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
                 )
                 .map((item) => {
                 const Icon = item.icon
+                // Knowledge expands into Claims and Member preview for anyone who can
+                // preview a member; everyone else keeps the plain link below.
+                if (
+                  item.path === "knowledge" &&
+                  campaignPath !== null &&
+                  resolvedCampaign?.capabilities.includes("access.manage") ===
+                    true
+                ) {
+                  return (
+                    <KnowledgeNavGroup
+                      key={item.path}
+                      campaignPath={campaignPath}
+                      collapsed={collapsed}
+                      onNavigate={close}
+                    />
+                  )
+                }
                 return (
                   <li key={item.path}>
                     {campaignPath === null ? (

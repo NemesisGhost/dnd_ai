@@ -984,6 +984,8 @@ spoiler-checking half of that (D-1, Option B here, Option C there).
 ```
 GET /campaigns/{campaign_id}/members/{campaign_membership_id}/preview/quests/{quest_id}
 GET /campaigns/{campaign_id}/members/{campaign_membership_id}/preview/knowledge/{knowledge_item_id}
+GET /campaigns/{campaign_id}/members/{campaign_membership_id}/preview/knowledge            (the collection)
+GET /campaigns/{campaign_id}/members/{campaign_membership_id}/preview/knowledge/perspectives
   auth: access.manage on {campaign_id} (require_campaign_capability, UNCHANGED), human only
   query: character_id?, party_id? — interpreted against the SUBJECT, not the actor
   200: the identical QuestResponse/KnowledgeResponse body the member's own request returns
@@ -1001,6 +1003,8 @@ expose the hidden stage to the party?" This is explicitly **not** Option A
 (no full-portal impersonation, no projection over all ~15 13D read routes):
 two bounded routes only, confined to the two genuine spoiler surfaces in
 the 13D read set.
+
+**Knowledge collection and perspectives (Knowledge member preview).** The portal's dedicated Member preview workspace needs the member's *collection* and the perspectives they may choose, so the Knowledge adapter has two further fixed-segment reads. The collection calls `dnd_ai.api.knowledge.resolve_knowledge_list` (the one derivation behind the member's own `GET /campaigns/{id}/knowledge`, now shared) with the **subject's** `AccessContext` and the same query parameters; a subject without `campaign.view` is the same non-disclosing 404, and a perspective the subject may not use is refused exactly as their own request would refuse it. The perspectives read returns `get_session_bootstrap(subject)`'s character perspectives and authorized parties for this campaign (and their roles), so the portal never offers a perspective the server would refuse for them. Neither adds an adapter or a resource kind; both write the same metadata-only `sensitive_read` row with `scope` = `collection` or `perspectives` and no record id. The anti-lying test also covers the collection (byte-identical to the subject's own list for the same query, including a refused perspective).
 
 **Actor and subject are never interchangeable.** `require_campaign_
 capability` is not modified at all — it authorizes the actor for `access.

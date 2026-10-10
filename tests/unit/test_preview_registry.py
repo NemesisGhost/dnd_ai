@@ -40,9 +40,11 @@ def test_an_adapter_declaring_private_data_is_refused_at_construction(
         )
 
 
-def test_preview_routes_are_exactly_two_get_routes() -> None:
+def test_preview_routes_are_exactly_four_get_routes() -> None:
     routes = [r for r in router.routes if "/preview/" in getattr(r, "path", "")]
-    assert len(routes) == len(PREVIEW_ADAPTERS)
+    # Two detail routes (one per adapter), the Knowledge collection and the subject's
+    # Knowledge perspectives: all four are named by fixed path segments.
+    assert len(routes) == len(PREVIEW_ADAPTERS) + 2
     assert all(getattr(r, "methods", set()) == {"GET"} for r in routes)
     # The adapter is named by a fixed path segment, never a path parameter.
     kinds = {r.path.split("/preview/")[1].split("/")[0] for r in routes}  # type: ignore[attr-defined]

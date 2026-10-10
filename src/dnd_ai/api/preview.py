@@ -5,11 +5,14 @@ effective_access` (checkpoint 13) already tells a GM *what capabilities* a
 member holds; it cannot show what a specific quest or knowledge item
 actually renders as for that member, since quest/knowledge detail is
 `visibility_policy`-driven, not capability-listing-driven. This module adds
-exactly two `GET` routes for that:
+`GET` routes for that: one detail route per previewable resource kind,
+plus, for Knowledge, the collection and the subject's own selectable perspectives:
 
 ```
 GET /campaigns/{campaign_id}/members/{campaign_membership_id}/preview/quests/{quest_id}
 GET /campaigns/{campaign_id}/members/{campaign_membership_id}/preview/knowledge/{knowledge_item_id}
+GET /campaigns/{campaign_id}/members/{campaign_membership_id}/preview/knowledge
+GET /campaigns/{campaign_id}/members/{campaign_membership_id}/preview/knowledge/perspectives
 ```
 
 **The actor and the subject are never interchangeable.** `require_campaign_
@@ -71,12 +74,14 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel
 from sqlalchemy import Connection, text
 
 from dnd_ai.domain.access import AccessContext, resolve_access_context
 from dnd_ai.domain.data_classification import DataClass
 from dnd_ai.domain.errors import SafeMessageError
+from dnd_ai.queries.bootstrap import get_session_bootstrap
 
 from ._shared import timeline_world_id
 from .access import require_campaign_capability
@@ -84,7 +89,14 @@ from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection
 from .errors import NotFoundError
-from .knowledge import KnowledgeResponse, resolve_knowledge_response
+from .knowledge import (
+    KnowledgeListResponse,
+    KnowledgeResponse,
+    KnowledgeView,
+    resolve_knowledge_list,
+    resolve_knowledge_response,
+)
+from .pagination import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 from .quests import QuestResponse, resolve_quest_response
 
 router = APIRouter(tags=["preview"])
@@ -150,12 +162,13 @@ def _resolve_or_refuse[T](
     adapter: PreviewAdapter,
     actor: AccessContext,
     campaign_membership_id: uuid.UUID,
-    resource_id: uuid.UUID,
+    resource_id: uuid.UUID | None,
     character_supplied: bool,
     party_supplied: bool,
     correlation_id: str | None,
     subject: "PreviewSubjectContext | None",
     resolve: Callable[[AccessContext], T | None],
+    scope: str | None = None,
 ) -> T | None:
     """Run the adapter's resolver for the subject. A resolver that refuses by
     raising (an unauthorized character/party perspective, for example) is
@@ -176,6 +189,7 @@ def _resolve_or_refuse[T](
             character_supplied=character_supplied,
             party_supplied=party_supplied,
             correlation_id=correlation_id,
+            scope=scope,
         )
         raise
 
@@ -186,11 +200,12 @@ def _audit_preview(
     adapter: PreviewAdapter,
     actor: AccessContext,
     campaign_membership_id: uuid.UUID,
-    resource_id: uuid.UUID,
+    resource_id: uuid.UUID | None,
     shown: bool,
     character_supplied: bool,
     party_supplied: bool,
     correlation_id: str | None,
+    scope: str | None = None,
 ) -> None:
     """One metadata-only `sensitive_read` row. Never the response body, any
     narrative, a query-string value, or a token."""
@@ -201,6 +216,9 @@ def _audit_preview(
         "character_perspective_supplied": character_supplied,
         "party_perspective_supplied": party_supplied,
     }
+    if scope is not None:
+        # A preview of no single record: the Knowledge collection, or the subject's perspectives.
+        changed["scope"] = scope
     record_change_log(
         connection,
         change_action_code=_PREVIEW_ACTION,
@@ -368,6 +386,86 @@ def preview_quest_endpoint(
     return response
 
 
+class PreviewPartyRef(BaseModel):
+    party_id: uuid.UUID
+    party_name: str
+
+
+class PreviewCharacterPerspective(BaseModel):
+    character_id: uuid.UUID
+    character_name: str
+    authorized_parties: list[PreviewPartyRef]
+
+
+class PreviewPerspectivesResponse(BaseModel):
+    """What the **subject** may choose as a Knowledge perspective: exactly the character and
+    party perspectives their own session bootstrap would offer, so the preview never invites a
+    character or party the server would refuse for them."""
+
+    display_name: str
+    roles: list[str]
+    character_perspectives: list[PreviewCharacterPerspective]
+
+
+# Declared before the `{knowledge_item_id}` route so the fixed segment is never read as an id.
+@router.get(
+    "/campaigns/{campaign_id}/members/{campaign_membership_id}/preview/knowledge/perspectives",
+    response_model=PreviewPerspectivesResponse,
+    status_code=200,
+)
+def preview_knowledge_perspectives_endpoint(
+    campaign_id: uuid.UUID,
+    campaign_membership_id: uuid.UUID,
+    actor: Annotated[
+        AccessContext, Depends(require_campaign_capability(_ACCESS_MANAGE_CAPABILITY))
+    ],
+    connection: Annotated[Connection, Depends(get_connection)],
+    correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
+) -> PreviewPerspectivesResponse:
+    """The subject's own selectable character and party perspectives (`get_session_bootstrap`
+    run for the subject, the derivation their own bootstrap uses). Same non-disclosing 404 as every
+    other unresolvable subject."""
+    adapter = PREVIEW_ADAPTERS["knowledge"]
+    subject = resolve_preview_subject(
+        connection, actor=actor, campaign_membership_id=campaign_membership_id
+    )
+    response: PreviewPerspectivesResponse | None = None
+    if subject is not None:
+        bootstrap = get_session_bootstrap(connection, user_id=subject.access.user_id)
+        campaign = next((c for c in bootstrap.campaigns if c.campaign_id == campaign_id), None)
+        if campaign is not None:
+            response = PreviewPerspectivesResponse(
+                display_name=subject.display_name,
+                roles=list(campaign.roles),
+                character_perspectives=[
+                    PreviewCharacterPerspective(
+                        character_id=perspective.character_id,
+                        character_name=perspective.character_name,
+                        authorized_parties=[
+                            PreviewPartyRef(party_id=party.party_id, party_name=party.party_name)
+                            for party in perspective.authorized_parties
+                        ],
+                    )
+                    for perspective in campaign.character_perspectives
+                ],
+            )
+    _audit_preview(
+        connection,
+        adapter=adapter,
+        actor=actor,
+        campaign_membership_id=campaign_membership_id,
+        resource_id=None,
+        shown=response is not None,
+        character_supplied=False,
+        party_supplied=False,
+        correlation_id=correlation_id,
+        scope="perspectives",
+    )
+    if response is None:
+        raise NotFoundError()
+    return response
+
+
 @router.get(
     "/campaigns/{campaign_id}/members/{campaign_membership_id}/preview/knowledge/{knowledge_item_id}",
     response_model=KnowledgeResponse,
@@ -421,6 +519,83 @@ def preview_knowledge_endpoint(
         character_supplied=character_id is not None,
         party_supplied=party_id is not None,
         correlation_id=correlation_id,
+    )
+    if response is None:
+        raise NotFoundError()
+    return response
+
+
+@router.get(
+    "/campaigns/{campaign_id}/members/{campaign_membership_id}/preview/knowledge",
+    response_model=KnowledgeListResponse,
+    status_code=200,
+)
+def preview_knowledge_list_endpoint(
+    campaign_id: uuid.UUID,
+    campaign_membership_id: uuid.UUID,
+    actor: Annotated[
+        AccessContext, Depends(require_campaign_capability(_ACCESS_MANAGE_CAPABILITY))
+    ],
+    connection: Annotated[Connection, Depends(get_connection)],
+    correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
+    view: Annotated[KnowledgeView, Query()] = "known",
+    character_id: Annotated[uuid.UUID | None, Query()] = None,
+    party_id: Annotated[uuid.UUID | None, Query()] = None,
+    q: Annotated[str | None, Query(max_length=200)] = None,
+    type: Annotated[str | None, Query(max_length=64)] = None,
+    include_public: Annotated[bool, Query()] = True,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+    cursor: Annotated[str | None, Query()] = None,
+) -> KnowledgeListResponse:
+    """The Knowledge collection as the **subject** (`campaign_membership_id`) would receive it:
+    the same derivation as their own `GET /campaigns/{id}/knowledge` (`resolve_knowledge_list`)
+    with the subject's `AccessContext`, never the actor's. A subject who could not open the
+    Knowledge screen at all (no `campaign.view`) is the same non-disclosing 404 as any other
+    unresolvable subject. `character_id`/`party_id` are interpreted against the subject."""
+    adapter = PREVIEW_ADAPTERS["knowledge"]
+    subject = resolve_preview_subject(
+        connection, actor=actor, campaign_membership_id=campaign_membership_id
+    )
+    response = _resolve_or_refuse(
+        connection,
+        adapter=adapter,
+        actor=actor,
+        campaign_membership_id=campaign_membership_id,
+        resource_id=None,
+        character_supplied=character_id is not None,
+        party_supplied=party_id is not None,
+        correlation_id=correlation_id,
+        subject=subject,
+        resolve=lambda access: (
+            resolve_knowledge_list(
+                connection,
+                access=access,
+                campaign_id=campaign_id,
+                view=view,
+                character_id=character_id,
+                party_id=party_id,
+                q=q,
+                type=type,
+                include_public=include_public,
+                limit=limit,
+                cursor=cursor,
+            )
+            if access.has_capability("campaign.view")
+            else None
+        ),
+        scope="collection",
+    )
+    _audit_preview(
+        connection,
+        adapter=adapter,
+        actor=actor,
+        campaign_membership_id=campaign_membership_id,
+        resource_id=None,
+        shown=response is not None,
+        character_supplied=character_id is not None,
+        party_supplied=party_id is not None,
+        correlation_id=correlation_id,
+        scope="collection",
     )
     if response is None:
         raise NotFoundError()

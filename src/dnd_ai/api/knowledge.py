@@ -422,6 +422,38 @@ def list_knowledge_endpoint(
     false` is the explicit opt-out; `view=public` is the public-only
     filter. An item both public and in the caller's audience is listed once,
     in its audience-specific projection."""
+    return resolve_knowledge_list(
+        connection,
+        access=access,
+        campaign_id=campaign_id,
+        view=view,
+        character_id=character_id,
+        party_id=party_id,
+        q=q,
+        type=type,
+        include_public=include_public,
+        limit=limit,
+        cursor=cursor,
+    )
+
+
+def resolve_knowledge_list(
+    connection: Connection,
+    *,
+    access: AccessContext,
+    campaign_id: uuid.UUID,
+    view: KnowledgeView,
+    character_id: uuid.UUID | None,
+    party_id: uuid.UUID | None,
+    q: str | None,
+    type: str | None,
+    include_public: bool,
+    limit: int,
+    cursor: str | None,
+) -> KnowledgeListResponse:
+    """The audience-filtered list for `access`. The one derivation behind both a member's own
+    request and the audience preview (`dnd_ai.api.preview`), which passes the **subject's**
+    resolved `AccessContext` in place of the actor's."""
     include_ground_truth = access.has_capability(_KNOWLEDGE_GROUND_TRUTH_CAPABILITY)
 
     authorized_party_id = resolve_party_perspective(

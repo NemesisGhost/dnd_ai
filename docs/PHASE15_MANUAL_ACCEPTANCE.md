@@ -87,6 +87,19 @@ Check at 390, 1280 and 2560 px, keyboard only, and with a screen reader, as a GM
 11. Widths: 360, 768, 1280 and 1920 px have no horizontal page scroll, the stage links wrap and the section menu is a left column from 64rem and a wrapping row below it. Closing the tab with an unsaved draft shows the browser's own prompt.
 12. Old addresses `…/knowledge/:id/edit` and `…/knowledge/:id/audience` land on `?section=claim` and `?section=who-knows` with character and party unchanged; `#claim` and `#who-knows` map to the same sections.
 
+### Knowledge Member preview
+
+Check at 360, 768, 1280 and 1920 px, keyboard only, and with a screen reader, as a GM or owner (`access.manage`) and as a player.
+
+1. Sidebar: for the GM, Knowledge expands into Claims and Member preview (the group opens on a Knowledge route; the active child is marked); for a player it is the plain Knowledge link with no Member preview. The normal Knowledge collection and claim pages have no "Preview as member" control.
+2. Member preview before a choice: only the "Choose a member to preview" state and the member list (open, active members); no Knowledge is shown and no Knowledge request is made.
+3. Choose a member: the bordered banner reads "Previewing as [member] ([roles])", says read-only and separates member access from fictional character and party knowledge; the URL holds `?member=`. Only that member's own characters are offered, and a party only for a character that may use it. The collection lists only what that member would see (compare it with the GM's own Knowledge page: drafts and unpublished claims are absent for a player).
+4. Open a claim from the preview: it stays in the preview (breadcrumb Knowledge › Member preview › Claim, the same banner), shows the member's projection as text (no truth or sensitivity unless the member's own request would include them), has no edit, source, lifecycle or knowledge-management control, and the subject is not a link. Back returns to the same filters, page and perspective.
+5. Invalid or stale selections: an unknown member, a character the member does not have, or a party without a usable character each give a clear error and no Knowledge request; changing the member clears the previous member's claims immediately; reload reproduces the same preview from the address.
+6. Return to Knowledge (banner link or Claims) lands on the ordinary collection with no member, perspective or filter from the preview; the GM's own Knowledge page is unchanged.
+7. A player who types the preview address is told they may not preview, and no preview or member-list request is made.
+8. Keyboard: the sidebar group, the child links, every selector and the cards are reachable and operable; focus is visible; no horizontal page scroll at 360 px.
+
 ## Carried items from earlier phases
 
 | Item | Result | Notes |

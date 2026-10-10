@@ -222,6 +222,8 @@ describe("unified knowledge claim page", () => {
         "3. Use in play",
       ])
       expect(within(stages).queryByText("Draft")).toBeNull()
+      // The member preview is its own workspace (Knowledge > Member preview), not a per-claim control.
+      expect(screen.queryByRole("button", { name: /Preview as member/ })).toBeNull()
     })
 
     it("marks an archived record as archived next to its canon status", async () => {

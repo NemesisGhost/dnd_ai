@@ -14,6 +14,9 @@ interface KnowledgeCardProps {
      * URL so a direct refresh/bookmark reproduces the same authorized
      * party-filtered view (UI_STYLE_GUIDE.md §11.2). */
     partyId: string | null
+    /** Opens the claim somewhere else (the Member preview keeps its own context in the address).
+     * The subject link is then left out, because it would leave that context. */
+    detailHref?: string
 }
 
 function buildDetailPath(
@@ -54,6 +57,7 @@ export function KnowledgeCard({
     item,
     characterId,
     partyId,
+    detailHref,
 }: KnowledgeCardProps) {
     const metadata: string[] = [humanizeCode(item.knowledge_type_code)]
 
@@ -78,15 +82,15 @@ export function KnowledgeCard({
             className="knowledge-card"
             title={item.statement}
             metadata={metadata}
-            to={buildDetailPath(
-                campaignId,
-                item.knowledge_item_id,
-                characterId,
-                partyId,
-            )}
+            to={
+                detailHref ??
+                buildDetailPath(campaignId, item.knowledge_item_id, characterId, partyId)
+            }
             linkLabel={item.statement}
             footer={
-                item.subject === null || item.subject === undefined ? undefined : (
+                detailHref !== undefined ||
+                item.subject === null ||
+                item.subject === undefined ? undefined : (
                     <KnowledgeSubjectLink
                         campaignId={campaignId}
                         subject={item.subject}

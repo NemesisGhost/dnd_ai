@@ -1,7 +1,6 @@
 import { useId } from "react"
 import type { ReactNode } from "react"
 import { Link } from "react-router"
-import { AudiencePreviewSection } from "../components/AudiencePreviewSection"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import type { AuthorizedParty } from "../types/bootstrap"
 import type { KnowledgeView } from "../types/knowledge"
@@ -70,8 +69,6 @@ export function KnowledgePage({
                     </Link>
                 </p>
             ) : null}
-
-            <AudiencePreviewSection campaignId={campaignId} resourceType="knowledge_item" />
 
             <div
                 className="knowledge-page__filters"

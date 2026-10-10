@@ -1,7 +1,6 @@
 import { Link } from "react-router"
 import type { KnowledgeDetail } from "../../types/knowledge"
 import { humanizeCode } from "../../utils/humanize"
-import { AudiencePreviewSection } from "../AudiencePreviewSection"
 import { LifecycleBadge } from "../authoring/feedback"
 import { KnowledgeSubjectLink } from "../KnowledgeSubjectLink"
 import type { ClaimGuidance } from "./claimStages"
@@ -21,7 +20,6 @@ export interface HeaderStatus {
 
 interface Props {
     campaignId: string
-    knowledgeItemId: string
     item: KnowledgeDetail
     characterId: string | null
     partyId: string | null
@@ -43,7 +41,6 @@ interface Props {
 // action lives in the header.
 export function KnowledgeClaimHeader({
     campaignId,
-    knowledgeItemId,
     item,
     characterId,
     partyId,
@@ -101,13 +98,6 @@ export function KnowledgeClaimHeader({
                         Next:{" "}
                         {guidanceHref !== null ? <Link to={guidanceHref}>{guidance.text} ›</Link> : guidance.text}
                     </span>
-                ) : null}
-                {canEdit ? (
-                    <AudiencePreviewSection
-                        campaignId={campaignId}
-                        resourceType="knowledge_item"
-                        fixedResource={{ id: knowledgeItemId, display_name: item.statement }}
-                    />
                 ) : null}
             </div>
         </header>

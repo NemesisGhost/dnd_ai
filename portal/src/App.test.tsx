@@ -980,11 +980,16 @@ describe("portal routing", () => {
   it("routes Knowledge through the authorized Knowledge boundary", () => {
     renderAppAt("/app/mundivita/knowledge")
 
+    // This person can manage access, so Knowledge expands into Claims and Member preview.
     expect(
-      screen.getByRole("link", {
-        name: "Knowledge",
-      }),
+      screen.getByRole("button", { name: "Knowledge" }),
+    ).toHaveAttribute("aria-expanded", "true")
+    expect(
+      screen.getByRole("link", { name: "Claims" }),
     ).toHaveAttribute("aria-current", "page")
+    expect(
+      screen.getByRole("link", { name: "Member preview" }),
+    ).not.toHaveAttribute("aria-current")
 
     expect(
       useKnowledgeItemsMock,

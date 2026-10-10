@@ -34,6 +34,8 @@ import {
   EditDungeonAreaPage,
   EditDungeonPage,
 } from "./pages/DungeonAuthoringPages"
+import { KnowledgeMemberPreviewClaimPage } from "./pages/KnowledgeMemberPreviewClaimPage"
+import { KnowledgeMemberPreviewPage } from "./pages/KnowledgeMemberPreviewPage"
 import { KnowledgeSectionRedirect } from "./pages/KnowledgeSectionRedirect"
 import { PrepareEncounterPage, PreparedEncounterPage } from "./pages/EncounterPages"
 import { ProvenancePage } from "./pages/ProvenancePage"
@@ -475,6 +477,17 @@ function App() {
             <Route
               path="knowledge/new"
               element={<CreateKnowledgePage />}
+            />
+
+            {/* Static preview routes, so "member-preview" is never read as a claim id. */}
+            <Route
+              path="knowledge/member-preview"
+              element={<KnowledgeMemberPreviewPage />}
+            />
+
+            <Route
+              path="knowledge/member-preview/:knowledgeItemId"
+              element={<KnowledgeMemberPreviewClaimPage />}
             />
 
             <Route
