@@ -20,7 +20,11 @@ afterEach(() => {
     vi.unstubAllGlobals()
 })
 
-function render(characterId: string | null, capabilities: string[] = ["campaign.view"]) {
+function render(
+    characterId: string | null,
+    capabilities: string[] = ["campaign.view"],
+    shown: KnowledgeDetail = item,
+) {
     const server = installMockServer()
     renderAuthoringRoutes({
         initialEntry: "/app/c1/knowledge/k1",
@@ -34,7 +38,7 @@ function render(characterId: string | null, capabilities: string[] = ["campaign.
                     <KnowledgeClaimPage
                         campaignId="c1"
                         knowledgeItemId="k1"
-                        item={item}
+                        item={shown}
                         characterId={characterId}
                         partyId={null}
                         refreshDetail={vi.fn()}
@@ -66,5 +70,36 @@ describe("KnowledgeClaimPage character knowledge", () => {
         const server = render(null)
         await screen.findByText("The duke is a vampire.")
         expect(server.calls).toHaveLength(0)
+    })
+
+    it("names public lore as the path, with its awareness and no invented personal fields", async () => {
+        render("c1", ["campaign.view"], {
+            ...item,
+            scope: "public",
+            awareness_level: "aware",
+            character_knowledge: { path: "public", awareness_level: "aware", confidence: null, willing_to_share: null },
+        })
+        expect(await screen.findByText(/Public knowledge\. The character has no personal record of it\./)).toBeInTheDocument()
+        expect(screen.getByText("Aware")).toBeInTheDocument()
+        expect(screen.queryByText("Confidence")).toBeNull()
+        expect(screen.queryByText("Willing to share")).toBeNull()
+        expect(screen.queryByText(/no recorded knowledge of this claim/)).toBeNull()
+    })
+
+    it("names a party path and a direct record accurately, with the recorded values", async () => {
+        render("c1", ["campaign.view"], {
+            ...item,
+            scope: "party",
+            character_knowledge: { path: "party", awareness_level: "rumored", confidence: 30, willing_to_share: true },
+        })
+        expect(await screen.findByText("Known through a party the character belongs to.")).toBeInTheDocument()
+        expect(screen.getByText("Rumored")).toBeInTheDocument()
+        expect(screen.getByText("30%")).toBeInTheDocument()
+        expect(screen.getByText("Yes")).toBeInTheDocument()
+    })
+
+    it("says the character has no knowledge only when the server found no path", async () => {
+        render("c1", ["campaign.view"], { ...item, scope: "canonical", character_knowledge: null })
+        expect(await screen.findByText(/no recorded knowledge of this claim/)).toBeInTheDocument()
     })
 })

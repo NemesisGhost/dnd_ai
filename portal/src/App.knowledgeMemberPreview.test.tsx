@@ -421,6 +421,76 @@ describe("Knowledge Member preview", () => {
       expect(screen.getByText("Aware")).toBeInTheDocument()
     })
 
+    it("follows the server's path: public lore is not labelled as the character's or party's own", async () => {
+      server.on("GET", /\/members\/m1\/preview\/knowledge\/k1(\?.*)?$/, {
+        body: {
+          knowledge_item_id: "k1",
+          knowledge_type_code: "fact",
+          statement: "Mira can see this.",
+          truth_status_code: null,
+          sensitivity: null,
+          awareness_level: "aware",
+          confidence: null,
+          willing_to_share: null,
+          scope: "public",
+          character_knowledge: { path: "public", awareness_level: "aware", confidence: null, willing_to_share: null },
+          subject: null,
+        },
+      })
+      setup(`${PREVIEW}/k1?member=m1&character_id=c1&party_id=p1`)
+      expect(await screen.findByRole("heading", { level: 3, name: "Public knowledge" })).toBeInTheDocument()
+      expect(screen.getByText(/no personal record of it/)).toBeInTheDocument()
+      expect(screen.getByText("Aware")).toBeInTheDocument()
+      expect(screen.queryByText("Confidence")).toBeNull()
+      expect(screen.queryByText(/has no recorded knowledge/)).toBeNull()
+    })
+
+    it("labels a direct record as the character's even with a party selected", async () => {
+      const url = /\/members\/m1\/preview\/knowledge\/k1(\?.*)?$/
+      const body = {
+        knowledge_item_id: "k1",
+        knowledge_type_code: "secret",
+        statement: "Mira can see this.",
+        truth_status_code: null,
+        sensitivity: null,
+        awareness_level: "suspected",
+        confidence: 15,
+        willing_to_share: false,
+        subject: null,
+      }
+      server.on("GET", url, {
+        body: {
+          ...body,
+          scope: "character",
+          character_knowledge: { path: "character", awareness_level: "suspected", confidence: 15, willing_to_share: false },
+        },
+      })
+      setup(`${PREVIEW}/k1?member=m1&character_id=c1&party_id=p1`)
+      expect(await screen.findByRole("heading", { level: 3, name: "Character knowledge: Ixa" })).toBeInTheDocument()
+      expect(screen.getByText("Known directly by the character.")).toBeInTheDocument()
+      expect(screen.getByText("15%")).toBeInTheDocument()
+    })
+
+    it("says the character has no recorded knowledge only when the server found no path", async () => {
+      server.on("GET", /\/members\/m1\/preview\/knowledge\/k1(\?.*)?$/, {
+        body: {
+          knowledge_item_id: "k1",
+          knowledge_type_code: "fact",
+          statement: "Mira can see this.",
+          truth_status_code: "true",
+          sensitivity: "secret",
+          awareness_level: null,
+          confidence: null,
+          willing_to_share: null,
+          scope: "canonical",
+          character_knowledge: null,
+          subject: null,
+        },
+      })
+      setup(`${PREVIEW}/k1?member=m1&character_id=c1`)
+      expect(await screen.findByText(/Ixa has no recorded knowledge of this claim/)).toBeInTheDocument()
+    })
+
     it.each([
       ["c1", "p1", "Red Company"],
       ["c1", null, "Ixa"],

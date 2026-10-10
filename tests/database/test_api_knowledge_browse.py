@@ -1914,3 +1914,189 @@ def test_a_gms_views_are_unchanged_by_a_selected_character(
     )
     assert detail["statement"] == "The mayor is secretly a doppelganger."
     assert detail["truth_status_code"] == "false"
+
+
+# ---------------------------------------------------------------------------
+# List and claim detail agree about whether and how the character knows a claim
+# ---------------------------------------------------------------------------
+
+
+def _ok_detail(client: TestClient, f: Fixture, item_id: uuid.UUID, params: dict[str, str]) -> Any:
+    response = client.get(_detail_url(f, item_id), params=params)
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_public_lore_without_a_personal_row_is_known_via_the_public_path(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    """The reported claim: public lore, no party or character record. The list
+    shows it (public path, awareness from the public record), so the detail
+    must say the character knows it — as public lore, with no invented
+    personal confidence or willingness to share."""
+    with client_factory(f.player_user_id) as client:
+        listed = client.get(_url(f), params={**_character_only(f), "limit": 100}).json()
+        detail = _ok_detail(client, f, f.public_id, _character_only(f))
+    row = next(i for i in listed["items"] if i["knowledge_item_id"] == str(f.public_id))
+    assert row["scope"] == "public"
+    assert detail["scope"] == "public"
+    assert row["awareness_level"] is not None
+    assert detail["character_knowledge"] == {
+        "path": "public",
+        "awareness_level": row["awareness_level"],
+        "confidence": None,
+        "willing_to_share": None,
+    }
+    assert detail["awareness_level"] == row["awareness_level"]
+    assert detail["truth_status_code"] is None
+    assert detail["sensitivity"] is None
+
+
+def test_direct_knowledge_is_reported_with_its_recorded_state(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as setup:
+        direct_id = make_knowledge_item(setup, f.world_id, statement="Aria memorised the map.")
+        make_entity_knowledge(
+            setup,
+            f.timeline_id,
+            direct_id,
+            f.character_id,
+            awareness_level="suspected",
+            confidence=42,
+            willing_to_share=False,
+        )
+    with client_factory(f.player_user_id) as client:
+        detail = _ok_detail(client, f, direct_id, _character_only(f))
+        with_party = _ok_detail(client, f, direct_id, _perspective(f))
+    expected = {
+        "path": "character",
+        "awareness_level": "suspected",
+        "confidence": 42,
+        "willing_to_share": False,
+    }
+    assert detail["character_knowledge"] == with_party["character_knowledge"] == expected
+    assert detail["scope"] == "character"
+
+
+def test_party_derived_knowledge_without_a_party_filter_is_reported_as_party_knowledge(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.player_user_id) as client:
+        rumor = _ok_detail(client, f, f.rumor_id, _character_only(f))
+        fact = _ok_detail(client, f, f.fact_id, _character_only(f))
+    assert rumor["scope"] == "party"
+    assert rumor["character_knowledge"] == {
+        "path": "party",
+        "awareness_level": "rumored",
+        "confidence": 30,
+        "willing_to_share": True,
+    }
+    assert fact["character_knowledge"]["path"] == "party"
+    assert fact["character_knowledge"]["confidence"] is None  # none recorded, none invented
+
+
+def test_a_viewable_claim_the_character_does_not_know_has_no_character_knowledge(
+    client_factory: Callable[[uuid.UUID], TestClient],
+    f: Fixture,
+    postgres_engine: Engine,
+) -> None:
+    """Permission to view is not knowledge: the GM may open the Rivals' claim
+    in canonical form, yet the selected character has no path to it — and a
+    player is refused it outright."""
+    with postgres_engine.begin() as setup:
+        make_membership_character_relationship(
+            setup,
+            f.gm_membership_id,
+            f.character_id,
+            f.relationship_type_id,
+            timeline_id=f.timeline_id,
+        )
+    with client_factory(f.player_user_id) as player:
+        refused = player.get(_detail_url(f, f.other_party_only_id), params=_character_only(f))
+    assert refused.status_code == 404
+    with client_factory(f.gm_user_id) as gm:
+        detail = _ok_detail(gm, f, f.other_party_only_id, _character_only(f))
+    assert detail["scope"] == "canonical"
+    assert detail["statement"] == "The Rivals found the northern cache."
+    assert detail["character_knowledge"] is None
+
+
+def test_the_gm_canonical_detail_still_reports_how_the_selected_character_knows_it(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as setup:
+        make_membership_character_relationship(
+            setup,
+            f.gm_membership_id,
+            f.character_id,
+            f.relationship_type_id,
+            timeline_id=f.timeline_id,
+        )
+    with client_factory(f.gm_user_id) as gm:
+        private = _ok_detail(gm, f, f.private_id, _character_only(f))
+        with_foreign_party = _ok_detail(
+            gm,
+            f,
+            f.private_id,
+            {"character_id": str(f.character_id), "party_id": str(f.other_party_id)},
+        )
+        public = _ok_detail(gm, f, f.public_id, _character_only(f))
+    # Ground truth stays the GM's view...
+    assert private["scope"] == "canonical"
+    assert private["statement"] == "Aria saw the seneschal take a bribe."
+    assert private["truth_status_code"] == "true"
+    # ...and the character's own answer rides alongside it.
+    assert private["character_knowledge"]["path"] == "character"
+    assert private["character_knowledge"]["awareness_level"] == "aware"
+    assert with_foreign_party["character_knowledge"] == private["character_knowledge"]
+    assert public["character_knowledge"]["path"] == "public"
+
+
+def test_an_unauthorized_character_gets_the_public_claim_but_no_character_knowledge(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    """Being able to view public lore says nothing about a character the
+    caller has no authority over."""
+    with client_factory(f.player_user_id) as client:
+        detail = _ok_detail(client, f, f.public_id, {"character_id": str(f.other_character_id)})
+    assert detail["scope"] == "public"
+    assert detail["character_knowledge"] is None
+
+
+def test_list_and_detail_agree_on_every_awareness_state(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """For every claim the character's lists show — direct, party and public,
+    with distinct awareness states — the detail reports the same path and the
+    same awareness / confidence / willingness as the list card."""
+    with postgres_engine.begin() as setup:
+        second_location = make_location(setup, f.world_id, name="Dunmere")
+        for awareness in ("rumored", "aware"):
+            item = make_knowledge_item(
+                setup, f.world_id, statement=f"Public lore, {awareness}, in two places."
+            )
+            make_public_knowledge(
+                setup, f.timeline_id, item, f.location_id, awareness_level="aware"
+            )
+            make_public_knowledge(
+                setup, f.timeline_id, item, second_location, awareness_level=awareness
+            )
+        direct = make_knowledge_item(setup, f.world_id, statement="Aria suspects the cook.")
+        make_entity_knowledge(
+            setup, f.timeline_id, direct, f.character_id, awareness_level="suspected", confidence=15
+        )
+    with client_factory(f.player_user_id) as client:
+        for params in (_character_only(f), _perspective(f)):
+            for view in ("known", "rumors", "recent"):
+                listed = _all_pages(client, f, {"view": view, **params, "limit": 5})
+                assert listed, view
+                for item in listed:
+                    detail = _ok_detail(client, f, uuid.UUID(item["knowledge_item_id"]), params)
+                    known_as = detail["character_knowledge"]
+                    assert known_as is not None, (view, item)
+                    assert known_as["path"] == item["scope"], (view, item)
+                    assert known_as["awareness_level"] == item["awareness_level"], (view, item)
+                    assert known_as["confidence"] == item["confidence"], (view, item)
+                    assert known_as["willing_to_share"] == item["willing_to_share"], (view, item)
+                    assert detail["awareness_level"] == item["awareness_level"], (view, item)

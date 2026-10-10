@@ -732,6 +732,26 @@ def test_a_player_preview_with_only_a_character_matches_what_the_player_sees(
             assert direct_claim.status_code == 404
 
 
+def test_a_player_preview_claim_reports_the_same_character_knowledge_path_as_the_player(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    query = f"?character_id={f.character_id}"
+    with client_factory(f.actor_user_id) as client:
+        preview = client.get(_knowledge_preview_url(f, f.player_membership_id) + query)
+    with client_factory(f.player_user_id) as client:
+        direct = client.get(f"/campaigns/{f.campaign_id}/knowledge/{f.knowledge_item_id}{query}")
+    assert preview.status_code == direct.status_code == 200
+    assert preview.json() == direct.json()
+    body = direct.json()
+    assert body["scope"] == "party"
+    assert body["character_knowledge"] == {
+        "path": "party",
+        "awareness_level": "aware",
+        "confidence": 60,
+        "willing_to_share": True,
+    }
+
+
 def test_the_collection_preview_shows_the_subjects_audience_not_the_actors(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
 ) -> None:

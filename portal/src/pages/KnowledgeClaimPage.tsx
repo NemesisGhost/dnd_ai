@@ -48,6 +48,7 @@ import type { KnowledgeAuthoringView, KnowledgeOptions } from "../types/knowledg
 import type { Provenance } from "../types/provenance"
 import { ERROR_CODE_MESSAGE, REASON_MAX, fieldForErrorCode } from "../utils/authoringValidation"
 import { describeBlockedReason } from "../utils/blockedReason"
+import { characterKnowledgeOf, characterKnowledgePathSentence } from "../utils/characterKnowledge"
 import { humanizeCode } from "../utils/humanize"
 import { canonStatusLabel } from "../utils/lifecycleNextStep"
 import { FIELD, STATEMENT_MAX, fromView, same, toBody, validate } from "../utils/knowledgeForm"
@@ -826,15 +827,7 @@ function CharacterKnowledge({
     // The reader layout supplies its own heading; a section panel already has one.
     heading: boolean
 }) {
-    const recorded = [
-        item.awareness_level !== null
-            ? { key: "awareness", label: "Awareness", value: humanizeCode(item.awareness_level) }
-            : null,
-        item.confidence !== null ? { key: "confidence", label: "Confidence", value: `${item.confidence}%` } : null,
-        item.willing_to_share !== null
-            ? { key: "share", label: "Willing to share", value: item.willing_to_share ? "Yes" : "No" }
-            : null,
-    ].filter((entry) => entry !== null)
+    const known = characterKnowledgeOf(item)
     return (
         <section
             className="knowledge-section knowledge-character"
@@ -843,17 +836,22 @@ function CharacterKnowledge({
             {heading ? <h2 id="knowledge-character-heading">Character knowledge</h2> : null}
             {characterId === null ? (
                 <p className="authoring-note">Select a character perspective to see what that character knows.</p>
-            ) : recorded.length === 0 ? (
+            ) : known === null ? (
                 <p className="authoring-note">The selected character has no recorded knowledge of this claim.</p>
             ) : (
-                <dl className="knowledge-character__facts">
-                    {recorded.map((entry) => (
-                        <div key={entry.key} className="knowledge-claim__fact">
-                            <dt>{entry.label}</dt>
-                            <dd>{entry.value}</dd>
-                        </div>
-                    ))}
-                </dl>
+                <>
+                    {known.path !== null ? (
+                        <p className="authoring-note">{characterKnowledgePathSentence(known.path)}</p>
+                    ) : null}
+                    <dl className="knowledge-character__facts">
+                        {known.facts.map((entry) => (
+                            <div key={entry.key} className="knowledge-claim__fact">
+                                <dt>{entry.label}</dt>
+                                <dd>{entry.value}</dd>
+                            </div>
+                        ))}
+                    </dl>
+                </>
             )}
         </section>
     )

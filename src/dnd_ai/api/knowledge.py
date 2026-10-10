@@ -55,7 +55,8 @@ from sqlalchemy import Connection, text
 
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.queries.entity_lifecycle import lifecycle_hidden_entity_ids
-from dnd_ai.queries.knowledge import get_knowledge_view
+from dnd_ai.queries.knowledge import KnowledgeNotAuthorizedError, get_knowledge_view
+from dnd_ai.queries.knowledge import KnowledgeView as KnowledgeViewResult
 from dnd_ai.queries.knowledge_authoring import knowledge_definition_states
 from dnd_ai.queries.knowledge_browse import (
     KNOWLEDGE_VIEWS,
@@ -117,6 +118,24 @@ class KnowledgeSubjectResponse(BaseModel):
     entity_type_code: str
 
 
+KnowledgePath = Literal["character", "party", "public"]
+
+
+class CharacterKnowledgeResponse(BaseModel):
+    """How the *selected character* knows a claim — present only when a valid
+    knowledge path exists (`get_knowledge_view` with the player perspective),
+    never merely because the caller may view the claim. `path` says where the
+    knowledge comes from: the character's own record, an eligible party's
+    record, or public lore. The personal fields are exactly what that record
+    holds; public lore has no personal record, so only its awareness is set and
+    confidence / willingness to share stay `null` — they are never invented."""
+
+    path: KnowledgePath
+    awareness_level: str | None
+    confidence: int | None
+    willing_to_share: bool | None
+
+
 class KnowledgeResponse(BaseModel):
     knowledge_item_id: uuid.UUID
     knowledge_type_code: str
@@ -129,6 +148,11 @@ class KnowledgeResponse(BaseModel):
     # The authorized subject summary, or `null` — for no subject and for one
     # this caller may not open alike (the two are indistinguishable).
     subject: KnowledgeSubjectResponse | None = None
+    # Which path produced the statement above (the list's `scope`).
+    scope: str = "canonical"
+    # How the selected character knows this claim, or `null` when no
+    # character is selected or none of its knowledge paths covers it.
+    character_knowledge: CharacterKnowledgeResponse | None = None
 
 
 class KnowledgeListItemResponse(BaseModel):
@@ -771,6 +795,18 @@ def resolve_knowledge_response(
             ),
         ).get(view.subject_entity_id)
 
+    character_knowledge = _character_knowledge(
+        connection,
+        access=access,
+        campaign_id=campaign_id,
+        knowledge_item_id=knowledge_item_id,
+        character_id=character_id,
+        party_id=party_id,
+        view=view,
+        perspective=perspective,
+        include_ground_truth=include_ground_truth,
+    )
+
     return KnowledgeResponse(
         knowledge_item_id=view.knowledge_item_id,
         knowledge_type_code=view.knowledge_type_code,
@@ -781,6 +817,77 @@ def resolve_knowledge_response(
         confidence=view.confidence,
         willing_to_share=view.willing_to_share,
         subject=subject,
+        scope=view.scope,
+        character_knowledge=character_knowledge,
+    )
+
+
+def _character_knowledge(
+    connection: Connection,
+    *,
+    access: AccessContext,
+    campaign_id: uuid.UUID,
+    knowledge_item_id: uuid.UUID,
+    character_id: uuid.UUID | None,
+    party_id: uuid.UUID | None,
+    view: KnowledgeViewResult,
+    perspective: MemberKnowledgePerspective,
+    include_ground_truth: bool,
+) -> CharacterKnowledgeResponse | None:
+    """How the selected character knows the claim, by the same resolution the
+    list uses (`get_knowledge_view` with a player perspective).
+
+    A player's own view *is* that resolution, so it is reused as-is; a caller
+    shown ground truth (a GM / owner) gets the character's answer resolved
+    separately, so their canonical view never reads as "the character knows
+    nothing". Authorization is unchanged: the character counts only when the
+    caller holds `character.view_knowledge` for it (`perspective.knower_id`),
+    and an unauthorized party pair is ignored here rather than failing a
+    canonical read the caller is otherwise entitled to."""
+    if character_id is None:
+        return None
+    if include_ground_truth:
+        try:
+            perspective = resolve_member_knowledge_perspective(
+                connection,
+                access=access,
+                campaign_id=campaign_id,
+                character_id=character_id,
+                party_id=party_id,
+            )
+        except PartyPerspectiveNotAuthorizedError:
+            perspective = resolve_member_knowledge_perspective(
+                connection,
+                access=access,
+                campaign_id=campaign_id,
+                character_id=character_id,
+                party_id=None,
+            )
+        if perspective.knower_id is None:
+            return None
+        try:
+            view = get_knowledge_view(
+                connection,
+                knowledge_item_id=knowledge_item_id,
+                timeline_id=access.timeline_id,
+                expected_world_id=timeline_world_id(connection, access.timeline_id),
+                party_id=perspective.party_id,
+                include_ground_truth=False,
+                knower_entity_id=perspective.knower_id,
+                allow_public=True,
+                eligible_party_ids=perspective.eligible_party_ids,
+            )
+        except KnowledgeNotAuthorizedError:
+            return None
+    elif perspective.knower_id is None:
+        return None
+    if view.scope not in ("character", "party", "public"):
+        return None
+    return CharacterKnowledgeResponse(
+        path=cast(KnowledgePath, view.scope),
+        awareness_level=view.awareness_level,
+        confidence=view.confidence,
+        willing_to_share=view.willing_to_share,
     )
 
 

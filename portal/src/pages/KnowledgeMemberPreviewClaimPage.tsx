@@ -4,6 +4,7 @@ import { MemberPreviewShell } from "../components/knowledge/MemberPreviewShell"
 import type { ReadyMemberPreview } from "../components/knowledge/MemberPreviewShell"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import type { KnowledgeDetail } from "../types/knowledge"
+import { characterKnowledgeOf, characterKnowledgePathSentence } from "../utils/characterKnowledge"
 import { humanizeCode } from "../utils/humanize"
 import { memberPreviewPath, memberPreviewSearch, parseMemberPreviewContext } from "../utils/memberPreviewContext"
 import type { MemberPreviewContext } from "../utils/memberPreviewContext"
@@ -61,21 +62,29 @@ function PreviewClaim({
     }
 
     const item = state.data
-    const recorded = [
-        item.awareness_level != null ? { label: "Awareness", value: humanizeCode(item.awareness_level) } : null,
-        item.confidence != null ? { label: "Confidence", value: `${item.confidence}%` } : null,
-        item.willing_to_share != null ? { label: "Willing to share", value: item.willing_to_share ? "Yes" : "No" } : null,
-    ].filter((entry) => entry !== null)
+    const known = characterKnowledgeOf(item)
+    const recorded = known?.facts ?? []
 
-    // With a party selected the server projects these values from the party's knowledge record,
-    // otherwise from the character's; null values only mean the projection did not include them.
+    // The server says how the character knows the claim; the heading follows that path rather than
+    // the selection, so a direct record is never labelled as the party's (or the reverse). A
+    // payload without a path keeps the selection-based wording.
     const partyKnowledge = ready.partyId !== null
     const perspectiveName = partyKnowledge ? (ready.partyName ?? "the party") : (ready.characterName ?? "the character")
-    const knowledgeHeading = partyKnowledge
-        ? `Party knowledge: ${perspectiveName}`
-        : ready.characterId !== null
-          ? `Character knowledge: ${perspectiveName}`
-          : "Perspective knowledge"
+    const characterHeading = `Character knowledge: ${ready.characterName ?? "the character"}`
+    const knowledgeHeading =
+        ready.characterId === null
+            ? "Perspective knowledge"
+            : known?.path === "character" || (known === null && item.character_knowledge !== undefined)
+              ? characterHeading
+              : known?.path === "party"
+                ? partyKnowledge
+                    ? `Party knowledge: ${ready.partyName ?? "the party"}`
+                    : "Party knowledge"
+                : known?.path === "public"
+                  ? "Public knowledge"
+                  : partyKnowledge
+                    ? `Party knowledge: ${perspectiveName}`
+                    : characterHeading
 
     return (
         <article aria-labelledby="member-preview-claim-heading">
@@ -110,19 +119,28 @@ function PreviewClaim({
                     <p className="authoring-note">
                         No character or party perspective is selected, so no perspective-specific knowledge is shown.
                     </p>
-                ) : recorded.length === 0 ? (
+                ) : known === null && item.character_knowledge !== undefined ? (
+                    <p className="authoring-note">
+                        {ready.characterName ?? "The selected character"} has no recorded knowledge of this claim.
+                    </p>
+                ) : recorded.length === 0 && known?.path == null ? (
                     <p className="authoring-note">
                         This projection includes no awareness, confidence or sharing details for {perspectiveName}.
                     </p>
                 ) : (
-                    <dl className="authoring-fact-list">
-                        {recorded.map((entry) => (
-                            <div key={entry.label}>
-                                <dt>{entry.label}</dt>
-                                <dd>{entry.value}</dd>
-                            </div>
-                        ))}
-                    </dl>
+                    <>
+                        {known?.path != null ? (
+                            <p className="authoring-note">{characterKnowledgePathSentence(known.path)}</p>
+                        ) : null}
+                        <dl className="authoring-fact-list">
+                            {recorded.map((entry) => (
+                                <div key={entry.key}>
+                                    <dt>{entry.label}</dt>
+                                    <dd>{entry.value}</dd>
+                                </div>
+                            ))}
+                        </dl>
+                    </>
                 )}
             </section>
             {back}

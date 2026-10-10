@@ -79,6 +79,11 @@ class KnowledgeView:
     # The claim's optional subject, unredacted — the API decides whether this
     # caller may be shown it (`dnd_ai.api.knowledge.resolve_subject_summaries`).
     subject_entity_id: uuid.UUID | None = None
+    # The knowledge path that produced this view — the same vocabulary as the
+    # list's `scope`: `canonical` (ground truth), `character` (the knower's own
+    # record), `party` (an authorized party's record) or `public` (public lore,
+    # no personal record at all).
+    scope: str = "canonical"
 
 
 def get_knowledge_view(
@@ -147,10 +152,12 @@ def get_knowledge_view(
             confidence=None,
             willing_to_share=None,
             subject_entity_id=row["subject_entity_id"],
+            scope="canonical",
         )
 
     party_ids = (party_id,) if party_id is not None else eligible_party_ids
     belief_row = None
+    scope = "character"
     if knower_entity_id is not None:
         # The selected character's own belief is the most specific projection
         # and wins over any party's (the list's precedence, too).
@@ -168,6 +175,7 @@ def get_knowledge_view(
             .one_or_none()
         )
     if belief_row is None and party_ids:
+        scope = "party"
         belief_row = (
             connection.execute(
                 text("""
@@ -191,25 +199,39 @@ def get_knowledge_view(
         # caller — its canonical statement only, never the GM-only
         # `truth_status`/`sensitivity` metadata. This keeps the `public`
         # list and this detail route in agreement.
-        is_public = connection.execute(
-            text("""
-                SELECT 1 FROM knowledge.public_knowledge
-                WHERE timeline_id = :timeline AND knowledge_item_id = :item
-                LIMIT 1
-            """),
-            {"timeline": timeline_id, "item": knowledge_item_id},
-        ).scalar()
-        if is_public is not None:
+        # The representative row is the list's own (`knowledge_browse.
+        # _PUBLIC_ITEMS_CTE`): public longest, earliest `known_since`, so the
+        # awareness shown here is the awareness the list card shows.
+        public_row = (
+            connection.execute(
+                text("""
+                    SELECT pub.awareness_level
+                    FROM knowledge.public_knowledge pub
+                    LEFT JOIN core.world_times pwt
+                           ON pwt.world_time_id = pub.known_since_world_time_id
+                    WHERE pub.timeline_id = :timeline AND pub.knowledge_item_id = :item
+                    ORDER BY pwt.sort_key ASC NULLS LAST, pub.public_knowledge_id
+                    LIMIT 1
+                """),
+                {"timeline": timeline_id, "item": knowledge_item_id},
+            )
+            .mappings()
+            .first()
+        )
+        if public_row is not None:
+            # Public lore has no personal record: confidence and willingness to
+            # share are never invented for it.
             return KnowledgeView(
                 knowledge_item_id=row["knowledge_item_id"],
                 knowledge_type_code=row["knowledge_type_code"],
                 statement=row["canonical_statement"],
                 truth_status_code=None,
                 sensitivity=None,
-                awareness_level=None,
+                awareness_level=public_row["awareness_level"],
                 confidence=None,
                 willing_to_share=None,
                 subject_entity_id=row["subject_entity_id"],
+                scope="public",
             )
 
     if belief_row is None:
@@ -228,4 +250,5 @@ def get_knowledge_view(
         confidence=belief_row["confidence"],
         willing_to_share=belief_row["willing_to_share"],
         subject_entity_id=row["subject_entity_id"],
+        scope=scope,
     )
