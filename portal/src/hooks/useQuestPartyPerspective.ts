@@ -4,6 +4,7 @@ import { usePerspective } from "../context/CharacterPerspectiveContext"
 import { useSession } from "../context/SessionContext"
 import type { AuthorizedParty } from "../types/bootstrap"
 import { resolveAuthorizedParties } from "../utils/authorizedParties"
+export { questPerspectiveSearch } from "../utils/questPerspectiveSearch"
 
 export interface QuestPartyPerspective {
     characterId: string | null
@@ -75,18 +76,3 @@ export function useQuestPartyPerspective(campaignId: string): QuestPartyPerspect
     return { characterId, partyId, parties, selectParty }
 }
 
-/** The `?character_id=…&party_id=…` suffix that carries a party perspective
- * from the quest list into a quest detail link (empty without a party). */
-export function questPerspectiveSearch(
-    characterId: string | null,
-    partyId: string | null,
-): string {
-    if (characterId === null || partyId === null) {
-        return ""
-    }
-    const parameters = new URLSearchParams({
-        character_id: characterId,
-        party_id: partyId,
-    })
-    return `?${parameters.toString()}`
-}

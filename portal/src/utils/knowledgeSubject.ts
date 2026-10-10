@@ -1,5 +1,5 @@
 import type { KnowledgeSubject } from "../types/knowledge"
-import { questPerspectiveSearch } from "../hooks/useQuestPartyPerspective"
+import { questPerspectiveSearch } from "./questPerspectiveSearch"
 
 /** The existing detail route for a Knowledge subject: a World Explorer
  * entity under `world/:category/:id`, a quest under `quests/:id`. Carries no

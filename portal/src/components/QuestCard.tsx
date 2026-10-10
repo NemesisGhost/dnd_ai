@@ -1,5 +1,5 @@
 import type { CampaignQuestListItem } from "../types/quest"
-import { questPerspectiveSearch } from "../hooks/useQuestPartyPerspective"
+import { questPerspectiveSearch } from "../utils/questPerspectiveSearch"
 import { humanizeCode } from "../utils/humanize"
 import { statusDetail } from "../utils/locationForm"
 import { EntityCard } from "./EntityCard"
