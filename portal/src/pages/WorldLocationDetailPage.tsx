@@ -1,3 +1,4 @@
+import { useWorldBackPath } from "../hooks/useWorldBackPath"
 import { Link } from "react-router"
 import { DetailPanel } from "../components/DetailPanel"
 import { areaAuthoringPath, dungeonAuthoringPath } from "../api/dungeonAuthoring"
@@ -27,6 +28,7 @@ export function WorldLocationDetailPage({
     campaignId,
     location,
 }: WorldLocationDetailPageProps) {
+    const worldBackPath = useWorldBackPath(campaignId)
     const headingRef = usePageArrival(true)
     const root = `/app/${encodeURIComponent(campaignId)}`
     const isDungeonType =
@@ -40,7 +42,7 @@ export function WorldLocationDetailPage({
     return (
         <section aria-labelledby="world-location-heading">
             <p>
-                <Link to={`/app/${encodeURIComponent(campaignId)}/world`}>
+                <Link to={worldBackPath}>
                     Back to World
                 </Link>
             </p>

@@ -219,7 +219,7 @@ describe("location authoring routes", () => {
     editor.unmount()
 
     open("/app/mundivita/world", ["campaign.view"])
-    await screen.findByRole("heading", { level: 1, name: "World" })
+    await screen.findByRole("heading", { level: 1, name: "Campaign World" })
     expect(screen.queryByRole("link", { name: "New location" })).toBeNull()
   })
 

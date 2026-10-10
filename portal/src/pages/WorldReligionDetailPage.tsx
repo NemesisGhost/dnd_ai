@@ -1,3 +1,4 @@
+import { useWorldBackPath } from "../hooks/useWorldBackPath"
 import { Link } from "react-router"
 import { religionAuthoringPath } from "../api/organizationAuthoring"
 import { AuthoringEditLink } from "../components/AuthoringEditLink"
@@ -20,11 +21,12 @@ export function WorldReligionDetailPage({
     campaignId,
     religion,
 }: WorldReligionDetailPageProps) {
+    const worldBackPath = useWorldBackPath(campaignId)
     const headingRef = usePageArrival(true)
     return (
         <section aria-labelledby="world-religion-heading">
             <p>
-                <Link to={`/app/${encodeURIComponent(campaignId)}/world`}>
+                <Link to={worldBackPath}>
                     Back to World
                 </Link>
             </p>

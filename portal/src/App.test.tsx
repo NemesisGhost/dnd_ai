@@ -967,7 +967,7 @@ describe("portal routing", () => {
 
     expect(
       screen.getByRole("heading", {
-        name: "World",
+        name: "Campaign World",
         level: 1,
       }),
     ).toBeInTheDocument()

@@ -152,7 +152,7 @@ describe("organization and religion authoring routes", () => {
     }
     editor.unmount()
     openApp("/app/mundivita/world", ["campaign.view"])
-    await screen.findByRole("heading", { level: 1, name: "World" })
+    await screen.findByRole("heading", { level: 1, name: "Campaign World" })
     for (const name of ["New location", "New organization", "New religion"]) {
       expect(screen.queryByRole("link", { name })).toBeNull()
     }

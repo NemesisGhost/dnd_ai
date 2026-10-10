@@ -1,4 +1,5 @@
 import { Link, useParams } from "react-router"
+import { useWorldBackPath } from "../hooks/useWorldBackPath"
 import {
     fetchEventDetail,
     fetchItemDetail,
@@ -33,6 +34,7 @@ export function CampaignWorldDetailPage() {
         category: string
         entityId: string
     }>()
+    const worldBackPath = useWorldBackPath(campaignId ?? "")
 
     if (
         campaignId === undefined ||
@@ -160,11 +162,7 @@ export function CampaignWorldDetailPage() {
             {(character) => (
                 <div>
                     <p>
-                        <Link
-                            to={`/app/${encodeURIComponent(campaignId)}/world`}
-                        >
-                            Back to World
-                        </Link>
+                        <Link to={worldBackPath}>Back to World</Link>
                     </p>
                     <CharacterDetailPage character={character} />
                     <CharacterInventoryPanel campaignId={campaignId} characterId={entityId} />
