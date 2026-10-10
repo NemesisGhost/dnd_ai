@@ -58,6 +58,10 @@ export function installCampaignShellMocks(): MockServer {
     server.on("GET", /^\/campaigns\/mundivita\/summary/, { body: {} })
     server.on("GET", /^\/worlds\?/, { body: { items: [], next_cursor: null } })
     server.on("GET", "/worlds/world-mundivita", { body: WORLD_BODY })
+    // The Info Box's party memberships for whichever character a page selects: none by default.
+    server.on("GET", /^\/campaigns\/mundivita\/characters\/[^/]+\/parties$/, {
+        body: { character_id: "any", can_open: false, items: [] },
+    })
     return server
 }
 

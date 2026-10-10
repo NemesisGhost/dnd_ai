@@ -271,6 +271,40 @@ describe("HierarchyContextPanel placement and levels", () => {
   })
 })
 
+describe("HierarchyContextPanel party memberships", () => {
+  it("shows a collapsed Parties (N) disclosure under the selector only for a selected character", async () => {
+    server.on("GET", "/campaigns/c1/characters/c1-hero/parties", {
+      body: {
+        character_id: "c1-hero",
+        can_open: false,
+        items: [
+          { party_id: "p1", name: "The Company" },
+          { party_id: "p2", name: "The Watch" },
+        ],
+      },
+    })
+    const { unmount } = renderAt("/app/c1/home")
+    expect(screen.queryByText(/Parties \(/)).toBeNull()
+    expect(screen.queryByText("Loading parties…")).toBeNull()
+    expect(server.callsTo("GET", /\/parties$/)).toHaveLength(0)
+    unmount()
+
+    renderAt("/app/c1/home", "c1-hero")
+    const summary = await screen.findByText("Parties (2)")
+    expect(summary.closest("details")).not.toHaveAttribute("open")
+    // Directly beneath the character selector.
+    expect(
+      character().compareDocumentPosition(summary) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+    // The rest of the Character area is still there.
+    expect(useCharacterMock).toHaveBeenCalledWith("c1", "c1-hero")
+    // Expanding changes no selection and asks for nothing else.
+    fireEvent.click(summary)
+    expect(selectCharacter).not.toHaveBeenCalled()
+    expect(server.callsTo("GET", /\/parties$/)).toHaveLength(1)
+  })
+})
+
 describe("HierarchyContextPanel cascade", () => {
   it("choosing a world navigates to its overview and removes the campaign and character", async () => {
     renderAt("/app/c1/home", "c1-hero")

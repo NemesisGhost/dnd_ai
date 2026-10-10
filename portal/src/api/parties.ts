@@ -7,6 +7,9 @@ const enc = encodeURIComponent
 export const partiesPath = (campaignId: string, includeArchived = false): string =>
     `/campaigns/${enc(campaignId)}/parties${includeArchived ? "?include_archived=true" : ""}`
 
+export const characterPartiesPath = (campaignId: string, characterId: string): string =>
+    `/campaigns/${enc(campaignId)}/characters/${enc(characterId)}/parties`
+
 export const partyPath = (campaignId: string, partyId: string): string =>
     `/campaigns/${enc(campaignId)}/parties/${enc(partyId)}`
 

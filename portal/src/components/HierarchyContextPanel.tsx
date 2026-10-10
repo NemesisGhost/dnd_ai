@@ -9,6 +9,7 @@ import type { CampaignContext } from "../types/bootstrap"
 import type { WorldListResponse } from "../types/worldAuthoring"
 import { buildWorldChoices, worldAccess } from "../utils/worldAccess"
 import { CharacterContextDetails } from "./CharacterContextDetails"
+import { CharacterParties } from "./CharacterParties"
 import { CharacterPerspectiveSelector } from "./CharacterPerspectiveSelector"
 
 interface HierarchyContextPanelProps {
@@ -286,6 +287,14 @@ export function HierarchyContextPanel({
               perspectives={campaign.character_perspectives}
               selectedCharacterId={selectedCharacterId}
               onSelectCharacter={onSelectCharacter}
+            />
+          )}
+
+          {campaign !== null && selectedCharacterId !== null && (
+            <CharacterParties
+              key={`${campaign.campaign_id}/${selectedCharacterId}`}
+              campaignId={campaign.campaign_id}
+              characterId={selectedCharacterId}
             />
           )}
 

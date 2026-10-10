@@ -1258,6 +1258,43 @@ a.app-header__title:focus-visible {
   color: var(--color-infobox-muted);
 }
 
+/* Party memberships: a native disclosure under the character selector, in the Info Box's own
+   colours, with long party names wrapping instead of overflowing a narrow panel. */
+.campaign-context-panel__parties {
+  margin: 0.5rem 0 0;
+  font-size: 0.85rem;
+}
+
+.campaign-context-panel__parties > summary {
+  font-weight: 600;
+  color: var(--color-infobox-text);
+  cursor: pointer;
+}
+
+.campaign-context-panel__party-list {
+  margin: 0.35rem 0 0;
+  padding-left: 1.25rem;
+}
+
+.campaign-context-panel__party-list li {
+  padding: 0.1rem 0;
+  overflow-wrap: anywhere;
+}
+
+.campaign-context-panel__party-list a,
+.campaign-context-panel__link-button {
+  color: var(--color-infobox-link);
+}
+
+.campaign-context-panel__link-button {
+  padding: 0;
+  font: inherit;
+  text-decoration: underline;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
 .campaign-context-panel__section .character-perspective-selector label {
   position: absolute;
   width: 1px;

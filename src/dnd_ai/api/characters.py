@@ -104,13 +104,14 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from sqlalchemy import Connection
+from sqlalchemy import Connection, text
 
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.queries.character import get_character_view
 from dnd_ai.queries.character_sheet import get_character_sheet_view
 from dnd_ai.queries.entity_lifecycle import lifecycle_hidden_entity_ids
 from dnd_ai.queries.inventory import get_inventory_view
+from dnd_ai.queries.parties import list_character_parties
 
 from ._shared import timeline_world_id
 from .access import (
@@ -456,6 +457,66 @@ def get_character_endpoint(
                 for r in view.resources
             ]
         ),
+    )
+
+
+class CharacterPartyResponse(BaseModel):
+    party_id: uuid.UUID
+    name: str
+
+
+class CharacterPartiesResponse(BaseModel):
+    character_id: uuid.UUID
+    # Whether the caller may open a party's own page (the member page needs `canon.edit`); decided
+    # here, once, so the portal never guesses it.
+    can_open: bool
+    items: list[CharacterPartyResponse]
+
+
+@router.get(
+    "/campaigns/{campaign_id}/characters/{character_id}/parties",
+    response_model=CharacterPartiesResponse,
+    status_code=200,
+)
+def list_character_parties_endpoint(
+    character_id: uuid.UUID,
+    access: Annotated[
+        AccessContext, Depends(require_campaign_capability(_CHARACTER_VIEW_CAPABILITY))
+    ],
+    connection: Annotated[Connection, Depends(get_connection)],
+) -> CharacterPartiesResponse:
+    """The parties the selected character currently belongs to — an informational affiliation
+    list for the campaign Info Box, never a knowledge perspective.
+
+    It is offered only for a character the caller may take the perspective of
+    (`character.view_knowledge`, the capability the session bootstrap lists characters under) that
+    is a visible character of this campaign's own world; anything else is the identical fixed 404
+    a nonexistent character gets, so neither a restricted character nor a party is disclosed. The
+    list is the complete current membership (`list_character_parties`), never paged; archived
+    parties appear only for an editor, as in every party read."""
+    if not access.has_capability(_CHARACTER_VIEW_CAPABILITY, entity_id=character_id):
+        raise NotFoundError()
+    if not access.has_capability("character.view_knowledge", character_id=character_id):
+        raise NotFoundError()
+    _require_published_character(connection, access, character_id)
+    in_world = connection.execute(
+        text("SELECT 1 FROM core.entities WHERE entity_id = :e AND world_id = :w"),
+        {"e": character_id, "w": timeline_world_id(connection, access.timeline_id)},
+    ).scalar()
+    if in_world is None:
+        raise NotFoundError()
+    editor = access.has_capability(_CHARACTER_MANAGE_CAPABILITY)
+    parties = list_character_parties(
+        connection,
+        campaign_id=access.campaign_id,
+        timeline_id=access.timeline_id,
+        character_id=character_id,
+        include_archived=editor,
+    )
+    return CharacterPartiesResponse(
+        character_id=character_id,
+        can_open=editor,
+        items=[CharacterPartyResponse(party_id=p.party_id, name=p.name) for p in parties],
     )
 
 

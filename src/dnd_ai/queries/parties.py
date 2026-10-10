@@ -67,3 +67,44 @@ def get_campaign_party(
         {"c": campaign_id, "p": party_id, "inc": include_archived, "active": PARTY_ACTIVE},
     ).one_or_none()
     return None if row is None else _view(row)
+
+
+def list_character_parties(
+    connection: Connection,
+    *,
+    campaign_id: uuid.UUID,
+    timeline_id: uuid.UUID,
+    character_id: uuid.UUID,
+    include_archived: bool,
+) -> list[PartyView]:
+    """The parties `character_id` currently belongs to on `timeline_id`, among those attached to
+    `campaign_id` — every one, in a stable name order, never paged.
+
+    "Currently" is the table's own "still a member" representation
+    (`effective_to_world_time_id IS NULL`, migration 009), and the party must be attached to the
+    campaign: exactly the pair rule `dnd_ai.api.access.resolve_party_perspective` accepts and the
+    session bootstrap's `authorized_parties` lists. Archived parties are hidden unless the caller
+    may see them (editors), like every other party read. This performs no authorization of its
+    own: the character's perspective must already have been authorized by the caller."""
+    rows = connection.execute(
+        text("""
+            SELECT p.party_id, p.name, p.description, p.row_version, ls.code AS lifecycle_status
+            FROM campaign.party_memberships pm
+            JOIN campaign.parties p ON p.party_id = pm.party_id
+            JOIN campaign.campaign_parties cp ON cp.party_id = p.party_id AND cp.campaign_id = :c
+            JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = p.lifecycle_status_id
+            WHERE pm.timeline_id = :t
+              AND pm.member_entity_id = :ch
+              AND pm.effective_to_world_time_id IS NULL
+              AND (CAST(:inc AS boolean) OR ls.code = :active)
+            ORDER BY lower(p.name), p.party_id
+        """),
+        {
+            "c": campaign_id,
+            "t": timeline_id,
+            "ch": character_id,
+            "inc": include_archived,
+            "active": PARTY_ACTIVE,
+        },
+    ).all()
+    return [_view(row) for row in rows]

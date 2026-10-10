@@ -376,7 +376,7 @@ describe("Knowledge Member preview", () => {
         main.queryByRole("button", { name: /Save|Discard|Submit|Approve|Publish|Archive|Restore|Tell|Make public|Add source|Record/ }),
       ).toBeNull()
       expect(screen.queryByRole("navigation", { name: "Claim stages" })).toBeNull()
-      expect(requestsTo(/\/authoring\/|\/lifecycle|\/provenance|\/sources|\/audience$|\/parties/)).toHaveLength(0)
+      expect(requestsTo(/\/authoring\/|\/lifecycle|\/provenance|\/sources|\/audience$|^\/campaigns\/[^/]+\/parties/)).toHaveLength(0)
       expect(server.calls.filter((c) => c.method !== "GET")).toHaveLength(0)
       expect(normalKnowledgeReads()).toHaveLength(0)
     })

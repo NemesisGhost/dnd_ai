@@ -10,6 +10,15 @@ export interface PartyItem {
     available_actions?: ("update" | "archive" | "restore")[]
 }
 
+// The parties a character currently belongs to (GET .../characters/{id}/parties): an informational
+// affiliation list, complete and never paged. `can_open` says whether the caller may open a
+// party's own page; the server decides it.
+export interface CharacterParties {
+    character_id: string
+    can_open: boolean
+    items: { party_id: string; name: string }[]
+}
+
 export interface PartyList {
     can_create: boolean
     items: PartyItem[]
