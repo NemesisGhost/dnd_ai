@@ -22,11 +22,14 @@ export function StageNav<S extends string>({
     stages,
     current,
     hrefFor,
+    linkState,
 }: {
     ariaLabel: string
     stages: readonly StageDef<S>[]
     current: S
     hrefFor: (stage: S) => string
+    // Router state to carry on each link (for a page that must remember where it was opened from).
+    linkState?: object
 }) {
     return (
         <nav aria-label={ariaLabel} className="session-run__stages">
@@ -35,6 +38,7 @@ export function StageNav<S extends string>({
                     <li key={stage.key}>
                         <Link
                             to={hrefFor(stage.key)}
+                            state={linkState}
                             aria-current={stage.key === current ? "step" : undefined}
                             className={
                                 stage.key === current
@@ -57,11 +61,13 @@ export function SectionNav<K extends string>({
     sections,
     current,
     hrefFor,
+    linkState,
 }: {
     ariaLabel: string
     sections: readonly SectionDef<K>[]
     current: K
     hrefFor: (key: K) => string
+    linkState?: object
 }) {
     return (
         <nav aria-label={ariaLabel} className="session-run__sections">
@@ -70,6 +76,7 @@ export function SectionNav<K extends string>({
                     <li key={section.key}>
                         <Link
                             to={hrefFor(section.key)}
+                            state={linkState}
                             aria-current={section.key === current ? "page" : undefined}
                             className={
                                 section.key === current

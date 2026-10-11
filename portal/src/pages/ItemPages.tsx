@@ -1,14 +1,15 @@
-import { Link, useParams } from "react-router"
+import { Link, useLocation, useParams } from "react-router"
 import { createItem, itemAuthoringPath, itemOptionsPath, itemsPath, updateItem } from "../api/items"
 import { ContentCreatePage } from "../components/authoring/ContentCreatePage"
 import type { ContentCreateConfig } from "../components/authoring/ContentCreatePage"
 import { ContentEditPage } from "../components/authoring/ContentEditPage"
-import type { ContentEditConfig } from "../components/authoring/ContentEditPage"
+import type { ContentEditConfig, EditNavigation } from "../components/authoring/ContentEditPage"
 import type { FieldError } from "../components/authoring/feedback"
 import { SelectField, TextAreaField, TextField } from "../components/authoring/fields"
 import { LifecycleBadge } from "../components/authoring/feedback"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
+import { pickReturnState } from "../hooks/useItemsBackPath"
 import { usePageArrival } from "../hooks/usePageArrival"
 import type { CreateItemBody, ItemList, ItemOptions, ItemView, UpdateItemBody } from "../types/items"
 import { validateName } from "../utils/authoringValidation"
@@ -17,6 +18,40 @@ import "../components/authoring/authoring.css"
 const itemsListPath = (campaignId: string): string => `/app/${encodeURIComponent(campaignId)}/items`
 const worldItemPath = (campaignId: string, itemId: string): string =>
     `/app/${encodeURIComponent(campaignId)}/world/item/${encodeURIComponent(itemId)}`
+// An item opened from the item inventory (the editor's workspace) rather than from the World page.
+const itemPath = (campaignId: string, itemId: string): string =>
+    `/app/${encodeURIComponent(campaignId)}/items/${encodeURIComponent(itemId)}`
+
+const searchOf = (state: unknown, key: "itemsSearch"): string => {
+    const value = (state as { itemsSearch?: unknown } | null | undefined)?.[key]
+    return typeof value === "string" && value.startsWith("?") ? value : ""
+}
+
+// Where the edit page's links lead. The item page it came from (the inventory's or the World's)
+// is named by `returnTo` in the router state, and only an address of this very item is honoured,
+// so a crafted state cannot send the person anywhere else. Anything else returns to the inventory.
+function editNavigation({
+    campaignId,
+    entityId,
+    state,
+}: {
+    campaignId: string
+    entityId: string
+    state: unknown
+}): EditNavigation {
+    const carried = pickReturnState(state)
+    const requested = (state as { returnTo?: { pathname?: unknown; search?: unknown } } | null | undefined)?.returnTo
+    const allowed = [itemPath(campaignId, entityId), worldItemPath(campaignId, entityId)]
+    const pathname = typeof requested?.pathname === "string" ? requested.pathname : null
+    const search = typeof requested?.search === "string" && requested.search.startsWith("?") ? requested.search : ""
+    return {
+        listPath: `${itemsListPath(campaignId)}${searchOf(state, "itemsSearch")}`,
+        detail: {
+            to: pathname !== null && allowed.includes(pathname) ? `${pathname}${search}` : itemPath(campaignId, entityId),
+            state: carried,
+        },
+    }
+}
 
 interface ItemFormValues {
     name: string
@@ -132,8 +167,10 @@ const createConfig: ContentCreateConfig<ItemOptions, ItemFormValues, CreateItemB
     noun: "item",
     heading: "New item",
     lead: "A new item is saved as a draft. It cannot be awarded or moved until it is published.",
-    breadcrumbLabel: "Items",
+    breadcrumbLabel: "Item inventory",
     worldPath: itemsListPath,
+    listPath: (campaignId, state) => `${itemsListPath(campaignId)}${searchOf(state, "itemsSearch")}`,
+    resultState: (state) => pickReturnState(state),
     optionsPath: itemOptionsPath,
     canCreate: (options) => options.can_create,
     initialValues: () => EMPTY,
@@ -146,7 +183,7 @@ const createConfig: ContentCreateConfig<ItemOptions, ItemFormValues, CreateItemB
         origin_notes: nullable(values.notes),
     }),
     create: createItem,
-    resultPath: (campaignId, created) => worldItemPath(campaignId, created.item_instance_id),
+    resultPath: (campaignId, created) => `${itemPath(campaignId, created.item_instance_id)}?section=details`,
     announce: "Item created as a draft",
     saveLabel: "Create item",
     pendingLabel: "Creating…",
@@ -172,9 +209,10 @@ const editConfig: ContentEditConfig<ItemView, ItemOptions, ItemFormValues, ItemE
     noun: "item",
     heading: "Edit item",
     entityParam: "itemId",
-    breadcrumbLabel: "Items",
+    breadcrumbLabel: "Item inventory",
     worldPath: itemsListPath,
-    detailPath: worldItemPath,
+    detailPath: itemPath,
+    navigation: editNavigation,
     viewPath: itemAuthoringPath,
     optionsPath: itemOptionsPath,
     name: (view) => view.name,
@@ -224,13 +262,17 @@ export function EditItemPage() {
 // /app/:campaignId/items: every item instance of the world, for editors.
 export function ItemsPage() {
     const { campaignId = "" } = useParams()
+    const location = useLocation()
+    // What an item opened from here returns to (the list as it was left: today it has no filters,
+    // but any query it gains is carried).
+    const here = { itemsSearch: location.search }
     const canEdit = useCampaignCapability(campaignId, "canon.edit")
     const list = useAuthoringResource<ItemList>(itemsPath(campaignId))
     const headingRef = usePageArrival(list.state.kind === "ready")
     return (
         <section className="authoring-page" aria-labelledby="items-heading">
             <h1 id="items-heading" ref={headingRef} tabIndex={-1}>
-                Items
+                Item inventory
             </h1>
             {!canEdit ? (
                 <p role="alert">You do not have permission to manage items.</p>
@@ -241,12 +283,10 @@ export function ItemsPage() {
             ) : (
                 <>
                     <p>
-                        <Link className="authoring-button" to={`${itemsListPath(campaignId)}/new`}>
+                        <Link className="authoring-button" to={`${itemsListPath(campaignId)}/new`} state={here}>
                             New item
                         </Link>{" "}
-                        <Link to={`${itemsListPath(campaignId).replace(/items$/, "item-definitions")}`}>
-                            Item definitions
-                        </Link>
+                        <Link to={`/app/${encodeURIComponent(campaignId)}/item-definitions`}>Item definitions</Link>
                     </p>
                     {list.state.data.items.length === 0 ? (
                         <p>No items yet.</p>
@@ -254,7 +294,9 @@ export function ItemsPage() {
                         <ul className="op-list">
                             {list.state.data.items.map((item) => (
                                 <li key={item.item_instance_id}>
-                                    <Link to={worldItemPath(campaignId, item.item_instance_id)}>{item.name}</Link>{" "}
+                                    <Link to={itemPath(campaignId, item.item_instance_id)} state={here}>
+                                        {item.name}
+                                    </Link>{" "}
                                     ({item.definition_name})
                                     {item.holder_name !== null ? `, carried by ${item.holder_name}` : ""}
                                     {item.is_destroyed ? ", destroyed" : ""}{" "}

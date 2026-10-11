@@ -3299,6 +3299,13 @@ a.app-header__title:focus-visible {
   }
 }
 
+/* A stage with a single section has no section menu, so its panel takes the whole column. */
+@container staged (min-width: 48rem) {
+  .session-run__layout--single {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 @media (max-width: 40rem) {
   .session-run__stage {
     flex: 1 1 auto;
@@ -3495,6 +3502,84 @@ a.app-header__title:focus-visible {
 
 .knowledge-claim__next {
   font-weight: 700;
+}
+
+/* The item page: the same guided workspace as the Knowledge claim, with the item's own header and
+   its In play summary above the stages. */
+.item-workspace .authoring-form {
+  max-width: none;
+}
+
+.item-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.item-header .world-detail__summary {
+  margin: 0;
+}
+
+.item-header__headline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+}
+
+.item-header__title {
+  flex: 1 1 20rem;
+  margin: 0;
+  font-size: 1.5rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.item-header__title:focus {
+  outline: none;
+}
+
+.item-header__title:focus-visible {
+  outline: 3px solid var(--color-focus);
+  outline-offset: 4px;
+}
+
+.item-header__status {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+/* "Destroyed" is words in a bordered pill, like the lifecycle badges; never colour alone. */
+.item-header__destroyed {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.125rem 0.5rem;
+  border: 2px solid var(--color-border-strong, var(--color-border));
+  border-radius: 999px;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.item-header__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 1rem;
+  font-size: 0.9375rem;
+}
+
+.item-header__next {
+  font-weight: 700;
+}
+
+.item-workspace > .detail-panel {
+  margin-bottom: 1rem;
+}
+
+.item-workspace__time {
+  margin-bottom: 0.75rem;
 }
 
 /* The Guided workspace's panels fill the content column; Run Session keeps its reading width. */

@@ -42,6 +42,7 @@ import { ProvenancePage } from "./pages/ProvenancePage"
 import { ReviewQueuePage, RevisionHistoryPage } from "./pages/ReviewPages"
 import { ItemDefinitionFormPage, ItemDefinitionsPage } from "./pages/ItemDefinitionPages"
 import { CreateItemPage, EditItemPage, ItemsPage } from "./pages/ItemPages"
+import { ItemWorkspacePage } from "./pages/ItemWorkspacePage"
 import { NpcPortrayalPage } from "./pages/NpcPortrayalPage"
 import { QuestProgressPage } from "./pages/QuestProgressPage"
 import { CreatePartyPage, EditPartyPage, PartiesPage } from "./pages/PartyPages"
@@ -347,6 +348,7 @@ function App() {
 
             <Route path="items/new" element={<CreateItemPage />} />
 
+            <Route path="items/:itemId" element={<ItemWorkspacePage />} />
             <Route path="items/:itemId/edit" element={<EditItemPage />} />
 
             <Route

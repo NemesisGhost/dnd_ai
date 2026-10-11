@@ -1,6 +1,7 @@
 import { Link } from "react-router"
 import { characterInventoryPath, partyInventoryPath } from "../api/items"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
+import { useWorldReturnState } from "../hooks/useWorldBackPath"
 import type { CharacterInventoryItem, PartyInventory } from "../types/items"
 import "./authoring/authoring.css"
 import { DetailPanel } from "./DetailPanel"
@@ -19,12 +20,16 @@ interface Row {
 }
 
 function ItemList({ campaignId, items }: { campaignId: string; items: Row[] }) {
+    // An item opened from here keeps the World browser state this page was opened with.
+    const returnState = useWorldReturnState()
     if (items.length === 0) return <p>Nothing carried.</p>
     return (
         <ul className="record-list">
             {items.map((item) => (
                 <li key={item.item_instance_id}>
-                    <Link to={itemPath(campaignId, item.item_instance_id)}>{item.name}</Link>
+                    <Link to={itemPath(campaignId, item.item_instance_id)} state={returnState}>
+                        {item.name}
+                    </Link>
                     {item.name !== item.display_name ? ` (${item.display_name})` : ""}
                     {item.quantity !== 1 ? `, ×${item.quantity}` : ""}
                     {item.condition_percentage !== null ? `, ${item.condition_percentage}% condition` : ""}

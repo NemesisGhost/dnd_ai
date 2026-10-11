@@ -97,6 +97,7 @@ function render(entry: string, capabilities = ["canon.edit"]) {
             { path: "/app/:campaignId/items", element: <ItemsPage /> },
             { path: "/app/:campaignId/items/new", element: <CreateItemPage /> },
             { path: "/app/:campaignId/items/:itemId/edit", element: <EditItemPage /> },
+            { path: "/app/:campaignId/items/:itemId", element: <p>Item workspace</p> },
         ],
     })
     return server
@@ -107,7 +108,12 @@ describe("ItemsPage", () => {
         render("/app/c1/items")
         expect(await screen.findByRole("link", { name: "Moonblade" })).toHaveAttribute(
             "href",
-            "/app/c1/world/item/i1",
+            "/app/c1/items/i1",
+        )
+        expect(screen.getByRole("heading", { level: 1, name: "Item inventory" })).toBeInTheDocument()
+        expect(screen.getByRole("link", { name: "Item definitions" })).toHaveAttribute(
+            "href",
+            "/app/c1/item-definitions",
         )
         expect(screen.getByText(/carried by Aldric/)).toBeInTheDocument()
         expect(screen.getByText(/destroyed/)).toBeInTheDocument()
@@ -135,6 +141,8 @@ describe("CreateItemPage", () => {
             item_definition_id: "d1",
             origin_notes: null,
         })
+        // The new draft opens in the item workspace, on its details.
+        expect(await screen.findByText("Item workspace")).toBeInTheDocument()
     })
 
     it("needs a name and a kind of item", async () => {

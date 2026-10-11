@@ -341,6 +341,7 @@ Recommended order:
 - A missing, inaccessible, or cross-campaign ID uses the same non-disclosing unavailable state.
 - Do not distinguish nonexistent from unauthorized records in user-facing output.
 - Do not display the prior record while a new route's detail request is loading.
+- Sidebar selection follows the address alone. A record reachable from two collections has one address per origin (an item at `/items/:id` and `/world/item/:id`), each selecting its own group; router state may restore a collection's query but never selects navigation.
 
 ### 8.2 Visual expansion
 
@@ -450,13 +451,14 @@ Shared primitives live in `portal/src/components/authoring/` and are styled by `
 
 ### 10a.1 Staged workspace pages
 
-A long task page (the Run Session page and the Knowledge claim page) is organised into **stages** with a **local section menu**, not a long scroll. The Knowledge claim page uses the stages Prepare, Review & publish and Use in play. The record's actual status lives in the page header, never in the stage navigation. Stages organise the interface only; they never imply or cause a lifecycle change, so their wording ("Prepare", "Run session", "Wrap up") avoids verbs like start or end.
+A long task page (the Run Session page, the Knowledge claim page and the item workspace) is organised into **stages** with a **local section menu**, not a long scroll. The Knowledge claim page uses the stages Prepare, Review & publish and Use in play. The record's actual status lives in the page header, never in the stage navigation. Stages organise the interface only; they never imply or cause a lifecycle change, so their wording ("Prepare", "Run session", "Wrap up") avoids verbs like start or end.
 
 - **Page breadcrumb.** `<nav aria-label="Breadcrumb">` with an ordered list: parent list, the record (by its title, never an identifier), and the current page (`aria-current="page"`, not a link). It is separate from the campaign context panel (world, timeline, campaign, perspective).
 - **Stage navigation.** A numbered row of links (`aria-label="Session stages"` or `"Claim stages"`, `aria-current="step"`), wrapping at narrow widths. The current stage is marked by weight and a heavier border, not colour alone.
 - **Section menu.** Links for the current stage's sections only (`aria-label="<Stage> sections"`, `aria-current="page"`): a left column when the workspace container is at least 48rem wide (so the sidebar and context panel are accounted for), a wrapping row below it. Links, not tabs or buttons, because choosing one changes the address.
 - **Preserved context.** Choosing a stage or section keeps every other query parameter (character and party perspective). A "Next" link in a page header is navigation to the section where a step lives, never an action.
 - **Section panel.** One panel visible at a time: a bordered surface with an `h2` (focused when the section changes), a one-line purpose, then the content. A section the record cannot use yet says why instead of showing a disabled form.
+- **Origin context.** A staged page reachable from more than one collection (an item from the item inventory or from the World page) remembers where it was opened from in router state (the collection's query string only, validated), forwards it on every stage, section, Next and edit link and when replacing the address to fill in a missing section, and returns to the plain collection for a direct link. Sidebar selection never depends on that state.
 - **Compact time bar.** In-world time is labelled "(in-world)" and real-world timestamps "Real-world …" so the two are never confused.
 
 ## 11. Knowledge standard
@@ -601,7 +603,7 @@ Every collection and detail route deliberately handles:
 - Keep D&D abbreviations conventional and consistent, such as `STR`, `DEX`, or `DC`.
 - Use tabular numerals where aligned numeric comparison matters.
 - Format signed modifiers consistently, including `+0`.
-- Use “Not recorded” only when absence is itself useful and authorized.
+- Use “Not recorded” only when absence is itself useful and authorized. For an item's runtime state, say one "Not in play yet" instead of a field-by-field “Not recorded”, and never turn a missing value into a default: a condition no one has set is "No damage recorded", not "Undamaged" or 100%.
 - Prefer omission when an optional card field contributes no information.
 - Do not expose UUIDs in text, DOM IDs, URLs unless the route contract requires them, accessible names, error messages, or test-only labels.
 - UUIDs may remain React keys.
