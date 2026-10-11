@@ -23,7 +23,9 @@ export async function logout(
     },
   })
 
-  if (!response.ok) {
+  // 401: the session already lapsed, so the signed-out end state the caller
+  // wants is already true — not a failure.
+  if (!response.ok && response.status !== 401) {
     throw new LogoutRequestError(response.status)
   }
 }

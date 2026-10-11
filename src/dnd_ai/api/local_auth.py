@@ -91,6 +91,7 @@ from dnd_ai.commands.local_auth import (
     list_browser_sessions,
     normalize_login_name,
     resolve_browser_session_csrf_token,
+    resolve_browser_session_lifetime,
     revoke_browser_session,
     revoke_browser_session_by_token,
 )
@@ -580,6 +581,12 @@ class SessionBootstrapResponse(BaseModel):
     user: SessionUserResponse
     csrf_token: str
     browser_session_id: uuid.UUID | None
+    # Browser-session lifetime, so the portal can leave the signed-in UI the
+    # moment the session lapses: the idle window slides with each
+    # authenticated request; the absolute expiry is fixed. Both null for a
+    # non-browser (bearer-token) caller.
+    session_idle_timeout_seconds: int | None = None
+    session_absolute_expires_at: str | None = None
     is_platform_administrator: bool
     # Server-computed global (not campaign-scoped) capabilities for *this*
     # user — currently only `world.create`, present exactly when
@@ -633,11 +640,18 @@ def session_bootstrap_endpoint(
         if principal.local_session_id is not None
         else None
     )
+    lifetime = (
+        resolve_browser_session_lifetime(connection, browser_session_id=principal.local_session_id)
+        if principal.local_session_id is not None
+        else None
+    )
     bootstrap = get_session_bootstrap(connection, user_id=principal.user_id)
     return SessionBootstrapResponse(
         user=SessionUserResponse(user_id=bootstrap.user_id, display_name=bootstrap.display_name),
         csrf_token=csrf_token or "",
         browser_session_id=principal.local_session_id,
+        session_idle_timeout_seconds=lifetime[0] if lifetime else None,
+        session_absolute_expires_at=lifetime[1].isoformat() if lifetime else None,
         is_platform_administrator=bootstrap.is_platform_administrator,
         global_capabilities=(
             [WORLD_CREATE]

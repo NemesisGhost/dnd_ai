@@ -50,6 +50,11 @@ export interface SessionBootstrap {
   user: UserSummary
   csrf_token: string
   browser_session_id: string | null
+  // Browser-session lifetime: the idle window slides with each authenticated
+  // request, the absolute expiry is fixed. Null/absent for a non-browser
+  // caller. Used only to sign the user out of the UI when the session lapses.
+  session_idle_timeout_seconds?: number | null
+  session_absolute_expires_at?: string | null
   // Phase 13E checkpoint 9: the only server-authoritative signal for
   // whether to render an admin surface at all (CP 10's /admin/accounts
   // page) — campaign-scoped access.manage grants nothing here.

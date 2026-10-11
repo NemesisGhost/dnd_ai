@@ -719,6 +719,25 @@ def resolve_browser_session_csrf_token(
     return str(value) if value is not None else None
 
 
+def resolve_browser_session_lifetime(
+    connection: Connection, *, browser_session_id: uuid.UUID
+) -> tuple[int, datetime] | None:
+    """The idle timeout (seconds, a sliding window renewed by each
+    authenticated request) and the fixed absolute expiry of one session, so
+    the portal can sign the user out when the session lapses without
+    waiting for a failing request. `None` only if the row is gone."""
+    absolute = connection.execute(
+        text(
+            "SELECT absolute_expires_at FROM security.browser_sessions "
+            "WHERE browser_session_id = :session"
+        ),
+        {"session": browser_session_id},
+    ).scalar()
+    if absolute is None:
+        return None
+    return int(_BROWSER_SESSION_IDLE_TIMEOUT.total_seconds()), absolute
+
+
 def revoke_browser_session_by_token(
     connection: Connection, *, raw_session_token: str
 ) -> uuid.UUID | None:
