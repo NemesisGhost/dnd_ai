@@ -110,20 +110,21 @@ function StagePanel({
                 {stage.description !== null && (
                     <p className="quest-detail__stage-description">{stage.description}</p>
                 )}
-                <p className="quest-stage-card__status-line">
-                    {progress}.
-                </p>
                 {stage.objectives.length === 0 ? (
+                    // The one empty state, decided from the authorized projection only.
                     <p>No objectives are shown for this stage.</p>
                 ) : (
-                    <ul className="quest-objective-list">
-                        {stage.objectives.map((objective) => (
-                            <ObjectiveItem
-                                key={objective.quest_objective_id}
-                                objective={objective}
-                            />
-                        ))}
-                    </ul>
+                    <>
+                        <p className="quest-stage-card__status-line">{progress}.</p>
+                        <ul className="quest-objective-list">
+                            {stage.objectives.map((objective) => (
+                                <ObjectiveItem
+                                    key={objective.quest_objective_id}
+                                    objective={objective}
+                                />
+                            ))}
+                        </ul>
+                    </>
                 )}
             </div>
         </div>
