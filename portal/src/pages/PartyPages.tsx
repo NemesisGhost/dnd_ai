@@ -148,7 +148,7 @@ function PartyRow({
             {party.lifecycle_status === "archived" ? " (archived)" : ""}
             {party.description !== null ? <p>{party.description}</p> : null}
             {actions.length > 0 ? (
-                <p className="authoring-actions">
+                <p className="row-actions">
                     <Link
                         className="authoring-button"
                         to={`${base(campaignId)}/parties/${encodeURIComponent(party.party_id)}`}
