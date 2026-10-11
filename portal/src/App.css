@@ -1661,9 +1661,24 @@ a.app-header__title:focus-visible {
   border-radius: 0.5rem;
 }
 
-.detail-panel__heading {
+.detail-panel__header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  align-items: baseline;
+  justify-content: space-between;
   margin: 0 0 0.75rem;
-  font-size: 1rem;
+}
+
+.detail-panel__heading {
+  margin: 0;
+  font-size: 1.125rem;
+}
+
+@media (max-width: 30rem) {
+  .detail-panel {
+    padding: 0.75rem;
+  }
 }
 
 .detail-panel__description {
@@ -2238,76 +2253,6 @@ a.app-header__title:focus-visible {
 .quest-detail__stage-description {
   margin: 0 0 0.75rem;
   color: var(--color-text-muted);
-}
-
-.quest-detail__objective-grid {
-  display: grid;
-  grid-template-columns:
-    repeat(auto-fill, minmax(min(100%, 18rem), 1fr));
-  gap: 0.75rem;
-  align-items: start;
-}
-
-/* Expandable objective card — same visual/accessibility precedent as the
-   character sheet's disclosure cards (native <details>/<summary>, explicit
-   expand/collapse indicator text, visible keyboard focus, no color-only
-   state). */
-.quest-objective-card {
-  min-width: 0;
-  border: 1px solid var(--color-border);
-  border-radius: 0.5rem;
-  background-color: var(--color-surface-muted);
-}
-
-.quest-objective-card summary {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.25rem 0.75rem;
-  padding: 0.75rem;
-  cursor: pointer;
-  list-style: none;
-}
-
-.quest-objective-card summary::-webkit-details-marker {
-  display: none;
-}
-
-.quest-objective-card summary:hover {
-  background-color: var(--color-surface-hover);
-}
-
-.quest-objective-card summary:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: 2px;
-}
-
-.quest-objective-card summary strong {
-  flex-basis: 100%;
-}
-
-.quest-objective-card summary span:not(.quest-objective-card__indicator) {
-  font-size: 0.8rem;
-  color: var(--color-text-muted);
-}
-
-.quest-objective-card__indicator {
-  margin-left: auto;
-}
-
-.quest-objective-card__indicator::after {
-  content: "Expand +";
-  font-size: 0.8rem;
-}
-
-.quest-objective-card[open] .quest-objective-card__indicator::after {
-  content: "Collapse −";
-}
-
-.quest-objective-card__body {
-  padding: 0.75rem;
-  border-top: 1px solid var(--color-border);
-  overflow-wrap: anywhere;
 }
 
 /* Compact card-compatible quest sort controls, replacing the previous
@@ -3337,7 +3282,13 @@ a.app-header__title:focus-visible {
   margin-bottom: 0.75rem;
 }
 
-@media (min-width: 64rem) {
+/* The section menu becomes a left column from the workspace's own width, not the viewport's: the
+   sidebar and the context panel take a different share of the screen at every viewport. */
+.staged-workspace {
+  container: staged / inline-size;
+}
+
+@container staged (min-width: 48rem) {
   .session-run__layout {
     grid-template-columns: 12rem minmax(0, 1fr);
     align-items: start;
@@ -3873,19 +3824,6 @@ a.app-header__title:focus-visible {
   padding: 0.25rem 0.75rem;
 }
 
-.knowledge-sources .authoring-aside {
-  background: none;
-  padding: 0.75rem 0 0;
-  border-top: 1px solid var(--color-border);
-  border-radius: 0;
-}
-
-.knowledge-sources h2 {
-  margin: 0 0 0.25rem;
-  font-size: 1.125rem;
-}
-
-
 /* Knowledge Member preview: the persistent "Previewing as" banner and the choose-a-member state.
    Distinct from the ordinary authoring surface by a heavier frame and a label, not colour alone. */
 
@@ -3918,5 +3856,169 @@ a.app-header__title:focus-visible {
 }
 
 .member-preview__claim {
+  overflow-wrap: anywhere;
+}
+
+/* Local horizontal scroll for any wide table (TableScroll): the page never scrolls sideways. */
+.table-scroll {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.table-scroll:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.table-scroll > .sortable-table,
+.table-scroll > .admin-accounts__table {
+  min-width: 36rem;
+}
+
+.table-scroll > table:not([class]) {
+  min-width: 40rem;
+}
+
+/* A neutral or successful form result. Errors use .login-error / .authoring-message instead. */
+.form-status {
+  margin: 0;
+}
+
+.form-status--success::before {
+  content: "\2713\00a0";
+}
+
+/* A secret shown once (OneTimeSecretPanel): panel geometry with a warning rule. */
+.one-time-secret {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin: 1rem 0;
+  padding: 1rem;
+  overflow-wrap: anywhere;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-left: 4px solid var(--color-warning-border);
+  border-radius: 0.5rem;
+}
+
+.one-time-secret h2 {
+  margin: 0;
+  font-size: 1.125rem;
+}
+
+.one-time-secret p {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+/* Containers own the space between sibling panels (docs/UI_STYLE_GUIDE.md section 6.7). */
+.section-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-width: 0;
+}
+
+/* World / quest / dungeon record page: the reader first, then the editor tools as full-width panels. */
+.world-detail__layout {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.world-detail__layout > p,
+.world-detail__layout > .authoring-page__actions-row {
+  margin: 0;
+}
+
+/* Disclosure: native <details> with a text indicator (never colour alone) and visible focus.
+   --plain is an unframed "why / more detail" control; --card is a framed row. */
+.disclosure > summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  align-items: baseline;
+  cursor: pointer;
+  list-style: none;
+}
+
+.disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.disclosure > summary:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.disclosure__indicator::after {
+  content: "Show +";
+  font-size: 0.8rem;
+}
+
+.disclosure[open] > summary .disclosure__indicator::after {
+  content: "Hide \2212";
+}
+
+.disclosure--plain {
+  margin: 0.5rem 0 0;
+}
+
+.disclosure--plain > summary {
+  padding: 0.25rem 0;
+  color: var(--color-text-muted);
+}
+
+.disclosure--plain > ul {
+  margin: 0.25rem 0 0;
+  padding-left: 1.25rem;
+}
+
+.lifecycle-blocked {
+  margin: 0.5rem 0 0;
+  padding-left: 1.25rem;
+}
+
+.world-detail__list {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+/* Quest detail objectives: the restrained list inside an expanded stage (UI_STYLE_GUIDE 12.3). */
+.quest-objective-list__item > .disclosure > summary {
+  padding: 0.25rem 0;
+}
+
+.quest-objective-list__item > .disclosure > summary strong {
+  flex-basis: 100%;
+}
+
+.quest-objective-list__meta {
+  font-size: 0.875rem;
+  color: var(--color-text-muted);
+}
+
+.disclosure__indicator--expand {
+  margin-left: auto;
+}
+
+.disclosure__indicator--expand::after,
+.disclosure[open] > summary .disclosure__indicator--expand::after {
+  font-size: 0.8rem;
+}
+
+.disclosure__indicator--expand::after {
+  content: "Expand +";
+}
+
+.disclosure[open] > summary .disclosure__indicator--expand::after {
+  content: "Collapse −";
+}
+
+.quest-objective-list__body {
+  padding: 0.5rem 0 0.25rem;
   overflow-wrap: anywhere;
 }

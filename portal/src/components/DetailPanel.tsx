@@ -6,6 +6,12 @@ interface DetailPanelProps {
     isEmpty?: boolean
     emptyState?: ReactNode
     className?: string
+    // Follows the page outline: 2 for a peer region of the page, 3 when nested under a section.
+    headingLevel?: 2 | 3
+    // For a host that needs to label or focus the heading by a stable id.
+    headingId?: string
+    // At most two compact controls that act on the whole panel (an Add toggle, an Edit link).
+    headerActions?: ReactNode
     children: ReactNode
 }
 
@@ -15,9 +21,14 @@ export function DetailPanel({
     isEmpty = false,
     emptyState,
     className,
+    headingLevel = 2,
+    headingId,
+    headerActions,
     children,
 }: DetailPanelProps) {
-    const headingId = useId()
+    const generatedId = useId()
+    const labelId = headingId ?? generatedId
+    const Heading = headingLevel === 2 ? "h2" : "h3"
 
     const panelClassName = className
         ? `detail-panel ${className}`
@@ -26,11 +37,14 @@ export function DetailPanel({
     return (
         <section
             className={panelClassName}
-            aria-labelledby={headingId}
+            aria-labelledby={labelId}
         >
-            <h2 id={headingId} className="detail-panel__heading">
-                {title}
-            </h2>
+            <div className="detail-panel__header">
+                <Heading id={labelId} className="detail-panel__heading">
+                    {title}
+                </Heading>
+                {headerActions}
+            </div>
 
             {description !== undefined && (
                 <p className="detail-panel__description">

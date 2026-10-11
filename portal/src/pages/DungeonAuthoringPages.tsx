@@ -257,11 +257,13 @@ const editDungeonConfig: ContentEditConfig<
     renderExtra: ({ campaignId, entityId, view, options, refetch }) => (
         <>
             <DungeonStructure campaignId={campaignId} view={view} options={options} refetch={refetch} />
-            <EntityLifecyclePanel
-                campaignId={campaignId}
-                entityId={entityId}
-                onChanged={() => void refetch()}
-            />
+            <div className="page-section section-stack">
+                <EntityLifecyclePanel
+                    campaignId={campaignId}
+                    entityId={entityId}
+                    onChanged={() => void refetch()}
+                />
+            </div>
         </>
     ),
 }
@@ -416,11 +418,13 @@ const editAreaConfig: ContentEditConfig<AreaAuthoringView, DungeonOptions, AreaV
                 </a>
             </p>
             <AreaContent campaignId={campaignId} view={view} options={options} refetch={refetch} />
-            <EntityLifecyclePanel
-                campaignId={campaignId}
-                entityId={entityId}
-                onChanged={() => void refetch()}
-            />
+            <div className="page-section section-stack">
+                <EntityLifecyclePanel
+                    campaignId={campaignId}
+                    entityId={entityId}
+                    onChanged={() => void refetch()}
+                />
+            </div>
         </>
     ),
 }

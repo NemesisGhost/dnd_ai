@@ -237,7 +237,7 @@ function ScopeCard({
             {scope.objectives.length === 0 ? (
                 <p>This quest has no objectives.</p>
             ) : (
-                <ul className="authoring-choice-list">
+                <ul className="op-list">
                     {scope.objectives.map((o) => (
                         <li key={o.quest_objective_id}>
                             {o.stage_name}: {o.name}

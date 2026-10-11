@@ -145,11 +145,13 @@ export function EditQuestPage() {
                         options={options.state.data}
                         refetch={refetch}
                     />
-                    <EntityLifecyclePanel
-                        campaignId={campaignId}
-                        entityId={questId}
-                        onChanged={() => void refetch()}
-                    />
+                    <div className="page-section section-stack">
+                        <EntityLifecyclePanel
+                            campaignId={campaignId}
+                            entityId={questId}
+                            onChanged={() => void refetch()}
+                        />
+                    </div>
                 </>
             )}
         </section>

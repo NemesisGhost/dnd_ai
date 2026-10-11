@@ -132,7 +132,7 @@ export function AreaContent({ campaignId, view, options, refetch }: Props) {
             {view.connections.length === 0 ? (
                 <p>No connections. Add them on the dungeon page.</p>
             ) : (
-                <ul className="authoring-choice-list">
+                <ul className="record-list">
                     {view.connections.map((c) => (
                         <li key={c.area_connection_id}>
                             {c.from_area.name} to {c.to_area.name} ({c.connection_type_label}
@@ -424,7 +424,7 @@ function StatePanel({
                     Save area state
                 </button>
             </form>
-            <ul className="authoring-choice-list">
+            <ul className="op-list">
                 {view.connections.map((c: ConnectionView) => (
                     <StatusRow
                         key={c.area_connection_id}

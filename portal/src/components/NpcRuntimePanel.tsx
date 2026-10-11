@@ -18,6 +18,7 @@ import { ReferenceCombobox } from "./authoring/ReferenceCombobox"
 import type { ReferenceOption } from "./authoring/ReferenceCombobox"
 import { WorldTimePicker } from "./authoring/WorldTimePicker"
 import "./authoring/authoring.css"
+import { DetailPanel } from "./DetailPanel"
 
 interface Props {
     campaignId: string
@@ -58,10 +59,9 @@ function Loaded({ campaignId, characterId }: Props) {
     }
     if (npc.state.data.canon_status !== "canon") {
         return (
-            <section className="authoring-aside" aria-labelledby="npc-runtime-heading">
-                <h2 id="npc-runtime-heading">Run this NPC</h2>
+            <DetailPanel title="Run this NPC" headingId="npc-runtime-heading">
                 <p>Publish this NPC to change their hit points, conditions, resources or location.</p>
-            </section>
+            </DetailPanel>
         )
     }
     return (
@@ -173,8 +173,7 @@ function Panel({
 
     const conditionByCode = new Map(options.conditions.map((c) => [c.code, c]))
     return (
-        <section className="authoring-aside" aria-labelledby="npc-runtime-heading">
-            <h2 id="npc-runtime-heading">Run this NPC</h2>
+        <DetailPanel title="Run this NPC" headingId="npc-runtime-heading">
             {explained !== null ? (
                 <p role="alert">{explained}</p>
             ) : error !== null ? (
@@ -217,7 +216,7 @@ function Panel({
 
             <h3>Conditions</h3>
             {(detail.conditions ?? []).length === 0 ? <p>None.</p> : null}
-            <ul className="authoring-choice-list">
+            <ul className="op-list">
                 {(detail.conditions ?? []).map((c) => {
                     const known = conditionByCode.get(c.condition_code)
                     return (
@@ -276,7 +275,7 @@ function Panel({
 
             <h3>Resources</h3>
             {(detail.resources ?? []).length === 0 ? <p>None tracked.</p> : null}
-            <ul className="authoring-choice-list">
+            <ul className="record-list">
                 {(detail.resources ?? []).map((r) => (
                     <li key={r.resource_code}>
                         {humanize(r.resource_code)}: {r.current_amount} of {r.maximum_amount}
@@ -343,6 +342,6 @@ function Panel({
                     Move NPC
                 </button>
             </form>
-        </section>
+        </DetailPanel>
     )
 }

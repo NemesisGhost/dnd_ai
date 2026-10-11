@@ -680,7 +680,10 @@ describe("unified knowledge claim page", () => {
       for (const name of ["Reject", "Archive", "Delete draft"]) {
         expect(within(group).getByRole("button", { name })).toBeInTheDocument()
       }
-      expect(screen.queryByText(/unavailable:/)).toBeNull()
+      // The reasons exist for those who ask, but nothing is listed in view.
+      expect(screen.queryByRole("list", { name: "Actions that need something first" })).toBeNull()
+      const reasons = screen.queryByRole("list", { name: "Unavailable lifecycle actions" })
+      if (reasons !== null) expect(reasons).not.toBeVisible()
       expect(screen.queryByRole("heading", { name: "Lifecycle" })).toBeNull()
     })
 

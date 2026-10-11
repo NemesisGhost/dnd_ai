@@ -55,7 +55,7 @@ export function SessionReview({
         <div className="session-run__review">
             <section aria-labelledby="review-overview-heading">
                 <h3 id="review-overview-heading">Overview</h3>
-                <ul className="authoring-choice-list">
+                <ul className="record-list">
                     {session.scheduled_for ? (
                         <li>
                             <RealWorldTime label="Real-world planned start" value={session.scheduled_for} />
@@ -81,7 +81,7 @@ export function SessionReview({
             <section aria-labelledby="review-participants-heading">
                 <h3 id="review-participants-heading">Participants ({present.length})</h3>
                 {present.length === 0 ? <p>No one is in this session.</p> : null}
-                <ul className="authoring-choice-list">
+                <ul className="record-list">
                     {present.map((p) => (
                         <li key={p.session_participant_id}>
                             {p.character_name}: {ROLE_LABEL[p.participation_role] ?? p.participation_role}
@@ -103,7 +103,7 @@ export function SessionReview({
             <section aria-labelledby="review-log-heading">
                 <h3 id="review-log-heading">Session log ({session.events.length})</h3>
                 {session.events.length === 0 ? <p>Nothing has been recorded yet.</p> : null}
-                <ul className="authoring-choice-list" aria-label="Recorded entries">
+                <ul className="record-list" aria-label="Recorded entries">
                     {session.events.map((event) => (
                         <li key={event.event_id}>
                             <Link to={`${campaign}/events/${enc(event.event_id)}`}>{event.name}</Link>
@@ -131,7 +131,7 @@ export function SessionReview({
                         <p>
                             {pending.length} prepared, {started.length} started or finished.
                         </p>
-                        <ul className="authoring-choice-list">
+                        <ul className="record-list">
                             {[...pending, ...started].map((e) => (
                                 <li key={e.encounter_id}>
                                     <Link

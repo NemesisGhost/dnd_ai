@@ -1065,7 +1065,7 @@ function StagePanel({
     const errorFor = (id: string) => errors.find((e) => e.fieldId === id)?.message ?? null
     const locked = structureLocked && panel.stageId !== null
     return (
-        <section className="authoring-aside" aria-label={panel.stageId === null ? "New stage" : "Edit stage"}>
+        <section className="inset-group" aria-label={panel.stageId === null ? "New stage" : "Edit stage"}>
             <AuthoringForm label={panel.stageId === null ? "New stage" : "Edit stage"} onSubmit={onSave}>
                 <ErrorSummary errors={errors} attempt={attempt} />
                 <TextField
@@ -1135,7 +1135,7 @@ function ObjectivePanel({
     const lockHint = locked ? "Locked: this quest has recorded progress." : undefined
     const title = panel.objectiveId === null ? "New objective" : "Edit objective"
     return (
-        <section className="authoring-aside" aria-label={title}>
+        <section className="inset-group" aria-label={title}>
             <AuthoringForm label={title} onSubmit={onSave}>
                 <ErrorSummary errors={errors} attempt={attempt} />
                 <TextField

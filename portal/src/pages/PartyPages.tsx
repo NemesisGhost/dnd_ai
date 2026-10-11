@@ -83,7 +83,7 @@ export function PartiesPage() {
                     {data.items.length === 0 ? (
                         <p>No parties yet.</p>
                     ) : (
-                        <ul className="authoring-choice-list">
+                        <ul className="op-list">
                             {data.items.map((party) => (
                                 <PartyRow
                                     key={party.party_id}

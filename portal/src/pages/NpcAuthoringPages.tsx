@@ -427,7 +427,7 @@ export function ChooseCharacterTypePage() {
         <section className="authoring-page" aria-labelledby="choose-character-heading">
             <h1 id="choose-character-heading">New character</h1>
             <p className="authoring-page__lead">What kind of character is this?</p>
-            <ul className="authoring-choice-list">
+            <ul className="op-list">
                 <li>
                     <Link className="authoring-button" to={`${base}/npc/new`}>
                         New NPC

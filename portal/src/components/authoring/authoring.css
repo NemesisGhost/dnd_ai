@@ -319,10 +319,13 @@
   font-size: 1.0625rem;
 }
 
+/* A plain semantic section: a heading and content, no surface. */
+.page-section,
 .authoring-section {
   margin-top: 1.5rem;
 }
 
+.page-section h2,
 .authoring-section h2 {
   font-size: 1.25rem;
 }
@@ -362,11 +365,12 @@
   color: var(--color-text-muted);
 }
 
-.authoring-aside {
+/* An inset group: a subordinate group inside a panel or form, never a top-level peer of panels. */
+.inset-group {
   align-self: start;
-  padding: 1rem;
+  padding: 0.75rem 1rem;
   background-color: var(--color-surface-muted);
-  border-radius: 0.25rem;
+  border-radius: 0.375rem;
 }
 
 .authoring-step-nav {
@@ -463,13 +467,6 @@
 
   .authoring-fact-list {
     grid-template-columns: minmax(0, 1fr);
-  }
-}
-
-@media (min-width: 64rem) {
-  .authoring-page__layout--with-aside {
-    grid-template-columns: minmax(0, 40rem) minmax(16rem, 24rem);
-    gap: 2rem;
   }
 }
 
@@ -683,4 +680,41 @@
     text-align: left;
     vertical-align: top;
     overflow-wrap: anywhere;
+}
+
+/* Operational list: records that carry their own commands or links (sources, relationships,
+   builds, review queue). Rows are separated by a rule, not boxed; action buttons are compact and
+   wrap with the row, and are never stretched full width on a phone. */
+.op-list {
+  margin: 0.5rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.op-list > li {
+  padding: 0.5rem 0;
+  overflow-wrap: anywhere;
+}
+
+.op-list > li + li {
+  border-top: 1px solid var(--color-border);
+}
+
+.op-list .authoring-button {
+  padding: 0.25rem 0.75rem;
+}
+
+/* Read-only chronology or summary: provenance, revisions, logs. Numbering stays on an ol. */
+.record-list {
+  margin: 0.5rem 0 0;
+  padding-left: 1.25rem;
+  overflow-wrap: anywhere;
+}
+
+.record-list > li + li {
+  margin-top: 0.375rem;
+}
+
+.record-list .authoring-button {
+  padding: 0.25rem 0.75rem;
 }

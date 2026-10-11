@@ -83,7 +83,7 @@ export function RelationshipEditor({ campaignId, relationshipId, options, onChan
                 {view.ended !== null ? ` until ${view.ended}` : ""}
                 {view.current_status !== null ? `. Now: ${view.current_status.replace(/_/g, " ")}` : ""}
             </p>
-            <ul className="authoring-choice-list">
+            <ul className="op-list">
                 {view.participants.map((p) => (
                     <li key={`${p.entity_id}-${p.role}`}>
                         {p.name} ({p.role_label})

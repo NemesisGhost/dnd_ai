@@ -93,7 +93,7 @@ export function ItemDefinitionsPage() {
                     {items.length === 0 ? (
                         <p>No item definitions match.</p>
                     ) : (
-                        <ul className="authoring-choice-list">
+                        <ul className="op-list">
                             {items.map((item) => (
                                 <li key={item.item_definition_id}>
                                     {item.name} ({item.category_label}, {item.rarity.replace(/_/g, " ")})

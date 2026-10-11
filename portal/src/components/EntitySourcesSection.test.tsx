@@ -103,6 +103,7 @@ describe("EntitySourcesSection", () => {
 
     it("attaches an existing source that is not already attached", async () => {
         const server = render(<EntitySourcesSection campaignId="c1" entityId="e1" />)
+        fireEvent.click(await screen.findByRole("button", { name: "Add source" }))
         const form = await screen.findByRole("form", { name: "Attach an existing source" })
         const options = within(form).getAllByRole("option").map((o) => o.textContent)
         expect(options).toEqual(["Choose a source", "Core book (Published reference)"])
@@ -116,6 +117,7 @@ describe("EntitySourcesSection", () => {
 
     it("writes a new source and attaches it", async () => {
         const server = render(<EntitySourcesSection campaignId="c1" entityId="e1" />)
+        fireEvent.click(await screen.findByRole("button", { name: "Add source" }))
         const form = await screen.findByRole("form", { name: "Write a new source" })
         fireEvent.change(within(form).getByRole("combobox", { name: "Type of source" }), { target: { value: "published_reference" } })
         fireEvent.change(within(form).getByRole("textbox", { name: "Title" }), { target: { value: "  New one " } })
@@ -137,10 +139,35 @@ describe("EntitySourcesSection", () => {
 
     it("needs a type and title for a new source", async () => {
         const server = render(<EntitySourcesSection campaignId="c1" entityId="e1" />)
+        fireEvent.click(await screen.findByRole("button", { name: "Add source" }))
         const form = await screen.findByRole("form", { name: "Write a new source" })
         fireEvent.click(within(form).getByRole("button", { name: "Write and attach source" }))
         expect(await screen.findByText(/Choose a type and enter a title/)).toBeInTheDocument()
         expect(server.callsTo("POST", SOURCES)).toHaveLength(0)
+    })
+
+    it("keeps what was typed while the forms are closed and reopened", async () => {
+        render(<EntitySourcesSection campaignId="c1" entityId="e1" />)
+        const toggle = await screen.findByRole("button", { name: "Add source" })
+        expect(toggle).toHaveAttribute("aria-expanded", "false")
+        fireEvent.click(toggle)
+        fireEvent.change(screen.getByRole("textbox", { name: "Title" }), { target: { value: "Half written" } })
+        fireEvent.click(screen.getByRole("button", { name: "Hide add source" }))
+        expect(screen.getByRole("form", { name: "Write a new source", hidden: true })).not.toBeVisible()
+        fireEvent.click(screen.getByRole("button", { name: "Add source" }))
+        expect(screen.getByRole("textbox", { name: "Title" })).toHaveValue("Half written")
+    })
+
+    it("supplies its own labelled Sources panel when standalone", async () => {
+        render(<EntitySourcesSection campaignId="c1" entityId="e1" />)
+        expect(await screen.findByRole("region", { name: "Sources" })).toBeInTheDocument()
+    })
+
+    it("adds no heading or region of its own when embedded in a host panel", async () => {
+        render(<EntitySourcesSection embedded campaignId="c1" entityId="e1" />)
+        await screen.findByText(/Session 3 notes \(Session notes\)/)
+        expect(screen.queryByRole("region")).toBeNull()
+        expect(screen.queryByRole("heading")).toBeNull()
     })
 
     it("shows nothing when the provenance read is refused", async () => {

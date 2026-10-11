@@ -15,6 +15,7 @@ import { ReferenceCombobox } from "./authoring/ReferenceCombobox"
 import type { ReferenceOption } from "./authoring/ReferenceCombobox"
 import { WorldTimePicker } from "./authoring/WorldTimePicker"
 import "./authoring/authoring.css"
+import { DetailPanel } from "./DetailPanel"
 
 interface Props {
     campaignId: string
@@ -143,18 +144,16 @@ function Panel({
 
     if (!view.can_operate) {
         return (
-            <section className="authoring-aside" aria-labelledby="item-ops-heading">
-                <h2 id="item-ops-heading">Run this item</h2>
+            <DetailPanel title="Run this item" headingId="item-ops-heading">
                 <p>Publish this item to award it, move it or change its condition.</p>
-            </section>
+            </DetailPanel>
         )
     }
 
     const placed = view.holder !== null || view.container !== null || view.location !== null
     const held = view.holder !== null
     return (
-        <section className="authoring-aside" aria-labelledby="item-ops-heading">
-            <h2 id="item-ops-heading">Run this item</h2>
+        <DetailPanel title="Run this item" headingId="item-ops-heading">
             {error?.kind === "stale" ? (
                 <StaleWriteNotice
                     onLoadLatest={() => {
@@ -435,6 +434,6 @@ function Panel({
                     />
                 </>
             )}
-        </section>
+        </DetailPanel>
     )
 }

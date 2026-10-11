@@ -212,7 +212,7 @@ function Dependencies({
             {dependencies.length === 0 ? (
                 <p>No dependencies.</p>
             ) : (
-                <ul className="authoring-choice-list">
+                <ul className="op-list">
                     {dependencies.map((d) => (
                         <li key={d.objective_dependency_id}>
                             {objectiveLabel(d.objective_id)} depends on {objectiveLabel(d.depends_on_objective_id)} (
@@ -347,7 +347,7 @@ function Participants({
             {participants.length === 0 ? (
                 <p>No participants.</p>
             ) : (
-                <ul className="authoring-choice-list">
+                <ul className="op-list">
                     {participants.map((p) => (
                         <li key={p.quest_participant_id}>
                             {p.participant?.name ?? "Unknown"} ({p.participant_role.replace("_", " ")}){" "}
@@ -597,7 +597,7 @@ function OutcomeCard({
                 {outcome.name} <span className="authoring-note">({outcome.code}, {outcome.outcome_category.replace("_", " ")})</span>
             </h4>
             {outcome.description !== null ? <p>{outcome.description}</p> : null}
-            <ul className="authoring-choice-list">
+            <ul className="op-list">
                 {outcome.rewards.map((r) => (
                     <li key={r.quest_reward_id}>
                         {r.reward_type}: {r.description}

@@ -15,7 +15,7 @@ interface QuestDetailPageProps {
     quest: QuestDetail
 }
 
-function ObjectiveCard({ objective }: { objective: QuestObjective }) {
+function ObjectiveItem({ objective }: { objective: QuestObjective }) {
     const status =
         objective.status_code !== null
             ? humanizeCode(objective.status_code)
@@ -42,25 +42,28 @@ function ObjectiveCard({ objective }: { objective: QuestObjective }) {
         })
     }
 
-    // Reuses the character-sheet disclosure card visual/accessibility
-    // precedent (native <details>/<summary>, explicit expand/collapse
-    // indicator, no reliance on color). quest_objective_id is only a React
-    // key — never rendered.
+    // A restrained list item inside the expanded stage (no nested card). The details stay a native
+    // disclosure with a text indicator, so state never relies on colour.
+    // quest_objective_id is only a React key and is never rendered.
     return (
-        <details className="quest-objective-card">
-            <summary>
-                <strong>{objective.name}</strong>
-                <span>{status}</span>
-                <span>{humanizeCode(objective.requirement_level)}</span>
-                <span
-                    className="quest-objective-card__indicator"
-                    aria-hidden="true"
-                />
-            </summary>
-            <div className="quest-objective-card__body">
-                <FactGrid items={factItems} />
-            </div>
-        </details>
+        <li className="quest-objective-list__item">
+            <details className="disclosure">
+                <summary>
+                    <strong>{objective.name}</strong>
+                    <span className="quest-objective-list__meta">{status}</span>
+                    <span className="quest-objective-list__meta">
+                        {humanizeCode(objective.requirement_level)}
+                    </span>
+                    <span
+                        className="disclosure__indicator disclosure__indicator--expand"
+                        aria-hidden="true"
+                    />
+                </summary>
+                <div className="quest-objective-list__body">
+                    <FactGrid items={factItems} />
+                </div>
+            </details>
+        </li>
     )
 }
 
@@ -113,14 +116,14 @@ function StagePanel({
                 {stage.objectives.length === 0 ? (
                     <p>No objectives are shown for this stage.</p>
                 ) : (
-                    <div className="quest-detail__objective-grid">
+                    <ul className="quest-objective-list">
                         {stage.objectives.map((objective) => (
-                            <ObjectiveCard
+                            <ObjectiveItem
                                 key={objective.quest_objective_id}
                                 objective={objective}
                             />
                         ))}
-                    </div>
+                    </ul>
                 )}
             </div>
         </div>

@@ -10,6 +10,7 @@ import type { Provenance, SourceList } from "../types/provenance"
 import { useAnnounce } from "./authoring/announcer"
 import { SelectField, TextAreaField, TextField } from "./authoring/fields"
 import { MutationStatusMessage } from "./authoring/feedback"
+import { DetailPanel } from "./DetailPanel"
 import "./authoring/authoring.css"
 
 interface Props {
@@ -17,16 +18,14 @@ interface Props {
     entityId: string
     // The World category of the record, for the provenance link.
     category?: string
-    // A concise summary with the forms behind an "Add source" button. The forms stay mounted
-    // while closed, so what was typed (and any error) is still there when they are reopened.
-    compact?: boolean
     // Reports whether something typed in the forms is not yet attached or written, so the page can
     // protect it when the person leaves.
     onDirtyChange?: (dirty: boolean) => void
     // Where the provenance page's back link returns to (the page that holds this section).
     returnTo?: string
-    // Replaces the section's own heading when the page already provides one.
-    hideHeading?: boolean
+    // The page already supplies the surface, the heading and the labelled region (a staged
+    // section panel): render the content only, with no panel, heading or region of its own.
+    embedded?: boolean
     // Plain-language context shown above the sources.
     intro?: ReactNode
     // The record's provenance, when the page already loads it (to show a count elsewhere), so the
@@ -52,10 +51,9 @@ export function EntitySourcesSection({
     campaignId,
     entityId,
     category,
-    compact = false,
     onDirtyChange,
     returnTo,
-    hideHeading = false,
+    embedded = false,
     intro,
     provenance: shared,
 }: Props) {
@@ -123,12 +121,10 @@ export function EntitySourcesSection({
         mutation.submit(command)
     }
 
-    return (
-        <section
-            className="authoring-aside"
-            {...(hideHeading ? { "aria-label": "Sources" } : { "aria-labelledby": `sources-${entityId}` })}
-        >
-            {hideHeading ? null : <h2 id={`sources-${entityId}`}>Sources</h2>}
+    // The forms stay mounted behind "Add source" while closed, so what was typed (and any error)
+    // is still there when they are reopened.
+    const body = (
+        <>
             {intro}
             {explained !== null ? (
                 <p role="alert">{explained}</p>
@@ -147,20 +143,18 @@ export function EntitySourcesSection({
                 </Link>
             </p>
             {attached.length === 0 ? <p>No further sources attached.</p> : null}
-            {compact ? (
-                <p>
-                    <button
-                        type="button"
-                        className="authoring-button"
-                        aria-expanded={adding}
-                        aria-controls={`add-source-${entityId}`}
-                        onClick={() => setAdding(!adding)}
-                    >
-                        {adding ? "Hide add source" : "Add source"}
-                    </button>
-                </p>
-            ) : null}
-            <ul className="authoring-choice-list">
+            <p>
+                <button
+                    type="button"
+                    className="authoring-button"
+                    aria-expanded={adding}
+                    aria-controls={`add-source-${entityId}`}
+                    onClick={() => setAdding(!adding)}
+                >
+                    {adding ? "Hide add source" : "Add source"}
+                </button>
+            </p>
+            <ul className="op-list">
                 {attached.map((l) => (
                     <li key={l.source_id}>
                         {l.title} ({l.source_type_label})
@@ -176,7 +170,7 @@ export function EntitySourcesSection({
                     </li>
                 ))}
             </ul>
-            <div id={`add-source-${entityId}`} hidden={compact && !adding}>
+            <div id={`add-source-${entityId}`} hidden={!adding}>
                 {available.length > 0 ? (
                     <form
                         noValidate
@@ -253,6 +247,13 @@ export function EntitySourcesSection({
                     </button>
                 </form>
             </div>
-        </section>
+        </>
+    )
+    return embedded ? (
+        <div className="sources-body">{body}</div>
+    ) : (
+        <DetailPanel title="Sources" headingId={`sources-${entityId}`}>
+            {body}
+        </DetailPanel>
     )
 }

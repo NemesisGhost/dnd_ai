@@ -14,6 +14,7 @@ import { ReferenceCombobox } from "./authoring/ReferenceCombobox"
 import type { ReferenceOption } from "./authoring/ReferenceCombobox"
 import { WorldTimePicker } from "./authoring/WorldTimePicker"
 import "./authoring/authoring.css"
+import { DetailPanel } from "./DetailPanel"
 
 interface Props {
     campaignId: string
@@ -41,12 +42,11 @@ export function OrganizationMembers({ campaignId, organizationId }: Props) {
     if (state.kind !== "ready") return null
     const roster = state.data
     return (
-        <section className="authoring-aside" aria-labelledby="members-heading">
-            <h2 id="members-heading">Members and offices</h2>
+        <DetailPanel title="Members and offices" headingId="members-heading">
             {roster.members.length === 0 ? (
                 <p>No members are known.</p>
             ) : (
-                <ul className="authoring-choice-list">
+                <ul className="record-list">
                     {roster.members.map((m) => (
                         <li key={m.relationship_id}>
                             {m.member_name}
@@ -74,7 +74,7 @@ export function OrganizationMembers({ campaignId, organizationId }: Props) {
                     />
                 </>
             ) : null}
-        </section>
+        </DetailPanel>
     )
 }
 

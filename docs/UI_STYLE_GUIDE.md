@@ -118,7 +118,7 @@ Use three surface levels:
 2. Card/panel: `--color-surface`
 3. Panel heading, inset fact, or secondary region: `--color-surface-muted`
 
-Hoverable cards may use `--color-surface-hover`. Avoid stacking multiple bordered cards inside one another. A detail page may contain panels, but a panel should not contain another full panel unless the nested element is a distinct, necessary subrecord such as a spellcasting profile.
+Hoverable cards may use `--color-surface-hover`. Avoid stacking multiple bordered cards inside one another. A detail page may contain panels, but a panel should not contain another full panel unless the nested element is a distinct, necessary subrecord such as a spellcasting profile. Which contract supplies the surface, who owns the spacing, and when a page may differ are defined in §6.7.
 
 ## 4. Typography and spacing
 
@@ -135,7 +135,7 @@ Hoverable cards may use `--color-surface-hover`. Avoid stacking multiple bordere
 | Field label | Muted and concise |
 | Supporting metadata | Muted, never smaller than readable body text requirements |
 
-Do not create headings solely to make text larger. Preserve a logical heading outline independent of visual styling.
+Do not create headings solely to make text larger. Preserve a logical heading outline independent of visual styling. Level follows the outline and size follows the contract, so peer headings always match: a panel heading is 1.125rem, a plain-section or workspace-section heading 1.25rem, a subgroup `h3` 1rem.
 
 ### 4.2 Spacing scale
 
@@ -195,7 +195,7 @@ Examples include ability scores, movement modes, spellcasting values, and a shor
 
 ### 5.4 Tables
 
-Use tables only for genuinely tabular comparisons. Wrap unavoidable wide tables in a local horizontal-scroll container. A page must never gain horizontal scrolling because of a table.
+Use tables only for genuinely tabular comparisons. Wrap unavoidable wide tables in a local horizontal-scroll container. A page must never gain horizontal scrolling because of a table. The `TableScroll` region (`.table-scroll`) is that container: it is named like the table's caption and keyboard-focusable, `SortableTable` supplies it itself, and any other table is wrapped explicitly. `.authoring-table-scroll`, `.character-sheet__table-scroll` and the audit table wrapper are older names for the same behaviour.
 
 On narrow screens, consider a list or card presentation when column relationships remain understandable without a table.
 
@@ -238,6 +238,8 @@ Responsibilities:
 
 It must not know about campaigns, quests, characters, or authorization.
 
+It takes a heading level (`h2` by default, `h3` when nested under a section heading), an optional heading id for hosts that label or focus the heading, and an optional `headerActions` slot beside the heading for at most two compact controls that act on the whole panel. A panel never sets its own outer margin: its container spaces it (§6.7).
+
 ### 6.4 `FactGrid`
 
 Responsibilities:
@@ -257,6 +259,28 @@ Responsibilities:
 - accessible text for symbolic state.
 
 Use only for important, quickly compared values. Do not turn every piece of metadata into a stat card.
+
+### 6.7 Section containment
+
+Five contracts say how a region is contained. Choose by purpose, not by counting neighbouring borders.
+
+| Contract | Use when | Not when | Treatment |
+|---|---|---|---|
+| **Primary section panel** (`DetailPanel`) | Peer regions of a record page, and a distinct task region on a reading page (Run this item, Lifecycle, Sources, Relationships, Members, Inventory) | Single-column forms or reading flows; around content that already has surfaces (card grids, tables, trees, stage cards) | Surface, 1px border, 0.5rem radius, 1rem padding (0.75rem below 30rem), `h2` 1.125rem |
+| **Plain section** (`.page-section`, also `.authoring-section`) | Settings, overview, form and list pages | Peers that reflow side by side | No surface, 1.5rem top margin, `h2` 1.25rem |
+| **Inset group** (`.inset-group`) | A subordinate group inside a panel or form | A top-level peer of panels; inside another inset | Muted surface, no border, 0.375rem radius |
+| **Workspace section panel** (`SectionPanel`) | The one visible section of a staged workspace | Anywhere else | Bordered, `h2` 1.25rem, purpose line |
+| **Disclosure** (`.disclosure`) | Optional detail of one item (why an action is unavailable, an objective's details) | Essential information or navigation | Native `<details>`, summary text, a text indicator ("Show +" / "Hide −", or "Expand +" / "Collapse −"), visible focus |
+
+**Wrapper ownership.** A container (the reading grid, `.section-stack`, `.world-detail__layout`, a plain section) owns the space between its children. A component that can stand alone owns its surface. A component that is embedded in a host that already supplies the surface, heading and labelled region renders content only (`EntitySourcesSection embedded`), so there is never a panel inside a panel and never a second region with the same name.
+
+**When an exception is justified.** Only when the semantics differ (an `article`, an `h1` header, a mode banner), the surface is itself the interaction (cards, stage cards, dialogs), the workflow documents a different width or density, or the content is structure that borders would obscure (trees, chronology). Say which in a comment beside the CSS. Preserved exceptions: Campaign Home's recent-events list and compact clock, the character sheet header reusing panel CSS for its `h1`, the staged workspace panel, Knowledge details, quest stage cards, the hierarchy context panel, the Member preview banner, and the Get started callout.
+
+### 6.8 Operational rows, chronology and status
+
+- **Operational list** (`.op-list`): records that carry their own commands or links (attached sources, relationships, builds, the review queue). Rows are separated by a rule, not boxed; row buttons are compact and wrap with their row and are never stretched to full width on a phone. Form actions (`.authoring-actions`) stay full width below 40rem.
+- **Chronology / summary list** (`.record-list`): provenance, revisions, logs and read-only summaries. A numbered list keeps its numbers.
+- **Status strip**: the compact campaign-time bar. **Messages** (`.authoring-message--error` / `--warning`) are for errors and warnings; a success or neutral result uses `.form-status` and is never styled as an error. A one-time secret uses the `OneTimeSecretPanel` panel with a warning rule.
 
 ### 6.6 Domain-specific wrappers
 
@@ -422,6 +446,7 @@ Shared primitives live in `portal/src/components/authoring/` and are styled by `
 - **Dialog.** Native `<dialog>` with a backdrop from `--color-overlay`, max width 32rem, focus trap and Escape from the platform, initial focus on Cancel.
 - **Lifecycle badge.** A rounded pill with a decorative icon and a text label (Draft, In review, Approved, Canon, Superseded, Rejected, Archived). The label is the meaning; the icon and tint are decoration.
 - **Visually hidden text** uses the `.visually-hidden` utility (clipped, not `display: none`) so it is still read by assistive technology.
+- **Lifecycle status and actions (one rule, every page).** A lifecycle panel shows the status (badge and words), then a compact action group: the next forward step as the primary button (Restore, or Return to draft for a rejected record, when that is the way forward) and every other action the server offers under **More**; the confirmations, reasons, supersede candidates and stale-write recovery do not change. Blocked actions are explained from the server's `blocked_actions` without discarding any: a reason a person can act on (a parent that is not published, a review in progress, and any reason the portal does not recognise) is shown next to the actions, and the reasons that only restate the status (wrong canon status, archived, not archived) sit under a collapsed **Why other actions are unavailable (N)** disclosure whose count is exactly the list inside. A page that already explains a blocker in its own words may suppress the inline copy, never the disclosure. Grouping is presentation only; it infers no eligibility.
 
 ### 10a.1 Staged workspace pages
 
@@ -429,7 +454,7 @@ A long task page (the Run Session page and the Knowledge claim page) is organise
 
 - **Page breadcrumb.** `<nav aria-label="Breadcrumb">` with an ordered list: parent list, the record (by its title, never an identifier), and the current page (`aria-current="page"`, not a link). It is separate from the campaign context panel (world, timeline, campaign, perspective).
 - **Stage navigation.** A numbered row of links (`aria-label="Session stages"` or `"Claim stages"`, `aria-current="step"`), wrapping at narrow widths. The current stage is marked by weight and a heavier border, not colour alone.
-- **Section menu.** Links for the current stage's sections only (`aria-label="<Stage> sections"`, `aria-current="page"`): a left column from 64rem, a wrapping row below it. Links, not tabs or buttons, because choosing one changes the address.
+- **Section menu.** Links for the current stage's sections only (`aria-label="<Stage> sections"`, `aria-current="page"`): a left column when the workspace container is at least 48rem wide (so the sidebar and context panel are accounted for), a wrapping row below it. Links, not tabs or buttons, because choosing one changes the address.
 - **Preserved context.** Choosing a stage or section keeps every other query parameter (character and party perspective). A "Next" link in a page header is navigation to the section where a step lives, never an action.
 - **Section panel.** One panel visible at a time: a bordered surface with an `h2` (focused when the section changes), a one-line purpose, then the content. A section the record cannot use yet says why instead of showing a disabled form.
 - **Compact time bar.** In-world time is labelled "(in-world)" and real-world timestamps "Real-world …" so the two are never confused.
@@ -509,7 +534,7 @@ Stages render as one connected vertical column of collapsible cards, in server s
 
 - **Disclosure.** Each stage title is an `<h3>` containing one button with `aria-expanded` and `aria-controls` pointing at the stage body. Stages start collapsed and expand or collapse independently, with an Expand all / Collapse all button above the list (its label follows whether every stage is open); this is local presentation state, sends no request, and is not persisted. A stage with an open form (and so any validation or stale-write notice) stays expanded. Reordering, saving, or editing never collapses a stage.
 - **Collapsed summary.** Sequence number, name, stage type, a disclosure indicator in text (`Expand +` / `Collapse −`), and a summary line. The detail page shows `Shown objectives: x of y complete` (or `No objectives shown`), counting only the objectives the server returned for this audience. That list is audience-filtered, so the portal never claims a whole-stage status (Not started, In progress, Complete) from it and never implies whether hidden objectives exist; each shown objective carries its own exact server status. The editor reads a definition, which carries no progress, so it shows the objective count and how many are required instead. The roll-up is text, never color alone.
-- **Objectives** are a restrained list inside the expanded body (a left rule, no nested cards). Requirement level is stated in words (**Required** / **Optional**).
+- **Objectives** are a restrained list inside the expanded body (a left rule, no nested cards). Requirement level is stated in words (**Required** / **Optional**). Each objective's own details are a plain native disclosure inside its list item.
 - **Editor ordering.** Each row is the card with a stacked arrow-only `▲` (Move up) and `▼` (Move down) pair on its right, together shorter than the collapsed card header, named for the stage in the accessible label. The buttons are the keyboard, touch, and assistive-technology path; they stay visible and are disabled at the first and last stage and while a reorder is pending. They exist only when the server lists `reorder_stages`. With that action, the card header (and its grip) is also draggable with the pointer; a bar on the target card shows the valid drop position. Both paths send one `reorder_stages` command carrying the full new `stage_ids` order and the loaded row version, and the page then shows the order the authoritative refetch returns. A drop that leaves the order unchanged sends nothing, and a failure or stale write leaves the server's order on screen with the usual recovery notice.
 - **Responsive.** Rows are capped at a readable width, the side controls narrow but remain at 390 px, summaries wrap, and nothing scrolls the page horizontally.
 
@@ -561,7 +586,7 @@ Every collection and detail route deliberately handles:
 - Navigating cards use native links.
 - Buttons are reserved for actions, not navigation.
 - Fact groups use semantic description lists.
-- Tables have captions and scoped headers.
+- Tables have captions and scoped headers, and a table that can be wider than its container sits in a named, keyboard-focusable scroll region.
 - Proficiency, known/prepared state, status, confidence, and selection never rely on color alone.
 - Focus is always visible in every theme.
 - Interactive targets remain usable on touch screens.

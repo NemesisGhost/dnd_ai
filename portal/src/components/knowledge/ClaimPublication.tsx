@@ -1,6 +1,6 @@
 import { Link } from "react-router"
 import type { EntityLifecycleView } from "../../types/entityLifecycle"
-import { LifecycleActionList } from "../EntityLifecyclePanel"
+import { LifecycleActionList, LifecycleBlockedReasons } from "../EntityLifecyclePanel"
 import { subjectBlocksPublish } from "./claimStages"
 
 interface Props {
@@ -85,7 +85,9 @@ export function ClaimPublication({ claimHref, unsavedEdits, ...rest }: Props) {
                     <Link to={claimHref}>Save or discard them in Claim</Link>
                 </p>
             ) : null}
-            <LifecycleActionList compact />
+            <LifecycleActionList />
+            {/* The subject blocker is already explained above, so every reason sits in the disclosure. */}
+            <LifecycleBlockedReasons inlineBlockers={false} />
         </>
     )
 }

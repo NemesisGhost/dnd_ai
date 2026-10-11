@@ -24,6 +24,7 @@ import type {
 } from "../types/relationshipAuthoring"
 import { RELATIONSHIP_CODE_MESSAGE } from "../utils/relationshipForm"
 import "./authoring/authoring.css"
+import { DetailPanel } from "./DetailPanel"
 
 interface Props {
     campaignId: string
@@ -51,10 +52,9 @@ function LoadedPanel({ campaignId, entityId }: Props) {
     const items = list.state.data.items
     const loadedOptions = options.state.data
     return (
-        <section className="authoring-aside" aria-labelledby="relationships-heading">
-            <h2 id="relationships-heading">Relationships</h2>
+        <DetailPanel title="Relationships" headingId="relationships-heading">
             {items.length === 0 ? <p>No relationships recorded.</p> : null}
-            <ul className="authoring-choice-list">
+            <ul className="op-list">
                 {items.map((item) => (
                     <li key={item.relationship_id}>
                         {item.participants.map((p) => `${p.name} (${p.role_label})`).join(" and ")}:{" "}
@@ -99,7 +99,7 @@ function LoadedPanel({ campaignId, entityId }: Props) {
                     onCreated={() => void list.refetch()}
                 />
             ) : null}
-        </section>
+        </DetailPanel>
     )
 }
 

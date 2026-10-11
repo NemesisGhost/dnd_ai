@@ -80,7 +80,7 @@ export function DungeonStructure({ campaignId, view, options, refetch }: Props) 
             {view.areas.length === 0 ? (
                 <p>No areas yet.</p>
             ) : (
-                <ul className="authoring-choice-list">
+                <ul className="op-list">
                     {view.areas.map((area) => (
                         <li key={area.dungeon_area_id}>
                             <Link

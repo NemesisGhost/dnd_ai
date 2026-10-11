@@ -80,7 +80,7 @@ function Loaded({ view, campaignId, category }: { view: Provenance; campaignId: 
 
             <h2>Sources attached now</h2>
             {current.length === 0 ? <p>None.</p> : null}
-            <ul className="authoring-choice-list">
+            <ul className="record-list">
                 {current.map((l) => (
                     <li key={`${l.source_id}-${l.attached_at}`}>
                         {l.title} ({l.source_type_label})
@@ -93,7 +93,7 @@ function Loaded({ view, campaignId, category }: { view: Provenance; campaignId: 
             {past.length > 0 ? (
                 <>
                     <h2>Sources detached</h2>
-                    <ul className="authoring-choice-list">
+                    <ul className="record-list">
                         {past.map((l) => (
                             <li key={`${l.source_id}-${l.attached_at}`}>
                                 {l.title} ({l.source_type_label}). Attached {when(l.attached_at)}
@@ -115,7 +115,7 @@ function Loaded({ view, campaignId, category }: { view: Provenance; campaignId: 
             </p>
             <h2>History</h2>
             {view.transitions.length === 0 ? <p>No lifecycle changes recorded.</p> : null}
-            <ol className="authoring-choice-list">
+            <ol className="record-list">
                 {view.transitions.map((t) => (
                     <li key={`${t.recorded_at}-${t.label}`}>
                         {t.label}

@@ -702,7 +702,7 @@ function Loaded({
                     {view.rounds.map((r) => (
                         <section key={r.round_number} aria-label={`Round ${r.round_number}`}>
                             <h3>Round {r.round_number}</h3>
-                            <ol className="authoring-choice-list">
+                            <ol className="record-list">
                                 {r.turns.map((t) => (
                                     <li key={t.turn_order}>
                                         {t.actor_name}: {humanize(t.action_kind ?? "turn")}

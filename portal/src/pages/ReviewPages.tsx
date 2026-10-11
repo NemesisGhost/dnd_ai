@@ -130,7 +130,7 @@ function QueueList({
             {rows.length === 0 ? (
                 <p>Nothing here.</p>
             ) : (
-                <ul className="authoring-choice-list" aria-label="Records">
+                <ul className="op-list" aria-label="Records">
                     {rows.map((row) => (
                         <li key={row.entity_id}>
                             {row.category !== null ? (
@@ -232,7 +232,7 @@ function History({ campaignId, history }: { campaignId: string; history: Revisio
             <p>
                 <strong>{history.name}</strong> is at version {history.row_version}.
             </p>
-            <ol className="authoring-choice-list" aria-label="Revisions">
+            <ol className="record-list" aria-label="Revisions">
                 {versions.map((r) => (
                     <li key={r.row_version}>{describe(r)}</li>
                 ))}

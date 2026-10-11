@@ -288,29 +288,31 @@ function RunBody({
             ) : null}
             <CampaignClockCard campaignId={campaignId} variant="compact" actionsVisible={nav.stage === "run"} />
             <RunStageNav current={nav.stage} hrefFor={nav.stageHref} />
-            <div className="session-run__layout">
-                <RunSectionNav stage={nav.stage} current={nav.section} hrefFor={nav.sectionHref} />
-                <div className="session-run__content">
-                    <div hidden={nav.stage !== "run"}>
-                        {actions.includes("start") ? (
-                            <StartControl
-                                campaignId={campaignId}
-                                session={session}
-                                refetch={refetch}
-                                onStarted={() => setNotice("started")}
-                            />
-                        ) : null}
-                        {notice === "started" ? (
-                            <p role="status">
-                                Session started. <Link to={nav.sectionHref("log")}>Go to the session log</Link>
-                            </p>
-                        ) : null}
+            <div className="staged-workspace">
+                <div className="session-run__layout">
+                    <RunSectionNav stage={nav.stage} current={nav.section} hrefFor={nav.sectionHref} />
+                    <div className="session-run__content">
+                        <div hidden={nav.stage !== "run"}>
+                            {actions.includes("start") ? (
+                                <StartControl
+                                    campaignId={campaignId}
+                                    session={session}
+                                    refetch={refetch}
+                                    onStarted={() => setNotice("started")}
+                                />
+                            ) : null}
+                            {notice === "started" ? (
+                                <p role="status">
+                                    Session started. <Link to={nav.sectionHref("log")}>Go to the session log</Link>
+                                </p>
+                            ) : null}
+                        </div>
+                        {SECTIONS.map((section) => (
+                            <RunSectionPanel key={section.key} section={section} active={section.key === nav.section}>
+                                {body[section.key]}
+                            </RunSectionPanel>
+                        ))}
                     </div>
-                    {SECTIONS.map((section) => (
-                        <RunSectionPanel key={section.key} section={section} active={section.key === nav.section}>
-                            {body[section.key]}
-                        </RunSectionPanel>
-                    ))}
                 </div>
             </div>
         </>
@@ -491,7 +493,7 @@ function Participants({
             {present.length === 0 ? (
                 <p>No one is in this session yet.</p>
             ) : (
-                <ul className="authoring-choice-list">
+                <ul className="op-list">
                     {present.map((p) => (
                         <li key={p.session_participant_id}>
                             {p.character_name} ({p.participation_role.replace("_", " ")}){" "}
@@ -655,7 +657,7 @@ function LogSection({
             {session.events.length === 0 ? (
                 <p>Nothing has been recorded yet.</p>
             ) : (
-                <ol className="authoring-choice-list" aria-label="Session log">
+                <ol className="record-list" aria-label="Session log">
                     {session.events.map((event) => (
                         <li key={event.event_id}>
                             <Link

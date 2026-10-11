@@ -78,7 +78,7 @@ export function WorldEntityDetailBoundary<T>({
     }
 
     return (
-        <>
+        <div className="world-detail__layout">
             {children(state.detail)}
             {lifecycle ? (
                 <EntityLifecyclePanel
@@ -88,7 +88,7 @@ export function WorldEntityDetailBoundary<T>({
                     onChanged={retry}
                 />
             ) : null}
-        </>
+        </div>
     )
 }
 

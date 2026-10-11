@@ -48,29 +48,27 @@ export function CampaignSettingsPage() {
     const [kept, setKept] = useState<Values | null>(null)
 
     return (
-        <main className="app-main">
-            <div className="authoring-page">
-                <h1 ref={headingRef} tabIndex={-1}>
-                    Campaign settings
-                </h1>
-                {!allowed ? (
-                    <p role="alert">You do not have permission to manage this campaign's settings.</p>
-                ) : state.kind === "loading" ? (
-                    <p role="status">Loading settings…</p>
-                ) : state.kind !== "ready" ? (
-                    <p role="alert">The campaign settings are not available.</p>
-                ) : (
-                    <SettingsForm
-                        key={state.data.row_version}
-                        settings={state.data}
-                        refreshing={state.refreshing}
-                        kept={kept}
-                        onKeep={setKept}
-                        refetch={refetch}
-                    />
-                )}
-            </div>
-        </main>
+        <div className="authoring-page">
+            <h1 ref={headingRef} tabIndex={-1}>
+                Campaign settings
+            </h1>
+            {!allowed ? (
+                <p role="alert">You do not have permission to manage this campaign's settings.</p>
+            ) : state.kind === "loading" ? (
+                <p role="status">Loading settings…</p>
+            ) : state.kind !== "ready" ? (
+                <p role="alert">The campaign settings are not available.</p>
+            ) : (
+                <SettingsForm
+                    key={state.data.row_version}
+                    settings={state.data}
+                    refreshing={state.refreshing}
+                    kept={kept}
+                    onKeep={setKept}
+                    refetch={refetch}
+                />
+            )}
+        </div>
     )
 }
 

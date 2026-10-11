@@ -291,8 +291,7 @@ export function KnowledgeClaimPage({
         ),
         sources: (
             <EntitySourcesSection
-                compact
-                hideHeading
+                embedded
                 campaignId={campaignId}
                 entityId={knowledgeItemId}
                 category="knowledge"
@@ -371,26 +370,28 @@ export function KnowledgeClaimPage({
                         current={nav.stage}
                         hrefFor={nav.stageHref}
                     />
-                    <div className="session-run__layout">
-                        <SectionNav
-                            ariaLabel={`${claimStageLabel(nav.stage)} sections`}
-                            sections={claimSectionsOf(nav.stage)}
-                            current={nav.section}
-                            hrefFor={nav.sectionHref}
-                        />
-                        <div className="session-run__content">
-                            {CLAIM_SECTIONS.map((section) => (
-                                <SectionPanel
-                                    key={section.key}
-                                    wide
-                                    headingId={claimHeadingId(section.key)}
-                                    label={section.label}
-                                    purpose={section.purpose}
-                                    active={section.key === nav.section}
-                                >
-                                    {body[section.key]}
-                                </SectionPanel>
-                            ))}
+                    <div className="staged-workspace">
+                        <div className="session-run__layout">
+                            <SectionNav
+                                ariaLabel={`${claimStageLabel(nav.stage)} sections`}
+                                sections={claimSectionsOf(nav.stage)}
+                                current={nav.section}
+                                hrefFor={nav.sectionHref}
+                            />
+                            <div className="session-run__content">
+                                {CLAIM_SECTIONS.map((section) => (
+                                    <SectionPanel
+                                        key={section.key}
+                                        wide
+                                        headingId={claimHeadingId(section.key)}
+                                        label={section.label}
+                                        purpose={section.purpose}
+                                        active={section.key === nav.section}
+                                    >
+                                        {body[section.key]}
+                                    </SectionPanel>
+                                ))}
+                            </div>
                         </div>
                     </div>
                 </LifecycleActionsProvider>

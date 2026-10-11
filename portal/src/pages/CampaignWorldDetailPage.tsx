@@ -160,7 +160,7 @@ export function CampaignWorldDetailPage() {
     return (
         <CharacterBoundary campaignId={campaignId} characterId={entityId}>
             {(character) => (
-                <div>
+                <div className="world-detail__layout">
                     <p>
                         <Link to={worldBackPath}>Back to World</Link>
                     </p>

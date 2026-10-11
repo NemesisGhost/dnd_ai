@@ -16,6 +16,16 @@ export const BLOCKED_REASON: Readonly<Record<string, string>> = {
         "a player or account is linked to this character. Remove those links first.",
 }
 
+// Reasons that only restate the record's status, which the lifecycle panel already shows. They
+// are grouped under a collapsed disclosure; every other reason (including any the portal does
+// not know yet) is actionable and shown inline. Grouping is presentation only: every reason the
+// server returns is displayed in one place or the other.
+export const STATUS_DERIVED_REASONS: ReadonlySet<string> = new Set([
+    "wrong_canon_status",
+    "entity_archived",
+    "entity_not_archived",
+])
+
 export function describeBlockedReason(reason: string): string {
     return BLOCKED_REASON[reason] ?? ERROR_CODE_MESSAGE[reason] ?? "not allowed right now."
 }

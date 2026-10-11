@@ -280,7 +280,7 @@ function BuildList({
             {data.builds.length === 0 ? (
                 <p>No builds yet.</p>
             ) : (
-                <ul className="authoring-choice-list">
+                <ul className="op-list">
                     {data.builds.map((build) => (
                         <li key={build.character_build_id}>
                             <strong>{build.label ?? "Untitled build"}</strong>

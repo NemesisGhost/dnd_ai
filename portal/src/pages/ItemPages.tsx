@@ -251,7 +251,7 @@ export function ItemsPage() {
                     {list.state.data.items.length === 0 ? (
                         <p>No items yet.</p>
                     ) : (
-                        <ul className="authoring-choice-list">
+                        <ul className="op-list">
                             {list.state.data.items.map((item) => (
                                 <li key={item.item_instance_id}>
                                     <Link to={worldItemPath(campaignId, item.item_instance_id)}>{item.name}</Link>{" "}

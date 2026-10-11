@@ -216,7 +216,7 @@ function Loaded({
             {view.versions.length === 0 ? (
                 <p>No versions saved yet.</p>
             ) : (
-                <ul className="authoring-choice-list">
+                <ul className="op-list">
                     {view.versions.map((v) => (
                         <li key={v.version_number}>
                             Version {v.version_number}, {new Date(v.created_at).toLocaleString()}

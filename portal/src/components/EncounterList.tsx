@@ -24,7 +24,7 @@ export function EncounterList({
     return (
         <>
             {items.length === 0 ? <p>{emptyText}</p> : null}
-            <ul className="authoring-choice-list">
+            <ul className="op-list">
                 {items.map((e) => (
                     <li key={e.encounter_id}>
                         <Link to={`${base}/${encodeURIComponent(e.encounter_id)}`}>

@@ -17,6 +17,7 @@ import { ReferenceCombobox } from "../components/authoring/ReferenceCombobox"
 import type { ReferenceOption } from "../components/authoring/ReferenceCombobox"
 import { WorldTimePicker } from "../components/authoring/WorldTimePicker"
 import { PartyInventoryPanel } from "../components/InventoryPanels"
+import { TableScroll } from "../components/TableScroll"
 import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
@@ -142,6 +143,7 @@ function MemberTable({
             {rows.length === 0 ? (
                 <p>{current ? "No current members." : "No past members."}</p>
             ) : (
+                <TableScroll label={current ? "Current members" : "Past members"}>
                 <table className="authoring-table">
                     <caption className="visually-hidden">
                         {current ? "Current members" : "Past members"}
@@ -182,6 +184,7 @@ function MemberTable({
                         ))}
                     </tbody>
                 </table>
+                </TableScroll>
             )}
             {current ? (
                 <ConfirmDialog

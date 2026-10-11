@@ -104,4 +104,28 @@ describe("DetailPanel", () => {
         expect(headings).toHaveLength(2)
         expect(headings[0].id).not.toBe(headings[1].id)
     })
+
+    it("follows the page outline with a nested heading level and a stable heading id", () => {
+        render(
+            <DetailPanel title="Sources" headingLevel={3} headingId="sources-heading">
+                <p>Body content</p>
+            </DetailPanel>,
+        )
+
+        const heading = screen.getByRole("heading", { level: 3, name: "Sources" })
+        expect(heading).toHaveAttribute("id", "sources-heading")
+        expect(screen.getByRole("region", { name: "Sources" })).toContainElement(heading)
+    })
+
+    it("keeps header actions beside the heading without changing the panel's name", () => {
+        render(
+            <DetailPanel title="Sources" headerActions={<button type="button">Add source</button>}>
+                <p>Body content</p>
+            </DetailPanel>,
+        )
+
+        expect(screen.getByRole("region", { name: "Sources" })).toContainElement(
+            screen.getByRole("button", { name: "Add source" }),
+        )
+    })
 })

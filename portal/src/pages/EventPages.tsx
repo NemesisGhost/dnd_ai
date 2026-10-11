@@ -285,7 +285,7 @@ function EventBody({
                 {event.effects.length === 0 ? (
                     <p>Nothing: this event only records what happened.</p>
                 ) : (
-                    <ul className="authoring-choice-list">
+                    <ul className="record-list">
                         {event.effects.map((effect, index) => (
                             <li key={index}>
                                 {label(effect.component)}: {show(effect.previous)} to {show(effect.new)}

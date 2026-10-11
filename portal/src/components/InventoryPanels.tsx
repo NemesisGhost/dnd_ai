@@ -3,6 +3,7 @@ import { characterInventoryPath, partyInventoryPath } from "../api/items"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import type { CharacterInventoryItem, PartyInventory } from "../types/items"
 import "./authoring/authoring.css"
+import { DetailPanel } from "./DetailPanel"
 
 const itemPath = (campaignId: string, itemId: string): string =>
     `/app/${encodeURIComponent(campaignId)}/world/item/${encodeURIComponent(itemId)}`
@@ -20,7 +21,7 @@ interface Row {
 function ItemList({ campaignId, items }: { campaignId: string; items: Row[] }) {
     if (items.length === 0) return <p>Nothing carried.</p>
     return (
-        <ul className="authoring-choice-list">
+        <ul className="record-list">
             {items.map((item) => (
                 <li key={item.item_instance_id}>
                     <Link to={itemPath(campaignId, item.item_instance_id)}>{item.name}</Link>
@@ -49,10 +50,9 @@ export function CharacterInventoryPanel({
     )
     if (state.kind !== "ready") return null
     return (
-        <section aria-labelledby={`inventory-${characterId}`}>
-            <h2 id={`inventory-${characterId}`}>Inventory</h2>
+        <DetailPanel title="Inventory" headingId={`inventory-${characterId}`}>
             <ItemList campaignId={campaignId} items={state.data} />
-        </section>
+        </DetailPanel>
     )
 }
 

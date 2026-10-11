@@ -14,9 +14,10 @@ import type {
     SupersedeBody,
 } from "../types/entityLifecycle"
 import { validateReason } from "../utils/authoringValidation"
-import { describeBlockedReason } from "../utils/blockedReason"
+import { describeBlockedReason, STATUS_DERIVED_REASONS } from "../utils/blockedReason"
 import { useAnnounce } from "./authoring/announcer"
 import { ConfirmDialog } from "./authoring/ConfirmDialog"
+import { DetailPanel } from "./DetailPanel"
 import { LifecycleBadge, MutationStatusMessage } from "./authoring/feedback"
 import { EntitySourcesSection } from "./EntitySourcesSection"
 import { SupersedeEntityDialog } from "./SupersedeEntityDialog"
@@ -173,10 +174,6 @@ interface PanelProps {
     view: EntityLifecycleView
     refetch: () => Promise<void>
     onChanged?: () => void
-    // One compact row (the next step, and the rest under "More") for a page that carries the
-    // lifecycle in a section of its own. The status and the unavailable-action explanations are
-    // left out: the page states the status itself.
-    compact?: boolean
     // Set while the page holds unsaved edits to the record: every action then asks first, and says
     // the edits are not part of the change.
     unsavedEdits?: boolean
@@ -407,9 +404,8 @@ export function LifecycleReviewAction() {
     )
 }
 
-// Every action the server offers: the next step, then the rest under "More" (compact), or all of
-// them as plain buttons with the unavailable ones explained (not compact).
-export function LifecycleActionList({ compact = false }: { compact?: boolean }) {
+// Every action the server offers: the next step as the primary button, the rest under "More".
+export function LifecycleActionList() {
     const { view, available, pending, open, errorNode, inlineError, moreRef } = useActions()
     const visible = ORDER.filter((code) => available.has(code))
     // The next forward step. When there is none, the step that leads out of a dead end is the
@@ -423,7 +419,6 @@ export function LifecycleActionList({ compact = false }: { compact?: boolean }) 
               ? "return_to_draft"
               : undefined)
     const more = visible.filter((code) => code !== primary)
-    const blocked = view.blocked_actions.filter((b) => b.action !== "all")
     const button = (code: string, primaryStyle: boolean) => (
         <button
             key={code}
@@ -435,62 +430,74 @@ export function LifecycleActionList({ compact = false }: { compact?: boolean }) 
             {actionButtonLabel(code)}
         </button>
     )
-    if (compact) {
-        return (
-            <div className="lifecycle-compact" role="group" aria-label="Lifecycle">
-                {primary !== undefined ? button(primary, true) : null}
-                {more.length > 0 ? (
-                    <details className="lifecycle-compact__more" ref={moreRef}>
-                        <summary className="authoring-button">More</summary>
-                        <div className="lifecycle-compact__menu">{more.map((code) => button(code, false))}</div>
-                    </details>
-                ) : null}
-                {visible.length === 0 ? (
-                    <span className="authoring-note">No lifecycle action is available to you right now.</span>
-                ) : null}
-                {inlineError ? <div className="lifecycle-compact__error">{errorNode}</div> : null}
-            </div>
-        )
-    }
+    return (
+        <div className="lifecycle-compact" role="group" aria-label="Lifecycle">
+            {primary !== undefined ? button(primary, true) : null}
+            {more.length > 0 ? (
+                <details className="lifecycle-compact__more" ref={moreRef}>
+                    <summary className="authoring-button">More</summary>
+                    <div className="lifecycle-compact__menu">{more.map((code) => button(code, false))}</div>
+                </details>
+            ) : null}
+            {visible.length === 0 ? (
+                <span className="authoring-note">No lifecycle action is available to you right now.</span>
+            ) : null}
+            {inlineError ? <div className="lifecycle-compact__error">{errorNode}</div> : null}
+        </div>
+    )
+}
+
+// Why actions are unavailable, from the server's `blocked_actions`. A reason a person can act on
+// (a parent that is not published yet, a review in progress, anything not recognised) is shown
+// next to the actions. The reasons that only restate the status are listed under a collapsed
+// disclosure. A host that already explains the blockers itself passes `inlineBlockers={false}`
+// and gets every reason in the disclosure; nothing the server sent is ever dropped.
+export function LifecycleBlockedReasons({ inlineBlockers = true }: { inlineBlockers?: boolean }) {
+    const { view } = useActions()
+    const blocked = view.blocked_actions.filter((b) => b.action !== "all")
+    const actionable = inlineBlockers ? blocked.filter((b) => !STATUS_DERIVED_REASONS.has(b.reason)) : []
+    const collapsed = blocked.filter((b) => !actionable.includes(b))
+    const line = (b: (typeof blocked)[number]) => (
+        <li key={b.action}>
+            {actionLabel(b.action)} unavailable: {describeBlockedReason(b.reason)}
+        </li>
+    )
     return (
         <>
-            {inlineError ? errorNode : null}
-            {visible.length > 0 ? (
-                <div className="authoring-actions">{visible.map((code) => button(code, false))}</div>
-            ) : (
-                <p className="authoring-note">No lifecycle actions are available right now.</p>
-            )}
-            {blocked.length > 0 ? (
-                <ul className="authoring-note" aria-label="Unavailable lifecycle actions">
-                    {blocked.map((b) => (
-                        <li key={b.action}>
-                            {actionLabel(b.action)} unavailable: {describeBlockedReason(b.reason)}
-                        </li>
-                    ))}
+            {actionable.length > 0 ? (
+                <ul className="authoring-note lifecycle-blocked" aria-label="Actions that need something first">
+                    {actionable.map(line)}
                 </ul>
+            ) : null}
+            {collapsed.length > 0 ? (
+                <details className="disclosure disclosure--plain">
+                    <summary>
+                        <span>Why other actions are unavailable ({collapsed.length})</span>
+                        <span className="disclosure__indicator" aria-hidden="true" />
+                    </summary>
+                    <ul className="authoring-note" aria-label="Unavailable lifecycle actions">
+                        {collapsed.map(line)}
+                    </ul>
+                </details>
             ) : null}
         </>
     )
 }
 
 export function LifecycleControls(props: PanelProps) {
-    const { view, compact = false } = props
+    const { view } = props
     return (
         <LifecycleActionsProvider {...props}>
-            {compact ? (
-                <LifecycleActionList compact />
-            ) : (
-                <section className="authoring-section" aria-labelledby="entity-lifecycle-heading">
-                    <h2 id="entity-lifecycle-heading">Lifecycle</h2>
-                    <p>
-                        <LifecycleBadge status={view.canon_status} />{" "}
-                        {view.lifecycle_status === "archived" ? <LifecycleBadge status="archived" /> : null}
-                        <span className="authoring-field__hint"> {STATUS_LABEL[view.canon_status] ?? view.canon_status}</span>
-                    </p>
-                    {view.superseded_by !== null ? <p>Replaced by {view.superseded_by.canonical_name}.</p> : null}
-                    <LifecycleActionList />
-                </section>
-            )}
+            <DetailPanel title="Lifecycle" headingId="entity-lifecycle-heading">
+                <p>
+                    <LifecycleBadge status={view.canon_status} />{" "}
+                    {view.lifecycle_status === "archived" ? <LifecycleBadge status="archived" /> : null}
+                    <span className="authoring-field__hint"> {STATUS_LABEL[view.canon_status] ?? view.canon_status}</span>
+                </p>
+                {view.superseded_by !== null ? <p>Replaced by {view.superseded_by.canonical_name}.</p> : null}
+                <LifecycleActionList />
+                <LifecycleBlockedReasons />
+            </DetailPanel>
         </LifecycleActionsProvider>
     )
 }
