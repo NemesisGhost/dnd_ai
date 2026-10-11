@@ -98,8 +98,27 @@ describe("ItemDefinitionsPage", () => {
         expect(screen.queryByText(/Longsword/)).not.toBeInTheDocument()
         expect(screen.getByText(/Moonblade \(Weapon, rare\)/)).toBeInTheDocument()
         fireEvent.click(screen.getByRole("checkbox", { name: /only this world/ }))
+        await screen.findByText(/Longsword/)
         fireEvent.change(screen.getByRole("combobox", { name: "Category" }), { target: { value: "potion" } })
         expect(screen.getByText("No item definitions match.")).toBeInTheDocument()
+    })
+
+    it("reads its filters from the address", async () => {
+        render("/app/c1/item-definitions?homebrew=1&category=weapon")
+        await screen.findByText(/Moonblade \(Weapon/)
+        expect(screen.queryByText(/Longsword/)).not.toBeInTheDocument()
+        expect(screen.getByRole("checkbox", { name: /only this world/ })).toBeChecked()
+        expect(screen.getByRole("combobox", { name: "Category" })).toHaveValue("weapon")
+    })
+
+    it("keeps the filters when the form returns to the list", async () => {
+        render("/app/c1/item-definitions?homebrew=1")
+        fireEvent.click(await screen.findByRole("link", { name: "Edit Moonblade" }))
+        const crumb = await screen.findByRole("link", { name: "Item definitions" })
+        expect(crumb).toHaveAttribute("href", "/app/c1/item-definitions?homebrew=1")
+        fireEvent.click(crumb)
+        await screen.findByText(/Moonblade \(Weapon/)
+        expect(screen.queryByText(/Longsword/)).not.toBeInTheDocument()
     })
 
     it("refuses people without canon.edit", async () => {

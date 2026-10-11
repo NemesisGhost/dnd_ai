@@ -3,7 +3,6 @@ import type { KeyboardEvent as ReactKeyboardEvent } from "react"
 import { NavLink, useMatch } from "react-router"
 import type { LucideIcon } from "lucide-react"
 import {
-  Backpack,
   BookOpen,
   CalendarDays,
   ClipboardCheck,
@@ -26,6 +25,7 @@ import { canCreateWorlds } from "../utils/worldAccess"
 import { AccessNavGroup } from "./AccessNavGroup"
 import { CampaignHomeNavGroup } from "./CampaignHomeNavGroup"
 import { DisabledNavItem } from "./DisabledNavItem"
+import { ItemsNavGroup } from "./ItemsNavGroup"
 import { KnowledgeNavGroup } from "./KnowledgeNavGroup"
 import { SELECT_CAMPAIGN_FIRST } from "./navigationReasons"
 import { WorldsNavGroup } from "./WorldsNavGroup"
@@ -55,12 +55,6 @@ const campaignNavigationItems: NavigationItem[] = [
     path: "items",
     label: "Items",
     icon: Package,
-    capability: "canon.edit",
-  },
-  {
-    path: "item-definitions",
-    label: "Item definitions",
-    icon: Backpack,
     capability: "canon.edit",
   },
 ]
@@ -276,6 +270,18 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
                 ) {
                   return (
                     <KnowledgeNavGroup
+                      key={item.path}
+                      campaignPath={campaignPath}
+                      collapsed={collapsed}
+                      onNavigate={close}
+                    />
+                  )
+                }
+                // Items expands into Inventory and Definitions (the capability filter above
+                // already limits it to `canon.edit`).
+                if (item.path === "items" && campaignPath !== null) {
+                  return (
+                    <ItemsNavGroup
                       key={item.path}
                       campaignPath={campaignPath}
                       collapsed={collapsed}

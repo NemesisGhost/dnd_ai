@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { Link, useNavigate, useParams } from "react-router"
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router"
 import {
     createItemDefinition,
     itemDefinitionOptionsPath,
@@ -14,6 +14,7 @@ import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
+import { useDefinitionsBackPath } from "../hooks/useItemsBackPath"
 import { usePageArrival } from "../hooks/usePageArrival"
 import type {
     ItemDefinition,
@@ -39,8 +40,18 @@ const campaignBase = (campaignId: string): string => `/app/${encodeURIComponent(
 export function ItemDefinitionsPage() {
     const { campaignId = "" } = useParams()
     const canEdit = useCampaignCapability(campaignId, "canon.edit")
-    const [category, setCategory] = useState("")
-    const [homebrewOnly, setHomebrewOnly] = useState(false)
+    // The filters live in the address (`?category=&homebrew=1`), so Back, a reload and a shared
+    // link restore them.
+    const [params, setParams] = useSearchParams()
+    const location = useLocation()
+    const category = params.get("category") ?? ""
+    const homebrewOnly = params.get("homebrew") === "1"
+    const setFilter = (key: string, value: string | null) => {
+        const next = new URLSearchParams(params)
+        if (value === null || value === "") next.delete(key)
+        else next.set(key, value)
+        setParams(next, { replace: true })
+    }
     const options = useAuthoringResource<ItemDefinitionOptions>(itemDefinitionOptionsPath(campaignId))
     const list = useAuthoringResource<ItemDefinitionList>(itemDefinitionsPath(campaignId))
     const headingRef = usePageArrival(list.state.kind === "ready")
@@ -68,7 +79,11 @@ export function ItemDefinitionsPage() {
                         belong to this world only.
                     </p>
                     <p>
-                        <Link className="authoring-button" to={`${campaignBase(campaignId)}/new`}>
+                        <Link
+                            className="authoring-button"
+                            to={`${campaignBase(campaignId)}/new`}
+                            state={{ definitionsSearch: location.search }}
+                        >
                             New item definition
                         </Link>
                     </p>
@@ -79,13 +94,13 @@ export function ItemDefinitionsPage() {
                             value={category}
                             placeholder="All categories"
                             options={options.state.kind === "ready" ? options.state.data.categories : []}
-                            onChange={setCategory}
+                            onChange={(value) => setFilter("category", value)}
                         />
                         <label>
                             <input
                                 type="checkbox"
                                 checked={homebrewOnly}
-                                onChange={(event) => setHomebrewOnly(event.target.checked)}
+                                onChange={(event) => setFilter("homebrew", event.target.checked ? "1" : null)}
                             />{" "}
                             Show only this world&apos;s definitions
                         </label>
@@ -103,6 +118,7 @@ export function ItemDefinitionsPage() {
                                             {" "}
                                             <Link
                                                 to={`${campaignBase(campaignId)}/${encodeURIComponent(item.item_definition_id)}`}
+                                                state={{ definitionsSearch: location.search }}
                                             >
                                                 Edit {item.name}
                                             </Link>
@@ -123,6 +139,7 @@ export function ItemDefinitionsPage() {
 // /app/:campaignId/item-definitions/new and /item-definitions/:definitionId
 export function ItemDefinitionFormPage() {
     const { campaignId = "", definitionId } = useParams()
+    const listPath = useDefinitionsBackPath(campaignId)
     const canEdit = useCampaignCapability(campaignId, "canon.edit")
     const options = useAuthoringResource<ItemDefinitionOptions>(itemDefinitionOptionsPath(campaignId))
     const existing = useAuthoringResource<ItemDefinition>(
@@ -133,9 +150,20 @@ export function ItemDefinitionFormPage() {
     const headingRef = usePageArrival(ready)
     return (
         <section className="authoring-page" aria-labelledby="item-definition-heading">
-            <p className="authoring-page__breadcrumb">
-                <Link to={campaignBase(campaignId)}>Item definitions</Link>
-            </p>
+            <nav aria-label="Breadcrumb" className="authoring-page__breadcrumb">
+                <ol className="session-run__breadcrumb">
+                    <li>
+                        <Link to={listPath}>Item definitions</Link>
+                    </li>
+                    <li aria-current="page">
+                        {definitionId === undefined
+                            ? "New item definition"
+                            : existing.state.kind === "ready"
+                              ? existing.state.data.name
+                              : "Edit item definition"}
+                    </li>
+                </ol>
+            </nav>
             <h1 id="item-definition-heading" ref={headingRef} tabIndex={-1}>
                 {definitionId === undefined ? "New item definition" : "Edit item definition"}
             </h1>
@@ -155,6 +183,7 @@ export function ItemDefinitionFormPage() {
                     options={options.state.data}
                     existing={existing.state.kind === "ready" ? existing.state.data : null}
                     refetch={existing.refetch}
+                    listPath={listPath}
                 />
             )}
         </section>
@@ -166,11 +195,14 @@ function DefinitionForm({
     options,
     existing,
     refetch,
+    listPath,
 }: {
     campaignId: string
     options: ItemDefinitionOptions
     existing: ItemDefinition | null
     refetch: () => Promise<void>
+    // The list the person came from, with its filters.
+    listPath: string
 }) {
     const { reload } = useSession()
     const announce = useAnnounce()
@@ -201,7 +233,7 @@ function DefinitionForm({
         onSuccess: async () => {
             if (existing === null) {
                 announce("Item definition created")
-                void navigate(campaignBase(campaignId))
+                void navigate(listPath)
                 return
             }
             await refetch()

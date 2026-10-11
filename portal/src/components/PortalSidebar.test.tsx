@@ -138,14 +138,24 @@ afterEach(() => {
     vi.unstubAllGlobals()
 })
 
-describe("PortalSidebar item definitions link", () => {
-    it("is offered only on a campaign that grants canon.edit", () => {
-        const editor: CampaignContext = { ...first, capabilities: ["canon.edit"] }
+describe("PortalSidebar Items group", () => {
+    const editor: CampaignContext = { ...first, capabilities: ["canon.edit"] }
+    const editorBootstrap = () => makeBootstrap({ campaigns: [editor, second] })
+
+    it("is offered only on a campaign that grants canon.edit, with Inventory and Definitions inside", () => {
         const { unmount } = renderSidebar("/app/campaign-a/home", {
             status: "authenticated",
-            bootstrap: makeBootstrap({ campaigns: [editor, second] }),
+            bootstrap: editorBootstrap(),
         })
-        expect(within(nav()).getByRole("link", { name: "Item definitions" })).toHaveAttribute(
+        expect(within(nav()).getByRole("button", { name: "Items" })).toHaveAttribute("aria-expanded", "false")
+        // No separate top-level destination for definitions or the inventory.
+        expect(within(nav()).queryByRole("link", { name: "Item definitions" })).not.toBeInTheDocument()
+        fireEvent.click(within(nav()).getByRole("button", { name: "Items" }))
+        expect(within(nav()).getByRole("link", { name: "Inventory" })).toHaveAttribute(
+            "href",
+            "/app/campaign-a/items",
+        )
+        expect(within(nav()).getByRole("link", { name: "Definitions" })).toHaveAttribute(
             "href",
             "/app/campaign-a/item-definitions",
         )
@@ -153,15 +163,39 @@ describe("PortalSidebar item definitions link", () => {
             "href",
             "/app/campaign-a/review",
         )
-        expect(within(nav()).getByRole("link", { name: "Items" })).toHaveAttribute(
-            "href",
-            "/app/campaign-a/items",
-        )
         unmount()
         renderSidebar("/app/campaign-a/home")
-        expect(within(nav()).queryByRole("link", { name: "Item definitions" })).not.toBeInTheDocument()
-        expect(within(nav()).queryByRole("link", { name: "Items" })).not.toBeInTheDocument()
+        expect(within(nav()).queryByRole("button", { name: "Items" })).not.toBeInTheDocument()
+        expect(within(nav()).queryByRole("link", { name: "Inventory" })).not.toBeInTheDocument()
+        expect(within(nav()).queryByRole("link", { name: "Definitions" })).not.toBeInTheDocument()
         expect(within(nav()).queryByRole("link", { name: "Review" })).not.toBeInTheDocument()
+    })
+
+    it.each([
+        ["/app/campaign-a/items", "Inventory"],
+        ["/app/campaign-a/items/new", "Inventory"],
+        ["/app/campaign-a/items/i1", "Inventory"],
+        ["/app/campaign-a/items/i1/edit", "Inventory"],
+        ["/app/campaign-a/item-definitions", "Definitions"],
+        ["/app/campaign-a/item-definitions/new", "Definitions"],
+        ["/app/campaign-a/item-definitions/d1", "Definitions"],
+    ])("opens on %s with %s current", (path, current) => {
+        renderSidebar(path, { status: "authenticated", bootstrap: editorBootstrap() })
+        expect(within(nav()).getByRole("button", { name: "Items" })).toHaveAttribute("aria-expanded", "true")
+        expect(within(nav()).getByRole("link", { name: current })).toHaveAttribute("aria-current", "page")
+        const other = current === "Inventory" ? "Definitions" : "Inventory"
+        expect(within(nav()).getByRole("link", { name: other })).not.toHaveAttribute("aria-current")
+    })
+
+    it("does not select Items for an item opened from the World page", () => {
+        renderSidebar("/app/campaign-a/world/item/i1", {
+            status: "authenticated",
+            bootstrap: editorBootstrap(),
+        })
+        expect(within(nav()).getByRole("button", { name: "Items" })).toHaveAttribute("aria-expanded", "false")
+        expect(within(nav()).getByRole("link", { name: "Inventory", hidden: true })).not.toHaveAttribute(
+            "aria-current",
+        )
     })
 })
 
