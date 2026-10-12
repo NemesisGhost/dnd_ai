@@ -7,6 +7,7 @@ const chest = { entity_id: "c1", name: "Oak chest", entity_type_code: "item_inst
 
 describe("item state wording", () => {
     const blank = {
+        last_event_id: null as string | null,
         holder: null,
         container: null,
         location: null,
@@ -20,6 +21,10 @@ describe("item state wording", () => {
 
     it("treats an item with nothing but the read model's defaults as having no recorded state", () => {
         expect(hasRecordedState(blank)).toBe(false)
+    })
+
+    it("counts a last event as recorded activity even when the item was left unplaced", () => {
+        expect(hasRecordedState({ ...blank, last_event_id: "e5" })).toBe(true)
     })
 
     it("counts any fact that can exist only as a record, whatever the last-event token says", () => {

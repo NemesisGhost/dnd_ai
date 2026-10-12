@@ -80,6 +80,14 @@ function Loaded({ campaignId, itemId, origin }: Props) {
     const lifecycle = useAuthoringResource<EntityLifecycleView>(entityLifecyclePath(campaignId, itemId))
     const provenance = useAuthoringResource<Provenance>(provenancePath(campaignId, itemId))
     const headingRef = usePageArrival(view.state.kind === "ready", "path")
+    // The last item read that succeeded for this item. A refresh that fails recoverably (a network
+    // or server error) keeps the workspace mounted on it, so unsent input in any section survives
+    // and the person can retry; a denied or unavailable answer, or a loading state, discards it and
+    // fails closed. The workspace is keyed by item, so this never outlives the record or campaign.
+    const [kept, setKept] = useState<ItemView | null>(null)
+    if (view.state.kind === "ready" && kept !== view.state.data) setKept(view.state.data)
+    if ((view.state.kind === "denied" || view.state.kind === "unavailable") && kept !== null) setKept(null)
+    const stale = view.state.kind === "error" && kept !== null
 
     if (view.state.kind === "loading") {
         return (
@@ -88,7 +96,7 @@ function Loaded({ campaignId, itemId, origin }: Props) {
             </section>
         )
     }
-    if (view.state.kind !== "ready") {
+    if (view.state.kind !== "ready" && !stale) {
         const missing = view.state.kind === "unavailable" || view.state.kind === "denied"
         return (
             <section className="authoring-page" aria-labelledby="item-workspace-heading">
@@ -113,7 +121,8 @@ function Loaded({ campaignId, itemId, origin }: Props) {
             campaignId={campaignId}
             itemId={itemId}
             origin={origin}
-            data={view.state.data}
+            data={view.state.kind === "ready" ? view.state.data : (kept as ItemView)}
+            refreshFailed={stale}
             refetchItem={view.refetch}
             lifecycle={lifecycle}
             provenance={provenance}
@@ -128,11 +137,14 @@ function Workspace({
     origin,
     data,
     refetchItem,
+    refreshFailed,
     lifecycle,
     provenance,
     headingRef,
 }: Props & {
     data: ItemView
+    // The last refresh failed; `data` is the last read that succeeded.
+    refreshFailed: boolean
     refetchItem: () => Promise<void>
     lifecycle: UseAuthoringResourceResult<EntityLifecycleView>
     provenance: UseAuthoringResourceResult<Provenance>
@@ -153,7 +165,13 @@ function Workspace({
     const guidance = itemGuidance(data)
     const [sourcesDirty, setSourcesDirty] = useState(false)
     const drafts = useItemDrafts()
-    const ops = useItemOperations({ campaignId, view: data, when: drafts.when, refetch: refetchItem })
+    const ops = useItemOperations({
+        campaignId,
+        view: data,
+        when: drafts.when,
+        consumeTime: () => drafts.setWhen(""),
+        refetch: refetchItem,
+    })
 
     // Move focus to the section heading when the section changes after arrival (a link, Back or
     // Forward), so a keyboard or screen reader user lands on the new content.
@@ -222,6 +240,17 @@ function Workspace({
                 guidanceHref={guidance === null ? null : nav.sectionHref(guidance.section)}
                 linkState={linkState}
             />
+            {refreshFailed ? (
+                <div className="authoring-message authoring-message--warning" role="alert">
+                    <p>
+                        The latest item information could not be loaded, so what is shown may be out of date. What
+                        you have typed is kept.
+                    </p>
+                    <button type="button" className="authoring-button" onClick={() => void refetchItem()}>
+                        Try again
+                    </button>
+                </div>
+            ) : null}
             <ItemStateSummary view={data} />
             {!settled ? (
                 <p role="status">Loading the item…</p>

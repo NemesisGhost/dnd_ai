@@ -3,7 +3,7 @@ import type { ReactNode } from "react"
 import { runItemOperation } from "../../api/items"
 import { useSession } from "../../context/SessionContext"
 import { useAuthoringMutation } from "../../hooks/useAuthoringMutation"
-import type { ItemView } from "../../types/items"
+import type { ItemView, OperationBody } from "../../types/items"
 import { useAnnounce } from "../authoring/announcer"
 import { MutationStatusMessage, StaleWriteNotice } from "../authoring/feedback"
 import type { ItemSection } from "./itemStages"
@@ -33,6 +33,13 @@ export interface ItemCommand {
     after?: () => void
 }
 
+// A command as submitted: the complete request (the operation's body with the item token and the
+// chosen time) is captured here, once. A retry replays exactly this, with its idempotency key; a
+// deliberate new submission with different data builds a new one and so gets a new key.
+interface PreparedCommand extends ItemCommand {
+    request: OperationBody
+}
+
 export interface ItemOperations {
     run: (command: ItemCommand) => void
     busy: boolean
@@ -50,38 +57,33 @@ export function useItemOperations({
     campaignId,
     view,
     when,
+    consumeTime,
     refetch,
 }: {
     campaignId: string
     view: ItemView
     when: string
+    // Clears the chosen time once a command has used it, so the next one defaults to the campaign clock.
+    consumeTime: () => void
     refetch: () => Promise<void>
 }): ItemOperations {
     const { reload } = useSession()
     const announce = useAnnounce()
     const [problem, setProblem] = useState<{ section: ItemSection; message: string } | null>(null)
-    const current = useRef<ItemCommand | null>(null)
+    const current = useRef<PreparedCommand | null>(null)
     // The section whose command last ran, so its refusal is shown there and nowhere else.
     const [errorSection, setErrorSection] = useState<ItemSection | null>(null)
 
-    const mutation = useAuthoringMutation<ItemCommand, unknown>({
+    const mutation = useAuthoringMutation<PreparedCommand, unknown>({
         scopeKey: `item-operation:${view.item_instance_id}`,
         request: (command, ctx) =>
-            runItemOperation(
-                campaignId,
-                view.item_instance_id,
-                command.operation,
-                {
-                    expected_last_event_id: view.last_event_id,
-                    ...(when === "" ? {} : { world_time_id: when }),
-                    ...command.body,
-                },
-                ctx,
-            ),
+            runItemOperation(campaignId, view.item_instance_id, command.operation, command.request, ctx),
         onSuccess: async () => {
             const command = current.current
             current.current = null
             command?.after?.()
+            // A refused or failed command keeps its time; only a confirmed one consumes it.
+            consumeTime()
             await refetch()
             if (command !== null && command !== undefined) announce(command.done)
         },
@@ -92,9 +94,17 @@ export function useItemOperations({
         busy: mutation.status.kind === "pending",
         run(command) {
             setProblem(null)
-            current.current = command
+            const prepared: PreparedCommand = {
+                ...command,
+                request: {
+                    expected_last_event_id: view.last_event_id,
+                    ...(when === "" ? {} : { world_time_id: when }),
+                    ...command.body,
+                },
+            }
+            current.current = prepared
             setErrorSection(command.section)
-            mutation.submit(command)
+            mutation.submit(prepared)
         },
         reject(section, message) {
             setProblem({ section, message })

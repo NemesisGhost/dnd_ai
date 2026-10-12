@@ -6,13 +6,15 @@ import { humanizeCode } from "./humanize"
 // value: a field the record does not hold is absent, never replaced by a default.
 
 // Whether the timeline records anything about the item. The authoring read fills in a quantity of 1
-// and "not equipped" when there is no state row (`COALESCE`), so those defaults are not evidence,
-// and the item's last-event token cannot be the test either: rows written without an event (seed
-// data, an older import) still hold real custody. Only a fact that can exist solely as a record
-// counts: a place, an owner, an attunement, damage, a non-default quantity, equipped or destroyed.
+// and "not equipped" when there is no state row (`COALESCE`), so those defaults are not evidence.
+// A last-event token proves a command ran (even one that left the item unplaced, which is a
+// supported release). Rows written without an event (seed data, an older import) still hold real
+// custody, so the facts that can exist solely as a record count too: a place, an owner, an
+// attunement, damage, a non-default quantity, equipped or destroyed.
 export function hasRecordedState(
     view: Pick<
         ItemView,
+        | "last_event_id"
         | "holder"
         | "container"
         | "location"
@@ -25,6 +27,7 @@ export function hasRecordedState(
     >,
 ): boolean {
     return (
+        view.last_event_id !== null ||
         isPlaced(view) ||
         view.owner !== null ||
         view.attuned_to !== null ||

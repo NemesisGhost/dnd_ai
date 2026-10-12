@@ -423,6 +423,16 @@ describe("in play state", () => {
         expect(within(summary).getByText("Carried by Aldric")).toBeInTheDocument()
     })
 
+    it("keeps the recorded quantity of an item that was released to no place", async () => {
+        setup("/app/c1/items/i1", { current: view({ holder: null, owner: null, last_event_id: "e5", quantity: 1 }) })
+        await waitReady()
+        const summary = screen.getByRole("heading", { name: "In play" }).closest("section")!
+        expect(within(summary).queryByText(/Not in play yet/)).not.toBeInTheDocument()
+        expect(within(summary).getByText("Quantity")).toBeInTheDocument()
+        expect(within(summary).getByText("Not placed")).toBeInTheDocument()
+        expect(within(summary).getByText("No damage recorded")).toBeInTheDocument()
+    })
+
     it("says no damage is recorded rather than showing a default condition", async () => {
         setup("/app/c1/items/i1")
         await waitReady()
@@ -666,5 +676,204 @@ describe("give versus place", () => {
         await waitReady()
         const summary = screen.getByRole("heading", { name: "In play" }).closest("section")!
         expect(within(summary).getByText("Lying at Stonebridge")).toBeInTheDocument()
+    })
+
+    describe("time and retry", () => {
+        const TIME_LABEL = "When this happens (in-world)"
+        const picker = () => screen.findByRole("combobox", { name: TIME_LABEL })
+        const timeValue = () => screen.getByRole("combobox", { name: TIME_LABEL })
+
+        it("uses a chosen time once, then defaults to the campaign clock", async () => {
+            const { server, state } = setup("/app/c1/items/i1?section=equipment")
+            await waitReady()
+            fireEvent.change(await picker(), { target: { value: "t1" } })
+            server.on("POST", OP("equip"), () => {
+                state.current = view({ is_equipped: true, last_event_id: "e2" })
+                return { body: state.current }
+            })
+            server.on("POST", OP("unequip"), () => ({ body: view({ last_event_id: "e3" }) }))
+            fireEvent.click(screen.getByRole("button", { name: "Equip" }))
+            await waitFor(() => expect(server.callsTo("POST", OP("equip"))).toHaveLength(1))
+            await screen.findByRole("button", { name: "Unequip" })
+            await waitFor(() => expect(timeValue()).toHaveValue(""))
+            fireEvent.click(screen.getByRole("button", { name: "Unequip" }))
+            await waitFor(() => expect(server.callsTo("POST", OP("unequip"))).toHaveLength(1))
+            expect(server.callsTo("POST", OP("equip"))[0]!.body).toEqual({
+                expected_last_event_id: "e1",
+                world_time_id: "t1",
+            })
+            expect(server.callsTo("POST", OP("unequip"))[0]!.body).toEqual({ expected_last_event_id: "e2" })
+        })
+
+        it.each(["give", "place", "condition"])("consumes the time after a successful %s", async (name) => {
+            const { server } = setup(`/app/c1/items/i1?section=${name === "condition" ? "condition" : "move"}`)
+            await waitReady()
+            fireEvent.change(await picker(), { target: { value: "t1" } })
+            if (name === "condition") {
+                const form = await within(panel("condition")).findByRole("form", { name: "Change this item" })
+                fireEvent.change(within(form).getByRole("textbox", { name: /Amount/ }), { target: { value: "5" } })
+                fireEvent.click(within(form).getByRole("button", { name: "Damage" }))
+                await waitFor(() => expect(server.callsTo("POST", OP("damage"))).toHaveLength(1))
+            } else if (name === "give") {
+                fireEvent.click(await screen.findByRole("radio", { name: "Give to a character" }))
+                const form = screen.getByRole("form", { name: "Give this item to a character" })
+                fireEvent.focus(within(form).getByRole("combobox", { name: "Give to" }))
+                fireEvent.click(await within(form).findByRole("option", { name: /Brea/ }))
+                fireEvent.click(within(form).getByRole("radio", { name: "Keep the current owner (Aldric)" }))
+                fireEvent.click(within(form).getByRole("button", { name: "Give item" }))
+                await waitFor(() => expect(server.callsTo("POST", OP("transfer"))).toHaveLength(1))
+            } else {
+                fireEvent.click(await screen.findByRole("radio", { name: "Place at a location" }))
+                const form = screen.getByRole("form", { name: "Place this item at a location" })
+                fireEvent.focus(within(form).getByRole("combobox", { name: "Place at" }))
+                fireEvent.click(await within(form).findByRole("option", { name: /Stonebridge/ }))
+                fireEvent.click(within(form).getByRole("button", { name: "Place item" }))
+                await waitFor(() => expect(server.callsTo("POST", OP("transfer"))).toHaveLength(1))
+            }
+            expect(server.callsTo("POST", /\/items\/i1\//)[0]!.body).toMatchObject({ world_time_id: "t1" })
+            await waitFor(() => expect(timeValue()).toHaveValue(""))
+        })
+
+        it("keeps the chosen time after a refused or stale command", async () => {
+            const { server } = setup("/app/c1/items/i1?section=equipment")
+            await waitReady()
+            fireEvent.change(await picker(), { target: { value: "t1" } })
+            server.on("POST", OP("equip"), {
+                status: 409,
+                body: { error: { code: "item_attuned", message: "m", correlation_id: "c" } },
+            })
+            fireEvent.click(screen.getByRole("button", { name: "Equip" }))
+            await screen.findByText("End the attunement first.")
+            expect(timeValue()).toHaveValue("t1")
+            server.on("POST", OP("equip"), {
+                status: 409,
+                body: { error: { code: "stale_write", message: "m", correlation_id: "c" } },
+            })
+            fireEvent.click(screen.getByRole("button", { name: "Equip" }))
+            await screen.findByRole("button", { name: /Load latest/i })
+            expect(timeValue()).toHaveValue("t1")
+        })
+
+        const UNAVAILABLE = {
+            status: 503,
+            body: { error: { code: "unavailable", message: "m", correlation_id: "c" } },
+        }
+
+        it("retries the original request with its key, whatever the picker says now", async () => {
+            const { server } = setup("/app/c1/items/i1?section=condition")
+            await waitReady()
+            const form = await within(panel("condition")).findByRole("form", { name: "Change this item" })
+            fireEvent.change(within(form).getByRole("textbox", { name: /Amount/ }), { target: { value: "15" } })
+            server.on("POST", OP("repair"), UNAVAILABLE)
+            fireEvent.click(within(form).getByRole("button", { name: "Repair" }))
+            const retry = await screen.findByRole("button", { name: /Retry|Try again/i })
+            fireEvent.change(await picker(), { target: { value: "t1" } })
+            server.on("POST", OP("repair"), { body: view({ last_event_id: "e2" }) })
+            fireEvent.click(retry)
+            await waitFor(() => expect(server.callsTo("POST", OP("repair"))).toHaveLength(2))
+            const [first, second] = server.callsTo("POST", OP("repair"))
+            expect(second!.body).toEqual(first!.body)
+            expect(first!.body).toEqual({ expected_last_event_id: "e1", amount: 15 })
+            expect(second!.headers["Idempotency-Key"]).toBe(first!.headers["Idempotency-Key"])
+        })
+
+        it("gives a deliberate new submission with different data a new key", async () => {
+            const { server } = setup("/app/c1/items/i1?section=condition")
+            await waitReady()
+            const form = await within(panel("condition")).findByRole("form", { name: "Change this item" })
+            server.on("POST", OP("repair"), UNAVAILABLE)
+            fireEvent.change(within(form).getByRole("textbox", { name: /Amount/ }), { target: { value: "15" } })
+            fireEvent.click(within(form).getByRole("button", { name: "Repair" }))
+            await screen.findByRole("button", { name: /Retry|Try again/i })
+            fireEvent.change(await picker(), { target: { value: "t1" } })
+            fireEvent.click(within(form).getByRole("button", { name: "Repair" }))
+            await waitFor(() => expect(server.callsTo("POST", OP("repair"))).toHaveLength(2))
+            const [first, second] = server.callsTo("POST", OP("repair"))
+            expect(second!.body).toEqual({ expected_last_event_id: "e1", world_time_id: "t1", amount: 15 })
+            expect(second!.headers["Idempotency-Key"]).not.toBe(first!.headers["Idempotency-Key"])
+        })
+    })
+
+    describe("a failed refresh", () => {
+        const failGet = (server: ReturnType<typeof setup>["server"], status: number) =>
+            server.on("GET", VIEW_PATH, {
+                status,
+                body: { error: { code: status === 404 ? "not_found" : "unavailable", message: "m", correlation_id: "c" } },
+            })
+
+        it("keeps unrelated drafts through a successful command, a failed read and a retry", async () => {
+            const { server, state } = setup("/app/c1/items/i1?section=condition")
+            await waitReady()
+            const form = await within(panel("condition")).findByRole("form", { name: "Change this item" })
+            fireEvent.change(within(form).getByRole("textbox", { name: /Amount/ }), { target: { value: "17" } })
+            fireEvent.click(sectionLink("Give or place"))
+            fireEvent.click(await screen.findByRole("radio", { name: "Place at a location" }))
+            const place = screen.getByRole("form", { name: "Place this item at a location" })
+            fireEvent.focus(within(place).getByRole("combobox", { name: "Place at" }))
+            fireEvent.click(await within(place).findByRole("option", { name: /Stonebridge/ }))
+            fireEvent.click(sectionLink("Equip & attune"))
+            server.on("POST", OP("equip"), () => {
+                failGet(server, 503)
+                return { body: view({ last_event_id: "e2" }) }
+            })
+            fireEvent.click(await screen.findByRole("button", { name: "Equip" }))
+            expect(await screen.findByText(/may be out of date/)).toBeInTheDocument()
+            expect(within(form).getByRole("textbox", { name: /Amount/, hidden: true })).toHaveValue("17")
+            expect(screen.getByRole("combobox", { name: "Place at", hidden: true })).toHaveValue("Stonebridge")
+            server.on("GET", VIEW_PATH, () => ({ body: state.current }))
+            fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+            await waitFor(() => expect(screen.queryByText(/may be out of date/)).not.toBeInTheDocument())
+            expect(within(form).getByRole("textbox", { name: /Amount/, hidden: true })).toHaveValue("17")
+            expect(screen.getByRole("combobox", { name: "Place at", hidden: true })).toHaveValue("Stonebridge")
+        })
+
+        it("keeps a Give draft through a failed read", async () => {
+            const { server } = setup("/app/c1/items/i1?section=move")
+            await waitReady()
+            fireEvent.click(await screen.findByRole("radio", { name: "Give to a character" }))
+            const give = screen.getByRole("form", { name: "Give this item to a character" })
+            fireEvent.focus(within(give).getByRole("combobox", { name: "Give to" }))
+            fireEvent.click(await within(give).findByRole("option", { name: /Brea/ }))
+            fireEvent.click(sectionLink("Equip & attune"))
+            server.on("POST", OP("equip"), () => {
+                failGet(server, 503)
+                return { body: view({ last_event_id: "e2" }) }
+            })
+            fireEvent.click(await screen.findByRole("button", { name: "Equip" }))
+            await screen.findByText(/may be out of date/)
+            fireEvent.click(sectionLink("Give or place"))
+            expect(screen.getByRole("combobox", { name: "Give to" })).toHaveValue("Brea")
+        })
+
+        it("fails closed when the record becomes unavailable, discarding the cached item", async () => {
+            const { server } = setup("/app/c1/items/i1?section=equipment")
+            await waitReady()
+            server.on("POST", OP("equip"), () => {
+                failGet(server, 404)
+                return { body: view({ last_event_id: "e2" }) }
+            })
+            fireEvent.click(await screen.findByRole("button", { name: "Equip" }))
+            expect(await screen.findByRole("heading", { name: "Item unavailable" })).toBeInTheDocument()
+            expect(screen.queryByRole("link", { name: /Prepare/ })).not.toBeInTheDocument()
+            expect(screen.queryByText("Moonblade")).not.toBeInTheDocument()
+        })
+
+        it("does not carry drafts to another item", async () => {
+            const { router, server } = setup("/app/c1/items/i1?section=condition")
+            server.on("GET", "/campaigns/c1/authoring/items/i2", {
+                status: 404,
+                body: { error: { code: "not_found", message: "m", correlation_id: "c" } },
+            })
+            server.on("GET", "/campaigns/c1/entities/i2/lifecycle", { status: 404 })
+            server.on("GET", "/campaigns/c1/entities/i2/provenance", { status: 404 })
+            await waitReady()
+            const form = await within(panel("condition")).findByRole("form", { name: "Change this item" })
+            fireEvent.change(within(form).getByRole("textbox", { name: /Amount/ }), { target: { value: "9" } })
+            void router.navigate("/app/c1/items/i2?section=condition")
+            // Leaving with unsent input asks first; discarding opens the other item with no draft.
+            fireEvent.click(await screen.findByRole("button", { name: "Discard" }))
+            await screen.findByRole("heading", { name: "Item unavailable" })
+            expect(screen.queryByDisplayValue("9")).not.toBeInTheDocument()
+        })
     })
 })
