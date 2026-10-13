@@ -15,6 +15,7 @@ import type { ReferenceOption } from "./authoring/ReferenceCombobox"
 import { WorldTimePicker } from "./authoring/WorldTimePicker"
 import "./authoring/authoring.css"
 import { PanelFrame } from "./DetailPanel"
+import { StaleReadNotice } from "./StaleReadNotice"
 import { useKeptData, useRefetchOnChange } from "../hooks/useKeptData"
 
 interface Props {
@@ -58,7 +59,7 @@ export function OrganizationMembers({
         organizationMembersPath(campaignId, organizationId),
     )
     useRefetchOnChange(refreshToken, refetch)
-    const kept = useKeptData(state)
+    const { data: kept, stale } = useKeptData(state)
     const changed = () => {
         void refetch()
         onChanged?.()
@@ -75,6 +76,7 @@ export function OrganizationMembers({
     const roster = kept
     return (
         <PanelFrame embedded={embedded} title="Members and offices" headingId="members-heading">
+            {stale ? <StaleReadNotice what="members and status" onRetry={() => void refetch()} /> : null}
             {roster.members.length === 0 ? (
                 <p>No members are known.</p>
             ) : (

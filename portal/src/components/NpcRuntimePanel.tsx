@@ -19,6 +19,7 @@ import type { ReferenceOption } from "./authoring/ReferenceCombobox"
 import { WorldTimePicker } from "./authoring/WorldTimePicker"
 import "./authoring/authoring.css"
 import { PanelFrame } from "./DetailPanel"
+import { StaleReadNotice } from "./StaleReadNotice"
 import { useKeptData, useRefetchOnChange } from "../hooks/useKeptData"
 
 interface Props {
@@ -31,6 +32,10 @@ interface Props {
     refreshToken?: unknown
     // Called after a command took effect, so the page's own view of the character agrees.
     onChanged?: () => void
+    // Why the commands are not offered, when the page already knows from its own successful read of
+    // the record's status (not published, archived, replaced). It wins over this panel's own read,
+    // which may be a retained one after a failed refresh.
+    blockedText?: string | null
 }
 
 type Command =
@@ -51,7 +56,7 @@ const humanize = (code: string): string => code.replace(/_/g, " ")
 // GM controls for a published NPC: hit points, conditions, resources and location, each one
 // idempotent command that records an event at the chosen time. The routes are the same ones the
 // character-state adapters use; this panel only gives a human GM a way to reach them.
-export function NpcRuntimePanel({ campaignId, characterId, embedded, refreshToken, onChanged }: Props) {
+export function NpcRuntimePanel({ campaignId, characterId, embedded, refreshToken, onChanged, blockedText }: Props) {
     if (!useCampaignCapability(campaignId, "canon.edit")) return null
     return (
         <Loaded
@@ -60,11 +65,12 @@ export function NpcRuntimePanel({ campaignId, characterId, embedded, refreshToke
             embedded={embedded}
             refreshToken={refreshToken}
             onChanged={onChanged}
+            blockedText={blockedText}
         />
     )
 }
 
-function Loaded({ campaignId, characterId, embedded, refreshToken, onChanged }: Props) {
+function Loaded({ campaignId, characterId, embedded, refreshToken, onChanged, blockedText }: Props) {
     const npc = useAuthoringResource<NpcAuthoringView>(npcAuthoringPath(campaignId, characterId))
     const options = useAuthoringResource<RuntimeOptions>(npcRuntimeOptionsPath(campaignId))
     const character = useAuthoringResource<CharacterDetail>(
@@ -72,29 +78,47 @@ function Loaded({ campaignId, characterId, embedded, refreshToken, onChanged }: 
     )
     useRefetchOnChange(refreshToken, npc.refetch)
     useRefetchOnChange(refreshToken, character.refetch)
-    const npcView = useKeptData(npc.state)
-    const optionsView = useKeptData(options.state)
-    const characterView = useKeptData(character.state)
+    const { data: npcView, stale: npcStale } = useKeptData(npc.state)
+    const { data: optionsView, stale: optionsStale } = useKeptData(options.state)
+    const { data: characterView, stale: characterStale } = useKeptData(character.state)
     if (npcView === null || optionsView === null || characterView === null) {
         return null
     }
-    // The server accepts these commands only for a published, active NPC.
-    if (npcView.lifecycle_status !== "active") {
+    // Reads only: trying again never repeats a command.
+    const notice =
+        npcStale || optionsStale || characterStale ? (
+            <StaleReadNotice
+                what="NPC information"
+                onRetry={() => {
+                    void npc.refetch()
+                    void options.refetch()
+                    void character.refetch()
+                }}
+            />
+        ) : null
+    // The server accepts these commands only for a published, active NPC. The page's own successful
+    // read of the status wins over a retained one.
+    const blocked =
+        blockedText ??
+        (npcView.lifecycle_status !== "active"
+            ? "This NPC is archived. Restore it before changing their hit points, conditions, resources or location."
+            : npcView.canon_status !== "canon"
+              ? "Publish this NPC to change their hit points, conditions, resources or location."
+              : null)
+    if (blocked !== null) {
         return (
-            <PanelFrame embedded={embedded} title="Run this NPC" headingId="npc-runtime-heading">
-                <p>This NPC is archived. Restore it before changing their hit points, conditions, resources or location.</p>
-            </PanelFrame>
-        )
-    }
-    if (npcView.canon_status !== "canon") {
-        return (
-            <PanelFrame embedded={embedded} title="Run this NPC" headingId="npc-runtime-heading">
-                <p>Publish this NPC to change their hit points, conditions, resources or location.</p>
-            </PanelFrame>
+            <>
+                {notice}
+                <PanelFrame embedded={embedded} title="Run this NPC" headingId="npc-runtime-heading">
+                    <p>{blocked}</p>
+                </PanelFrame>
+            </>
         )
     }
     return (
-        <Panel
+        <>
+            {notice}
+            <Panel
             campaignId={campaignId}
             characterId={characterId}
             embedded={embedded}
@@ -102,7 +126,8 @@ function Loaded({ campaignId, characterId, embedded, refreshToken, onChanged }: 
             detail={characterView}
             refetch={character.refetch}
             onChanged={onChanged}
-        />
+            />
+        </>
     )
 }
 

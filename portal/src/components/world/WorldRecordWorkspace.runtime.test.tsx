@@ -44,7 +44,9 @@ const lifecycleBody = (id: string, type: string, s: State) => ({
     available_actions:
         s.lifecycle === "archived"
             ? ["restore"]
-            : s.canon === "approved"
+            : s.canon === "canon"
+              ? ["archive"]
+              : s.canon === "approved"
               ? ["publish", "return_to_draft"]
               : s.canon === "proposed"
                 ? ["approve", "reject", "return_to_draft"]
@@ -52,13 +54,27 @@ const lifecycleBody = (id: string, type: string, s: State) => ({
     blocked_actions: [],
 })
 
+// Reads that answer with a server error while the flag is set; `failed` counts the answers given.
+const fails = { character: false, npc: false, roster: false, failed: 0 }
+const failing = () => {
+    fails.failed += 1
+    return { status: 500, body: {} }
+}
+
 function setupNpc(initial: Partial<State> = {}) {
+    fails.character = false
+    fails.npc = false
+    fails.roster = false
+    fails.failed = 0
     const state: State = { canon: "approved", lifecycle: "active", hp: 10, ...initial }
     const server = installMockServer()
     server.on("GET", /.*/, NOT_FOUND)
     installRecordReads(server, { campaignId: C, entityId: "n1", entityTypeCode: "npc", canon: state.canon })
     server.on("GET", `/campaigns/${C}/entities/n1/lifecycle`, () => ({ body: lifecycleBody("n1", "npc", state) }))
-    server.on("GET", `/campaigns/${C}/characters/n1`, () => ({
+    server.on("GET", `/campaigns/${C}/characters/n1`, () =>
+        fails.character
+            ? failing()
+            : {
         body: {
             character_id: "n1",
             name: "Mira",
@@ -75,17 +91,27 @@ function setupNpc(initial: Partial<State> = {}) {
             conditions: [],
             resources: [],
         },
-    }))
-    server.on("GET", `/campaigns/${C}/authoring/npcs/n1`, () => ({
-        body: {
-            npc_id: "n1",
-            canon_status: state.canon,
-            lifecycle_status: state.lifecycle,
-            row_version: 3,
-            available_actions: ["update"],
-            blocked_actions: [],
-        },
-    }))
+    },
+    )
+    server.on("GET", `/campaigns/${C}/authoring/npcs/n1`, () =>
+        fails.npc
+            ? failing()
+            : {
+                  body: {
+                      npc_id: "n1",
+                      canon_status: state.canon,
+                      lifecycle_status: state.lifecycle,
+                      row_version: 3,
+                      available_actions: ["update"],
+                      blocked_actions: [],
+                  },
+              },
+    )
+    server.on("POST", `/campaigns/${C}/entities/n1/lifecycle/archive`, () => {
+        state.lifecycle = "archived"
+        fails.npc = true
+        return { body: { entity_id: "n1", canon_status: state.canon, lifecycle_status: "archived", row_version: 4 } }
+    })
     server.on("GET", /npc-runtime-options/, { body: { conditions: [], resources: [] } })
     server.on("GET", /world-times/, { body: { items: [TIME], next_cursor: null } })
     server.on("GET", /calendars/, { body: { calendars: [] } })
@@ -165,59 +191,90 @@ describe("an NPC's Run section agrees with the workspace", () => {
         expect(server.calls.filter((c) => c.method !== "GET")).toHaveLength(0)
     })
 
-    it("keeps an unsent hit point change and Sources input through a successful step and a failed refresh", async () => {
-        let failReads = false
+    const inSection = (key: string) => within(screen.getByRole("heading", { level: 2, name: key }).closest("section")!)
+
+    it("says a retained read may be out of date, retries by reading only, and keeps unsent input", async () => {
         const { server } = setupNpc({ canon: "approved" })
-        server.on("GET", `/campaigns/${C}/characters/n1`, () =>
-            failReads
-                ? { status: 500, body: {} }
-                : {
-                      body: {
-                          character_id: "n1",
-                          name: "Mira",
-                          species_code: "human",
-                          size_category: "medium",
-                          current_hit_points: 10,
-                          maximum_hit_points: 20,
-                          temporary_hit_points: null,
-                          exhaustion_level: null,
-                          death_save_successes: null,
-                          death_save_failures: null,
-                          current_location_id: null,
-                          active_encounter_id: null,
-                          conditions: [],
-                          resources: [],
-                      },
-                  },
-        )
         await opened("Mira")
-        // Unsent input in two independent sections.
         fireEvent.click(screen.getByRole("link", { name: "1. Prepare" }))
         fireEvent.click(await screen.findByRole("link", { name: "Sources" }))
         fireEvent.click(await screen.findByRole("button", { name: "Add source" }))
         fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Field notes" } })
-        fireEvent.click(screen.getByRole("link", { name: "3. Use in play" }))
-        fireEvent.click(await screen.findByRole("link", { name: "Run this NPC" }))
-        // Approved: Run says to publish. Publish from Review (the panel stays mounted behind).
-        expect(await screen.findByText(/Publish this NPC to change/)).toBeVisible()
         fireEvent.click(screen.getByRole("link", { name: "2. Review & publish" }))
+        // The refresh that follows publishing fails: it must actually be asked for, and answer 500.
+        fails.character = true
         fireEvent.click(await screen.findByRole("button", { name: "Publish as canon" }))
         const dialog = screen.getByRole("dialog", { name: "Publish as canon?", hidden: true })
         fireEvent.click(within(dialog).getByRole("button", { name: "Publish as canon" }))
         await waitFor(() => expect(screen.getByRole("group", { name: "Record status" })).toHaveTextContent(/Canon/))
+        await waitFor(() => expect(fails.failed).toBeGreaterThan(0))
         fireEvent.click(screen.getByRole("link", { name: "3. Use in play" }))
         const form = await screen.findByRole("form", { name: "Adjust hit points" })
         fireEvent.change(within(form).getByRole("textbox", { name: /Change/ }), { target: { value: "-4" } })
-        // A later refresh fails recoverably: the form and the typed value stay.
-        failReads = true
-        fireEvent.click(screen.getByRole("link", { name: "2. Review & publish" }))
-        await screen.findByRole("heading", { level: 2, name: "Review" })
-        fireEvent.click(screen.getByRole("link", { name: "3. Use in play" }))
-        expect(within(await screen.findByRole("form", { name: "Adjust hit points" })).getByRole("textbox", { name: /Change/ })).toHaveValue("-4")
+        const run = inSection("Run this NPC")
+        expect(await run.findByText(/may be out of date/)).toBeVisible()
+        // Reading again recovers; nothing is sent, and nothing typed is lost.
+        fails.character = false
+        const posts = server.calls.filter((c) => c.method === "POST").length
+        fireEvent.click(run.getByRole("button", { name: "Try again" }))
+        await waitFor(() => expect(run.queryByText(/may be out of date/)).not.toBeInTheDocument())
+        expect(within(screen.getByRole("form", { name: "Adjust hit points" })).getByRole("textbox", { name: /Change/ })).toHaveValue("-4")
+        expect(server.calls.filter((c) => c.method === "POST")).toHaveLength(posts)
         fireEvent.click(screen.getByRole("link", { name: "1. Prepare" }))
         fireEvent.click(await screen.findByRole("link", { name: "Sources" }))
         expect(screen.getByLabelText("Title")).toHaveValue("Field notes")
-        expect(server.calls.filter((c) => c.method === "POST")).toHaveLength(1)
+    })
+
+    it("keeps showing the old hit points with a warning when the read after a change fails, then recovers on retry", async () => {
+        const { server } = setupNpc({ canon: "canon" })
+        await opened("Mira")
+        fireEvent.click(screen.getByRole("link", { name: "3. Use in play" }))
+        fireEvent.click(await screen.findByRole("link", { name: "Run this NPC" }))
+        fireEvent.change(await screen.findByRole("combobox", { name: "When this happens" }), { target: { value: "t1" } })
+        await screen.findByText("10 of 20")
+        const form = screen.getByRole("form", { name: "Adjust hit points" })
+        fireEvent.change(within(form).getByRole("textbox", { name: /Change/ }), { target: { value: "-3" } })
+        fails.character = true
+        fireEvent.click(within(form).getByRole("button", { name: "Apply hit point change" }))
+        await waitFor(() => expect(server.callsTo("POST", `/campaigns/${C}/characters/n1/hit-points`)).toHaveLength(1))
+        const run = inSection("Run this NPC")
+        expect(await run.findByText(/may be out of date/)).toBeVisible()
+        expect(run.getByText("10 of 20")).toBeInTheDocument()
+        expect(fails.failed).toBeGreaterThan(0)
+        fails.character = false
+        fireEvent.click(run.getByRole("button", { name: "Try again" }))
+        expect(await run.findByText("7 of 20")).toBeInTheDocument()
+        expect(run.queryByText(/may be out of date/)).not.toBeInTheDocument()
+        // The retry only read: the change was recorded exactly once.
+        expect(server.callsTo("POST", `/campaigns/${C}/characters/n1/hit-points`)).toHaveLength(1)
+    })
+
+    it("withholds Run for an NPC the page knows is archived even when its own status read fails", async () => {
+        const { server } = setupNpc({ canon: "canon" })
+        await opened("Mira")
+        fireEvent.click(screen.getByRole("link", { name: "2. Review & publish" }))
+        fireEvent.click(await screen.findByRole("link", { name: "Publication" }))
+        fireEvent.click(await screen.findByText("More"))
+        fireEvent.click(screen.getByRole("button", { name: "Archive" }))
+        const dialog = screen.getByRole("dialog", { name: "Archive this record?", hidden: true })
+        fireEvent.click(within(dialog).getByRole("button", { name: "Archive" }))
+        await waitFor(() => expect(screen.getByRole("group", { name: "Record status" })).toHaveTextContent(/Archived/))
+        await waitFor(() => expect(fails.failed).toBeGreaterThan(0))
+        fireEvent.click(screen.getByRole("link", { name: "3. Use in play" }))
+        fireEvent.click(await screen.findByRole("link", { name: "Run this NPC" }))
+        const run = inSection("Run this NPC")
+        expect(await run.findByText(/This NPC is archived\. Restore it/)).toBeVisible()
+        expect(await run.findByText(/may be out of date/)).toBeVisible()
+        for (const name of ["Adjust hit points", "Add a condition", "Adjust a resource", "Move this NPC"]) {
+            expect(screen.queryByRole("form", { name })).not.toBeInTheDocument()
+        }
+        // Reading again changes nothing about eligibility and sends nothing.
+        const posts = server.calls.filter((c) => c.method === "POST").length
+        fails.npc = false
+        fireEvent.click(run.getByRole("button", { name: "Try again" }))
+        await waitFor(() => expect(run.queryByText(/may be out of date/)).not.toBeInTheDocument())
+        expect(screen.queryByRole("form", { name: "Adjust hit points" })).not.toBeInTheDocument()
+        expect(server.calls.filter((c) => c.method === "POST")).toHaveLength(posts)
     })
 })
 
@@ -327,6 +384,49 @@ describe("an organization's members and status", () => {
         fireEvent.click(screen.getByRole("link", { name: "1. Prepare" }))
         const details = screen.getByRole("heading", { level: 2, name: "Details" }).closest("section")!
         await waitFor(() => expect(within(details).getByText("Dissolved")).toBeInTheDocument())
+    })
+
+    it("keeps the old status with a warning when the roster read after a change fails, then recovers on retry", async () => {
+        let status: string | null = null
+        const state: State = { canon: "canon", lifecycle: "active", hp: 0 }
+        fails.roster = false
+        fails.failed = 0
+        const server = installMockServer()
+        server.on("GET", /.*/, NOT_FOUND)
+        installRecordReads(server, { campaignId: C, entityId: "o1", entityTypeCode: "business" })
+        server.on("GET", `/campaigns/${C}/world/organizations/o1`, () => ({ body: { ...orgDetail, status_code: status } }))
+        server.on("GET", `/campaigns/${C}/entities/o1/lifecycle`, () => ({ body: lifecycleBody("o1", "business", state) }))
+        server.on("GET", `/campaigns/${C}/authoring/organizations/o1`, { body: { available_actions: ["update"], blocked_actions: [] } })
+        server.on("GET", `/campaigns/${C}/organizations/o1/members`, () => (fails.roster ? failing() : { body: roster(status) }))
+        server.on("GET", /world-times/, { body: { items: [TIME], next_cursor: null } })
+        server.on("GET", /calendars/, { body: { calendars: [] } })
+        server.on("POST", `/campaigns/${C}/organizations/o1/status`, () => {
+            status = "dissolved"
+            fails.roster = true
+            return { body: { organization_state_id: "s", event_id: "e", previous_status_code: null, new_status_code: "dissolved" } }
+        })
+        render(server, "/app/c1/world/organization/o1?section=sources")
+        await opened("The Guild")
+        fireEvent.click(await screen.findByRole("button", { name: "Add source" }))
+        fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Charter" } })
+        fireEvent.click(screen.getByRole("link", { name: "3. Use in play" }))
+        const form = await screen.findByRole("form", { name: "Organization status" })
+        fireEvent.change(within(form).getByRole("combobox", { name: "New status" }), { target: { value: "dissolved" } })
+        fireEvent.change(within(form).getByRole("combobox", { name: "When" }), { target: { value: "t1" } })
+        fireEvent.click(within(form).getByRole("button", { name: "Set status" }))
+        await waitFor(() => expect(server.callsTo("POST", `/campaigns/${C}/organizations/o1/status`)).toHaveLength(1))
+        const members = within(screen.getByRole("heading", { level: 2, name: "Members and status" }).closest("section")!)
+        expect(await members.findByText(/may be out of date/)).toBeVisible()
+        expect(members.getByText("Now: not recorded")).toBeInTheDocument()
+        expect(fails.failed).toBeGreaterThan(0)
+        fails.roster = false
+        fireEvent.click(members.getByRole("button", { name: "Try again" }))
+        expect(await members.findByText("Now: dissolved")).toBeInTheDocument()
+        expect(members.queryByText(/may be out of date/)).not.toBeInTheDocument()
+        expect(server.callsTo("POST", `/campaigns/${C}/organizations/o1/status`)).toHaveLength(1)
+        fireEvent.click(screen.getByRole("link", { name: "1. Prepare" }))
+        fireEvent.click(await screen.findByRole("link", { name: "Sources" }))
+        expect(screen.getByLabelText("Title")).toHaveValue("Charter")
     })
 
     it("does not treat an unreadable lifecycle as eligibility", async () => {

@@ -364,6 +364,7 @@ function Workspace({
                         characterId={entityId}
                         refreshToken={changes}
                         onChanged={refreshDetail}
+                        blockedText={playBlockedText(lifecycleView, "NPC")}
                     />
                 )
             case "player":
