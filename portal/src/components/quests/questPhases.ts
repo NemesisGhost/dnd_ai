@@ -182,7 +182,7 @@ export function questGuidance(
                   target: { kind: "replacement", entityId: view.superseded_by.entity_id },
               }
     }
-    if (view.canon_status === "canon") return at("Run it", "progress")
+    if (view.canon_status === "canon") return at("Use it in play", "progress")
     if (available.has("publish")) return at("Publish it", "review")
     if (available.has("approve")) return at("Approve it", "review")
     if (view.canon_status === "draft" && canEdit && !hasObjective) {

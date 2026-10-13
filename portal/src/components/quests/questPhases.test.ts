@@ -77,7 +77,7 @@ describe("questGuidance", () => {
             "Return it to draft to rework it",
         )
         expect(questGuidance(view("canon", ["supersede"]), draft)).toEqual({
-            text: "Run it",
+            text: "Use it in play",
             target: { kind: "section", section: "progress" },
         })
     })

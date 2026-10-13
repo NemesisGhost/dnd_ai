@@ -27,7 +27,7 @@ describe("Quest workspace: header and workflow", () => {
     it("shows the quest, its real lifecycle status, and a three-phase workflow without a progress status", async () => {
         setupQuestWorkspace({ section: "details", view: questView({ canon_status: "canon" }) })
         const heading = await screen.findByRole("heading", { level: 1, name: "The Lost Amulet" })
-        expect(heading).toHaveFocus()
+        await waitFor(() => expect(heading).toHaveFocus())
         expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1)
         const header = heading.closest("header")!
         expect(within(header).getByRole("group", { name: "Record status" })).toHaveTextContent("Canon")
@@ -185,9 +185,12 @@ describe("Quest workspace: Next", () => {
         expect(await screen.findByRole("link", { name: /Submit for review/ })).toHaveAttribute("href", "/app/c1/quests/q1?section=publication")
     })
 
-    it("leads a published quest to Progress", async () => {
+    it("leads a published quest to Progress, in the words of the phase it opens", async () => {
         setupQuestWorkspace({ section: "details", view: questView({ canon_status: "canon" }) })
-        expect(await screen.findByRole("link", { name: /Run it/ })).toHaveAttribute("href", "/app/c1/quests/q1?section=progress")
+        const next = await screen.findByRole("link", { name: /Use it in play/ })
+        expect(next).toHaveAttribute("href", "/app/c1/quests/q1?section=progress")
+        // The link is named for the phase button it leads into.
+        expect(screen.getByRole("link", { name: /3\. Use in play/ })).toBeInTheDocument()
     })
 
     it("offers no Next when the server offers no step", async () => {

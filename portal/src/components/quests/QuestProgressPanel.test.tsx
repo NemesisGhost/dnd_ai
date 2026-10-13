@@ -103,6 +103,7 @@ describe("Quest Progress", () => {
                 },
             ),
         )
+        fireEvent.click(await screen.findByRole("button", { name: /Red Company/ }))
         const card = await screen.findByRole("article", { name: "Progress for Red Company" })
         fireEvent.click(within(card).getByRole("button", { name: "Activate quest for Red Company" }))
         await waitFor(() => expect(server.callsTo("POST", `${RUNTIME}/activate`)).toHaveLength(1))
@@ -269,5 +270,51 @@ describe("Quest Progress and the structure it can lock", () => {
         expect(within(screen.getByRole("form", { name: "Add a participant" })).getByRole("combobox", { name: /Role in the quest/ })).toHaveValue(
             "giver",
         )
+    })
+})
+
+describe("Quest Progress scopes", () => {
+    const party = {
+        party_id: "p1",
+        party_name: "Red Company",
+        status: "active",
+        actions: ["suspend"],
+        all_required_complete: false,
+        objectives: [
+            { quest_objective_id: "o1", name: "Find the map", stage_name: "Opening", requirement_level: "required", status: "active", next_statuses: ["completed"] },
+        ],
+    }
+
+    it("lists everyone and each party with its status, and shows only the selected scope's details", async () => {
+        const { server } = setup(questProgress({}, party))
+        const list = await screen.findByRole("navigation", { name: "Progress scopes" })
+        const items = within(list).getAllByRole("button")
+        expect(items.map((b) => b.textContent)).toEqual(["EveryoneActive", "Red CompanyActive"])
+        expect(items[0]).toHaveAttribute("aria-pressed", "true")
+        expect(screen.getByRole("article", { name: "Progress for Everyone" })).toBeInTheDocument()
+        expect(screen.queryByRole("article", { name: "Progress for Red Company" })).toBeNull()
+        fireEvent.click(items[1]!)
+        expect(items[1]).toHaveAttribute("aria-pressed", "true")
+        expect(screen.getByRole("article", { name: "Progress for Red Company" })).toBeInTheDocument()
+        expect(screen.queryByRole("article", { name: "Progress for Everyone" })).toBeNull()
+        // Choosing a scope sends nothing.
+        expect(server.callsTo("POST", /./)).toHaveLength(0)
+    })
+
+    it("keeps the chosen scope through a refresh", async () => {
+        const { server } = setup(questProgress({}, party))
+        fireEvent.click(await screen.findByRole("button", { name: /Red Company/ }))
+        fireEvent.click(await screen.findByRole("button", { name: "Suspend quest for Red Company" }))
+        await waitFor(() => expect(server.callsTo("POST", `${RUNTIME}/suspend`)).toHaveLength(1))
+        await waitFor(() => expect(screen.getByRole("article", { name: "Progress for Red Company" })).toBeInTheDocument())
+    })
+
+    it("puts each objective's moves in their own group, apart from its text", async () => {
+        setup()
+        const move = await screen.findByRole("button", { name: "Start Reach the ruin for Everyone" })
+        const group = move.parentElement!
+        expect(group).toHaveClass("quest-progress__moves")
+        expect(within(group).getAllByRole("button").length).toBeGreaterThan(1)
+        expect(group.parentElement).toHaveClass("quest-progress__objective")
     })
 })

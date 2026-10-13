@@ -4112,3 +4112,72 @@ a.app-header__title:focus-visible {
   padding: 0.5rem 0 0.25rem;
   overflow-wrap: anywhere;
 }
+
+/* Quest Progress: the scopes (everyone, then each party) are a list down the left, and the selected
+   one's details are on the right, from the workspace's own width (a lower threshold than the section menu, so the list stays at the side even beside the sidebar and context panel). */
+.quest-progress {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.75rem;
+}
+
+.quest-progress__scopes ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.quest-progress__scope {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  color: var(--color-text);
+  text-align: left;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 0.375rem;
+  cursor: pointer;
+}
+
+.quest-progress__scope--current {
+  border-width: 2px;
+  border-color: var(--color-primary);
+  font-weight: 700;
+}
+
+.quest-progress__scope-status {
+  font-size: 0.875rem;
+  font-weight: 400;
+  color: var(--color-text-muted);
+}
+
+/* An objective's text, and its moves with room between them. */
+.quest-progress__objective {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+.quest-progress__moves {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+@container staged (min-width: 34rem) {
+  .quest-progress {
+    grid-template-columns: 12rem minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .quest-progress__scopes ul {
+    flex-direction: column;
+  }
+}

@@ -80,6 +80,8 @@ export function QuestProgressPanel({ campaignId, questId, blockedText, refreshTo
     const [done, setDone] = useState<string | null>(null)
     const [confirm, setConfirm] = useState<{ scope: ScopeProgress; action: QuestAction } | null>(null)
     const [note, setNote] = useState("")
+    // Which scope the details show (presentation only: nothing is sent). The campaign-wide scope has no party.
+    const [selected, setSelected] = useState<string | null>(null)
     // The last read that succeeded. A refresh that fails recoverably keeps it on screen, said to be
     // possibly out of date, with Try again (which only reads); a denied or unavailable answer, or
     // another quest, discards it and fails closed.
@@ -156,6 +158,7 @@ export function QuestProgressPanel({ campaignId, questId, blockedText, refreshTo
         )
     }
     const offered = blockedText === null
+    const scope = data.scopes.find((s) => s.party_id === selected) ?? data.scopes[0]!
     return (
         <>
             {blockedText !== null ? <p className="authoring-note">{blockedText}</p> : null}
@@ -175,7 +178,28 @@ export function QuestProgressPanel({ campaignId, questId, blockedText, refreshTo
                 </div>
             ) : null}
             {staleOrError}
-            {data.scopes.map((scope) => (
+            <div className="quest-progress">
+                <nav aria-label="Progress scopes" className="quest-progress__scopes">
+                    <ul>
+                        {data.scopes.map((s) => (
+                            <li key={s.party_id ?? "everyone"}>
+                                <button
+                                    type="button"
+                                    className={
+                                        s === scope
+                                            ? "quest-progress__scope quest-progress__scope--current"
+                                            : "quest-progress__scope"
+                                    }
+                                    aria-pressed={s === scope}
+                                    onClick={() => setSelected(s.party_id)}
+                                >
+                                    <span>{s.party_name ?? "Everyone"}</span>
+                                    <span className="quest-progress__scope-status">{statusLabel(s.status)}</span>
+                                </button>
+                            </li>
+                        ))}
+                    </ul>
+                </nav>
                 <ScopeCard
                     key={scope.party_id ?? "everyone"}
                     scope={scope}
@@ -197,7 +221,7 @@ export function QuestProgressPanel({ campaignId, questId, blockedText, refreshTo
                         )
                     }
                 />
-            ))}
+            </div>
             <ConfirmDialog
                 open={confirm !== null}
                 title={confirm === null ? "" : `${ACTION_LABEL[confirm.action]}?`}
@@ -273,23 +297,27 @@ function ScopeCard({
             ) : (
                 <ul className="op-list">
                     {scope.objectives.map((o) => (
-                        <li key={o.quest_objective_id}>
-                            {o.stage_name}: {o.name}
-                            {o.requirement_level === "required" ? "" : " (optional)"} — {statusLabel(o.status)}{" "}
-                            {offered
-                                ? o.next_statuses.map((status) => (
-                                      <button
-                                          key={status}
-                                          type="button"
-                                          className="authoring-button"
-                                          disabled={busy}
-                                          aria-label={`${OBJECTIVE_VERB[status] ?? status} ${o.name} for ${who}`}
-                                          onClick={() => onObjective(o.quest_objective_id, status, o.status)}
-                                      >
-                                          {OBJECTIVE_VERB[status] ?? status}
-                                      </button>
-                                  ))
-                                : null}
+                        <li key={o.quest_objective_id} className="quest-progress__objective">
+                            <span>
+                                {o.stage_name}: {o.name}
+                                {o.requirement_level === "required" ? "" : " (optional)"} — {statusLabel(o.status)}
+                            </span>
+                            {offered && o.next_statuses.length > 0 ? (
+                                <span className="quest-progress__moves">
+                                    {o.next_statuses.map((status) => (
+                                        <button
+                                            key={status}
+                                            type="button"
+                                            className="authoring-button"
+                                            disabled={busy}
+                                            aria-label={`${OBJECTIVE_VERB[status] ?? status} ${o.name} for ${who}`}
+                                            onClick={() => onObjective(o.quest_objective_id, status, o.status)}
+                                        >
+                                            {OBJECTIVE_VERB[status] ?? status}
+                                        </button>
+                                    ))}
+                                </span>
+                            ) : null}
                         </li>
                     ))}
                 </ul>
