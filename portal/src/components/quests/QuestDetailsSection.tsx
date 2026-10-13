@@ -17,8 +17,10 @@ import { useAnnounce } from "../authoring/announcer"
 import { TextAreaField, TextField } from "../authoring/fields"
 import { AuthoringForm, ErrorSummary, FormActions, MutationStatusMessage, StaleWriteNotice } from "../authoring/feedback"
 import type { FieldError } from "../authoring/feedback"
+import { DraftConflict } from "./DraftConflict"
 import { questEditBlockedText } from "./questPhases"
 import { useQuestCommand } from "./useQuestCommand"
+import { useSyncedDraft } from "./useSyncedDraft"
 import { useUnsavedReport } from "./useUnsavedReport"
 import type { ReportUnsaved } from "./useUnsavedReport"
 import "../authoring/authoring.css"
@@ -232,16 +234,13 @@ function NotesForm({
 }: Props & { editable: boolean }) {
     const command = useQuestCommand({ campaignId, questId: view.quest_id, scope: "notes", refetch })
     const serverNotes = view.gm_notes ?? ""
-    const [notes, setNotes] = useState(serverNotes)
-    const [synced, setSynced] = useState(serverNotes)
-    // A newer saved note replaces the text only while the person has not changed it.
-    if (serverNotes !== synced) {
-        setSynced(serverNotes)
-        if (notes.trim() === synced.trim()) setNotes(serverNotes)
-    }
+    // The notes follow the saved text while untouched; a draft is kept, and if the saved notes
+    // changed elsewhere meanwhile the person chooses before the next save.
+    const draft = useSyncedDraft({ notes: serverNotes }, view.row_version)
+    const notes = draft.values.notes
     const max = options.limits.gm_notes_max_length
     const tooLong = notes.trim().length > max
-    useUnsavedReport(onUnsaved, "notes", editable && notes.trim() !== serverNotes.trim() ? ["GM notes"] : [])
+    useUnsavedReport(onUnsaved, "notes", editable && draft.dirty ? ["GM notes"] : [])
 
     if (!editable) {
         return view.gm_notes === null ? null : (
@@ -254,18 +253,22 @@ function NotesForm({
     return (
         <section className="inset-group quest-notes" aria-label="GM notes">
             {command.notice}
+            {draft.conflict ? (
+                <DraftConflict what="The planning notes" onLatest={draft.loadLatest} onKeep={draft.keepMine} />
+            ) : null}
             <form
                 noValidate
                 aria-label="GM notes"
                 className="authoring-form"
                 onSubmit={(event) => {
                     event.preventDefault()
-                    if (tooLong) return
+                    if (tooLong || draft.conflict) return
+                    draft.submitting({ notes: notes.trim() })
                     command.send(
                         {
                             op: "update_quest",
                             body: {
-                                expected_row_version: view.row_version,
+                                expected_row_version: draft.version,
                                 name: view.name,
                                 summary: view.summary,
                                 gm_notes: notes.trim() === "" ? null : notes.trim(),
@@ -280,12 +283,12 @@ function NotesForm({
                     label="Planning notes"
                     hint="Visible only to people who can edit canon. Never shown to players."
                     value={notes}
-                    onChange={setNotes}
+                    onChange={(next) => draft.setValues({ notes: next })}
                     maxLength={max}
                     error={tooLong ? `Notes must be ${max} characters or fewer.` : null}
                 />
                 <div className="authoring-actions">
-                    <button type="submit" className="authoring-button" disabled={command.busy || tooLong}>
+                    <button type="submit" className="authoring-button" disabled={command.busy || tooLong || draft.conflict}>
                         Save notes
                     </button>
                 </div>

@@ -207,10 +207,14 @@ function Workspace({
     const [changes, setChanges] = useState(0)
     // Every command reads the quest, its lifecycle (the next lifecycle step carries the version it
     // saw) and its revisions again. Nothing is remounted, so nothing typed elsewhere is lost.
+    const refreshRecord = useCallback(
+        async () => void (await Promise.all([refetchQuest(), lifecycle.refetch(), revisions.refetch()])),
+        [refetchQuest, lifecycle, revisions],
+    )
     const refreshAll = useCallback(async () => {
         setChanges((n) => n + 1)
-        await Promise.all([refetchQuest(), lifecycle.refetch(), revisions.refetch()])
-    }, [refetchQuest, lifecycle, revisions])
+        await refreshRecord()
+    }, [refreshRecord])
 
     // What is typed and not sent, by reporter, for the page's one guard.
     const [unsaved, setUnsaved] = useState<Record<string, string[]>>({})
@@ -279,6 +283,7 @@ function Workspace({
                         entityId={questId}
                         onDirtyChange={reportSource}
                         returnTo={`${here}${sectionHref("sources")}`}
+                        returnState={linkState}
                         intro={
                             <p className="authoring-note">
                                 Sources record where this quest came from. They are optional, can be changed at any
@@ -324,6 +329,9 @@ function Workspace({
                         }
                         refreshToken={changes}
                         onUnsaved={report}
+                        // A progress command can lock the structure (the quest now has progress): read the
+                        // quest again, in place. Progress itself was already read, so it is not read twice.
+                        onChanged={refreshRecord}
                     />
                 ) : null
             case "preview":

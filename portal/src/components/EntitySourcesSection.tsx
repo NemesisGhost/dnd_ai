@@ -23,6 +23,9 @@ interface Props {
     onDirtyChange?: (dirty: boolean) => void
     // Where the provenance page's back link returns to (the page that holds this section).
     returnTo?: string
+    // Router state to carry with `returnTo` (where the record was opened from), so the way back
+    // from the provenance page keeps it. The provenance page validates it.
+    returnState?: object
     // The page already supplies the surface, the heading and the labelled region (a staged
     // section panel): render the content only, with no panel, heading or region of its own.
     embedded?: boolean
@@ -53,6 +56,7 @@ export function EntitySourcesSection({
     category,
     onDirtyChange,
     returnTo,
+    returnState,
     embedded = false,
     intro,
     provenance: shared,
@@ -137,7 +141,7 @@ export function EntitySourcesSection({
                 {view.created_by_name !== null ? ` by ${view.created_by_name}` : ""}.{" "}
                 <Link
                     to={`/app/${encodeURIComponent(campaignId)}/world/${encodeURIComponent(category ?? "record")}/${encodeURIComponent(entityId)}/provenance`}
-                    state={returnTo === undefined ? undefined : { returnTo }}
+                    state={returnTo === undefined ? undefined : { ...returnState, returnTo }}
                 >
                     View provenance
                 </Link>

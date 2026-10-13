@@ -4,6 +4,7 @@ import { LifecycleBadge } from "../components/authoring/feedback"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { usePageArrival } from "../hooks/usePageArrival"
+import { pickWorldReturnState } from "../hooks/useWorldBackPath"
 import type { Provenance } from "../types/provenance"
 import { isWorldDetailCategory } from "../types/world"
 import "../components/authoring/authoring.css"
@@ -32,6 +33,8 @@ export function ProvenancePage() {
     // A Knowledge claim that opened this page names where to go back to (its section and the
     // perspective); anything else, or an address outside this campaign's Knowledge, is ignored.
     const returnTo = knowledgeReturnPath(campaignId, locationState)
+    // Where the record was opened from (the Review queue as it was left) rides back to it, validated.
+    const carried = pickWorldReturnState(locationState)
     // A record with no World detail page (a quest, a dungeon) links back to the World list.
     const detailPath = returnTo ?? (isWorldDetailCategory(category)
         ? `/app/${encodeURIComponent(campaignId)}/world/${encodeURIComponent(category)}/${encodeURIComponent(entityId)}`
@@ -39,7 +42,7 @@ export function ProvenancePage() {
     return (
         <section className="authoring-page" aria-labelledby="provenance-heading">
             <p className="authoring-page__breadcrumb">
-                <Link to={detailPath}>{state.kind === "ready" ? state.data.name : "Record"}</Link>
+                <Link to={detailPath} state={carried}>{state.kind === "ready" ? state.data.name : "Record"}</Link>
             </p>
             <h1 id="provenance-heading" ref={headingRef} tabIndex={-1}>
                 Provenance
@@ -51,13 +54,23 @@ export function ProvenancePage() {
             ) : state.kind !== "ready" ? (
                 <p role="alert">This record does not exist, or you do not have access to it.</p>
             ) : (
-                <Loaded view={state.data} campaignId={campaignId} category={category} />
+                <Loaded view={state.data} campaignId={campaignId} category={category} carried={carried} />
             )}
         </section>
     )
 }
 
-function Loaded({ view, campaignId, category }: { view: Provenance; campaignId: string; category: string }) {
+function Loaded({
+    view,
+    campaignId,
+    category,
+    carried,
+}: {
+    view: Provenance
+    campaignId: string
+    category: string
+    carried: object | undefined
+}) {
     const current = view.links.filter((l) => l.is_attached)
     const past = view.links.filter((l) => !l.is_attached)
     return (
@@ -112,6 +125,7 @@ function Loaded({ view, campaignId, category }: { view: Provenance; campaignId: 
             <p>
                 <Link
                     to={`/app/${encodeURIComponent(campaignId)}/world/${encodeURIComponent(category === "" ? "record" : category)}/${encodeURIComponent(view.entity_id)}/history`}
+                    state={carried}
                 >
                     Revision history and comparison
                 </Link>

@@ -5,7 +5,9 @@ import type { QuestAuthoringView, QuestOptions, QuestOutcomeView } from "../../t
 import { SelectField, TextAreaField, TextField } from "../authoring/fields"
 import { ReferenceCombobox } from "../authoring/ReferenceCombobox"
 import type { ReferenceOption } from "../authoring/ReferenceCombobox"
+import { DraftConflict } from "./DraftConflict"
 import { useQuestCommand } from "./useQuestCommand"
+import { useSyncedDraft } from "./useSyncedDraft"
 import { useUnsavedReport } from "./useUnsavedReport"
 import type { ReportUnsaved } from "./useUnsavedReport"
 import "../authoring/authoring.css"
@@ -17,6 +19,10 @@ import "../authoring/authoring.css"
 // is half-typed here, and a form clears only what its own successful command consumed.
 // Dependencies are structural and lock once the quest has progress; the rest stay editable.
 
+const DEFAULT_DEPENDENCY = "prerequisite"
+const DEFAULT_ROLE = "involved"
+const DEFAULT_OUTCOME = "success"
+const DEFAULT_REWARD = "other"
 const CODE_PATTERN = /^[a-z][a-z0-9_]{0,63}$/
 
 interface SectionProps {
@@ -39,9 +45,13 @@ export function QuestDependencies({ campaignId, view, options, refetch, onUnsave
     const command = useQuestCommand({ campaignId, questId: view.quest_id, scope: "dependencies", refetch })
     const [objective, setObjective] = useState("")
     const [dependsOn, setDependsOn] = useState("")
-    const [kind, setKind] = useState("prerequisite")
+    const [kind, setKind] = useState(DEFAULT_DEPENDENCY)
     const [problem, setProblem] = useState<string | null>(null)
-    useUnsavedReport(onUnsaved, "dependencies", objective !== "" || dependsOn !== "" ? ["a dependency"] : [])
+    useUnsavedReport(
+        onUnsaved,
+        "dependencies",
+        objective !== "" || dependsOn !== "" || kind !== DEFAULT_DEPENDENCY ? ["a dependency"] : [],
+    )
 
     const objectives = objectivesOf(view)
     const label = (id: string) => objectives.find((o) => o.id === id)?.label ?? "an objective"
@@ -119,6 +129,7 @@ export function QuestDependencies({ campaignId, view, options, refetch, onUnsave
                             () => {
                                 setObjective("")
                                 setDependsOn("")
+                                setKind(DEFAULT_DEPENDENCY)
                             },
                         )
                     }}
@@ -163,9 +174,9 @@ export function QuestDependencies({ campaignId, view, options, refetch, onUnsave
 export function QuestParticipants({ campaignId, view, options, refetch, onUnsaved }: SectionProps) {
     const command = useQuestCommand({ campaignId, questId: view.quest_id, scope: "participants", refetch })
     const [who, setWho] = useState<ReferenceOption | null>(null)
-    const [role, setRole] = useState("involved")
+    const [role, setRole] = useState(DEFAULT_ROLE)
     const [problem, setProblem] = useState<string | null>(null)
-    useUnsavedReport(onUnsaved, "participants", who !== null ? ["a participant"] : [])
+    useUnsavedReport(onUnsaved, "participants", who !== null || role !== DEFAULT_ROLE ? ["a participant"] : [])
     const editable = view.available_actions.includes("add_participant")
     const participants = view.participants ?? []
 
@@ -237,7 +248,10 @@ export function QuestParticipants({ campaignId, view, options, refetch, onUnsave
                                 },
                             },
                             "Participant added",
-                            () => setWho(null),
+                            () => {
+                                setWho(null)
+                                setRole(DEFAULT_ROLE)
+                            },
                         )
                     }}
                 >
@@ -274,12 +288,14 @@ export function QuestOutcomes({ campaignId, view, options, refetch, onUnsaved }:
     const [code, setCode] = useState("")
     const [name, setName] = useState("")
     const [description, setDescription] = useState("")
-    const [category, setCategory] = useState("success")
+    const [category, setCategory] = useState(DEFAULT_OUTCOME)
     const [errors, setErrors] = useState<Record<string, string>>({})
     useUnsavedReport(
         onUnsaved,
         "outcomes",
-        code.trim() !== "" || name.trim() !== "" || description.trim() !== "" ? ["an outcome"] : [],
+        code.trim() !== "" || name.trim() !== "" || description.trim() !== "" || category !== DEFAULT_OUTCOME
+            ? ["an outcome"]
+            : [],
     )
     const editable = view.available_actions.includes("add_outcome")
     const outcomes = view.outcomes ?? []
@@ -308,6 +324,7 @@ export function QuestOutcomes({ campaignId, view, options, refetch, onUnsaved }:
                 setCode("")
                 setName("")
                 setDescription("")
+                setCategory(DEFAULT_OUTCOME)
             },
         )
     }
@@ -396,22 +413,22 @@ function OutcomeCard({
     onUnsaved: ReportUnsaved
 }) {
     const [editing, setEditing] = useState(false)
-    const [name, setName] = useState(outcome.name)
-    const [description, setDescription] = useState(outcome.description ?? "")
-    const [category, setCategory] = useState(outcome.outcome_category)
-    const [rewardType, setRewardType] = useState("other")
+    const [rewardType, setRewardType] = useState(DEFAULT_REWARD)
     const [rewardText, setRewardText] = useState("")
     const [item, setItem] = useState<ReferenceOption | null>(null)
     const [problem, setProblem] = useState<string | null>(null)
-    const version = view.row_version
-    const edited =
-        editing &&
-        (name.trim() !== outcome.name ||
-            description.trim() !== (outcome.description ?? "") ||
-            category !== outcome.outcome_category)
+    // The edit form follows the outcome's saved fields while untouched; its draft is kept, and if
+    // those fields changed elsewhere meanwhile the person chooses before saving over them.
+    const draft = useSyncedDraft(
+        { name: outcome.name, description: outcome.description ?? "", category: outcome.outcome_category },
+        view.row_version,
+    )
+    const { name, description, category } = draft.values
+    const version = draft.version
+    const addVersion = view.row_version
     useUnsavedReport(onUnsaved, `outcome-${outcome.quest_outcome_id}`, [
-        ...(edited ? ["an outcome"] : []),
-        ...(rewardText.trim() !== "" || item !== null ? ["a reward"] : []),
+        ...(editing && draft.dirty ? ["an outcome"] : []),
+        ...(rewardText.trim() !== "" || item !== null || rewardType !== DEFAULT_REWARD ? ["a reward"] : []),
     ])
 
     async function searchKnowledge(query: string, signal: AbortSignal): Promise<ReferenceOption[]> {
@@ -436,7 +453,7 @@ function OutcomeCard({
                 op: "add_reward",
                 outcomeId: outcome.quest_outcome_id,
                 body: {
-                    expected_row_version: version,
+                    expected_row_version: addVersion,
                     reward_type: rewardType,
                     description: rewardText.trim(),
                     reward_knowledge_item_id: rewardType === "knowledge" ? (item?.id ?? null) : null,
@@ -446,6 +463,7 @@ function OutcomeCard({
             () => {
                 setRewardText("")
                 setItem(null)
+                setRewardType(DEFAULT_REWARD)
             },
         )
     }
@@ -471,7 +489,7 @@ function OutcomeCard({
                                 disabled={command.busy}
                                 onClick={() =>
                                     command.send(
-                                        { op: "remove_reward", rewardId: r.quest_reward_id, expected_row_version: version },
+                                        { op: "remove_reward", rewardId: r.quest_reward_id, expected_row_version: addVersion },
                                         "Reward removed",
                                     )
                                 }
@@ -497,7 +515,7 @@ function OutcomeCard({
                                     {
                                         op: "remove_outcome",
                                         outcomeId: outcome.quest_outcome_id,
-                                        expected_row_version: version,
+                                        expected_row_version: addVersion,
                                     },
                                     "Outcome removed",
                                 )
@@ -506,6 +524,9 @@ function OutcomeCard({
                             Remove {outcome.name}
                         </button>
                     </div>
+                    {editing && draft.conflict ? (
+                        <DraftConflict what={`Outcome ${outcome.name}`} onLatest={draft.loadLatest} onKeep={draft.keepMine} />
+                    ) : null}
                     {editing ? (
                         <form
                             noValidate
@@ -513,7 +534,8 @@ function OutcomeCard({
                             className="authoring-form"
                             onSubmit={(event) => {
                                 event.preventDefault()
-                                if (name.trim() === "") return
+                                if (name.trim() === "" || draft.conflict) return
+                                draft.submitting({ name: name.trim(), description: description.trim(), category })
                                 command.send(
                                     {
                                         op: "update_outcome",
@@ -534,23 +556,23 @@ function OutcomeCard({
                                 id={`o-name-${outcome.quest_outcome_id}`}
                                 label="Name"
                                 value={name}
-                                onChange={setName}
+                                onChange={(next) => draft.setValues({ ...draft.values, name: next })}
                                 required
                             />
                             <TextAreaField
                                 id={`o-desc-${outcome.quest_outcome_id}`}
                                 label="Description"
                                 value={description}
-                                onChange={setDescription}
+                                onChange={(next) => draft.setValues({ ...draft.values, description: next })}
                             />
                             <SelectField
                                 id={`o-cat-${outcome.quest_outcome_id}`}
                                 label="Kind of outcome"
                                 value={category}
                                 options={options.outcome_categories}
-                                onChange={setCategory}
+                                onChange={(next) => draft.setValues({ ...draft.values, category: next })}
                             />
-                            <button type="submit" className="authoring-button" disabled={command.busy}>
+                            <button type="submit" className="authoring-button" disabled={command.busy || draft.conflict}>
                                 Save outcome
                             </button>
                         </form>

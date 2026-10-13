@@ -1,6 +1,6 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { RUNTIME, questProgress, questView, setupQuestWorkspace } from "../../test/questWorkspaceHarness"
+import { AUTHORING, RUNTIME, questProgress, questView, setupQuestWorkspace } from "../../test/questWorkspaceHarness"
 
 afterEach(() => {
     vi.unstubAllGlobals()
@@ -213,5 +213,61 @@ describe("Quest Progress refresh", () => {
         await waitFor(() => expect(screen.queryByText(/may be out of date/)).toBeNull())
         // Try again only reads.
         expect(server.callsTo("POST", /./)).toHaveLength(before)
+    })
+})
+
+describe("Quest Progress and the structure it can lock", () => {
+    it("reads the quest again after a command, so structure that now has progress is locked in place", async () => {
+        const { server, setView } = setup(questProgress({ status: null, actions: ["activate"] }))
+        await screen.findByRole("article", { name: "Progress for Everyone" })
+        const reads = server.callsTo("GET", `${AUTHORING}/q1`).length
+        // After the activation the server reports recorded progress and withdraws the structural actions.
+        setView(
+            questView({
+                canon_status: "canon",
+                has_progress: true,
+                row_version: 5,
+                available_actions: ["update", "add_stage", "update_stage", "add_objective", "update_objective"],
+                blocked_actions: ["reorder_stages", "remove_stage", "remove_objective"].map((action) => ({
+                    action,
+                    reason: "quest_has_progress",
+                })),
+            }),
+        )
+        fireEvent.click(screen.getByRole("button", { name: "Activate quest for Everyone" }))
+        await waitFor(() => expect(server.callsTo("GET", `${AUTHORING}/q1`).length).toBeGreaterThan(reads))
+        // One command, and Progress was read again by its own refresh, not by repeating anything.
+        expect(server.callsTo("POST", `${RUNTIME}/activate`)).toHaveLength(1)
+
+        fireEvent.click(screen.getByRole("link", { name: /Prepare/ }))
+        fireEvent.click(await screen.findByRole("link", { name: "Stages and objectives" }))
+        expect(await screen.findByRole("note")).toHaveTextContent("already has progress recorded")
+        fireEvent.click(screen.getByRole("button", { name: "Expand all" }))
+        expect(screen.queryByRole("button", { name: /Remove stage/ })).toBeNull()
+        expect(screen.queryByRole("button", { name: /Remove objective/ })).toBeNull()
+        expect(screen.queryByRole("button", { name: /Move (up|down)/ })).toBeNull()
+        // Wording and visibility stay editable; the structural fields are disabled with their reason.
+        fireEvent.click(screen.getAllByRole("button", { name: /Edit objective/ })[0]!)
+        const panel = screen.getByRole("form", { name: "Edit objective" })
+        expect(within(panel).getByRole("combobox", { name: /Kind of objective/ })).toBeDisabled()
+        expect(within(panel).getByRole("textbox", { name: /Objective name/ })).toBeEnabled()
+        expect(within(panel).getByRole("combobox", { name: "Visibility" })).toBeEnabled()
+        expect(within(panel).getAllByText(/recorded progress/).length).toBeGreaterThan(0)
+    })
+
+    it("keeps a half-typed draft elsewhere through that refresh", async () => {
+        const { setView } = setup(questProgress({ status: null, actions: ["activate"] }))
+        fireEvent.click(await screen.findByRole("link", { name: /Prepare/ }))
+        fireEvent.click(await screen.findByRole("link", { name: "Participants" }))
+        const form = await screen.findByRole("form", { name: "Add a participant" })
+        fireEvent.change(within(form).getByRole("combobox", { name: /Role in the quest/ }), { target: { value: "giver" } })
+        setView(questView({ canon_status: "canon", has_progress: true, row_version: 5 }))
+        fireEvent.click(screen.getByRole("link", { name: /Use in play/ }))
+        fireEvent.click(await screen.findByRole("button", { name: "Activate quest for Everyone" }))
+        await waitFor(() => expect(screen.getByTestId("authoring-announcer")).toHaveTextContent("Activate quest: done"))
+        fireEvent.click(screen.getByRole("link", { name: /Prepare/ }))
+        expect(within(screen.getByRole("form", { name: "Add a participant" })).getByRole("combobox", { name: /Role in the quest/ })).toHaveValue(
+            "giver",
+        )
     })
 })

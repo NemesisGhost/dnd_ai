@@ -1,6 +1,7 @@
 /* eslint-disable react-refresh/only-export-components -- test support module: Fast Refresh does not apply to it. */
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import { CampaignQuestDetailPage } from "../pages/CampaignQuestDetailPage"
+import { ProvenancePage } from "../pages/ProvenancePage"
 import { bootstrapWith, installMockServer, renderAuthoringRoutes } from "./authoringHarness"
 import { installRecordReads } from "./worldWorkspaceMocks"
 
@@ -242,6 +243,7 @@ export function setupQuestWorkspace(setup: QuestWorkspaceSetup = {}) {
         }),
         routes: [
             { path: "/app/:campaignId/quests/:questId", element: <CampaignQuestDetailPage /> },
+            { path: "/app/:campaignId/world/:category/:entityId/provenance", element: <ProvenancePage /> },
             { path: "/app/:campaignId/quests", element: <p>Quests list page</p> },
             { path: "/app/:campaignId/review", element: <p>Review queue page</p> },
         ],

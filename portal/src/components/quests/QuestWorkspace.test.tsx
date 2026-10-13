@@ -493,3 +493,50 @@ describe("QuestSectionRedirect", () => {
         expect(ctx.router.state.historyAction).toBe("REPLACE")
     })
 })
+
+describe("Quest workspace: the provenance round trip", () => {
+    const sources = "?section=sources&character_id=c9&party_id=p9"
+
+    it("returns to Sources with the perspective, and to the Review queue the quest was opened from", async () => {
+        const ctx = setupQuestWorkspace({
+            entry: { pathname: "/app/c1/quests/q1", search: sources, state: { reviewSearch: "?status=proposed&type=quest" } },
+        })
+        expect(await screen.findByRole("link", { name: "Back to Review queue" })).toHaveAttribute(
+            "href",
+            "/app/c1/review?status=proposed&type=quest",
+        )
+        fireEvent.click(await screen.findByRole("link", { name: "View provenance" }))
+        expect(await screen.findByRole("heading", { level: 1, name: "Provenance" })).toBeInTheDocument()
+        fireEvent.click(screen.getByRole("link", { name: "The Lost Amulet" }))
+        await screen.findByRole("navigation", { name: "Quest workflow" })
+        expect(ctx.router.state.location.pathname).toBe("/app/c1/quests/q1")
+        expect(ctx.router.state.location.search).toBe(sources)
+        // Sources is the section shown, and the way back to the filtered queue survived the round trip.
+        expect(screen.getByRole("heading", { level: 2, name: "Sources" })).toBeVisible()
+        expect(screen.getByRole("link", { name: "Back to Review queue" })).toHaveAttribute(
+            "href",
+            "/app/c1/review?status=proposed&type=quest",
+        )
+        expect(screen.queryByRole("link", { name: "Back to Quests" })).toBeNull()
+    })
+
+    it("carries the queue through the history link too", async () => {
+        const ctx = setupQuestWorkspace({
+            entry: { pathname: "/app/c1/quests/q1", search: sources, state: { reviewSearch: "?status=proposed" } },
+        })
+        fireEvent.click(await screen.findByRole("link", { name: "View provenance" }))
+        fireEvent.click(await screen.findByRole("link", { name: "Revision history and comparison" }))
+        await waitFor(() => expect(ctx.router.state.location.pathname).toBe("/app/c1/world/record/q1/history"))
+        expect(ctx.router.state.location.state).toMatchObject({ reviewSearch: "?status=proposed" })
+    })
+
+    it("opened directly, still returns to Quests, and ignores a crafted queue address", async () => {
+        const ctx = setupQuestWorkspace({
+            entry: { pathname: "/app/c1/quests/q1", search: sources, state: { reviewSearch: "//evil.example" } },
+        })
+        fireEvent.click(await screen.findByRole("link", { name: "View provenance" }))
+        fireEvent.click(await screen.findByRole("link", { name: "The Lost Amulet" }))
+        expect(await screen.findByRole("link", { name: "Back to Quests" })).toBeInTheDocument()
+        expect(ctx.router.state.location.state ?? {}).not.toHaveProperty("reviewSearch")
+    })
+})

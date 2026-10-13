@@ -64,13 +64,16 @@ interface Props {
     // read again in place, so nothing typed here is lost and nothing is remounted.
     refreshToken: number
     onUnsaved: ReportUnsaved
+    // Called after a command succeeded and progress was read again, so the page reads what progress
+    // decides (whether the structure is now locked) again too.
+    onChanged?: () => Promise<void> | void
 }
 
 // How far the campaign and each party have got, and the explicit moves the GM can make. This is
 // timeline state under decision D-16: only these commands change it, and nothing completes a quest
 // by itself. It is separate from the quest's publication and from the authored stages. Mounted
 // only for editors, inside the Quest workspace.
-export function QuestProgressPanel({ campaignId, questId, blockedText, refreshToken, onUnsaved }: Props) {
+export function QuestProgressPanel({ campaignId, questId, blockedText, refreshToken, onUnsaved, onChanged }: Props) {
     const { reload } = useSession()
     const announce = useAnnounce()
     const { state, refetch } = useAuthoringResource<QuestProgress>(questProgressPath(campaignId, questId))
@@ -104,6 +107,7 @@ export function QuestProgressPanel({ campaignId, questId, blockedText, refreshTo
             setConfirm(null)
             setNote("")
             await refetch()
+            await onChanged?.()
             if (message !== null) announce(message)
         },
     })
