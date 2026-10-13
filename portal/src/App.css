@@ -3510,6 +3510,11 @@ a.app-header__title:focus-visible {
   max-width: none;
 }
 
+/* The quest workspace: the planning notes sit under the details form as a group of their own. */
+.section-stack > .quest-notes {
+  align-self: stretch;
+}
+
 .item-header {
   display: flex;
   flex-direction: column;

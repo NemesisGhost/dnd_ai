@@ -1,7 +1,7 @@
 import { useParams } from "react-router"
-import { questAuthoringPath } from "../api/questAuthoring"
-import { AuthoringEditLink } from "../components/AuthoringEditLink"
 import { QuestDetailBoundary } from "../components/QuestDetailBoundary"
+import { QuestWorkspace } from "../components/quests/QuestWorkspace"
+import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { useQuestPartyPerspective } from "../hooks/useQuestPartyPerspective"
 import { QuestDetailPage } from "./QuestDetailPage"
 import PlaceholderPage from "./PlaceholderPage"
@@ -27,13 +27,32 @@ export function CampaignQuestDetailPage() {
         )
     }
 
-    return <CampaignQuestDetailContent campaignId={campaignId} questId={questId} />
+    // Keyed by quest, so nothing read or typed for one quest is ever shown under another.
+    return <CampaignQuestDetailRoute key={questId} campaignId={campaignId} questId={questId} />
+}
+
+// People who can edit canon get the Quest workspace, which reads the quest through the authoring
+// contract and so also opens a draft or a quest no party has started. Everyone else gets the
+// audience-filtered reader and sends only the requests it always sent.
+function CampaignQuestDetailRoute({
+    campaignId,
+    questId,
+}: {
+    campaignId: string
+    questId: string
+}) {
+    const canEdit = useCampaignCapability(campaignId, "canon.edit")
+    return canEdit ? (
+        <QuestWorkspace campaignId={campaignId} questId={questId} />
+    ) : (
+        <CampaignQuestReader campaignId={campaignId} questId={questId} />
+    )
 }
 
 // The same (character, party) perspective the quest list used: the party
 // pair the list's link carried in the URL, re-validated against the
 // currently selected character (see useQuestPartyPerspective).
-function CampaignQuestDetailContent({
+function CampaignQuestReader({
     campaignId,
     questId,
 }: {
@@ -49,18 +68,7 @@ function CampaignQuestDetailContent({
             characterId={characterId}
             partyId={partyId}
         >
-            {(quest) => (
-                <>
-                    <QuestDetailPage campaignId={campaignId} quest={quest} />
-                    <AuthoringEditLink
-                        campaignId={campaignId}
-                        noun="quest"
-                        viewPath={questAuthoringPath(campaignId, questId)}
-                        editPath={`/app/${encodeURIComponent(campaignId)}/quests/${encodeURIComponent(questId)}/edit`}
-                        detail={quest}
-                    />
-                </>
-            )}
+            {(quest) => <QuestDetailPage campaignId={campaignId} quest={quest} />}
         </QuestDetailBoundary>
     )
 }

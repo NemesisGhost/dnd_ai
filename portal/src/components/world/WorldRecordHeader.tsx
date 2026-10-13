@@ -2,7 +2,6 @@ import { Link } from "react-router"
 import type { RefObject } from "react"
 import type { EntityLifecycleView } from "../../types/entityLifecycle"
 import { LifecycleBadge } from "../authoring/feedback"
-import type { WorldGuidance } from "./worldStages"
 
 interface Props {
     name: string
@@ -15,10 +14,13 @@ interface Props {
     // browser (with its category, search and page).
     back: { href: string; label: string }
     headingRef: RefObject<HTMLHeadingElement | null>
-    guidance: WorldGuidance | null
+    // The one next step, as text; where it leads is `guidanceHref`. Null when there is none.
+    guidance: { text: string } | null
     // Where the guidance leads; null when it has no destination.
     guidanceHref: string | null
     linkState?: object
+    // The heading's id, for a workspace whose sections name it (default: the World workspace's).
+    headingId?: string
 }
 
 // The always-visible top of the World record page: where it is, what the record is, and its real
@@ -34,6 +36,7 @@ export function WorldRecordHeader({
     guidance,
     guidanceHref,
     linkState,
+    headingId = "world-workspace-heading",
 }: Props) {
     return (
         <header className="item-header">
@@ -42,7 +45,7 @@ export function WorldRecordHeader({
             </p>
             <p className="world-detail__eyebrow">{eyebrow}</p>
             <div className="item-header__headline">
-                <h1 id="world-workspace-heading" ref={headingRef} tabIndex={-1} className="item-header__title">
+                <h1 id={headingId} ref={headingRef} tabIndex={-1} className="item-header__title">
                     {name}
                 </h1>
                 {status !== null ? (

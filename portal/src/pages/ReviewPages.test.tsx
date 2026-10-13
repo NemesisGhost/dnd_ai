@@ -102,7 +102,7 @@ describe("ReviewQueuePage", () => {
             "href",
             "/app/c1/knowledge/e2?section=review",
         )
-        expect(screen.getByRole("link", { name: "Find the Duke" })).toHaveAttribute("href", "/app/c1/quests/e3/edit")
+        expect(screen.getByRole("link", { name: "Find the Duke" })).toHaveAttribute("href", "/app/c1/quests/e3?section=review")
         expect(screen.getByRole("link", { name: "Sunblade" })).toHaveAttribute(
             "href",
             "/app/c1/items/e4?section=publication",
@@ -401,7 +401,7 @@ describe("RevisionHistoryPage", () => {
 
     it("links a quest's history back to the quest, which has no World page", async () => {
         setup({ ...history, entity_type_code: "quest", name: "Find the Duke" }, ["canon.edit"], "/app/c1/world/record/e1/history")
-        expect(await screen.findByRole("link", { name: "Find the Duke" })).toHaveAttribute("href", "/app/c1/quests/e1/edit")
+        expect(await screen.findByRole("link", { name: "Find the Duke" })).toHaveAttribute("href", "/app/c1/quests/e1")
     })
 
     it("links a knowledge claim's history back to the claim", async () => {

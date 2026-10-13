@@ -8,11 +8,14 @@ import type { Provenance } from "../types/provenance"
 import { isWorldDetailCategory } from "../types/world"
 import "../components/authoring/authoring.css"
 
-// The Knowledge claim page to return to, when that page opened this one.
+// The Knowledge claim page or Quest workspace to return to, when that page opened this one.
 function knowledgeReturnPath(campaignId: string, state: unknown): string | null {
     const returnTo = (state as { returnTo?: unknown } | null)?.returnTo
-    const prefix = `/app/${encodeURIComponent(campaignId)}/knowledge/`
-    return typeof returnTo === "string" && returnTo.startsWith(prefix) ? returnTo : null
+    const base = `/app/${encodeURIComponent(campaignId)}`
+    // A claim page or a quest workspace of this campaign; anything else is ignored.
+    return typeof returnTo === "string" && (returnTo.startsWith(`${base}/knowledge/`) || returnTo.startsWith(`${base}/quests/`))
+        ? returnTo
+        : null
 }
 
 const when = (value: string): string => new Date(value).toLocaleString()

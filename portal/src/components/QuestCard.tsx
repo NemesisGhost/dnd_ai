@@ -43,9 +43,9 @@ export function QuestCard({
         <EntityCard
             title={quest.name}
             status={status}
-            // A definition no party has started has no player-facing detail, so
-            // its card opens the editor (the list only includes it for editors).
-            to={untracked ? `${base}/edit` : `${base}${questPerspectiveSearch(characterId, partyId)}`}
+            // Editors open the quest workspace, which also reads a definition no party has started
+            // (the list only includes those for editors); everyone else opens the reader.
+            to={`${base}${questPerspectiveSearch(characterId, partyId)}`}
             linkLabel={`${quest.name}, ${status}`}
         />
     )

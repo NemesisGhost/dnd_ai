@@ -6,7 +6,10 @@ type StatusView = Pick<EntityLifecycleView, "canon_status" | "lifecycle_status">
 
 // The status in words. Never claims publishing hands the record to anyone: who can see it follows
 // their own access, and what happens to it in play is recorded separately.
-export function PublicationExplanation({ view }: { view: StatusView }) {
+//
+// `publishedText` replaces the sentence for a published record, for a kind whose players see it
+// only under other conditions (a quest is seen once it is activated).
+export function PublicationExplanation({ view, publishedText }: { view: StatusView; publishedText?: string }) {
     if (view.lifecycle_status === "archived") {
         return (
             <p>
@@ -23,7 +26,7 @@ export function PublicationExplanation({ view }: { view: StatusView }) {
         case "approved":
             return <p>Approved, but not yet published. Publish it to make it part of canon.</p>
         case "canon":
-            return <p>Published. Players can see it wherever their access allows.</p>
+            return <p>{publishedText ?? "Published. Players can see it wherever their access allows."}</p>
         case "rejected":
             return <p>Rejected. Return it to draft to rework it, or archive it.</p>
         case "superseded":
@@ -39,12 +42,13 @@ interface Props {
     historyHref: string
     linkState?: object
     onRetry: () => void
+    publishedText?: string
 }
 
 // Where the record is in its life and every step the server offers (the one lifecycle rule: the
 // next step as the primary button, the rest under More, actionable reasons inline). Rendered
 // inside a LifecycleActionsProvider.
-export function WorldPublicationSection({ lifecycleView, historyHref, linkState, onRetry }: Props) {
+export function WorldPublicationSection({ lifecycleView, historyHref, linkState, onRetry, publishedText }: Props) {
     return (
         <>
             {lifecycleView === null ? (
@@ -56,7 +60,7 @@ export function WorldPublicationSection({ lifecycleView, historyHref, linkState,
                 </div>
             ) : (
                 <>
-                    <PublicationExplanation view={lifecycleView} />
+                    <PublicationExplanation view={lifecycleView} publishedText={publishedText} />
                     {lifecycleView.superseded_by !== null ? (
                         <p>Replaced by {lifecycleView.superseded_by.canonical_name}.</p>
                     ) : null}

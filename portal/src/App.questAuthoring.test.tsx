@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { QuestCard } from "./components/QuestCard"
 import { installCampaignShellMocks, openApp } from "./test/campaignRoutes"
 import type { MockServer } from "./test/authoringHarness"
+import { installRecordReads } from "./test/worldWorkspaceMocks"
 
 vi.mock("./hooks/useSessionBootstrap", () => ({ useSessionBootstrap: vi.fn() }))
 vi.mock("./api/userPreferences", () => ({
@@ -58,6 +59,8 @@ beforeEach(() => {
   server.on("GET", "/campaigns/mundivita/authoring/quests/options", { body: OPTIONS })
   server.on("GET", "/campaigns/mundivita/authoring/quests/q1", { body: VIEW })
   server.on("GET", /\/entities\/q1\/lifecycle$/, { status: 404 })
+  server.on("GET", "/campaigns/mundivita/quests/q1/progress", { body: { quest_id: "q1", name: "The Lost Amulet", published: false, scopes: [] } })
+  installRecordReads(server, { campaignId: "mundivita", entityId: "q1", name: "The Lost Amulet", entityTypeCode: "quest" })
   server.on("GET", /^\/campaigns\/mundivita\/quests(\?.*)?$/, {
     body: [
       { quest_id: "q1", name: "The Lost Amulet", status_code: null, tracked: false, canon_status: "draft", lifecycle_status: "active" },
@@ -73,7 +76,9 @@ afterEach(() => {
 describe("quest authoring routes", () => {
   it.each([
     ["/app/mundivita/quests/new", "New quest"],
-    ["/app/mundivita/quests/q1/edit", "Edit quest"],
+    ["/app/mundivita/quests/q1", "The Lost Amulet"],
+    ["/app/mundivita/quests/q1/edit", "The Lost Amulet"],
+    ["/app/mundivita/quests/q1/progress", "The Lost Amulet"],
   ])("%s loads directly with one main and one h1", async (path, heading) => {
     openApp(path)
     expect(await screen.findByRole("heading", { level: 1, name: heading })).toBeInTheDocument()
@@ -84,7 +89,7 @@ describe("quest authoring routes", () => {
     expect(server.calls.some((c) => c.path.endsWith("/quests/new"))).toBe(false)
   })
 
-  it("gives editors a New quest link and sends an untracked draft's card to its editor", async () => {
+  it("gives editors a New quest link and sends an untracked draft's card to its workspace", async () => {
     openApp("/app/mundivita/quests")
     expect(await screen.findByRole("link", { name: "New quest" })).toHaveAttribute(
       "href",
@@ -92,7 +97,7 @@ describe("quest authoring routes", () => {
     )
     expect(screen.getByRole("link", { name: /The Lost Amulet, Draft · Not started/ })).toHaveAttribute(
       "href",
-      "/app/mundivita/quests/q1/edit",
+      "/app/mundivita/quests/q1?character_id=character-ixamarra&party_id=party-primary",
     )
     // A tracked quest's detail link carries the list's party perspective.
     expect(screen.getByRole("link", { name: /The Siege, Active/ })).toHaveAttribute(

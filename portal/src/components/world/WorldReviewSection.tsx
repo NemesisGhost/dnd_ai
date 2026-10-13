@@ -1,3 +1,4 @@
+import type { ReactNode } from "react"
 import { Link } from "react-router"
 import type { UseAuthoringResourceResult } from "../../hooks/useAuthoringResource"
 import type { EntityLifecycleView } from "../../types/entityLifecycle"
@@ -15,6 +16,10 @@ interface Props {
     detailsHref: string
     publicationHref: string
     linkState?: object
+    // See PublicationExplanation.
+    publishedText?: string
+    // What else a reviewer should check, from the record itself (a quest's structure).
+    summary?: ReactNode
 }
 
 const when = (iso: string): string => new Date(iso).toLocaleString()
@@ -31,6 +36,8 @@ export function WorldReviewSection({
     detailsHref,
     publicationHref,
     linkState,
+    publishedText,
+    summary,
 }: Props) {
     const state = revisions.state
     const list = state.kind === "ready" ? state.data.revisions : null
@@ -44,8 +51,9 @@ export function WorldReviewSection({
                     Publication.
                 </p>
             ) : (
-                <PublicationExplanation view={lifecycleView} />
+                <PublicationExplanation view={lifecycleView} publishedText={publishedText} />
             )}
+            {summary}
             <dl className="authoring-fact-list">
                 <dt>Latest change</dt>
                 <dd>

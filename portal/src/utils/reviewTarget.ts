@@ -51,7 +51,10 @@ export function reviewTarget(campaignId: string, row: ReviewRowIdentity): Review
     const id = enc(row.entity_id)
 
     if (row.entity_type_code === "quest") {
-        return { path: `${base}/quests/${id}/edit`, action, carriesReturn: false }
+        // The quest workspace: Review where a decision is waiting, Publication for a quest that
+        // was rejected, replaced or archived, Details for a draft.
+        const section = phase === "decide" ? "review" : phase === "publication" ? "publication" : "details"
+        return { path: `${base}/quests/${id}?section=${section}`, action, carriesReturn: true }
     }
     if (row.entity_type_code === "knowledge_item") {
         const section = phase === "decide" ? "review" : phase === "publication" ? "publication" : "claim"
@@ -78,7 +81,7 @@ export function reviewTarget(campaignId: string, row: ReviewRowIdentity): Review
 export function recordPath(campaignId: string, entityId: string, entityTypeCode: string, category: string | null): string | null {
     const base = `/app/${enc(campaignId)}`
     const id = enc(entityId)
-    if (entityTypeCode === "quest") return `${base}/quests/${id}/edit`
+    if (entityTypeCode === "quest") return `${base}/quests/${id}`
     if (entityTypeCode === "knowledge_item") return `${base}/knowledge/${id}`
     if (category !== null && category !== "record") return `${base}/world/${enc(category)}/${id}`
     return null

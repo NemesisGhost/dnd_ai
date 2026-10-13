@@ -44,7 +44,7 @@ import { ItemDefinitionFormPage, ItemDefinitionsPage } from "./pages/ItemDefinit
 import { CreateItemPage, EditItemPage, ItemsPage } from "./pages/ItemPages"
 import { ItemWorkspacePage } from "./pages/ItemWorkspacePage"
 import { NpcPortrayalPage } from "./pages/NpcPortrayalPage"
-import { QuestProgressPage } from "./pages/QuestProgressPage"
+import { QuestSectionRedirect } from "./pages/QuestSectionRedirect"
 import { CreatePartyPage, EditPartyPage, PartiesPage } from "./pages/PartyPages"
 import {
   ChooseCharacterTypePage,
@@ -52,7 +52,7 @@ import {
   CreatePlayerCharacterPage,
   EditCharacterPage,
 } from "./pages/NpcAuthoringPages"
-import { CreateQuestPage, EditQuestPage } from "./pages/QuestAuthoringPages"
+import { CreateQuestPage } from "./pages/QuestAuthoringPages"
 import { CreateReligionPage, EditReligionPage } from "./pages/ReligionAuthoringPages"
 import { CampaignKnowledgePage } from "./pages/CampaignKnowledgePage"
 import { CampaignKnowledgeDetailPage } from "./pages/CampaignKnowledgeDetailPage"
@@ -378,7 +378,7 @@ function App() {
 
             <Route
               path="quests/:questId/progress"
-              element={<QuestProgressPage />}
+              element={<QuestSectionRedirect section="progress" />}
             />
 
             <Route
@@ -428,7 +428,7 @@ function App() {
 
             <Route
               path="quests/:questId/edit"
-              element={<EditQuestPage />}
+              element={<QuestSectionRedirect section="details" />}
             />
 
             <Route

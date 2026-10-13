@@ -1,15 +1,9 @@
-import { Link, useParams } from "react-router"
-import { createQuest, questAuthoringPath, questOptionsPath } from "../api/questAuthoring"
+import { createQuest, questOptionsPath } from "../api/questAuthoring"
 import { ContentCreatePage } from "../components/authoring/ContentCreatePage"
 import type { ContentCreateConfig } from "../components/authoring/ContentCreatePage"
 import type { FieldError } from "../components/authoring/feedback"
 import { TextAreaField, TextField } from "../components/authoring/fields"
-import { QuestCompletionEditor } from "../components/authoring/QuestCompletionEditor"
-import { QuestEditor } from "../components/authoring/QuestEditor"
-import { EntityLifecyclePanel } from "../components/EntityLifecyclePanel"
-import { useAuthoringResource } from "../hooks/useAuthoringResource"
-import { usePageArrival } from "../hooks/usePageArrival"
-import type { CreateQuestBody, QuestAuthoringView, QuestOptions } from "../types/questAuthoring"
+import type { CreateQuestBody, QuestOptions } from "../types/questAuthoring"
 import {
     DESCRIPTION_MAX,
     NAME_MAX,
@@ -63,7 +57,7 @@ const createConfig: ContentCreateConfig<
     }),
     create: createQuest,
     resultPath: (campaignId, created) =>
-        `${questsPath(campaignId)}/${encodeURIComponent(created.quest_id)}/edit`,
+        `${questsPath(campaignId)}/${encodeURIComponent(created.quest_id)}?section=structure`,
     announce: "Quest created as a draft. Add its stages and objectives.",
     saveLabel: "Create quest",
     pendingLabel: "Creating…",
@@ -91,69 +85,8 @@ const createConfig: ContentCreateConfig<
 }
 
 // Create a Quest draft: /app/:campaignId/quests/new. Stages and objectives are
-// added on the quest's own editor page, which this creation lands on.
+// added in the quest's own workspace (its Stages and objectives section), which this
+// creation lands on.
 export function CreateQuestPage() {
     return <ContentCreatePage config={createConfig} />
-}
-
-// Edit a Quest definition: /app/:campaignId/quests/:questId/edit. Loads the
-// authoring aggregate keyed by the URL, so it reloads and deep-links on its own.
-export function EditQuestPage() {
-    const { campaignId = "", questId = "" } = useParams()
-    const { state, refetch } = useAuthoringResource<QuestAuthoringView>(
-        questAuthoringPath(campaignId, questId),
-    )
-    const options = useAuthoringResource<QuestOptions>(questOptionsPath(campaignId))
-    const ready = state.kind === "ready" && options.state.kind === "ready"
-    const headingRef = usePageArrival(ready)
-
-    return (
-        <section className="authoring-page" aria-labelledby="edit-quest-heading">
-            <p className="authoring-page__breadcrumb">
-                <Link to={questsPath(campaignId)}>Quests</Link>
-                {state.kind === "ready" ? <> / {state.data.name}</> : null}
-            </p>
-            <h1 id="edit-quest-heading" ref={headingRef} tabIndex={-1}>
-                Edit quest
-            </h1>
-            {state.kind === "loading" || options.state.kind === "loading" ? (
-                <p role="status">Loading quest…</p>
-            ) : state.kind === "unavailable" || state.kind === "denied" ? (
-                <p role="alert">This quest does not exist, or you do not have access to it.</p>
-            ) : state.kind === "error" || options.state.kind !== "ready" ? (
-                <p role="alert">The quest could not be loaded. Try reloading the page.</p>
-            ) : (
-                <>
-                    <QuestEditor
-                        campaignId={campaignId}
-                        view={state.data}
-                        options={options.state.data}
-                        refreshing={state.refreshing}
-                        refetch={refetch}
-                    />
-                    {state.data.canon_status === "canon" ? (
-                        <p>
-                            <Link to={`/app/${encodeURIComponent(campaignId)}/quests/${encodeURIComponent(questId)}/progress`}>
-                                Run this quest
-                            </Link>
-                        </p>
-                    ) : null}
-                    <QuestCompletionEditor
-                        key={state.data.row_version}
-                        campaignId={campaignId}
-                        view={state.data}
-                        options={options.state.data}
-                        refetch={refetch}
-                    />
-                    <div className="page-section section-stack">
-                        <EntityLifecyclePanel
-                            campaignId={campaignId}
-                            entityId={questId}
-                            onChanged={() => void refetch()}
-                        />
-                    </div>
-                </>
-            )}
-        </section>
-    )
 }

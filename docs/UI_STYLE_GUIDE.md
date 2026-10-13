@@ -269,12 +269,12 @@ Five contracts say how a region is contained. Choose by purpose, not by counting
 | **Primary section panel** (`DetailPanel`) | Peer regions of a record page, and a distinct task region on a reading page (Run this item, Lifecycle, Sources, Relationships, Members, Inventory) | Single-column forms or reading flows; around content that already has surfaces (card grids, tables, trees, stage cards) | Surface, 1px border, 0.5rem radius, 1rem padding (0.75rem below 30rem), `h2` 1.125rem |
 | **Plain section** (`.page-section`, also `.authoring-section`) | Settings, overview, form and list pages | Peers that reflow side by side | No surface, 1.5rem top margin, `h2` 1.25rem |
 | **Inset group** (`.inset-group`) | A subordinate group inside a panel or form | A top-level peer of panels; inside another inset | Muted surface, no border, 0.375rem radius |
-| **Workspace section panel** (`SectionPanel`) | The one visible section of a staged workspace | Anywhere else | Bordered, `h2` 1.25rem, purpose line |
+| **Workspace section panel** (`SectionPanel`) | The one visible section of a guided workspace (§10a.1) | Anywhere else | Bordered, `h2` 1.25rem, purpose line |
 | **Disclosure** (`.disclosure`) | Optional detail of one item (why an action is unavailable, an objective's details) | Essential information or navigation | Native `<details>`, summary text, a text indicator ("Show +" / "Hide −", or "Expand +" / "Collapse −"), visible focus |
 
 **Wrapper ownership.** A container (the reading grid, `.section-stack`, `.world-detail__layout`, a plain section) owns the space between its children. A component that can stand alone owns its surface. A component that is embedded in a host that already supplies the surface, heading and labelled region renders content only (`EntitySourcesSection embedded`), so there is never a panel inside a panel and never a second region with the same name.
 
-**When an exception is justified.** Only when the semantics differ (an `article`, an `h1` header, a mode banner), the surface is itself the interaction (cards, stage cards, dialogs), the workflow documents a different width or density, or the content is structure that borders would obscure (trees, chronology). Say which in a comment beside the CSS. Preserved exceptions: Campaign Home's recent-events list and compact clock, the character sheet header reusing panel CSS for its `h1`, the staged workspace panel, Knowledge details, quest stage cards, the hierarchy context panel, the Member preview banner, and the Get started callout.
+**When an exception is justified.** Only when the semantics differ (an `article`, an `h1` header, a mode banner), the surface is itself the interaction (cards, stage cards, dialogs), the workflow documents a different width or density, or the content is structure that borders would obscure (trees, chronology). Say which in a comment beside the CSS. Preserved exceptions: Campaign Home's recent-events list and compact clock, the character sheet header reusing panel CSS for its `h1`, the guided workspace panel, Knowledge details, quest stage cards, the hierarchy context panel, the Member preview banner, and the Get started callout.
 
 ### 6.8 Operational rows, chronology and status
 
@@ -449,17 +449,61 @@ Shared primitives live in `portal/src/components/authoring/` and are styled by `
 - **Visually hidden text** uses the `.visually-hidden` utility (clipped, not `display: none`) so it is still read by assistive technology.
 - **Lifecycle status and actions (one rule, every page).** A lifecycle panel shows the status (badge and words), then a compact action group: the next forward step as the primary button (Restore, or Return to draft for a rejected record, when that is the way forward) and every other action the server offers under **More**; the confirmations, reasons, supersede candidates and stale-write recovery do not change. Blocked actions are explained from the server's `blocked_actions` without discarding any: a reason a person can act on (a parent that is not published, a review in progress, and any reason the portal does not recognise) is shown next to the actions, and the reasons that only restate the status (wrong canon status, archived, not archived) sit under a collapsed **Why other actions are unavailable (N)** disclosure whose count is exactly the list inside. A page that already explains a blocker in its own words may suppress the inline copy, never the disclosure. Grouping is presentation only; it infers no eligibility.
 
-### 10a.1 Staged workspace pages
+### 10a.1 Guided workspace pages
 
-A long task page (the Run Session page, the Knowledge claim page, the item workspace and the World record workspace) is organised into **stages** with a **local section menu**, not a long scroll. The Knowledge claim page, the item workspace and the World record workspace use the stages Prepare, Review & publish and Use in play (a World record has the third only where a published record can be run, so a place or a religion has two). The record's actual status lives in the page header, never in the stage navigation. Stages organise the interface only; they never imply or cause a lifecycle change, so their wording ("Prepare", "Run session", "Wrap up") avoids verbs like start or end.
+A record whose editors do several **meaningful working phases** on one page uses a **guided workspace**: an always-visible header with the record's real status, a numbered **workflow phase** row, a **local section menu** for the current phase, and one visible section at a time. This is the rule for every such record; it is not a style choice per page. The Run Session page, the Knowledge claim page, the item workspace, the World record workspace and the Quest workspace follow it.
 
-- **Page breadcrumb.** `<nav aria-label="Breadcrumb">` with an ordered list: parent list, the record (by its title, never an identifier), and the current page (`aria-current="page"`, not a link). It is separate from the campaign context panel (world, timeline, campaign, perspective).
-- **Stage navigation.** A numbered row of links (`aria-label="Session stages"`, `"Claim stages"`, `"Item stages"` or `"Record stages"`, `aria-current="step"`), wrapping at narrow widths. The current stage is marked by weight and a heavier border, not colour alone.
-- **Section menu.** Links for the current stage's sections only (`aria-label="<Stage> sections"`, `aria-current="page"`): a left column when the workspace container is at least 48rem wide (so the sidebar and context panel are accounted for), a wrapping row below it. Links, not tabs or buttons, because choosing one changes the address.
-- **Preserved context.** Choosing a stage or section keeps every other query parameter (character and party perspective). A "Next" link in a page header is navigation to the section where a step lives, never an action.
-- **Section panel.** One panel visible at a time: a bordered surface with an `h2` (focused when the section changes), a one-line purpose, then the content. A section the record cannot use yet says why instead of showing a disabled form.
-- **Origin context.** A staged page reachable from more than one collection (an item from the item inventory or from the World page) remembers where it was opened from in router state (the collection's query string only, validated), forwards it on every stage, section, Next and edit link and when replacing the address to fill in a missing section, and returns to the plain collection for a direct link. Sidebar selection never depends on that state.
+**What qualifies as a working phase.** A phase qualifies when all three hold: it is a distinct job with its own commands or decisions (authoring the definition, deciding publication, recording what happens in play or at the table); the server's state decides when its commands apply, so a phase that does not apply yet explains itself instead of disappearing; and a person comes back to it repeatedly and out of order. A record gets a guided workspace when it has **at least two** such phases (for example Prepare plus Review & publish, or Prepare plus Run). Having many panels, or a long page, does not qualify a record.
+
+**When something lighter is enough.**
+
+| Use | When |
+|---|---|
+| Plain sections (`.page-section`, `DetailPanel`, §6.7) | One job with several regions: reading pages, settings, lists, one form plus its history, and a record with its own exclusive status machine whose page shows only what that status allows (an event, an encounter) |
+| A disclosure (§6.7) | Optional detail of one item |
+| A wizard step row (`.authoring-step-nav`) | A linear creation flow in which every step commits and the next depends on it (campaign setup) |
+| Tabs (ARIA `tablist`) | Never for workflow phases. Reserved for switching views of the same data without changing the address; none exist today |
+
+Non-linear workflows stay non-linear. Phases are numbered for orientation and every one stays reachable; a phase never gates another. Only the server's eligibility does, and it is explained in the section.
+
+**Naming.** Phases are named for the work, not for a state: Prepare, Review & publish, Use in play, Run session, Wrap up. They avoid verbs of lifecycle change (start, end, publish now). The phase row is labelled "<Record> workflow" (`"Quest workflow"`), and the words "stage" and "phase" never appear in a phase label. A domain term is never reused for navigation: a quest **stage** is part of the authored adventure, an encounter **round** and a session **status** belong to their records. Documentation says "workflow phase" in full. (The older pages' accessible labels, "Session stages", "Claim stages", "Item stages" and "Record stages", and the shared component names `StageNav` and `useStagedNavigation` predate this rule and are renamed when each is next changed.)
+
+**Status and eligibility.** The header shows the record's real status from the server's lifecycle read, never from the phase, and shows none while it is unknown. Phases never imply, cause or block a lifecycle change. A **Next** link is navigation to the section where a step lives, derived only from `available_actions` (or the read model's own explicit flags), never an action. A section whose commands do not apply says why and links to what unlocks it. A failed status read is not eligibility: its commands are withheld.
+
+**Default and direct links.** The current section lives in the address (`?section=…`) and the phase follows from it. With no section the default is where the record's next real step is done, from the lifecycle read: in review or approved, Review; archived or replaced, Publication; published and active, the first Use in play section where the record has one; otherwise the first Prepare section. A missing or unknown value is replaced, not pushed; a person's choice adds a history entry. Every other query parameter and the router state are kept, and each phase reopens on the section last used in it. Old addresses redirect into a section, replacing history and carrying the query and the state.
+
+**Read-only.** People without the authoring capability get the reader: no phases, no authoring request, and a `?section=` in their address is ignored and not rewritten. Inside the workspace, a field the person may not change is text with one line saying why; a section with nothing for this person is left out, never shown disabled.
+
+**Return context.** The header's back link follows where the record was opened from (validated router state: the collection's query, or the Review queue's filters), and that state rides on every phase, section, Next, edit and redirect link. A direct link returns to the plain collection. Sidebar selection never depends on that state.
+
+**Drafts.** Every section stays mounted once shown, so switching never loses input. Saves are independent and report in the section that sent them; a refresh updates in place and never remounts on a row version; one page-level guard names everything unsent, and a query-only change is not leaving. Entered values are never written to browser storage.
+
+**Keyboard and focus.** Phases and sections are links (`aria-current="step"` and `aria-current="page"`), not tabs or buttons, because choosing one changes the address. Arrival focuses the `<h1>`; a section change focuses its `<h2>`. The current item is shown by weight and a heavier border, not colour alone.
+
+**Responsive layout.** The section menu is a left column when the workspace container is at least 48rem wide (a container query, so the sidebar and context panel are accounted for) and a wrapping row above that; a phase with one section has no menu. At 320-390px there is one column, no horizontal page scroll, and full-width form actions, while row buttons stay compact.
+
+**Reuse.** Use `useStagedNavigation`, `StageNav`, `SectionNav`, `SectionPanel`, `UnsavedInputGuard` and the lifecycle parts (`LifecycleActionsProvider` with the Review and Publication sections), with the record header pattern (`.item-header`). Do not build another navigation component.
+
+**Parts of the page.**
+
+- **Page breadcrumb.** `<nav aria-label="Breadcrumb">` with an ordered list: parent list, the record (by its title, never an identifier), and the current page (`aria-current="page"`, not a link). A workspace may use a single "Back to …" link above the header instead. It is separate from the campaign context panel (world, timeline, campaign, perspective).
+- **Phase navigation.** A numbered row of links, wrapping at narrow widths. The current phase is marked by weight and a heavier border, not colour alone.
+- **Section menu.** Links for the current phase's sections only (`aria-label="<Phase> sections"`).
+- **Section panel.** One panel visible at a time: a bordered surface with an `h2`, a one-line purpose, then the content.
 - **Compact time bar.** In-world time is labelled "(in-world)" and real-world timestamps "Real-world …" so the two are never confused.
+
+**Page families against this rule.**
+
+| Family | Verdict |
+|---|---|
+| Run Session, Knowledge claim, item workspace, World record workspace, Quest workspace | Guided workspaces (this section) |
+| Quest reader, Knowledge Member preview, Knowledge and World readers | One job (read); no phases |
+| Session detail, encounter, event record | Plain sections; the record's own status decides what its page shows |
+| Campaign setup | Wizard step row |
+| Lists, Review queue, revision history, Campaign Home, settings, access, parties, party members, world times, worlds, timelines | One job; plain sections |
+| Item definitions | Not lifecycle-managed; one form |
+| Dungeon and area edit pages; NPC portrayal and character builds | Candidates to fold into the World record workspace's sections later; not part of the Quest work |
+| Character sheet tabs (UI_DESIGN §5.5) | Reading views of one character; not a workflow |
 
 ## 11. Knowledge standard
 
@@ -517,6 +561,8 @@ Each card links to the established campaign-scoped quest detail route.
 
 ### 12.2 Detail page
 
+This is the audience-filtered reader that every member without `canon.edit` gets. People who can edit canon get the Quest workspace (§12.4) at the same address.
+
 The quest detail surface should include:
 
 - title and current status;
@@ -532,7 +578,7 @@ Stages and objectives are separate bounded panels or subregions. Do not reorder 
 
 ### 12.3 Connected collapsible stage cards
 
-Stages render as one connected vertical column of collapsible cards, in server sequence order, on both the detail page and the definition editor.
+Stages render as one connected vertical column of collapsible cards, in server sequence order, on both the detail page and the **Stages and objectives** section of the Quest workspace (§12.4).
 
 - **Disclosure.** Each stage title is an `<h3>` containing one button with `aria-expanded` and `aria-controls` pointing at the stage body. Stages start collapsed and expand or collapse independently, with an Expand all / Collapse all button above the list (its label follows whether every stage is open); this is local presentation state, sends no request, and is not persisted. A stage with an open form (and so any validation or stale-write notice) stays expanded. Reordering, saving, or editing never collapses a stage.
 - **Collapsed summary.** Sequence number, name, stage type, a disclosure indicator in text (`Expand +` / `Collapse −`), and a summary line. The detail page shows `Shown objectives: x of y complete` (or `No objectives shown`), counting only the objectives the server returned for this audience. That list is audience-filtered, so the portal never claims a whole-stage status (Not started, In progress, Complete) from it and never implies whether hidden objectives exist; each shown objective carries its own exact server status. The editor reads a definition, which carries no progress, so it shows the objective count and how many are required instead. The roll-up is text, never color alone.
@@ -541,6 +587,24 @@ Stages render as one connected vertical column of collapsible cards, in server s
 - **Responsive.** Rows are capped at a readable width, the side controls narrow but remain at 390 px, summaries wrap, and nothing scrolls the page horizontally.
 
 Future related-NPC, location, discovery, dependency, outcome, or reward panels require corresponding audience-safe API fields.
+
+### 12.4 Quest workspace
+
+For people who can edit canon, the quest's address (`/app/:campaignId/quests/:questId`) is a guided workspace (§10a.1). It reads the quest through the authoring contract, so it also opens a draft or a quest no party has started. It keeps three things apart, in layout and in words:
+
+| Concept | What it is | Where it appears |
+|---|---|---|
+| **Workflow phase** | Page navigation only: never stored, sent or a status | The "Quest workflow" row: **1. Prepare**, **2. Review & publish**, **3. Use in play** |
+| **Quest stage and objective** | The authored adventure (a definition) | The **Stages and objectives** section, and objective names in Progress |
+| **Progress** | Timeline state for the campaign and for each party, changed only by explicit GM commands | The **Progress** section only |
+
+The record's real status (Draft, In review, Approved, Canon, Rejected, Superseded, Archived) is the header badge, from the lifecycle read. Progress status (Not started, Active, Suspended, Completed, Failed, Abandoned) is per scope and never appears in the header. Publication copy never says that publishing starts, activates, completes or reveals the quest, and progress copy never names a lifecycle status.
+
+Sections: **Prepare** has Details (name and summary, and the planning notes only editors see), Stages and objectives (the connected stage cards of §12.3, with their inline forms, ordering and confirmed removals), Dependencies, Outcomes and rewards, Participants, and Sources. **Review & publish** has Review (a summary of the saved structure, the revision comparison links and the Approve or Publish step when the server offers it) and Publication (the one lifecycle rule of §10a). **Use in play** has Progress and, only with `access.manage`, Member preview (the read-only preview of what a member sees). Each section saves on its own and keeps its own errors, confirmations and stale-write recovery.
+
+Defaults: draft or rejected opens Details, in review or approved opens Review, published opens Progress, replaced or archived opens Publication. **Next** is "Add stages and objectives" for a draft with nothing to publish, then the server-offered lifecycle step ("Submit for review", "Approve it", "Publish it", "Return it to draft to rework it", "Restore it"), "Run it" for a published quest, or "Replaced by X". Progress is read once Use in play is first opened and then stays mounted. It offers commands only while the page's own lifecycle read says the quest is published and active, whatever the progress read offers; an unknown status withholds them. A refresh that fails keeps what is shown, says it may be out of date, and offers Try again (which only reads).
+
+When the quest cannot be edited, the definition is text with one line saying why (in review or approved or rejected: return it to draft; archived: restore it; replaced: edit the replacement) and a link to Publication. Once progress is recorded the structure that depends on it stays locked with its reason (§12.3 and the editor's lock note), and wording, visibility, outcomes and participants stay editable. The old `/edit` and `/progress` addresses redirect into the Details and Progress sections.
 
 ## 13. State presentation
 
@@ -653,6 +717,17 @@ Test:
 - no inaccessible or invented sections;
 - responsive CSS through build/manual browser checks rather than brittle JSDOM layout assertions.
 
+### Guided workspaces
+
+Test:
+
+- the phase and section links, direct links, defaults for every lifecycle state, and that an unknown section is replaced rather than pushed;
+- that no phase or section link sends a request, and that a half-typed draft survives switching;
+- that eligibility comes from the server's lifecycle and actions, not from the phase, and that a failed status read withholds commands;
+- the reader (no phases, no authoring request, `?section=` ignored) beside the workspace;
+- return context: Back to the collection or the Review queue, carried through every link;
+- that the phase labels contain neither "stage" nor "phase" where a domain stage exists.
+
 ### Route plumbing
 
 Test:
@@ -693,6 +768,7 @@ A redesigned surface is complete only when:
 - no capability is inferred locally;
 - null fields are handled deliberately;
 - focus, headings, labels, and status indicators are accessible;
+- a record with several working phases follows the guided workspace rule (§10a.1), with workflow phases named apart from domain terms;
 - focused tests pass;
 - the complete portal test suite passes;
 - lint and production build pass;

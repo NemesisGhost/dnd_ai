@@ -62,13 +62,23 @@ describe("reviewTarget", () => {
         )
     })
 
-    it("sends a quest to its edit page, which has no sections", () => {
+    it("sends a quest to the section of its workspace where it is decided, and carries the way back", () => {
         const quest = { category: null, entity_type_code: "quest" }
         expect(reviewTarget("c1", row(quest))).toEqual({
-            path: "/app/c1/quests/e1/edit",
+            path: "/app/c1/quests/e1?section=review",
             action: "Review",
-            carriesReturn: false,
+            carriesReturn: true,
         })
+        expect(reviewTarget("c1", row({ ...quest, canon_status: "draft" }))).toMatchObject({
+            path: "/app/c1/quests/e1?section=details",
+            action: "Open",
+        })
+        for (const canon_status of ["rejected", "superseded"]) {
+            expect(reviewTarget("c1", row({ ...quest, canon_status }))?.path).toBe("/app/c1/quests/e1?section=publication")
+        }
+        expect(reviewTarget("c1", row({ ...quest, lifecycle_status: "archived" }))?.path).toBe(
+            "/app/c1/quests/e1?section=publication",
+        )
     })
 
     it("gives a record with no page of its own no target at all", () => {
@@ -84,7 +94,7 @@ describe("reviewTarget", () => {
 describe("recordPath", () => {
     it("leads the history page back to the record, including ones with no World page", () => {
         expect(recordPath("c1", "e1", "settlement", "location")).toBe("/app/c1/world/location/e1")
-        expect(recordPath("c1", "e1", "quest", "record")).toBe("/app/c1/quests/e1/edit")
+        expect(recordPath("c1", "e1", "quest", "record")).toBe("/app/c1/quests/e1")
         expect(recordPath("c1", "e1", "knowledge_item", "record")).toBe("/app/c1/knowledge/e1")
         expect(recordPath("c1", "e1", "something_new", "record")).toBeNull()
     })
