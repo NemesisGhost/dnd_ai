@@ -10,10 +10,9 @@ import {
 import { CharacterBoundary } from "../components/CharacterBoundary"
 import { CharacterInventoryPanel } from "../components/InventoryPanels"
 import { ItemWorkspace } from "../components/items/ItemWorkspace"
-import { NpcAuthoringControls } from "../components/NpcAuthoringControls"
 import { OrganizationMembers } from "../components/OrganizationMembers"
-import { RelationshipsPanel } from "../components/RelationshipsPanel"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
+import { WorldRecordWorkspace } from "../components/world/WorldRecordWorkspace"
 import { WorldEntityDetailBoundary } from "../components/WorldEntityDetailBoundary"
 import { isWorldDetailCategory } from "../types/world"
 import { CharacterDetailPage } from "./CharacterDetailPage"
@@ -29,6 +28,11 @@ import { WorldReligionDetailPage } from "./WorldReligionDetailPage"
 // `category` is validated against the categories with an independently
 // loadable detail contract and fails closed for anything else (including
 // "relationship", which has none until Phase 15.2).
+//
+// People who can edit canon get a guided workspace for the records that go through the canon
+// lifecycle (places, dungeons, areas, organizations, religions, NPCs and player characters; an
+// item gets the item workspace). Everyone else, and an event for everyone, gets the read-only page
+// below, which sends no authoring, lifecycle or sources request.
 export function CampaignWorldDetailPage() {
     const { campaignId, category, entityId } = useParams<{
         campaignId: string
@@ -36,6 +40,7 @@ export function CampaignWorldDetailPage() {
         entityId: string
     }>()
     const worldBackPath = useWorldBackPath(campaignId ?? "")
+    const canEdit = useCampaignCapability(campaignId ?? "", "canon.edit")
 
     if (
         campaignId === undefined ||
@@ -51,6 +56,10 @@ export function CampaignWorldDetailPage() {
         )
     }
 
+    if (canEdit && (category === "location" || category === "organization" || category === "religion" || category === "character")) {
+        return <WorldRecordWorkspace key={`${category}:${entityId}`} campaignId={campaignId} category={category} entityId={entityId} />
+    }
+
     if (category === "location") {
         return (
             <WorldEntityDetailBoundary
@@ -60,13 +69,10 @@ export function CampaignWorldDetailPage() {
                 resourceLabel="location"
             >
                 {(location) => (
-                    <>
-                        <WorldLocationDetailPage
-                            campaignId={campaignId}
-                            location={location}
-                        />
-                        <RelationshipsPanel campaignId={campaignId} entityId={entityId} />
-                    </>
+                    <WorldLocationDetailPage
+                        campaignId={campaignId}
+                        location={location}
+                    />
                 )}
             </WorldEntityDetailBoundary>
         )
@@ -87,7 +93,6 @@ export function CampaignWorldDetailPage() {
                             organization={organization}
                         />
                         <OrganizationMembers campaignId={campaignId} organizationId={entityId} />
-                        <RelationshipsPanel campaignId={campaignId} entityId={entityId} />
                     </>
                 )}
             </WorldEntityDetailBoundary>
@@ -103,13 +108,10 @@ export function CampaignWorldDetailPage() {
                 resourceLabel="religion"
             >
                 {(religion) => (
-                    <>
-                        <WorldReligionDetailPage
-                            campaignId={campaignId}
-                            religion={religion}
-                        />
-                        <RelationshipsPanel campaignId={campaignId} entityId={entityId} />
-                    </>
+                    <WorldReligionDetailPage
+                        campaignId={campaignId}
+                        religion={religion}
+                    />
                 )}
             </WorldEntityDetailBoundary>
         )
@@ -126,12 +128,22 @@ export function CampaignWorldDetailPage() {
                 entityId={entityId}
                 fetchDetail={fetchEventDetail}
                 resourceLabel="event"
+                lifecycle={false}
             >
                 {(event) => (
-                    <WorldEventDetailPage
-                        campaignId={campaignId}
-                        event={event}
-                    />
+                    <>
+                        <WorldEventDetailPage
+                            campaignId={campaignId}
+                            event={event}
+                        />
+                        {canEdit ? (
+                            <p>
+                                <Link to={`/app/${encodeURIComponent(campaignId)}/events/${encodeURIComponent(entityId)}`}>
+                                    Open the event record
+                                </Link>
+                            </p>
+                        ) : null}
+                    </>
                 )}
             </WorldEntityDetailBoundary>
         )
@@ -149,8 +161,6 @@ export function CampaignWorldDetailPage() {
                     </p>
                     <CharacterDetailPage character={character} />
                     <CharacterInventoryPanel campaignId={campaignId} characterId={entityId} />
-                    <NpcAuthoringControls campaignId={campaignId} characterId={entityId} />
-                    <RelationshipsPanel campaignId={campaignId} entityId={entityId} />
                 </div>
             )}
         </CharacterBoundary>

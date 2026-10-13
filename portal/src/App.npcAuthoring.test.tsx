@@ -2,6 +2,7 @@ import { screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { installCampaignShellMocks, openApp } from "./test/campaignRoutes"
 import type { MockServer } from "./test/authoringHarness"
+import { installRecordReads } from "./test/worldWorkspaceMocks"
 
 vi.mock("./hooks/useSessionBootstrap", () => ({ useSessionBootstrap: vi.fn() }))
 vi.mock("./api/userPreferences", () => ({
@@ -79,6 +80,8 @@ beforeEach(() => {
       blocked_actions: [],
     },
   })
+  // The editors' workspace also reads the record's revisions, provenance and the world's sources.
+  installRecordReads(server, { campaignId: "mundivita", entityId: "n1", entityTypeCode: "npc" })
 })
 
 afterEach(() => {
@@ -97,13 +100,19 @@ describe("NPC authoring routes", () => {
     expect(screen.queryByText(/Unexpected Application Error/i)).toBeNull()
   })
 
-  it("gives an editor the NPC Edit link and lifecycle panel on a character's detail", async () => {
+  it("gives an editor the NPC Edit link on a character's workspace, opened at its details", async () => {
     openApp("/app/mundivita/world/character/n1")
     expect(await screen.findByRole("link", { name: "Edit NPC" })).toHaveAttribute(
       "href",
       "/app/mundivita/characters/n1/edit",
     )
-    expect(await screen.findByRole("heading", { name: "Lifecycle" })).toBeInTheDocument()
+    expect(await screen.findByRole("heading", { level: 2, name: "Details" })).toBeInTheDocument()
+  })
+
+  it("offers the lifecycle steps in the Publication section", async () => {
+    openApp("/app/mundivita/world/character/n1?section=publication")
+    expect(await screen.findByRole("heading", { level: 2, name: "Publication" })).toBeInTheDocument()
+    expect(await screen.findByRole("button", { name: "Submit for review" })).toBeInTheDocument()
   })
 
   it("gives a player neither and sends no authoring request", async () => {

@@ -24,11 +24,13 @@ import type {
 } from "../types/relationshipAuthoring"
 import { RELATIONSHIP_CODE_MESSAGE } from "../utils/relationshipForm"
 import "./authoring/authoring.css"
-import { DetailPanel } from "./DetailPanel"
+import { PanelFrame } from "./DetailPanel"
 
 interface Props {
     campaignId: string
     entityId: string
+    // A staged section already supplies the surface and the heading: render the content only.
+    embedded?: boolean
 }
 
 const humanize = (code: string): string => code.replace(/_/g, " ")
@@ -36,23 +38,31 @@ const humanize = (code: string): string => code.replace(/_/g, " ")
 // The relationships an entity takes part in, for editors: every edge (private and archived
 // ones included), the editor for each, and a form to add another. Mounted on the world
 // detail pages; players and observers get nothing and send no request.
-export function RelationshipsPanel({ campaignId, entityId }: Props) {
+export function RelationshipsPanel({ campaignId, entityId, embedded }: Props) {
     if (!useCampaignCapability(campaignId, "canon.edit")) return null
-    return <LoadedPanel campaignId={campaignId} entityId={entityId} />
+    return <LoadedPanel campaignId={campaignId} entityId={entityId} embedded={embedded} />
 }
 
-function LoadedPanel({ campaignId, entityId }: Props) {
+function LoadedPanel({ campaignId, entityId, embedded }: Props) {
     const [showArchived, setShowArchived] = useState(false)
     const [open, setOpen] = useState<string | null>(null)
     const list = useAuthoringResource<RelationshipList>(
         entityRelationshipsPath(campaignId, entityId, showArchived),
     )
     const options = useAuthoringResource<RelationshipOptions>(relationshipOptionsPath(campaignId))
-    if (list.state.kind !== "ready" || options.state.kind !== "ready") return null
+    if (list.state.kind !== "ready" || options.state.kind !== "ready") {
+        // Inside a staged section a missing body would read as "no relationships", so say why.
+        if (embedded !== true) return null
+        return list.state.kind === "loading" || options.state.kind === "loading" ? (
+            <p role="status">Loading relationships…</p>
+        ) : (
+            <p role="alert">Relationships could not be loaded.</p>
+        )
+    }
     const items = list.state.data.items
     const loadedOptions = options.state.data
     return (
-        <DetailPanel title="Relationships" headingId="relationships-heading">
+        <PanelFrame embedded={embedded} title="Relationships" headingId="relationships-heading">
             {items.length === 0 ? <p>No relationships recorded.</p> : null}
             <ul className="op-list">
                 {items.map((item) => (
@@ -99,7 +109,7 @@ function LoadedPanel({ campaignId, entityId }: Props) {
                     onCreated={() => void list.refetch()}
                 />
             ) : null}
-        </DetailPanel>
+        </PanelFrame>
     )
 }
 

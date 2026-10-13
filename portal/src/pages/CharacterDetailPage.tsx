@@ -7,9 +7,10 @@ interface CharacterDetailPageProps {
     character: CharacterDetail
 }
 
-// The restricted World character read model: only the fields the audience-safe response carries.
-// It shares the World readers' panel and fact vocabulary, but is not the character sheet.
-export function CharacterDetailPage({
+// The reading panels of the restricted World character read model: only the fields the
+// audience-safe response carries. They share the World readers' panel and fact vocabulary, but are
+// not the character sheet. Shared by the reader and the editors' workspace.
+export function CharacterPanels({
     character,
 }: CharacterDetailPageProps) {
     const conditions = character.conditions
@@ -20,10 +21,7 @@ export function CharacterDetailPage({
         resources !== null
 
     return (
-        <section aria-labelledby="character-heading">
-            <p className="world-detail__eyebrow">Character</p>
-            <h1 id="character-heading">{character.name}</h1>
-
+        <>
             <div className="world-detail__panel-grid">
                 <DetailPanel title="Overview" headingId="character-overview-heading">
                     <FactGrid
@@ -110,6 +108,19 @@ export function CharacterDetailPage({
                 ) : null}
             </div>
             {hasFullDetails ? null : <p>Additional character details are not available.</p>}
+        </>
+    )
+}
+
+export function CharacterDetailPage({
+    character,
+}: CharacterDetailPageProps) {
+    return (
+        <section aria-labelledby="character-heading">
+            <p className="world-detail__eyebrow">Character</p>
+            <h1 id="character-heading">{character.name}</h1>
+
+            <CharacterPanels character={character} />
         </section>
     )
 }

@@ -12,6 +12,7 @@ import { ContentCreatePage } from "../components/authoring/ContentCreatePage"
 import type { ContentCreateConfig } from "../components/authoring/ContentCreatePage"
 import { ContentEditPage } from "../components/authoring/ContentEditPage"
 import type { ContentEditConfig } from "../components/authoring/ContentEditPage"
+import { worldEditNavigation } from "../components/world/editNavigation"
 import type { FieldError } from "../components/authoring/feedback"
 import { SelectField, TextAreaField, TextField } from "../components/authoring/fields"
 import { ReferenceCombobox } from "../components/authoring/ReferenceCombobox"
@@ -348,6 +349,7 @@ const editConfig: ContentEditConfig<NpcAuthoringView, NpcOptions, NpcFormValues,
     breadcrumbLabel: "World",
     worldPath: worldBase,
     detailPath: (campaignId, id) => `${worldBase(campaignId)}/character/${encodeURIComponent(id)}`,
+    navigation: worldEditNavigation("character"),
     viewPath: npcAuthoringPath,
     optionsPath: npcOptionsPath,
     name: (view) => view.name,

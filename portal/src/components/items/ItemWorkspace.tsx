@@ -9,19 +9,18 @@ import type { UseAuthoringResourceResult } from "../../hooks/useAuthoringResourc
 import { useCampaignCapability } from "../../hooks/useCampaignCapability"
 import { pickReturnState, useItemsBackPath } from "../../hooks/useItemsBackPath"
 import { usePageArrival } from "../../hooks/usePageArrival"
-import { useUnsavedChangesGuard } from "../../hooks/useUnsavedChangesGuard"
 import { useWorldBackPath } from "../../hooks/useWorldBackPath"
 import type { EntityLifecycleView } from "../../types/entityLifecycle"
 import type { ItemView } from "../../types/items"
 import type { Provenance } from "../../types/provenance"
 import { describeBlockedReason } from "../../utils/blockedReason"
 import { rarityText } from "../../utils/itemState"
-import { ConfirmDialog } from "../authoring/ConfirmDialog"
 import { WorldTimePicker } from "../authoring/WorldTimePicker"
 import { FactGrid } from "../FactGrid"
 import { LifecycleActionList, LifecycleActionsProvider, LifecycleBlockedReasons } from "../EntityLifecyclePanel"
 import { EntitySourcesSection } from "../EntitySourcesSection"
 import { SectionNav, SectionPanel, StageNav } from "../staged/StagedNav"
+import { UnsavedInputGuard } from "../staged/UnsavedInputGuard"
 import { ItemHeader } from "./ItemHeader"
 import type { ItemOrigin } from "./ItemHeader"
 import { ItemConditionSection, ItemEquipmentSection, ItemMoveSection } from "./ItemPlaySections"
@@ -421,22 +420,5 @@ function PublicationSection({ view, lifecycleView }: { view: ItemView; lifecycle
             <LifecycleActionList />
             <LifecycleBlockedReasons />
         </>
-    )
-}
-
-// One guard for everything an editor has typed and not yet sent (a hand-over, a place, an amount, a
-// source): leaving the page asks first, and so does closing the tab (docs/UI_DESIGN.md §5.11).
-function UnsavedInputGuard({ unsaved }: { unsaved: string[] }) {
-    const guard = useUnsavedChangesGuard(unsaved.length > 0)
-    return (
-        <ConfirmDialog
-            open={guard.blocked}
-            title="Discard unsaved input?"
-            description={`You have entered ${unsaved.join(" and ")}. It has not been sent.`}
-            confirmLabel="Discard"
-            cancelLabel="Keep editing"
-            onConfirm={guard.discard}
-            onCancel={guard.stay}
-        />
     )
 }

@@ -4,7 +4,7 @@ import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { useWorldReturnState } from "../hooks/useWorldBackPath"
 import type { CharacterInventoryItem, PartyInventory } from "../types/items"
 import "./authoring/authoring.css"
-import { DetailPanel } from "./DetailPanel"
+import { PanelFrame } from "./DetailPanel"
 
 const itemPath = (campaignId: string, itemId: string): string =>
     `/app/${encodeURIComponent(campaignId)}/world/item/${encodeURIComponent(itemId)}`
@@ -46,18 +46,29 @@ function ItemList({ campaignId, items }: { campaignId: string; items: Row[] }) {
 export function CharacterInventoryPanel({
     campaignId,
     characterId,
+    embedded,
 }: {
     campaignId: string
     characterId: string
+    // A staged section already supplies the surface and the heading: render the content only.
+    embedded?: boolean
 }) {
     const { state } = useAuthoringResource<CharacterInventoryItem[]>(
         characterInventoryPath(campaignId, characterId),
     )
-    if (state.kind !== "ready") return null
+    if (state.kind !== "ready") {
+        // Inside a staged section a missing body would read as "nothing carried", so say why.
+        if (embedded !== true) return null
+        return state.kind === "loading" ? (
+            <p role="status">Loading inventory…</p>
+        ) : (
+            <p role="alert">The inventory could not be loaded.</p>
+        )
+    }
     return (
-        <DetailPanel title="Inventory" headingId={`inventory-${characterId}`}>
+        <PanelFrame embedded={embedded} title="Inventory" headingId={`inventory-${characterId}`}>
             <ItemList campaignId={campaignId} items={state.data} />
-        </DetailPanel>
+        </PanelFrame>
     )
 }
 

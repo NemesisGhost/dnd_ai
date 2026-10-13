@@ -15,6 +15,27 @@ interface DetailPanelProps {
     children: ReactNode
 }
 
+// A panel, or only its content when a staged section already supplies the surface and the heading.
+export function PanelFrame({
+    embedded = false,
+    title,
+    headingId,
+    children,
+}: {
+    embedded?: boolean
+    title: string
+    headingId?: string
+    children: ReactNode
+}) {
+    return embedded ? (
+        <>{children}</>
+    ) : (
+        <DetailPanel title={title} headingId={headingId}>
+            {children}
+        </DetailPanel>
+    )
+}
+
 export function DetailPanel({
     title,
     description,

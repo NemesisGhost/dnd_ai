@@ -47,7 +47,7 @@ const campaignNavigationItems: NavigationItem[] = [
   { path: "knowledge", label: "Knowledge", icon: BookOpen },
   {
     path: "review",
-    label: "Review",
+    label: "Review queue",
     icon: ClipboardCheck,
     capability: "canon.edit",
   },

@@ -14,6 +14,7 @@ import { ContentCreatePage } from "../components/authoring/ContentCreatePage"
 import type { ContentCreateConfig } from "../components/authoring/ContentCreatePage"
 import { ContentEditPage } from "../components/authoring/ContentEditPage"
 import type { ContentEditConfig } from "../components/authoring/ContentEditPage"
+import { worldEditNavigation } from "../components/world/editNavigation"
 import { DungeonStructure } from "../components/authoring/DungeonStructure"
 import type { FieldError } from "../components/authoring/feedback"
 import { SelectField, TextAreaField, TextField } from "../components/authoring/fields"
@@ -222,6 +223,7 @@ const editDungeonConfig: ContentEditConfig<
     breadcrumbLabel: "World",
     worldPath,
     detailPath: locationDetail,
+    navigation: worldEditNavigation("location"),
     viewPath: dungeonAuthoringPath,
     optionsPath: dungeonOptionsPath,
     name: (view) => view.name,
@@ -343,6 +345,7 @@ const editAreaConfig: ContentEditConfig<AreaAuthoringView, DungeonOptions, AreaV
     breadcrumbLabel: "World",
     worldPath,
     detailPath: locationDetail,
+    navigation: worldEditNavigation("location"),
     viewPath: areaAuthoringPath,
     optionsPath: dungeonOptionsPath,
     name: (view) => view.name,

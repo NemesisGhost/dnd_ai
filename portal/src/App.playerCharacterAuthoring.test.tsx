@@ -2,6 +2,7 @@ import { screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { installCampaignShellMocks, openApp } from "./test/campaignRoutes"
 import type { MockServer } from "./test/authoringHarness"
+import { installRecordReads } from "./test/worldWorkspaceMocks"
 
 vi.mock("./hooks/useSessionBootstrap", () => ({ useSessionBootstrap: vi.fn() }))
 vi.mock("./api/userPreferences", () => ({
@@ -80,6 +81,8 @@ function mock(canon: string) {
       blocked_actions: [],
     },
   })
+  // The editors' workspace also reads the record's revisions, provenance and the world's sources.
+  installRecordReads(server, { campaignId: "mundivita", entityId: "p1", entityTypeCode: "player_character" })
 }
 
 beforeEach(() => mock("draft"))
@@ -126,7 +129,7 @@ describe("player-character authoring routes", () => {
   it("links a published player character to Access with the character chosen", async () => {
     vi.unstubAllGlobals()
     mock("canon")
-    openApp("/app/mundivita/world/character/p1")
+    openApp("/app/mundivita/world/character/p1?section=player")
     expect(await screen.findByRole("link", { name: "Link a player" })).toHaveAttribute(
       "href",
       "/app/mundivita/access?character=p1",

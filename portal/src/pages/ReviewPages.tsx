@@ -1,5 +1,5 @@
-import { useState } from "react"
-import { Link, useParams } from "react-router"
+import { useEffect, useState } from "react"
+import { Link, useLocation, useParams, useSearchParams } from "react-router"
 import { comparePath, fetchReviewPage, reviewQueuePath, revisionsPath } from "../api/review"
 import { SelectField } from "../components/authoring/fields"
 import { LifecycleBadge } from "../components/authoring/feedback"
@@ -12,23 +12,76 @@ import type {
     RevisionComparison,
     RevisionHistory,
 } from "../types/review"
+import { humanizeCode } from "../utils/humanize"
+import { recordPath, reviewTarget } from "../utils/reviewTarget"
 import "../components/authoring/authoring.css"
 
 const humanize = (code: string): string => code.replace(/_/g, " ")
 const when = (value: string): string => new Date(value).toLocaleString()
 const base = (campaignId: string): string => `/app/${encodeURIComponent(campaignId)}`
+// A kind of record in words; "NPC" is an acronym, not a word to capitalise.
+const kindLabel = (code: string): string => (code === "npc" ? "NPC" : humanizeCode(code))
 
 const historyPath = (campaignId: string, category: string | null, entityId: string): string =>
     `${base(campaignId)}/world/${encodeURIComponent(category ?? "record")}/${encodeURIComponent(entityId)}/history`
 
 // /app/:campaignId/review: the world's definitions that are not yet published, by where they
-// stand, for people who can edit canon. A reviewer can approve their own work (it is audited);
-// the queue says when the latest change was theirs.
+// stand, for people who can edit canon. Each row opens the record's own workspace at the section
+// where it is reviewed; the decision itself is taken there, never in this list. A reviewer can
+// approve their own work (it is audited); the queue says when the latest change was theirs.
+// The filters live in the address, so Back from a record returns to the same list.
+const DEFAULT_STATUS = "in_review"
+const STATUS_ORDER = ["in_review", "approved", "pending", "draft", "rejected", "archived"]
+// The statuses whose counts add up to "needs attention".
+const PENDING_PARTS = ["draft", "in_review", "approved", "rejected"]
+
+function orderedStatuses(statuses: ReviewQueue["statuses"]): ReviewQueue["statuses"] {
+    const rank = (value: string) => {
+        const index = STATUS_ORDER.indexOf(value)
+        return index === -1 ? STATUS_ORDER.length : index
+    }
+    return [...statuses].sort((a, b) => rank(a.value) - rank(b.value))
+}
+
+// What the counts can honestly say. The server counts every kind of record, so they are shown only
+// while no kind is chosen; "needs attention" is the sum of the four statuses it covers.
+function countFor(counts: Record<string, number>, status: string): number | undefined {
+    if (counts[status] !== undefined) return counts[status]
+    if (status === "pending" && PENDING_PARTS.every((part) => counts[part] !== undefined)) {
+        return PENDING_PARTS.reduce((sum, part) => sum + (counts[part] ?? 0), 0)
+    }
+    return undefined
+}
+
+const EMPTY_COPY: Record<string, string> = {
+    in_review: "Nothing is waiting for review. Records appear here when someone submits them for review.",
+    approved: "Nothing is approved and waiting to be published.",
+}
+
 export function ReviewQueuePage() {
     const { campaignId = "" } = useParams()
     const canEdit = useCampaignCapability(campaignId, "canon.edit")
-    const [status, setStatus] = useState("pending")
-    const [type, setType] = useState("")
+    return (
+        <section className="authoring-page" aria-labelledby="review-heading">
+            {canEdit ? (
+                <Queue campaignId={campaignId} />
+            ) : (
+                <>
+                    <h1 id="review-heading" tabIndex={-1}>
+                        Review queue
+                    </h1>
+                    <p role="alert">You do not have permission to review records.</p>
+                </>
+            )}
+        </section>
+    )
+}
+
+function Queue({ campaignId }: { campaignId: string }) {
+    const [params, setParams] = useSearchParams()
+    const rawStatus = params.get("status")
+    const status = rawStatus !== null && STATUS_ORDER.includes(rawStatus) ? rawStatus : DEFAULT_STATUS
+    const type = params.get("type") ?? ""
     const first = useAuthoringResource<ReviewQueue>(reviewQueuePath(campaignId, { status, type }))
     const headingRef = usePageArrival(first.state.kind === "ready")
     const data = first.state.kind === "ready" ? first.state.data : null
@@ -36,17 +89,41 @@ export function ReviewQueuePage() {
     const [meta, setMeta] = useState<ReviewQueue | null>(null)
     if (data !== null && meta !== data) setMeta(data)
     const shown = data ?? meta
+
+    // A missing or unknown value is corrected in place (not pushed), so Back does not revisit it.
+    useEffect(() => {
+        const unknownKind = shown !== null && type !== "" && !shown.types.includes(type)
+        if (rawStatus === status && !unknownKind) return
+        const next = new URLSearchParams(params)
+        next.set("status", status)
+        if (unknownKind) next.delete("type")
+        setParams(next, { replace: true })
+    }, [rawStatus, status, type, shown, params, setParams])
+
+    const change = (key: "status" | "type", value: string) => {
+        const next = new URLSearchParams(params)
+        next.set("status", status)
+        if (key === "status") next.set("status", value)
+        else if (value === "") next.delete("type")
+        else next.set("type", value)
+        setParams(next)
+    }
+    // What a record opened from here leads back to: this list, as it is now.
+    const reviewSearch = `?${new URLSearchParams({ status, ...(type === "" ? {} : { type }) }).toString()}`
+
     return (
-        <section className="authoring-page" aria-labelledby="review-heading">
+        <>
             <h1 id="review-heading" ref={headingRef} tabIndex={-1}>
-                Review
+                Review queue
             </h1>
-            {!canEdit ? (
-                <p role="alert">You do not have permission to review records.</p>
-            ) : shown === null && first.state.kind === "loading" ? (
+            <p className="authoring-page__lead">
+                Records of this world that are waiting for a review decision or for publication. Open one to
+                review it in its own workspace.
+            </p>
+            {shown === null && first.state.kind === "loading" ? (
                 <p role="status">Loading…</p>
             ) : shown === null ? (
-                <p role="alert">The review queue could not be loaded.</p>
+                <QueueError onRetry={() => void first.refetch()} />
             ) : (
                 <>
                     <form noValidate aria-label="Filter the review queue" className="authoring-form">
@@ -54,29 +131,29 @@ export function ReviewQueuePage() {
                             id="review-status"
                             label="Show"
                             value={status}
-                            options={shown.statuses.map((s) => ({
-                                value: s.value,
-                                label:
-                                    shown.counts[s.value] === undefined
-                                        ? s.label
-                                        : `${s.label} (${shown.counts[s.value]})`,
-                            }))}
-                            onChange={setStatus}
+                            options={orderedStatuses(shown.statuses).map((s) => {
+                                const count = type === "" ? countFor(shown.counts, s.value) : undefined
+                                return {
+                                    value: s.value,
+                                    label: count === undefined ? s.label : `${s.label} (${count})`,
+                                }
+                            })}
+                            onChange={(value) => change("status", value)}
                         />
                         <SelectField
                             id="review-type"
                             label="Kind of record"
                             value={type}
                             placeholder="All kinds"
-                            options={shown.types.map((t) => ({ value: t, label: humanize(t) }))}
-                            onChange={setType}
+                            options={shown.types.map((t) => ({ value: t, label: kindLabel(t) }))}
+                            onChange={(value) => change("type", value)}
                         />
                     </form>
                     {data === null ? (
                         first.state.kind === "loading" ? (
                             <p role="status">Loading…</p>
                         ) : (
-                            <p role="alert">The review queue could not be loaded.</p>
+                            <QueueError onRetry={() => void first.refetch()} />
                         )
                     ) : (
                         <QueueList
@@ -85,11 +162,24 @@ export function ReviewQueuePage() {
                             status={status}
                             type={type}
                             data={data}
+                            reviewSearch={reviewSearch}
+                            onShowAllKinds={() => change("type", "")}
                         />
                     )}
                 </>
             )}
-        </section>
+        </>
+    )
+}
+
+function QueueError({ onRetry }: { onRetry: () => void }) {
+    return (
+        <div role="alert">
+            <p>The review queue could not be loaded.</p>
+            <button type="button" className="authoring-button" onClick={onRetry}>
+                Try again
+            </button>
+        </div>
     )
 }
 
@@ -98,11 +188,15 @@ function QueueList({
     status,
     type,
     data,
+    reviewSearch,
+    onShowAllKinds,
 }: {
     campaignId: string
     status: string
     type: string
     data: ReviewQueue
+    reviewSearch: string
+    onShowAllKinds: () => void
 }) {
     const [more, setMore] = useState<ReviewRow[]>([])
     const [cursor, setCursor] = useState<string | null>(data.next_cursor)
@@ -128,32 +222,62 @@ function QueueList({
     return (
         <>
             {rows.length === 0 ? (
-                <p>Nothing here.</p>
+                <div>
+                    <p>
+                        {EMPTY_COPY[status] !== undefined && type === ""
+                            ? EMPTY_COPY[status]
+                            : "No records match this filter."}
+                    </p>
+                    {type !== "" ? (
+                        <button type="button" className="authoring-button" onClick={onShowAllKinds}>
+                            Show all kinds
+                        </button>
+                    ) : null}
+                </div>
             ) : (
                 <ul className="op-list" aria-label="Records">
-                    {rows.map((row) => (
-                        <li key={row.entity_id}>
-                            {row.category !== null ? (
-                                <Link
-                                    to={`${base(campaignId)}/world/${encodeURIComponent(row.category)}/${encodeURIComponent(row.entity_id)}`}
-                                >
-                                    {row.name}
-                                </Link>
-                            ) : (
-                                <strong>{row.name}</strong>
-                            )}{" "}
-                            ({humanize(row.entity_type_code)}){" "}
-                            <LifecycleBadge
-                                status={row.lifecycle_status === "archived" ? "archived" : row.canon_status}
-                            />
-                            . Changed {when(row.updated_at)}
-                            {row.last_change_by !== null ? ` by ${row.last_change_by}` : ""}
-                            {row.last_change_by_me ? " (you)" : ""}.{" "}
-                            <Link to={historyPath(campaignId, row.category, row.entity_id)}>
-                                History of {row.name}
-                            </Link>
-                        </li>
-                    ))}
+                    {rows.map((row) => {
+                        const target = reviewTarget(campaignId, row)
+                        const state = target?.carriesReturn ? { reviewSearch } : undefined
+                        return (
+                            <li key={row.entity_id}>
+                                {target !== null ? (
+                                    <Link to={target.path} state={state}>
+                                        {row.name}
+                                    </Link>
+                                ) : (
+                                    <strong>{row.name}</strong>
+                                )}{" "}
+                                ({kindLabel(row.entity_type_code)}){" "}
+                                <LifecycleBadge
+                                    status={row.lifecycle_status === "archived" ? "archived" : row.canon_status}
+                                />
+                                . Last changed {when(row.updated_at)}
+                                {row.last_change_by !== null ? ` by ${row.last_change_by}` : ""}
+                                {row.last_change_by_me ? " (you)" : ""}.
+                                <div className="row-actions">
+                                    {target !== null ? (
+                                        <Link
+                                            className="authoring-button"
+                                            to={target.path}
+                                            state={state}
+                                            aria-label={`${target.action} ${row.name}`}
+                                        >
+                                            {target.action}
+                                        </Link>
+                                    ) : null}
+                                    <Link
+                                        className="authoring-button"
+                                        to={historyPath(campaignId, row.category, row.entity_id)}
+                                        state={target?.carriesReturn ? state : undefined}
+                                        aria-label={`History of ${row.name}`}
+                                    >
+                                        History
+                                    </Link>
+                                </div>
+                            </li>
+                        )
+                    })}
                 </ul>
             )}
             {failed ? <p role="alert">More could not be loaded. Try again.</p> : null}
@@ -175,37 +299,58 @@ function QueueList({
 
 // /app/:campaignId/world/:category/:entityId/history: every revision of a record, and a
 // comparison of any two. The comparison reads the authored fields (a lifecycle revision holds
-// only statuses, so it stands for the latest authored version at or before it).
+// only statuses, so it stands for the latest authored version at or before it). The two versions
+// compared are in the address (`?from=&to=`), so a comparison can be linked to.
 export function RevisionHistoryPage() {
-    const { campaignId = "", category = "", entityId = "" } = useParams()
+    const { campaignId = "" } = useParams()
     const canEdit = useCampaignCapability(campaignId, "canon.edit")
-    const { state } = useAuthoringResource<RevisionHistory>(revisionsPath(campaignId, entityId))
-    const headingRef = usePageArrival(state.kind === "ready")
-    const detailPath = `${base(campaignId)}/world/${encodeURIComponent(category)}/${encodeURIComponent(entityId)}`
     return (
         <section className="authoring-page" aria-labelledby="history-heading">
+            {canEdit ? (
+                <LoadedHistory />
+            ) : (
+                <>
+                    <h1 id="history-heading" tabIndex={-1}>
+                        Revision history
+                    </h1>
+                    <p role="alert">You do not have permission to see the history of this record.</p>
+                </>
+            )}
+        </section>
+    )
+}
+
+function LoadedHistory() {
+    const { campaignId = "", category = "", entityId = "" } = useParams()
+    const { state } = useAuthoringResource<RevisionHistory>(revisionsPath(campaignId, entityId))
+    const headingRef = usePageArrival(state.kind === "ready")
+    const { state: routerState } = useLocation()
+    const reviewSearch = (routerState as { reviewSearch?: unknown } | null)?.reviewSearch
+    const queueHref = `${base(campaignId)}/review${typeof reviewSearch === "string" && reviewSearch.startsWith("?") ? reviewSearch : ""}`
+    const detail =
+        state.kind === "ready" ? recordPath(campaignId, entityId, state.data.entity_type_code, category) : null
+    return (
+        <>
             <p className="authoring-page__breadcrumb">
-                <Link to={`${base(campaignId)}/review`}>Review</Link>
-                {state.kind === "ready" && category !== "record" ? (
+                <Link to={queueHref}>Review queue</Link>
+                {state.kind === "ready" && detail !== null ? (
                     <>
                         {" / "}
-                        <Link to={detailPath}>{state.data.name}</Link>
+                        <Link to={detail}>{state.data.name}</Link>
                     </>
                 ) : null}
             </p>
             <h1 id="history-heading" ref={headingRef} tabIndex={-1}>
                 Revision history
             </h1>
-            {!canEdit ? (
-                <p role="alert">You do not have permission to see the history of this record.</p>
-            ) : state.kind === "loading" ? (
+            {state.kind === "loading" ? (
                 <p role="status">Loading…</p>
             ) : state.kind !== "ready" ? (
                 <p role="alert">This record does not exist, or you do not have access to it.</p>
             ) : (
                 <History campaignId={campaignId} history={state.data} />
             )}
-        </section>
+        </>
     )
 }
 
@@ -223,9 +368,27 @@ function describe(revision: RevisionHistory["revisions"][number]): string {
 
 function History({ campaignId, history }: { campaignId: string; history: RevisionHistory }) {
     const versions = history.revisions
-    const [from, setFrom] = useState(versions.length > 1 ? String(versions[1]!.row_version) : "")
-    const [to, setTo] = useState(versions.length > 0 ? String(versions[0]!.row_version) : "")
-    const [shown, setShown] = useState<{ from: number; to: number } | null>(null)
+    const [params, setParams] = useSearchParams()
+    const known = new Set(versions.map((r) => r.row_version))
+    // The versions named in the address, when both are versions of this record; anything else is
+    // ignored.
+    const requested = (() => {
+        const from = Number(params.get("from"))
+        const to = Number(params.get("to"))
+        return Number.isInteger(from) && Number.isInteger(to) && known.has(from) && known.has(to)
+            ? { from, to }
+            : null
+    })()
+    const [from, setFrom] = useState(
+        requested !== null
+            ? String(requested.from)
+            : versions.length > 1
+              ? String(versions[1]!.row_version)
+              : "",
+    )
+    const [to, setTo] = useState(
+        requested !== null ? String(requested.to) : versions.length > 0 ? String(versions[0]!.row_version) : "",
+    )
     const options = versions.map((r) => ({ value: String(r.row_version), label: describe(r) }))
     return (
         <>
@@ -245,7 +408,13 @@ function History({ campaignId, history }: { campaignId: string; history: Revisio
                         className="authoring-form"
                         onSubmit={(event) => {
                             event.preventDefault()
-                            if (from !== "" && to !== "") setShown({ from: Number(from), to: Number(to) })
+                            if (from === "" || to === "") return
+                            // The comparison lives in the address; choosing it replaces the entry, so
+                            // Back leaves the page rather than stepping through comparisons.
+                            const next = new URLSearchParams(params)
+                            next.set("from", from)
+                            next.set("to", to)
+                            setParams(next, { replace: true })
                         }}
                     >
                         <SelectField id="compare-from" label="Compare" value={from} options={options} onChange={setFrom} />
@@ -254,13 +423,13 @@ function History({ campaignId, history }: { campaignId: string; history: Revisio
                             Compare versions
                         </button>
                     </form>
-                    {shown !== null ? (
+                    {requested !== null ? (
                         <Comparison
-                            key={`${shown.from}-${shown.to}`}
+                            key={`${requested.from}-${requested.to}`}
                             campaignId={campaignId}
                             entityId={history.entity_id}
-                            from={shown.from}
-                            to={shown.to}
+                            from={requested.from}
+                            to={requested.to}
                         />
                     ) : null}
                 </>

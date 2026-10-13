@@ -18,11 +18,13 @@ import { ReferenceCombobox } from "./authoring/ReferenceCombobox"
 import type { ReferenceOption } from "./authoring/ReferenceCombobox"
 import { WorldTimePicker } from "./authoring/WorldTimePicker"
 import "./authoring/authoring.css"
-import { DetailPanel } from "./DetailPanel"
+import { PanelFrame } from "./DetailPanel"
 
 interface Props {
     campaignId: string
     characterId: string
+    // A staged section already supplies the surface and the heading: render the content only.
+    embedded?: boolean
 }
 
 type Command =
@@ -43,12 +45,12 @@ const humanize = (code: string): string => code.replace(/_/g, " ")
 // GM controls for a published NPC: hit points, conditions, resources and location, each one
 // idempotent command that records an event at the chosen time. The routes are the same ones the
 // character-state adapters use; this panel only gives a human GM a way to reach them.
-export function NpcRuntimePanel({ campaignId, characterId }: Props) {
+export function NpcRuntimePanel({ campaignId, characterId, embedded }: Props) {
     if (!useCampaignCapability(campaignId, "canon.edit")) return null
-    return <Loaded campaignId={campaignId} characterId={characterId} />
+    return <Loaded campaignId={campaignId} characterId={characterId} embedded={embedded} />
 }
 
-function Loaded({ campaignId, characterId }: Props) {
+function Loaded({ campaignId, characterId, embedded }: Props) {
     const npc = useAuthoringResource<NpcAuthoringView>(npcAuthoringPath(campaignId, characterId))
     const options = useAuthoringResource<RuntimeOptions>(npcRuntimeOptionsPath(campaignId))
     const character = useAuthoringResource<CharacterDetail>(
@@ -59,15 +61,16 @@ function Loaded({ campaignId, characterId }: Props) {
     }
     if (npc.state.data.canon_status !== "canon") {
         return (
-            <DetailPanel title="Run this NPC" headingId="npc-runtime-heading">
+            <PanelFrame embedded={embedded} title="Run this NPC" headingId="npc-runtime-heading">
                 <p>Publish this NPC to change their hit points, conditions, resources or location.</p>
-            </DetailPanel>
+            </PanelFrame>
         )
     }
     return (
         <Panel
             campaignId={campaignId}
             characterId={characterId}
+            embedded={embedded}
             options={options.state.data}
             detail={character.state.data}
             refetch={character.refetch}
@@ -81,6 +84,7 @@ function Panel({
     options,
     detail,
     refetch,
+    embedded,
 }: Props & { options: RuntimeOptions; detail: CharacterDetail; refetch: () => Promise<void> }) {
     const { reload } = useSession()
     const announce = useAnnounce()
@@ -173,7 +177,7 @@ function Panel({
 
     const conditionByCode = new Map(options.conditions.map((c) => [c.code, c]))
     return (
-        <DetailPanel title="Run this NPC" headingId="npc-runtime-heading">
+        <PanelFrame embedded={embedded} title="Run this NPC" headingId="npc-runtime-heading">
             {explained !== null ? (
                 <p role="alert">{explained}</p>
             ) : error !== null ? (
@@ -342,6 +346,6 @@ function Panel({
                     Move NPC
                 </button>
             </form>
-        </DetailPanel>
+        </PanelFrame>
     )
 }

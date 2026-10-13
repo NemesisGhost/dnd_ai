@@ -14,11 +14,13 @@ import { ReferenceCombobox } from "./authoring/ReferenceCombobox"
 import type { ReferenceOption } from "./authoring/ReferenceCombobox"
 import { WorldTimePicker } from "./authoring/WorldTimePicker"
 import "./authoring/authoring.css"
-import { DetailPanel } from "./DetailPanel"
+import { PanelFrame } from "./DetailPanel"
 
 interface Props {
     campaignId: string
     organizationId: string
+    // A staged section already supplies the surface and the heading: render the content only.
+    embedded?: boolean
 }
 
 const CODE_MESSAGE: Readonly<Record<string, string>> = {
@@ -35,14 +37,22 @@ const humanize = (code: string): string => code.replace(/_/g, " ")
 // can view the organization sees the public, current roster they can discover; an editor also
 // sees private and ended stints, can add a member, and can set the organization's operational
 // status. Offices are edited in the Relationships panel below (a membership is a relationship).
-export function OrganizationMembers({ campaignId, organizationId }: Props) {
+export function OrganizationMembers({ campaignId, organizationId, embedded }: Props) {
     const { state, refetch } = useAuthoringResource<Roster>(
         organizationMembersPath(campaignId, organizationId),
     )
-    if (state.kind !== "ready") return null
+    if (state.kind !== "ready") {
+        // Inside a staged section a missing body would read as "no members", so say why.
+        if (embedded !== true) return null
+        return state.kind === "loading" ? (
+            <p role="status">Loading members…</p>
+        ) : (
+            <p role="alert">Members could not be loaded.</p>
+        )
+    }
     const roster = state.data
     return (
-        <DetailPanel title="Members and offices" headingId="members-heading">
+        <PanelFrame embedded={embedded} title="Members and offices" headingId="members-heading">
             {roster.members.length === 0 ? (
                 <p>No members are known.</p>
             ) : (
@@ -74,7 +84,7 @@ export function OrganizationMembers({ campaignId, organizationId }: Props) {
                     />
                 </>
             ) : null}
-        </DetailPanel>
+        </PanelFrame>
     )
 }
 

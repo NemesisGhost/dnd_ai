@@ -8,6 +8,7 @@ import { ContentCreatePage } from "../components/authoring/ContentCreatePage"
 import type { ContentCreateConfig } from "../components/authoring/ContentCreatePage"
 import { ContentEditPage } from "../components/authoring/ContentEditPage"
 import type { ContentEditConfig } from "../components/authoring/ContentEditPage"
+import { worldEditNavigation } from "../components/world/editNavigation"
 import { OrganizationFields } from "../components/authoring/OrganizationFields"
 import type {
     CreateOrganizationBody,
@@ -89,6 +90,7 @@ const editConfig: ContentEditConfig<
     breadcrumbLabel: "World",
     worldPath,
     detailPath: (campaignId, id) => `${worldPath(campaignId)}/organization/${encodeURIComponent(id)}`,
+    navigation: worldEditNavigation("organization"),
     viewPath: organizationAuthoringPath,
     optionsPath: organizationOptionsPath,
     name: (view) => view.name,

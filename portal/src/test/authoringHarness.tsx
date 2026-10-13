@@ -143,7 +143,8 @@ function Shell({
 }
 
 export interface RenderOptions {
-    initialEntry: string
+    // An address, or an address with the router state it was opened with.
+    initialEntry: string | { pathname: string; search?: string; state?: unknown }
     routes: { path: string; element: ReactNode }[]
     bootstrap?: SessionBootstrap
     reload?: () => void
