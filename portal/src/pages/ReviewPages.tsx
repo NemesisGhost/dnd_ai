@@ -12,6 +12,7 @@ import type {
     RevisionComparison,
     RevisionHistory,
 } from "../types/review"
+import { pickWorldReturnState } from "../hooks/useWorldBackPath"
 import { humanizeCode } from "../utils/humanize"
 import { recordPath, reviewTarget } from "../utils/reviewTarget"
 import "../components/authoring/authoring.css"
@@ -238,7 +239,10 @@ function QueueList({
                 <ul className="op-list" aria-label="Records">
                     {rows.map((row) => {
                         const target = reviewTarget(campaignId, row)
+                        // The record's own page learns the queue only where it supports a way back; the
+                        // history page always does, whatever kind of record this is.
                         const state = target?.carriesReturn ? { reviewSearch } : undefined
+                        const queueState = { reviewSearch }
                         return (
                             <li key={row.entity_id}>
                                 {target !== null ? (
@@ -269,7 +273,7 @@ function QueueList({
                                     <Link
                                         className="authoring-button"
                                         to={historyPath(campaignId, row.category, row.entity_id)}
-                                        state={target?.carriesReturn ? state : undefined}
+                                        state={queueState}
                                         aria-label={`History of ${row.name}`}
                                     >
                                         History
@@ -325,8 +329,10 @@ function LoadedHistory() {
     const { state } = useAuthoringResource<RevisionHistory>(revisionsPath(campaignId, entityId))
     const headingRef = usePageArrival(state.kind === "ready")
     const { state: routerState } = useLocation()
-    const reviewSearch = (routerState as { reviewSearch?: unknown } | null)?.reviewSearch
-    const queueHref = `${base(campaignId)}/review${typeof reviewSearch === "string" && reviewSearch.startsWith("?") ? reviewSearch : ""}`
+    // Where the person came from (the Review queue's filters, the World browser), validated; it
+    // rides along every link out of this page and every comparison.
+    const returnState = pickWorldReturnState(routerState)
+    const queueHref = `${base(campaignId)}/review${returnState?.reviewSearch ?? ""}`
     const detail =
         state.kind === "ready" ? recordPath(campaignId, entityId, state.data.entity_type_code, category) : null
     return (
@@ -336,7 +342,9 @@ function LoadedHistory() {
                 {state.kind === "ready" && detail !== null ? (
                     <>
                         {" / "}
-                        <Link to={detail}>{state.data.name}</Link>
+                        <Link to={detail} state={returnState}>
+                            {state.data.name}
+                        </Link>
                     </>
                 ) : null}
             </p>
@@ -369,6 +377,7 @@ function describe(revision: RevisionHistory["revisions"][number]): string {
 function History({ campaignId, history }: { campaignId: string; history: RevisionHistory }) {
     const versions = history.revisions
     const [params, setParams] = useSearchParams()
+    const { state: routerState } = useLocation()
     const known = new Set(versions.map((r) => r.row_version))
     // The versions named in the address, when both are versions of this record; anything else is
     // ignored.
@@ -414,7 +423,7 @@ function History({ campaignId, history }: { campaignId: string; history: Revisio
                             const next = new URLSearchParams(params)
                             next.set("from", from)
                             next.set("to", to)
-                            setParams(next, { replace: true })
+                            setParams(next, { replace: true, state: routerState })
                         }}
                     >
                         <SelectField id="compare-from" label="Compare" value={from} options={options} onChange={setFrom} />

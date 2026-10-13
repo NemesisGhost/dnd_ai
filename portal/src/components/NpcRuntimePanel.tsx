@@ -19,12 +19,18 @@ import type { ReferenceOption } from "./authoring/ReferenceCombobox"
 import { WorldTimePicker } from "./authoring/WorldTimePicker"
 import "./authoring/authoring.css"
 import { PanelFrame } from "./DetailPanel"
+import { useKeptData, useRefetchOnChange } from "../hooks/useKeptData"
 
 interface Props {
     campaignId: string
     characterId: string
     // A staged section already supplies the surface and the heading: render the content only.
     embedded?: boolean
+    // Changes when the record's status changed elsewhere on the page (publishing, restoring), so
+    // eligibility is read again without remounting the panel.
+    refreshToken?: unknown
+    // Called after a command took effect, so the page's own view of the character agrees.
+    onChanged?: () => void
 }
 
 type Command =
@@ -45,21 +51,42 @@ const humanize = (code: string): string => code.replace(/_/g, " ")
 // GM controls for a published NPC: hit points, conditions, resources and location, each one
 // idempotent command that records an event at the chosen time. The routes are the same ones the
 // character-state adapters use; this panel only gives a human GM a way to reach them.
-export function NpcRuntimePanel({ campaignId, characterId, embedded }: Props) {
+export function NpcRuntimePanel({ campaignId, characterId, embedded, refreshToken, onChanged }: Props) {
     if (!useCampaignCapability(campaignId, "canon.edit")) return null
-    return <Loaded campaignId={campaignId} characterId={characterId} embedded={embedded} />
+    return (
+        <Loaded
+            campaignId={campaignId}
+            characterId={characterId}
+            embedded={embedded}
+            refreshToken={refreshToken}
+            onChanged={onChanged}
+        />
+    )
 }
 
-function Loaded({ campaignId, characterId, embedded }: Props) {
+function Loaded({ campaignId, characterId, embedded, refreshToken, onChanged }: Props) {
     const npc = useAuthoringResource<NpcAuthoringView>(npcAuthoringPath(campaignId, characterId))
     const options = useAuthoringResource<RuntimeOptions>(npcRuntimeOptionsPath(campaignId))
     const character = useAuthoringResource<CharacterDetail>(
         `/campaigns/${encodeURIComponent(campaignId)}/characters/${encodeURIComponent(characterId)}`,
     )
-    if (npc.state.kind !== "ready" || options.state.kind !== "ready" || character.state.kind !== "ready") {
+    useRefetchOnChange(refreshToken, npc.refetch)
+    useRefetchOnChange(refreshToken, character.refetch)
+    const npcView = useKeptData(npc.state)
+    const optionsView = useKeptData(options.state)
+    const characterView = useKeptData(character.state)
+    if (npcView === null || optionsView === null || characterView === null) {
         return null
     }
-    if (npc.state.data.canon_status !== "canon") {
+    // The server accepts these commands only for a published, active NPC.
+    if (npcView.lifecycle_status !== "active") {
+        return (
+            <PanelFrame embedded={embedded} title="Run this NPC" headingId="npc-runtime-heading">
+                <p>This NPC is archived. Restore it before changing their hit points, conditions, resources or location.</p>
+            </PanelFrame>
+        )
+    }
+    if (npcView.canon_status !== "canon") {
         return (
             <PanelFrame embedded={embedded} title="Run this NPC" headingId="npc-runtime-heading">
                 <p>Publish this NPC to change their hit points, conditions, resources or location.</p>
@@ -71,9 +98,10 @@ function Loaded({ campaignId, characterId, embedded }: Props) {
             campaignId={campaignId}
             characterId={characterId}
             embedded={embedded}
-            options={options.state.data}
-            detail={character.state.data}
+            options={optionsView}
+            detail={characterView}
             refetch={character.refetch}
+            onChanged={onChanged}
         />
     )
 }
@@ -85,6 +113,7 @@ function Panel({
     detail,
     refetch,
     embedded,
+    onChanged,
 }: Props & { options: RuntimeOptions; detail: CharacterDetail; refetch: () => Promise<void> }) {
     const { reload } = useSession()
     const announce = useAnnounce()
@@ -145,6 +174,7 @@ function Panel({
             setResourceDelta("")
             setSource("")
             await refetch()
+            onChanged?.()
             if (message !== null) announce(message)
         },
     })

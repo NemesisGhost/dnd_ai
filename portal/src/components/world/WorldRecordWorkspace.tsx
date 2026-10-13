@@ -217,16 +217,22 @@ function Workspace({
     const back = reviewBack !== null ? { href: reviewBack, label: "Back to Review queue" } : { href: worldBack, label: "Back to World" }
 
     const settled = lifecycle.state.kind !== "loading"
+    // A lifecycle read that succeeded and says the record is not lifecycle-managed (a bare
+    // character) is not a failed read: it has no publication workflow, only its details.
+    const unmanaged = lifecycle.state.kind === "ready" && !lifecycle.state.data.lifecycle_managed
     const lifecycleView =
         lifecycle.state.kind === "ready" && lifecycle.state.data.lifecycle_managed ? lifecycle.state.data : null
     const kind = worldKindOf(category, lifecycleView?.entity_type_code ?? null)
     const sections = worldSectionsOf(kind)
-    const nav = useStagedNavigation(sections, defaultWorldSection(lifecycleView), { ready: settled })
+    const nav = useStagedNavigation(sections, defaultWorldSection(lifecycleView), { ready: settled && !unmanaged })
     const guidance = lifecycleView === null ? null : worldGuidance(lifecycleView)
     const [sourcesDirty, setSourcesDirty] = useState(false)
     // How many times the record was refreshed after a step, for the links that read the record's
     // authoring view and must not outlive the state that allowed them.
     const [changes, setChanges] = useState(0)
+    // A command recorded on a panel (hit points, a status): the page's own view of the record is
+    // read again; nothing is remounted and no other section's input is touched.
+    const refreshDetail = () => void refetchDetail()
     const refreshRecord = () => {
         setChanges((n) => n + 1)
         void refetchDetail()
@@ -331,16 +337,35 @@ function Workspace({
                     />
                 )
             case "members": {
-                const blocked = playBlockedText(lifecycleView, playNoun)
+                // Unknown status (the lifecycle read failed) is not eligibility: withhold the commands.
+                const blocked =
+                    lifecycleView === null
+                        ? `The ${playNoun}'s status could not be loaded, so recording members or a status is not offered.`
+                        : playBlockedText(lifecycleView, playNoun)
                 return (
                     <>
                         {blocked !== null ? <p className="authoring-note">{blocked}</p> : null}
-                        <OrganizationMembers embedded campaignId={campaignId} organizationId={entityId} />
+                        <OrganizationMembers
+                            embedded
+                            campaignId={campaignId}
+                            organizationId={entityId}
+                            refreshToken={changes}
+                            onChanged={refreshDetail}
+                            commandsBlocked={blocked !== null}
+                        />
                     </>
                 )
             }
             case "run":
-                return <NpcRuntimePanel embedded campaignId={campaignId} characterId={entityId} />
+                return (
+                    <NpcRuntimePanel
+                        embedded
+                        campaignId={campaignId}
+                        characterId={entityId}
+                        refreshToken={changes}
+                        onChanged={refreshDetail}
+                    />
+                )
             case "player":
                 return (
                     <PlayerSection
@@ -352,6 +377,31 @@ function Workspace({
             case "inventory":
                 return <CharacterInventoryPanel embedded campaignId={campaignId} characterId={entityId} />
         }
+    }
+
+    if (unmanaged) {
+        return (
+            <section className="authoring-page item-workspace" aria-labelledby="world-workspace-heading">
+                <WorldRecordHeader
+                    name={info.name}
+                    eyebrow={info.eyebrow}
+                    summary={info.summary}
+                    status={null}
+                    back={back}
+                    headingRef={headingRef}
+                    guidance={null}
+                    guidanceHref={null}
+                />
+                <DetailsSection
+                    campaignId={campaignId}
+                    category={category}
+                    kind={kind}
+                    data={data}
+                    changes={changes}
+                    editState={editState}
+                />
+            </section>
+        )
     }
 
     const stages = worldStagesOf(kind)

@@ -15,12 +15,21 @@ import type { ReferenceOption } from "./authoring/ReferenceCombobox"
 import { WorldTimePicker } from "./authoring/WorldTimePicker"
 import "./authoring/authoring.css"
 import { PanelFrame } from "./DetailPanel"
+import { useKeptData, useRefetchOnChange } from "../hooks/useKeptData"
 
 interface Props {
     campaignId: string
     organizationId: string
     // A staged section already supplies the surface and the heading: render the content only.
     embedded?: boolean
+    // Changes when the record's status changed elsewhere on the page, so the roster is read again
+    // without remounting the panel.
+    refreshToken?: unknown
+    // Called after a status or a member was recorded, so the page's own view agrees.
+    onChanged?: () => void
+    // The organization cannot take new members or a status now (not published, archived,
+    // replaced): the roster stays readable, the commands are withheld.
+    commandsBlocked?: boolean
 }
 
 const CODE_MESSAGE: Readonly<Record<string, string>> = {
@@ -37,11 +46,24 @@ const humanize = (code: string): string => code.replace(/_/g, " ")
 // can view the organization sees the public, current roster they can discover; an editor also
 // sees private and ended stints, can add a member, and can set the organization's operational
 // status. Offices are edited in the Relationships panel below (a membership is a relationship).
-export function OrganizationMembers({ campaignId, organizationId, embedded }: Props) {
+export function OrganizationMembers({
+    campaignId,
+    organizationId,
+    embedded,
+    refreshToken,
+    onChanged,
+    commandsBlocked = false,
+}: Props) {
     const { state, refetch } = useAuthoringResource<Roster>(
         organizationMembersPath(campaignId, organizationId),
     )
-    if (state.kind !== "ready") {
+    useRefetchOnChange(refreshToken, refetch)
+    const kept = useKeptData(state)
+    const changed = () => {
+        void refetch()
+        onChanged?.()
+    }
+    if (kept === null) {
         // Inside a staged section a missing body would read as "no members", so say why.
         if (embedded !== true) return null
         return state.kind === "loading" ? (
@@ -50,7 +72,7 @@ export function OrganizationMembers({ campaignId, organizationId, embedded }: Pr
             <p role="alert">Members could not be loaded.</p>
         )
     }
-    const roster = state.data
+    const roster = kept
     return (
         <PanelFrame embedded={embedded} title="Members and offices" headingId="members-heading">
             {roster.members.length === 0 ? (
@@ -69,18 +91,18 @@ export function OrganizationMembers({ campaignId, organizationId, embedded }: Pr
                     ))}
                 </ul>
             )}
-            {roster.can_edit ? (
+            {roster.can_edit && !commandsBlocked ? (
                 <>
                     <StatusControl
                         campaignId={campaignId}
                         organizationId={organizationId}
                         roster={roster}
-                        onChanged={() => void refetch()}
+                        onChanged={changed}
                     />
                     <AddMember
                         campaignId={campaignId}
                         organizationId={organizationId}
-                        onAdded={() => void refetch()}
+                        onAdded={changed}
                     />
                 </>
             ) : null}

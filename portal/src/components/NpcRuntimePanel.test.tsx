@@ -20,9 +20,11 @@ const TIME = {
     display: "Year 1",
 }
 
-function setup(canon = "canon", capabilities = ["canon.edit"]) {
+function setup(canon = "canon", capabilities = ["canon.edit"], lifecycle = "active") {
     const server = installMockServer()
-    server.on("GET", /authoring\/npcs\/n1$/, { body: { npc_id: "n1", canon_status: canon, row_version: 1 } })
+    server.on("GET", /authoring\/npcs\/n1$/, {
+        body: { npc_id: "n1", canon_status: canon, lifecycle_status: lifecycle, row_version: 1 },
+    })
     server.on("GET", /npc-runtime-options/, {
         body: {
             conditions: [{ value: "c-poisoned", label: "Poisoned", code: "poisoned" }],
@@ -96,6 +98,14 @@ describe("NpcRuntimePanel", () => {
         await new Promise((resolve) => setTimeout(resolve, 50))
         expect(screen.queryByRole("heading", { name: "Run this NPC" })).not.toBeInTheDocument()
         expect(server.callsTo("GET", BASE)).toHaveLength(0)
+    })
+
+    it("offers no controls for an archived NPC, even one that was published", async () => {
+        const server = setup("canon", ["canon.edit"], "archived")
+        expect(await screen.findByText(/This NPC is archived. Restore it before/)).toBeInTheDocument()
+        expect(screen.queryByRole("form", { name: "Adjust hit points" })).not.toBeInTheDocument()
+        expect(screen.queryByRole("form", { name: "Move this NPC" })).not.toBeInTheDocument()
+        expect(server.calls.filter((c) => c.method !== "GET")).toHaveLength(0)
     })
 
     it("needs a time before anything is sent", async () => {

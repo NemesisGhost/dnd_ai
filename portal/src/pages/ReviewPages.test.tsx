@@ -214,6 +214,16 @@ describe("ReviewQueuePage", () => {
         expect(await screen.findByRole("link", { name: "Stonebridge" })).toBeInTheDocument()
     })
 
+    it("sends the queue to every History link, whatever the kind of record", async () => {
+        const { router } = setup(["canon.edit"], "/app/c1/review?status=in_review")
+        for (const name of ["Stonebridge", "Dead Duke's Claim", "Find the Duke", "Sunblade"]) {
+            await router.navigate("/app/c1/review?status=in_review")
+            fireEvent.click(await screen.findByRole("link", { name: `History of ${name}` }))
+            await vi.waitFor(() => expect(router.state.location.pathname).toMatch(/\/history$/))
+            expect(router.state.location.state).toEqual({ reviewSearch: "?status=in_review" })
+        }
+    })
+
     it("writes NPC as an acronym in the kind filter and on the row", async () => {
         const server = installMockServer()
         server.on("GET", `${QUEUE}?status=in_review`, {
@@ -261,7 +271,7 @@ describe("RevisionHistoryPage", () => {
     function setup(
         view: object = history,
         capabilities = ["canon.edit"],
-        entry = "/app/c1/world/location/e1/history",
+        entry: string | { pathname: string; search?: string; state?: unknown } = "/app/c1/world/location/e1/history",
     ) {
         const server = installMockServer()
         server.on("GET", REVISIONS, { body: view })
@@ -363,6 +373,30 @@ describe("RevisionHistoryPage", () => {
         setup()
         expect(await screen.findByRole("link", { name: "Review queue" })).toHaveAttribute("href", "/app/c1/review")
         expect(screen.getByRole("link", { name: "Stonebridge" })).toHaveAttribute("href", "/app/c1/world/location/e1")
+    })
+
+    it("keeps the queue it came from through a comparison, and into the record", async () => {
+        const state = { reviewSearch: "?status=approved&type=npc" }
+        const { router } = setup(history, ["canon.edit"], { pathname: "/app/c1/world/location/e1/history", state })
+        expect(await screen.findByRole("link", { name: "Review queue" })).toHaveAttribute(
+            "href",
+            "/app/c1/review?status=approved&type=npc",
+        )
+        fireEvent.click(screen.getByRole("button", { name: "Compare versions" }))
+        await screen.findByText(/No differences in the authored fields/)
+        expect(router.state.location.state).toEqual(state)
+        expect(screen.getByRole("link", { name: "Review queue" })).toHaveAttribute(
+            "href",
+            "/app/c1/review?status=approved&type=npc",
+        )
+        fireEvent.click(screen.getByRole("link", { name: "Stonebridge" }))
+        await vi.waitFor(() => expect(router.state.location.pathname).toBe("/app/c1/world/location/e1"))
+        expect(router.state.location.state).toEqual(state)
+    })
+
+    it("ignores a crafted return state", async () => {
+        setup(history, ["canon.edit"], { pathname: "/app/c1/world/location/e1/history", state: { reviewSearch: "//evil.example" } })
+        expect(await screen.findByRole("link", { name: "Review queue" })).toHaveAttribute("href", "/app/c1/review")
     })
 
     it("links a quest's history back to the quest, which has no World page", async () => {
