@@ -312,11 +312,14 @@ describe("PortalSidebar campaign resolution", () => {
             authenticated(makeBootstrap({ startup_campaign_id: "campaign-a" })),
         )
 
+        // The explicit destination is not authorized: the startup campaign
+        // does not stand in for it, so campaign-scoped entries stay disabled.
         expect(nav().innerHTML).not.toContain("ghost-campaign")
         openWorlds()
-        expect(
-            within(nav()).getByRole("link", { name: "Campaign world" }),
-        ).toHaveAttribute("href", "/app/campaign-a/world")
+        for (const name of ["Campaign world", "Characters", "Campaign Home"]) {
+            expect(within(nav()).queryByRole("link", { name })).not.toBeInTheDocument()
+        }
+        expect(disabledEntry("Characters")).toBeInTheDocument()
     })
 
     it("keeps campaign destinations as disabled slots with no resolvable campaign", () => {

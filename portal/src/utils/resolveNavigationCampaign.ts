@@ -14,7 +14,10 @@ export interface NavigationWorldScope {
 // The campaign the persistent sidebar's campaign-specific links target
 // (docs/UI_DESIGN.md §4.5). Precedence, most to least authoritative:
 //
-//   1. the route campaign, when it is in the current bootstrap;
+//   1. the route campaign, when it is in the current bootstrap. A route that
+//      names a campaign the bootstrap does not contain (unknown, revoked,
+//      unauthorized) resolves nothing -- the ID is never used or echoed and a
+//      saved campaign never stands in for it;
 //   2. a route that names a world (and possibly a timeline): a campaign of
 //      that confirmed world and timeline only -- saved last-visited, then
 //      startup, then the world's only campaign, else none. An explicit
@@ -46,6 +49,9 @@ export function resolveNavigationCampaign(
     const routeCampaign = find(routeCampaignId)
     if (routeCampaign !== null) {
         return routeCampaign
+    }
+    if (routeCampaignId !== undefined) {
+        return null
     }
 
     if (worldScope?.routeNamesWorld === true) {

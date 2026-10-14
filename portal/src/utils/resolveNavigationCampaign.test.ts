@@ -64,9 +64,18 @@ describe("resolveNavigationCampaign", () => {
         expect(resolveNavigationCampaign(value, "ghost-route")).toBeNull()
     })
 
-    it("skips a bad route ID but still uses a valid fallback", () => {
-        const value = bootstrap({ startup_campaign_id: "second" })
-        expect(resolveNavigationCampaign(value, "ghost-route")?.campaign_id).toBe("second")
+    it("does not replace a route that names an unauthorized campaign with a valid fallback", () => {
+        const value = bootstrap({
+            startup_campaign_id: "second",
+            campaign_preferences: {
+                startup_mode: "resume_last_visited",
+                preferred_campaign_id: null,
+                last_visited_campaign_id: "third",
+            },
+        })
+        expect(resolveNavigationCampaign(value, "ghost-route")).toBeNull()
+        // No campaign in the route: the saved fallback still applies.
+        expect(resolveNavigationCampaign(value, undefined)?.campaign_id).toBe("third")
     })
 
     it("returns null with no campaigns", () => {

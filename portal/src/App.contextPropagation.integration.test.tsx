@@ -551,13 +551,19 @@ describe("a newer selection survives lagging or stale saved state", () => {
     expect(screen.getByText("Member of b")).toBeInTheDocument()
   })
 
-  it("never uses an unauthorized campaign in the URL", async () => {
+  it("resolves no campaign navigation for an unauthorized campaign in the URL", async () => {
     server.lastVisited = "c"
     renderAt("/app/ghost/home")
 
     await screen.findByText("Campaign not found")
-    await waitFor(() => expect(accessButton()).not.toBeNull())
+    await expectAccessSlotRendered()
+    await sleep(150)
+    expect(accessButton()).toBeNull()
+    for (const name of ["Campaign Home", "Characters", "Quests", "Sessions", "Knowledge"]) {
+      expect(within(sidebar()).queryByRole("link", { name })).not.toBeInTheDocument()
+    }
     expect(document.querySelector('a[href*="ghost"]')).toBeNull()
+    expect(server.requests.some((r) => r.includes("ghost"))).toBe(false)
   })
 
   it("ignores a saved campaign that is no longer authorized", async () => {
