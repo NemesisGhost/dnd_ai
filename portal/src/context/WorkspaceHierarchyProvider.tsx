@@ -114,10 +114,19 @@ export function WorkspaceHierarchyProvider({ children }: { children: ReactNode }
             authoringWorldId,
             authoringTimelineId,
             authoringWorldAccess,
+            routeNamesWorld: worldMatch !== null && routeWorldId !== null,
             world: requestedWorldId === null ? null : worldState,
             refetchWorld: refetch,
         }
-    }, [worldMatch, routeCampaign, worldState, requestedWorldId, routeTimelineId, refetch])
+    }, [
+        worldMatch,
+        routeWorldId,
+        routeCampaign,
+        worldState,
+        requestedWorldId,
+        routeTimelineId,
+        refetch,
+    ])
 
     return (
         <WorkspaceHierarchyContext.Provider value={value}>

@@ -80,7 +80,8 @@ interface PortalSidebarProps {
 //   authenticated     full content.
 //
 // Campaign-specific links target the *resolved* authorized campaign (route
-// campaign, else last visited, else startup) — never a guessed or stale ID.
+// campaign; else, on a world route, a campaign of that world; else last
+// visited, else startup) — never a guessed or stale ID.
 export function PortalSidebar({ drawer }: PortalSidebarProps) {
   const { state } = useSession()
   const routeMatch = useMatch("/app/:campaignId/*")
@@ -90,8 +91,15 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
   // World and timeline context come from the route-derived hierarchy, which
   // confirms them against server data (WorkspaceHierarchyProvider) — never a
   // raw route ID.
-  const { authoringWorldId, authoringTimelineId, authoringWorldAccess } =
-    useWorkspaceHierarchy()
+  const {
+    activeWorldId,
+    activeTimelineId,
+    authoringWorldId,
+    authoringTimelineId,
+    authoringWorldAccess,
+    routeNamesWorld,
+    world,
+  } = useWorkspaceHierarchy()
   const navigationRef = useRef<HTMLElement>(null)
   const { open: drawerOpen, closeAndFocusToggle, close } = drawer
 
@@ -166,7 +174,16 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
   const resolvedCampaign =
     bootstrap === null
       ? null
-      : resolveNavigationCampaign(bootstrap, routeCampaignId)
+      : resolveNavigationCampaign(bootstrap, routeCampaignId, {
+          routeNamesWorld,
+          activeWorldId,
+          activeTimelineId,
+          worldUnavailable:
+            world !== null &&
+            (world.kind === "unavailable" ||
+              world.kind === "denied" ||
+              world.kind === "error"),
+        })
   const authorizedRouteCampaignId =
     bootstrap?.campaigns.some(
       (campaign) => campaign.campaign_id === routeCampaignId,

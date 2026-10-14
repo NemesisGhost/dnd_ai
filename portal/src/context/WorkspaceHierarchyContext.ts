@@ -24,6 +24,13 @@ export interface WorkspaceHierarchy {
     // server-computed capabilities ("edit" or "view"); null with no world.
     // Timeline-authoring navigation is offered only for "edit".
     authoringWorldAccess: WorldAccess | null
+    // True while the route names a concrete world (`/worlds/{id}/...`, not
+    // `/worlds` or `/worlds/new`), whether or not the server has confirmed it.
+    // It carries no ID and is never linked from: it only tells navigation that
+    // a world selection is in force, so a saved campaign preference may not be
+    // used for that world until `activeWorldId` is known (see
+    // utils/resolveNavigationCampaign.ts).
+    routeNamesWorld: boolean
     // GET /worlds/{id} for the route's world, keyed by that path so a previous
     // world's response is never shown for the next one. `null` when the route
     // names no world.

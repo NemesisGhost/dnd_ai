@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import type { SessionBootstrap } from "../types/bootstrap"
-import { resolveNavigationCampaign } from "./resolveNavigationCampaign"
+import {
+    resolveNavigationCampaign,
+    type NavigationWorldScope,
+} from "./resolveNavigationCampaign"
 
 const first = sessionBootstrapFixture.campaigns[0]!
 const second = { ...first, campaign_id: "second", campaign_name: "Second" }
@@ -68,5 +71,110 @@ describe("resolveNavigationCampaign", () => {
 
     it("returns null with no campaigns", () => {
         expect(resolveNavigationCampaign(bootstrap({ campaigns: [] }), undefined)).toBeNull()
+    })
+})
+
+describe("resolveNavigationCampaign with a world route", () => {
+    const inW1 = { ...first, campaign_id: "w1-a", world_id: "w1", timeline_id: "t1" }
+    const inW1Other = { ...first, campaign_id: "w1-b", world_id: "w1", timeline_id: "t2" }
+    const inW2 = { ...first, campaign_id: "w2-a", world_id: "w2", timeline_id: "t3" }
+
+    function scope(overrides: Partial<NavigationWorldScope> = {}): NavigationWorldScope {
+        return {
+            routeNamesWorld: true,
+            activeWorldId: "w2",
+            activeTimelineId: null,
+            worldUnavailable: false,
+            ...overrides,
+        }
+    }
+
+    function withPreferences(lastVisited: string | null, startup: string | null = null) {
+        return bootstrap({
+            campaigns: [inW1, inW1Other, inW2],
+            startup_campaign_id: startup,
+            campaign_preferences: {
+                startup_mode: "resume_last_visited",
+                preferred_campaign_id: null,
+                last_visited_campaign_id: lastVisited,
+            },
+        })
+    }
+
+    it("does not let a saved campaign from another world override the selected world", () => {
+        const value = withPreferences("w1-a", "w1-b")
+        expect(resolveNavigationCampaign(value, undefined, scope())?.campaign_id).toBe("w2-a")
+    })
+
+    it("uses a saved campaign that belongs to the selected world", () => {
+        const value = withPreferences("w1-b", "w1-a")
+        expect(
+            resolveNavigationCampaign(value, undefined, scope({ activeWorldId: "w1" }))
+                ?.campaign_id,
+        ).toBe("w1-b")
+        expect(
+            resolveNavigationCampaign(
+                withPreferences("w2-a", "w1-a"),
+                undefined,
+                scope({ activeWorldId: "w1" }),
+            )?.campaign_id,
+        ).toBe("w1-a")
+    })
+
+    it("resolves nothing when the world has several campaigns and no saved one belongs to it", () => {
+        expect(
+            resolveNavigationCampaign(
+                withPreferences("w2-a"),
+                undefined,
+                scope({ activeWorldId: "w1" }),
+            ),
+        ).toBeNull()
+    })
+
+    it("narrows to the selected timeline", () => {
+        expect(
+            resolveNavigationCampaign(
+                withPreferences("w1-a", "w1-b"),
+                undefined,
+                scope({ activeWorldId: "w1", activeTimelineId: "t2" }),
+            )?.campaign_id,
+        ).toBe("w1-b")
+    })
+
+    it("resolves nothing while the route's world is unconfirmed", () => {
+        expect(
+            resolveNavigationCampaign(
+                withPreferences("w1-a"),
+                undefined,
+                scope({ activeWorldId: null }),
+            ),
+        ).toBeNull()
+    })
+
+    it("falls back to saved defaults when the route's world turns out to be unusable", () => {
+        expect(
+            resolveNavigationCampaign(
+                withPreferences("w1-a"),
+                undefined,
+                scope({ activeWorldId: null, worldUnavailable: true }),
+            )?.campaign_id,
+        ).toBe("w1-a")
+    })
+
+    it("still prefers an authorized route campaign over the world route", () => {
+        expect(
+            resolveNavigationCampaign(withPreferences("w1-a"), "w2-a", scope({ activeWorldId: "w1" }))
+                ?.campaign_id,
+        ).toBe("w2-a")
+    })
+
+    it("uses saved defaults when the route names no world", () => {
+        expect(
+            resolveNavigationCampaign(
+                withPreferences("w1-a"),
+                undefined,
+                scope({ routeNamesWorld: false, activeWorldId: null }),
+            )?.campaign_id,
+        ).toBe("w1-a")
     })
 })
