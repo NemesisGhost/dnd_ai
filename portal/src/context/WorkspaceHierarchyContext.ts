@@ -31,6 +31,10 @@ export interface WorkspaceHierarchy {
     // used for that world until `activeWorldId` is known (see
     // utils/resolveNavigationCampaign.ts).
     routeNamesWorld: boolean
+    // Likewise for a concrete timeline (`/worlds/{id}/timelines/{timelineId}`).
+    // With `activeTimelineId` null it means the named timeline was not
+    // confirmed (unknown or not authorized).
+    routeNamesTimeline: boolean
     // GET /worlds/{id} for the route's world, keyed by that path so a previous
     // world's response is never shown for the next one. `null` when the route
     // names no world.

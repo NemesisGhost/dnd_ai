@@ -186,12 +186,20 @@ function renderAt(path: string) {
     ],
     { initialEntries: [path] },
   )
-  render(
+  const view = render(
     <ThemeProvider>
       <RouterProvider router={router} />
     </ThemeProvider>,
   )
+  lastUnmount = view.unmount
   return router
+}
+
+let lastUnmount: () => void = () => undefined
+
+function renderAtWithUnmount(path: string) {
+  renderAt(path)
+  return { unmount: lastUnmount }
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -432,16 +440,44 @@ describe("world routes keep saved defaults out of the selected context", () => {
     ).not.toBeInTheDocument()
   })
 
-  it("falls back to the saved campaign when the world link is not usable", async () => {
+  it("exposes no campaign navigation for a world that is denied, missing, or fails", async () => {
     server.lastVisited = "a"
     server.unavailableWorlds = ["w9"]
     worlds = [...worlds, worldDetail("w9", "t9")]
-    const router = renderAt("/worlds/w9")
 
-    await waitFor(() => expect(accessButton()).not.toBeNull())
-    await openAccess()
+    for (const path of ["/worlds/w9", "/worlds/does-not-exist"]) {
+      const { unmount } = renderAtWithUnmount(path)
+      await expectAccessSlotRendered()
+      await waitFor(() =>
+        expect(server.requests.some((r) => r.endsWith(path.replace("/worlds/", "/api/worlds/")))).toBe(
+          true,
+        ),
+      )
+      await sleep(150)
+      expect(accessButton()).toBeNull()
+      expect(within(sidebar()).queryByRole("link", { name: "Characters" })).not.toBeInTheDocument()
+      expect(within(sidebar()).queryByRole("link", { name: "Campaign Home" })).not.toBeInTheDocument()
+      unmount()
+    }
+  })
 
-    await waitFor(() => expect(router.state.location.pathname).toBe("/app/a/access"))
+  it("exposes no campaign navigation for an unknown timeline of a valid world", async () => {
+    server.lastVisited = "a"
+    renderAt("/worlds/w1/timelines/t9")
+
+    await expectAccessSlotRendered()
+    await waitFor(() => expect(server.requests).toContain("GET /api/worlds/w1"))
+    await sleep(150)
+    expect(accessButton()).toBeNull()
+    expect(within(sidebar()).queryByRole("link", { name: "Characters" })).not.toBeInTheDocument()
+  })
+
+  it("still resolves a campaign for a valid timeline of the world", async () => {
+    server.lastVisited = "b"
+    const router = renderAt("/worlds/w1/timelines/t1")
+
+    await openAccess("b")
+    await waitFor(() => expect(router.state.location.pathname).toBe("/app/b/access"))
   })
 
   it("follows browser Back and Forward between a campaign and a world", async () => {

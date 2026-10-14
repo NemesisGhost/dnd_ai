@@ -82,9 +82,9 @@ describe("resolveNavigationCampaign with a world route", () => {
     function scope(overrides: Partial<NavigationWorldScope> = {}): NavigationWorldScope {
         return {
             routeNamesWorld: true,
+            routeNamesTimeline: false,
             activeWorldId: "w2",
             activeTimelineId: null,
-            worldUnavailable: false,
             ...overrides,
         }
     }
@@ -151,14 +151,25 @@ describe("resolveNavigationCampaign with a world route", () => {
         ).toBeNull()
     })
 
-    it("falls back to saved defaults when the route's world turns out to be unusable", () => {
+    it("never falls back to saved defaults for a world that is not confirmed or usable", () => {
+        // Still loading, unknown, denied, or failed all leave no active world.
         expect(
             resolveNavigationCampaign(
-                withPreferences("w1-a"),
+                withPreferences("w1-a", "w1-b"),
                 undefined,
-                scope({ activeWorldId: null, worldUnavailable: true }),
-            )?.campaign_id,
-        ).toBe("w1-a")
+                scope({ activeWorldId: null }),
+            ),
+        ).toBeNull()
+    })
+
+    it("resolves nothing for a timeline that was named but not confirmed", () => {
+        expect(
+            resolveNavigationCampaign(
+                withPreferences("w1-a", "w1-b"),
+                undefined,
+                scope({ activeWorldId: "w1", routeNamesTimeline: true, activeTimelineId: null }),
+            ),
+        ).toBeNull()
     })
 
     it("still prefers an authorized route campaign over the world route", () => {

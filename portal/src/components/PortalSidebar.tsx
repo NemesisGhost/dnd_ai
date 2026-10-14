@@ -98,7 +98,7 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
     authoringTimelineId,
     authoringWorldAccess,
     routeNamesWorld,
-    world,
+    routeNamesTimeline,
   } = useWorkspaceHierarchy()
   const navigationRef = useRef<HTMLElement>(null)
   const { open: drawerOpen, closeAndFocusToggle, close } = drawer
@@ -176,13 +176,9 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
       ? null
       : resolveNavigationCampaign(bootstrap, routeCampaignId, {
           routeNamesWorld,
+          routeNamesTimeline,
           activeWorldId,
           activeTimelineId,
-          worldUnavailable:
-            world !== null &&
-            (world.kind === "unavailable" ||
-              world.kind === "denied" ||
-              world.kind === "error"),
         })
   const authorizedRouteCampaignId =
     bootstrap?.campaigns.some(

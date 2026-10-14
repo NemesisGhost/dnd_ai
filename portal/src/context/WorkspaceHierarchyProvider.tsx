@@ -115,11 +115,14 @@ export function WorkspaceHierarchyProvider({ children }: { children: ReactNode }
             authoringTimelineId,
             authoringWorldAccess,
             routeNamesWorld: worldMatch !== null && routeWorldId !== null,
+            routeNamesTimeline:
+                worldMatch !== null && timelineMatch !== null && routeTimelineId !== null,
             world: requestedWorldId === null ? null : worldState,
             refetchWorld: refetch,
         }
     }, [
         worldMatch,
+        timelineMatch,
         routeWorldId,
         routeCampaign,
         worldState,
