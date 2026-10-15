@@ -960,6 +960,20 @@ a.app-header__title:focus-visible {
   font-size: 0.95rem;
 }
 
+/* Invitation confirm screen: the action rows are separated, and the always-mounted
+   status region (a live region must stay in the DOM) shows no error box until it has text. */
+.invitation-onboarding__actions {
+  margin: 1rem 0;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.invitation-onboarding__message:empty {
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
 /* World page */
 
 .world-page {
