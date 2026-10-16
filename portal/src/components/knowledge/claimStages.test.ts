@@ -68,7 +68,7 @@ describe("claim guidance", () => {
         [{ canon_status: "draft", lifecycle_status: "archived", available_actions: ["restore"] }, section("Restore it, then continue review", "publication")],
         [{ canon_status: "approved", available_actions: ["publish", "return_to_draft"] }, section("Publish as canon", "publication")],
         [{ canon_status: "proposed", available_actions: ["approve", "return_to_draft", "reject"] }, section("Approve", "review")],
-        [{ canon_status: "draft", available_actions: ["submit_for_review", "archive"] }, section("Submit for review", "publication")],
+        [{ canon_status: "draft", available_actions: ["submit_for_review", "archive"] }, section("Submit for review", "review")],
         [{ canon_status: "rejected", available_actions: ["return_to_draft", "archive"] }, section("Return it to draft to rework it", "publication")],
         [{ canon_status: "canon", available_actions: ["supersede", "archive"] }, section("Record who knows it", "who-knows")],
     ])("guides %j", (view, expected) => {

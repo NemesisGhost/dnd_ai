@@ -110,7 +110,7 @@ describe("worldGuidance", () => {
         worldGuidance({ canon_status, lifecycle_status, available_actions })
 
     it("names only a step the server actually offers", () => {
-        expect(guide("draft", ["submit_for_review"])).toEqual({ text: "Submit for review", section: "publication" })
+        expect(guide("draft", ["submit_for_review"])).toEqual({ text: "Submit for review", section: "review" })
         expect(guide("proposed", ["approve", "reject", "return_to_draft"])).toEqual({ text: "Approve it", section: "review" })
         expect(guide("approved", ["publish", "return_to_draft"])).toEqual({ text: "Publish it", section: "review" })
         expect(guide("rejected", ["return_to_draft"])).toEqual({

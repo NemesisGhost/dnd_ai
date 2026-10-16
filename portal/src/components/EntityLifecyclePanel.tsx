@@ -383,11 +383,12 @@ function useActions(): LifecycleActions {
 
 const actionButtonLabel = (code: string): string => (code === "supersede" ? "Supersede…" : actionLabel(code))
 
-// Only the approve or publish step, as the primary button of a review section. Renders nothing
-// when neither is available to the person.
+// The next forward step (submit for review, approve or publish), as the primary button of a
+// review section, so the step is there without a second click. Renders nothing when none is
+// available to the person.
 export function LifecycleReviewAction() {
     const { available, pending, open, errorNode, inlineError } = useActions()
-    const code = ["approve", "publish"].find((c) => available.has(c))
+    const code = FORWARD.find((c) => available.has(c))
     if (code === undefined) return null
     return (
         <div className="lifecycle-compact" role="group" aria-label="Review decision">

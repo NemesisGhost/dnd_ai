@@ -66,7 +66,7 @@ describe("questGuidance", () => {
     it("points at the step that is actually available, never at an action", () => {
         expect(questGuidance(view("draft", ["submit_for_review"]), draft)).toEqual({
             text: "Submit for review",
-            target: { kind: "section", section: "publication" },
+            target: { kind: "section", section: "review" },
         })
         expect(questGuidance(view("proposed", ["approve", "reject"]), draft)?.text).toBe("Approve it")
         expect(questGuidance(view("approved", ["publish"]), draft)).toEqual({

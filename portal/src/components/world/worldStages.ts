@@ -202,7 +202,7 @@ export function worldGuidance(view: Pick<EntityLifecycleView, "canon_status" | "
     if (view.canon_status === "superseded") return null
     if (available.has("publish")) return at("Publish it", "review")
     if (available.has("approve")) return at("Approve it", "review")
-    if (available.has("submit_for_review")) return at("Submit for review", "publication")
+    if (available.has("submit_for_review")) return at("Submit for review", "review")
     if (view.canon_status === "rejected" && available.has("return_to_draft")) {
         return at("Return it to draft to rework it", "publication")
     }

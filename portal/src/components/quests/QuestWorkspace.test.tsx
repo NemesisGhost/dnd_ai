@@ -182,7 +182,7 @@ describe("Quest workspace: Next", () => {
 
     it("leads a draft with objectives to submit it, a published quest to run it", async () => {
         setupQuestWorkspace({ section: "details", lifecycle: { available_actions: ["submit_for_review"] } })
-        expect(await screen.findByRole("link", { name: /Submit for review/ })).toHaveAttribute("href", "/app/c1/quests/q1?section=publication")
+        expect(await screen.findByRole("link", { name: /Submit for review/ })).toHaveAttribute("href", "/app/c1/quests/q1?section=review")
     })
 
     it("leads a published quest to Progress, in the words of the phase it opens", async () => {

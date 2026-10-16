@@ -688,7 +688,7 @@ describe("unified knowledge claim page", () => {
     })
 
     it.each([
-      ["draft", ["submit_for_review", "reject", "archive"], "Submit for review", "publication"],
+      ["draft", ["submit_for_review", "reject", "archive"], "Submit for review", "review"],
       ["proposed", ["approve", "return_to_draft", "reject"], "Approve", "review"],
       ["approved", ["publish", "return_to_draft"], "Publish as canon", "publication"],
       ["rejected", ["return_to_draft", "archive"], "Return it to draft to rework it", "publication"],
@@ -707,7 +707,7 @@ describe("unified knowledge claim page", () => {
       await claimBox()
       const before = server.calls.length
       fireEvent.click(screen.getByRole("link", { name: /Submit for review/ }))
-      expect(router.state.location.search).toBe("?section=publication")
+      expect(router.state.location.search).toBe("?section=review")
       expect(server.calls.length).toBe(before)
     })
 
@@ -1257,7 +1257,7 @@ describe("unified knowledge claim page", () => {
       setup(at("who-knows"))
       const note = await screen.findByText(/Only a published claim can be recorded as known/)
       expect(note).toHaveTextContent("This claim is a draft.")
-      expect(within(note).getByRole("link", { name: "Submit for review" })).toHaveAttribute("href", `${CLAIM}?section=publication`)
+      expect(within(note).getByRole("link", { name: "Submit for review" })).toHaveAttribute("href", `${CLAIM}?section=review`)
       for (const name of ["Tell a party", "Record who learned this", "Record a telling", "Make public"]) {
         expect(screen.queryByRole("button", { name })).toBeNull()
       }

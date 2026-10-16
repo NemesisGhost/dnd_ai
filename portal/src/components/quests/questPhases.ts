@@ -188,7 +188,7 @@ export function questGuidance(
     if (view.canon_status === "draft" && canEdit && !hasObjective) {
         return at("Add stages and objectives", "structure")
     }
-    if (available.has("submit_for_review")) return at("Submit for review", "publication")
+    if (available.has("submit_for_review")) return at("Submit for review", "review")
     if (view.canon_status === "rejected" && available.has("return_to_draft")) {
         return at("Return it to draft to rework it", "publication")
     }

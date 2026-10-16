@@ -135,7 +135,7 @@ export function claimGuidance(view: EntityLifecycleView): ClaimGuidance | null {
         return { text: "Publish its subject first", target: { kind: "subject" } }
     }
     if (available.has("approve")) return section("Approve", "review")
-    if (available.has("submit_for_review")) return section("Submit for review", "publication")
+    if (available.has("submit_for_review")) return section("Submit for review", "review")
     if (view.canon_status === "rejected" && available.has("return_to_draft")) {
         return section("Return it to draft to rework it", "publication")
     }

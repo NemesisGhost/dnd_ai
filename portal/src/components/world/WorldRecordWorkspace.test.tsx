@@ -244,7 +244,7 @@ describe("World record workspace: a place", () => {
     it("names only the next step the server offers, as a link that does not act", async () => {
         const { server } = setup()
         const next = await screen.findByRole("link", { name: /Submit for review/ })
-        expect(next.getAttribute("href")).toMatch(/\?section=publication$/)
+        expect(next.getAttribute("href")).toMatch(/\?section=review$/)
         expect(next.closest(".item-header__next")).toHaveTextContent("Next:")
         expect(writes(server)).toHaveLength(0)
     })
@@ -460,6 +460,13 @@ describe("World record workspace: Review and Publication", () => {
             "href",
             "/app/c1/world/location/l1/history",
         )
+    })
+
+    it("offers the next step, Submit for review, in Review itself for a draft, with no extra click", async () => {
+        const { server } = setup({ entry: "/app/c1/world/location/l1?section=review" })
+        const group = await screen.findByRole("group", { name: "Review decision" })
+        expect(within(group).getByRole("button", { name: "Submit for review" })).toBeVisible()
+        expect(writes(server)).toHaveLength(0)
     })
 
     it("still shows the record when its lifecycle cannot be read, and offers no step", async () => {
