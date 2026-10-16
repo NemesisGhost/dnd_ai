@@ -41,6 +41,23 @@ describe("ErrorSummary", () => {
         expect(screen.getByLabelText("World name")).toHaveFocus()
     })
 
+    it("hands a followed link to the page instead of focusing the field, when the page reveals fields itself", () => {
+        const onFollow = vi.fn()
+        render(
+            <>
+                <input id="far-field" aria-label="Far field" />
+                <ErrorSummary
+                    errors={[{ fieldId: "far-field", message: "Fix it." }]}
+                    attempt={1}
+                    onFollow={onFollow}
+                />
+            </>,
+        )
+        fireEvent.click(screen.getByRole("link", { name: "Fix it." }))
+        expect(onFollow).toHaveBeenCalledWith("far-field")
+        expect(screen.getByLabelText("Far field")).not.toHaveFocus()
+    })
+
     it("does not steal focus before any attempt", () => {
         render(<ErrorSummary errors={[{ fieldId: "x", message: "m" }]} attempt={0} />)
         expect(screen.getByRole("alert")).not.toHaveFocus()

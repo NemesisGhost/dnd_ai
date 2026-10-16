@@ -17,6 +17,9 @@ interface AuthoringEditLinkProps {
     // refreshes it, the authoring read is refreshed too so the link never
     // outlives the state that allowed it.
     detail: unknown
+    // Router state to carry to the edit page (where the person came from, so Save and Cancel can
+    // return there).
+    linkState?: object
 }
 
 // The "Edit" entry point on a record's detail page. Players (no `canon.edit` in
@@ -30,7 +33,7 @@ export function AuthoringEditLink(props: AuthoringEditLinkProps) {
     return <LoadedLink {...props} />
 }
 
-function LoadedLink({ viewPath, editPath, noun, detail }: AuthoringEditLinkProps) {
+function LoadedLink({ viewPath, editPath, noun, detail, linkState }: AuthoringEditLinkProps) {
     const { state, refetch } = useAuthoringResource<EditableView>(viewPath)
     const firstRender = useRef(true)
     useEffect(() => {
@@ -47,7 +50,7 @@ function LoadedLink({ viewPath, editPath, noun, detail }: AuthoringEditLinkProps
     if (state.data.available_actions.includes("update")) {
         return (
             <p className="authoring-page__actions-row">
-                <Link className="authoring-button" to={editPath}>
+                <Link className="authoring-button" to={editPath} state={linkState}>
                     Edit {noun}
                 </Link>
             </p>

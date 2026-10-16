@@ -50,13 +50,20 @@ export interface SessionBootstrap {
   user: UserSummary
   csrf_token: string
   browser_session_id: string | null
+  // Browser-session lifetime: the idle window slides with each authenticated
+  // request, the absolute expiry is fixed. Null/absent for a non-browser
+  // caller. Used only to sign the user out of the UI when the session lapses.
+  session_idle_timeout_seconds?: number | null
+  session_absolute_expires_at?: string | null
   // Phase 13E checkpoint 9: the only server-authoritative signal for
   // whether to render an admin surface at all (CP 10's /admin/accounts
   // page) — campaign-scoped access.manage grants nothing here.
   is_platform_administrator: boolean
-  // Phase 14: server-computed global (non-campaign) capabilities, currently
-  // `world.create` for human principals. Optional only so older fixtures keep
-  // compiling; the server always sends it. Never inferred client-side.
+  // Server-computed global (non-campaign) capabilities for this user. Today
+  // only `world.create`, present only for an active platform administrator or
+  // a user with an effective built-in GM assignment (ADR 0018) — never every
+  // human. Optional only so older fixtures keep compiling; the server always
+  // sends it. Never inferred client-side (see utils/worldAccess.ts).
   global_capabilities?: readonly string[]
   // Server-computed landing campaign (docs/UI_DESIGN.md §4.2): null means
   // "no campaign to resume" and the portal lands on /campaigns. Always null or

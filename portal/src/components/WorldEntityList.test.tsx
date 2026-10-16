@@ -107,9 +107,7 @@ describe("WorldEntityList", () => {
         })
 
         expect(
-            screen.getByText(
-                "No world entities match the current search.",
-            ),
+            screen.getByText("No entries to show here yet."),
         ).toBeInTheDocument()
 
         expect(screen.queryByRole("list")).not.toBeInTheDocument()
@@ -160,6 +158,123 @@ describe("WorldEntityList", () => {
                 name: "Next page",
             }),
         ).not.toBeInTheDocument()
+    })
+
+    it("offers Previous page only past the first page, disabled while refreshing", () => {
+        const onPreviousPage = vi.fn()
+
+        const { rerender } = render(
+            <MemoryRouter>
+                <WorldEntityList
+                    campaignId="campaign-a"
+                    page={page}
+                    onPreviousPage={onPreviousPage}
+                    onNextPage={vi.fn()}
+                />
+            </MemoryRouter>,
+        )
+
+        // Previous page stays in the pager but is unavailable on page one.
+        expect(
+            screen.getByRole("button", {
+                name: "Previous page",
+            }),
+        ).toBeDisabled()
+
+        rerender(
+            <MemoryRouter>
+                <WorldEntityList
+                    campaignId="campaign-a"
+                    page={{ ...page, next_cursor: null }}
+                    hasPreviousPage
+                    refreshing
+                    onPreviousPage={onPreviousPage}
+                    onNextPage={vi.fn()}
+                />
+            </MemoryRouter>,
+        )
+
+        expect(
+            screen.getByRole("button", {
+                name: "Previous page",
+            }),
+        ).toBeDisabled()
+
+        rerender(
+            <MemoryRouter>
+                <WorldEntityList
+                    campaignId="campaign-a"
+                    page={{ ...page, next_cursor: null }}
+                    hasPreviousPage
+                    onPreviousPage={onPreviousPage}
+                    onNextPage={vi.fn()}
+                />
+            </MemoryRouter>,
+        )
+
+        fireEvent.click(
+            screen.getByRole("button", {
+                name: "Previous page",
+            }),
+        )
+
+        expect(onPreviousPage).toHaveBeenCalledTimes(1)
+    })
+
+    it("offers a Clear search action in the empty state only while a search is active", () => {
+        const onClearSearch = vi.fn()
+        const empty = { items: [], next_cursor: null }
+
+        const { rerender } = render(
+            <MemoryRouter>
+                <WorldEntityList
+                    campaignId="campaign-a"
+                    page={empty}
+                    query="zzz"
+                    categoryNoun="events"
+                    onClearSearch={onClearSearch}
+                    onNextPage={vi.fn()}
+                />
+            </MemoryRouter>,
+        )
+
+        expect(screen.getByText("No events match “zzz”.")).toBeInTheDocument()
+        fireEvent.click(screen.getByRole("button", { name: "Clear search" }))
+        expect(onClearSearch).toHaveBeenCalledTimes(1)
+
+        rerender(
+            <MemoryRouter>
+                <WorldEntityList
+                    campaignId="campaign-a"
+                    page={empty}
+                    categoryNoun="events"
+                    onClearSearch={onClearSearch}
+                    onNextPage={vi.fn()}
+                />
+            </MemoryRouter>,
+        )
+
+        expect(screen.getByText("No events to show here yet.")).toBeInTheDocument()
+        expect(screen.queryByRole("button", { name: "Clear search" })).not.toBeInTheDocument()
+    })
+
+    it("disables Next page on the last page and shows the page number", () => {
+        render(
+            <MemoryRouter>
+                <WorldEntityList
+                    campaignId="campaign-a"
+                    page={{ ...page, next_cursor: null }}
+                    pageNumber={3}
+                    hasPreviousPage
+                    onPreviousPage={vi.fn()}
+                    onNextPage={vi.fn()}
+                />
+            </MemoryRouter>,
+        )
+
+        expect(screen.getByRole("button", { name: "Next page" })).toBeDisabled()
+        expect(screen.getByRole("button", { name: "Previous page" })).toBeEnabled()
+        expect(screen.getByText("Page 3")).toBeInTheDocument()
     })
 
     describe("refreshing", () => {

@@ -33,8 +33,26 @@ from dataclasses import dataclass
 
 from sqlalchemy import Connection, Engine, text
 
-from ._shared import lookup_id, require_state_targetable, validate_session_campaign
+from dnd_ai.domain.authoring import StaleWriteError
+from dnd_ai.domain.relationship_authoring import (
+    OrganizationStatusUnchangedError,
+    RelationshipArchivedError,
+)
+
+from ._shared import (
+    lifecycle_code,
+    lookup_id,
+    require_state_targetable,
+    validate_session_campaign,
+)
 from .events import EventParticipant, _insert_event_row
+
+
+class _Unset:
+    """Marks a keyword the caller did not pass (so `None` can mean "no state yet")."""
+
+
+UNSET = _Unset()
 
 
 @dataclass(frozen=True)
@@ -72,12 +90,16 @@ def _lock_relationship(connection: Connection, relationship_id: uuid.UUID) -> No
     campaign.relationship_state row) before touching campaign.
     relationship_state at all — the same first-write concurrency guard
     advance_objective applies via _lock_quest_objective."""
-    connection.execute(
+    row = connection.execute(
         text(
-            "SELECT relationship_id FROM world.relationships WHERE relationship_id = :r FOR UPDATE"
+            "SELECT lifecycle_status_id FROM world.relationships "
+            "WHERE relationship_id = :r FOR UPDATE"
         ),
         {"r": relationship_id},
-    )
+    ).one_or_none()
+    # Phase 15.3A-2a: an archived relationship takes no state writes until it is restored.
+    if row is not None and lifecycle_code(connection, row.lifecycle_status_id) != "active":
+        raise RelationshipArchivedError(f"relationship {relationship_id} is archived")
 
 
 def _lock_relationship_state(
@@ -372,6 +394,7 @@ def _update_organization_status_impl(
     cause_interaction_id: uuid.UUID | None = None,
     cause_event_id: uuid.UUID | None = None,
     event_details: str | None = None,
+    expected_status: str | None | _Unset = UNSET,
 ) -> UpdateOrganizationStatusResult:
     """The actual work of update_organization_status(), on a connection the
     caller already has open — see this module's docstring for why it splits
@@ -399,6 +422,12 @@ def _update_organization_status_impl(
         connection, timeline_id=timeline_id, organization_id=organization_id
     )
     previous_status_code = existing[1] if existing is not None else None
+    # Phase 15.3A-2b hardening: a caller that names the status it saw (the authoring
+    # route always does) gets a stale write if it moved, and a change must change it.
+    if not isinstance(expected_status, _Unset) and expected_status != previous_status_code:
+        raise StaleWriteError(f"organization {organization_id} is {previous_status_code!r}")
+    if previous_status_code == new_status_code:
+        raise OrganizationStatusUnchangedError(f"organization already {new_status_code}")
 
     event_id = _insert_event_row(
         connection,

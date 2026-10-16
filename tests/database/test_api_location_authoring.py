@@ -287,17 +287,20 @@ def test_a_canon_edit_stays_canon_and_is_audited(s: ContentSetup) -> None:
     view = update(s, current, summary="Revised", change_note="typo fix").json()
     assert view["canon_status"] == "canon" and view["summary"] == "Revised"
     row = s.audit("update_location")[0]
+    # Audit records that the field changed, never the narrative itself.
     assert row.reason == "typo fix" and row.changed_fields["summary"] == {
         "from": None,
-        "to": "Revised",
+        "to": {"redacted": True},
     }
+    assert "Revised" not in str(row.changed_fields)
 
 
-def test_long_text_in_the_audit_diff_is_bounded(s: ContentSetup) -> None:
+def test_long_text_never_reaches_the_audit_diff(s: ContentSetup) -> None:
     created = create(s, "Long", "region")
     update(s, created, summary="y" * 4000)
-    changed = s.audit("update_location")[0].changed_fields["summary"]["to"]
-    assert changed["truncated"] is True and len(changed["value"]) == 1000
+    row = s.audit("update_location")[0]
+    assert row.changed_fields["summary"]["to"] == {"redacted": True}
+    assert "yyyy" not in str(row.changed_fields)
 
 
 # --- hierarchy ------------------------------------------------------------------

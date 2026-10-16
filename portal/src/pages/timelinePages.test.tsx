@@ -269,3 +269,58 @@ describe("CreateTimelineBranchPage", () => {
         expect(screen.queryByRole("textbox", { name: /Branch name/ })).not.toBeInTheDocument()
     })
 })
+
+// A `world_viewer` (world.view only): the server sends no available or
+// blocked action on the world or its timelines (dnd_ai.domain.world_authority.
+// authorized_actions), so every timeline page renders read-only and no form
+// mounts, whatever the timeline's lifecycle state.
+describe("world_viewer timeline pages", () => {
+    const viewerTimeline = detail({ available_actions: [], blocked_actions: [] })
+
+    it("shows the timeline with no action, link, or unavailable-action list", async () => {
+        const server = installMockServer()
+        server.on("GET", "/worlds/w1/timelines/t1", {
+            body: {
+                ...viewerTimeline,
+                children: [tl({ timeline_id: "t2", name: "Child", is_primary: false, parent_timeline_id: "t1" })],
+            },
+        })
+        renderAuthoringRoutes({ initialEntry: "/worlds/w1/timelines/t1", routes })
+        await screen.findByRole("heading", { level: 1, name: "Main" })
+
+        for (const name of ["Edit timeline", "Create branch", "New campaign"]) {
+            expect(screen.queryByRole("link", { name })).not.toBeInTheDocument()
+        }
+        for (const name of ["Archive timeline", "Restore timeline"]) {
+            expect(screen.queryByRole("button", { name })).not.toBeInTheDocument()
+        }
+        expect(screen.queryByRole("list", { name: "Unavailable actions" })).not.toBeInTheDocument()
+        expect(server.calls.filter((call) => call.method === "POST")).toHaveLength(0)
+    })
+
+    it("never mounts the edit, branch, or new-timeline forms", async () => {
+        const server = installMockServer()
+        server.on("GET", "/worlds/w1/timelines/t1", { body: viewerTimeline })
+        server.on("GET", /^\/worlds\/w1\/timelines\/t1\/branch-points/, {
+            body: { items: [], next_cursor: null },
+        })
+        server.on("GET", "/worlds/w1", {
+            body: { name: "World", capabilities: ["world.view"], available_actions: [] },
+        })
+
+        const edit = renderAuthoringRoutes({ initialEntry: "/worlds/w1/timelines/t1/edit", routes })
+        expect(await screen.findByRole("alert")).toHaveTextContent("cannot be edited")
+        expect(screen.queryByRole("textbox")).not.toBeInTheDocument()
+        edit.unmount()
+
+        const branch = renderAuthoringRoutes({ initialEntry: "/worlds/w1/timelines/t1/branch", routes })
+        expect(await screen.findByRole("alert")).toHaveTextContent("cannot be branched")
+        expect(screen.queryByRole("textbox")).not.toBeInTheDocument()
+        branch.unmount()
+
+        renderAuthoringRoutes({ initialEntry: "/worlds/w1/timelines/new", routes })
+        expect(await screen.findByRole("alert")).toHaveTextContent("cannot be added")
+        expect(screen.queryByRole("textbox")).not.toBeInTheDocument()
+        expect(server.calls.filter((call) => call.method === "POST")).toHaveLength(0)
+    })
+})

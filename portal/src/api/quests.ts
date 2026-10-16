@@ -15,9 +15,13 @@ export class QuestRequestError extends Error {
     }
 }
 
-function addCharacterPerspective(
+// The server honors a party perspective only for an authorized
+// (character_id, party_id) *pair* (`resolve_party_perspective`); a party
+// without its character is never sent.
+function addPerspective(
     path: string,
     characterId: string | null,
+    partyId: string | null,
 ): string {
     if (characterId === null) {
         return path
@@ -27,20 +31,26 @@ function addCharacterPerspective(
         character_id: characterId,
     })
 
+    if (partyId !== null) {
+        parameters.set("party_id", partyId)
+    }
+
     return `${path}?${parameters.toString()}`
 }
 
 export async function fetchCampaignQuests(
     campaignId: string,
     characterId: string | null,
+    partyId: string | null,
     signal?: AbortSignal,
 ): Promise<CampaignQuestListItem[]> {
     const encodedCampaignId =
         encodeURIComponent(campaignId)
 
-    const path = addCharacterPerspective(
+    const path = addPerspective(
         `/api/campaigns/${encodedCampaignId}/quests`,
         characterId,
+        partyId,
     )
 
     const response = await fetch(path, {
@@ -65,6 +75,7 @@ export async function fetchQuest(
     campaignId: string,
     questId: string,
     characterId: string | null,
+    partyId: string | null,
     signal?: AbortSignal,
 ): Promise<QuestDetail> {
     const encodedCampaignId =
@@ -73,9 +84,10 @@ export async function fetchQuest(
     const encodedQuestId =
         encodeURIComponent(questId)
 
-    const path = addCharacterPerspective(
+    const path = addPerspective(
         `/api/campaigns/${encodedCampaignId}/quests/${encodedQuestId}`,
         characterId,
+        partyId,
     )
 
     const response = await fetch(path, {

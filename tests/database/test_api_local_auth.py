@@ -181,6 +181,8 @@ def test_full_activation_and_login_flow(
         session_body = session_response.json()
         assert session_body["user"]["user_id"] == login_response.json()["user_id"]
         assert session_body["csrf_token"]
+        assert session_body["session_idle_timeout_seconds"] == 30 * 60
+        assert session_body["session_absolute_expires_at"]
         assert session_body["campaigns"] == []
         assert "selected_campaign_id" not in session_body
         assert session_body["startup_campaign_id"] is None

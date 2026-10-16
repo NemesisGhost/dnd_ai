@@ -45,11 +45,14 @@ from dataclasses import dataclass
 
 from sqlalchemy import Connection, Engine, text
 
+from dnd_ai.domain.quest_runtime import QUEST_TERMINAL, QuestNotActiveError
+
 from ._shared import PartyNotInCampaignError as PartyNotInCampaignError
 from ._shared import lookup_id, require_state_targetable
 from ._shared import validate_campaign_party as _validate_campaign_party
 from ._shared import validate_session_campaign as _validate_session_campaign
 from .events import EventParticipant, _insert_event_row
+from .quest_runtime import lock_quest_runtime
 
 _TERMINAL_OBJECTIVE_STATUSES = frozenset({"completed", "failed", "skipped", "superseded"})
 _ADVANCEABLE_STATUSES = frozenset({"completed", "failed"})
@@ -214,6 +217,16 @@ def _advance_objective_impl(
     # edit removed the objective while this waited, it is gone now: re-read.
     require_state_targetable(connection, context.quest_id)
     context = _quest_objective_context(connection, quest_objective_id)
+    # Quest runtime (15.2E-2b): a quest that was suspended, completed, failed or abandoned
+    # for this audience takes no further objective progress. A quest with no state row is
+    # untracked, which this adapter-level command has always allowed.
+    quest_state = lock_quest_runtime(
+        connection, timeline_id=timeline_id, quest_id=context.quest_id, party_id=party_id
+    )
+    if quest_state is not None and (
+        quest_state[1] in QUEST_TERMINAL or quest_state[1] == "suspended"
+    ):
+        raise QuestNotActiveError(f"quest {context.quest_id} is {quest_state[1]}")
     _lock_quest_objective(connection, quest_objective_id)
 
     existing = _lock_objective_state(

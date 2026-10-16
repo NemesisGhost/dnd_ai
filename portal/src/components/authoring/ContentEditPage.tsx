@@ -1,6 +1,6 @@
 import { useState } from "react"
 import type { ReactNode } from "react"
-import { Link, useNavigate, useParams } from "react-router"
+import { Link, useLocation, useNavigate, useParams } from "react-router"
 import { useSession } from "../../context/SessionContext"
 import { useAuthoringMutation } from "../../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../../hooks/useAuthoringResource"
@@ -31,6 +31,12 @@ export interface EditableView {
     blocked_actions: EntityBlockedAction[]
 }
 
+// Where the page's links lead: the collection, and the record page the person came from.
+export interface EditNavigation {
+    listPath: string
+    detail: { to: string; state?: object }
+}
+
 export interface ContentEditConfig<TView extends EditableView, TOptions, TValues, TBody> {
     noun: string
     heading: string
@@ -39,6 +45,9 @@ export interface ContentEditConfig<TView extends EditableView, TOptions, TValues
     breadcrumbLabel: string
     worldPath: (campaignId: string) => string
     detailPath: (campaignId: string, entityId: string) => string
+    // Optional: a record that can be reached from more than one place returns to where the person
+    // came from (the router state names it) instead of the single `worldPath`/`detailPath`.
+    navigation?: (context: { campaignId: string; entityId: string; state: unknown }) => EditNavigation
     viewPath: (campaignId: string, entityId: string) => string
     optionsPath: (campaignId: string) => string
     name: (view: TView) => string
@@ -51,7 +60,7 @@ export interface ContentEditConfig<TView extends EditableView, TOptions, TValues
         entityId: string,
         body: TBody & { expected_row_version: number; change_note: string | null },
         ctx: MutationContext,
-    ) => Promise<TView>
+    ) => Promise<unknown>
     renderFields: (
         props: FieldsRenderProps<TOptions, TValues> & { entityId: string; view: TView },
     ) => ReactNode
@@ -60,6 +69,15 @@ export interface ContentEditConfig<TView extends EditableView, TOptions, TValues
     // True when a change to a canon record needs a confirmation (always, today).
     canonWarning: string
     saved: string
+    // Optional sections rendered after the form, sharing the page view and refetch (for an
+    // aggregate whose children are edited beside its own fields).
+    renderExtra?: (props: {
+        campaignId: string
+        entityId: string
+        view: TView
+        options: TOptions
+        refetch: () => Promise<void>
+    }) => ReactNode
 }
 
 interface Props<TView extends EditableView, TOptions, TValues, TBody> {
@@ -82,17 +100,23 @@ export function ContentEditPage<TView extends EditableView, TOptions, TValues, T
     const ready = state.kind === "ready" && options.state.kind === "ready"
     const headingRef = usePageArrival(ready)
     const [keptChanges, setKeptChanges] = useState<TValues | null>(null)
-    const detailPath = config.detailPath(campaignId, entityId)
+    const location = useLocation()
+    const target: EditNavigation = config.navigation?.({ campaignId, entityId, state: location.state }) ?? {
+        listPath: config.worldPath(campaignId),
+        detail: { to: config.detailPath(campaignId, entityId) },
+    }
     const headingId = `edit-${config.noun.replace(/\s+/g, "-")}-heading`
 
     return (
         <section className="authoring-page" aria-labelledby={headingId}>
             <p className="authoring-page__breadcrumb">
-                <Link to={config.worldPath(campaignId)}>{config.breadcrumbLabel}</Link>
+                <Link to={target.listPath}>{config.breadcrumbLabel}</Link>
                 {state.kind === "ready" ? (
                     <>
                         {" / "}
-                        <Link to={detailPath}>{config.name(state.data)}</Link>
+                        <Link to={target.detail.to} state={target.detail.state}>
+                            {config.name(state.data)}
+                        </Link>
                     </>
                 ) : null}
             </p>
@@ -108,7 +132,7 @@ export function ContentEditPage<TView extends EditableView, TOptions, TValues, T
             ) : state.kind === "error" || options.state.kind !== "ready" ? (
                 <p role="alert">The {config.noun} could not be loaded. Try reloading the page.</p>
             ) : !state.data.available_actions.includes("update") ? (
-                <NotEditable config={config} view={state.data} detailPath={detailPath} />
+                <NotEditable config={config} view={state.data} target={target.detail} />
             ) : (
                 <EditForm
                     key={state.data.row_version}
@@ -121,7 +145,7 @@ export function ContentEditPage<TView extends EditableView, TOptions, TValues, T
                     keptChanges={keptChanges}
                     onKeepChanges={setKeptChanges}
                     refetch={refetch}
-                    detailPath={detailPath}
+                    target={target.detail}
                 />
             )}
         </section>
@@ -131,18 +155,20 @@ export function ContentEditPage<TView extends EditableView, TOptions, TValues, T
 function NotEditable<TView extends EditableView, TOptions, TValues, TBody>({
     config,
     view,
-    detailPath,
+    target,
 }: {
     config: ContentEditConfig<TView, TOptions, TValues, TBody>
     view: TView
-    detailPath: string
+    target: EditNavigation["detail"]
 }) {
     const reason = view.blocked_actions.find((b) => b.action === "update")?.reason
     return (
         <p role="alert">
             This {config.noun} cannot be edited right now
             {reason !== undefined ? `: ${describeBlockedReason(reason)}` : "."}{" "}
-            <Link to={detailPath}>Back to the {config.noun}</Link>
+            <Link to={target.to} state={target.state}>
+                Back to the {config.noun}
+            </Link>
         </p>
     )
 }
@@ -157,7 +183,7 @@ interface EditFormProps<TView extends EditableView, TOptions, TValues, TBody> {
     keptChanges: TValues | null
     onKeepChanges: (values: TValues | null) => void
     refetch: () => Promise<void>
-    detailPath: string
+    target: EditNavigation["detail"]
 }
 
 function EditForm<TView extends EditableView, TOptions, TValues, TBody>({
@@ -170,7 +196,7 @@ function EditForm<TView extends EditableView, TOptions, TValues, TBody>({
     keptChanges,
     onKeepChanges,
     refetch,
-    detailPath,
+    target,
 }: EditFormProps<TView, TOptions, TValues, TBody>) {
     const navigate = useNavigate()
     const { reload } = useSession()
@@ -185,7 +211,7 @@ function EditForm<TView extends EditableView, TOptions, TValues, TBody>({
 
     const mutation = useAuthoringMutation<
         TBody & { expected_row_version: number; change_note: string | null },
-        TView
+        unknown
     >({
         scopeKey: `edit-${config.noun}:${entityId}:${view.row_version}`,
         request: (body, ctx) => config.update(campaignId, entityId, body, ctx),
@@ -193,7 +219,7 @@ function EditForm<TView extends EditableView, TOptions, TValues, TBody>({
             guard.release()
             onKeepChanges(null)
             setConfirmingCanon(false)
-            void navigate(detailPath, { state: { announce: config.saved } })
+            void navigate(target.to, { state: { ...target.state, announce: config.saved } })
         },
     })
 
@@ -297,8 +323,10 @@ function EditForm<TView extends EditableView, TOptions, TValues, TBody>({
                         error={errorFor("change-note")}
                     />
                 ) : null}
-                <FormActions pending={pending} onCancel={() => void navigate(detailPath)} />
+                <FormActions pending={pending} onCancel={() => void navigate(target.to, { state: target.state })} />
             </AuthoringForm>
+
+            {config.renderExtra?.({ campaignId, entityId, view, options, refetch })}
 
             <ConfirmDialog
                 open={confirmingCanon && mutation.status.kind !== "error"}

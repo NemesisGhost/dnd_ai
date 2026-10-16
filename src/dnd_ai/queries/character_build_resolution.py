@@ -53,6 +53,11 @@ Resolution, in order:
    command exists yet because nothing in the product calls it; see
    docs/PHASE13D_CHARACTER_SHEET_BACKEND.md for the full writeup.
 
+   Since checkpoint 15.2B-2 the fallback also recovers the baseline when the
+   ancestor has since changed the build by event (every event activation records
+   the value it replaced), so a branch made before such a change keeps the build
+   that was active at the branch point.
+
 Steps 2 and 3 only ever run when step 1 finds no local row at all, and step
 3 only runs when step 2's bounded event search finds nothing — an ancestor
 with event-linked history for this component is always resolved through the
@@ -125,4 +130,25 @@ def resolve_effective_character_build_id(
         if admin_row is not None:
             build_id = admin_row["character_build_id"]
             return uuid.UUID(str(build_id)) if build_id is not None else None
+        # The ancestor changed the build by event only after the branch point (step
+        # 2 found nothing at or before it), so what it replaced is the baseline this
+        # timeline branched from: the `previous_value` of its earliest build effect.
+        # (Checkpoint 15.2B-2: `activate_character_build` records that previous
+        # value on every event activation.)
+        earliest = connection.execute(
+            text("""
+                SELECT ee.previous_value
+                FROM narrative.events e
+                JOIN narrative.event_effects ee ON ee.event_id = e.event_id
+                JOIN core.world_times wt ON wt.world_time_id = e.world_time_id
+                WHERE e.timeline_id = :timeline
+                  AND ee.target_entity_id = :character
+                  AND ee.target_component = 'character_build_id'
+                ORDER BY wt.sort_key ASC, e.created_at ASC
+                LIMIT 1
+            """),
+            {"timeline": parent_timeline_id, "character": character_id},
+        ).one_or_none()
+        if earliest is not None:
+            return uuid.UUID(earliest[0]) if earliest[0] is not None else None
         current_timeline_id = parent_timeline_id

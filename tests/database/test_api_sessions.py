@@ -46,14 +46,18 @@ class Fixture:
         self.timeline_id = make_timeline(connection, self.world_id, is_primary=True)
         self.start_world_time_id = make_world_time(connection, self.world_id, 100)
         self.end_world_time_id = make_world_time(connection, self.world_id, 200)
-        self.campaign_id = make_campaign(
-            connection, self.timeline_id, lifecycle_status_code="pending"
-        )
+        # Active (the hardened commands, like every Phase 15 operation, refuse a
+        # campaign that is not); an active campaign must keep an access manager, so
+        # the GM role below also holds `access.manage`.
+        self.campaign_id = make_campaign(connection, self.timeline_id)
+        # In progress: `end_session` (hardened in checkpoint 15.2D-2) ends only a
+        # session that has started and not ended.
         self.session_id = make_session(
             connection,
             self.campaign_id,
             1,
             start_world_time_id=self.start_world_time_id,
+            started_at=datetime.now(UTC) - timedelta(hours=1),
         )
         already_ended_started_at = datetime.now(UTC)
         self.already_ended_session_id = make_session(
@@ -79,6 +83,11 @@ class Fixture:
             connection, "security", "capabilities", "capability_id", "canon.edit"
         )
         make_role_capability(connection, role_id, canon_edit_id)
+        make_role_capability(
+            connection,
+            role_id,
+            lookup_id(connection, "security", "capabilities", "capability_id", "access.manage"),
+        )
         make_membership_role(connection, gm_membership_id, role_id)
 
         self.capless_user_id = make_user(connection, "Session API Capless Member")
@@ -183,7 +192,10 @@ def test_a_non_member_gets_not_found(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
 ) -> None:
     with client_factory(f.outsider_user_id) as client:
-        response = client.post(_end_url(f), json={"end_world_time_id": str(f.end_world_time_id)})
+        response = client.post(
+            _end_url(f),
+            json={"expected_row_version": 1, "end_world_time_id": str(f.end_world_time_id)},
+        )
     assert response.status_code == 404
 
 
@@ -191,7 +203,10 @@ def test_a_member_without_the_capability_gets_forbidden(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
 ) -> None:
     with client_factory(f.capless_user_id) as client:
-        response = client.post(_end_url(f), json={"end_world_time_id": str(f.end_world_time_id)})
+        response = client.post(
+            _end_url(f),
+            json={"expected_row_version": 1, "end_world_time_id": str(f.end_world_time_id)},
+        )
     assert response.status_code == 403
 
 
@@ -201,11 +216,14 @@ def test_ending_a_session_succeeds(
     with client_factory(f.gm_user_id) as client:
         response = client.post(
             _end_url(f),
-            json={"end_world_time_id": str(f.end_world_time_id), "summary": "The party rested."},
+            json={
+                "expected_row_version": 1,
+                "end_world_time_id": str(f.end_world_time_id),
+                "summary": "The party rested.",
+            },
         )
     assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["already_ended"] is False
+    assert response.json()["changed"] is True
 
     with postgres_engine.connect() as verify:
         row = verify.execute(
@@ -232,16 +250,20 @@ def test_ending_a_session_succeeds(
         assert audit_row.world_id == f.world_id
 
 
-def test_ending_an_already_ended_session_is_a_no_op(
+def test_ending_a_session_that_is_not_in_progress_is_refused_and_writes_nothing(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
 ) -> None:
     with client_factory(f.gm_user_id) as client:
         response = client.post(
             _end_url(f, f.already_ended_session_id),
-            json={"end_world_time_id": str(f.end_world_time_id), "summary": "Overwritten?"},
+            json={
+                "expected_row_version": 1,
+                "end_world_time_id": str(f.end_world_time_id),
+                "summary": "Overwritten?",
+            },
         )
-    assert response.status_code == 200, response.text
-    assert response.json()["already_ended"] is True
+    assert response.status_code == 409, response.text
+    assert response.json()["error"]["code"] == "session_not_in_progress"
 
     with postgres_engine.connect() as verify:
         count = verify.execute(
@@ -257,7 +279,7 @@ def test_a_sequential_replay_of_end_session_returns_the_original_response(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
 ) -> None:
     key = f"end-session-{uuid.uuid4().hex[:8]}"
-    body = {"end_world_time_id": str(f.end_world_time_id)}
+    body = {"expected_row_version": 1, "end_world_time_id": str(f.end_world_time_id)}
     with client_factory(f.gm_user_id) as client:
         first = client.post(_end_url(f), json=body, headers={"Idempotency-Key": key})
         second = client.post(_end_url(f), json=body, headers={"Idempotency-Key": key})

@@ -17,6 +17,7 @@ interface KnowledgeItemsBoundaryProps {
     query: string
     knowledgeType: string | null
     cursor?: string | null
+    includePublic?: boolean
     children: (
         page: KnowledgePage,
         refreshing: boolean,
@@ -31,6 +32,7 @@ export function KnowledgeItemsBoundary({
     query,
     knowledgeType,
     cursor = null,
+    includePublic = true,
     children,
 }: KnowledgeItemsBoundaryProps) {
     const { state, retry } =
@@ -42,6 +44,7 @@ export function KnowledgeItemsBoundary({
             query,
             knowledgeType,
             cursor,
+            includePublic,
         )
 
     if (state.status === "loading") {

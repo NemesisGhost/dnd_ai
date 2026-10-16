@@ -48,10 +48,11 @@ world_roles = _lookup_table(
     "security",
     "world_roles",
     "world_role_id",
-    "Roles a user can hold on a world (currently world_owner). Capabilities are a "
+    "Roles a user can hold on a world (world_owner, world_viewer). Capabilities are a "
     "closed mapping in application code (dnd_ai.domain.world_authority), not rows in "
     "security.capabilities, which is assignable to campaign roles "
-    "(docs/adr/0014-world-authoring-authority.md).",
+    "(docs/adr/0014-world-authoring-authority.md, "
+    "docs/adr/0019-world-visibility-and-viewer-role.md).",
 )
 
 character_relationship_types = _lookup_table(

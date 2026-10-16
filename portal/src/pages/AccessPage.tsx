@@ -44,6 +44,7 @@ interface MemberAccessCardProps {
     assignableCharacters: AssignableCharacter[]
     assignableRelationshipTypes: AssignableCharacterRelationshipType[]
     grantableResourceCapabilities: GrantableResourceCapability[]
+    preselectCharacterId: string | null
     onChanged: (message: string) => void
     onMutationStart: () => void
 }
@@ -56,6 +57,7 @@ function MemberAccessCard({
     assignableCharacters,
     assignableRelationshipTypes,
     grantableResourceCapabilities,
+    preselectCharacterId,
     onChanged,
     onMutationStart,
 }: MemberAccessCardProps) {
@@ -196,6 +198,7 @@ function MemberAccessCard({
                         }
                         memberDisplayName={member.display_name}
                         assignableCharacters={assignableCharacters}
+                        preselectCharacterId={preselectCharacterId}
                         assignableRelationshipTypes={
                             assignableRelationshipTypes
                         }
@@ -459,6 +462,9 @@ function AccessGroupCard({
 interface AccessPageProps {
     campaignId: string
     overview: CampaignAccessOverview
+    // A character the relationship control starts on (from `?character=<id>` on
+    // a player character's page); the server still validates everything.
+    preselectCharacterId?: string | null
     onChanged: (message: string) => void
     onMutationStart: () => void
 }
@@ -466,11 +472,11 @@ interface AccessPageProps {
 export function AccessPage({
     campaignId,
     overview,
+    preselectCharacterId = null,
     onChanged,
     onMutationStart,
 }: AccessPageProps) {
     const { state: sessionState } = useSession()
-
     const campaignName =
         sessionState.status === "authenticated"
             ? (sessionState.bootstrap.campaigns.find(
@@ -522,6 +528,7 @@ export function AccessPage({
                                 grantableResourceCapabilities={
                                     overview.grantable_resource_capabilities
                                 }
+                                preselectCharacterId={preselectCharacterId}
                                 onChanged={onChanged}
                                 onMutationStart={onMutationStart}
                             />

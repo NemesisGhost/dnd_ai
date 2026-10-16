@@ -35,23 +35,22 @@ reasons every other query router in this package has neither.
 
 import uuid
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy import Connection
 
-from dnd_ai.commands.sessions import _end_session_impl
 from dnd_ai.domain.access import AccessContext
-from dnd_ai.queries.session import get_session_view, list_campaign_sessions
+from dnd_ai.queries.session import (
+    get_session_view,
+    list_campaign_sessions,
+    list_session_participants,
+)
 
-from ._shared import timeline_world_id
 from .access import require_campaign_capability
-from .audit import record_change_log
-from .correlation import get_request_correlation_id
-from .deps import get_connection, get_idempotency_key
+from .deps import get_connection
 from .errors import NotFoundError
-from .idempotency import IdempotentReplay, begin_idempotent_request, complete_idempotent_request
 
 router = APIRouter(tags=["sessions"])
 
@@ -69,88 +68,6 @@ _SESSION_VIEW_CAPABILITY = "campaign.view"
 # it — same split dnd_ai.api.summary already applies campaign-wide.
 _DRAFT_EVENTS_CAPABILITY = "canon.edit"
 
-_END_SESSION_COMMAND_NAME = "end_session"
-_UPDATED_CHANGE_ACTION = "updated"
-
-
-class EndSessionRequest(BaseModel):
-    end_world_time_id: uuid.UUID
-    summary: str | None = None
-
-
-class EndSessionResponse(BaseModel):
-    session_id: uuid.UUID
-    already_ended: bool
-
-
-@router.post(
-    "/campaigns/{campaign_id}/sessions/{session_id}/end",
-    response_model=EndSessionResponse,
-    status_code=200,
-)
-def end_session_endpoint(
-    campaign_id: uuid.UUID,
-    session_id: uuid.UUID,
-    body: EndSessionRequest,
-    access: Annotated[AccessContext, Depends(require_campaign_capability(_CANON_EDIT_CAPABILITY))],
-    connection: Annotated[Connection, Depends(get_connection)],
-    idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
-    correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
-) -> EndSessionResponse:
-    reservation_id: uuid.UUID | None = None
-    if idempotency_key is not None:
-        fingerprint_payload: dict[str, Any] = {
-            "session_id": str(session_id),
-            **body.model_dump(mode="json"),
-        }
-        outcome = begin_idempotent_request(
-            connection,
-            actor_user_id=access.user_id,
-            campaign_id=campaign_id,
-            idempotency_key=idempotency_key,
-            command_name=_END_SESSION_COMMAND_NAME,
-            payload=fingerprint_payload,
-            correlation_id=correlation_id,
-        )
-        if isinstance(outcome, IdempotentReplay):
-            return EndSessionResponse.model_validate(outcome.response_body)
-        reservation_id = outcome.idempotent_request_id
-
-    result = _end_session_impl(
-        connection,
-        session_id=session_id,
-        campaign_id=campaign_id,
-        end_world_time_id=body.end_world_time_id,
-        summary=body.summary,
-    )
-
-    if not result.already_ended:
-        record_change_log(
-            connection,
-            change_action_code=_UPDATED_CHANGE_ACTION,
-            schema_name="campaign",
-            table_name="sessions",
-            record_id=session_id,
-            entity_id=None,
-            world_id=timeline_world_id(connection, access.timeline_id),
-            actor_user_id=access.user_id,
-            correlation_id=correlation_id,
-            command_name=_END_SESSION_COMMAND_NAME,
-            event_id=None,
-        )
-
-    response = EndSessionResponse(session_id=result.session_id, already_ended=result.already_ended)
-
-    if reservation_id is not None:
-        complete_idempotent_request(
-            connection,
-            idempotent_request_id=reservation_id,
-            response_status_code=200,
-            response_body=response.model_dump(mode="json"),
-        )
-
-    return response
-
 
 # ---------------------------------------------------------------------------
 # Read side (Phase 13D backend readiness) — response contracts
@@ -164,6 +81,12 @@ class SessionListItemResponse(BaseModel):
     status_code: str
     started_at: datetime | None
     ended_at: datetime | None
+    # Phase 15.2D-1: the planned start and the derived play status (D-13).
+    scheduled_for: datetime | None = None
+    play_status: str = "unscheduled"
+    # Editors only: the version to send back, and what they can do.
+    row_version: int | None = None
+    available_actions: list[str] | None = None
 
 
 class SessionEventResponse(BaseModel):
@@ -174,6 +97,15 @@ class SessionEventResponse(BaseModel):
     event_status_code: str
     world_time_id: uuid.UUID
     details: str | None
+
+
+class SessionParticipantResponse(BaseModel):
+    session_participant_id: uuid.UUID
+    character_id: uuid.UUID
+    character_name: str
+    participation_role: str
+    added_at: datetime
+    removed_at: datetime | None
 
 
 class SessionDetailResponse(BaseModel):
@@ -187,6 +119,33 @@ class SessionDetailResponse(BaseModel):
     start_world_time_id: uuid.UUID | None
     end_world_time_id: uuid.UUID | None
     events: list[SessionEventResponse]
+    scheduled_for: datetime | None = None
+    play_status: str = "unscheduled"
+    row_version: int | None = None
+    available_actions: list[str] | None = None
+    # Editors only: who is (or was) present.
+    participants: list[SessionParticipantResponse] | None = None
+
+
+def _actions(lifecycle_status: str, play_status: str) -> list[str]:
+    """What an editor can do with the session, by lifecycle and derived play
+    status (a session being played cannot be archived)."""
+    if lifecycle_status == "archived":
+        return ["restore"]
+    if lifecycle_status != "active":
+        # Every session command refuses a session that is not active (for example
+        # a `pending` row), so offering actions would only lead to a 409.
+        return []
+    actions = ["update"]
+    if play_status in ("unscheduled", "scheduled"):
+        actions.append("start")
+    if play_status in ("unscheduled", "scheduled", "in_progress"):
+        actions.append("manage_participants")
+    if play_status == "in_progress":
+        actions.extend(["log", "end"])
+    if play_status != "in_progress":
+        actions.append("archive")
+    return actions
 
 
 # ---------------------------------------------------------------------------
@@ -209,8 +168,13 @@ def list_sessions_endpoint(
     denied_session_ids, _allowed_session_ids = access.resource_grant_targets(
         _SESSION_VIEW_CAPABILITY, field_name="session_id"
     )
+    editor = access.has_capability(_CANON_EDIT_CAPABILITY)
+    # An archived session is hidden from anyone who cannot edit canon (D-13).
     items = list_campaign_sessions(
-        connection, campaign_id=campaign_id, denied_session_ids=denied_session_ids
+        connection,
+        campaign_id=campaign_id,
+        denied_session_ids=denied_session_ids,
+        include_archived=editor,
     )
     return [
         SessionListItemResponse(
@@ -220,6 +184,10 @@ def list_sessions_endpoint(
             status_code=item.status_code,
             started_at=item.started_at,
             ended_at=item.ended_at,
+            scheduled_for=item.scheduled_for,
+            play_status=item.play_status,
+            row_version=item.row_version if editor else None,
+            available_actions=_actions(item.status_code, item.play_status) if editor else None,
         )
         for item in items
     ]
@@ -254,6 +222,7 @@ def get_session_endpoint(
         include_draft_events=access.has_capability(_DRAFT_EVENTS_CAPABILITY),
         denied_draft_event_ids=denied_draft_event_ids,
         allowed_draft_event_ids=allowed_draft_event_ids,
+        include_archived=access.has_capability(_CANON_EDIT_CAPABILITY),
     )
 
     return SessionDetailResponse(
@@ -266,6 +235,29 @@ def get_session_endpoint(
         summary=view.summary,
         start_world_time_id=view.start_world_time_id,
         end_world_time_id=view.end_world_time_id,
+        scheduled_for=view.scheduled_for,
+        play_status=view.play_status,
+        row_version=view.row_version if access.has_capability(_CANON_EDIT_CAPABILITY) else None,
+        available_actions=(
+            _actions(view.status_code, view.play_status)
+            if access.has_capability(_CANON_EDIT_CAPABILITY)
+            else None
+        ),
+        participants=(
+            [
+                SessionParticipantResponse(
+                    session_participant_id=p.session_participant_id,
+                    character_id=p.character_id,
+                    character_name=p.character_name,
+                    participation_role=p.participation_role,
+                    added_at=p.added_at,
+                    removed_at=p.removed_at,
+                )
+                for p in list_session_participants(connection, session_id=session_id)
+            ]
+            if access.has_capability(_CANON_EDIT_CAPABILITY)
+            else None
+        ),
         events=[
             SessionEventResponse(
                 event_id=e.event_id,
@@ -274,7 +266,8 @@ def get_session_endpoint(
                 event_type_code=e.event_type_code,
                 event_status_code=e.event_status_code,
                 world_time_id=e.world_time_id,
-                details=e.details,
+                # GM-only (D-3, data class GM_ONLY).
+                details=e.details if access.has_capability(_CANON_EDIT_CAPABILITY) else None,
             )
             for e in view.events
         ],

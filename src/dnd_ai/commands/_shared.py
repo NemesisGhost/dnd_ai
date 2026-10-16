@@ -6,6 +6,7 @@ from sqlalchemy import Connection, text
 
 from dnd_ai.domain.entity_lifecycle import STATE_TARGET_GUARDED_TYPE_CODES
 from dnd_ai.domain.errors import DomainAuthorizationError
+from dnd_ai.domain.party_authoring import PartyNotActiveError
 
 
 class LookupCodeNotFoundError(ValueError):
@@ -205,6 +206,7 @@ def validate_campaign_party(
     campaign_id: uuid.UUID | None,
     party_id: uuid.UUID | None,
     lock: bool = False,
+    require_active: bool = False,
 ) -> None:
     """Rejects a caller-supplied party_id that is not actually associated
     with campaign_id, before anything is inserted, updated, or read.
@@ -242,3 +244,14 @@ def validate_campaign_party(
         raise PartyNotInCampaignError(
             f"party {party_id} is not associated with campaign {campaign_id!r}"
         )
+    if require_active:
+        # An archived party takes no new writes (Phase 15.2C-1, decision D-30).
+        status = connection.execute(
+            text(
+                "SELECT ls.code FROM campaign.parties p JOIN core.lifecycle_statuses ls "
+                "ON ls.lifecycle_status_id = p.lifecycle_status_id WHERE p.party_id = :party"
+            ),
+            {"party": party_id},
+        ).scalar()
+        if status != "active":
+            raise PartyNotActiveError(f"party {party_id} is {status}")

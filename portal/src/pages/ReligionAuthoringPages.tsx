@@ -8,6 +8,7 @@ import { ContentCreatePage } from "../components/authoring/ContentCreatePage"
 import type { ContentCreateConfig } from "../components/authoring/ContentCreatePage"
 import { ContentEditPage } from "../components/authoring/ContentEditPage"
 import type { ContentEditConfig } from "../components/authoring/ContentEditPage"
+import { worldEditNavigation } from "../components/world/editNavigation"
 import type { FieldError } from "../components/authoring/feedback"
 import { TextAreaField, TextField } from "../components/authoring/fields"
 import type {
@@ -22,6 +23,7 @@ import {
     validateDescription,
     validateName,
 } from "../utils/authoringValidation"
+import type { ReligionReceipt } from "../types/contentAuthoring"
 
 interface ReligionFormValues {
     name: string
@@ -114,7 +116,7 @@ const createConfig: ContentCreateConfig<
     ReligionOptions,
     ReligionFormValues,
     CreateReligionBody,
-    ReligionAuthoringView
+    ReligionReceipt
 > = {
     noun: "religion",
     heading: "New religion",
@@ -155,6 +157,7 @@ const editConfig: ContentEditConfig<
     breadcrumbLabel: "World",
     worldPath,
     detailPath: (campaignId, id) => `${worldPath(campaignId)}/religion/${encodeURIComponent(id)}`,
+    navigation: worldEditNavigation("religion"),
     viewPath: religionAuthoringPath,
     optionsPath: religionOptionsPath,
     name: (view) => view.name,

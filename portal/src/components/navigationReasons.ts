@@ -3,3 +3,4 @@
 export const SELECT_CAMPAIGN_FIRST = "Select a campaign first"
 export const SELECT_WORLD_FIRST = "Select a world first"
 export const SELECT_TIMELINE_FIRST = "Select a timeline first"
+export const NOT_AVAILABLE_FOR_ACCOUNT = "Not available for your account"

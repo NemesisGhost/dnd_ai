@@ -1,4 +1,5 @@
 import { Link, useParams } from "react-router"
+import { useWorldBackPath } from "../hooks/useWorldBackPath"
 import {
     fetchEventDetail,
     fetchItemDetail,
@@ -7,7 +8,11 @@ import {
     fetchReligionDetail,
 } from "../api/world"
 import { CharacterBoundary } from "../components/CharacterBoundary"
-import { NpcAuthoringControls } from "../components/NpcAuthoringControls"
+import { CharacterInventoryPanel } from "../components/InventoryPanels"
+import { ItemWorkspace } from "../components/items/ItemWorkspace"
+import { OrganizationMembers } from "../components/OrganizationMembers"
+import { useCampaignCapability } from "../hooks/useCampaignCapability"
+import { WorldRecordWorkspace } from "../components/world/WorldRecordWorkspace"
 import { WorldEntityDetailBoundary } from "../components/WorldEntityDetailBoundary"
 import { isWorldDetailCategory } from "../types/world"
 import { CharacterDetailPage } from "./CharacterDetailPage"
@@ -23,12 +28,19 @@ import { WorldReligionDetailPage } from "./WorldReligionDetailPage"
 // `category` is validated against the categories with an independently
 // loadable detail contract and fails closed for anything else (including
 // "relationship", which has none until Phase 15.2).
+//
+// People who can edit canon get a guided workspace for the records that go through the canon
+// lifecycle (places, dungeons, areas, organizations, religions, NPCs and player characters; an
+// item gets the item workspace). Everyone else, and an event for everyone, gets the read-only page
+// below, which sends no authoring, lifecycle or sources request.
 export function CampaignWorldDetailPage() {
     const { campaignId, category, entityId } = useParams<{
         campaignId: string
         category: string
         entityId: string
     }>()
+    const worldBackPath = useWorldBackPath(campaignId ?? "")
+    const canEdit = useCampaignCapability(campaignId ?? "", "canon.edit")
 
     if (
         campaignId === undefined ||
@@ -42,6 +54,10 @@ export function CampaignWorldDetailPage() {
                 description="The requested world information is not available."
             />
         )
+    }
+
+    if (canEdit && (category === "location" || category === "organization" || category === "religion" || category === "character")) {
+        return <WorldRecordWorkspace key={`${category}:${entityId}`} campaignId={campaignId} category={category} entityId={entityId} />
     }
 
     if (category === "location") {
@@ -71,10 +87,13 @@ export function CampaignWorldDetailPage() {
                 resourceLabel="organization"
             >
                 {(organization) => (
-                    <WorldOrganizationDetailPage
-                        campaignId={campaignId}
-                        organization={organization}
-                    />
+                    <>
+                        <WorldOrganizationDetailPage
+                            campaignId={campaignId}
+                            organization={organization}
+                        />
+                        <OrganizationMembers campaignId={campaignId} organizationId={entityId} />
+                    </>
                 )}
             </WorldEntityDetailBoundary>
         )
@@ -99,21 +118,7 @@ export function CampaignWorldDetailPage() {
     }
 
     if (category === "item") {
-        return (
-            <WorldEntityDetailBoundary
-                campaignId={campaignId}
-                entityId={entityId}
-                fetchDetail={fetchItemDetail}
-                resourceLabel="item"
-            >
-                {(item) => (
-                    <WorldItemDetailPage
-                        campaignId={campaignId}
-                        item={item}
-                    />
-                )}
-            </WorldEntityDetailBoundary>
-        )
+        return <WorldItemEntry campaignId={campaignId} entityId={entityId} />
     }
 
     if (category === "event") {
@@ -123,12 +128,22 @@ export function CampaignWorldDetailPage() {
                 entityId={entityId}
                 fetchDetail={fetchEventDetail}
                 resourceLabel="event"
+                lifecycle={false}
             >
                 {(event) => (
-                    <WorldEventDetailPage
-                        campaignId={campaignId}
-                        event={event}
-                    />
+                    <>
+                        <WorldEventDetailPage
+                            campaignId={campaignId}
+                            event={event}
+                        />
+                        {canEdit ? (
+                            <p>
+                                <Link to={`/app/${encodeURIComponent(campaignId)}/events/${encodeURIComponent(entityId)}`}>
+                                    Open the event record
+                                </Link>
+                            </p>
+                        ) : null}
+                    </>
                 )}
             </WorldEntityDetailBoundary>
         )
@@ -140,18 +155,35 @@ export function CampaignWorldDetailPage() {
     return (
         <CharacterBoundary campaignId={campaignId} characterId={entityId}>
             {(character) => (
-                <div>
+                <div className="world-detail__layout">
                     <p>
-                        <Link
-                            to={`/app/${encodeURIComponent(campaignId)}/world`}
-                        >
-                            Back to World
-                        </Link>
+                        <Link to={worldBackPath}>Back to World</Link>
                     </p>
                     <CharacterDetailPage character={character} />
-                    <NpcAuthoringControls campaignId={campaignId} characterId={entityId} />
+                    <CharacterInventoryPanel campaignId={campaignId} characterId={entityId} />
                 </div>
             )}
         </CharacterBoundary>
+    )
+}
+
+// An item on the World page. People who can edit canon get the item workspace (the same page as
+// from the item inventory, returning to the World browser); everyone else gets the reader, which
+// shows only what the World API allows them. Players send no authoring request.
+function WorldItemEntry({ campaignId, entityId }: { campaignId: string; entityId: string }) {
+    const canEdit = useCampaignCapability(campaignId, "canon.edit")
+    if (canEdit) {
+        return <ItemWorkspace key={entityId} campaignId={campaignId} itemId={entityId} origin="world" />
+    }
+    return (
+        <WorldEntityDetailBoundary
+            campaignId={campaignId}
+            entityId={entityId}
+            fetchDetail={fetchItemDetail}
+            resourceLabel="item"
+            lifecycle={false}
+        >
+            {(item) => <WorldItemDetailPage campaignId={campaignId} item={item} />}
+        </WorldEntityDetailBoundary>
     )
 }

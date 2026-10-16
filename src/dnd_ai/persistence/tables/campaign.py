@@ -150,6 +150,42 @@ parties = Table(
     Column("name", Text(), nullable=False),
     Column("description", Text()),
     *_timestamps(),
+    # Added by revision 120 (Phase 15 checkpoint 15.2C-1).
+    Column(
+        "row_version",
+        BigInteger(),
+        nullable=False,
+        server_default=text("1"),
+        comment=(
+            "Optimistic-concurrency token, incremented by every UPDATE "
+            "(core.bump_row_version()). Authoring commands require the caller's "
+            "expected_row_version to equal it under a row lock and reject a stale write."
+        ),
+    ),
+    Column(
+        "lifecycle_status_id",
+        UUID(),
+        ForeignKey("core.lifecycle_statuses.lifecycle_status_id", ondelete="RESTRICT"),
+        nullable=False,
+        comment=(
+            "Operational lifecycle (active or archived). An archived party stays referenced by "
+            "its history, is hidden from pickers, and takes no new membership or knowledge writes."
+        ),
+    ),
+    Column(
+        "archived_at",
+        TIMESTAMP(timezone=True),
+        comment="When the party was archived; NULL while active.",
+    ),
+    Column(
+        "created_by_user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="SET NULL"),
+        comment=(
+            "The authenticated human who created the party through the authoring command; NULL "
+            "for parties created before revision 120 or by operator tooling."
+        ),
+    ),
     schema="campaign",
     comment=(
         "A group of characters who adventure together. A stable world-level identity that "
@@ -225,6 +261,25 @@ party_memberships = Table(
     Column("joined_reason", Text()),
     Column("left_reason", Text()),
     *_timestamps(),
+    # Added by revision 121 (Phase 15 checkpoint 15.2C-2).
+    Column(
+        "joined_event_id",
+        UUID(),
+        ForeignKey("narrative.events.event_id", ondelete="SET NULL"),
+        comment=(
+            "The party_member_joined event that recorded this membership (same timeline); "
+            "NULL for rows created before revision 121."
+        ),
+    ),
+    Column(
+        "left_event_id",
+        UUID(),
+        ForeignKey("narrative.events.event_id", ondelete="SET NULL"),
+        comment=(
+            "The party_member_left event that ended this membership (same timeline); NULL while "
+            "open and for rows ended before revision 121."
+        ),
+    ),
     schema="campaign",
     comment=(
         "Timeline-scoped temporal record of a character belonging to a party. A character "
@@ -236,8 +291,24 @@ party_memberships = Table(
 )
 
 Index("ix_parties_world_id", parties.c.world_id)
+Index("ix_parties_lifecycle_status_id", parties.c.lifecycle_status_id)
+Index(
+    "ix_parties_created_by_user_id",
+    parties.c.created_by_user_id,
+    postgresql_where=parties.c.created_by_user_id.isnot(None),
+)
 Index("ix_party_memberships_member_entity_id", party_memberships.c.member_entity_id)
 Index("ix_party_memberships_party_id", party_memberships.c.party_id)
+Index(
+    "ix_party_memberships_joined_event_id",
+    party_memberships.c.joined_event_id,
+    postgresql_where=party_memberships.c.joined_event_id.isnot(None),
+)
+Index(
+    "ix_party_memberships_left_event_id",
+    party_memberships.c.left_event_id,
+    postgresql_where=party_memberships.c.left_event_id.isnot(None),
+)
 Index(
     "ix_party_memberships_effective_from_world_time_id",
     party_memberships.c.effective_from_world_time_id,
@@ -410,6 +481,41 @@ sessions = Table(
         ),
     ),
     *_timestamps(),
+    # Added by revision 122 (Phase 15 checkpoint 15.2D-1).
+    Column(
+        "row_version",
+        BigInteger(),
+        nullable=False,
+        server_default=text("1"),
+        comment=(
+            "Optimistic-concurrency token, incremented by every UPDATE "
+            "(core.bump_row_version()). Authoring commands require the caller's "
+            "expected_row_version to equal it under a row lock and reject a stale write."
+        ),
+    ),
+    Column(
+        "scheduled_for",
+        TIMESTAMP(timezone=True),
+        comment=(
+            "The planned real-world start of the session. A plan, not history: it may be "
+            "changed or cleared until the session starts. Play status is derived from this, "
+            "started_at, and ended_at."
+        ),
+    ),
+    Column(
+        "archived_at",
+        TIMESTAMP(timezone=True),
+        comment="When the session was archived; NULL while active.",
+    ),
+    Column(
+        "created_by_user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="SET NULL"),
+        comment=(
+            "The authenticated human who scheduled the session through the authoring command; "
+            "NULL for sessions created before revision 122 or by operator tooling."
+        ),
+    ),
     schema="campaign",
     comment=(
         "A single period of play within a campaign. Carries both real-world time "
@@ -425,6 +531,11 @@ Index(
     unique=True,
 )
 Index("ix_sessions_campaign_id", sessions.c.campaign_id)
+Index(
+    "ix_sessions_created_by_user_id",
+    sessions.c.created_by_user_id,
+    postgresql_where=sessions.c.created_by_user_id.isnot(None),
+)
 Index("ix_sessions_lifecycle_status_id", sessions.c.lifecycle_status_id)
 Index(
     "ix_sessions_start_world_time_id",
@@ -1410,4 +1521,120 @@ Index(
     relationship_state.c.perspective_holder_entity_id,
     unique=True,
     postgresql_where=relationship_state.c.perspective_holder_entity_id.isnot(None),
+)
+
+
+# ---------------------------------------------------------------------------
+# campaign — the campaign clock (revision 118, Phase 15)
+# ---------------------------------------------------------------------------
+
+timeline_clocks = Table(
+    "timeline_clocks",
+    metadata,
+    Column(
+        "timeline_id",
+        UUID(),
+        ForeignKey("campaign.timelines.timeline_id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "current_world_time_id",
+        UUID(),
+        ForeignKey("core.world_times.world_time_id", ondelete="RESTRICT"),
+        nullable=False,
+        comment="The timeline's current point in fictional time; must belong to the timeline's world.",
+    ),
+    Column(
+        "last_event_id",
+        UUID(),
+        ForeignKey("narrative.events.event_id", ondelete="SET NULL"),
+        comment=(
+            "The time_advanced or time_corrected event that set the current value "
+            "(same-timeline guard: campaign.enforce_state_event_timeline())."
+        ),
+    ),
+    Column(
+        "row_version",
+        BigInteger(),
+        nullable=False,
+        server_default=text("1"),
+        comment="Optimistic-concurrency token, incremented by every UPDATE (core.bump_row_version()).",
+    ),
+    *_timestamps(),
+    schema="campaign",
+    comment=(
+        "The current world time of a timeline (Phase 15). One row per timeline; typed "
+        "timeline state changed only through the clock commands, each of which records a "
+        "causal event. A branch with no row inherits its parent's clock bounded by its "
+        "branch point (resolved on read)."
+    ),
+)
+
+Index(
+    "ix_timeline_clocks_current_world_time_id",
+    timeline_clocks.c.current_world_time_id,
+)
+Index(
+    "ix_timeline_clocks_last_event_id",
+    timeline_clocks.c.last_event_id,
+    postgresql_where=timeline_clocks.c.last_event_id.isnot(None),
+)
+
+
+# Added by revision 123 (Phase 15 checkpoint 15.2D-2).
+session_participants = Table(
+    "session_participants",
+    metadata,
+    _uuid_pk("session_participant_id"),
+    Column(
+        "session_id",
+        UUID(),
+        ForeignKey("campaign.sessions.session_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "character_id",
+        UUID(),
+        ForeignKey("character.characters.character_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "participation_role",
+        Text(),
+        nullable=False,
+        comment="player_character, npc, or guest (any character present without a fixed role).",
+    ),
+    Column("added_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    Column("removed_at", TIMESTAMP(timezone=True)),
+    Column(
+        "added_by_user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="SET NULL"),
+    ),
+    schema="campaign",
+    comment=(
+        "The characters taking part in a session (decision D-14: characters only, never "
+        "user attendance). A row is open while removed_at is NULL; a character may be added "
+        "again after removal. Presence does not grant access."
+    ),
+)
+
+Index("ix_session_participants_character_id", session_participants.c.character_id)
+Index(
+    "ix_session_participants_added_by_user_id",
+    session_participants.c.added_by_user_id,
+    postgresql_where=session_participants.c.added_by_user_id.isnot(None),
+)
+Index(
+    "ux_session_participants_open",
+    session_participants.c.session_id,
+    session_participants.c.character_id,
+    unique=True,
+    postgresql_where=session_participants.c.removed_at.is_(None),
+)
+Index(
+    "ux_sessions_one_in_progress",
+    sessions.c.campaign_id,
+    unique=True,
+    postgresql_where=sessions.c.started_at.isnot(None) & sessions.c.ended_at.is_(None),
 )

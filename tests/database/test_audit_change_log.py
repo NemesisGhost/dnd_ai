@@ -83,6 +83,9 @@ def test_seeded_change_actions_cover_the_lifecycle(db_connection: Connection) ->
         "restored",
         "deleted",
         "denied",
+        # "sensitive_read" (migration 116, checkpoint 15.2A-3): a security-
+        # relevant read that changes no data, such as a GM audience preview.
+        "sensitive_read",
     }
 
 

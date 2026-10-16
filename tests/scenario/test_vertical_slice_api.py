@@ -462,7 +462,10 @@ def test_the_vertical_slice_scenario(
     # players independently.
     for membership_id, relationship_type in (
         (player1_membership_id, "primary_controller"),
-        (player2_membership_id, "co_controller"),
+        # player2 is only a `viewer` of the shared character, so the direct
+        # view_knowledge grant below is their sole source of that capability
+        # (a co_controller holds it by production default, migration 114).
+        (player2_membership_id, "viewer"),
     ):
         relationship_response = gm.post(
             f"/campaigns/{campaign_id}/memberships/{membership_id}/character-relationships",
@@ -646,12 +649,27 @@ def test_the_vertical_slice_scenario(
     assert npc_result["discovered_knowledge_item_id"] == str(f.npc_knowledge_item_id)
 
     # -- Step 14: end the session and generate a summary.
+    session_url = f"/campaigns/{campaign_id}/sessions/{session_id}"
+    session_detail = gm.get(session_url)
+    assert session_detail.status_code == 200, session_detail.text
+    start_response = gm.post(
+        f"{session_url}/start",
+        json={
+            "expected_row_version": session_detail.json()["row_version"],
+            "start_world_time_id": str(f.wt_before),
+        },
+    )
+    assert start_response.status_code == 200, start_response.text
     end_session_response = gm.post(
-        f"/campaigns/{campaign_id}/sessions/{session_id}/end",
-        json={"end_world_time_id": str(f.wt_end_session), "summary": "The keep's entry is clear."},
+        f"{session_url}/end",
+        json={
+            "expected_row_version": start_response.json()["row_version"],
+            "end_world_time_id": str(f.wt_end_session),
+            "summary": "The keep's entry is clear.",
+        },
     )
     assert end_session_response.status_code == 200, end_session_response.text
-    assert end_session_response.json()["already_ended"] is False
+    assert gm.get(session_url).json()["play_status"] == "completed"
 
     # -- Step 15: GM, player, and observer summaries — each succeeds, and
     # hidden content stays indistinguishable from nonexistent for the

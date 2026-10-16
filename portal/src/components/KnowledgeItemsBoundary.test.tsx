@@ -103,6 +103,7 @@ describe("KnowledgeItemsBoundary", () => {
             "glass",
             "fact",
             "knowledge-cursor",
+            true,
         )
     })
 

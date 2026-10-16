@@ -398,7 +398,7 @@ export function AcceptCampaignInvitationPage() {
     const data = onboardingStatus.state.data
 
     const notNowControl = (
-        <div className="access-role-editor__actions">
+        <div className="access-role-editor__actions invitation-onboarding__actions">
             <button
                 type="button"
                 disabled={cancel.status.kind === "pending"}
@@ -408,7 +408,11 @@ export function AcceptCampaignInvitationPage() {
             >
                 {cancel.status.kind === "pending" ? "Closing…" : "Not now"}
             </button>
-            <p className="login-error" role="status" aria-live="polite">
+            <p
+                className="login-error invitation-onboarding__message"
+                role="status"
+                aria-live="polite"
+            >
                 {cancel.status.kind === "unavailable" &&
                     "This invitation is no longer available. It may have expired, been revoked, or already been used."}
                 {(cancel.status.kind === "error" || cancel.status.kind === "denied") &&

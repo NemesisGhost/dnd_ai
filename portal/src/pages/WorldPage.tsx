@@ -1,13 +1,19 @@
 import { useId } from "react"
 import type { ReactNode } from "react"
 import { Link } from "react-router"
-import type { WorldCategory } from "../types/world"
+import type { WorldCategory, WorldCategoryCounts } from "../types/world"
+import { WORLD_CATEGORY_NAV } from "../utils/worldCategories"
 
 interface WorldPageProps {
     category: WorldCategory | null
     query: string
     onQueryChange: (query: string) => void
-    onCategoryChange: (category: WorldCategory | null) => void
+    // The address a category link opens: it keeps the search and draft
+    // preview, and restarts paging.
+    categoryHref: (category: WorldCategory | null) => string
+    // Authorized totals for the current search, or null while unknown (loading
+    // or failed): no count is shown then, never a zero.
+    counts?: WorldCategoryCounts | null
     // Offered only to canon.edit holders; players never see the toggle.
     canPreviewHidden?: boolean
     showHidden?: boolean
@@ -18,26 +24,12 @@ interface WorldPageProps {
     children: ReactNode
 }
 
-interface CategoryOption {
-    value: WorldCategory | ""
-    label: string
-}
-
-const categoryOptions: CategoryOption[] = [
-    { value: "", label: "All" },
-    { value: "location", label: "Locations" },
-    { value: "character", label: "Characters" },
-    { value: "organization", label: "Organizations" },
-    { value: "religion", label: "Religions" },
-    { value: "item", label: "Items" },
-    { value: "event", label: "Events" },
-]
-
 export function WorldPage({
     category,
     query,
     onQueryChange,
-    onCategoryChange,
+    categoryHref,
+    counts = null,
     canPreviewHidden = false,
     showHidden = false,
     onShowHiddenChange,
@@ -45,71 +37,24 @@ export function WorldPage({
     children,
 }: WorldPageProps) {
     const searchInputId = useId()
-    const categorySelectId = useId()
 
     return (
-        <section aria-labelledby="world-heading">
-            <h1 id="world-heading">World</h1>
+        <section aria-labelledby="world-heading" className="world-page">
+            <h1 id="world-heading">Campaign World</h1>
 
-            {createLinks.length > 0 ? (
-                <nav aria-label="Create world content" className="authoring-page__actions-row">
-                    {createLinks.map((link) => (
-                        <Link key={link.to} to={link.to} className="authoring-button">
-                            {link.label}
-                        </Link>
-                    ))}
-                </nav>
-            ) : null}
-
-            <div
-                className="world-page__filters"
-                role="search"
-                aria-label="World search"
-            >
-                <div className="world-page__field">
-                    <label htmlFor={searchInputId}>
-                        Search
-                    </label>
-                    <input
-                        id={searchInputId}
-                        type="search"
-                        value={query}
-                        onChange={(event) =>
-                            onQueryChange(event.currentTarget.value)
-                        }
-                    />
-                </div>
-
-                <div className="world-page__field">
-                    <label htmlFor={categorySelectId}>
-                        Category
-                    </label>
-                    <select
-                        id={categorySelectId}
-                        value={category ?? ""}
-                        onChange={(event) => {
-                            const value = event.currentTarget.value
-
-                            onCategoryChange(
-                                value === ""
-                                    ? null
-                                    : (value as WorldCategory),
-                            )
-                        }}
-                    >
-                        {categoryOptions.map((option) => (
-                            <option
-                                key={option.value || "all"}
-                                value={option.value}
-                            >
-                                {option.label}
-                            </option>
-                        ))}
-                    </select>
-                </div>
-                {canPreviewHidden ? (
+            <div className="world-page__toolbar">
+                <div role="search" aria-label="World search" className="world-page__search">
                     <div className="world-page__field">
-                        <label>
+                        <label htmlFor={searchInputId}>Search</label>
+                        <input
+                            id={searchInputId}
+                            type="search"
+                            value={query}
+                            onChange={(event) => onQueryChange(event.currentTarget.value)}
+                        />
+                    </div>
+                    {canPreviewHidden ? (
+                        <label className="world-page__toggle">
                             <input
                                 type="checkbox"
                                 checked={showHidden}
@@ -119,11 +64,52 @@ export function WorldPage({
                             />{" "}
                             Show drafts and archived
                         </label>
-                    </div>
+                    ) : null}
+                </div>
+
+                {createLinks.length > 0 ? (
+                    <nav aria-label="Create world content" className="authoring-page__actions-row">
+                        {createLinks.map((link) => (
+                            <Link key={link.to} to={link.to} className="authoring-button">
+                                {link.label}
+                            </Link>
+                        ))}
+                    </nav>
                 ) : null}
             </div>
 
-            {children}
+            <div className="world-page__body">
+                <nav aria-label="World categories" className="world-categories">
+                    <ul className="world-categories__list">
+                        {WORLD_CATEGORY_NAV.map((item) => {
+                            const selected = item.category === category
+                            return (
+                                <li key={item.category ?? "all"}>
+                                    <Link
+                                        to={categoryHref(item.category)}
+                                        className="world-categories__link"
+                                        aria-current={selected ? "page" : undefined}
+                                    >
+                                        <span>{item.label}</span>
+                                        {counts !== null && " "}
+                                        {counts !== null && (
+                                            <span className="world-categories__count">
+                                                {"("}
+                                                {item.category === null
+                                                    ? counts.total
+                                                    : counts.counts[item.category]}
+                                                {")"}
+                                            </span>
+                                        )}
+                                    </Link>
+                                </li>
+                            )
+                        })}
+                    </ul>
+                </nav>
+
+                <div className="world-page__results">{children}</div>
+            </div>
         </section>
     )
 }

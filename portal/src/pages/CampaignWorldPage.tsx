@@ -6,15 +6,15 @@ import {
     useParams,
 } from "react-router"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
+import { useWorldCategoryCounts } from "../hooks/useWorldCategoryCounts"
+import { useWorldBrowseState } from "../hooks/useWorldBrowseState"
 import {
     WorldEntitiesBoundary,
 } from "../components/WorldEntitiesBoundary"
 import {
     WorldEntityList,
 } from "../components/WorldEntityList"
-import type {
-    WorldCategory,
-} from "../types/world"
+import { worldCategoryNavItem } from "../utils/worldCategories"
 import PlaceholderPage from "./PlaceholderPage"
 import { WorldPage } from "./WorldPage"
 
@@ -31,51 +31,54 @@ interface CampaignWorldContentProps {
 function CampaignWorldContent({
     campaignId,
 }: CampaignWorldContentProps) {
-    const [category, setCategory] =
-        useState<WorldCategory | null>(null)
-    const [searchInputValue, setSearchInputValue] =
-        useState("")
-    const [debouncedQuery, setDebouncedQuery] =
-        useState("")
-    const [cursor, setCursor] =
-        useState<string | null>(null)
-    const [showHidden, setShowHidden] = useState(false)
+    // Category, search, page trail and draft preview live in the address (see
+    // useWorldBrowseState), so entries return to the same view and Back,
+    // Forward and deep links work. Only the text being typed is local.
+    const browse = useWorldBrowseState()
+    const [searchInputValue, setSearchInputValue] = useState(browse.query)
+    const [seenUrlQuery, setSeenUrlQuery] = useState(browse.query)
+    if (browse.query !== seenUrlQuery) {
+        // Back/Forward or a link changed the address: the field follows it.
+        setSeenUrlQuery(browse.query)
+        setSearchInputValue(browse.query)
+    }
     // The toggle is offered from the bootstrap's capability list; the server
     // re-checks and ignores the flags for anyone without canon.edit.
     const canPreviewHidden = useCampaignCapability(campaignId, "canon.edit")
+    const includeHidden = browse.showHidden && canPreviewHidden
+    const { setQuery } = browse
 
     useEffect(() => {
-        if (searchInputValue === debouncedQuery) {
+        if (searchInputValue === browse.query) {
             return
         }
 
-        const timeoutId = window.setTimeout(() => {
-            setDebouncedQuery(searchInputValue)
-            setCursor(null)
-        }, SEARCH_DEBOUNCE_MS)
+        const timeoutId = window.setTimeout(
+            () => setQuery(searchInputValue),
+            SEARCH_DEBOUNCE_MS,
+        )
 
         return () => window.clearTimeout(timeoutId)
-    }, [searchInputValue, debouncedQuery])
+    }, [searchInputValue, browse.query, setQuery])
 
-    function handleCategoryChange(
-        nextCategory: WorldCategory | null,
-    ) {
-        setCategory(nextCategory)
-        setCursor(null)
+    const counts = useWorldCategoryCounts(campaignId, browse.query, includeHidden)
+    const categoryItem = worldCategoryNavItem(browse.category)
+
+    function clearSearch() {
+        setSearchInputValue("")
+        browse.setQuery("")
     }
 
     return (
         <WorldPage
-            category={category}
+            category={browse.category}
             query={searchInputValue}
-            onCategoryChange={handleCategoryChange}
             onQueryChange={setSearchInputValue}
+            counts={counts}
+            categoryHref={(category) => browse.hrefFor({ category }) || "?"}
             canPreviewHidden={canPreviewHidden}
-            showHidden={showHidden && canPreviewHidden}
-            onShowHiddenChange={(value) => {
-                setShowHidden(value)
-                setCursor(null)
-            }}
+            showHidden={includeHidden}
+            onShowHiddenChange={browse.setShowHidden}
             createLinks={
                 canPreviewHidden
                     ? [
@@ -84,12 +87,16 @@ function CampaignWorldContent({
                               to: `/app/${encodeURIComponent(campaignId)}/world/location/new`,
                           },
                           {
+                              label: "New dungeon",
+                              to: `/app/${encodeURIComponent(campaignId)}/world/dungeon/new`,
+                          },
+                          {
                               label: "New organization",
                               to: `/app/${encodeURIComponent(campaignId)}/world/organization/new`,
                           },
                           {
-                              label: "New NPC",
-                              to: `/app/${encodeURIComponent(campaignId)}/characters/npc/new`,
+                              label: "New character",
+                              to: `/app/${encodeURIComponent(campaignId)}/characters/new`,
                           },
                           {
                               label: "New religion",
@@ -101,19 +108,28 @@ function CampaignWorldContent({
         >
             <WorldEntitiesBoundary
                 campaignId={campaignId}
-                category={category}
-                query={debouncedQuery}
-                cursor={cursor}
-                includeHidden={showHidden && canPreviewHidden}
+                category={browse.category}
+                query={browse.query}
+                cursor={browse.cursor}
+                includeHidden={includeHidden}
             >
                 {(page, refreshing) => (
                     <WorldEntityList
                         campaignId={campaignId}
                         page={page}
                         refreshing={refreshing}
-                        onNextPage={() =>
-                            setCursor(page.next_cursor)
-                        }
+                        pageNumber={browse.pageNumber}
+                        hasPreviousPage={browse.cursors.length > 0}
+                        onPreviousPage={browse.goToPreviousPage}
+                        onNextPage={() => {
+                            if (page.next_cursor !== null) {
+                                browse.goToNextPage(page.next_cursor)
+                            }
+                        }}
+                        query={browse.query}
+                        categoryNoun={categoryItem.noun}
+                        onClearSearch={clearSearch}
+                        returnSearch={browse.returnSearch}
                     />
                 )}
             </WorldEntitiesBoundary>

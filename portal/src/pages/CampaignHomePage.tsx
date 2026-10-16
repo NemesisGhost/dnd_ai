@@ -1,5 +1,7 @@
 import { useParams } from "react-router"
 import { GetStartedCard } from "../components/GetStartedCard"
+import { CampaignClockCard } from "../components/CampaignClockCard"
+import { GmToolsCard } from "../components/GmToolsCard"
 import { useContext } from "react"
 import { SessionContext } from "../context/SessionContext"
 import { CampaignSummaryBoundary } from "../layouts/CampaignSummaryBoundary"
@@ -42,7 +44,9 @@ export function CampaignHomePage() {
     >
       {(summary) => (
         <>
-          <HomePage summary={summary} />
+          <HomePage key={campaignId} summary={summary} />
+          {state?.status === "authenticated" && <CampaignClockCard campaignId={campaignId} />}
+          <GmToolsCard campaignId={campaignId} />
           {isEmptyCampaign(summary) && canManage && (
             <GetStartedCard campaignId={campaignId} />
           )}

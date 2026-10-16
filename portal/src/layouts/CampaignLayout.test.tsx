@@ -131,7 +131,6 @@ describe("CampaignLayout last-visited recording", () => {
     expect(recordLastVisited).toHaveBeenCalledWith(
       "secundivita",
       bootstrap.csrf_token,
-      expect.any(AbortSignal),
     )
   })
 

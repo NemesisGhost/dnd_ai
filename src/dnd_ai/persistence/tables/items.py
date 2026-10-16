@@ -14,6 +14,7 @@ constraints/triggers, and views are not autogenerate-tracked at all).
 """
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     Column,
     ForeignKey,
@@ -86,7 +87,36 @@ item_definitions = Table(
     ),
     *_provenance_columns(),
     *_timestamps(),
-    UniqueConstraint("ruleset_version_id", "code", name="ux_item_definitions_ruleset_version_code"),
+    Column(
+        "owning_world_id",
+        UUID(),
+        ForeignKey("core.worlds.world_id", ondelete="CASCADE"),
+        comment=(
+            "NULL for a ruleset-wide definition visible to every world on the ruleset; set for a "
+            "homebrew definition that only this world can see and use. Immutable. A documented "
+            "exception to ruleset-wide rules data (DATABASE_MODEL §8)."
+        ),
+    ),
+    Column(
+        "row_version",
+        BigInteger(),
+        nullable=False,
+        server_default=text("1"),
+        comment=(
+            "Optimistic-concurrency token, incremented by every UPDATE "
+            "(core.bump_row_version()). Authoring commands require the caller's "
+            "expected_row_version to equal it under a row lock and reject a stale write."
+        ),
+    ),
+    Column(
+        "created_by_user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="SET NULL"),
+        comment=(
+            "The authenticated human who authored this homebrew definition; NULL for seeded or "
+            "operator-created definitions."
+        ),
+    ),
     schema="rules",
     comment=(
         "A reusable mechanical item definition (docs/DOMAIN_MODEL.md §12.1) — a generic "
@@ -96,6 +126,26 @@ item_definitions = Table(
     ),
 )
 
+Index(
+    "ux_item_definitions_ruleset_version_code",
+    item_definitions.c.ruleset_version_id,
+    item_definitions.c.code,
+    unique=True,
+    postgresql_where=item_definitions.c.owning_world_id.is_(None),
+)
+Index(
+    "ux_item_definitions_world_code",
+    item_definitions.c.owning_world_id,
+    item_definitions.c.ruleset_version_id,
+    item_definitions.c.code,
+    unique=True,
+    postgresql_where=item_definitions.c.owning_world_id.isnot(None),
+)
+Index(
+    "ix_item_definitions_created_by_user_id",
+    item_definitions.c.created_by_user_id,
+    postgresql_where=item_definitions.c.created_by_user_id.isnot(None),
+)
 Index("ix_item_definitions_ruleset_version_id", item_definitions.c.ruleset_version_id)
 Index("ix_item_definitions_item_category_id", item_definitions.c.item_category_id)
 Index(

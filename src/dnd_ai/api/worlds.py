@@ -1,7 +1,8 @@
 """World authoring endpoints (Phase 14, docs/adr/0014-world-authoring-authority.md).
 
     GET  /worlds                          worlds the caller holds authority over
-    POST /worlds                          create (world.create: any human principal)
+    POST /worlds                          create (world.create: an active platform
+                                          administrator or effective built-in gm)
     GET  /worlds/{world_id}               detail with server-computed actions (world.view)
     POST /worlds/{world_id}/update        (world.manage)
     POST /worlds/{world_id}/archive       (world.manage)
@@ -9,7 +10,12 @@
 
 Every route builds on `require_human_user_id` / `require_world_capability`, so
 Foundry device principals get 403 and cookie-session callers pass CSRF and
-Origin checks (inherited from `get_authenticated_user_id`). A missing,
+Origin checks (inherited from `get_authenticated_user_id`). `POST /worlds`
+additionally refuses a human who may not create worlds with 403 `forbidden`
+(docs/adr/0018-world-creation-eligibility.md): the route checks before touching
+the idempotency store — so a refused caller can neither reserve a key nor
+replay an earlier success — and `create_world` re-checks authoritatively in the
+same transaction. A missing,
 unclaimed, or someone-else's world is the same 404. Mutations use the
 actor-scoped idempotency store and write one `audit.change_log` row per
 durable record, sharing the request correlation ID. Reasons are stored in the
@@ -30,7 +36,9 @@ from dnd_ai.commands.worlds import (
     restore_world,
     update_world,
 )
+from dnd_ai.domain.authoring import WorldCreationNotAuthorizedError
 from dnd_ai.domain.world_authority import WORLD_MANAGE, WORLD_VIEW, WorldAuthority
+from dnd_ai.queries.world_authority import may_create_worlds
 from dnd_ai.queries.worlds import WorldDetail, WorldSummary, get_world_detail, list_worlds
 
 from ._authoring import (
@@ -195,6 +203,10 @@ def create_world_endpoint(
     idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
 ) -> Any:
+    # Defense in depth ahead of the idempotency store; `create_world` repeats
+    # this check as the authoritative one.
+    if not may_create_worlds(connection, user_id=user_id):
+        raise WorldCreationNotAuthorizedError(f"user {user_id} may not create worlds")
     state = start_actor_idempotency(
         connection,
         actor_user_id=user_id,

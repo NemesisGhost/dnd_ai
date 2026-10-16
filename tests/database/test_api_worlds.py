@@ -12,7 +12,7 @@ from sqlalchemy import Connection, text
 
 from dnd_ai.domain.access import FOUNDRY_ACCESS_AUTH_METHOD, AuthenticatedPrincipal
 from tests.authoring_support import AuthoringHarness, harness_fixture_factory
-from tests.builders import dnd5e_ids
+from tests.builders import dnd5e_ids, make_world_creator
 from tests.factories import make_campaign, make_user, make_world, oidc_principal
 
 pytestmark = pytest.mark.database
@@ -55,11 +55,13 @@ def _audit(connection: Connection, command: str) -> list:
 # --- bootstrap and reference data ------------------------------------------------
 
 
-def test_the_bootstrap_advertises_world_create_to_humans_only(
+def test_the_bootstrap_advertises_world_create_to_eligible_humans_only(
     harness: AuthoringHarness,
 ) -> None:
-    gm = harness.new_actor("GM")
+    gm = harness.new_actor("GM", world_creator=True)
     assert gm.get("/auth/session").json()["global_capabilities"] == ["world.create"]
+    player = harness.new_actor("Player")
+    assert player.get("/auth/session").json()["global_capabilities"] == []
 
     foundry = AuthenticatedPrincipal(
         user_id=gm.user_id,
@@ -79,7 +81,7 @@ def test_the_bootstrap_advertises_world_create_to_humans_only(
 def test_rulesets_lists_canon_rulesets_with_a_current_version(
     harness: AuthoringHarness,
 ) -> None:
-    gm = harness.new_actor("GM")
+    gm = harness.new_actor("GM", world_creator=True)
     body = gm.get("/rulesets").json()
     codes = [item["code"] for item in body["items"]]
     assert "dnd5e" in codes
@@ -88,7 +90,7 @@ def test_rulesets_lists_canon_rulesets_with_a_current_version(
 
 
 def test_rulesets_is_not_available_to_foundry_or_anonymous(harness: AuthoringHarness) -> None:
-    gm = harness.new_actor("GM")
+    gm = harness.new_actor("GM", world_creator=True)
     foundry = AuthenticatedPrincipal(
         user_id=gm.user_id,
         auth_method=FOUNDRY_ACCESS_AUTH_METHOD,
@@ -109,7 +111,7 @@ def test_rulesets_is_not_available_to_foundry_or_anonymous(harness: AuthoringHar
 def test_create_world_returns_ids_and_audits_three_records_with_one_correlation(
     harness: AuthoringHarness, db_connection: Connection
 ) -> None:
-    gm = harness.new_actor("GM")
+    gm = harness.new_actor("GM", world_creator=True)
     response = _create(gm, db_connection)
     assert response.status_code == 201, response.text
     body = response.json()
@@ -130,7 +132,7 @@ def test_create_world_returns_ids_and_audits_three_records_with_one_correlation(
 def test_the_creator_then_sees_the_world_with_full_capabilities(
     harness: AuthoringHarness, db_connection: Connection
 ) -> None:
-    gm = harness.new_actor("GM")
+    gm = harness.new_actor("GM", world_creator=True)
     created = _create(gm, db_connection).json()
     listing = gm.get("/worlds").json()
     assert [w["world_id"] for w in listing["items"]] == [created["world_id"]]
@@ -147,7 +149,7 @@ def test_the_creator_then_sees_the_world_with_full_capabilities(
 def test_replay_with_the_same_key_creates_nothing_new(
     harness: AuthoringHarness, db_connection: Connection
 ) -> None:
-    gm = harness.new_actor("GM")
+    gm = harness.new_actor("GM", world_creator=True)
     body = _create_body("Replay", db_connection)
     first = gm.post("/worlds", body, key="replay-key-1")
     second = gm.post("/worlds", body, key="replay-key-1")
@@ -165,7 +167,7 @@ def test_replay_with_the_same_key_creates_nothing_new(
 def test_reusing_a_key_with_a_different_body_conflicts(
     harness: AuthoringHarness, db_connection: Connection
 ) -> None:
-    gm = harness.new_actor("GM")
+    gm = harness.new_actor("GM", world_creator=True)
     assert gm.post("/worlds", _create_body("One", db_connection), key="same-key").status_code == 201
     other = gm.post("/worlds", _create_body("Two", db_connection), key="same-key")
     assert other.status_code == 409
@@ -175,7 +177,7 @@ def test_reusing_a_key_with_a_different_body_conflicts(
 def test_unknown_ruleset_is_a_field_mappable_400(
     harness: AuthoringHarness, db_connection: Connection
 ) -> None:
-    gm = harness.new_actor("GM")
+    gm = harness.new_actor("GM", world_creator=True)
     body = _create_body("Bad", db_connection)
     ghost = str(uuid.uuid4())
     body["ruleset_ids"] = [ghost]
@@ -198,7 +200,7 @@ def test_unknown_ruleset_is_a_field_mappable_400(
 def test_malformed_bodies_are_422(
     harness: AuthoringHarness, db_connection: Connection, mutate
 ) -> None:  # type: ignore[no-untyped-def]
-    gm = harness.new_actor("GM")
+    gm = harness.new_actor("GM", world_creator=True)
     body = _create_body("Bad", db_connection)
     mutate(body)
     response = gm.post("/worlds", body)
@@ -221,7 +223,7 @@ def test_unauthenticated_requests_are_401(
 def test_missing_csrf_token_is_rejected_and_writes_nothing(
     harness: AuthoringHarness, db_connection: Connection
 ) -> None:
-    gm = harness.new_actor("GM")
+    gm = harness.new_actor("GM", world_creator=True)
     response = gm.post("/worlds", _create_body("NoCsrf", db_connection), csrf=False)
     assert response.status_code == 403
     assert (
@@ -235,7 +237,7 @@ def test_missing_csrf_token_is_rejected_and_writes_nothing(
 def test_a_wrong_csrf_token_and_a_disallowed_origin_are_rejected(
     harness: AuthoringHarness, db_connection: Connection
 ) -> None:
-    gm = harness.new_actor("GM")
+    gm = harness.new_actor("GM", world_creator=True)
     body = _create_body("Nope", db_connection)
     bad_token = gm.client.post(
         "/worlds", json=body, headers={"Origin": "http://localhost:5173", "X-CSRF-Token": "nope"}
@@ -254,7 +256,7 @@ def test_a_wrong_csrf_token_and_a_disallowed_origin_are_rejected(
 def test_every_world_mutation_enforces_csrf(
     harness: AuthoringHarness, db_connection: Connection
 ) -> None:
-    gm = harness.new_actor("GM")
+    gm = harness.new_actor("GM", world_creator=True)
     created = _create(gm, db_connection).json()
     world_id = created["world_id"]
     for suffix, body in (
@@ -269,7 +271,7 @@ def test_every_world_mutation_enforces_csrf(
 def test_foundry_principals_cannot_create_read_or_manage_worlds(
     harness: AuthoringHarness, db_connection: Connection
 ) -> None:
-    gm = harness.new_actor("GM")
+    gm = harness.new_actor("GM", world_creator=True)
     world_id = _create(gm, db_connection).json()["world_id"]
     foundry = AuthenticatedPrincipal(
         user_id=gm.user_id,
@@ -296,13 +298,17 @@ def test_foundry_principals_cannot_create_read_or_manage_worlds(
 def test_an_oidc_bearer_principal_needs_no_csrf_but_gets_no_extra_authority(
     harness: AuthoringHarness, db_connection: Connection
 ) -> None:
-    gm = harness.new_actor("GM")
+    gm = harness.new_actor("GM", world_creator=True)
     world_id = _create(gm, db_connection).json()["world_id"]
-    other = make_user(db_connection, "Bearer Other")
+    other = make_world_creator(db_connection, make_user(db_connection, "Bearer Other"))
     client = harness.principal_client(oidc_principal(other))
     created = client.post("/worlds", json=_create_body("Bearer World", db_connection))
     assert created.status_code == 201
     assert client.get(f"/worlds/{world_id}").status_code == 404
+
+    # A bearer principal is held to the same creation policy as a cookie one.
+    ordinary = harness.principal_client(oidc_principal(make_user(db_connection, "Bearer Plain")))
+    assert ordinary.post("/worlds", json=_create_body("Nope", db_connection)).status_code == 403
 
 
 # --- non-disclosure ---------------------------------------------------------------
@@ -311,7 +317,7 @@ def test_an_oidc_bearer_principal_needs_no_csrf_but_gets_no_extra_authority(
 def test_missing_other_and_unclaimed_worlds_are_the_same_404(
     harness: AuthoringHarness, db_connection: Connection
 ) -> None:
-    owner = harness.new_actor("Owner")
+    owner = harness.new_actor("Owner", world_creator=True)
     stranger = harness.new_actor("Stranger")
     owned = _create(owner, db_connection).json()["world_id"]
     legacy = str(make_world(db_connection, "legacy-world"))
@@ -337,7 +343,7 @@ def test_missing_other_and_unclaimed_worlds_are_the_same_404(
 def test_a_campaign_owner_with_no_world_membership_has_no_world_authority(
     harness: AuthoringHarness, db_connection: Connection
 ) -> None:
-    owner = harness.new_actor("Owner")
+    owner = harness.new_actor("Owner", world_creator=True)
     world_id = _create(owner, db_connection).json()["world_id"]
     assert harness.new_actor("Other").get(f"/worlds/{world_id}").status_code == 404
 
@@ -348,7 +354,7 @@ def test_a_campaign_owner_with_no_world_membership_has_no_world_authority(
 def test_world_detail_reports_rulesets_timelines_and_server_computed_actions(
     harness: AuthoringHarness, db_connection: Connection
 ) -> None:
-    gm = harness.new_actor("GM")
+    gm = harness.new_actor("GM", world_creator=True)
     created = _create(gm, db_connection).json()
     detail = gm.get(f"/worlds/{created['world_id']}").json()
 
@@ -364,6 +370,7 @@ def test_world_detail_reports_rulesets_timelines_and_server_computed_actions(
         "archive",
         "create_timeline",
         "create_campaign",
+        "create_calendar",
     }
     assert detail["blocked_actions"] == [
         {"action": "restore", "reason": "lifecycle_transition_not_allowed"}
@@ -373,7 +380,7 @@ def test_world_detail_reports_rulesets_timelines_and_server_computed_actions(
 def test_update_changes_the_world_and_audits_only_real_changes(
     harness: AuthoringHarness, db_connection: Connection
 ) -> None:
-    gm = harness.new_actor("GM")
+    gm = harness.new_actor("GM", world_creator=True)
     created = _create(gm, db_connection).json()
     wid, version = created["world_id"], created["row_version"]
 
@@ -401,7 +408,7 @@ def test_update_changes_the_world_and_audits_only_real_changes(
 def test_a_stale_update_is_a_distinct_409_and_writes_nothing(
     harness: AuthoringHarness, db_connection: Connection
 ) -> None:
-    gm = harness.new_actor("GM")
+    gm = harness.new_actor("GM", world_creator=True)
     created = _create(gm, db_connection).json()
     wid = created["world_id"]
     stale = gm.post(
@@ -416,7 +423,7 @@ def test_a_stale_update_is_a_distinct_409_and_writes_nothing(
 def test_a_retried_successful_update_replays_instead_of_reporting_stale(
     harness: AuthoringHarness, db_connection: Connection
 ) -> None:
-    gm = harness.new_actor("GM")
+    gm = harness.new_actor("GM", world_creator=True)
     created = _create(gm, db_connection).json()
     wid, version = created["world_id"], created["row_version"]
     body = {"expected_row_version": version, "name": "Once", "description": None}
@@ -430,7 +437,7 @@ def test_a_retried_successful_update_replays_instead_of_reporting_stale(
 def test_archive_refuses_with_an_active_campaign_then_succeeds_and_restores(
     harness: AuthoringHarness, db_connection: Connection
 ) -> None:
-    gm = harness.new_actor("GM")
+    gm = harness.new_actor("GM", world_creator=True)
     created = _create(gm, db_connection).json()
     wid = created["world_id"]
     campaign = make_campaign(
@@ -485,7 +492,7 @@ def test_archive_refuses_with_an_active_campaign_then_succeeds_and_restores(
 def test_illegal_transitions_are_409_not_allowed(
     harness: AuthoringHarness, db_connection: Connection
 ) -> None:
-    gm = harness.new_actor("GM")
+    gm = harness.new_actor("GM", world_creator=True)
     created = _create(gm, db_connection).json()
     restore = gm.post(
         f"/worlds/{created['world_id']}/restore",
@@ -498,7 +505,7 @@ def test_illegal_transitions_are_409_not_allowed(
 def test_world_list_is_paginated_and_ordered(
     harness: AuthoringHarness, db_connection: Connection
 ) -> None:
-    gm = harness.new_actor("GM")
+    gm = harness.new_actor("GM", world_creator=True)
     for name in ("Charlie", "alpha", "Bravo"):
         assert _create(gm, db_connection, name).status_code == 201
     first = gm.get("/worlds", limit=2).json()

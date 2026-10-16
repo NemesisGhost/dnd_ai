@@ -547,7 +547,8 @@ Run the same three commands locally before pushing portal changes.
 - a full downgrade-to-base/upgrade-to-head round trip
 - seed idempotency — apply the complete seed set twice and require byte-identical lookup rows
 - schema comparison — autogenerate against head must produce an empty diff, proving migrations and metadata agree
-- the full pytest suite (`tests/unit`, `tests/database`, `tests/scenario`) — `tests/conftest.py` provisions its own ephemeral database off the service container exactly as it does against a local server
+
+**`postgres-tests`** runs the full pytest suite (`tests/unit`, `tests/database`, `tests/scenario`) as four parallel matrix shards, each against its own fresh `postgres:18.4` service container — `tests/conftest.py` provisions its own ephemeral database off it exactly as it does against a local server. The suite outgrew a single 30-minute job (PR #66: ~26 minutes of pytest alone). `CI_TEST_SHARD=<index>/<total>` makes `tests/conftest.py` keep only that shard's test files (whole files, dealt round-robin in sorted order — disjoint and together covering every file, proven by `tests/unit/test_conftest_sharding.py`); unset, as locally, every test runs. To reproduce one CI shard locally, run `CI_TEST_SHARD=2/4 uv run pytest`. Don't run several shards concurrently against one local server: migrations and downgrade tests create and drop cluster-global roles (`migration_owner` and the application roles), and concurrent sessions collide on them (`tuple concurrently deleted`) — CI avoids this by giving every shard its own server.
 
 **`docker-build`**: validates `compose.yaml`/`compose.ci.yaml`, builds the application image, brings up disposable PostgreSQL via compose, and runs the `migrate` service against it as an end-to-end smoke test of the self-hosted deployment topology itself.
 
@@ -555,7 +556,7 @@ Run the same three commands locally before pushing portal changes.
 
 Seed idempotency became a required CI step in Phase 2 when the first lookup content was added. Every later seed change participates in the same check; do not create a second seeding path outside `apply_seed()`.
 
-A pull request that changes schema without a green `postgres-verification` job should not merge. Local results do not substitute for it — CI runs on a clean, disposable environment every time, which a long-lived local server does not guarantee ([PLAN.md §24.0](PLAN.md#240-verification-policy)).
+A pull request that changes schema without green `postgres-verification` and `postgres-tests` jobs (every shard) should not merge. Local results do not substitute for it — CI runs on a clean, disposable environment every time, which a long-lived local server does not guarantee ([PLAN.md §24.0](PLAN.md#240-verification-policy)).
 
 AWS RDS is no longer part of CI. Anyone who deploys the optional Terraform under `terraform/` is responsible for verifying that path themselves — see [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md) for what that trades away.
 

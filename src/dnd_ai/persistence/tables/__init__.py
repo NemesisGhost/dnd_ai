@@ -78,7 +78,9 @@ from .campaign import (
     quest_statuses,
     relationship_state,
     relationship_statuses,
+    session_participants,
     sessions,
+    timeline_clocks,
     timelines,
 )
 from .characters import (
@@ -96,6 +98,7 @@ from .characters import (
     character_senses,
     character_spellcasting_profiles,
     characters,
+    npc_portrayal_profiles,
     npcs,
     player_characters,
 )
@@ -105,6 +108,8 @@ from .core import (
     canon_statuses,
     entities,
     entity_names,
+    entity_revisions,
+    entity_source_links,
     entity_tags,
     entity_types,
     lifecycle_statuses,
@@ -184,6 +189,7 @@ from .locations import (
 )
 from .narrative import (
     event_causes,
+    event_corrections,
     event_effects,
     event_locations,
     event_observations,
@@ -221,6 +227,7 @@ from .relationships import (
     relationships,
     religions,
     religious_organizations,
+    route_relationships,
 )
 from .rules import (
     abilities,
@@ -353,6 +360,7 @@ __all__ = [
     "entity_tags",
     "entity_types",
     "event_causes",
+    "event_corrections",
     "event_effects",
     "event_locations",
     "event_observations",
@@ -407,6 +415,7 @@ __all__ = [
     "metadata",
     "military_units",
     "name_types",
+    "npc_portrayal_profiles",
     "npcs",
     "objective_dependencies",
     "objective_state",
@@ -426,6 +435,7 @@ __all__ = [
     "player_characters",
     "political_factions",
     "political_relationships",
+    "route_relationships",
     "proficiency_types",
     "prompt_fragments",
     "prompt_templates",
@@ -447,7 +457,9 @@ __all__ = [
     "relationship_participants",
     "relationship_perspectives",
     "relationship_state",
+    "timeline_clocks",
     "relationship_statuses",
+    "session_participants",
     "relationship_types",
     "relationships",
     "religions",
@@ -484,5 +496,7 @@ __all__ = [
     "world_rulesets",
     "world_time_precisions",
     "world_times",
+    "entity_revisions",
+    "entity_source_links",
     "worlds",
 ]

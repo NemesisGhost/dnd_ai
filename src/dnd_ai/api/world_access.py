@@ -13,8 +13,8 @@ Rules (docs/PLAN.md Phase 14, §8):
   `AuthenticatedPrincipal` kind.
 - **Non-disclosing.** No authority — including a nonexistent world and an
   unclaimed legacy world — is a 404, identical in every case. A caller who
-  *has* authority but lacks the capability gets 403 (unreachable while
-  `world_owner` is the only role, kept for parity with campaign routes).
+  *has* authority but lacks the capability gets 403 — a `world_viewer`
+  calling any `world.manage`/`timeline.manage` route.
 - **Re-checked at mutation time.** The returned `WorldAuthority` is a
   presentation-grade snapshot; commands re-resolve and re-check lifecycle
   under their own row locks, so nothing trusts this lookup for a write.

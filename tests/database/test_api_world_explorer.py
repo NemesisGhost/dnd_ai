@@ -1168,3 +1168,178 @@ def test_every_entity_in_search_has_a_fetchable_detail_for_that_caller(
                 continue
             detail = client.get(f"/campaigns/{f.campaign_id}/world/{sub}/{item['entity_id']}")
             assert detail.status_code == 200, (item, detail.text)
+
+
+# ---------------------------------------------------------------------------
+# GM-only fields are not projected to players (D-3, checkpoint 15.2A-3)
+# ---------------------------------------------------------------------------
+
+
+def test_gm_only_free_text_is_projected_to_the_gm_but_not_to_a_player(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as setup:
+        setup.execute(
+            text(
+                "UPDATE world.item_instances SET origin_notes = 'GM: stolen from the duke' "
+                "WHERE item_instance_id = :i"
+            ),
+            {"i": f.item_id},
+        )
+        detailed_event_id = make_event(
+            setup,
+            f.world_id,
+            f.timeline_id,
+            f.world_time_id,
+            name="A quiet bribe",
+            details="GM: the guard is bribed",
+        )
+        setup.execute(
+            text(
+                "INSERT INTO campaign.location_state (timeline_id, location_id, condition_notes) "
+                "VALUES (:t, :l, 'GM: the cellar floods at night')"
+            ),
+            {"t": f.timeline_id, "l": f.settlement_id},
+        )
+    base = f"/campaigns/{f.campaign_id}/world"
+    with client_factory(f.gm_user_id) as gm:
+        gm_item = gm.get(f"{base}/items/{f.item_id}").json()
+        gm_event = gm.get(f"{base}/events/{detailed_event_id}").json()
+        gm_location = gm.get(f"{base}/locations/{f.settlement_id}").json()
+    assert gm_item["origin_notes"] == "GM: stolen from the duke"
+    assert gm_event["details"] == "GM: the guard is bribed"
+    assert gm_location["condition_notes"] == "GM: the cellar floods at night"
+    with client_factory(f.player_user_id) as player:
+        item = player.get(f"{base}/items/{f.item_id}")
+        event = player.get(f"{base}/events/{detailed_event_id}")
+        location = player.get(f"{base}/locations/{f.settlement_id}")
+    assert item.status_code == event.status_code == location.status_code == 200
+    assert item.json()["origin_notes"] is None
+    assert event.json()["details"] is None
+    assert location.json()["condition_notes"] is None
+    assert "GM:" not in item.text + event.text + location.text
+
+
+# ---------------------------------------------------------------------------
+# Category counts (GET .../world/search/counts)
+# ---------------------------------------------------------------------------
+
+_CATEGORIES = {"location", "character", "organization", "religion", "item", "event"}
+
+
+def _counts(f: Fixture) -> str:
+    return f"/campaigns/{f.campaign_id}/world/search/counts"
+
+
+def _walk_search(client: TestClient, f: Fixture, **params: object) -> list[dict[str, object]]:
+    """Every result of a search, one row per page request, so a total is only
+    ever compared against rows a client could really page through."""
+    items: list[dict[str, object]] = []
+    cursor: str | None = None
+    for _ in range(100):
+        page_params = {"limit": 1, **params}
+        if cursor:
+            page_params["cursor"] = cursor
+        body = client.get(_search(f), params=page_params).json()
+        items.extend(body["items"])
+        cursor = body["next_cursor"]
+        if cursor is None:
+            return items
+    raise AssertionError("search did not terminate")
+
+
+def _by_category(items: list[dict[str, object]]) -> dict[str, int]:
+    return {c: sum(1 for item in items if item["category"] == c) for c in _CATEGORIES}
+
+
+def test_counts_are_exact_totals_across_pages_for_gm_and_player(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    for user_id in (f.gm_user_id, f.player_user_id):
+        with client_factory(user_id) as client:
+            body = client.get(_counts(f)).json()
+            walked = _walk_search(client, f)  # one item per page
+        assert set(body["counts"]) == _CATEGORIES
+        assert body["counts"] == _by_category(walked)
+        assert body["total"] == len(walked) == sum(body["counts"].values())
+        assert len(walked) > 1  # the total really spans several pages
+
+
+def test_counts_apply_the_search_to_every_category_and_keep_zero_categories(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.gm_user_id) as client:
+        unfiltered = client.get(_counts(f)).json()
+        filtered = client.get(_counts(f), params={"q": "bRaSs"}).json()
+        walked = _walk_search(client, f, q="bRaSs")
+        nothing = client.get(_counts(f), params={"q": "zz-no-such-entry-zz"}).json()
+    assert filtered["counts"] == _by_category(walked)
+    assert filtered["total"] == len(walked)
+    assert filtered["counts"]["location"] >= 1  # "Brasshollow"
+    assert filtered["total"] < unfiltered["total"]
+    assert any(count == 0 for count in filtered["counts"].values())
+    assert set(filtered["counts"]) == _CATEGORIES  # zero categories stay listed
+    assert nothing == {"counts": dict.fromkeys(_CATEGORIES, 0), "total": 0}
+
+
+def test_a_category_count_does_not_depend_on_a_category_filter_in_the_request(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.gm_user_id) as client:
+        plain = client.get(_counts(f)).json()
+        with_category = client.get(_counts(f), params={"category": "religion"}).json()
+    assert with_category == plain
+
+
+def test_player_counts_hide_what_search_hides(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with client_factory(f.gm_user_id) as gm:
+        gm_counts = gm.get(_counts(f)).json()
+    with client_factory(f.player_user_id) as player:
+        before = player.get(_counts(f)).json()
+    # The draft event and the undiscovered NPC are GM-only.
+    assert before["counts"]["event"] < gm_counts["counts"]["event"]
+    assert before["counts"]["character"] < gm_counts["counts"]["character"]
+    assert before["total"] < gm_counts["total"]
+
+    with postgres_engine.begin() as setup:
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.view_capability_id,
+            entity_id=f.item_id,
+            grantee_campaign_membership_id=f.player_membership_id,
+            effect="deny",
+        )
+    with client_factory(f.player_user_id) as player:
+        after = player.get(_counts(f)).json()
+        walked = _walk_search(player, f)
+    with client_factory(f.gm_user_id) as gm:
+        gm_after = gm.get(_counts(f)).json()
+    assert after["counts"]["item"] == before["counts"]["item"] - 1
+    assert after["counts"] == _by_category(walked)
+    assert gm_after == gm_counts  # the deny is for that member only
+
+
+def test_draft_and_archived_preview_flags_only_change_counts_for_a_gm(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    flags = {"include_noncanon": "true", "include_archived": "true"}
+    for user_id in (f.gm_user_id, f.player_user_id):
+        with client_factory(user_id) as client:
+            counted = client.get(_counts(f), params=flags).json()
+            walked = _walk_search(client, f, **flags)
+        assert counted["counts"] == _by_category(walked)
+        assert counted["total"] == len(walked)
+    with client_factory(f.player_user_id) as player:
+        assert player.get(_counts(f), params=flags).json() == player.get(_counts(f)).json()
+
+
+def test_counts_require_campaign_access(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.outsider_user_id) as client:
+        assert client.get(_counts(f)).status_code == 404
+    with client_factory(f.capless_user_id) as client:
+        assert client.get(_counts(f)).status_code == 403

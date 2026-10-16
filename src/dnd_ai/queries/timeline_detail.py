@@ -1,6 +1,8 @@
 """Timeline detail read model (Phase 14): the summary plus children, the
 campaigns the *caller* manages on it, and server-computed actions from the
-same policy the commands enforce."""
+same policy the commands enforce, restricted to the actions the caller's world
+capabilities allow (`dnd_ai.domain.world_authority.TIMELINE_ACTION_CAPABILITIES`)
+— a `world_viewer` sees the timeline and is offered no action on it."""
 
 import uuid
 from dataclasses import dataclass
@@ -8,6 +10,7 @@ from dataclasses import dataclass
 from sqlalchemy import Connection, text
 
 from dnd_ai.domain.authoring_policy import BlockedAction, timeline_actions
+from dnd_ai.domain.world_authority import TIMELINE_ACTION_CAPABILITIES, authorized_actions
 from dnd_ai.queries.timelines import (
     TimelineSummary,
     get_timeline_summary,
@@ -32,6 +35,7 @@ def get_timeline_detail(
     user_id: uuid.UUID,
     world_id: uuid.UUID,
     timeline_id: uuid.UUID,
+    capabilities: frozenset[str],
 ) -> TimelineDetail | None:
     summary = get_timeline_summary(connection, world_id=world_id, timeline_id=timeline_id)
     if summary is None:
@@ -45,11 +49,15 @@ def get_timeline_detail(
         {"w": world_id},
     ).scalar()
     blocking = timeline_has_blocking_campaigns(connection, timeline_id=timeline_id)
-    available, blocked = timeline_actions(
-        world_status=str(world_status),
-        timeline_status=summary.lifecycle_status,
-        is_primary=summary.is_primary,
-        has_blocking_campaigns=blocking,
+    available, blocked = authorized_actions(
+        *timeline_actions(
+            world_status=str(world_status),
+            timeline_status=summary.lifecycle_status,
+            is_primary=summary.is_primary,
+            has_blocking_campaigns=blocking,
+        ),
+        capabilities=capabilities,
+        required=TIMELINE_ACTION_CAPABILITIES,
     )
     return TimelineDetail(
         summary=summary,

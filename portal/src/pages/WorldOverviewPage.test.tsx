@@ -221,4 +221,47 @@ describe("WorldOverviewPage", () => {
         expect(screen.getByRole("alert")).toHaveTextContent("does not exist, or you do not have access")
         expect(screen.getByRole("link", { name: "Back to your worlds" })).toHaveAttribute("href", "/worlds")
     })
+
+    it("omits Edit world when the server does not report update", async () => {
+        setup(worldDetail({ available_actions: ["create_timeline"] }))
+        await screen.findByRole("heading", { level: 1, name: "Eberron" })
+        expect(screen.queryByRole("link", { name: "Edit world" })).not.toBeInTheDocument()
+        expect(screen.getByRole("link", { name: "New timeline" })).toBeInTheDocument()
+    })
+
+    it("renders a view-only world read-only, with no authoring controls or destinations", async () => {
+        // Even if a response carried actions, a world without world.manage is
+        // presented read-only.
+        setup(
+            worldDetail({
+                capabilities: ["world.view"],
+                available_actions: [],
+                blocked_actions: [],
+            }),
+        )
+        await screen.findByRole("heading", { level: 1, name: "Eberron" })
+        expect(screen.getByText("View only")).toBeInTheDocument()
+        expect(screen.getByText("A world of intrigue")).toBeInTheDocument()
+        expect(screen.getByText("Main Timeline")).toBeInTheDocument()
+        for (const name of ["Edit world", "New timeline", "New calendar", "New campaign"]) {
+            expect(screen.queryByRole("link", { name })).not.toBeInTheDocument()
+        }
+        for (const name of ["Archive world", "Restore world"]) {
+            expect(screen.queryByRole("button", { name })).not.toBeInTheDocument()
+        }
+        // Timelines are names, not links into timeline authoring; managed
+        // campaigns are not listed.
+        expect(screen.queryByRole("link", { name: "Main Timeline" })).not.toBeInTheDocument()
+        expect(screen.queryByText("Skyfall")).not.toBeInTheDocument()
+        const links = screen.getAllByRole("link").map((link) => link.getAttribute("href"))
+        expect(links).toEqual(["/worlds"])
+    })
+
+    it("keeps a view-only world read-only even if the server listed actions", async () => {
+        setup(worldDetail({ capabilities: ["world.view"] }))
+        await screen.findByRole("heading", { level: 1, name: "Eberron" })
+        expect(screen.queryByRole("link", { name: "Edit world" })).not.toBeInTheDocument()
+        expect(screen.queryByRole("button", { name: "Archive world" })).not.toBeInTheDocument()
+        expect(screen.queryByRole("link", { name: "New campaign" })).not.toBeInTheDocument()
+    })
 })

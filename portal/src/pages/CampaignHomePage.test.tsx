@@ -1,8 +1,10 @@
 import {
+    fireEvent,
     render,
     screen,
 } from "@testing-library/react"
 import {
+    Link,
     MemoryRouter,
     Route,
     Routes,
@@ -98,5 +100,39 @@ describe("CampaignHomePage", () => {
         expect(
             useCampaignSummaryMock,
         ).not.toHaveBeenCalled()
+    })
+
+    it("does not carry an event selection from one campaign to another", () => {
+        const eventsFor = (campaign: string): CampaignSummary => ({
+            ...emptySummary,
+            recent_events: ["a", "b"].map((key) => ({
+                event_id: `${campaign}-${key}`,
+                name: `${campaign} event ${key}`,
+                summary: null,
+                event_type_code: "other",
+                event_status_code: "recorded",
+                world_time_id: `time-${campaign}-${key}`,
+                world_time_display: null,
+                details: null,
+            })),
+        })
+        useCampaignSummaryMock.mockImplementation((id: string) => ({
+            state: { status: "success", summary: eventsFor(id) },
+            retry: vi.fn(),
+        }))
+
+        render(
+            <MemoryRouter initialEntries={["/app/c1/home"]}>
+                <Link to="/app/c2/home">go c2</Link>
+                <Routes>
+                    <Route path="/app/:campaignId/home" element={<CampaignHomePage />} />
+                </Routes>
+            </MemoryRouter>,
+        )
+        fireEvent.click(screen.getByRole("button", { name: /c1 event b/ }))
+        expect(screen.getByRole("heading", { level: 3 })).toHaveTextContent("c1 event b")
+
+        fireEvent.click(screen.getByText("go c2"))
+        expect(screen.getByRole("heading", { level: 3 })).toHaveTextContent("c2 event a")
     })
 })

@@ -10,28 +10,110 @@ platform administration, and never inferred by a client.
 
 `WorldAuthority` is the resolved snapshot a route or command receives. It is
 the analogue of `dnd_ai.domain.access.AccessContext` for the world aggregate.
+
+World *creation* is the one global, not per-world, capability (`world.create`,
+below). It is the deliberate exception to "never derived from campaign roles or
+platform administration": docs/adr/0018-world-creation-eligibility.md makes it
+exactly "active platform administrator, or effective built-in `gm`". Creating a
+world grants the creator `world_owner` on that world and nothing broader;
+being an administrator or a GM confers no authority over any existing world.
 """
 
 import uuid
 from dataclasses import dataclass
+
+from .authoring_policy import (
+    TIMELINE_ARCHIVE,
+    TIMELINE_CREATE_BRANCH,
+    TIMELINE_CREATE_CAMPAIGN,
+    TIMELINE_RESTORE,
+    TIMELINE_UPDATE,
+    WORLD_ARCHIVE,
+    WORLD_CREATE_CALENDAR,
+    WORLD_CREATE_CAMPAIGN,
+    WORLD_CREATE_TIMELINE,
+    WORLD_RESTORE,
+    WORLD_UPDATE,
+    BlockedAction,
+)
 
 WORLD_VIEW = "world.view"
 WORLD_MANAGE = "world.manage"
 TIMELINE_MANAGE = "timeline.manage"
 CAMPAIGN_CREATE = "campaign.create"
 
-# Global (not world-scoped) capability: any active human principal may create
-# a world (ADR 0014, D3). Foundry device principals and machine principals
-# never hold it — `dnd_ai.api.auth.require_human_user_id` is the gate.
+# Global (not world-scoped) capability. Held only by an active platform
+# administrator or an active user with an effective assignment of the built-in
+# `gm` system-template role (ADR 0018, which amends ADR 0014 D3). It is
+# computed per user from the database by
+# `dnd_ai.queries.world_authority.may_create_worlds` — never granted statically
+# — and `create_world` enforces that same policy in its own transaction.
+# Foundry device principals and machine principals never hold it:
+# `dnd_ai.api.auth.require_human_user_id` refuses them before the policy runs.
 WORLD_CREATE = "world.create"
 
+# The `security.roles.code` of the built-in (campaign_id IS NULL) system
+# template whose effective holders may create worlds. A campaign-scoped custom
+# role with the same code is a different role and never qualifies.
+WORLD_CREATOR_SYSTEM_ROLE_CODE = "gm"
+
 WORLD_OWNER_ROLE = "world_owner"
+# Explicit read-only access to a world outside any campaign: `world.view` and
+# nothing else. Never derived from a campaign role — a campaign's
+# `campaign.view` already reaches that campaign's world through the campaign's
+# own World Explorer routes and confers no world role.
+WORLD_VIEWER_ROLE = "world_viewer"
 
 WORLD_ROLE_CAPABILITIES: dict[str, frozenset[str]] = {
     WORLD_OWNER_ROLE: frozenset({WORLD_VIEW, WORLD_MANAGE, TIMELINE_MANAGE, CAMPAIGN_CREATE}),
+    WORLD_VIEWER_ROLE: frozenset({WORLD_VIEW}),
 }
 
-HUMAN_GLOBAL_CAPABILITIES: frozenset[str] = frozenset({WORLD_CREATE})
+# The world capability each action a world/timeline read model can report
+# requires — the same capability the action's route and command enforce. The
+# read models drop an action the caller lacks the capability for from *both*
+# `available_actions` and `blocked_actions`: a viewer is not "blocked" from
+# editing, the action simply is not theirs.
+WORLD_ACTION_CAPABILITIES: dict[str, str] = {
+    WORLD_UPDATE: WORLD_MANAGE,
+    WORLD_ARCHIVE: WORLD_MANAGE,
+    WORLD_RESTORE: WORLD_MANAGE,
+    WORLD_CREATE_CALENDAR: WORLD_MANAGE,
+    WORLD_CREATE_TIMELINE: TIMELINE_MANAGE,
+    WORLD_CREATE_CAMPAIGN: CAMPAIGN_CREATE,
+}
+TIMELINE_ACTION_CAPABILITIES: dict[str, str] = {
+    TIMELINE_UPDATE: TIMELINE_MANAGE,
+    TIMELINE_ARCHIVE: TIMELINE_MANAGE,
+    TIMELINE_RESTORE: TIMELINE_MANAGE,
+    TIMELINE_CREATE_BRANCH: TIMELINE_MANAGE,
+    TIMELINE_CREATE_CAMPAIGN: CAMPAIGN_CREATE,
+}
+
+
+def authorized_actions(
+    available: list[str],
+    blocked: list[BlockedAction],
+    *,
+    capabilities: frozenset[str],
+    required: dict[str, str],
+) -> tuple[list[str], list[BlockedAction]]:
+    """Keep only the actions whose required capability the caller holds. An
+    action missing from `required` is dropped (deny by default)."""
+
+    def allowed(action: str) -> bool:
+        needed = required.get(action)
+        return needed is not None and needed in capabilities
+
+    return (
+        [action for action in available if allowed(action)],
+        [item for item in blocked if allowed(item.action)],
+    )
+
+
+# Every global capability code that exists. Membership is per user and
+# database-resolved; this set only names the closed vocabulary.
+GLOBAL_CAPABILITIES: frozenset[str] = frozenset({WORLD_CREATE})
 
 
 @dataclass(frozen=True)

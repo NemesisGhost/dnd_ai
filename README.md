@@ -9,7 +9,7 @@ It is designed to become the shared source of truth behind a campaign: worlds, t
 The initial rules implementation targets Dungeons & Dragons 5e (2024). The architecture is ruleset-aware and is intended to support additional tabletop systems over time.
 
 > [!IMPORTANT]
-> This project is under active development and is not yet a production release. See [Project Status](docs/PROJECT_STATUS.md) for verified current capabilities and [Project Plan](docs/PLAN.md) for upcoming work.
+> This project is under active development and is not yet a production release. See [Project Status](docs/PROJECT_STATUS.md) for verified current capabilities and [Roadmap](docs/PLANv2.md) for upcoming work.
 
 ## The product promise
 
@@ -305,7 +305,7 @@ For the exact current layout and ownership rules, see [Development Guide](docs/D
 The repository is evolving quickly, so this README deliberately avoids claiming that every product-direction feature above is already complete.
 
 - [Project Status](docs/PROJECT_STATUS.md) records dated, verification-backed implementation status.
-- [Project Plan](docs/PLAN.md) defines the active delivery sequence and remaining work.
+- [Roadmap (PLANv2)](docs/PLANv2.md) is the authoritative product roadmap; [Project Plan](docs/PLAN.md) is the detailed architectural record and carries the Phase 15 completion checkpoints.
 - [UI Design](docs/UI_DESIGN.md) defines portal behavior and authorization-sensitive presentation.
 - [Entity Lifecycle](docs/ENTITY_LIFECYCLE.md) defines creation, approval, mutation, supersession, archival, and deletion rules.
 
@@ -361,7 +361,7 @@ AWS RDS support remains available as an optional database-hosting path under [`t
 ### Product and status
 
 - [Project Status](docs/PROJECT_STATUS.md) — verified implementation snapshot
-- [Project Plan](docs/PLAN.md) — delivery sequence and remaining work
+- [Roadmap (PLANv2)](docs/PLANv2.md) — authoritative roadmap; [Project Plan](docs/PLAN.md) — architecture and Phase 15 checkpoints
 - [UI Design](docs/UI_DESIGN.md) — portal interaction and authorization rules
 
 ### Domain and architecture

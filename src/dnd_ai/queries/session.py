@@ -48,6 +48,7 @@ from datetime import datetime
 from sqlalchemy import Connection, text
 
 from dnd_ai.domain.errors import DomainAuthorizationError
+from dnd_ai.domain.session_authoring import derive_play_status
 
 
 class SessionNotFoundError(DomainAuthorizationError):
@@ -68,6 +69,10 @@ class SessionListItemView:
     status_code: str
     started_at: datetime | None
     ended_at: datetime | None
+    # Phase 15.2D-1: the planned start, the version, and the derived play status.
+    scheduled_for: datetime | None = None
+    row_version: int = 1
+    play_status: str = "unscheduled"
 
 
 @dataclass(frozen=True)
@@ -93,6 +98,9 @@ class SessionView:
     start_world_time_id: uuid.UUID | None
     end_world_time_id: uuid.UUID | None
     events: tuple[SessionEventView, ...]
+    scheduled_for: datetime | None = None
+    row_version: int = 1
+    play_status: str = "unscheduled"
 
 
 def list_campaign_sessions(
@@ -100,6 +108,7 @@ def list_campaign_sessions(
     *,
     campaign_id: uuid.UUID,
     denied_session_ids: frozenset[uuid.UUID] = frozenset(),
+    include_archived: bool = True,
 ) -> tuple[SessionListItemView, ...]:
     """Every session for `campaign_id`, most recent first, excluding any
     `denied_session_ids` (a per-session `campaign.view` deny — see this
@@ -113,14 +122,19 @@ def list_campaign_sessions(
     rows = connection.execute(
         text("""
             SELECT s.session_id, s.session_number, s.title, ls.code AS status_code,
-                   s.started_at, s.ended_at
+                   s.started_at, s.ended_at, s.scheduled_for, s.row_version
             FROM campaign.sessions s
             JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = s.lifecycle_status_id
             WHERE s.campaign_id = :campaign
               AND NOT (s.session_id = ANY(CAST(:denied AS uuid[])))
+              AND (CAST(:inc AS boolean) OR ls.code <> 'archived')
             ORDER BY s.session_number DESC
         """),
-        {"campaign": campaign_id, "denied": list(denied_session_ids)},
+        {
+            "campaign": campaign_id,
+            "denied": list(denied_session_ids),
+            "inc": include_archived,
+        },
     ).mappings()
     return tuple(
         SessionListItemView(
@@ -130,6 +144,13 @@ def list_campaign_sessions(
             status_code=row["status_code"],
             started_at=row["started_at"],
             ended_at=row["ended_at"],
+            scheduled_for=row["scheduled_for"],
+            row_version=int(row["row_version"]),
+            play_status=derive_play_status(
+                scheduled_for=row["scheduled_for"],
+                started_at=row["started_at"],
+                ended_at=row["ended_at"],
+            ),
         )
         for row in rows
     )
@@ -143,6 +164,7 @@ def get_session_view(
     include_draft_events: bool,
     denied_draft_event_ids: frozenset[uuid.UUID] = frozenset(),
     allowed_draft_event_ids: frozenset[uuid.UUID] = frozenset(),
+    include_archived: bool = True,
 ) -> SessionView:
     """One session's own fields plus its linked `narrative.events` rows
     (`narrative.events.session_id`), filtered by the same draft/voided
@@ -156,7 +178,8 @@ def get_session_view(
             text("""
                 SELECT s.session_id, s.campaign_id, s.session_number, s.title,
                        ls.code AS status_code, s.started_at, s.ended_at, s.summary,
-                       s.start_world_time_id, s.end_world_time_id
+                       s.start_world_time_id, s.end_world_time_id, s.scheduled_for,
+                       s.row_version
                 FROM campaign.sessions s
                 JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = s.lifecycle_status_id
                 WHERE s.session_id = :session
@@ -166,6 +189,14 @@ def get_session_view(
         .mappings()
         .one_or_none()
     )
+    if (
+        session_row is not None
+        and session_row["status_code"] == "archived"
+        and not include_archived
+    ):
+        # An archived session is hidden from people who cannot edit canon, with the
+        # same 404 as a missing one.
+        session_row = None
     if session_row is None or session_row["campaign_id"] != campaign_id:
         raise SessionNotFoundError(
             f"session {session_id} does not exist in campaign {campaign_id} "
@@ -226,4 +257,51 @@ def get_session_view(
         start_world_time_id=session_row["start_world_time_id"],
         end_world_time_id=session_row["end_world_time_id"],
         events=events,
+        scheduled_for=session_row["scheduled_for"],
+        row_version=int(session_row["row_version"]),
+        play_status=derive_play_status(
+            scheduled_for=session_row["scheduled_for"],
+            started_at=session_row["started_at"],
+            ended_at=session_row["ended_at"],
+        ),
+    )
+
+
+@dataclass(frozen=True)
+class SessionParticipantView:
+    session_participant_id: uuid.UUID
+    character_id: uuid.UUID
+    character_name: str
+    participation_role: str
+    added_at: datetime
+    removed_at: datetime | None
+
+
+def list_session_participants(
+    connection: Connection, *, session_id: uuid.UUID
+) -> tuple[SessionParticipantView, ...]:
+    """Present participants first (by name), then those removed. For `canon.edit`
+    holders only (the route decides): presence names characters the viewer might
+    not otherwise be allowed to see."""
+    rows = connection.execute(
+        text("""
+            SELECT sp.session_participant_id, sp.character_id, e.canonical_name,
+                   sp.participation_role, sp.added_at, sp.removed_at
+            FROM campaign.session_participants sp
+            JOIN core.entities e ON e.entity_id = sp.character_id
+            WHERE sp.session_id = :s
+            ORDER BY (sp.removed_at IS NOT NULL), lower(e.canonical_name), sp.added_at
+        """),
+        {"s": session_id},
+    ).all()
+    return tuple(
+        SessionParticipantView(
+            session_participant_id=row.session_participant_id,
+            character_id=row.character_id,
+            character_name=str(row.canonical_name),
+            participation_role=str(row.participation_role),
+            added_at=row.added_at,
+            removed_at=row.removed_at,
+        )
+        for row in rows
     )

@@ -119,6 +119,58 @@ def pytest_configure(config: pytest.Config) -> None:
     _cleanup_stale_pytest_run_dirs(keep=run_dir)
 
 
+# --- CI test sharding ----------------------------------------------------
+#
+# The full suite outgrew CI's 30-minute job budget in a single process
+# (PR #66: ~26 minutes of pytest alone), so .github/workflows/ci.yml runs it
+# as parallel shards, each against its own disposable PostgreSQL 18 service
+# container. CI_TEST_SHARD="<index>/<total>" (1-based) keeps only this
+# shard's test files; unset, every collected test runs, as it always has
+# locally. Whole files are assigned, never individual tests, so a module's
+# fixtures and its tests' order within the shared session database are
+# unchanged. Files are dealt round-robin in sorted order: every shard
+# collects the same checkout, so the partition is deterministic, disjoint,
+# and covers every file — and the slow, alphabetically adjacent test_api_*
+# modules spread evenly across shards instead of landing on one.
+_TEST_SHARD_ENV_VAR = "CI_TEST_SHARD"
+
+
+def _parse_test_shard(value: str) -> tuple[int, int]:
+    """'2/4' -> (2, 4). Anything else is a usage error, never a silent
+    fallback to running everything (or nothing)."""
+    index_text, separator, total_text = value.strip().partition("/")
+    try:
+        index, total = int(index_text), int(total_text)
+    except ValueError:
+        index = total = 0
+    if not separator or total < 1 or not 1 <= index <= total:
+        raise pytest.UsageError(
+            f"{_TEST_SHARD_ENV_VAR} must be '<index>/<total>' with 1 <= index <= total, "
+            f"got {value!r}"
+        )
+    return index, total
+
+
+def _shard_files(files: Sequence[str], index: int, total: int) -> set[str]:
+    """The test files shard `index` of `total` runs (round-robin over the
+    sorted, de-duplicated file list)."""
+    ordered = sorted(set(files))
+    return {path for position, path in enumerate(ordered) if position % total == index - 1}
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    raw_shard = os.environ.get(_TEST_SHARD_ENV_VAR)
+    if not raw_shard:
+        return
+    index, total = _parse_test_shard(raw_shard)
+    keep = _shard_files([item.nodeid.split("::", 1)[0] for item in items], index, total)
+    selected = [item for item in items if item.nodeid.split("::", 1)[0] in keep]
+    deselected = [item for item in items if item.nodeid.split("::", 1)[0] not in keep]
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
+    items[:] = selected
+
+
 # docs/DATABASE_CONVENTIONS.md §2.1 pins one PostgreSQL major version across
 # local, dev/staging/prod, and CI.
 REQUIRED_POSTGRES_MAJOR_VERSION = 18
@@ -581,3 +633,71 @@ def db_connection(postgres_engine: Engine) -> Iterator[Connection]:
             yield connection
         finally:
             transaction.rollback()
+
+
+@pytest.fixture(autouse=True)
+def _legacy_permissive_relationship_policy(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Most access tests build arbitrary relationship types with arbitrary
+    capability mappings through the factories, which predates the Phase 15
+    default-deny relationship policy (checkpoint 15.2A-1). They exercise the
+    resolver's *mapping* mechanics, not the policy, so they run with the
+    code-side matrix check relaxed to "the database mapping decides".
+
+    Tests that exercise the real policy (the built-in matrix, default deny for
+    custom types, inactive types) opt out with
+    `@pytest.mark.real_relationship_policy`. Production code is never patched.
+    """
+    if request.node.get_closest_marker("real_relationship_policy") is not None:
+        return
+    monkeypatch.setattr(
+        "dnd_ai.domain.access.relationship_capability_permitted",
+        lambda type_code, capability_code: True,
+    )
+
+
+@pytest.fixture(autouse=True)
+def _restore_production_relationship_defaults(request: pytest.FixtureRequest) -> Iterator[None]:
+    """Many access tests commit pairs into the shared session database and
+    delete them again by (type, capability), which would also delete the
+    production defaults seeded by migration 114 for the built-in types. After
+    any test that used the database, put the built-in types back to exactly the
+    approved matrix so later tests (and the clean-install assertions) see the
+    state a freshly migrated database has. Custom-type rows are left alone."""
+    yield
+    if "postgres_engine" not in request.fixturenames:
+        return
+    from dnd_ai.domain.access import BUILTIN_RELATIONSHIP_CAPABILITIES
+
+    engine: Engine = request.getfixturevalue("postgres_engine")
+    allowed = [
+        (type_code, capability)
+        for type_code, capabilities in BUILTIN_RELATIONSHIP_CAPABILITIES.items()
+        for capability in sorted(capabilities)
+    ]
+    builtin = sorted(BUILTIN_RELATIONSHIP_CAPABILITIES)
+    with engine.begin() as connection:
+        connection.execute(
+            text("""
+                DELETE FROM security.character_relationship_type_capabilities rtc
+                USING security.character_relationship_types rt, security.capabilities cap
+                WHERE rt.character_relationship_type_id = rtc.character_relationship_type_id
+                  AND cap.capability_id = rtc.capability_id
+                  AND rt.code = ANY(CAST(:builtin AS text[]))
+                  AND NOT ((rt.code, cap.code) IN (SELECT * FROM unnest(CAST(:types AS text[]), CAST(:caps AS text[]))))
+            """),
+            {"builtin": builtin, "types": [t for t, _ in allowed], "caps": [c for _, c in allowed]},
+        )
+        connection.execute(
+            text("""
+                INSERT INTO security.character_relationship_type_capabilities
+                    (character_relationship_type_id, capability_id)
+                SELECT rt.character_relationship_type_id, cap.capability_id
+                FROM unnest(CAST(:types AS text[]), CAST(:caps AS text[])) AS allowed(type_code, cap_code)
+                JOIN security.character_relationship_types rt ON rt.code = allowed.type_code
+                JOIN security.capabilities cap ON cap.code = allowed.cap_code
+                ON CONFLICT DO NOTHING
+            """),
+            {"types": [t for t, _ in allowed], "caps": [c for _, c in allowed]},
+        )

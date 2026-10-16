@@ -2,11 +2,7 @@ import { createLocation, locationOptionsPath } from "../api/locationAuthoring"
 import { ContentCreatePage } from "../components/authoring/ContentCreatePage"
 import type { ContentCreateConfig } from "../components/authoring/ContentCreatePage"
 import { LocationFields } from "../components/authoring/LocationFields"
-import type {
-    CreateLocationBody,
-    LocationAuthoringView,
-    LocationOptions,
-} from "../types/locationAuthoring"
+import type { CreateLocationBody, LocationOptions } from "../types/locationAuthoring"
 import {
     EMPTY_LOCATION_FORM,
     sameValues,
@@ -14,12 +10,13 @@ import {
     validateLocationForm,
 } from "../utils/locationForm"
 import type { LocationFormValues } from "../utils/locationForm"
+import type { LocationReceipt } from "../types/contentAuthoring"
 
 const config: ContentCreateConfig<
     LocationOptions,
     LocationFormValues,
     CreateLocationBody,
-    LocationAuthoringView
+    LocationReceipt
 > = {
     noun: "location",
     heading: "New location",
