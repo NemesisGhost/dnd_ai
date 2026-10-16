@@ -10,6 +10,13 @@ describe("TextField", () => {
         expect(screen.getByText("(required)")).toBeInTheDocument()
     })
 
+    it("offers a numeric keyboard only when asked", () => {
+        const { rerender } = render(<TextField label="Days" value="" onChange={() => {}} />)
+        expect(screen.getByRole("textbox", { name: "Days" })).not.toHaveAttribute("inputmode")
+        rerender(<TextField label="Days" value="" onChange={() => {}} inputMode="numeric" />)
+        expect(screen.getByRole("textbox", { name: "Days" })).toHaveAttribute("inputmode", "numeric")
+    })
+
     it("wires the hint and error to the control and flags it invalid, with plain-text error", () => {
         render(
             <TextField

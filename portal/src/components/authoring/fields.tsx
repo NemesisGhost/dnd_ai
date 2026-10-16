@@ -60,6 +60,8 @@ interface TextFieldProps {
     // Native read-only: the value stays focusable and selectable.
     readOnly?: boolean
     autoComplete?: string
+    // The on-screen keyboard to offer; the value is still text and validated as text.
+    inputMode?: "numeric"
 }
 
 export function TextField({
@@ -74,6 +76,7 @@ export function TextField({
     disabled,
     readOnly,
     autoComplete,
+    inputMode,
 }: TextFieldProps) {
     const generated = useId()
     const fieldId = id ?? generated
@@ -89,6 +92,7 @@ export function TextField({
                         disabled={disabled}
                         readOnly={readOnly}
                         autoComplete={autoComplete ?? "off"}
+                        inputMode={inputMode}
                         aria-invalid={error ? true : undefined}
                         aria-describedby={describedBy}
                         aria-required={required ? true : undefined}
@@ -103,7 +107,7 @@ export function TextField({
     )
 }
 
-interface TextAreaFieldProps extends Omit<TextFieldProps, "autoComplete"> {
+interface TextAreaFieldProps extends Omit<TextFieldProps, "autoComplete" | "inputMode"> {
     rows?: number
     hideLabel?: boolean
     className?: string

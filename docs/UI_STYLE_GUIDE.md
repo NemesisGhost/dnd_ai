@@ -279,6 +279,7 @@ Five contracts say how a region is contained. Choose by purpose, not by counting
 ### 6.8 Operational rows, chronology and status
 
 - **Operational list** (`.op-list`): records that carry their own commands or links (attached sources, relationships, builds, the review queue). Rows are separated by a rule, not boxed; row buttons are compact and wrap with their row and are never stretched to full width on a phone. Form actions (`.authoring-actions`) stay full width below 40rem.
+- **Draft roster** (`.calendar-roster__*`): the rows of an unsaved parent (the months of a calendar being created). It uses the operational-list idiom (ruled rows, compact wrapping row buttons, a header row from 40rem), shows each row's position and its own actions, says in words that Add, Edit and Remove change the draft only, expands one row's editor at a time under that row, and puts the form that adds a row above the list so nothing large is appended at the bottom.
 - **Chronology / summary list** (`.record-list`): provenance, revisions, logs and read-only summaries. A numbered list keeps its numbers.
 - **Status strip**: the compact campaign-time bar. **Messages** (`.authoring-message--error` / `--warning`) are for errors and warnings; a success or neutral result uses `.form-status` and is never styled as an error. A one-time secret uses the `OneTimeSecretPanel` panel with a warning rule.
 
@@ -462,9 +463,12 @@ A record whose editors do several **meaningful working phases** on one page uses
 | Plain sections (`.page-section`, `DetailPanel`, §6.7) | One job with several regions: reading pages, settings, lists, one form plus its history, and a record with its own exclusive status machine whose page shows only what that status allows (an event, an encounter) |
 | A disclosure (§6.7) | Optional detail of one item |
 | A wizard step row (`.authoring-step-nav`) | A linear creation flow in which every step commits and the next depends on it (campaign setup) |
+| Local creation steps | Creating one record whose parts are best entered in separate views, with nothing committed until one final action (New calendar). Described below |
 | Tabs (ARIA `tablist`) | Never for workflow phases. Reserved for switching views of the same data without changing the address; none exist today |
 
 Non-linear workflows stay non-linear. Phases are numbered for orientation and every one stays reachable; a phase never gates another. Only the server's eligibility does, and it is explained in the section.
+
+**Local creation steps.** A record that does not exist yet can still be entered in several views. Its steps reuse the workflow navigation (`useStagedNavigation`, `StageNav`, `SectionPanel`) with these differences: there is no record header and no status, because nothing exists on the server; the steps never send a request, so there is exactly one write, the single action on the last step ("Create calendar", on **Review & create**); the step row is labelled "New <record> workflow" and its labels are named for the work (Basics, Months, Review & create), which says plainly that Review & create is the person's own check and not the Review queue. The draft lives in one reducer above the panels, so every value and every unfinished sub-form survives any step change; unfinished sub-forms are never dropped silently (creation is refused and the form is named); the whole draft is validated whichever step shows it; an error link shows the step and opens the row before it focuses the field (`ErrorSummary onFollow`); Enter in a step's fields must not submit, so only the last step contains the creating form; and a change to what would be sent withdraws a failed attempt's Retry. Arrival uses `usePageArrival(…, "path")`, so a step change moves focus to the step's heading and not the page heading. Entered values are never written to browser storage.
 
 **Naming.** Phases are named for the work, not for a state: Prepare, Review & publish, Use in play, Run session, Wrap up. They avoid verbs of lifecycle change (start, end, publish now). The phase row is labelled "<Record> workflow" (`"Quest workflow"`), and the words "stage" and "phase" never appear in a phase label. A domain term is never reused for navigation: a quest **stage** is part of the authored adventure, an encounter **round** and a session **status** belong to their records. Documentation says "workflow phase" in full. (The older pages' accessible labels, "Session stages", "Claim stages", "Item stages" and "Record stages", and the shared component names `StageNav` and `useStagedNavigation` predate this rule and are renamed when each is next changed.)
 
@@ -500,6 +504,7 @@ Non-linear workflows stay non-linear. Phases are numbered for orientation and ev
 | Quest reader, Knowledge Member preview, Knowledge and World readers | One job (read); no phases |
 | Session detail, encounter, event record | Plain sections; the record's own status decides what its page shows |
 | Campaign setup | Wizard step row |
+| New calendar | Local creation steps (this section) |
 | Lists, Review queue, revision history, Campaign Home, settings, access, parties, party members, world times, worlds, timelines | One job; plain sections |
 | Item definitions | Not lifecycle-managed; one form |
 | Dungeon and area edit pages; NPC portrayal and character builds | Candidates to fold into the World record workspace's sections later; not part of the Quest work |

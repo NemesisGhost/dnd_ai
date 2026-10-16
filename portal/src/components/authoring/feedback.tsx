@@ -25,12 +25,15 @@ interface ErrorSummaryProps {
     // Incremented by the page on every failed submit attempt; the summary takes
     // focus each time it changes while it has something to say.
     attempt: number
+    // A page whose fields can be out of sight (another step, a collapsed row) reveals the field
+    // itself; without it a link just focuses the field.
+    onFollow?: (fieldId: string) => void
 }
 
 // Shown after a failed submit. It is focusable and takes focus on each failed
 // attempt, announces once (role="alert"), and links every field error to its
 // input. Entered values are never cleared by a failure.
-export function ErrorSummary({ errors, formError, attempt }: ErrorSummaryProps) {
+export function ErrorSummary({ errors, formError, attempt, onFollow }: ErrorSummaryProps) {
     const ref = useRef<HTMLDivElement>(null)
     const hasContent = errors.length > 0 || Boolean(formError)
 
@@ -56,7 +59,11 @@ export function ErrorSummary({ errors, formError, attempt }: ErrorSummaryProps) 
                                 href={`#${error.fieldId}`}
                                 onClick={(event) => {
                                     event.preventDefault()
-                                    document.getElementById(error.fieldId)?.focus()
+                                    if (onFollow !== undefined) {
+                                        onFollow(error.fieldId)
+                                    } else {
+                                        document.getElementById(error.fieldId)?.focus()
+                                    }
                                 }}
                             >
                                 {error.message}

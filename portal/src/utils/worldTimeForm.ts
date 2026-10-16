@@ -8,6 +8,12 @@ import type { Calendar, CreateCalendarBody, CreateWorldTimeBody } from "../types
 export const MONTHS_MAX = 60
 export const DAY_COUNT_MAX = 400
 export const YEAR_LIMIT = 1_000_000
+// Mirrors of the domain limits (domain/world_time.py); the server stays authoritative.
+export const DAYS_PER_WEEK_MAX = 30
+export const EPOCH_LABEL_MAX = 200
+export const MONTH_NAME_MAX = 100
+// A new month starts at this many days.
+export const DEFAULT_DAY_COUNT = "30"
 
 export interface MonthRow {
     name: string
@@ -22,14 +28,6 @@ export interface CalendarFormValues {
     months: MonthRow[]
 }
 
-export const EMPTY_CALENDAR_FORM: CalendarFormValues = {
-    name: "",
-    description: "",
-    daysPerWeek: "",
-    epochLabel: "",
-    months: [{ name: "", dayCount: "30" }],
-}
-
 // A whole number in text form: "" means absent, anything else must be an integer.
 export function parseWhole(text: string): number | null | "invalid" {
     const trimmed = text.trim()
@@ -38,50 +36,7 @@ export function parseWhole(text: string): number | null | "invalid" {
     return Number(trimmed)
 }
 
-export function validateCalendarForm(values: CalendarFormValues): FieldError[] {
-    const errors: FieldError[] = []
-    if (values.name.trim() === "") {
-        errors.push({ fieldId: "calendar-name", message: "Enter a name for the calendar." })
-    }
-    const dpw = parseWhole(values.daysPerWeek)
-    if (dpw === "invalid" || (dpw !== null && (dpw < 1 || dpw > 30))) {
-        errors.push({
-            fieldId: "calendar-days-per-week",
-            message: "Days per week must be a whole number from 1 to 30, or empty.",
-        })
-    }
-    if (values.months.length < 1 || values.months.length > MONTHS_MAX) {
-        errors.push({
-            fieldId: "calendar-month-0-name",
-            message: `A calendar needs between 1 and ${MONTHS_MAX} months.`,
-        })
-    }
-    const seen = new Set<string>()
-    values.months.forEach((month, index) => {
-        const name = month.name.trim()
-        if (name === "") {
-            errors.push({
-                fieldId: `calendar-month-${index}-name`,
-                message: `Enter a name for month ${index + 1}.`,
-            })
-        } else if (seen.has(name.toLowerCase())) {
-            errors.push({
-                fieldId: `calendar-month-${index}-name`,
-                message: `Month ${index + 1} repeats a name. Month names must be unique.`,
-            })
-        }
-        seen.add(name.toLowerCase())
-        const days = parseWhole(month.dayCount)
-        if (days === null || days === "invalid" || days < 1 || days > DAY_COUNT_MAX) {
-            errors.push({
-                fieldId: `calendar-month-${index}-days`,
-                message: `Month ${index + 1} needs a day count from 1 to ${DAY_COUNT_MAX}.`,
-            })
-        }
-    })
-    return errors
-}
-
+// The request body for a calendar. The draft is validated first (calendarDraft.ts).
 export function toCalendarBody(values: CalendarFormValues): CreateCalendarBody {
     const dpw = parseWhole(values.daysPerWeek)
     return {

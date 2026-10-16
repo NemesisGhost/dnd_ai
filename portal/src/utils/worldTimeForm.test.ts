@@ -1,12 +1,10 @@
 import { describe, expect, it } from "vitest"
 import type { Calendar } from "../types/worldTime"
 import {
-    EMPTY_CALENDAR_FORM,
     emptyWorldTimeForm,
     parseWhole,
     toCalendarBody,
     toWorldTimeBody,
-    validateCalendarForm,
     validateWorldTimeForm,
 } from "./worldTimeForm"
 
@@ -36,32 +34,7 @@ describe("parseWhole", () => {
     })
 })
 
-describe("calendar form", () => {
-    it("requires a name and valid months", () => {
-        const errors = validateCalendarForm({
-            ...EMPTY_CALENDAR_FORM,
-            months: [
-                { name: "", dayCount: "30" },
-                { name: "Frost", dayCount: "0" },
-                { name: "frost", dayCount: "10" },
-            ],
-        })
-        expect(ids(errors)).toEqual([
-            "calendar-name",
-            "calendar-month-0-name",
-            "calendar-month-1-days",
-            "calendar-month-2-name",
-        ])
-    })
-
-    it("rejects an out-of-range days-per-week and accepts empty", () => {
-        const base = { ...EMPTY_CALENDAR_FORM, name: "C", months: [{ name: "A", dayCount: "5" }] }
-        expect(ids(validateCalendarForm({ ...base, daysPerWeek: "31" }))).toEqual([
-            "calendar-days-per-week",
-        ])
-        expect(validateCalendarForm({ ...base, daysPerWeek: "" })).toEqual([])
-    })
-
+describe("calendar body", () => {
     it("builds a trimmed body with numbers and nulls", () => {
         expect(
             toCalendarBody({

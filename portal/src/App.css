@@ -4195,3 +4195,205 @@ a.app-header__title:focus-visible {
     flex-direction: column;
   }
 }
+
+/* New calendar: the month roster. Compact rows with the position, name and days, then the row's
+   commands; the form that adds or edits a month is an inset group above or under its row. Columns
+   from 40rem; below that each row reflows to the name line, then its commands. */
+.calendar-lock {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.calendar-roster__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+.calendar-roster__header h3 {
+  margin: 0;
+  font-size: 1.125rem;
+}
+
+.calendar-roster__header .authoring-field__hint {
+  margin: 0;
+}
+
+.calendar-roster__summary {
+  margin: 0.5rem 0 0.25rem;
+}
+
+.calendar-roster__summary + .authoring-field__hint {
+  margin: 0 0 0.5rem;
+}
+
+.calendar-roster__notice {
+  margin: 0.5rem 0;
+  font-weight: 700;
+}
+
+.calendar-roster__form {
+  margin: 0.75rem 0;
+}
+
+.calendar-roster__form-title {
+  margin: 0 0 0.5rem;
+  font-weight: 700;
+}
+
+.calendar-roster__fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.75rem;
+}
+
+.calendar-roster__fields > * {
+  min-width: 0;
+}
+
+.calendar-roster__form .row-actions {
+  margin-top: 0.75rem;
+}
+
+.calendar-roster__head,
+.calendar-roster__row {
+  display: grid;
+  grid-template-columns: 2rem minmax(0, 1fr) 3.5rem;
+  gap: 0.25rem 0.75rem;
+  align-items: baseline;
+}
+
+.calendar-roster__head {
+  display: none;
+}
+
+.calendar-roster__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.calendar-roster__list > li {
+  padding: 0.5rem 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.calendar-roster__position {
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.calendar-roster__name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.calendar-roster__days {
+  font-variant-numeric: tabular-nums;
+}
+
+.calendar-roster__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  grid-column: 2 / -1;
+}
+
+.calendar-roster__actions .authoring-button {
+  width: auto;
+  padding: 0.25rem 0.75rem;
+}
+
+.calendar-roster__form .authoring-button {
+  width: auto;
+}
+
+.calendar-review__heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.25rem 1rem;
+}
+
+.calendar-review__heading h3 {
+  margin: 1rem 0 0.25rem;
+  font-size: 1.125rem;
+}
+
+.calendar-review__facts {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0 1rem;
+  margin: 0;
+}
+
+.calendar-review__facts dt {
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+
+.calendar-review__facts dd {
+  margin: 0 0 0.5rem;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+}
+
+.calendar-review__months {
+  overflow-wrap: anywhere;
+}
+
+.calendar-review .inset-group {
+  margin: 1rem 0;
+}
+
+.calendar-review .authoring-note,
+.calendar-step-actions {
+  margin-top: 1rem;
+}
+
+/* Step links look like buttons, so they carry no underline and centre their text. */
+.calendar-step-actions a.authoring-button,
+.calendar-review a.authoring-button {
+  text-align: center;
+  text-decoration: none;
+}
+
+@media (min-width: 40rem) {
+  /* The commands column has a fixed width so the header cells line up with the rows. */
+  .calendar-roster__head,
+  .calendar-roster__row {
+    grid-template-columns: 2rem minmax(0, 1fr) 4rem 11rem;
+  }
+
+  .calendar-roster__head {
+    display: grid;
+    padding: 0.5rem 0 0.25rem;
+    color: var(--color-text-muted);
+    font-size: 0.875rem;
+    font-weight: 700;
+  }
+
+  .calendar-roster__actions {
+    grid-column: auto;
+    flex-wrap: nowrap;
+    justify-content: flex-end;
+  }
+
+  .calendar-roster__fields {
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  }
+
+  .calendar-review__facts {
+    grid-template-columns: 9rem minmax(0, 1fr);
+  }
+
+  .calendar-review__facts dd {
+    margin-bottom: 0.25rem;
+  }
+}
