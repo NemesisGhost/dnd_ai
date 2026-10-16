@@ -87,8 +87,7 @@ export function CalendarReview({
                 </section>
             ) : null}
             <p className="authoring-note">
-                A calendar cannot be changed after it is created. Its months and their lengths decide how
-                dates in this world are ordered.
+                A calendar cannot be changed after it is created.
             </p>
             {status}
             <AuthoringForm label="Create calendar" onSubmit={onCreate}>

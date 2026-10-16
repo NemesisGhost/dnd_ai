@@ -141,10 +141,7 @@ export function CalendarCreation({ worldId }: { worldId: string }) {
 
     return (
         <>
-            <p className="authoring-page__lead">
-                A calendar lets you record dates in this world. Add its months in order; the number of days
-                in each sets the length of a year.
-            </p>
+            <p className="authoring-page__lead calendar-lead">A calendar lets you record dates in this world.</p>
             <ErrorSummary errors={shown} attempt={attempt} onFollow={follow} />
             <StageNav
                 ariaLabel="New calendar workflow"

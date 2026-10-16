@@ -4357,6 +4357,12 @@ a.app-header__title:focus-visible {
   margin-top: 1rem;
 }
 
+/* One-line statements: the shared reading width would wrap them on wide screens for no reason. */
+.calendar-lead,
+.calendar-review .authoring-note {
+  max-width: none;
+}
+
 /* Step links look like buttons, so they carry no underline and centre their text. */
 .calendar-step-actions a.authoring-button,
 .calendar-review a.authoring-button {
