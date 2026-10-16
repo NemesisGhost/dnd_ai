@@ -16,7 +16,6 @@ import { CalendarBasics } from "./CalendarBasics"
 import { CalendarReview } from "./CalendarReview"
 import { MonthRoster } from "./MonthRoster"
 import {
-    COMPOSER_NAME_ID,
     blockingForm,
     calendarReducer,
     initialDraft,
@@ -126,7 +125,7 @@ export function CalendarCreation({ worldId }: { worldId: string }) {
             if (blocked === null) {
                 dispatch({ type: "openEdit", key })
             } else {
-                target = blocked.kind === "composer" ? COMPOSER_NAME_ID : monthNameId(blocked.key)
+                target = monthNameId(blocked.key)
             }
         }
         const step = stepForField(target)

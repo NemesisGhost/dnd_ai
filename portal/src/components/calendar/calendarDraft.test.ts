@@ -24,7 +24,6 @@ function run(draft: CalendarDraft, ...actions: DraftAction[]): CalendarDraft {
 function addMonth(draft: CalendarDraft, name: string, dayCount = "30"): CalendarDraft {
     return run(
         draft,
-        { type: "openComposer" },
         { type: "composer", patch: { name, dayCount } },
         { type: "applyComposer" },
     )
@@ -43,7 +42,7 @@ function named(name = "Frost"): CalendarDraft {
 const ids = (draft: CalendarDraft) => validateCalendarDraft(draft).map((e) => e.fieldId)
 
 describe("initial draft", () => {
-    it("is one blank 30-day month with its form open, nothing touched and nothing seeded", () => {
+    it("is one blank 30-day month with its editor open and the Add a month panel ready, nothing touched and nothing seeded", () => {
         const draft = initialDraft()
         expect(draft.months).toEqual([{ key: "m1", name: "", dayCount: "30" }])
         expect(draft.name).toBe("")
@@ -51,7 +50,7 @@ describe("initial draft", () => {
         expect(draft.epochLabel).toBe("")
         expect(draft.daysPerWeek).toBe("")
         expect(draft.editing?.key).toBe("m1")
-        expect(draft.composer).toBeNull()
+        expect(draft.composer).toEqual({ name: "", dayCount: "30", errors: [] })
         expect(draft.touched).toBe(false)
         expect(unappliedForms(draft)).toEqual([])
     })
@@ -69,7 +68,7 @@ describe("add", () => {
     })
 
     it("refuses an invalid month and keeps the form and its values", () => {
-        const base = run(named(), { type: "openComposer" })
+        const base = named()
         for (const [name, days] of [
             ["", "30"],
             ["X", "0"],
@@ -95,19 +94,20 @@ describe("add", () => {
         expect(draft.months.map((m) => m.dayCount)).toEqual(["30", "1", "400", "12"])
     })
 
-    it("stops at 60 months and closes the form", () => {
+    it("stops at 60 months and hides the Add a month panel", () => {
         let draft = named()
         for (let i = 2; i <= 60; i += 1) draft = addMonth(draft, `Month ${i}`)
         expect(draft.months).toHaveLength(60)
         expect(draft.composer).toBeNull()
-        expect(run(draft, { type: "openComposer" }).composer).toBeNull()
+        // The panel returns, empty, as soon as there is room again.
+        expect(run(draft, { type: "remove", key: "m60" }).composer).toEqual({ name: "", dayCount: "30", errors: [] })
     })
 })
 
 describe("edit", () => {
     it("changes only the buffer until applied, and the row's own name is not a duplicate", () => {
         let draft = addMonth(named(), "Thaw")
-        draft = run(draft, { type: "closeComposer" }, { type: "openEdit", key: "m2" }, { type: "edit", patch: { name: "Melt" } })
+        draft = run(draft, { type: "openEdit", key: "m2" }, { type: "edit", patch: { name: "Melt" } })
         expect(draft.months[1]!.name).toBe("Thaw")
         draft = run(draft, { type: "edit", patch: { name: "thaw" } }, { type: "applyEdit" })
         expect(draft.months[1]!.name).toBe("thaw")
@@ -116,7 +116,7 @@ describe("edit", () => {
 
     it("rejects a name another month has and keeps the editor open", () => {
         let draft = addMonth(named(), "Thaw")
-        draft = run(draft, { type: "closeComposer" }, { type: "openEdit", key: "m2" }, { type: "edit", patch: { name: "FROST" } }, { type: "applyEdit" })
+        draft = run(draft, { type: "openEdit", key: "m2" }, { type: "edit", patch: { name: "FROST" } }, { type: "applyEdit" })
         expect(draft.editing?.buffer.errors.map((e) => e.fieldId)).toEqual([monthNameId("m2")])
         expect(draft.months[1]!.name).toBe("Thaw")
     })
@@ -132,17 +132,24 @@ describe("edit", () => {
         expect(draft.editing).toBeNull()
     })
 
-    it("opens one form at a time: an unchanged one is closed, one with unapplied values blocks with a notice", () => {
+    it("never lets the Add a month panel block or be replaced by a row editor", () => {
+        const draft = run(named(), { type: "composer", patch: { name: "Half" } }, { type: "openEdit", key: "m1" })
+        expect(draft.editing?.key).toBe("m1")
+        expect(draft.composer?.name).toBe("Half")
+        expect(draft.notice).toBeNull()
+        expect(blockingForm(draft)).toBeNull()
+    })
+
+    it("opens one row editor at a time: an unchanged one is closed, one with unapplied values blocks with a notice", () => {
         let draft = addMonth(named(), "Thaw")
-        draft = run(draft, { type: "closeComposer" })
-        // Unchanged editor on m1 is replaced by m2's.
+                // Unchanged editor on m1 is replaced by m2's.
         draft = run(draft, { type: "openEdit", key: "m1" }, { type: "openEdit", key: "m2" })
         expect(draft.editing?.key).toBe("m2")
-        // Changed editor on m2 blocks opening m1 and the composer.
+        // A changed editor on m2 blocks opening m1.
         draft = run(draft, { type: "edit", patch: { name: "Melt" } }, { type: "openEdit", key: "m1" })
         expect(draft.editing?.key).toBe("m2")
         expect(draft.notice).toMatch(/month 2/)
-        expect(run(draft, { type: "openComposer" }).composer).toBeNull()
+        expect(draft.composer).not.toBeNull()
         expect(blockingForm(draft)).toEqual({ kind: "edit", key: "m2", position: 2 })
     })
 })
@@ -150,7 +157,7 @@ describe("edit", () => {
 describe("remove", () => {
     it("keeps the other rows' keys, values and error ids on the same rows", () => {
         let draft = addMonth(addMonth(named(), "Thaw"), "Bloom", "28")
-        draft = run(draft, { type: "closeComposer" }, { type: "remove", key: "m2" })
+        draft = run(draft, { type: "remove", key: "m2" })
         expect(draft.months.map((m) => [m.key, m.name, m.dayCount])).toEqual([
             ["m1", "Frost", "30"],
             ["m3", "Bloom", "28"],
@@ -161,14 +168,14 @@ describe("remove", () => {
 
     it("never reuses a key", () => {
         let draft = addMonth(named(), "Thaw")
-        draft = run(draft, { type: "closeComposer" }, { type: "remove", key: "m2" })
+        draft = run(draft, { type: "remove", key: "m2" })
         expect(addMonth(draft, "Again").months.map((m) => m.key)).toEqual(["m1", "m3"])
     })
 
     it("cannot remove the only month, and drops the editor of a removed row", () => {
         expect(run(named(), { type: "remove", key: "m1" }).months).toHaveLength(1)
         let draft = addMonth(named(), "Thaw")
-        draft = run(draft, { type: "closeComposer" }, { type: "openEdit", key: "m2" }, { type: "remove", key: "m2" })
+        draft = run(draft, { type: "openEdit", key: "m2" }, { type: "remove", key: "m2" })
         expect(draft.editing).toBeNull()
     })
 })
@@ -226,7 +233,7 @@ describe("whole-draft validation", () => {
 
     it("flags repeated names case-insensitively on the later month, with its current position", () => {
         let draft = addMonth(addMonth(named(), "Thaw"), "Bloom")
-        draft = run(draft, { type: "closeComposer" }, { type: "remove", key: "m2" })
+        draft = run(draft, { type: "remove", key: "m2" })
         const duplicated: CalendarDraft = {
             ...draft,
             months: [...draft.months, { key: "m9", name: " frost ", dayCount: "5" }],
@@ -238,7 +245,7 @@ describe("whole-draft validation", () => {
     })
 
     it("refuses to drop an unapplied month form: it is reported, not ignored", () => {
-        const composing = run(named(), { type: "openComposer" }, { type: "composer", patch: { name: "Thaw" } })
+        const composing = run(named(), { type: "composer", patch: { name: "Thaw" } })
         expect(ids(composing)).toEqual([COMPOSER_NAME_ID])
         const editing = run(named(), { type: "openEdit", key: "m1" }, { type: "edit", patch: { dayCount: "9" } })
         expect(ids(editing)).toEqual([monthNameId("m1")])
@@ -246,7 +253,7 @@ describe("whole-draft validation", () => {
     })
 
     it("does not report an untouched open form, and reports each field once", () => {
-        expect(ids(run(named(), { type: "openComposer" }))).toEqual([])
+        expect(ids(named())).toEqual([])
         const unnamedEdited = run(initialDraft(), { type: "edit", patch: { name: "X" } })
         const list = ids(unnamedEdited)
         expect(new Set(list).size).toBe(list.length)

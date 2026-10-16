@@ -2,7 +2,6 @@ import type { Dispatch } from "react"
 import { TextField } from "../authoring/fields"
 import { DAY_COUNT_MAX, MONTHS_MAX, MONTH_NAME_MAX } from "../../utils/worldTimeForm"
 import {
-    ADD_MONTH_ID,
     calendarReducer,
     COMPOSER_DAYS_ID,
     COMPOSER_NAME_ID,
@@ -36,13 +35,6 @@ export function MonthRoster({ draft, dispatch, errorFor, requestFocus, announce 
     const full = months.length >= MONTHS_MAX
     const unapplied = unappliedForms(draft)
 
-    function openComposer() {
-        dispatch({ type: "openComposer" })
-        const blocked = unapplied[0]
-        if (blocked === undefined || blocked.kind === "composer") requestFocus(COMPOSER_NAME_ID)
-        else requestFocus(monthNameId(blocked.key))
-    }
-
     function submitComposer() {
         // The reducer is pure, so the outcome is known before the action is dispatched.
         const action = { type: "applyComposer" } as const
@@ -67,18 +59,17 @@ export function MonthRoster({ draft, dispatch, errorFor, requestFocus, announce 
 
     function openEdit(key: string) {
         dispatch({ type: "openEdit", key })
-        const blocked = unapplied.find((f) => !(f.kind === "edit" && f.key === key))
-        requestFocus(
-            blocked === undefined ? monthNameId(key) : blocked.kind === "composer" ? COMPOSER_NAME_ID : monthNameId(blocked.key),
-        )
+        // Refused over another row's unapplied values: focus that editor instead.
+        const blocked = unapplied.find((f) => f.kind === "edit" && f.key !== key)
+        requestFocus(blocked?.kind === "edit" ? monthNameId(blocked.key) : monthNameId(key))
     }
 
     function remove(key: string, position: number, name: string) {
-        // Focus moves to a row that still exists: the next, else the previous, else Add.
+        // Focus moves to a row that still exists: the next, else the previous, else the Add panel.
         const neighbour = months[position] ?? months[position - 2]
         dispatch({ type: "remove", key })
         announce(sentence(`${monthLabel(position, name)}, removed from the draft.`))
-        requestFocus(neighbour === undefined ? ADD_MONTH_ID : monthEditId(neighbour.key))
+        requestFocus(neighbour === undefined ? COMPOSER_NAME_ID : monthEditId(neighbour.key))
     }
 
     return (
@@ -89,18 +80,7 @@ export function MonthRoster({ draft, dispatch, errorFor, requestFocus, announce 
                 </h3>
                 {full ? (
                     <p className="authoring-field__hint">A calendar can have up to {MONTHS_MAX} months.</p>
-                ) : (
-                    <button
-                        type="button"
-                        id={ADD_MONTH_ID}
-                        className="authoring-button"
-                        aria-expanded={composer !== null}
-                        aria-controls="calendar-composer"
-                        onClick={openComposer}
-                    >
-                        Add a month
-                    </button>
-                )}
+                ) : null}
             </div>
             <p className="calendar-roster__summary" aria-live="polite">
                 <strong>{monthCountText(draft)}</strong>. {yearLengthText(draft)}
@@ -152,16 +132,6 @@ export function MonthRoster({ draft, dispatch, errorFor, requestFocus, announce 
                     <div className="row-actions">
                         <button type="submit" className="authoring-button authoring-button--primary">
                             Add to draft
-                        </button>
-                        <button
-                            type="button"
-                            className="authoring-button"
-                            onClick={() => {
-                                dispatch({ type: "closeComposer" })
-                                requestFocus(ADD_MONTH_ID)
-                            }}
-                        >
-                            {unapplied.some((f) => f.kind === "composer") ? "Discard and close" : "Done"}
                         </button>
                     </div>
                 </form>

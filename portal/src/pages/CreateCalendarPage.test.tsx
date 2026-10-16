@@ -72,9 +72,8 @@ function nameFirstMonth(name = "Frost", days = "30") {
     type(/^Month 1 days/, days)
     press("Apply to draft")
 }
-// Adds a month through the composer, opening it first when it is closed.
+// Adds a month through the Add a month panel, which is always there.
 function addMonth(name: string, days = "30") {
-    if (screen.queryByRole("form", { name: "Add a month" }) === null) press("Add a month")
     type(/^New month name/, name)
     type(/^New month days/, days)
     press("Add to draft")
@@ -85,7 +84,6 @@ async function completeDraft() {
     await toMonths()
     nameFirstMonth(" Frost ")
     addMonth("Thaw", "31")
-    press("Done")
 }
 
 const createCalls = (server: ReturnType<typeof installMockServer>) => server.callsTo("POST", CREATE_PATH)
@@ -167,7 +165,6 @@ describe("steps", () => {
         type(/^Days per week/, "7")
         await toMonths()
         nameFirstMonth("Frost")
-        press("Add a month")
         type(/^New month name/, "Thaw")
         type(/^New month days/, "31")
         await toReview()
@@ -181,7 +178,6 @@ describe("steps", () => {
         expect(screen.getByRole("textbox", { name: /^New month days/ })).toHaveValue("31")
         // A half-made edit survives as well.
         press("Add to draft")
-        press("Done")
         press("Edit month 2, Thaw")
         type(/^Month 2 name/, "Melt")
         await toReview()
@@ -211,12 +207,29 @@ describe("the month roster", () => {
         expect(screen.getByRole("button", { name: "Apply to draft" })).toBeInTheDocument()
     })
 
-    it("adds a month through a form above the roster, which stays open for the next one", async () => {
+    it("offers Add a month as a panel that is already open, with no button to open it and none to close it", async () => {
+        setup()
+        await ready()
+        await toMonths()
+        // Open before anything is applied, and still there after the first month is.
+        expect(screen.getByRole("form", { name: "Add a month" })).toBeVisible()
+        nameFirstMonth("Frost")
+        expect(screen.getByRole("form", { name: "Add a month" })).toBeVisible()
+        expect(screen.queryByRole("button", { name: "Add a month" })).toBeNull()
+        expect(screen.queryByRole("button", { name: /^Done$|Discard and close/ })).toBeNull()
+        // Row editing does not take the panel away, and its values wait for Add to draft.
+        press("Edit month 1, Frost")
+        expect(screen.getByRole("form", { name: "Add a month" })).toBeVisible()
+        type(/^New month name/, "Thaw")
+        expect(screen.getByRole("textbox", { name: /^New month name/ })).toHaveValue("Thaw")
+        expect(rows()).toHaveLength(1)
+    })
+
+    it("adds a month through the panel above the roster, which stays ready for the next one", async () => {
         const { server } = setup()
         await ready()
         await toMonths()
         nameFirstMonth("Frost")
-        press("Add a month")
         const composer = screen.getByRole("form", { name: "Add a month" })
         const list = document.querySelector(".calendar-roster__list")!
         expect(composer.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
@@ -238,7 +251,6 @@ describe("the month roster", () => {
         nameFirstMonth("Frost")
         addMonth("Thaw", "31")
         addMonth("Bloom", "28")
-        press("Done")
         press("Edit month 2, Thaw")
         expect(screen.getAllByRole("form", { name: /^Edit month/ })).toHaveLength(1)
         expect(screen.getByRole("form", { name: "Edit month 2" })).toBeInTheDocument()
@@ -259,7 +271,6 @@ describe("the month roster", () => {
         await toMonths()
         nameFirstMonth("Frost")
         addMonth("Thaw")
-        press("Done")
         press("Edit month 2, Thaw")
         type(/^Month 2 name/, "Other")
         press("Cancel edit")
@@ -271,7 +282,6 @@ describe("the month roster", () => {
         await ready()
         await toMonths()
         nameFirstMonth("Frost")
-        press("Add a month")
         for (const [name, days, message] of [
             [" FROST ", "30", /Another month already has this name/],
             ["Thaw", "0", /Days must be a whole number from 1 to 400/],
@@ -309,7 +319,6 @@ describe("the month roster", () => {
         nameFirstMonth("Frost", "10")
         addMonth("Thaw", "20")
         addMonth("Bloom", "30")
-        press("Done")
         press("Remove month 2, Thaw from the draft")
         expect(rowTexts()).toEqual(["1Frost10EditRemove", "2Bloom30EditRemove"])
         // The surviving row's own editor and its own error stay together.
@@ -333,12 +342,13 @@ describe("the month roster", () => {
         for (let i = 2; i <= 60; i += 1) addMonth(`Month ${i}`)
         expect(rows()).toHaveLength(60)
         expect(within(monthsPanel()).getByText("60 months")).toBeInTheDocument()
-        expect(screen.queryByRole("button", { name: "Add a month" })).toBeNull()
         expect(screen.queryByRole("form", { name: "Add a month" })).toBeNull()
         expect(screen.getByText(/up to 60 months/)).toBeInTheDocument()
         expect(within(monthsPanel()).getByText(/Year length: 1800 days\./)).toBeInTheDocument()
         press("Remove month 60, Month 60 from the draft")
-        expect(screen.getByRole("button", { name: "Add a month" })).toBeInTheDocument()
+        // Room again: the panel is back, empty and ready.
+        expect(screen.getByRole("form", { name: "Add a month" })).toBeVisible()
+        expect(screen.getByRole("textbox", { name: /^New month name/ })).toHaveValue("")
     }, 30_000)
 
     it("announces additions and removals, and focuses the first invalid field of a refused month", async () => {
@@ -353,8 +363,6 @@ describe("the month roster", () => {
         type(/^New month days/, "0")
         press("Add to draft")
         await waitFor(() => expect(screen.getByRole("textbox", { name: /^New month days/ })).toHaveFocus())
-        // Closing a form that holds unadded values says that it discards them.
-        press("Discard and close")
         press("Remove month 2, Thaw from the draft")
         expect(announcer).toHaveTextContent("Month 2, Thaw, removed from the draft.")
         // Focus goes to a row that still exists: here month 1's Edit button.
@@ -367,7 +375,6 @@ describe("the month roster", () => {
         await toMonths()
         nameFirstMonth("Frost")
         addMonth("Thaw")
-        press("Done")
         press("Edit month 2, Thaw")
         type(/^Month 2 name/, "Melt")
         press("Edit month 1, Frost")
@@ -384,8 +391,6 @@ describe("creating", () => {
         const nameInput = screen.getByRole("textbox", { name: /^Calendar name/ })
         expect(nameInput.closest("form")).toBeNull()
         await toMonths()
-        const composerOpener = screen.getByRole("button", { name: "Add a month" })
-        fireEvent.click(composerOpener)
         // Submitting a month form (what Enter does there) adds to the draft and sends nothing.
         type(/^New month name/, "Thaw")
         fireEvent.submit(screen.getByRole("form", { name: "Add a month" }))
@@ -498,9 +503,8 @@ describe("creating", () => {
         await ready()
         type(/^Calendar name/, "Common")
         await toMonths()
-        // Opening Add closes the untouched editor, leaving the unnamed month collapsed.
-        press("Add a month")
-        press("Done")
+        // Cancelling the open editor leaves the unnamed month collapsed.
+        press("Cancel edit")
         expect(screen.queryByRole("textbox", { name: /^Month 1 name/ })).toBeNull()
         await toReview()
         press("Create calendar")
@@ -516,7 +520,6 @@ describe("creating", () => {
         await ready()
         await completeDraft()
         await toMonths()
-        press("Add a month")
         type(/^New month name/, "Bloom")
         await toReview()
         press("Create calendar")
@@ -621,7 +624,6 @@ describe("failure and retry", () => {
         press("Create calendar")
         await screen.findByText(/could not reach the server/)
         await toMonths()
-        press("Add a month")
         type(/^New month name/, "Unsent")
         await toReview()
         expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument()
@@ -640,7 +642,7 @@ describe("failure and retry", () => {
         await toBasics()
         expect(screen.getByRole("textbox", { name: /^Calendar name/ })).toBeDisabled()
         await toMonths()
-        expect(screen.getByRole("button", { name: "Add a month" })).toBeDisabled()
+        expect(screen.getByRole("textbox", { name: /^New month name/ })).toBeDisabled()
         // A second submit while pending is ignored.
         await toReview()
         release(RECEIPT)

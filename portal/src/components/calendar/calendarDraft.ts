@@ -11,8 +11,8 @@ import {
 } from "../../utils/worldTimeForm"
 
 // The unsaved state of the calendar being created: the calendar's own fields, its committed months
-// in order, and at most one open month form (the composer that adds a month, or the editor of one
-// row). Pure, so it can be tested without React. Nothing here is sent anywhere; the page builds
+// in order, the Add a month panel (always available until the calendar is full), and at most one
+// open row editor. Pure, so it can be tested without React. Nothing here is sent anywhere; the page builds
 // the one creation request from the committed months only.
 
 // A committed month. `key` is stable for the life of the draft and never reused; it is not the
@@ -50,17 +50,14 @@ export type CalendarField = "name" | "description" | "epochLabel" | "daysPerWeek
 
 export type DraftAction =
     | { type: "field"; field: CalendarField; value: string }
-    | { type: "openComposer" }
     | { type: "composer"; patch: Partial<Pick<MonthBuffer, "name" | "dayCount">> }
     | { type: "applyComposer" }
-    | { type: "closeComposer" }
     | { type: "openEdit"; key: string }
     | { type: "edit"; patch: Partial<Pick<MonthBuffer, "name" | "dayCount">> }
     | { type: "applyEdit" }
     | { type: "cancelEdit" }
     | { type: "remove"; key: string }
 
-export const ADD_MONTH_ID = "calendar-add-month"
 export const MONTHS_ID = "calendar-months"
 export const COMPOSER_NAME_ID = "calendar-composer-name"
 export const COMPOSER_DAYS_ID = "calendar-composer-days"
@@ -81,7 +78,6 @@ export type CalendarStep = "basics" | "months" | "review"
 export function stepForField(fieldId: string): CalendarStep {
     if (
         fieldId === MONTHS_ID ||
-        fieldId === ADD_MONTH_ID ||
         fieldId.startsWith("calendar-composer-") ||
         MONTH_FIELD.test(fieldId)
     ) {
@@ -100,7 +96,7 @@ export function initialDraft(): CalendarDraft {
         epochLabel: "",
         daysPerWeek: "",
         months: [{ key: "m1", name: "", dayCount: DEFAULT_DAY_COUNT }],
-        composer: null,
+        composer: blankBuffer(),
         editing: { key: "m1", buffer: blankBuffer() },
         nextKey: 2,
         touched: false,
@@ -176,15 +172,15 @@ export function unappliedForms(draft: CalendarDraft): UnappliedForm[] {
     return found
 }
 
-// The first open form with unapplied values: opening another form would discard it.
-export function blockingForm(draft: CalendarDraft): UnappliedForm | null {
-    return unappliedForms(draft)[0] ?? null
+// The row editor with unapplied values: opening another row's editor would discard it. The Add
+// a month panel never blocks, because it is not replaced by anything.
+export function blockingForm(draft: CalendarDraft): Extract<UnappliedForm, { kind: "edit" }> | null {
+    const found = unappliedForms(draft).find((f) => f.kind === "edit")
+    return found?.kind === "edit" ? found : null
 }
 
-function blockedNotice(form: UnappliedForm): string {
-    return form.kind === "composer"
-        ? "Add the month you are entering to the draft, or discard it, first."
-        : `Apply or cancel your changes to month ${form.position} first.`
+function blockedNotice(form: Extract<UnappliedForm, { kind: "edit" }>): string {
+    return `Apply or cancel your changes to month ${form.position} first.`
 }
 
 // ---- the reducer ----
@@ -194,12 +190,6 @@ export function calendarReducer(draft: CalendarDraft, action: DraftAction): Cale
         case "field":
             return { ...draft, [action.field]: action.value, touched: true, notice: null }
 
-        case "openComposer": {
-            if (draft.composer !== null || draft.months.length >= MONTHS_MAX) return draft
-            const blocked = blockingForm(draft)
-            if (blocked !== null) return { ...draft, notice: blockedNotice(blocked) }
-            return { ...draft, composer: blankBuffer(), editing: null, notice: null }
-        }
         case "composer": {
             if (draft.composer === null) return draft
             return {
@@ -226,16 +216,13 @@ export function calendarReducer(draft: CalendarDraft, action: DraftAction): Cale
             return {
                 ...draft,
                 months,
-                // The form stays open for the next month, until the calendar is full.
+                // The panel stays ready for the next month, until the calendar is full.
                 composer: months.length >= MONTHS_MAX ? null : blankBuffer(),
                 nextKey: draft.nextKey + 1,
                 touched: true,
                 notice: null,
             }
         }
-        case "closeComposer":
-            return { ...draft, composer: null, notice: null }
-
         case "openEdit": {
             const row = draft.months.find((m) => m.key === action.key)
             if (row === undefined || draft.editing?.key === action.key) return draft
@@ -243,7 +230,6 @@ export function calendarReducer(draft: CalendarDraft, action: DraftAction): Cale
             if (blocked !== null) return { ...draft, notice: blockedNotice(blocked) }
             return {
                 ...draft,
-                composer: null,
                 editing: { key: row.key, buffer: { name: row.name, dayCount: row.dayCount, errors: [] } },
                 notice: null,
             }
@@ -292,6 +278,8 @@ export function calendarReducer(draft: CalendarDraft, action: DraftAction): Cale
             return {
                 ...draft,
                 months: draft.months.filter((m) => m.key !== action.key),
+                // Room again after the calendar was full: the Add a month panel comes back.
+                composer: draft.composer ?? blankBuffer(),
                 // A form for a month that is gone goes with it.
                 editing: draft.editing?.key === action.key ? null : draft.editing,
                 touched: true,
@@ -413,7 +401,7 @@ export function validateCalendarDraft(draft: CalendarDraft): FieldError[] {
             form.kind === "composer"
                 ? {
                       fieldId: COMPOSER_NAME_ID,
-                      message: "You started adding a month that is not in the draft yet. Add it to the draft or discard it.",
+                      message: "You started adding a month that is not in the draft yet. Add it to the draft or clear it.",
                   }
                 : {
                       fieldId: monthNameId(form.key),
