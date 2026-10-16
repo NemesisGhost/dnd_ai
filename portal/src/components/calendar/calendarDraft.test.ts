@@ -29,30 +29,31 @@ function addMonth(draft: CalendarDraft, name: string, dayCount = "30"): Calendar
     )
 }
 
-// A draft whose single month is named and applied, with no form open.
+// A draft with one month and a calendar name, the Add a month panel ready.
 function named(name = "Frost"): CalendarDraft {
-    return run(
-        initialDraft(),
-        { type: "edit", patch: { name } },
-        { type: "applyEdit" },
-        { type: "field", field: "name", value: "Reckoning" },
-    )
+    return run(addMonth(initialDraft(), name), { type: "field", field: "name", value: "Reckoning" })
 }
 
 const ids = (draft: CalendarDraft) => validateCalendarDraft(draft).map((e) => e.fieldId)
 
 describe("initial draft", () => {
-    it("is one blank 30-day month with its editor open and the Add a month panel ready, nothing touched and nothing seeded", () => {
+    it("has no months, only the Add a month panel (a blank 30-day month), nothing touched and nothing seeded", () => {
         const draft = initialDraft()
-        expect(draft.months).toEqual([{ key: "m1", name: "", dayCount: "30" }])
+        expect(draft.months).toEqual([])
+        expect(draft.editing).toBeNull()
+        expect(draft.composer).toEqual({ name: "", dayCount: "30", errors: [] })
         expect(draft.name).toBe("")
         expect(draft.description).toBe("")
         expect(draft.epochLabel).toBe("")
         expect(draft.daysPerWeek).toBe("")
-        expect(draft.editing?.key).toBe("m1")
-        expect(draft.composer).toEqual({ name: "", dayCount: "30", errors: [] })
         expect(draft.touched).toBe(false)
         expect(unappliedForms(draft)).toEqual([])
+        expect(yearLengthText(draft)).toBe("Add at least one month to see the year length.")
+    })
+
+    it("cannot be created without a month, and says so on the Months heading", () => {
+        const errors = validateCalendarDraft({ ...initialDraft(), name: "Common" })
+        expect(errors).toEqual([{ fieldId: "calendar-months", message: expect.stringMatching(/at least one month/) }])
     })
 })
 
@@ -172,8 +173,10 @@ describe("remove", () => {
         expect(addMonth(draft, "Again").months.map((m) => m.key)).toEqual(["m1", "m3"])
     })
 
-    it("cannot remove the only month, and drops the editor of a removed row", () => {
-        expect(run(named(), { type: "remove", key: "m1" }).months).toHaveLength(1)
+    it("can remove the last month, leaving none, and drops the editor of a removed row", () => {
+        const empty = run(named(), { type: "remove", key: "m1" })
+        expect(empty.months).toEqual([])
+        expect(ids({ ...empty, name: "Common" })).toEqual(["calendar-months"])
         let draft = addMonth(named(), "Thaw")
         draft = run(draft, { type: "openEdit", key: "m2" }, { type: "remove", key: "m2" })
         expect(draft.editing).toBeNull()
@@ -213,14 +216,13 @@ describe("whole-draft validation", () => {
             daysPerWeek: "31",
             epochLabel: "e".repeat(201),
             description: "d".repeat(4001),
-            editing: null,
         }
         expect(ids(draft)).toEqual([
             "calendar-name",
             "calendar-description",
             "calendar-epoch",
             "calendar-days-per-week",
-            monthNameId("m1"),
+            "calendar-months",
         ])
     })
 

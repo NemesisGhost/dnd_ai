@@ -53,6 +53,7 @@ export function CalendarReview({
                     <h3 id="calendar-review-months">Months in order</h3>
                     <Link to={monthsHref}>Change months</Link>
                 </div>
+                {draft.months.length === 0 ? <p>No months yet.</p> : null}
                 <ol className="record-list calendar-review__months">
                     {draft.months.map((month) => (
                         <li key={month.key}>

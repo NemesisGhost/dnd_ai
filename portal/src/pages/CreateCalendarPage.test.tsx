@@ -66,12 +66,6 @@ const monthsPanel = () => screen.getByRole("region", { name: "Months" })
 const rows = () => screen.getAllByRole("listitem").filter((li) => li.querySelector(".calendar-roster__row"))
 const rowTexts = () => rows().map((li) => li.querySelector(".calendar-roster__row")!.textContent)
 
-// Names month 1 through its open editor and applies it.
-function nameFirstMonth(name = "Frost", days = "30") {
-    type(/^Month 1 name/, name)
-    type(/^Month 1 days/, days)
-    press("Apply to draft")
-}
 // Adds a month through the Add a month panel, which is always there.
 function addMonth(name: string, days = "30") {
     type(/^New month name/, name)
@@ -82,7 +76,7 @@ function addMonth(name: string, days = "30") {
 async function completeDraft() {
     type(/^Calendar name/, " Common Reckoning ")
     await toMonths()
-    nameFirstMonth(" Frost ")
+    addMonth(" Frost ")
     addMonth("Thaw", "31")
 }
 
@@ -164,7 +158,7 @@ describe("steps", () => {
         type(/^Epoch/, "Founding")
         type(/^Days per week/, "7")
         await toMonths()
-        nameFirstMonth("Frost")
+        addMonth("Frost")
         type(/^New month name/, "Thaw")
         type(/^New month days/, "31")
         await toReview()
@@ -187,16 +181,31 @@ describe("steps", () => {
 })
 
 describe("the month roster", () => {
-    it("starts with one blank 30-day month, open for entry, with no Remove and no example data", async () => {
+    it("starts with no months, warns that one is required, and has only the Add a month panel", async () => {
         setup()
         await ready()
         await toMonths()
-        expect(rowTexts()).toEqual(["1Name needed30Edit"])
-        expect(screen.getByRole("textbox", { name: /^Month 1 name/ })).toHaveValue("")
-        expect(screen.getByRole("textbox", { name: /^Month 1 days/ })).toHaveValue("30")
-        expect(screen.queryByRole("button", { name: /^Remove/ })).toBeNull()
-        expect(within(monthsPanel()).getByText("1 month")).toBeInTheDocument()
+        expect(rows()).toHaveLength(0)
+        expect(screen.queryByRole("form", { name: /^Edit month/ })).toBeNull()
+        expect(within(monthsPanel()).getByText(/At least one month is required/)).toBeInTheDocument()
+        expect(within(monthsPanel()).getByText("0 months")).toBeInTheDocument()
+        expect(within(monthsPanel()).getByText(/Add at least one month to see the year length/)).toBeInTheDocument()
+        // The panel holds a blank 30-day month, and nothing is seeded.
+        expect(screen.getByRole("form", { name: "Add a month" })).toBeVisible()
+        expect(screen.getByRole("textbox", { name: /^New month name/ })).toHaveValue("")
+        expect(screen.getByRole("textbox", { name: /^New month days/ })).toHaveValue("30")
+    })
+
+    it("drops the warning once a month is added, and brings it back when the last is removed", async () => {
+        setup()
+        await ready()
+        await toMonths()
+        addMonth("Frost")
+        expect(within(monthsPanel()).queryByText(/At least one month is required/)).toBeNull()
         expect(within(monthsPanel()).getByText(/Year length: 30 days\./)).toBeInTheDocument()
+        press("Remove month 1, Frost from the draft")
+        expect(rows()).toHaveLength(0)
+        expect(within(monthsPanel()).getByText(/At least one month is required/)).toBeInTheDocument()
     })
 
     it("says that its actions change the draft only", async () => {
@@ -204,6 +213,8 @@ describe("the month roster", () => {
         await ready()
         await toMonths()
         expect(screen.getByText(/Add, Edit and Remove change this unsaved draft only/)).toBeInTheDocument()
+        addMonth("Frost")
+        press("Edit month 1, Frost")
         expect(screen.getByRole("button", { name: "Apply to draft" })).toBeInTheDocument()
     })
 
@@ -211,9 +222,9 @@ describe("the month roster", () => {
         setup()
         await ready()
         await toMonths()
-        // Open before anything is applied, and still there after the first month is.
+        // Open before anything is added, and still there after the first month is.
         expect(screen.getByRole("form", { name: "Add a month" })).toBeVisible()
-        nameFirstMonth("Frost")
+        addMonth("Frost")
         expect(screen.getByRole("form", { name: "Add a month" })).toBeVisible()
         expect(screen.queryByRole("button", { name: "Add a month" })).toBeNull()
         expect(screen.queryByRole("button", { name: /^Done$|Discard and close/ })).toBeNull()
@@ -229,7 +240,7 @@ describe("the month roster", () => {
         const { server } = setup()
         await ready()
         await toMonths()
-        nameFirstMonth("Frost")
+        addMonth("Frost")
         const composer = screen.getByRole("form", { name: "Add a month" })
         const list = document.querySelector(".calendar-roster__list")!
         expect(composer.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
@@ -248,7 +259,7 @@ describe("the month roster", () => {
         setup()
         await ready()
         await toMonths()
-        nameFirstMonth("Frost")
+        addMonth("Frost")
         addMonth("Thaw", "31")
         addMonth("Bloom", "28")
         press("Edit month 2, Thaw")
@@ -269,7 +280,7 @@ describe("the month roster", () => {
         setup()
         await ready()
         await toMonths()
-        nameFirstMonth("Frost")
+        addMonth("Frost")
         addMonth("Thaw")
         press("Edit month 2, Thaw")
         type(/^Month 2 name/, "Other")
@@ -281,7 +292,7 @@ describe("the month roster", () => {
         setup()
         await ready()
         await toMonths()
-        nameFirstMonth("Frost")
+        addMonth("Frost")
         for (const [name, days, message] of [
             [" FROST ", "30", /Another month already has this name/],
             ["Thaw", "0", /Days must be a whole number from 1 to 400/],
@@ -305,18 +316,18 @@ describe("the month roster", () => {
         setup()
         await ready()
         await toMonths()
-        nameFirstMonth("Frost")
+        addMonth("Frost")
         press("Edit month 1, Frost")
         type(/^Month 1 days/, "20")
         press("Apply to draft")
-        expect(rowTexts()).toEqual(["1Frost20Edit"])
+        expect(rowTexts()).toEqual(["1Frost20EditRemove"])
     })
 
     it("keeps each remaining row's values on its own row after a removal, and renumbers", async () => {
         setup()
         await ready()
         await toMonths()
-        nameFirstMonth("Frost", "10")
+        addMonth("Frost", "10")
         addMonth("Thaw", "20")
         addMonth("Bloom", "30")
         press("Remove month 2, Thaw from the draft")
@@ -327,18 +338,16 @@ describe("the month roster", () => {
         press("Apply to draft")
         expect(within(screen.getByRole("form", { name: "Edit month 2" })).getByText(/Days must be a whole number/)).toBeInTheDocument()
         expect(screen.getByRole("textbox", { name: /^Month 2 name/ })).toHaveValue("Bloom")
-        // Removing down to one month removes the last Remove.
         press("Cancel edit")
         press("Remove month 1, Frost from the draft")
-        expect(rowTexts()).toEqual(["1Bloom30Edit"])
-        expect(screen.queryByRole("button", { name: /^Remove/ })).toBeNull()
+        expect(rowTexts()).toEqual(["1Bloom30EditRemove"])
     })
 
     it("allows at most 60 months", async () => {
         setup()
         await ready()
         await toMonths()
-        nameFirstMonth("Month 1")
+        addMonth("Month 1")
         for (let i = 2; i <= 60; i += 1) addMonth(`Month ${i}`)
         expect(rows()).toHaveLength(60)
         expect(within(monthsPanel()).getByText("60 months")).toBeInTheDocument()
@@ -355,7 +364,7 @@ describe("the month roster", () => {
         setup()
         await ready()
         await toMonths()
-        nameFirstMonth("Frost")
+        addMonth("Frost")
         addMonth("Thaw")
         const announcer = screen.getByTestId("authoring-announcer")
         expect(announcer).toHaveTextContent("Month 2, Thaw, added to the draft.")
@@ -373,7 +382,7 @@ describe("the month roster", () => {
         setup()
         await ready()
         await toMonths()
-        nameFirstMonth("Frost")
+        addMonth("Frost")
         addMonth("Thaw")
         press("Edit month 2, Thaw")
         type(/^Month 2 name/, "Melt")
@@ -394,7 +403,7 @@ describe("creating", () => {
         // Submitting a month form (what Enter does there) adds to the draft and sends nothing.
         type(/^New month name/, "Thaw")
         fireEvent.submit(screen.getByRole("form", { name: "Add a month" }))
-        expect(rows()).toHaveLength(2)
+        expect(rows()).toHaveLength(1)
         fireEvent.submit(screen.getByRole("form", { name: "Add a month" }))
         expect(server.callsTo("POST", /./)).toEqual([])
         // The only submit button for the calendar is in the Review form, with nothing to type in.
@@ -481,7 +490,7 @@ describe("creating", () => {
         const summary = heading.closest("div")!
         await waitFor(() => expect(summary).toHaveFocus())
         expect(within(summary).getByRole("link", { name: "Enter a name for the calendar." })).toBeInTheDocument()
-        expect(within(summary).getByRole("link", { name: "Enter a name for month 1." })).toBeInTheDocument()
+        expect(within(summary).getByRole("link", { name: /needs at least one month/ })).toBeInTheDocument()
         expect(createCalls(server)).toHaveLength(0)
     })
 
@@ -498,18 +507,46 @@ describe("creating", () => {
         expect(screen.getByText(/Days per week must be a whole number from 1 to 30, or empty\./, { selector: "p" })).toBeInTheDocument()
     })
 
-    it("opens the collapsed row a month problem belongs to before focusing its field", async () => {
+    it("cannot create without a month: the summary and Review say so, and the link focuses the Months heading", async () => {
+        const { server } = setup()
+        await ready()
+        type(/^Calendar name/, "Common")
+        await toReview()
+        expect(within(screen.getByRole("region", { name: "Review & create" })).getByText("No months yet.")).toBeInTheDocument()
+        press("Create calendar")
+        const summary = (await screen.findByRole("heading", { name: "There is a problem" })).closest("div")!
+        expect(createCalls(server)).toHaveLength(0)
+        fireEvent.click(within(summary).getByRole("link", { name: /A calendar needs at least one month/ }))
+        await waitFor(() => expect(screen.getByRole("heading", { level: 3, name: "Months in order" })).toHaveFocus())
+        expect(screen.getByRole("heading", { level: 2, name: "Months" })).toBeVisible()
+        expect(createCalls(server)).toHaveLength(0)
+    })
+
+    it("sends a calendar once its first month is added, without any other month", async () => {
+        const { server } = setup()
+        server.on("POST", CREATE_PATH, RECEIPT)
+        await ready()
+        type(/^Calendar name/, "Common")
+        await toMonths()
+        addMonth("Frost", "12")
+        await toReview()
+        press("Create calendar")
+        await screen.findByText("World overview page")
+        expect((createCalls(server)[0]!.body as { months: unknown }).months).toEqual([{ name: "Frost", day_count: 12 }])
+    })
+
+    it("reveals the step of an unapplied row edit and focuses its field", async () => {
         setup()
         await ready()
         type(/^Calendar name/, "Common")
         await toMonths()
-        // Cancelling the open editor leaves the unnamed month collapsed.
-        press("Cancel edit")
-        expect(screen.queryByRole("textbox", { name: /^Month 1 name/ })).toBeNull()
+        addMonth("Frost")
+        press("Edit month 1, Frost")
+        type(/^Month 1 name/, "Other")
         await toReview()
         press("Create calendar")
         const summary = (await screen.findByRole("heading", { name: "There is a problem" })).closest("div")!
-        fireEvent.click(within(summary).getByRole("link", { name: "Enter a name for month 1." }))
+        fireEvent.click(within(summary).getByRole("link", { name: /Month 1 has changes that are not applied/ }))
         await waitFor(() => expect(screen.getByRole("textbox", { name: /^Month 1 name/ })).toHaveFocus())
         expect(screen.getByRole("heading", { level: 2, name: "Months" })).toBeVisible()
     })
@@ -559,7 +596,7 @@ describe("creating", () => {
         await toBasics()
         type(/^Calendar name/, "Common")
         expect(within(summary).queryByRole("link", { name: "Enter a name for the calendar." })).toBeNull()
-        expect(within(summary).getByRole("link", { name: "Enter a name for month 1." })).toBeInTheDocument()
+        expect(within(summary).getByRole("link", { name: /needs at least one month/ })).toBeInTheDocument()
         // A problem not reported by the last Create does not appear on its own.
         type(/^Days per week/, "99")
         expect(within(summary).queryByRole("link", { name: /Days per week/ })).toBeNull()

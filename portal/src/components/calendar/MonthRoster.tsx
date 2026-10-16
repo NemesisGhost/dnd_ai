@@ -1,4 +1,5 @@
 import type { Dispatch } from "react"
+import { AlertTriangle } from "lucide-react"
 import { TextField } from "../authoring/fields"
 import { DAY_COUNT_MAX, MONTHS_MAX, MONTH_NAME_MAX } from "../../utils/worldTimeForm"
 import {
@@ -82,6 +83,12 @@ export function MonthRoster({ draft, dispatch, errorFor, requestFocus, announce 
                     <p className="authoring-field__hint">A calendar can have up to {MONTHS_MAX} months.</p>
                 ) : null}
             </div>
+            {months.length === 0 ? (
+                <div className="authoring-message authoring-message--warning" role="status">
+                    <AlertTriangle aria-hidden="true" className="authoring-message__icon" />
+                    <p>At least one month is required. Add one below; a calendar cannot be created without it.</p>
+                </div>
+            ) : null}
             <p className="calendar-roster__summary" aria-live="polite">
                 <strong>{monthCountText(draft)}</strong>. {yearLengthText(draft)}
                 {unapplied.length > 0 ? " Changes you have not applied are not counted." : ""}
@@ -137,12 +144,14 @@ export function MonthRoster({ draft, dispatch, errorFor, requestFocus, announce 
                 </form>
             ) : null}
 
-            <div className="calendar-roster__head" aria-hidden="true">
+            {months.length > 0 ? (
+                <div className="calendar-roster__head" aria-hidden="true">
                 <span>No.</span>
                 <span>Month</span>
                 <span>Days</span>
                 <span />
             </div>
+            ) : null}
             <ol className="calendar-roster__list">
                 {months.map((month, index) => {
                     const position = index + 1
@@ -172,16 +181,14 @@ export function MonthRoster({ draft, dispatch, errorFor, requestFocus, announce 
                                     >
                                         Edit
                                     </button>
-                                    {months.length > 1 ? (
-                                        <button
-                                            type="button"
-                                            className="authoring-button"
-                                            aria-label={`Remove ${label} from the draft`}
-                                            onClick={() => remove(month.key, position, month.name)}
-                                        >
-                                            Remove
-                                        </button>
-                                    ) : null}
+                                    <button
+                                        type="button"
+                                        className="authoring-button"
+                                        aria-label={`Remove ${label} from the draft`}
+                                        onClick={() => remove(month.key, position, month.name)}
+                                    >
+                                        Remove
+                                    </button>
                                 </span>
                             </div>
                             {open && editing !== null ? (

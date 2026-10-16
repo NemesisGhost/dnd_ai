@@ -88,17 +88,18 @@ export function stepForField(fieldId: string): CalendarStep {
 
 const blankBuffer = (): MonthBuffer => ({ name: "", dayCount: DEFAULT_DAY_COUNT, errors: [] })
 
-// One blank 30-day month, its form already open, as the page has always started.
+// No months yet: the Add a month panel (a blank 30-day month) is the only way to make one, and a
+// calendar cannot be created until it has at least one.
 export function initialDraft(): CalendarDraft {
     return {
         name: "",
         description: "",
         epochLabel: "",
         daysPerWeek: "",
-        months: [{ key: "m1", name: "", dayCount: DEFAULT_DAY_COUNT }],
+        months: [],
         composer: blankBuffer(),
-        editing: { key: "m1", buffer: blankBuffer() },
-        nextKey: 2,
+        editing: null,
+        nextKey: 1,
         touched: false,
         notice: null,
     }
@@ -274,7 +275,7 @@ export function calendarReducer(draft: CalendarDraft, action: DraftAction): Cale
             return { ...draft, editing: null, notice: null }
 
         case "remove": {
-            if (draft.months.length <= 1 || !draft.months.some((m) => m.key === action.key)) return draft
+            if (!draft.months.some((m) => m.key === action.key)) return draft
             return {
                 ...draft,
                 months: draft.months.filter((m) => m.key !== action.key),
@@ -323,6 +324,7 @@ export function monthCountText(draft: CalendarDraft): string {
 }
 
 export function yearLengthText(draft: CalendarDraft): string {
+    if (draft.months.length === 0) return "Add at least one month to see the year length."
     const length = yearLength(draft)
     if (length.kind === "known") return `Year length: ${plural(length.days, "day", "days")}.`
     const which =
@@ -360,11 +362,10 @@ export function validateCalendarDraft(draft: CalendarDraft): FieldError[] {
         })
     }
 
-    if (draft.months.length < 1 || draft.months.length > MONTHS_MAX) {
-        errors.push({
-            fieldId: MONTHS_ID,
-            message: `A calendar needs between 1 and ${MONTHS_MAX} months.`,
-        })
+    if (draft.months.length < 1) {
+        errors.push({ fieldId: MONTHS_ID, message: "A calendar needs at least one month. Add one in the Months step." })
+    } else if (draft.months.length > MONTHS_MAX) {
+        errors.push({ fieldId: MONTHS_ID, message: `A calendar can have at most ${MONTHS_MAX} months.` })
     }
     const unapplied = unappliedForms(draft)
     const editedKey = unapplied.find((f) => f.kind === "edit")?.key
