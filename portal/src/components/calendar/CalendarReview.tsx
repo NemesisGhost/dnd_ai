@@ -92,6 +92,11 @@ export function CalendarReview({
             {status}
             <AuthoringForm label="Create calendar" onSubmit={onCreate}>
                 <FormActions
+                    leading={
+                        <Link className="authoring-button" to={monthsHref}>
+                            Back: Months
+                        </Link>
+                    }
                     pending={pending}
                     saveLabel="Create calendar"
                     pendingLabel="Creating…"

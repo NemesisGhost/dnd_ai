@@ -433,6 +433,21 @@ describe("creating", () => {
         expect(screen.queryByText("Before you can create this calendar")).toBeNull()
     })
 
+    it("keeps Back, the main action and Cancel in one row on every step", async () => {
+        setup()
+        await ready()
+        const row = (names: string[]) => {
+            const parents = names.map((n) => screen.getByRole(n.startsWith("Back") || n.startsWith("Next") ? "link" : "button", { name: n }).parentElement)
+            expect(new Set(parents).size).toBe(1)
+            return parents[0]!.textContent
+        }
+        expect(row(["Next: Months", "Cancel"])).toBe("Next: MonthsCancel")
+        await toMonths()
+        expect(row(["Back: Basics", "Next: Review & create", "Cancel"])).toBe("Back: BasicsNext: Review & createCancel")
+        await toReview()
+        expect(row(["Back: Months", "Create calendar", "Cancel"])).toBe("Back: MonthsCreate calendarCancel")
+    })
+
     it("sends exactly one request with CSRF, an idempotency key and the ordered, trimmed payload, then redirects", async () => {
         const { server, router } = setup()
         server.on("POST", CREATE_PATH, RECEIPT)

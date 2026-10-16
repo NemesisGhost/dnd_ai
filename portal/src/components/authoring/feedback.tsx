@@ -82,6 +82,8 @@ interface FormActionsProps {
     saveLabel?: string
     pendingLabel?: string
     cancelLabel?: string
+    // Navigation shown before Save in the same row (a creation step's Back link).
+    leading?: ReactNode
 }
 
 // Explicit Save and Cancel. Save is the only submit button; while pending it is
@@ -92,9 +94,11 @@ export function FormActions({
     saveLabel = "Save",
     pendingLabel = "Saving…",
     cancelLabel = "Cancel",
+    leading,
 }: FormActionsProps) {
     return (
         <div className="authoring-actions">
+            {leading}
             <button
                 type="submit"
                 className="authoring-button authoring-button--primary"

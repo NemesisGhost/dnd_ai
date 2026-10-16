@@ -204,11 +204,6 @@ export function CalendarCreation({ worldId }: { worldId: string }) {
                                             onCreate={create}
                                             onCancel={() => void navigate(worldHref)}
                                         />
-                                        <div className="authoring-actions calendar-step-actions">
-                                            <Link className="authoring-button" to={hrefs.months}>
-                                                Back: Months
-                                            </Link>
-                                        </div>
                                     </>
                                 )}
                             </fieldset>
