@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { createRelationship } from "../api/relationshipAuthoring"
 import { organizationMembersPath, setOrganizationStatus } from "../api/organizationMembers"
 import { fetchWorldEntities } from "../api/world"
@@ -6,7 +6,7 @@ import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import type { CreateRelationshipBody, RelationshipView } from "../types/relationshipAuthoring"
-import type { OrganizationMembers as Roster, StatusReceipt } from "../types/organizationMembers"
+import type { MemberRow, OrganizationMembers as Roster, StatusReceipt } from "../types/organizationMembers"
 import { useAnnounce } from "./authoring/announcer"
 import { SelectField, TextField } from "./authoring/fields"
 import { MutationStatusMessage, StaleWriteNotice } from "./authoring/feedback"
@@ -17,6 +17,8 @@ import "./authoring/authoring.css"
 import { PanelFrame } from "./DetailPanel"
 import { StaleReadNotice } from "./StaleReadNotice"
 import { useKeptData, useRefetchOnChange } from "../hooks/useKeptData"
+import { humanizeCode } from "../utils/humanize"
+import { OrganizationMemberEditor } from "./OrganizationMemberEditor"
 
 interface Props {
     campaignId: string
@@ -43,10 +45,11 @@ const CODE_MESSAGE: Readonly<Record<string, string>> = {
 
 const humanize = (code: string): string => code.replace(/_/g, " ")
 
-// The people and organizations that belong to an organization, with their offices. Everyone who
-// can view the organization sees the public, current roster they can discover; an editor also
-// sees private and ended stints, can add a member, and can set the organization's operational
-// status. Offices are edited in the Relationships panel below (a membership is a relationship).
+// The people and organizations that belong to an organization, with their offices, as a compact
+// roster. Everyone who can view the organization sees the public, current roster they can discover.
+// An editor also sees private, ended and archived stints, can add a member, can correct, change the
+// office of, or end a membership from its row, and can set the organization's operational status.
+// The membership forms and the status form save independently and never reset each other.
 export function OrganizationMembers({
     campaignId,
     organizationId,
@@ -74,41 +77,186 @@ export function OrganizationMembers({
         )
     }
     const roster = kept
+    const manage = roster.can_edit && !commandsBlocked
     return (
         <PanelFrame embedded={embedded} title="Members and offices" headingId="members-heading">
             {stale ? <StaleReadNotice what="members and status" onRetry={() => void refetch()} /> : null}
-            {roster.members.length === 0 ? (
-                <p>No members are known.</p>
-            ) : (
-                <ul className="record-list">
-                    {roster.members.map((m) => (
-                        <li key={m.relationship_id}>
-                            {m.member_name}
-                            {m.role !== null ? `, ${m.role}` : ""}
-                            {m.rank !== null ? ` (${m.rank})` : ""}: from {m.started}
-                            {m.ended !== null ? ` until ${m.ended}` : ""}
-                            {m.lifecycle_status !== "active" ? " (archived)" : ""}
-                            {!m.is_public ? " (private)" : ""}
-                        </li>
-                    ))}
-                </ul>
-            )}
-            {roster.can_edit && !commandsBlocked ? (
-                <>
-                    <StatusControl
-                        campaignId={campaignId}
-                        organizationId={organizationId}
-                        roster={roster}
-                        onChanged={changed}
-                    />
+            <MemberRoster
+                campaignId={campaignId}
+                organizationId={organizationId}
+                roster={roster}
+                manage={manage}
+                onChanged={changed}
+            />
+            {manage ? (
+                <StatusControl
+                    campaignId={campaignId}
+                    organizationId={organizationId}
+                    roster={roster}
+                    onChanged={changed}
+                />
+            ) : null}
+        </PanelFrame>
+    )
+}
+
+function periodText(m: MemberRow): string {
+    if (m.lifecycle_status !== "active") {
+        return `Archived (${m.started}${m.ended !== null ? ` to ${m.ended}` : ""})`
+    }
+    return m.ended !== null ? `${m.started} to ${m.ended}` : `Since ${m.started}`
+}
+
+function MemberRoster({
+    campaignId,
+    organizationId,
+    roster,
+    manage,
+    onChanged,
+}: {
+    campaignId: string
+    organizationId: string
+    roster: Roster
+    manage: boolean
+    onChanged: () => void
+}) {
+    const [adding, setAdding] = useState(false)
+    const [editing, setEditing] = useState<string | null>(null)
+    const returnTo = useRef<string | null>(null)
+    // After a row editor closes, keyboard focus goes back to the row's Edit button.
+    useEffect(() => {
+        if (editing === null && returnTo.current !== null) {
+            document.getElementById(returnTo.current)?.focus()
+            returnTo.current = null
+        }
+    }, [editing])
+    const close = (relationshipId: string) => {
+        returnTo.current = `member-edit-${relationshipId}`
+        setEditing(null)
+    }
+    return (
+        <div className="member-roster">
+            <div className="member-roster__bar">
+                <h3>Roster</h3>
+                {manage ? (
+                    <button
+                        type="button"
+                        className="authoring-button"
+                        aria-expanded={adding}
+                        aria-controls="member-add-panel"
+                        onClick={() => setAdding(!adding)}
+                    >
+                        Add a member
+                    </button>
+                ) : null}
+            </div>
+            {manage && adding ? (
+                <div id="member-add-panel">
                     <AddMember
                         campaignId={campaignId}
                         organizationId={organizationId}
-                        onAdded={changed}
+                        onAdded={() => {
+                            setAdding(false)
+                            onChanged()
+                        }}
+                        onCancel={() => setAdding(false)}
                     />
-                </>
+                </div>
             ) : null}
-        </PanelFrame>
+            {roster.members.length === 0 ? (
+                <p className="member-roster__empty">No members are known.</p>
+            ) : (
+                <>
+                    <div
+                        className={
+                            roster.can_edit ? "member-roster__head member-roster__head--editor" : "member-roster__head"
+                        }
+                        aria-hidden="true"
+                    >
+                        <span>Member</span>
+                        <span>Office and rank</span>
+                        {roster.can_edit ? <span>Visible to</span> : null}
+                        <span>Period</span>
+                        {manage ? <span /> : null}
+                    </div>
+                    <ul className="member-roster__list">
+                        {roster.members.map((m) => (
+                            <li
+                                key={m.relationship_id}
+                                className={
+                                    roster.can_edit
+                                        ? "member-roster__row member-roster__row--editor"
+                                        : "member-roster__row"
+                                }
+                                aria-label={m.member_name}
+                            >
+                                <span className="member-roster__who">
+                                    <span className="member-roster__name">{m.member_name}</span>{" "}
+                                    <span className="member-roster__type">{humanizeCode(m.member_type_code)}</span>
+                                </span>
+                                <span className="member-roster__office">
+                                    {m.role === null && m.rank === null ? (
+                                        <span className="member-roster__none">No office recorded</span>
+                                    ) : (
+                                        <>
+                                            {m.role ?? ""}
+                                            {m.role !== null && m.rank !== null ? " " : ""}
+                                            {m.rank !== null ? (
+                                                <span className="member-roster__rank">({m.rank})</span>
+                                            ) : null}
+                                        </>
+                                    )}
+                                </span>
+                                {roster.can_edit ? (
+                                    <span className="member-roster__visibility">
+                                        {m.is_public ? "Public" : "Editors only"}
+                                    </span>
+                                ) : null}
+                                <span className="member-roster__period">
+                                    {periodText(m)}
+                                    {m.ended === null && m.lifecycle_status === "active" ? (
+                                        <span className="member-roster__state"> (current)</span>
+                                    ) : null}
+                                </span>
+                                {manage ? (
+                                    <span className="member-roster__actions">
+                                        {m.lifecycle_status === "active" ? (
+                                            <button
+                                                type="button"
+                                                id={`member-edit-${m.relationship_id}`}
+                                                className="authoring-button"
+                                                aria-expanded={editing === m.relationship_id}
+                                                aria-label={`Edit membership of ${m.member_name}`}
+                                                onClick={() => {
+                                                    if (editing === m.relationship_id) close(m.relationship_id)
+                                                    else setEditing(m.relationship_id)
+                                                }}
+                                            >
+                                                {editing === m.relationship_id ? "Close" : "Edit"}
+                                            </button>
+                                        ) : (
+                                            <span className="member-roster__none">Restore in Relationships</span>
+                                        )}
+                                    </span>
+                                ) : null}
+                                {manage && editing === m.relationship_id ? (
+                                    <OrganizationMemberEditor
+                                        campaignId={campaignId}
+                                        relationshipId={m.relationship_id}
+                                        memberName={m.member_name}
+                                        onSaved={() => {
+                                            close(m.relationship_id)
+                                            onChanged()
+                                        }}
+                                        onCancel={() => close(m.relationship_id)}
+                                    />
+                                ) : null}
+                            </li>
+                        ))}
+                    </ul>
+                </>
+            )}
+        </div>
     )
 }
 
@@ -192,10 +340,12 @@ function AddMember({
     campaignId,
     organizationId,
     onAdded,
+    onCancel,
 }: {
     campaignId: string
     organizationId: string
     onAdded: () => void
+    onCancel: () => void
 }) {
     const { reload } = useSession()
     const announce = useAnnounce()
@@ -239,7 +389,7 @@ function AddMember({
         <form
             noValidate
             aria-label="Add a member"
-            className="authoring-form"
+            className="authoring-form member-roster__add"
             onSubmit={(event) => {
                 event.preventDefault()
                 if (member === null || start === "") {
@@ -262,7 +412,6 @@ function AddMember({
                 })
             }}
         >
-            <h3>Add a member</h3>
             {explained !== null ? (
                 <p role="alert">{explained}</p>
             ) : error !== null ? (
@@ -291,9 +440,23 @@ function AddMember({
                 onChange={setIsPublic}
             />
             <WorldTimePicker campaignId={campaignId} id="member-start" label="Joined" value={start} onChange={setStart} />
-            <button type="submit" className="authoring-button" disabled={mutation.status.kind === "pending"}>
-                Add member
-            </button>
+            <div className="authoring-actions">
+                <button
+                    type="submit"
+                    className="authoring-button authoring-button--primary"
+                    disabled={mutation.status.kind === "pending"}
+                >
+                    Add member
+                </button>
+                <button
+                    type="button"
+                    className="authoring-button"
+                    disabled={mutation.status.kind === "pending"}
+                    onClick={onCancel}
+                >
+                    Cancel
+                </button>
+            </div>
         </form>
     )
 }

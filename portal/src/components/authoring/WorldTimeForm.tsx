@@ -1,4 +1,5 @@
 import { useState } from "react"
+import type { ReactNode } from "react"
 import { createWorldTime } from "../../api/worldTime"
 import { useSession } from "../../context/SessionContext"
 import { useAuthoringMutation } from "../../hooks/useAuthoringMutation"
@@ -39,6 +40,9 @@ interface WorldTimeFormProps {
     onCreated: (receipt: WorldTimeReceipt) => void
     onCancel: () => void
     heading?: string
+    // The form sits inside another form (the picker does): render a group that saves by click or
+    // Enter, never a nested <form>.
+    nested?: boolean
 }
 
 // Records one point in fictional time: a date on a calendar, or a narrative
@@ -51,6 +55,7 @@ export function WorldTimeForm({
     onCreated,
     onCancel,
     heading,
+    nested = false,
 }: WorldTimeFormProps) {
     const { reload } = useSession()
     const [values, setValues] = useState<WorldTimeFormValues>(() => emptyWorldTimeForm(calendars))
@@ -100,8 +105,10 @@ export function WorldTimeForm({
             />
         ) : null
 
+    const label = heading ?? "Record a world time"
+    const Shell = nested ? NestedGroup : AuthoringForm
     return (
-        <AuthoringForm label={heading ?? "Record a world time"} onSubmit={submit}>
+        <Shell label={label} onSubmit={submit}>
             <ErrorSummary errors={all} attempt={attempt} />
             {noBackendMessage}
             <RadioGroupField
@@ -224,7 +231,27 @@ export function WorldTimeForm({
                 saveLabel="Record time"
                 pendingLabel="Recording…"
                 onCancel={onCancel}
+                onSave={nested ? submit : undefined}
             />
-        </AuthoringForm>
+        </Shell>
+    )
+}
+
+// What a form is, minus the <form>: Enter in a text box saves, as it would in a form.
+function NestedGroup({ onSubmit, children, label }: { onSubmit: () => void; children: ReactNode; label: string }) {
+    return (
+        <div
+            role="group"
+            className="authoring-form"
+            aria-label={label}
+            onKeyDown={(event) => {
+                if (event.key === "Enter" && event.target instanceof HTMLInputElement && event.target.type !== "radio") {
+                    event.preventDefault()
+                    onSubmit()
+                }
+            }}
+        >
+            {children}
+        </div>
     )
 }

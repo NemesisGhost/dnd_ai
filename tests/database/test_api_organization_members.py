@@ -328,3 +328,143 @@ def test_authority_and_replay(s: ContentSetup) -> None:
         text("SELECT upper_inf(membership_period) AS open FROM world.organization_memberships")
     ).one()
     assert row.open is True
+
+
+def change_office(s: ContentSetup, relationship: dict, **body: object):  # type: ignore[no-untyped-def]
+    current = s.gm.get(s.url(f"relationships/{relationship['relationship_id']}")).json()
+    return s.gm.post(
+        s.url(f"relationships/{relationship['relationship_id']}/change-office"),
+        {"expected_row_version": current["row_version"], **body},
+        key=s.gm.fresh_key(),
+    )
+
+
+def test_a_change_of_office_ends_the_stint_and_starts_its_successor(s: ContentSetup) -> None:
+    guild, mira = organization(s, "The Guild"), npc(s, "Mira")
+    times = Times(s)
+    year1, year5 = times.at(1), times.at(5)
+    joined = join(s, guild, mira, year1, role="Initiate", rank="Third").json()
+    changed = change_office(
+        s, joined, effective_world_time_id=year5, role="Captain", rank="First", is_public=True
+    )
+    assert changed.status_code == 200, changed.text
+    successor = changed.json()
+    assert successor["relationship_id"] != joined["relationship_id"]
+    assert successor["started_world_time_id"] == year5 and successor["ended_world_time_id"] is None
+    assert successor["typed"] == {"role": "Captain", "rank": "First", "is_public": True}
+    assert {(p["entity_id"], p["role"]) for p in successor["participants"]} == {
+        (p["entity_id"], p["role"]) for p in joined["participants"]
+    }
+    rows = members(s, guild)["members"]
+    assert [(r["role"], r["current"]) for r in rows] == [("Initiate", False), ("Captain", True)]
+    assert rows[0]["ended"] is not None and rows[1]["ended"] is None
+    assert len(s.audit("change_membership_office")) == 2
+    # Nothing is deleted: the first stint is still its own row.
+    assert s.count("world.organization_memberships") == 2
+
+
+def test_a_change_of_office_is_validated_and_writes_nothing_when_refused(s: ContentSetup) -> None:
+    guild, mira = organization(s, "The Guild"), npc(s, "Mira")
+    times = Times(s)
+    year1, year3, year5 = times.at(1), times.at(3), times.at(5)
+    joined = join(s, guild, mira, year3, role="Initiate").json()
+
+    def refused(response, status: int, error: str) -> None:  # type: ignore[no-untyped-def]
+        assert response.status_code == status and code(response) == error, response.text
+        assert s.count("world.organization_memberships") == 1
+        assert s.audit("change_membership_office") == []
+
+    refused(
+        change_office(
+            s, joined, effective_world_time_id=year5, role="Initiate", rank=None, is_public=True
+        ),
+        400,
+        "relationship_invalid",
+    )
+    refused(
+        change_office(
+            s, joined, effective_world_time_id=year1, role="Captain", rank=None, is_public=True
+        ),
+        400,
+        "relationship_time_invalid",
+    )
+    refused(
+        change_office(
+            s, joined, effective_world_time_id=year3, role="Captain", rank=None, is_public=True
+        ),
+        400,
+        "relationship_time_invalid",
+    )
+    stale = s.gm.post(
+        s.url(f"relationships/{joined['relationship_id']}/change-office"),
+        {
+            "expected_row_version": joined["row_version"] + 5,
+            "effective_world_time_id": year5,
+            "role": "Captain",
+            "rank": None,
+            "is_public": True,
+        },
+        key=s.gm.fresh_key(),
+    )
+    refused(stale, 409, "stale_write")
+    assert act(s, joined, "end", {"ended_world_time_id": year5}).status_code == 200
+    ended = change_office(
+        s, joined, effective_world_time_id=times.at(8), role="Captain", rank=None, is_public=True
+    )
+    assert ended.status_code == 409 and code(ended) == "relationship_already_ended"
+    assert s.count("world.organization_memberships") == 1
+
+
+def test_a_change_of_office_needs_edit_authority_and_replays(s: ContentSetup) -> None:
+    guild, mira = organization(s, "The Guild"), npc(s, "Mira")
+    times = Times(s)
+    joined = join(s, guild, mira, times.at(1), role="Initiate").json()
+    body = {
+        "expected_row_version": joined["row_version"],
+        "effective_world_time_id": times.at(5),
+        "role": "Captain",
+        "rank": None,
+        "is_public": True,
+    }
+    url = s.url(f"relationships/{joined['relationship_id']}/change-office")
+    assert s.player.post(url, body, key=s.player.fresh_key()).status_code == 403
+    assert s.count("world.organization_memberships") == 1
+    key = s.gm.fresh_key()
+    first = s.gm.post(url, body, key=key)
+    replay = s.gm.post(url, body, key=key)
+    assert first.status_code == replay.status_code == 200
+    assert replay.json() == replay_body(first.json())
+    assert s.count("world.organization_memberships") == 2
+    unknown = s.gm.post(url, {**body, "member_entity_id": mira}, key=s.gm.fresh_key())
+    assert unknown.status_code == 422  # the member cannot be changed
+
+
+def test_a_correction_keeps_one_row_and_an_end_keeps_the_history_visible(s: ContentSetup) -> None:
+    guild, bank = organization(s, "The Guild"), organization(s, "The Bank")
+    times = Times(s)
+    year1, year5 = times.at(1), times.at(5)
+    joined = join(
+        s, guild, bank, year1, role="Initate", rank="Third", description="Sworn in"
+    ).json()
+    fixed = act(
+        s,
+        joined,
+        "update",
+        {
+            "description": "Sworn in",
+            "started_world_time_id": year1,
+            "role": "Initiate",
+            "rank": "Third",
+            "is_public": True,
+        },
+    )
+    assert fixed.status_code == 200 and fixed.json()["typed"]["role"] == "Initiate"
+    assert fixed.json()["description"] == "Sworn in"
+    assert s.count("world.organization_memberships") == 1
+    ended = act(s, fixed.json(), "end", {"ended_world_time_id": year5})
+    assert ended.status_code == 200
+    assert "end" not in ended.json()["available_actions"]
+    [row] = members(s, guild)["members"]
+    assert row["current"] is False and row["ended"] is not None and row["role"] == "Initiate"
+    # A reader still sees the ended public stint.
+    assert [m["member_name"] for m in members(s, guild, s.player)["members"]] == ["The Bank"]

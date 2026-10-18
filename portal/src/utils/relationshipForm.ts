@@ -8,5 +8,7 @@ export const RELATIONSHIP_CODE_MESSAGE: Readonly<Record<string, string>> = {
     relationship_archived: "This relationship is archived. Restore it first.",
     relationship_already_ended: "This relationship has already ended.",
     relationship_not_archived: "This relationship is not archived.",
+    membership_overlap: "That member already belongs to this organization during that time.",
+    membership_start_required: "Choose when the membership began.",
     perspective_holder_invalid: "Choose one of the relationship's participants.",
 }

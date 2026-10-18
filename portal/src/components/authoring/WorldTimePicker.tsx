@@ -85,6 +85,7 @@ export function WorldTimePicker({
                     calendars={calendars.state.data.calendars}
                     times={items}
                     heading="Record a new world time"
+                    nested
                     onCreated={created}
                     onCancel={() => setAdding(false)}
                 />

@@ -659,6 +659,69 @@ def end_relationship(
     )
 
 
+@dataclass(frozen=True)
+class OfficeChangeResult:
+    ended: RelationshipResult
+    successor: RelationshipResult
+
+
+def change_membership_office(
+    connection: Connection,
+    *,
+    campaign_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    relationship_id: uuid.UUID,
+    expected_row_version: int,
+    effective_world_time_id: uuid.UUID,
+    role: str | None,
+    rank: str | None,
+    is_public: bool,
+) -> OfficeChangeResult:
+    """An in-world change of office or rank: the current stint ends at the effective time and a
+    new stint of the same member in the same organization starts at it, in one transaction.
+
+    Stints are half-open, so the two meet without overlapping. History is kept: nothing is
+    overwritten, and a correction of a mistake is `update_relationship` instead.
+    """
+    locked = _lock_relationship(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        relationship_id=relationship_id,
+        expected_row_version=expected_row_version,
+    )
+    if locked.kind != KIND_MEMBERSHIP:
+        raise RelationshipInvalidError("only a membership can change office")
+    typed = _clean_typed(KIND_MEMBERSHIP, {"role": role, "rank": rank, "is_public": is_public})
+    current = _current_typed(connection, relationship_id, KIND_MEMBERSHIP)
+    if (current["role"], current["rank"], current["is_public"]) == (
+        typed["role"],
+        typed["rank"],
+        typed["is_public"],
+    ):
+        raise RelationshipInvalidError("the office, rank and visibility are unchanged")
+    ended = end_relationship(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        relationship_id=relationship_id,
+        expected_row_version=expected_row_version,
+        ended_world_time_id=effective_world_time_id,
+    )
+    successor = create_relationship(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        kind=KIND_MEMBERSHIP,
+        relationship_type=locked.type_code,
+        participants=[ParticipantInput(p.entity_id, str(p.role)) for p in locked.participants],
+        description=locked.row.description,
+        started_world_time_id=effective_world_time_id,
+        typed=typed,
+    )
+    return OfficeChangeResult(ended=ended, successor=successor)
+
+
 def archive_relationship(
     connection: Connection,
     *,

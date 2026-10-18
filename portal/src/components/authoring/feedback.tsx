@@ -84,6 +84,9 @@ interface FormActionsProps {
     cancelLabel?: string
     // Navigation shown before Save in the same row (a creation step's Back link).
     leading?: ReactNode
+    // Saves by click instead of by submitting a <form>: for actions that sit inside another form,
+    // where a nested <form> would submit the outer one in a real browser.
+    onSave?: () => void
 }
 
 // Explicit Save and Cancel. Save is the only submit button; while pending it is
@@ -95,15 +98,17 @@ export function FormActions({
     pendingLabel = "Saving…",
     cancelLabel = "Cancel",
     leading,
+    onSave,
 }: FormActionsProps) {
     return (
         <div className="authoring-actions">
             {leading}
             <button
-                type="submit"
+                type={onSave === undefined ? "submit" : "button"}
                 className="authoring-button authoring-button--primary"
                 disabled={pending}
                 aria-busy={pending}
+                onClick={onSave}
             >
                 {pending ? pendingLabel : saveLabel}
             </button>

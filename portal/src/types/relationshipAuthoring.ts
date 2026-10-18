@@ -125,6 +125,16 @@ export type RelationshipCommand =
           }
       }
     | { op: "end"; body: { expected_row_version: number; ended_world_time_id: string } }
+    | {
+          op: "change_office"
+          body: {
+              expected_row_version: number
+              effective_world_time_id: string
+              role: string | null
+              rank: string | null
+              is_public: boolean
+          }
+      }
     | { op: "archive"; body: { expected_row_version: number } }
     | { op: "restore"; body: { expected_row_version: number } }
     | { op: "perspective"; body: PerspectiveBody & { expected_row_version: number } }

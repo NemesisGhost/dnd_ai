@@ -341,6 +341,7 @@ describe("an organization's members and status", () => {
         setupOrg({ canon: "canon" })
         await opened("The Guild")
         expect(await screen.findByRole("form", { name: "Organization status" })).toBeVisible()
+        fireEvent.click(screen.getByRole("button", { name: "Add a member" }))
         expect(screen.getByRole("form", { name: "Add a member" })).toBeInTheDocument()
     })
 

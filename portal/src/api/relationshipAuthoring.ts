@@ -36,6 +36,7 @@ export function createRelationship(
 const PATH = {
     update: "update",
     end: "end",
+    change_office: "change-office",
     archive: "archive",
     restore: "restore",
     perspective: "perspectives",

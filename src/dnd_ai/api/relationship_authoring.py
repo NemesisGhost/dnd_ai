@@ -5,6 +5,7 @@
     POST /campaigns/{id}/authoring/relationships
     GET  /campaigns/{id}/authoring/relationships/{relationship_id}
     POST /campaigns/{id}/authoring/relationships/{relationship_id}/update|end|archive|restore
+    POST /campaigns/{id}/authoring/relationships/{relationship_id}/change-office
     POST /campaigns/{id}/authoring/relationships/{relationship_id}/perspectives
 
 All `canon.edit`. A relationship is created with its participants and its kind's typed fields;
@@ -28,6 +29,7 @@ from dnd_ai.commands.world_relationships import (
     ParticipantInput,
     RelationshipResult,
     archive_relationship,
+    change_membership_office,
     create_relationship,
     end_relationship,
     restore_relationship,
@@ -122,6 +124,14 @@ class UpdateRelationshipRequest(BaseAuthoringRequest):
 class EndRelationshipRequest(BaseAuthoringRequest):
     expected_row_version: int = Field(ge=1)
     ended_world_time_id: uuid.UUID
+
+
+class ChangeOfficeRequest(BaseAuthoringRequest):
+    expected_row_version: int = Field(ge=1)
+    effective_world_time_id: uuid.UUID
+    role: str | None = Field(max_length=SHORT_TEXT_MAX_LENGTH)
+    rank: str | None = Field(max_length=SHORT_TEXT_MAX_LENGTH)
+    is_public: bool
 
 
 class VersionRequest(BaseAuthoringRequest):
@@ -427,6 +437,68 @@ def end_endpoint(
             ended_world_time_id=body.ended_world_time_id,
         ),
     )
+
+
+@router.post(_BASE + "/{relationship_id}/change-office")
+def change_office_endpoint(
+    relationship_id: uuid.UUID,
+    body: ChangeOfficeRequest,
+    access: _Access,
+    connection: _Conn,
+    idempotency_key: _Key,
+    correlation_id: _Corr,
+) -> Any:
+    """End the stint and start its successor in one transaction; answers with the successor."""
+    payload = {"relationship_id": str(relationship_id), **body.model_dump(mode="json")}
+    idem = start_campaign_idempotency(
+        connection,
+        actor_user_id=access.user_id,
+        campaign_id=access.campaign_id,
+        idempotency_key=idempotency_key,
+        command_name="change_membership_office",
+        payload=payload,
+        correlation_id=correlation_id,
+    )
+    if idem.replay is not None:
+        return idem.replay
+    outcome = change_membership_office(
+        connection,
+        campaign_id=access.campaign_id,
+        actor_user_id=access.user_id,
+        relationship_id=relationship_id,
+        expected_row_version=body.expected_row_version,
+        effective_world_time_id=body.effective_world_time_id,
+        role=body.role,
+        rank=body.rank,
+        is_public=body.is_public,
+    )
+    for result in (outcome.ended, outcome.successor):
+        record_change_log(
+            connection,
+            change_action_code=result.action,
+            schema_name="world",
+            table_name=result.record_table,
+            record_id=result.record_id or result.relationship_id,
+            entity_id=None,
+            world_id=result.world_id,
+            actor_user_id=access.user_id,
+            correlation_id=correlation_id,
+            command_name="change_membership_office",
+            event_id=None,
+            changed_fields=result.changed_fields or None,
+            reason=None,
+        )
+    view = get_relationship_authoring(
+        connection,
+        world_id=outcome.successor.world_id,
+        timeline_id=access.timeline_id,
+        relationship_id=outcome.successor.relationship_id,
+    )
+    if view is None:
+        raise NotFoundError()
+    response = _view_json(view, changed=True)
+    finish_campaign_idempotency(connection, idem, status_code=200, body=response)
+    return response
 
 
 def _lifecycle_endpoint(name: str, command: Callable[..., RelationshipResult]) -> None:
