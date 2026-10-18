@@ -124,15 +124,36 @@ describe("NPC authoring routes", () => {
     expect(server.calls.some((c) => c.path.includes("/lifecycle"))).toBe(false)
   })
 
-  it("offers New character to editors only", async () => {
-    const editor = openApp("/app/mundivita/world")
+  it("offers New character in World only when People is selected, to editors only", async () => {
+    const editor = openApp("/app/mundivita/world?category=character")
     expect(await screen.findByRole("link", { name: "New character" })).toHaveAttribute(
       "href",
       "/app/mundivita/characters/new",
     )
     editor.unmount()
-    openApp("/app/mundivita/world", ["campaign.view"])
+    const other = openApp("/app/mundivita/world?category=location")
+    expect(await screen.findByRole("link", { name: "New location" })).toBeInTheDocument()
+    expect(screen.queryByRole("link", { name: "New character" })).toBeNull()
+    other.unmount()
+    const all = openApp("/app/mundivita/world")
+    expect(await screen.findByRole("link", { name: "New location" })).toBeInTheDocument()
+    expect(screen.queryByRole("link", { name: "New character" })).toBeNull()
+    all.unmount()
+    openApp("/app/mundivita/world?category=character", ["campaign.view"])
     await screen.findByRole("heading", { level: 1, name: "Campaign World" })
+    expect(screen.queryByRole("link", { name: "New character" })).toBeNull()
+  })
+
+  it("offers New character on the Characters page to editors, even with no character selected", async () => {
+    const editor = openApp("/app/mundivita/characters")
+    expect(await screen.findByRole("link", { name: "New character" })).toHaveAttribute(
+      "href",
+      "/app/mundivita/characters/new",
+    )
+    editor.unmount()
+    openApp("/app/mundivita/characters", ["campaign.view"])
+    const main = await screen.findByRole("main")
+    expect(main.textContent).toMatch(/character/i)
     expect(screen.queryByRole("link", { name: "New character" })).toBeNull()
   })
 })

@@ -64,6 +64,37 @@ function CampaignWorldContent({
     const counts = useWorldCategoryCounts(campaignId, browse.query, includeHidden)
     const categoryItem = worldCategoryNavItem(browse.category)
 
+    // New character is contextual: offered only while People is selected. It
+    // opens the same creation flow as the Characters page.
+    const createLinks = canPreviewHidden
+        ? [
+              {
+                  label: "New location",
+                  to: `/app/${encodeURIComponent(campaignId)}/world/location/new`,
+              },
+              {
+                  label: "New dungeon",
+                  to: `/app/${encodeURIComponent(campaignId)}/world/dungeon/new`,
+              },
+              {
+                  label: "New organization",
+                  to: `/app/${encodeURIComponent(campaignId)}/world/organization/new`,
+              },
+              ...(browse.category === "character"
+                  ? [
+                        {
+                            label: "New character",
+                            to: `/app/${encodeURIComponent(campaignId)}/characters/new`,
+                        },
+                    ]
+                  : []),
+              {
+                  label: "New religion",
+                  to: `/app/${encodeURIComponent(campaignId)}/world/religion/new`,
+              },
+          ]
+        : []
+
     function clearSearch() {
         setSearchInputValue("")
         browse.setQuery("")
@@ -79,32 +110,7 @@ function CampaignWorldContent({
             canPreviewHidden={canPreviewHidden}
             showHidden={includeHidden}
             onShowHiddenChange={browse.setShowHidden}
-            createLinks={
-                canPreviewHidden
-                    ? [
-                          {
-                              label: "New location",
-                              to: `/app/${encodeURIComponent(campaignId)}/world/location/new`,
-                          },
-                          {
-                              label: "New dungeon",
-                              to: `/app/${encodeURIComponent(campaignId)}/world/dungeon/new`,
-                          },
-                          {
-                              label: "New organization",
-                              to: `/app/${encodeURIComponent(campaignId)}/world/organization/new`,
-                          },
-                          {
-                              label: "New character",
-                              to: `/app/${encodeURIComponent(campaignId)}/characters/new`,
-                          },
-                          {
-                              label: "New religion",
-                              to: `/app/${encodeURIComponent(campaignId)}/world/religion/new`,
-                          },
-                      ]
-                    : []
-            }
+            createLinks={createLinks}
         >
             <WorldEntitiesBoundary
                 campaignId={campaignId}
