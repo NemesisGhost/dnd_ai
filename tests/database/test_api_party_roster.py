@@ -11,6 +11,7 @@ from tests.authoring_support import AuthoringHarness, harness_fixture_factory
 from tests.content_support import ContentSetup
 from tests.database.test_api_campaign_clock import Times
 from tests.database.test_api_party_members import add, new_party, parties_url, published_pc
+from tests.factories import make_membership_character_relationship
 
 pytestmark = pytest.mark.database
 
@@ -23,6 +24,26 @@ def harness(db_connection: Connection) -> Iterator[AuthoringHarness]:
 @pytest.fixture
 def s(harness: AuthoringHarness, db_connection: Connection) -> ContentSetup:
     return ContentSetup(harness, db_connection)
+
+
+def grant_owner(s: ContentSetup, character_id: str) -> None:
+    """Give the player a character relationship (and so the character-view tier) for one PC."""
+    membership = s.connection.execute(
+        text(
+            "SELECT campaign_membership_id FROM security.campaign_memberships "
+            "WHERE campaign_id = :c AND user_id = :u"
+        ),
+        {"c": s.cid, "u": s.player.user_id},
+    ).scalar()
+    owner_type = s.connection.execute(
+        text(
+            "SELECT character_relationship_type_id FROM security.character_relationship_types "
+            "WHERE code = 'owner'"
+        )
+    ).scalar()
+    make_membership_character_relationship(
+        s.connection, membership, uuid.UUID(character_id), owner_type
+    )
 
 
 def roster(s: ContentSetup, party_id: str, actor: str = "player", cid: str | None = None):  # type: ignore[no-untyped-def]
@@ -38,6 +59,12 @@ def test_a_viewer_with_no_membership_lists_and_opens_every_active_party(s: Conte
     assert [p["name"] for p in listing["items"]] == ["Alpha", "Beta"]
     assert listing["can_create"] is False
 
+    # Without any character access the published member is neither listed nor counted.
+    hidden = roster(s, first["party_id"]).json()
+    assert hidden["members"] == [] and hidden["member_count"] == 0
+    assert "Aldric" not in str(hidden) and pc not in str(hidden)
+
+    grant_owner(s, pc)
     body = roster(s, first["party_id"]).json()
     assert body["member_count"] == 1
     assert body["members"] == [{"character_id": pc, "character_name": "Aldric"}]
@@ -58,6 +85,7 @@ def test_browsing_grants_nothing_and_writes_nothing(s: ContentSetup) -> None:
     times = Times(s)
     party, pc = new_party(s), published_pc(s)
     assert add(s, party["party_id"], pc, times.at(1)).status_code == 201
+    grant_owner(s, pc)
     tables = (
         "campaign.party_memberships",
         "campaign.parties",
@@ -126,6 +154,8 @@ def test_an_archived_party_is_hidden_from_viewers_but_not_editors(s: ContentSetu
 def test_only_current_members_are_listed(s: ContentSetup) -> None:
     times = Times(s)
     party, stayer, leaver = new_party(s), published_pc(s, "Stayer"), published_pc(s, "Leaver")
+    grant_owner(s, stayer)
+    grant_owner(s, leaver)
     add(s, party["party_id"], stayer, times.at(1))
     joined = add(s, party["party_id"], leaver, times.at(1)).json()
     ended = s.gm.post_raw(
@@ -148,6 +178,7 @@ def test_a_member_the_viewer_cannot_open_is_left_out_and_not_counted(s: ContentS
     times = Times(s)
     party, pc = new_party(s), published_pc(s, "Hidden")
     add(s, party["party_id"], pc, times.at(1))
+    grant_owner(s, pc)
     s.connection.execute(
         text(
             "UPDATE core.entities SET canon_status_id = "
@@ -161,3 +192,17 @@ def test_a_member_the_viewer_cannot_open_is_left_out_and_not_counted(s: ContentS
     assert [m["character_name"] for m in roster(s, party["party_id"], "gm").json()["members"]] == [
         "Hidden"
     ]
+
+
+def test_only_characters_the_viewer_may_open_are_listed_and_counted(s: ContentSetup) -> None:
+    times = Times(s)
+    party, mine, other = new_party(s), published_pc(s, "Mine"), published_pc(s, "Other")
+    add(s, party["party_id"], mine, times.at(1))
+    add(s, party["party_id"], other, times.at(1))
+    grant_owner(s, mine)
+    body = roster(s, party["party_id"]).json()
+    assert body["members"] == [{"character_id": mine, "character_name": "Mine"}]
+    assert body["member_count"] == 1
+    assert "Other" not in str(body) and other not in str(body)
+    managed = roster(s, party["party_id"], actor="gm").json()
+    assert managed["member_count"] == 2
