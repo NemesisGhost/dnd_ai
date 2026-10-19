@@ -4536,3 +4536,66 @@ a.app-header__title:focus-visible {
     margin-top: 0;
   }
 }
+
+/* Characters page: local views, the browser's type filter, and the sheet's Manage row */
+
+.characters-page__header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.5rem;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+
+.characters-page__header .authoring-page__actions-row {
+  margin: 0;
+}
+
+.characters-page__views {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.characters-page__view-link,
+.characters-browser__filters .world-categories__link {
+  display: inline-flex;
+  gap: 0.4rem;
+  padding: 0.4rem 0.8rem;
+  color: var(--color-text);
+  text-decoration: none;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+}
+
+.characters-page__view-link:hover,
+.characters-browser__filters .world-categories__link:hover {
+  background-color: var(--color-surface-hover);
+}
+
+.characters-page__view-link[aria-current="page"] {
+  color: var(--color-primary-foreground);
+  background-color: var(--color-primary);
+  border-color: var(--color-primary);
+  font-weight: 700;
+}
+
+.characters-page__view-link:focus-visible {
+  outline: 3px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.characters-browser__filters {
+  flex-direction: row;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+.character-manage {
+  align-items: center;
+}
+
+.character-manage p {
+  margin: 0;
+}

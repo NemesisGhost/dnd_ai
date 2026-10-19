@@ -7,6 +7,8 @@ import {
     updatePlayerCharacter,
 } from "../api/playerCharacterAuthoring"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
+import { readCharactersReturn } from "../hooks/useCharactersBackPath"
+import { pickWorldReturnState } from "../hooks/useWorldBackPath"
 import { Link, useParams } from "react-router"
 import { ContentCreatePage } from "../components/authoring/ContentCreatePage"
 import type { ContentCreateConfig } from "../components/authoring/ContentCreatePage"
@@ -275,6 +277,11 @@ const createConfig: ContentCreateConfig<NpcOptions, NpcFormValues, CreateNpcBody
     lead: "A new NPC is saved as a draft. Only people who can edit canon see it until it is published. This sets who the character is; stats, inventory, and behavior are managed elsewhere.",
     breadcrumbLabel: "World",
     worldPath: worldBase,
+    // From World -> People the person returns to that same view, and the new NPC's workspace
+    // starts with it, so Back to World lands on People again.
+    listPath: (campaignId, state) =>
+        `${worldBase(campaignId)}${pickWorldReturnState(state)?.worldSearch ?? ""}`,
+    resultState: (state) => pickWorldReturnState(state),
     optionsPath: npcOptionsPath,
     canCreate: (options) => options.can_create,
     initialValues: () => EMPTY,
@@ -305,6 +312,14 @@ const playerCharacterCreateConfig: ContentCreateConfig<
     noun: "player character",
     heading: "New player character",
     lead: "A new player character is saved as a draft. Only people who can edit canon see it until it is published. Linking a player to it is done in Access, after it is published.",
+    // From Characters the breadcrumb and Cancel return there, with its filters. Opened any other
+    // way they fall back to World. The new record still opens in its World workspace, where
+    // publication lives.
+    listPath: (campaignId, state) =>
+        readCharactersReturn(campaignId, state) ?? worldBase(campaignId),
+    breadcrumbLabelFor: (campaignId, state) =>
+        readCharactersReturn(campaignId, state) === undefined ? "World" : "Characters",
+    resultState: () => undefined,
     optionsPath: playerCharacterOptionsPath,
     create: createPlayerCharacter,
     resultPath: (campaignId, created) =>

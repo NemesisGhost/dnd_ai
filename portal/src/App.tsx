@@ -10,7 +10,8 @@ import { LoginPage } from "./pages/LoginPage"
 import { LandingRedirect } from "./pages/LandingRedirect"
 import { CampaignsPage } from "./pages/CampaignsPage"
 import { CampaignHomePage } from "./pages/CampaignHomePage"
-import { CampaignCharactersPage } from "./pages/CampaignCharactersPage"
+import { CampaignCharactersBrowsePage, CampaignCharactersPage } from "./pages/CampaignCharactersPage"
+import { CharacterSheetRoutePage } from "./pages/CharacterSheetRoutePage"
 import { CampaignQuestsPage } from "./pages/CampaignQuestsPage"
 import { CampaignQuestDetailPage } from "./pages/CampaignQuestDetailPage"
 import { CampaignSessionsPage } from "./pages/CampaignSessionsPage"
@@ -315,6 +316,11 @@ function App() {
             />
 
             <Route
+              path="characters/all"
+              element={<CampaignCharactersBrowsePage />}
+            />
+
+            <Route
               path="characters/new"
               element={<ChooseCharacterTypePage />}
             />
@@ -369,6 +375,11 @@ function App() {
             <Route
               path="characters/:characterId/edit"
               element={<EditCharacterPage />}
+            />
+
+            <Route
+              path="characters/:characterId"
+              element={<CharacterSheetRoutePage />}
             />
 
             <Route

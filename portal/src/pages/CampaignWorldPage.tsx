@@ -64,8 +64,8 @@ function CampaignWorldContent({
     const counts = useWorldCategoryCounts(campaignId, browse.query, includeHidden)
     const categoryItem = worldCategoryNavItem(browse.category)
 
-    // New character is contextual: offered only while People is selected. It
-    // opens the same creation flow as the Characters page.
+    // New NPC is contextual: offered only while People is selected. It opens NPC
+    // creation directly; player characters are created from the Characters page.
     const createLinks = canPreviewHidden
         ? [
               {
@@ -83,8 +83,9 @@ function CampaignWorldContent({
               ...(browse.category === "character"
                   ? [
                         {
-                            label: "New character",
-                            to: `/app/${encodeURIComponent(campaignId)}/characters/new`,
+                            label: "New NPC",
+                            to: `/app/${encodeURIComponent(campaignId)}/characters/npc/new`,
+                            state: { worldSearch: browse.returnSearch },
                         },
                     ]
                   : []),

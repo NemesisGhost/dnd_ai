@@ -53,6 +53,10 @@ function buildWorldSearchPath(
         searchParameters.set("include_archived", "true")
     }
 
+    if (parameters.characterType !== undefined) {
+        searchParameters.set("character_type", parameters.characterType)
+    }
+
     if (parameters.limit !== undefined) {
         searchParameters.set(
             "limit",

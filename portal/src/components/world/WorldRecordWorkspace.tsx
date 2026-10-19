@@ -306,7 +306,15 @@ function Workspace({
                     />
                 )
             case "relationships":
-                return <RelationshipsPanel embedded campaignId={campaignId} entityId={entityId} />
+                return (
+                    <RelationshipsPanel
+                        embedded
+                        campaignId={campaignId}
+                        entityId={entityId}
+                        kind={kind}
+                        membersHref={kind === "organization" ? sectionHref("members") : undefined}
+                    />
+                )
             case "review":
                 return (
                     <WorldReviewSection
@@ -562,6 +570,12 @@ function DetailsSection({
             return (
                 <>
                     <CharacterPanels character={character} />
+                    {/* The sheet is its own page: linked, never embedded a second time here. */}
+                    <p className="authoring-page__actions-row">
+                        <Link className="authoring-button" to={`${root}/characters/${encodeURIComponent(id)}`}>
+                            Open character sheet
+                        </Link>
+                    </p>
                     <AuthoringEditLink
                         campaignId={campaignId}
                         noun="NPC"

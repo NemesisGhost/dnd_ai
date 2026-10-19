@@ -37,6 +37,8 @@ export interface ContentCreateConfig<TOptions, TValues, TBody, TResult> {
     // from `worldPath`; and the state the new record's page should start with.
     listPath?: (campaignId: string, state: unknown) => string
     resultState?: (state: unknown) => object | undefined
+    // Optional: the breadcrumb text, when it depends on where the person came from.
+    breadcrumbLabelFor?: (campaignId: string, state: unknown) => string
     optionsPath: (campaignId: string) => string
     canCreate: (options: TOptions) => boolean
     initialValues: (options: TOptions) => TValues
@@ -71,7 +73,9 @@ export function ContentCreatePage<TOptions, TValues, TBody, TResult>({
     return (
         <section className="authoring-page" aria-labelledby={headingId}>
             <p className="authoring-page__breadcrumb">
-                <Link to={listPath}>{config.breadcrumbLabel}</Link>
+                <Link to={listPath}>
+                    {config.breadcrumbLabelFor?.(campaignId, arrival) ?? config.breadcrumbLabel}
+                </Link>
             </p>
             <h1 id={headingId} ref={headingRef} tabIndex={-1}>
                 {config.heading}

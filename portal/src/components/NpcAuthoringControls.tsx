@@ -100,18 +100,27 @@ export function PortrayalLink({
     campaignId,
     characterId,
     detail,
-}: NpcAuthoringControlsProps & { detail: number }) {
+    asButton,
+}: NpcAuthoringControlsProps & { detail: number; asButton?: boolean }) {
     if (!useCampaignCapability(campaignId, "canon.edit")) {
         return null
     }
-    return <LoadedPortrayalLink campaignId={campaignId} characterId={characterId} detail={detail} />
+    return (
+        <LoadedPortrayalLink
+            campaignId={campaignId}
+            characterId={characterId}
+            detail={detail}
+            asButton={asButton}
+        />
+    )
 }
 
 function LoadedPortrayalLink({
     campaignId,
     characterId,
     detail,
-}: NpcAuthoringControlsProps & { detail: number }) {
+    asButton,
+}: NpcAuthoringControlsProps & { detail: number; asButton?: boolean }) {
     const { state } = useAuthoringResource<unknown>(
         `${npcAuthoringPath(campaignId, characterId)}${detail === 0 ? "" : `?v=${detail}`}`,
     )
@@ -121,6 +130,7 @@ function LoadedPortrayalLink({
     return (
         <p>
             <Link
+                className={asButton === true ? "authoring-button" : undefined}
                 to={`/app/${encodeURIComponent(campaignId)}/characters/${encodeURIComponent(characterId)}/portrayal`}
             >
                 How this NPC is played

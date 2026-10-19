@@ -28,6 +28,7 @@ vi.mock("../hooks/useCharacter", () => ({
 const characterFixture: CharacterDetail = {
     character_id: "character-a",
     name: "Character A",
+    character_kind: "character",
     species_code: "human",
     size_category: "medium",
     current_hit_points: 10,

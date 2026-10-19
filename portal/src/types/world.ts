@@ -36,7 +36,12 @@ export interface WorldEntitySearchParameters {
     limit?: number
     // GM preview: also list drafts, superseded and archived records.
     includeHidden?: boolean
+    // Narrows the People category to one character type before paging. The server
+    // accepts it only with category "character".
+    characterType?: CharacterType
 }
+
+export type CharacterType = "npc" | "player_character"
 
 // World categories with an independently loadable, audience-safe detail
 // contract (UI_STYLE_GUIDE.md §10.2). "organization" joined in Phase 15.1 with

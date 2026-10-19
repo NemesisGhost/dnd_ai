@@ -41,11 +41,14 @@ export const WORLD_BODY = {
     blocked_actions: [],
 }
 
-export function bootstrapFor(capabilities: string[]): SessionBootstrap {
+export function bootstrapFor(
+    capabilities: string[],
+    campaign: Partial<SessionBootstrap["campaigns"][number]> = {},
+): SessionBootstrap {
     return {
         ...sessionBootstrapFixture,
         csrf_token: "csrf-from-session",
-        campaigns: [{ ...sessionBootstrapFixture.campaigns[0]!, capabilities }],
+        campaigns: [{ ...sessionBootstrapFixture.campaigns[0]!, capabilities, ...campaign }],
     }
 }
 
@@ -65,9 +68,14 @@ export function installCampaignShellMocks(): MockServer {
     return server
 }
 
-export function openApp(entry: string, capabilities: string[] = ["access.manage", "canon.edit"]) {
+// `campaign` overrides the fixture campaign's own fields, e.g. no character perspectives.
+export function openApp(
+    entry: string,
+    capabilities: string[] = ["access.manage", "canon.edit"],
+    campaign: Partial<SessionBootstrap["campaigns"][number]> = {},
+) {
     vi.mocked(useSessionBootstrap).mockReturnValue({
-        state: { status: "authenticated", bootstrap: bootstrapFor(capabilities) },
+        state: { status: "authenticated", bootstrap: bootstrapFor(capabilities, campaign) },
         reload: vi.fn(),
         refresh: vi.fn(),
     })

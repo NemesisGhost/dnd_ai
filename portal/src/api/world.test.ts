@@ -162,6 +162,24 @@ describe("fetchWorldEntities", () => {
         )
     })
 
+    it("sends the character type with the People category", async () => {
+        const fetchMock = vi.fn().mockResolvedValue(
+            new Response(JSON.stringify({ items: [], next_cursor: null }), { status: 200 }),
+        )
+        vi.stubGlobal("fetch", fetchMock)
+
+        await fetchWorldEntities("campaign-a", {
+            category: "character",
+            query: "",
+            characterType: "npc",
+        })
+
+        expect(fetchMock).toHaveBeenCalledWith(
+            "/api/campaigns/campaign-a/world/search?category=character&character_type=npc",
+            expect.objectContaining({ method: "GET" }),
+        )
+    })
+
     it("throws a typed error for an unsuccessful response", async () => {
         const fetchMock = vi.fn().mockResolvedValue(
             new Response(null, {
