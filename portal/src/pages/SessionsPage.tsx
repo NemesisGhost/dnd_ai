@@ -12,6 +12,7 @@ import type { SortDirection } from "../utils/sorting"
 
 interface SessionsPageProps {
     sessions: CampaignSessionListItem[]
+    canSchedule?: boolean
 }
 
 function formatTimestamp(timestamp: string): string {
@@ -118,12 +119,13 @@ const editColumn: SortableTableColumn<CampaignSessionListItem> = {
 
 export function SessionsPage({
     sessions,
+    canSchedule = false,
 }: SessionsPageProps) {
     const editor = sessions.some((session) => session.available_actions != null)
     return (
         <section aria-labelledby="sessions-heading">
             <h1 id="sessions-heading">Sessions</h1>
-            {editor ? (
+            {canSchedule ? (
                 <p>
                     <Link className="authoring-button" to="new">
                         Schedule a session
