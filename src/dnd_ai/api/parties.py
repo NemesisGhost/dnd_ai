@@ -53,11 +53,7 @@ from ._authoring import (
 )
 from ._content_support import clean_note
 from ._shared import timeline_world_id
-from .access import (
-    CharacterViewNotAuthorizedError,
-    require_campaign_capability,
-    resolve_character_view_tier,
-)
+from .access import require_campaign_capability
 from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
@@ -134,26 +130,18 @@ def get_party_endpoint(party_id: uuid.UUID, access: _View, connection: _Conn) ->
     return _json(view, editor=editor)
 
 
-def _may_open_character(access: AccessContext, character_id: uuid.UUID) -> bool:
-    """The character-detail policy: some character-view tier (or `canon.edit`) for this exact
-    character, else the character is as unreachable to the caller as a nonexistent one."""
-    try:
-        resolve_character_view_tier(access, character_id=character_id)
-    except CharacterViewNotAuthorizedError:
-        return False
-    return True
-
-
 @router.get(_BASE + "/{party_id}/roster")
 def get_party_roster_endpoint(
     party_id: uuid.UUID, access: _View, connection: _Conn
 ) -> dict[str, Any]:
     """Read-only roster for anyone with `campaign.view`: the party and who is a member now on the
     campaign's own timeline — character id and name only. Join/leave reasons, history and times
-    are management data and stay on the `canon.edit` members read. A member the caller could not
-    open as a character (no character-view tier for that character, an unpublished definition
-    for a non-editor, or an entity-level `campaign.view` deny) is left out, and `member_count` counts only what is listed. Archived
-    parties are the same 404 as a missing one for a non-editor. Reading grants nothing."""
+    are management data and stay on the `canon.edit` members read. A member whose entity the caller cannot see (an unpublished
+    definition for a non-editor, or an entity-level `campaign.view` deny) is left out, and
+    `member_count` counts only what is listed. Party membership is enough context to show a
+    member's name: no character-view tier is required, and listing grants none (character detail,
+    sheet and build routes keep their own checks). Archived parties are the same 404 as a missing
+    one for a non-editor. Reading grants nothing."""
     editor = access.has_capability("canon.edit")
     party = get_campaign_party(
         connection, campaign_id=access.campaign_id, party_id=party_id, include_archived=editor
@@ -172,7 +160,6 @@ def get_party_roster_endpoint(
         if m.is_current
         and m.character_id not in hidden
         and access.has_capability("campaign.view", entity_id=m.character_id)
-        and _may_open_character(access, m.character_id)
     ]
     return {
         "party": _json(party, editor=editor),
