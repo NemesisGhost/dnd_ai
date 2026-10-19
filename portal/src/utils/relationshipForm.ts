@@ -3,6 +3,7 @@
 export const RELATIONSHIP_CODE_MESSAGE: Readonly<Record<string, string>> = {
     relationship_invalid: "That is not a valid relationship.",
     participant_invalid: "Choose published places, organizations, religions or characters.",
+    participant_incompatible: "That participant cannot take that role in this type of relationship.",
     relationship_time_invalid: "Choose times in this world, with the end after the start.",
     relationship_start_required: "Set when the relationship started before ending it.",
     relationship_archived: "This relationship is archived. Restore it first.",

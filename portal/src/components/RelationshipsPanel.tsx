@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { Link } from "react-router"
 import {
     createRelationship,
@@ -21,6 +21,7 @@ import type {
     CreateRelationshipBody,
     RelationshipList,
     RelationshipOptions,
+    RelationshipPairing,
     RelationshipView,
 } from "../types/relationshipAuthoring"
 import { RELATIONSHIP_CODE_MESSAGE } from "../utils/relationshipForm"
@@ -33,14 +34,12 @@ interface Props {
     entityId: string
     // A staged section already supplies the surface and the heading: render the content only.
     embedded?: boolean
-    // What the record is, so the Add form offers only the kinds that can apply to it. The server
-    // stays the authority and refuses a kind that does not fit.
+    // What the record is, for the notes beside the Add form. Which types and roles it may take comes
+    // from the server's pairings for this record, which stay the authority.
     kind?: WorldKind
     // Where this record's own Members and offices section is, when it has one (an organization).
     membersHref?: string
 }
-
-const PLACE_KINDS: readonly WorldKind[] = ["place", "dungeon", "area"]
 
 // A membership is one relationship record, but it is added and changed in the organization's
 // Members and offices, where a change of office keeps its history. This is where that is.
@@ -68,7 +67,9 @@ function LoadedPanel({ campaignId, entityId, embedded, kind: recordKind, members
     const list = useAuthoringResource<RelationshipList>(
         entityRelationshipsPath(campaignId, entityId, showArchived),
     )
-    const options = useAuthoringResource<RelationshipOptions>(relationshipOptionsPath(campaignId))
+    const options = useAuthoringResource<RelationshipOptions>(
+        relationshipOptionsPath(campaignId, entityId),
+    )
     if (list.state.kind !== "ready" || options.state.kind !== "ready") {
         // Inside a staged section a missing body would read as "no relationships", so say why.
         if (embedded !== true) return null
@@ -175,22 +176,15 @@ function AddRelationship({
     options: RelationshipOptions
     onCreated: () => void
 }) {
-    // Membership is added in the organization's Members and offices (it needs an office, a rank and a
-    // required start this form does not have), and a route joins two places, so offer it only on a place.
-    const options: RelationshipOptions = {
-        ...allOptions,
-        kinds: allOptions.kinds.filter(
-            (k) =>
-                k.code !== "membership" &&
-                (k.code !== "route" || recordKind === undefined || PLACE_KINDS.includes(recordKind)),
-        ),
-    }
     const { reload } = useSession()
     const announce = useAnnounce()
     const [picked, setPicked] = useState("")
     const [myRole, setMyRole] = useState("")
     const [other, setOther] = useState<ReferenceOption | null>(null)
     const [otherRole, setOtherRole] = useState("")
+    const [cleared, setCleared] = useState(false)
+    // The entity type of each counterpart the search returned, to check a choice against the roles.
+    const foundTypes = useRef(new Map<string, string>())
     const [description, setDescription] = useState("")
     const [start, setStart] = useState("")
     const [unit, setUnit] = useState("")
@@ -203,11 +197,18 @@ function AddRelationship({
     const [mode, setMode] = useState("")
     const [concealed, setConcealed] = useState("no")
     const [problem, setProblem] = useState<string | null>(null)
+    // What this record can take part in comes from the server's pairings for it. Membership is
+    // added in the organization's Members and offices (it needs an office, a rank and a required
+    // start this form does not have), so it is never offered here.
+    const pairings = (allOptions.for_entity?.pairings ?? []).filter((p) => p.relationship_type !== "membership")
+    const offered = new Set(pairings.map((p) => p.relationship_type))
     // The type decides the kind, so there is one choice. Each choice is identified by its kind and
     // type codes (stable, and distinct even if two kinds ever shared a type); labels that repeat
-    // across kinds name their kind. Only the server's own offered types are listed.
-    const choices = options.kinds.flatMap((k) =>
-        k.types.map((t) => ({ value: `${k.code}/${t}`, type: t, kind: k, label: humanize(t) })),
+    // across kinds name their kind.
+    const choices = allOptions.kinds.flatMap((k) =>
+        k.types
+            .filter((t) => offered.has(t))
+            .map((t) => ({ value: `${k.code}/${t}`, type: t, kind: k, label: humanize(t) })),
     )
     const repeated = new Set(choices.map((c) => c.label).filter((l, i, all) => all.indexOf(l) !== i))
     const labelled = choices.map((c) => ({
@@ -221,8 +222,45 @@ function AddRelationship({
     const kind = shape?.code ?? ""
     const type = choice?.type ?? ""
 
+    const roleLabels = new Map(
+        (allOptions.relationship_types.find((t) => t.code === type)?.roles ?? []).map((r) => [r.code, r.label]),
+    )
+    const roleList = (codes: string[]) =>
+        [...new Set(codes)].map((r) => ({ value: r, label: roleLabels.get(r) ?? humanize(r) }))
+    const forType = (t: string) => pairings.filter((p) => p.relationship_type === t)
+    const myRoles = (t: string) => [...new Set(forType(t).map((p) => p.my_role))]
+    const otherRoles = (t: string, mine: string) => [
+        ...new Set(forType(t).filter((p) => mine === "" || p.my_role === mine).map((p) => p.other_role)),
+    ]
+    // A role that is not offered is not held: a single remaining role is the role.
+    const settled = (current: string, offeredRoles: string[]) =>
+        offeredRoles.length === 1 ? offeredRoles[0]! : offeredRoles.includes(current) ? current : ""
+    const myRoleValue = settled(myRole, myRoles(type))
+    const otherRoleValue = settled(otherRole, otherRoles(type, myRoleValue))
+    const matching = (t: string, mine: string, theirs: string): RelationshipPairing[] =>
+        forType(t).filter((p) => (mine === "" || p.my_role === mine) && (theirs === "" || p.other_role === theirs))
+    const allowedTypes = (t: string, mine: string, theirs: string): string[] => [
+        ...new Set(matching(t, mine, theirs).flatMap((p) => p.other_entity_type_codes)),
+    ]
+    const allowed = allowedTypes(type, myRoleValue, otherRoleValue)
+
+    // Clear the counterpart when the new choice means it cannot take the other role.
+    function reconcile(nextType: string, nextMine: string, nextTheirs: string) {
+        const mine = settled(nextMine, myRoles(nextType))
+        const theirs = settled(nextTheirs, otherRoles(nextType, mine))
+        if (other !== null) {
+            const kindOfOther = foundTypes.current.get(other.id) ?? ""
+            if (!allowedTypes(nextType, mine, theirs).includes(kindOfOther)) {
+                setOther(null)
+                setCleared(true)
+            }
+        }
+    }
+
     function choose(next: string) {
-        const nextKind = labelled.find((c) => c.value === next)?.kind.code ?? ""
+        const nextChoice = labelled.find((c) => c.value === next)
+        const nextKind = nextChoice?.kind.code ?? ""
+        setCleared(false)
         if (nextKind !== kind) {
             // A different kind has its own roles and fields: nothing from the old one carries over.
             setMyRole("")
@@ -237,8 +275,29 @@ function AddRelationship({
             setMode("")
             setConcealed("no")
             setProblem(null)
+            if (nextChoice !== undefined) reconcile(nextChoice.type, "", "")
+        } else if (nextChoice !== undefined) {
+            const nextMine = myRoles(nextChoice.type).includes(myRoleValue) ? myRoleValue : ""
+            setMyRole(nextMine)
+            const nextTheirs = otherRoles(nextChoice.type, nextMine).includes(otherRoleValue) ? otherRoleValue : ""
+            setOtherRole(nextTheirs)
+            reconcile(nextChoice.type, nextMine, nextTheirs)
         }
         setPicked(next)
+    }
+
+    function chooseMine(next: string) {
+        setCleared(false)
+        setMyRole(next)
+        const theirs = otherRoles(type, next).includes(otherRoleValue) ? otherRoleValue : ""
+        setOtherRole(theirs)
+        reconcile(type, next, theirs)
+    }
+
+    function chooseTheirs(next: string) {
+        setCleared(false)
+        setOtherRole(next)
+        reconcile(type, myRoleValue, next)
     }
 
     const mutation = useAuthoringMutation<CreateRelationshipBody, RelationshipView>({
@@ -255,15 +314,28 @@ function AddRelationship({
     const explained = error?.code ? (RELATIONSHIP_CODE_MESSAGE[error.code] ?? null) : null
 
     async function searchOthers(query: string, signal: AbortSignal): Promise<ReferenceOption[]> {
-        const page = await fetchWorldEntities(campaignId, { category: null, query, limit: 10 }, signal)
+        // One more than shown, so leaving this record out never shortens the list.
+        const page = await fetchWorldEntities(
+            campaignId,
+            { category: null, query, limit: 11, entityTypes: allowed },
+            signal,
+        )
         return page.items
-            .filter((item) => item.category !== "item" && item.category !== "event" && item.entity_id !== entityId)
-            .map((item) => ({ id: item.entity_id, label: item.name, detail: humanize(item.entity_type_code) }))
+            .filter((item) => item.entity_id !== entityId)
+            .slice(0, 10)
+            .map((item) => {
+                foundTypes.current.set(item.entity_id, item.entity_type_code)
+                return { id: item.entity_id, label: item.name, detail: humanize(item.entity_type_code) }
+            })
     }
 
     function submit() {
-        if (shape === undefined || type === "" || myRole === "" || otherRole === "" || other === null) {
+        if (shape === undefined || type === "" || myRoleValue === "" || otherRoleValue === "" || other === null) {
             setProblem("Choose the type, both roles and the other participant.")
+            return
+        }
+        if (!allowedTypes(type, myRoleValue, otherRoleValue).includes(foundTypes.current.get(other.id) ?? "")) {
+            setProblem("The other participant cannot take that role in this type of relationship.")
             return
         }
         const shareValue = share.trim() === "" ? null : Number(share)
@@ -276,8 +348,8 @@ function AddRelationship({
             kind,
             relationship_type: type,
             participants: [
-                { entity_id: entityId, role: myRole },
-                { entity_id: other.id, role: otherRole },
+                { entity_id: entityId, role: myRoleValue },
+                { entity_id: other.id, role: otherRoleValue },
             ],
             description: description.trim() === "" ? null : description.trim(),
             started_world_time_id: start === "" ? null : start,
@@ -298,7 +370,6 @@ function AddRelationship({
         mutation.submit(body)
     }
 
-    const roleOptions = (shape?.roles ?? []).map((r) => ({ value: r, label: humanize(r) }))
     return (
         <form
             noValidate
@@ -349,7 +420,7 @@ function AddRelationship({
                     id="rel-new-type"
                     label="Type"
                     hint={
-                        kind === "general"
+                        type === "parent_of"
                             ? "For containment use the place\u2019s parent; for an organization\u2019s parent body use its Parent organization field."
                             : undefined
                     }
@@ -361,37 +432,44 @@ function AddRelationship({
             )}
             {shape !== undefined ? (
                 <>
-                    <SelectField
+                    <RoleField
                         id="rel-new-my-role"
                         label="This record is the"
-                        value={myRole}
-                        placeholder="Choose a role"
-                        options={roleOptions}
-                        onChange={setMyRole}
+                        value={myRoleValue}
+                        roles={roleList(myRoles(type))}
+                        onChange={chooseMine}
                     />
+                    {cleared ? (
+                        <p className="authoring-note" role="status">
+                            The other participant was cleared because it cannot take that role.
+                        </p>
+                    ) : null}
                     <ReferenceCombobox
                         id="rel-new-other"
                         label="Other participant"
                         value={other}
-                        onChange={setOther}
+                        onChange={(next) => {
+                            setCleared(false)
+                            setOther(next)
+                        }}
                         search={searchOthers}
+                        searchKey={`${type}/${myRoleValue}/${otherRoleValue}`}
                         error={problem}
                         placeholder="Search"
                     />
-                    <SelectField
+                    <RoleField
                         id="rel-new-other-role"
                         label="The other participant is the"
-                        value={otherRole}
-                        placeholder="Choose a role"
-                        options={roleOptions}
-                        onChange={setOtherRole}
+                        value={otherRoleValue}
+                        roles={roleList(otherRoles(type, myRoleValue))}
+                        onChange={chooseTheirs}
                     />
                     <TextAreaField
                         id="rel-new-description"
                         label="Description"
                         value={description}
                         onChange={setDescription}
-                        maxLength={options.limits.text_max_length}
+                        maxLength={allOptions.limits.text_max_length}
                     />
                     <WorldTimePicker
                         campaignId={campaignId}
@@ -452,5 +530,43 @@ function AddRelationship({
                 </>
             ) : null}
         </form>
+    )
+}
+
+// A role choice. When the type leaves exactly one role, it is shown, not asked for.
+function RoleField({
+    id,
+    label,
+    value,
+    roles,
+    onChange,
+}: {
+    id: string
+    label: string
+    value: string
+    roles: { value: string; label: string }[]
+    onChange: (value: string) => void
+}) {
+    if (roles.length === 1) {
+        return (
+            <TextField
+                id={id}
+                label={label}
+                hint="The only role available."
+                value={roles[0]!.label}
+                onChange={() => undefined}
+                readOnly
+            />
+        )
+    }
+    return (
+        <SelectField
+            id={id}
+            label={label}
+            value={value}
+            placeholder="Choose a role"
+            options={roles}
+            onChange={onChange}
+        />
     )
 }

@@ -1,5 +1,6 @@
-import { fireEvent, screen, within } from "@testing-library/react"
+import { cleanup, fireEvent, screen, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
+import policy from "../fixtures/relationshipPolicy.json"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import { bootstrapWith, installMockServer, renderAuthoringRoutes } from "../test/authoringHarness"
 import type { WorldKind } from "./world/worldStages"
@@ -7,57 +8,59 @@ import { RelationshipsPanel } from "./RelationshipsPanel"
 
 const BASE = "/campaigns/c1/authoring/relationships"
 
-const OPTIONS = {
-    can_create: true,
-    kinds: [
-        {
-            code: "employment",
-            label: "Employment",
-            types: ["employment"],
-            roles: ["employer", "employee"],
-            fixed_roles: ["employer", "employee"],
-        },
-        {
-            code: "family",
-            label: "Family",
-            types: ["family"],
-            roles: ["parent", "child", "other"],
-            fixed_roles: null,
-        },
-    ],
-    limits: {
-        text_max_length: 4000,
-        short_text_max_length: 200,
-        stance_min: -100,
-        stance_max: 100,
-        min_participants: 2,
-        max_participants: 20,
-    },
+interface PolicyType {
+    code: string
+    kind: string
+}
+interface Policy {
+    relationship_types: PolicyType[]
+    pairings: Record<string, { relationship_type: string }[]>
+}
+const POLICY = policy as Policy
+
+const KIND_LABELS: Record<string, string> = {
+    family: "Family",
+    employment: "Employment",
+    ownership: "Ownership",
+    membership: "Membership",
+    route: "Route",
+    political: "Political",
+    general: "Other connection",
 }
 
-const EXTRA_KINDS = [
-    {
-        code: "membership",
-        label: "Membership",
-        types: ["membership"],
-        roles: ["member", "organization"],
-        fixed_roles: ["member", "organization"],
-    },
-    {
-        code: "route",
-        label: "Route",
-        types: ["route"],
-        roles: ["origin", "destination"],
-        fixed_roles: ["origin", "destination"],
-    },
-    {
-        code: "general",
-        label: "Other connection",
-        types: ["parent_of", "allied_with"],
-        roles: ["subject", "object"],
-        fixed_roles: null,
-    },
-]
+// The kind catalog the server derives from the same policy.
+const KINDS = Object.entries(KIND_LABELS).map(([code, label]) => ({
+    code,
+    label,
+    types: POLICY.relationship_types.filter((t) => t.kind === code).map((t) => t.code),
+    roles: [],
+    fixed_roles: null,
+}))
+
+const LIMITS = {
+    text_max_length: 4000,
+    short_text_max_length: 200,
+    stance_min: -100,
+    stance_max: 100,
+    min_participants: 2,
+    max_participants: 20,
+}
+
+// What the options endpoint answers for a record of this entity type.
+function optionsFor(entityType: string, kinds: { code: string; types: string[] }[] = KINDS) {
+    const types = new Set(kinds.flatMap((k) => k.types))
+    return {
+        can_create: true,
+        kinds,
+        relationship_types: POLICY.relationship_types,
+        limits: LIMITS,
+        for_entity: {
+            entity_id: "e1",
+            entity_type_code: entityType,
+            pairings: (POLICY.pairings[entityType] ?? []).filter((p) => types.has(p.relationship_type)),
+        },
+    }
+}
 
 const participant = (id: string, name: string, role: string, label: string) => ({
     entity_id: id,
@@ -79,6 +82,7 @@ const SUMMARY = {
     ended: false,
     is_public: null,
     row_version: 2,
+    policy_conflicts: [],
     participants: [participant("e1", "Mira", "parent", "Parent"), participant("e2", "Tom", "child", "Child")],
 }
 
@@ -100,6 +104,7 @@ const VIEW = {
     perspectives: [],
     current_status: null,
     available_actions: ["update", "archive", "set_perspective", "end"],
+    policy_conflicts: [],
 }
 
 afterEach(() => {
@@ -113,7 +118,9 @@ interface SetupOptions {
     membersHref?: string
     summary?: object
     view?: object
-    kinds?: object[]
+    // The record's entity type, which decides the pairings the server offers it.
+    entityType?: string
+    kinds?: { code: string; types: string[] }[]
 }
 
 function setup(capabilitiesOrOptions: string[] | SetupOptions = ["canon.edit"]) {
@@ -124,19 +131,25 @@ function setup(capabilitiesOrOptions: string[] | SetupOptions = ["canon.edit"]) 
         membersHref,
         summary = SUMMARY,
         view = VIEW,
-        kinds = [...OPTIONS.kinds, ...EXTRA_KINDS],
+        entityType = "npc",
+        kinds = KINDS,
     } = Array.isArray(capabilitiesOrOptions) ? { capabilities: capabilitiesOrOptions } : capabilitiesOrOptions
     const server = installMockServer()
-    server.on("GET", `${BASE}/options`, { body: { ...OPTIONS, kinds } })
+    server.on("GET", /authoring\/relationships\/options/, { body: optionsFor(entityType, kinds) })
     server.on("GET", /authoring\/relationships\?entity_id=/, { body: { items: [summary] } })
     server.on("GET", `${BASE}/r1`, () => ({ body: view }))
     server.on("GET", /world-times/, { body: { items: [], next_cursor: null, can_create: true } })
     server.on("GET", /calendars/, { body: { items: [], can_create: true } })
-    server.on("GET", /world\/search/, {
-        body: {
-            items: [{ entity_id: "e3", category: "character", entity_type_code: "npc", name: "Ann", summary: null }],
-            next_cursor: null,
-        },
+    // Like the server, answer only with the entity types asked for.
+    server.on("GET", /world\/search/, (call) => {
+        const types = new URLSearchParams(call.path.split("?")[1]).getAll("entity_type")
+        const code = types.length === 0 || types.includes("npc") ? "npc" : types[0]!
+        return {
+            body: {
+                items: [{ entity_id: "e3", category: "character", entity_type_code: code, name: "Ann", summary: null }],
+                next_cursor: null,
+            },
+        }
     })
     server.on("POST", new RegExp(BASE), { body: { ...VIEW, changed: true } })
     renderAuthoringRoutes({
@@ -152,6 +165,12 @@ function setup(capabilitiesOrOptions: string[] | SetupOptions = ["canon.edit"]) 
         ],
     })
     return server
+}
+
+// When the chosen role leaves the other participant only one role, it is read-only, not a choice.
+function chooseOtherRole(form: HTMLElement, value: string) {
+    const select = within(form).queryByRole("combobox", { name: "The other participant is the" })
+    if (select !== null) fireEvent.change(select, { target: { value } })
 }
 
 describe("RelationshipsPanel", () => {
@@ -204,9 +223,7 @@ describe("RelationshipsPanel", () => {
         fireEvent.change(within(form).getByRole("combobox", { name: "This record is the" }), {
             target: { value: "employer" },
         })
-        fireEvent.change(within(form).getByRole("combobox", { name: "The other participant is the" }), {
-            target: { value: "employee" },
-        })
+        chooseOtherRole(form, "employee")
         fireEvent.click(within(form).getByRole("button", { name: "Add relationship" }))
         expect(await within(form).findByText(/Choose the type, both roles/)).toBeInTheDocument()
         expect(server.callsTo("POST", BASE)).toHaveLength(0)
@@ -238,7 +255,7 @@ describe("RelationshipsPanel", () => {
             target: { value: "family/family" },
         })
         fireEvent.change(within(form).getByRole("combobox", { name: "This record is the" }), { target: { value: "parent" } })
-        fireEvent.change(within(form).getByRole("combobox", { name: "The other participant is the" }), { target: { value: "child" } })
+        chooseOtherRole(form, "child")
         fireEvent.focus(within(form).getByRole("combobox", { name: "Other participant" }))
         fireEvent.click(await within(form).findByRole("option", { name: /Ann/ }))
         fireEvent.click(within(form).getByRole("button", { name: "Add relationship" }))
@@ -263,23 +280,39 @@ describe("RelationshipsPanel: terminology and placement", () => {
         expect(note).toHaveTextContent(/Members and offices/)
     })
 
-    it("offers a route only on a place", async () => {
-        setup({ kind: "place" })
+    it("asks for the options of this record", async () => {
+        const server = setup({ entityId: "e1" })
+        await kindsOffered()
+        expect(server.callsTo("GET", /relationships\/options\?entity_id=e1$/)).toHaveLength(1)
+    })
+
+    it("offers a route on a place", async () => {
+        setup({ kind: "place", entityType: "settlement" })
         expect(await kindsOffered()).toContain("route/route")
     })
 
-    it.each<WorldKind>(["npc", "pc", "organization", "religion", "character"])(
-        "does not offer a route on %s",
-        async (kind) => {
-            setup({ kind })
-            expect(await kindsOffered()).not.toContain("route/route")
+    it.each([
+        ["npc", "npc"],
+        ["pc", "player_character"],
+        ["organization", "organization"],
+    ] as [WorldKind, string][])("does not offer a route on %s", async (kind, entityType) => {
+        setup({ kind, entityType })
+        expect(await kindsOffered()).not.toContain("route/route")
+    })
+
+    it.each(["npc", "player_character"])(
+        "offers %s no place-only type, and ownership, control and worship",
+        async (entityType) => {
+            setup({ entityType })
+            const offered = await kindsOffered()
+            for (const type of ["adjacency", "capital_of", "parent_of", "route"]) {
+                expect(offered.map((v) => v.split("/")[1])).not.toContain(type)
+            }
+            expect(offered).toEqual(
+                expect.arrayContaining(["ownership/ownership", "political/control", "general/worship"]),
+            )
         },
     )
-
-    it("leaves the kinds to the server when it is not told what the record is", async () => {
-        setup()
-        expect(await kindsOffered()).toContain("route/route")
-    })
 
     it("never offers Membership in the Add form, and points to Members and offices instead", async () => {
         setup({ kind: "organization", membersHref: "?section=members" })
@@ -298,7 +331,7 @@ describe("RelationshipsPanel: terminology and placement", () => {
     })
 
     it("explains containment and parent bodies next to the general parent_of type", async () => {
-        setup({ kind: "place" })
+        setup({ kind: "place", entityType: "settlement" })
         const form = await screen.findByRole("form", { name: "Add a relationship" })
         fireEvent.change(within(form).getByRole("combobox", { name: "Type" }), { target: { value: "general/parent_of" } })
         expect(await within(form).findByText(/use the place.s parent/)).toBeInTheDocument()
@@ -394,13 +427,7 @@ describe("RelationshipsPanel: a membership", () => {
 })
 
 describe("RelationshipsPanel: the type decides the kind", () => {
-    const KIND = (code: string, types: string[], roles: string[], fixed: string[] | null = null) => ({
-        code,
-        label: code[0]!.toUpperCase() + code.slice(1),
-        types,
-        roles,
-        fixed_roles: fixed,
-    })
+    const KIND = (code: string, types: string[]) => ({ code, label: code[0]!.toUpperCase() + code.slice(1), types })
     const searchAndPick = async (form: HTMLElement) => {
         fireEvent.focus(within(form).getByRole("combobox", { name: "Other participant" }))
         fireEvent.click(await within(form).findByRole("option", { name: /Ann/ }))
@@ -417,15 +444,13 @@ describe("RelationshipsPanel: the type decides the kind", () => {
     })
 
     it("submits the kind the chosen type belongs to", async () => {
-        const server = setup({ kind: "place" })
+        const server = setup({ kind: "place", entityType: "settlement" })
         const form = await screen.findByRole("form", { name: "Add a relationship" })
         fireEvent.change(within(form).getByRole("combobox", { name: "Type" }), { target: { value: "general/parent_of" } })
         fireEvent.change(await within(form).findByRole("combobox", { name: "This record is the" }), {
             target: { value: "subject" },
         })
-        fireEvent.change(within(form).getByRole("combobox", { name: "The other participant is the" }), {
-            target: { value: "object" },
-        })
+        chooseOtherRole(form, "object")
         await searchAndPick(form)
         fireEvent.click(within(form).getByRole("button", { name: "Add relationship" }))
         await vi.waitFor(() => expect(server.callsTo("POST", BASE)).toHaveLength(1))
@@ -442,7 +467,7 @@ describe("RelationshipsPanel: the type decides the kind", () => {
         expect(within(form).queryByRole("textbox", { name: "Job title" })).toBeNull()
         expect(within(form).getByRole("combobox", { name: "This record is the" })).toHaveValue("")
         fireEvent.change(within(form).getByRole("combobox", { name: "This record is the" }), { target: { value: "parent" } })
-        fireEvent.change(within(form).getByRole("combobox", { name: "The other participant is the" }), { target: { value: "child" } })
+        chooseOtherRole(form, "child")
         await searchAndPick(form)
         fireEvent.click(within(form).getByRole("button", { name: "Add relationship" }))
         await vi.waitFor(() => expect(server.callsTo("POST", BASE)).toHaveLength(1))
@@ -455,14 +480,14 @@ describe("RelationshipsPanel: the type decides the kind", () => {
     })
 
     it("selects a single available type and shows it as a labelled read-only value", async () => {
-        const server = setup({ kinds: [KIND("employment", ["employment"], ["employer", "employee"], ["employer", "employee"])] })
+        const server = setup({ kinds: [KIND("employment", ["employment"])] })
         const form = await screen.findByRole("form", { name: "Add a relationship" })
         const value = within(form).getByRole("textbox", { name: "Type" })
         expect(value).toHaveValue("employment")
         expect(value).toHaveAttribute("readonly")
         expect(within(form).queryByRole("combobox", { name: "Type" })).toBeNull()
         fireEvent.change(within(form).getByRole("combobox", { name: "This record is the" }), { target: { value: "employer" } })
-        fireEvent.change(within(form).getByRole("combobox", { name: "The other participant is the" }), { target: { value: "employee" } })
+        chooseOtherRole(form, "employee")
         await searchAndPick(form)
         fireEvent.click(within(form).getByRole("button", { name: "Add relationship" }))
         await vi.waitFor(() => expect(server.callsTo("POST", BASE)).toHaveLength(1))
@@ -478,7 +503,7 @@ describe("RelationshipsPanel: the type decides the kind", () => {
     })
 
     it("also treats a kind that lists no type as unavailable", async () => {
-        setup({ kinds: [KIND("family", [], ["parent", "child"])] })
+        setup({ kinds: [KIND("family", [])] })
         const form = await screen.findByRole("form", { name: "Add a relationship" })
         expect(within(form).getByText(/No relationship types are available/)).toBeInTheDocument()
     })
@@ -486,13 +511,191 @@ describe("RelationshipsPanel: the type decides the kind", () => {
     it("tells two same-named types in different kinds apart and keeps their identifiers distinct", async () => {
         setup({
             kinds: [
-                KIND("family", ["other"], ["parent", "child"]),
-                KIND("general", ["other"], ["subject", "object"]),
+                KIND("family", ["other"]),
+                KIND("general", ["other"]),
             ],
         })
         const form = await screen.findByRole("form", { name: "Add a relationship" })
         const options = within(within(form).getByRole("combobox", { name: "Type" })).getAllByRole("option")
         expect(options.map((o) => o.textContent)).toEqual(expect.arrayContaining(["other (Family)", "other (General)"]))
         expect(new Set(options.map((o) => (o as HTMLOptionElement).value)).size).toBe(options.length)
+    })
+})
+
+describe("RelationshipsPanel: participant compatibility", () => {
+    const openForm = () => screen.findByRole("form", { name: "Add a relationship" })
+    const pickType = async (form: HTMLElement, value: string) =>
+        fireEvent.change(await within(form).findByRole("combobox", { name: "Type" }), { target: { value } })
+    const pickAnn = async (form: HTMLElement) => {
+        fireEvent.focus(within(form).getByRole("combobox", { name: "Other participant" }))
+        fireEvent.click(await within(form).findByRole("option", { name: /Ann/ }))
+    }
+    const rolesIn = (form: HTMLElement, name: string) =>
+        within(within(form).getByRole("combobox", { name })).getAllByRole("option").map((o) => o.textContent)
+
+    it.each(["ownership/ownership", "political/control", "general/worship"])(
+        "submits %s with the opened record on either side, whichever the person picks",
+        async (value) => {
+            const type = value.split("/")[1]!
+            const [first, second] = {
+                ownership: ["owner", "property"],
+                control: ["ruler", "object"],
+                worship: ["subject", "object"],
+            }[type]!
+            for (const [mine, theirs] of [
+                [first, second],
+                [second, first],
+            ] as [string, string][]) {
+                const server = setup({ entityType: "player_character" })
+                const form = await openForm()
+                await pickType(form, value)
+                fireEvent.change(within(form).getByRole("combobox", { name: "This record is the" }), {
+                    target: { value: mine },
+                })
+                chooseOtherRole(form, theirs)
+                await pickAnn(form)
+                fireEvent.click(within(form).getByRole("button", { name: "Add relationship" }))
+                await vi.waitFor(() => expect(server.callsTo("POST", BASE)).toHaveLength(1))
+                expect(server.callsTo("POST", BASE)[0]!.body).toMatchObject({
+                    relationship_type: type,
+                    participants: [
+                        { entity_id: "e1", role: mine },
+                        { entity_id: "e3", role: theirs },
+                    ],
+                })
+                cleanup()
+            }
+        },
+    )
+
+    it("names the roles by direction", async () => {
+        setup({ entityType: "npc" })
+        const form = await openForm()
+        await pickType(form, "general/worship")
+        expect(rolesIn(form, "This record is the")).toEqual(expect.arrayContaining(["Worshipper", "Worshipped"]))
+        await pickType(form, "ownership/ownership")
+        expect(rolesIn(form, "This record is the")).toEqual(expect.arrayContaining(["Owner", "Owned"]))
+    })
+
+    it("offers a settlement Capital Of only as the capital, with both roles read-only", async () => {
+        const server = setup({ entityType: "settlement", kind: "place" })
+        const form = await openForm()
+        await pickType(form, "general/capital_of")
+        expect(within(form).getByRole("textbox", { name: "This record is the" })).toHaveValue("Capital")
+        expect(within(form).getByRole("textbox", { name: "This record is the" })).toHaveAttribute("readonly")
+        expect(within(form).getByRole("textbox", { name: "The other participant is the" })).toHaveValue("Governed place")
+        await pickAnn(form)
+        fireEvent.click(within(form).getByRole("button", { name: "Add relationship" }))
+        await vi.waitFor(() => expect(server.callsTo("POST", BASE)).toHaveLength(1))
+        expect(server.callsTo("POST", BASE)[0]!.body).toMatchObject({
+            relationship_type: "capital_of",
+            participants: [
+                { entity_id: "e1", role: "subject" },
+                { entity_id: "e3", role: "object" },
+            ],
+        })
+    })
+
+    it("offers a nation Capital Of only as the governed place", async () => {
+        setup({ entityType: "nation", kind: "place" })
+        const form = await openForm()
+        await pickType(form, "general/capital_of")
+        expect(within(form).getByRole("textbox", { name: "This record is the" })).toHaveValue("Governed place")
+        expect(within(form).getByRole("textbox", { name: "The other participant is the" })).toHaveValue("Capital")
+    })
+
+    it("shows a symmetric type's single role read-only", async () => {
+        setup({ entityType: "organization" })
+        const form = await openForm()
+        await pickType(form, "political/alliance")
+        expect(within(form).getByRole("textbox", { name: "This record is the" })).toHaveValue("Ally")
+        expect(within(form).getByRole("textbox", { name: "The other participant is the" })).toHaveValue("Ally")
+    })
+
+    it("clears the roles that the new type does not offer when the type changes within a kind", async () => {
+        setup({ entityType: "npc" })
+        const form = await openForm()
+        await pickType(form, "political/control")
+        fireEvent.change(within(form).getByRole("combobox", { name: "This record is the" }), { target: { value: "ruler" } })
+        chooseOtherRole(form, "object")
+        await pickType(form, "political/alliance")
+        expect(within(form).getByRole("textbox", { name: "This record is the" })).toHaveValue("Ally")
+        await pickType(form, "political/control")
+        expect(within(form).getByRole("combobox", { name: "This record is the" })).toHaveValue("")
+        expect(within(form).getByRole("combobox", { name: "The other participant is the" })).toHaveValue("")
+    })
+
+    it("clears a counterpart that cannot take a newly chosen role, and says so", async () => {
+        setup({ entityType: "npc" })
+        const form = await openForm()
+        await pickType(form, "political/control")
+        fireEvent.change(within(form).getByRole("combobox", { name: "This record is the" }), { target: { value: "ruler" } })
+        chooseOtherRole(form, "object")
+        await pickAnn(form)
+        expect(within(form).getByRole("combobox", { name: "Other participant" })).toHaveValue("Ann")
+        // A person cannot be the controlled place.
+        chooseOtherRole(form, "territory")
+        expect(within(form).getByRole("combobox", { name: "Other participant" })).toHaveValue("")
+        expect(within(form).getByText(/cleared because it cannot take that role/)).toBeInTheDocument()
+    })
+
+    it("keeps a counterpart that still fits after a role change", async () => {
+        setup({ entityType: "npc" })
+        const form = await openForm()
+        await pickType(form, "general/worship")
+        fireEvent.change(within(form).getByRole("combobox", { name: "This record is the" }), { target: { value: "subject" } })
+        chooseOtherRole(form, "object")
+        await pickAnn(form)
+        fireEvent.change(within(form).getByRole("combobox", { name: "This record is the" }), { target: { value: "object" } })
+        expect(within(form).getByRole("combobox", { name: "Other participant" })).toHaveValue("Ann")
+        expect(within(form).queryByText(/cleared because/)).toBeNull()
+    })
+
+    it("narrows the counterpart search to the types the pairing allows, and drops only itself", async () => {
+        const server = setup({ entityType: "settlement", kind: "place" })
+        const form = await openForm()
+        await pickType(form, "general/capital_of")
+        fireEvent.focus(within(form).getByRole("combobox", { name: "Other participant" }))
+        await within(form).findByRole("option", { name: /Ann/ })
+        const path = server.callsTo("GET", /world\/search/).at(-1)!.path
+        const params = new URLSearchParams(path.split("?")[1])
+        expect(params.getAll("entity_type").sort()).toEqual(["continent", "location", "nation", "plane", "realm", "region"])
+        expect(params.has("category")).toBe(false)
+    })
+
+    it("explains a refused incompatible participant", async () => {
+        const server = setup({ entityType: "npc" })
+        server.on("POST", BASE, {
+            status: 400,
+            body: { error: { code: "participant_incompatible", message: "m", correlation_id: "c" } },
+        })
+        const form = await openForm()
+        await pickType(form, "family/family")
+        fireEvent.change(within(form).getByRole("combobox", { name: "This record is the" }), { target: { value: "parent" } })
+        chooseOtherRole(form, "child")
+        await pickAnn(form)
+        fireEvent.click(within(form).getByRole("button", { name: "Add relationship" }))
+        expect(await screen.findByRole("alert")).toHaveTextContent(/cannot take that role in this type of relationship/)
+    })
+
+    it("shows a note for an existing relationship the rules would refuse, and keeps it correctable", async () => {
+        const conflicted = {
+            ...VIEW,
+            policy_conflicts: ["Varek (npc) cannot be the capital in capital of."],
+        }
+        setup({ view: conflicted, summary: { ...SUMMARY, policy_conflicts: conflicted.policy_conflicts } })
+        fireEvent.click(await screen.findByRole("button", { name: "Open family" }))
+        expect(await screen.findByText(/does not fit the current rules/)).toHaveTextContent(/Varek \(npc\) cannot be the capital/)
+        expect(screen.getByRole("button", { name: "Save relationship" })).toBeInTheDocument()
+        expect(screen.getByRole("button", { name: "End relationship" })).toBeInTheDocument()
+        expect(screen.getByRole("button", { name: "Archive relationship" })).toBeInTheDocument()
+        expect(screen.getByRole("form", { name: "Set perspective" })).toBeInTheDocument()
+    })
+
+    it("shows no note for a relationship that fits", async () => {
+        setup()
+        fireEvent.click(await screen.findByRole("button", { name: "Open family" }))
+        await screen.findByText(/Family: Family, from Year 1/)
+        expect(screen.queryByText(/does not fit the current rules/)).toBeNull()
     })
 })

@@ -449,3 +449,247 @@ def test_authority_replay_and_other_worlds(s: ContentSetup) -> None:
         ).status_code
         == 404
     )
+
+
+# --- Participant compatibility (policy in domain/relationship_authoring.py) -------------------
+
+
+def pc(s: ContentSetup, name: str) -> str:
+    species = s.gm.get(s.url("player-characters/options")).json()["species"][0]["species_id"]
+    response = s.gm.post(
+        s.url("player-characters"),
+        {"name": name, "species_id": species, "size_category": "medium"},
+        key=s.gm.fresh_key(),
+    )
+    assert response.status_code == 201, response.text
+    return str(response.json()["player_character_id"])
+
+
+def religion(s: ContentSetup, name: str) -> str:
+    response = s.gm.post(
+        s.url("religions"),
+        {"name": name, "summary": None, "pantheon_structure": "One"},
+        key=s.gm.fresh_key(),
+    )
+    assert response.status_code == 201, response.text
+    return str(response.json()["religion_id"])
+
+
+def world_search(s: ContentSetup, actor: object = None, **params: object):  # type: ignore[no-untyped-def]
+    return (actor or s.gm).get(f"/campaigns/{s.cid}/world/search", **params)  # type: ignore[attr-defined]
+
+
+_PERSON_SIDES = {
+    "ownership": ("ownership", "ownership", "owner", "property"),
+    "control": ("political", "control", "ruler", "object"),
+    "worship": ("general", "worship", "subject", "object"),
+}
+
+
+def test_characters_take_either_side_of_ownership_control_and_worship(s: ContentSetup) -> None:
+    people = {
+        "npc-a": npc(s, "Alder"),
+        "npc-b": npc(s, "Birch"),
+        "pc-a": pc(s, "Cedar"),
+        "pc-b": pc(s, "Dogwood"),
+    }
+    pairs = [("npc-a", "npc-b"), ("npc-a", "pc-a"), ("pc-a", "npc-a"), ("pc-a", "pc-b")]
+    for kind, relationship_type, first_role, second_role in _PERSON_SIDES.values():
+        for first, second in pairs:
+            # Both directions, whichever record the form was opened on.
+            for left, right in ((first, second), (second, first)):
+                response = create(
+                    s,
+                    kind,
+                    relationship_type,
+                    [(people[left], first_role), (people[right], second_role)],
+                )
+                assert response.status_code == 201, (relationship_type, left, right, response.text)
+
+
+def test_fictional_ownership_control_and_worship_grant_nothing(s: ContentSetup) -> None:
+    owner, owned = pc(s, "Cedar"), npc(s, "Alder")
+    tables = (
+        "security.membership_character_relationships",
+        "narrative.events",
+        "campaign.relationship_state",
+    )
+    before = {t: s.count(t) for t in tables}
+    for kind, relationship_type, first_role, second_role in _PERSON_SIDES.values():
+        response = create(s, kind, relationship_type, [(owner, first_role), (owned, second_role)])
+        assert response.status_code == 201, response.text
+    assert {t: s.count(t) for t in tables} == before
+    # A player with no character access still cannot read the editor's relationships.
+    assert s.player.get(s.url("relationships"), entity_id=owned).status_code == 403
+
+
+def test_incompatible_participants_are_refused_and_nothing_is_written(s: ContentSetup) -> None:
+    mira, tom = npc(s, "Mira"), npc(s, "Tom")
+    town, other_town = place(s, "Highmarch"), place(s, "Lowmarch")
+    nation = place(s, "Vell", "nation")
+    faith = religion(s, "The Light")
+    before = s.count("world.relationships")
+    incompatible = [
+        # An NPC cannot be the capital or the governed place, adjoin, or be a parent.
+        create(s, "general", "capital_of", [(mira, "subject"), (nation, "object")]),
+        create(s, "general", "capital_of", [(town, "subject"), (mira, "object")]),
+        create(s, "general", "adjacency", [(mira, "subject"), (tom, "object")]),
+        create(s, "general", "parent_of", [(mira, "subject"), (tom, "object")]),
+        # A nation is not a capital; a settlement is not a governed place.
+        create(s, "general", "capital_of", [(nation, "subject"), (town, "object")]),
+        create(s, "general", "capital_of", [(town, "subject"), (other_town, "object")]),
+        # Both sides of parent_of are the same kind of record.
+        create(s, "general", "parent_of", [(town, "subject"), (faith, "object")]),
+        # A religion is not an employee; a place is not a family member.
+        create(s, "employment", "employment", [(mira, "employer"), (faith, "employee")]),
+        create(s, "family", "family", [(mira, "parent"), (town, "child")]),
+        # A route keeps its original refusal.
+        create(s, "route", "route", [(mira, "origin"), (town, "destination")]),
+    ]
+    for response in incompatible:
+        assert response.status_code == 400, response.text
+        assert code(response) in ("participant_incompatible", "participant_invalid"), response.text
+    assert code(incompatible[0]) == "participant_incompatible"
+    assert code(incompatible[-1]) == "participant_invalid"
+    # A role that is not the type's, and missing required roles, are shape errors.
+    wrong_role = create(s, "political", "alliance", [(town, "ruler"), (other_town, "territory")])
+    assert wrong_role.status_code == 400 and code(wrong_role) == "relationship_invalid"
+    no_object = create(s, "political", "war", [(town, "subject"), (other_town, "subject")])
+    assert no_object.status_code == 400 and code(no_object) == "relationship_invalid"
+    two_capitals = create(s, "general", "capital_of", [(town, "subject"), (other_town, "subject")])
+    assert two_capitals.status_code == 400 and code(two_capitals) == "relationship_invalid"
+    assert s.count("world.relationships") == before
+    # A participant that does not exist is still indistinguishable from an unusable one.
+    ghost = create(s, "general", "capital_of", [(town, "subject"), (str(uuid.uuid4()), "object")])
+    assert ghost.status_code == 400 and code(ghost) == "participant_invalid"
+    # The compatible shapes work, in either participant order.
+    for participants in (
+        [(town, "subject"), (nation, "object")],
+        [(nation, "object"), (town, "subject")],
+    ):
+        assert create(s, "general", "capital_of", participants).status_code == 201
+    assert (
+        create(s, "general", "adjacency", [(town, "object"), (other_town, "subject")]).status_code
+        == 201
+    )
+
+
+def test_an_inactive_type_is_not_offered_or_created_but_existing_records_stay_usable(
+    s: ContentSetup, db_connection: Connection
+) -> None:
+    mira, tom = npc(s, "Mira"), npc(s, "Tom")
+    existing = create(s, "general", "worship", [(mira, "subject"), (tom, "object")]).json()
+    db_connection.execute(
+        text("UPDATE world.relationship_types SET is_active = false WHERE code = 'worship'")
+    )
+    offered = s.gm.get(s.url("relationships/options"), entity_id=mira).json()
+    assert "worship" not in {t["code"] for t in offered["relationship_types"]}
+    assert "worship" not in {p["relationship_type"] for p in offered["for_entity"]["pairings"]}
+    refused = create(s, "general", "worship", [(mira, "subject"), (tom, "object")])
+    assert refused.status_code == 400 and code(refused) == "relationship_invalid"
+    current = view(s, existing["relationship_id"])
+    assert current["policy_conflicts"] == ["This type of relationship is no longer offered."]
+    assert act(s, existing, "update", {"description": "Still correctable"}).status_code == 200
+
+
+def test_existing_incompatible_records_stay_readable_and_correctable(
+    s: ContentSetup, db_connection: Connection
+) -> None:
+    from tests.factories import make_relationship
+
+    mira, town = npc(s, "Mira"), place(s, "Highmarch")
+    relationship_id = make_relationship(
+        db_connection, uuid.UUID(str(s.world_id)), relationship_type_code="capital_of"
+    )
+    for entity, role in ((mira, "subject"), (town, "object")):
+        db_connection.execute(
+            text("""
+                INSERT INTO world.relationship_participants
+                    (relationship_id, entity_id, participant_role_id)
+                VALUES (:r, :e, (SELECT relationship_participant_role_id
+                                 FROM world.relationship_participant_roles WHERE code = :role))
+            """),
+            {"r": relationship_id, "e": entity, "role": role},
+        )
+    current = view(s, str(relationship_id))
+    assert any("Mira" in reason and "capital" in reason for reason in current["policy_conflicts"])
+    listed = s.gm.get(s.url("relationships"), entity_id=mira).json()["items"]
+    assert listed[0]["policy_conflicts"] == current["policy_conflicts"]
+    # A compatible relationship reports no conflicts.
+    fine = create(s, "general", "worship", [(mira, "subject"), (town, "object")]).json()
+    assert fine["policy_conflicts"] == []
+    # Correct, archive, restore and end all still work on the incompatible record.
+    updated = act(s, current, "update", {"description": "Corrected"})
+    assert updated.status_code == 200, updated.text
+    archived = act(s, updated.json(), "archive")
+    assert archived.status_code == 200, archived.text
+    restored = act(s, archived.json(), "restore")
+    assert restored.status_code == 200, restored.text
+    assert restored.json()["policy_conflicts"] == current["policy_conflicts"]
+    times = Times(s)
+    started = act(s, restored.json(), "update", {"started_world_time_id": times.at(1)})
+    assert started.status_code == 200, started.text
+    ended = act(s, started.json(), "end", {"ended_world_time_id": times.at(2)})
+    assert ended.status_code == 200, ended.text
+
+
+def test_options_are_scoped_to_the_entity(s: ContentSetup) -> None:
+    mira, town, nation = npc(s, "Mira"), place(s, "Highmarch"), place(s, "Vell", "nation")
+
+    def pairings(entity: str, type_code: str) -> set[tuple[str, str]]:
+        response = s.gm.get(s.url("relationships/options"), entity_id=entity)
+        assert response.status_code == 200, response.text
+        return {
+            (p["my_role"], p["other_role"])
+            for p in response.json()["for_entity"]["pairings"]
+            if p["relationship_type"] == type_code
+        }
+
+    person = {
+        p["relationship_type"]
+        for p in s.gm.get(s.url("relationships/options"), entity_id=mira).json()["for_entity"][
+            "pairings"
+        ]
+    }
+    assert person >= {"family", "ownership", "control", "worship", "alliance", "other"}
+    assert not person & {"adjacency", "capital_of", "parent_of", "route"}
+    assert pairings(town, "capital_of") == {("subject", "object")}
+    assert pairings(nation, "capital_of") == {("object", "subject")}
+    assert pairings(mira, "control") == {
+        ("ruler", "object"),
+        ("ruler", "territory"),
+        ("object", "ruler"),
+    }
+    # The portal's fixture is the metadata this endpoint serves.
+    from tests.unit.relationship_policy_fixture import build
+
+    served = s.gm.get(s.url("relationships/options"), entity_id=mira).json()
+    assert served["relationship_types"] == build()["relationship_types"]
+    assert served["for_entity"]["pairings"] == build()["pairings"]["npc"]
+    # Without an entity the catalog is unchanged and nothing entity-specific is returned.
+    plain = s.gm.get(s.url("relationships/options")).json()
+    assert "for_entity" not in plain and plain["kinds"]
+    assert {t["code"] for t in plain["relationship_types"]} >= {"capital_of", "worship"}
+    # Missing and other-world entities are the same 404; a non-editor is refused as before.
+    assert s.gm.get(s.url("relationships/options"), entity_id=str(uuid.uuid4())).status_code == 404
+    foreign = s.stranger.get(s.url("relationships/options", s.other_cid), entity_id=mira)
+    assert foreign.status_code == 404
+    assert s.player.get(s.url("relationships/options"), entity_id=mira).status_code == 403
+
+
+def test_world_search_entity_type_filter(s: ContentSetup) -> None:
+    for index in range(3):
+        place(s, f"A building {index}", "building")
+    first = place(s, "Zed", "settlement")
+    draft = place(s, "Zed draft", "settlement", publish=False)
+    page = world_search(s, category="location", entity_type="settlement", limit=1)
+    assert page.status_code == 200, page.text
+    assert [i["entity_id"] for i in page.json()["items"]] == [first]
+    assert page.json()["next_cursor"] is None
+    two = world_search(s, category="location", entity_type=["settlement", "building"], limit=50)
+    assert {i["entity_type_code"] for i in two.json()["items"]} == {"settlement", "building"}
+    assert world_search(s, category="location", entity_type="npc").status_code == 422
+    assert world_search(s, entity_type="npc").status_code == 200
+    seen = world_search(s, s.player, category="location", entity_type="settlement")
+    assert seen.status_code == 200
+    assert draft not in {i["entity_id"] for i in seen.json()["items"]}

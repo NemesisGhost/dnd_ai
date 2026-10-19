@@ -12,8 +12,9 @@ function base(campaignId: string): string {
     return `/campaigns/${enc(campaignId)}/authoring/relationships`
 }
 
-export const relationshipOptionsPath = (campaignId: string): string =>
-    `${base(campaignId)}/options`
+// With an entity, the options also carry the pairings that record can take.
+export const relationshipOptionsPath = (campaignId: string, entityId?: string): string =>
+    `${base(campaignId)}/options${entityId === undefined ? "" : `?entity_id=${enc(entityId)}`}`
 
 export const entityRelationshipsPath = (
     campaignId: string,

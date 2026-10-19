@@ -39,6 +39,9 @@ export interface WorldEntitySearchParameters {
     // Narrows the People category to one character type before paging. The server
     // accepts it only with category "character".
     characterType?: CharacterType
+    // Narrows the listing to these entity type codes before paging (repeatable). Each must be a
+    // type of the requested category; the server refuses others.
+    entityTypes?: readonly string[]
 }
 
 export type CharacterType = "npc" | "player_character"

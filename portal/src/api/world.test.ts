@@ -180,6 +180,25 @@ describe("fetchWorldEntities", () => {
         )
     })
 
+    it("repeats entity_type for each entity type code", async () => {
+        const fetchMock = vi.fn().mockResolvedValue(
+            new Response(JSON.stringify({ items: [], next_cursor: null }), { status: 200 }),
+        )
+        vi.stubGlobal("fetch", fetchMock)
+
+        await fetchWorldEntities("campaign-a", {
+            category: null,
+            query: "",
+            entityTypes: ["settlement", "nation"],
+            limit: 10,
+        })
+
+        expect(fetchMock).toHaveBeenCalledWith(
+            "/api/campaigns/campaign-a/world/search?entity_type=settlement&entity_type=nation&limit=10",
+            expect.objectContaining({ method: "GET" }),
+        )
+    })
+
     it("throws a typed error for an unsuccessful response", async () => {
         const fetchMock = vi.fn().mockResolvedValue(
             new Response(null, {

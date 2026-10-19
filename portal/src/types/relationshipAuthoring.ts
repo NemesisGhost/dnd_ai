@@ -8,9 +8,41 @@ export interface RelationshipKindOption {
     fixed_roles: string[] | null
 }
 
+export interface RelationshipRolePolicy {
+    code: string
+    // Reads in the direction of the relationship ("Worshipper", "Controlled place").
+    label: string
+    entity_type_codes: string[]
+}
+
+export interface RelationshipTypePolicy {
+    code: string
+    label: string
+    kind: string
+    symmetric: boolean
+    min_participants: number
+    max_participants: number
+    roles: RelationshipRolePolicy[]
+}
+
+// One way the opened record can take part in a two-participant relationship of a type.
+export interface RelationshipPairing {
+    relationship_type: string
+    my_role: string
+    other_role: string
+    other_entity_type_codes: string[]
+}
+
 export interface RelationshipOptions {
     can_create: boolean
     kinds: RelationshipKindOption[]
+    relationship_types: RelationshipTypePolicy[]
+    // Present when the options were requested for a record.
+    for_entity?: {
+        entity_id: string
+        entity_type_code: string
+        pairings: RelationshipPairing[]
+    }
     limits: {
         text_max_length: number
         short_text_max_length: number
@@ -42,6 +74,8 @@ export interface RelationshipSummary {
     is_public: boolean | null
     row_version: number
     participants: RelationshipParticipant[]
+    // Why the current rules would not accept this record; empty when they do.
+    policy_conflicts: string[]
 }
 
 export interface RelationshipList {
@@ -78,6 +112,7 @@ export interface RelationshipView {
     perspectives: PerspectiveView[]
     current_status: string | null
     available_actions: string[]
+    policy_conflicts: string[]
     changed?: boolean
 }
 

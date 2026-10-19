@@ -21,6 +21,7 @@ from dnd_ai.domain.relationship_authoring import (
     KIND_POLITICAL,
     KIND_ROUTE,
     RELATIONSHIP_KINDS,
+    policy_conflicts,
 )
 
 from .campaign_clock import world_time_point
@@ -69,6 +70,7 @@ class RelationshipAuthoringView:
     perspectives: list[PerspectiveRow] = field(default_factory=list)
     current_status: str | None = None
     available_actions: list[str] = field(default_factory=list)
+    policy_conflicts: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -83,6 +85,7 @@ class RelationshipSummary:
     is_public: bool | None
     row_version: int
     participants: list[Participant]
+    policy_conflicts: list[str] = field(default_factory=list)
 
 
 _KIND_LABEL = {k.code: k.label for k in RELATIONSHIP_KINDS}
@@ -114,6 +117,41 @@ def _kind(connection: Connection, relationship_id: uuid.UUID) -> str:
     ):
         return "membership"
     return "general"
+
+
+def active_type_codes(connection: Connection) -> frozenset[str]:
+    """Relationship types the platform lookup currently offers."""
+    return frozenset(
+        str(code)
+        for code in connection.execute(
+            text("SELECT code FROM world.relationship_types WHERE is_active")
+        ).scalars()
+    )
+
+
+def _conflicts(
+    type_code: str, participants: list[Participant], active: frozenset[str]
+) -> list[str]:
+    return policy_conflicts(
+        type_code,
+        [(p.role, p.entity_type_code, p.name) for p in participants],
+        type_offered=type_code in active,
+    )
+
+
+def entity_type_code_in_world(
+    connection: Connection, *, world_id: uuid.UUID, entity_id: uuid.UUID
+) -> str | None:
+    """The subtype code of an entity in this world, or None when there is no such entity here."""
+    code = connection.execute(
+        text("""
+            SELECT et.code FROM core.entities e
+            JOIN core.entity_types et ON et.entity_type_id = e.entity_type_id
+            WHERE e.entity_id = :e AND e.world_id = :w
+        """),
+        {"e": entity_id, "w": world_id},
+    ).scalar()
+    return None if code is None else str(code)
 
 
 def _participants(connection: Connection, relationship_id: uuid.UUID) -> list[Participant]:
@@ -256,6 +294,9 @@ def get_relationship_authoring(
         perspectives=perspectives,
         current_status=None if status is None else str(status),
         available_actions=actions,
+        policy_conflicts=_conflicts(
+            str(row.type_code), participants, active_type_codes(connection)
+        ),
     )
 
 
@@ -282,9 +323,11 @@ def list_entity_relationships(
         {"w": world_id, "e": entity_id, "archived": include_archived},
     ).all()
     summaries: list[RelationshipSummary] = []
+    active = active_type_codes(connection)
     for r in rows:
         kind = _kind(connection, r.relationship_id)
         typed = _typed(connection, r.relationship_id, kind)
+        participants = _participants(connection, r.relationship_id)
         summaries.append(
             RelationshipSummary(
                 relationship_id=r.relationship_id,
@@ -296,7 +339,8 @@ def list_entity_relationships(
                 ended=r.ended_world_time_id is not None,
                 is_public=typed.get("is_public"),
                 row_version=int(r.row_version),
-                participants=_participants(connection, r.relationship_id),
+                participants=participants,
+                policy_conflicts=_conflicts(str(r.type_code), participants, active),
             )
         )
     return summaries

@@ -890,6 +890,34 @@ Examples:
 - family
 - political control
 
+### 11.5 Relationship type compatibility
+
+A relationship type does not connect just any entities. Which entities may take which role in which type is **application policy**, applied when a relationship is created. Participants and type are fixed afterwards (ADR 0017), so no later command re-checks it. The code source of truth is `RELATIONSHIP_TYPE_POLICIES` in `src/dnd_ai/domain/relationship_authoring.py`; the Add form reads the same policy from the options endpoint, so the form and the server cannot disagree. There is no database trigger or constraint for it.
+
+**Entity groups** (subtype codes from `core.entity_types`): *person* = `npc`, `player_character`; *organization* = `organization`, `business`, `government`, `religious_organization`, `military_unit`, `political_faction`; *religion* = `religion`; *place* = `location`, `plane`, `realm`, `continent`, `nation`, `region`, `district`, `geographic_feature`, `settlement`, `building`, `dungeon`, `dungeon_area`; *polity place* (a place that can act politically) = `nation`, `region`, `realm`, `settlement`, `district`, `location`. The generic `location` counts as any place subtype, so a place without a more specific subtype is never locked out. Items and events are not participants.
+
+| Type | Direction | Role: allowed entities | Participants |
+|---|---|---|---|
+| `family` | by role | `parent`, `child`, `subject`, `object`, `other`: person | 2 to 20 |
+| `employment` | employer to employee | `employer`, `employee`: person, organization | one each, different |
+| `ownership` | owner to property | `owner`: person, organization, religion; `property`: person, place, organization | one each, different |
+| `membership` | member to organization | `member`: person, organization; `organization`: organization (added only in Members and offices) | one each |
+| `route` | origin to destination | both: place | one each, different |
+| `alliance`, `rivalry` | symmetric | `ally` / `rival`: person, organization, religion, polity place | 2 to 20, one role |
+| `war` | side A and side B | `subject` (side A), `object` (side B), `other` (third party): person, organization, religion, polity place | 2 to 20, at least one `subject` and one `object` |
+| `control` | controller to controlled | `ruler`: person, organization, religion, polity place; `territory`: place; `object`: person, organization | 2 to 20, at least one `ruler` and one `territory` or `object` |
+| `worship` | worshipper to worshipped | `subject`: person, organization, place; `object`: religion, person, place, organization | 2 to 20, at least one of each |
+| `adjacency` | symmetric | `subject`, `object`: place except `dungeon_area` (dungeon areas use `world.area_connections`) | exactly two, different |
+| `capital_of` | capital to governed place | `subject`: `settlement`, `location`; `object`: `nation`, `region`, `realm`, `continent`, `plane`, `location` | exactly two, different |
+| `parent_of` | parent to child | `subject`, `object`: religion, organization or place, both sides the same group; never a person (Family is the home for that, and containment and parent bodies have their own fields) | exactly two, different |
+| `other` | any | `subject`, `object`, `other`: any participant | 2 to 20 |
+
+**People.** An NPC or a player character may be the owner or the owned, the controller or the controlled, the worshipper or the worshipped, in every pairing and from either record's page. A worshipped character needs no religion, deity flag or classification. **These relationships are fictional.** Creating one writes no `security.*` row, capability, perspective eligibility, controller assignment, event or `campaign.*_state` row; who may see or play a character is Character access, and no relationship grants a mechanical effect.
+
+**Refusals.** A usable participant that cannot take the role is refused with `participant_incompatible` (400). A role, count or pairing that does not fit the type (a `ruler` in an alliance, a war without a second side, two capitals) is `relationship_invalid`. A participant that does not exist, is in another world or is archived is still `participant_invalid`, indistinguishable from one another, and route and membership keep that code. A type whose lookup row is no longer active is `relationship_invalid` and is no longer offered.
+
+**Existing records.** The policy is never applied retroactively and nothing is rewritten: a record the policy would now refuse stays readable (editors, readers and NPC portrayal), and can be corrected, ended, archived, restored and given perspectives. The editor shows the reasons as `policy_conflicts`; the way to connect different records is to end or archive it and add a correct one. A label never reinterprets a record. `scripts/audit_relationship_compatibility.py` lists such records read-only.
+
 ---
 
 ## 12. Item domain

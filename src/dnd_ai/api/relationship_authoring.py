@@ -41,15 +41,22 @@ from dnd_ai.domain.authoring import REASON_MAX_LENGTH
 from dnd_ai.domain.relationship_authoring import (
     MAX_PARTICIPANTS,
     MIN_PARTICIPANTS,
+    PARTICIPANT_TYPE_CODES,
     RELATIONSHIP_KINDS,
+    RELATIONSHIP_TYPE_POLICIES,
     SHORT_TEXT_MAX_LENGTH,
     STANCE_MAX,
     STANCE_MIN,
     TEXT_MAX_LENGTH,
+    RelationshipTypePolicy,
+    TypePairing,
+    pairs_for,
 )
 from dnd_ai.queries.relationship_authoring import (
     Participant,
     RelationshipAuthoringView,
+    active_type_codes,
+    entity_type_code_in_world,
     get_relationship_authoring,
     list_entity_relationships,
 )
@@ -219,6 +226,7 @@ def _view_json(view: RelationshipAuthoringView, *, changed: bool | None = None) 
         ],
         "current_status": view.current_status,
         "available_actions": view.available_actions,
+        "policy_conflicts": view.policy_conflicts,
     }
     if changed is not None:
         body["changed"] = changed
@@ -280,10 +288,43 @@ def _run(
     return JSONResponse(status_code=status, content=response) if created else response
 
 
-@router.get(_BASE + "/options")
-def options_endpoint(access: _Access) -> dict[str, Any]:
-    del access
+def relationship_type_json(policy: RelationshipTypePolicy) -> dict[str, Any]:
+    """One type of the compatibility policy as the options endpoint serves it."""
     return {
+        "code": policy.code,
+        "label": policy.code.replace("_", " ").title(),
+        "kind": policy.kind,
+        "symmetric": policy.symmetric,
+        "min_participants": policy.min_participants,
+        "max_participants": policy.max_participants,
+        "roles": [
+            {"code": r.code, "label": r.label, "entity_type_codes": sorted(r.entity_type_codes)}
+            for r in policy.roles
+        ],
+    }
+
+
+def pairing_json(pairing: TypePairing) -> dict[str, Any]:
+    return {
+        "relationship_type": pairing.relationship_type,
+        "my_role": pairing.my_role,
+        "other_role": pairing.other_role,
+        "other_entity_type_codes": list(pairing.other_entity_type_codes),
+    }
+
+
+@router.get(_BASE + "/options")
+def options_endpoint(
+    access: _Access,
+    connection: _Conn,
+    entity_id: Annotated[uuid.UUID | None, Query()] = None,
+) -> dict[str, Any]:
+    """The catalog, the per-type compatibility policy and, for `entity_id`, the pairings that
+    record can take. An entity that is missing, in another world or not a participant type is the
+    same 404 as an unknown relationship."""
+    active = active_type_codes(connection)
+    offered = [policy for policy in RELATIONSHIP_TYPE_POLICIES.values() if policy.code in active]
+    body: dict[str, Any] = {
         "can_create": True,
         "kinds": [
             {
@@ -295,6 +336,7 @@ def options_endpoint(access: _Access) -> dict[str, Any]:
             }
             for k in RELATIONSHIP_KINDS
         ],
+        "relationship_types": [relationship_type_json(policy) for policy in offered],
         "limits": {
             "text_max_length": TEXT_MAX_LENGTH,
             "short_text_max_length": SHORT_TEXT_MAX_LENGTH,
@@ -304,6 +346,24 @@ def options_endpoint(access: _Access) -> dict[str, Any]:
             "max_participants": MAX_PARTICIPANTS,
         },
     }
+    if entity_id is not None:
+        entity_type_code = entity_type_code_in_world(
+            connection,
+            world_id=timeline_world_id(connection, access.timeline_id),
+            entity_id=entity_id,
+        )
+        if entity_type_code is None or entity_type_code not in PARTICIPANT_TYPE_CODES:
+            raise NotFoundError()
+        body["for_entity"] = {
+            "entity_id": str(entity_id),
+            "entity_type_code": entity_type_code,
+            "pairings": [
+                pairing_json(p)
+                for p in pairs_for(entity_type_code)
+                if p.relationship_type in active
+            ],
+        }
+    return body
 
 
 @router.get(_BASE)
@@ -332,6 +392,7 @@ def list_endpoint(
                 "is_public": i.is_public,
                 "row_version": i.row_version,
                 "participants": [_participant_json(p) for p in i.participants],
+                "policy_conflicts": i.policy_conflicts,
             }
             for i in items
         ]

@@ -35,56 +35,21 @@ class RelationshipKind:
     fixed_roles: tuple[str, ...] | None = None
 
 
-RELATIONSHIP_KINDS: tuple[RelationshipKind, ...] = (
-    RelationshipKind(
-        KIND_FAMILY, "Family", ("family",), ("parent", "child", "subject", "object", "other")
-    ),
-    RelationshipKind(
-        KIND_EMPLOYMENT,
-        "Employment",
-        ("employment",),
-        ("employer", "employee"),
-        fixed_roles=("employer", "employee"),
-    ),
-    RelationshipKind(
-        KIND_OWNERSHIP,
-        "Ownership",
-        ("ownership",),
-        ("owner", "property"),
-        fixed_roles=("owner", "property"),
-    ),
-    RelationshipKind(
-        KIND_MEMBERSHIP,
-        "Membership",
-        ("membership",),
-        ("member", "organization"),
-        fixed_roles=("member", "organization"),
-    ),
-    RelationshipKind(
-        KIND_ROUTE,
-        "Route",
-        ("route",),
-        ("origin", "destination"),
-        fixed_roles=("origin", "destination"),
-    ),
-    RelationshipKind(
-        KIND_POLITICAL,
-        "Political",
-        ("alliance", "rivalry", "war", "control"),
-        ("subject", "object", "ally", "rival", "ruler", "territory", "other"),
-    ),
-    RelationshipKind(
-        KIND_GENERAL,
-        "Other connection",
-        ("worship", "adjacency", "capital_of", "parent_of", "other"),
-        ("subject", "object", "other"),
-    ),
+# Entity groups (subtype codes from `core.entity_types`). The compatibility policy below and the
+# membership and route commands share these.
+PERSON_TYPE_CODES = frozenset({"npc", "player_character"})
+ORGANIZATION_TYPE_CODES = frozenset(
+    {
+        "organization",
+        "business",
+        "government",
+        "religious_organization",
+        "military_unit",
+        "political_faction",
+    }
 )
-_KIND_BY_CODE = {k.code: k for k in RELATIONSHIP_KINDS}
-
-# Entity types that can take part in a relationship: places, organizations, religions and
-# characters (items and events are not related this way).
-PARTICIPANT_TYPE_CODES = frozenset(
+RELIGION_TYPE_CODES = frozenset({"religion"})
+PLACE_TYPE_CODES = frozenset(
     {
         "location",
         "settlement",
@@ -98,17 +63,423 @@ PARTICIPANT_TYPE_CODES = frozenset(
         "realm",
         "dungeon",
         "dungeon_area",
-        "organization",
-        "business",
-        "government",
-        "religious_organization",
-        "military_unit",
-        "political_faction",
-        "religion",
-        "npc",
-        "player_character",
     }
 )
+# A place that can act politically (ally, rival, ruler, worshipper).
+POLITY_PLACE_TYPE_CODES = frozenset(
+    {"nation", "region", "realm", "settlement", "district", "location"}
+)
+MEMBER_TYPE_CODES = PERSON_TYPE_CODES | ORGANIZATION_TYPE_CODES
+
+# Entity types that can take part in a relationship: places, organizations, religions and
+# characters (items and events are not related this way).
+PARTICIPANT_TYPE_CODES = (
+    PLACE_TYPE_CODES | ORGANIZATION_TYPE_CODES | RELIGION_TYPE_CODES | PERSON_TYPE_CODES
+)
+
+_POLITICAL_ACTORS = (
+    PERSON_TYPE_CODES | ORGANIZATION_TYPE_CODES | RELIGION_TYPE_CODES | POLITY_PLACE_TYPE_CODES
+)
+
+
+@dataclass(frozen=True)
+class RolePolicy:
+    code: str
+    # Reads in the direction of the relationship ("Worshipper", "Controlled place").
+    label: str
+    entity_type_codes: frozenset[str]
+
+
+@dataclass(frozen=True)
+class RelationshipTypePolicy:
+    """What one relationship type may connect. Applied when a relationship is created; participants
+    and type are fixed afterwards (ADR 0017), so later commands never re-check it."""
+
+    code: str
+    kind: str
+    roles: tuple[RolePolicy, ...]
+    symmetric: bool = False
+    min_participants: int = 2
+    max_participants: int = 20
+    # Each set must be held by at least one participant ({"ruler"}, {"territory", "object"}).
+    required_roles: tuple[frozenset[str], ...] = ()
+    # A fixed-shape type has exactly these roles, once each.
+    exact_roles: tuple[str, ...] | None = None
+    distinct_entities: bool = False
+    # Both participants of a two-sided type must come from the same one of these groups.
+    same_group_of: tuple[frozenset[str], ...] = ()
+    # Route and membership keep their original refusal (`participant_invalid`).
+    legacy_entity_error: bool = False
+
+    def role(self, code: str) -> RolePolicy | None:
+        return next((r for r in self.roles if r.code == code), None)
+
+
+def _roles(codes: frozenset[str], *labelled: tuple[str, str]) -> tuple[RolePolicy, ...]:
+    return tuple(RolePolicy(code, label, codes) for code, label in labelled)
+
+
+def _fixed(
+    code: str, kind: str, *roles: RolePolicy, legacy: bool = False
+) -> RelationshipTypePolicy:
+    return RelationshipTypePolicy(
+        code,
+        kind,
+        roles,
+        min_participants=2,
+        max_participants=2,
+        exact_roles=tuple(r.code for r in roles),
+        distinct_entities=True,
+        legacy_entity_error=legacy,
+    )
+
+
+_PARENT_GROUPS = (RELIGION_TYPE_CODES, ORGANIZATION_TYPE_CODES, PLACE_TYPE_CODES)
+_ADJACENT_PLACES = PLACE_TYPE_CODES - {"dungeon_area"}
+_PERSON_OR_ORG = PERSON_TYPE_CODES | ORGANIZATION_TYPE_CODES
+_ANY = PARTICIPANT_TYPE_CODES
+
+RELATIONSHIP_TYPE_POLICIES: dict[str, RelationshipTypePolicy] = {
+    p.code: p
+    for p in (
+        RelationshipTypePolicy(
+            "family",
+            KIND_FAMILY,
+            _roles(
+                PERSON_TYPE_CODES,
+                ("parent", "Parent"),
+                ("child", "Child"),
+                ("subject", "Subject"),
+                ("object", "Object"),
+                ("other", "Other"),
+            ),
+        ),
+        _fixed(
+            "employment",
+            KIND_EMPLOYMENT,
+            RolePolicy("employer", "Employer", _PERSON_OR_ORG),
+            RolePolicy("employee", "Employee", _PERSON_OR_ORG),
+        ),
+        _fixed(
+            "ownership",
+            KIND_OWNERSHIP,
+            RolePolicy(
+                "owner", "Owner", PERSON_TYPE_CODES | ORGANIZATION_TYPE_CODES | RELIGION_TYPE_CODES
+            ),
+            RolePolicy(
+                "property",
+                "Owned",
+                PERSON_TYPE_CODES | PLACE_TYPE_CODES | ORGANIZATION_TYPE_CODES,
+            ),
+        ),
+        _fixed(
+            "membership",
+            KIND_MEMBERSHIP,
+            RolePolicy("member", "Member", MEMBER_TYPE_CODES),
+            RolePolicy("organization", "Organization", ORGANIZATION_TYPE_CODES),
+            legacy=True,
+        ),
+        _fixed(
+            "route",
+            KIND_ROUTE,
+            RolePolicy("origin", "Origin", PLACE_TYPE_CODES),
+            RolePolicy("destination", "Destination", PLACE_TYPE_CODES),
+            legacy=True,
+        ),
+        RelationshipTypePolicy(
+            "alliance",
+            KIND_POLITICAL,
+            _roles(_POLITICAL_ACTORS, ("ally", "Ally")),
+            symmetric=True,
+        ),
+        RelationshipTypePolicy(
+            "rivalry",
+            KIND_POLITICAL,
+            _roles(_POLITICAL_ACTORS, ("rival", "Rival")),
+            symmetric=True,
+        ),
+        RelationshipTypePolicy(
+            "war",
+            KIND_POLITICAL,
+            _roles(
+                _POLITICAL_ACTORS,
+                ("subject", "Side A"),
+                ("object", "Side B"),
+                ("other", "Third party"),
+            ),
+            required_roles=(frozenset({"subject"}), frozenset({"object"})),
+        ),
+        RelationshipTypePolicy(
+            "control",
+            KIND_POLITICAL,
+            (
+                RolePolicy("ruler", "Controller", _POLITICAL_ACTORS),
+                RolePolicy("territory", "Controlled place", PLACE_TYPE_CODES),
+                RolePolicy("object", "Controlled party", _PERSON_OR_ORG),
+            ),
+            required_roles=(frozenset({"ruler"}), frozenset({"territory", "object"})),
+        ),
+        RelationshipTypePolicy(
+            "worship",
+            KIND_GENERAL,
+            (
+                RolePolicy(
+                    "subject",
+                    "Worshipper",
+                    PERSON_TYPE_CODES | ORGANIZATION_TYPE_CODES | PLACE_TYPE_CODES,
+                ),
+                RolePolicy(
+                    "object",
+                    "Worshipped",
+                    RELIGION_TYPE_CODES
+                    | PERSON_TYPE_CODES
+                    | PLACE_TYPE_CODES
+                    | ORGANIZATION_TYPE_CODES,
+                ),
+            ),
+            required_roles=(frozenset({"subject"}), frozenset({"object"})),
+        ),
+        RelationshipTypePolicy(
+            "adjacency",
+            KIND_GENERAL,
+            _roles(_ADJACENT_PLACES, ("subject", "Adjoining place"), ("object", "Adjoining place")),
+            symmetric=True,
+            max_participants=2,
+            required_roles=(frozenset({"subject"}), frozenset({"object"})),
+            distinct_entities=True,
+        ),
+        RelationshipTypePolicy(
+            "capital_of",
+            KIND_GENERAL,
+            (
+                RolePolicy("subject", "Capital", frozenset({"settlement", "location"})),
+                RolePolicy(
+                    "object",
+                    "Governed place",
+                    frozenset({"nation", "region", "realm", "continent", "plane", "location"}),
+                ),
+            ),
+            max_participants=2,
+            required_roles=(frozenset({"subject"}), frozenset({"object"})),
+            distinct_entities=True,
+        ),
+        RelationshipTypePolicy(
+            "parent_of",
+            KIND_GENERAL,
+            (
+                RolePolicy(
+                    "subject",
+                    "Parent",
+                    RELIGION_TYPE_CODES | ORGANIZATION_TYPE_CODES | PLACE_TYPE_CODES,
+                ),
+                RolePolicy(
+                    "object",
+                    "Child",
+                    RELIGION_TYPE_CODES | ORGANIZATION_TYPE_CODES | PLACE_TYPE_CODES,
+                ),
+            ),
+            max_participants=2,
+            required_roles=(frozenset({"subject"}), frozenset({"object"})),
+            distinct_entities=True,
+            same_group_of=_PARENT_GROUPS,
+        ),
+        RelationshipTypePolicy(
+            "other",
+            KIND_GENERAL,
+            _roles(_ANY, ("subject", "Subject"), ("object", "Object"), ("other", "Other")),
+        ),
+    )
+}
+
+# Catalog order of roles within a kind (kept stable for the options payload).
+_ROLE_ORDER = (
+    "parent",
+    "child",
+    "subject",
+    "object",
+    "ally",
+    "rival",
+    "ruler",
+    "territory",
+    "other",
+    "employer",
+    "employee",
+    "owner",
+    "property",
+    "member",
+    "organization",
+    "origin",
+    "destination",
+)
+
+_KIND_LABELS = (
+    (KIND_FAMILY, "Family"),
+    (KIND_EMPLOYMENT, "Employment"),
+    (KIND_OWNERSHIP, "Ownership"),
+    (KIND_MEMBERSHIP, "Membership"),
+    (KIND_ROUTE, "Route"),
+    (KIND_POLITICAL, "Political"),
+    (KIND_GENERAL, "Other connection"),
+)
+
+
+def _derive_kind(code: str, label: str) -> RelationshipKind:
+    policies = [p for p in RELATIONSHIP_TYPE_POLICIES.values() if p.kind == code]
+    roles = {r.code for p in policies for r in p.roles}
+    fixed = policies[0].exact_roles if len(policies) == 1 else None
+    return RelationshipKind(
+        code,
+        label,
+        tuple(p.code for p in policies),
+        tuple(sorted(roles, key=_ROLE_ORDER.index)),
+        fixed_roles=fixed,
+    )
+
+
+# Derived from the policies, so the kind catalog and the type policy cannot disagree.
+RELATIONSHIP_KINDS: tuple[RelationshipKind, ...] = tuple(
+    _derive_kind(code, label) for code, label in _KIND_LABELS
+)
+_KIND_BY_CODE = {k.code: k for k in RELATIONSHIP_KINDS}
+
+
+def _humanize(code: str) -> str:
+    return code.replace("_", " ")
+
+
+@dataclass(frozen=True)
+class PolicyViolation:
+    # "shape": the type, roles or counts do not fit; "entity": a participant cannot take its role.
+    category: str
+    message: str
+
+
+# One participant as the policy sees it: role code, entity type code, optional display name.
+PolicyParticipant = tuple[str, str] | tuple[str, str, str]
+
+
+def _violations(
+    policy: RelationshipTypePolicy, participants: list[PolicyParticipant]
+) -> list[PolicyViolation]:
+    found: list[PolicyViolation] = []
+    roles = [p[0] for p in participants]
+    for role in dict.fromkeys(roles):
+        if policy.role(role) is None:
+            found.append(
+                PolicyViolation(
+                    "shape", f"{_humanize(role).capitalize()} is not a role of this type."
+                )
+            )
+    if not policy.min_participants <= len(participants) <= policy.max_participants:
+        found.append(
+            PolicyViolation(
+                "shape",
+                f"This type has {policy.min_participants} to {policy.max_participants} participants.",
+            )
+        )
+    if policy.exact_roles is not None and sorted(roles) != sorted(policy.exact_roles):
+        found.append(PolicyViolation("shape", f"This type needs exactly {policy.exact_roles}."))
+    for needed in policy.required_roles:
+        if not needed.intersection(roles):
+            found.append(
+                PolicyViolation("shape", f"This type needs a {' or '.join(sorted(needed))} role.")
+            )
+    for item in participants:
+        role, entity_type = item[0], item[1]
+        role_policy = policy.role(role)
+        if role_policy is None or entity_type in role_policy.entity_type_codes:
+            continue
+        who = item[2] if len(item) == 3 else "A participant"
+        found.append(
+            PolicyViolation(
+                "entity",
+                f"{who} ({_humanize(entity_type)}) cannot be the {role_policy.label.lower()} "
+                f"in {_humanize(policy.code)}.",
+            )
+        )
+    if policy.same_group_of and len(participants) == 2:
+        groups = [
+            next((i for i, g in enumerate(policy.same_group_of) if p[1] in g), None)
+            for p in participants
+        ]
+        if None not in groups and groups[0] != groups[1]:
+            found.append(
+                PolicyViolation(
+                    "entity",
+                    f"Both sides of {_humanize(policy.code)} must be the same kind of record.",
+                )
+            )
+    return found
+
+
+def validate_participants(
+    policy: RelationshipTypePolicy, participants: list[PolicyParticipant]
+) -> None:
+    """Raise unless the roles, counts and each participant's entity type fit the type's policy."""
+    violations = _violations(policy, participants)
+    shape = [v for v in violations if v.category == "shape"]
+    if shape:
+        raise RelationshipInvalidError(shape[0].message)
+    if violations:
+        error: type[SafeMessageError] = (
+            RelationshipParticipantInvalidError
+            if policy.legacy_entity_error
+            else RelationshipParticipantIncompatibleError
+        )
+        raise error(violations[0].message)
+
+
+def policy_conflicts(
+    relationship_type: str, participants: list[PolicyParticipant], *, type_offered: bool = True
+) -> list[str]:
+    """Plain reasons the current policy would refuse a stored relationship; empty when it fits.
+    Reports only what the policy says about the stored roles and entity types."""
+    policy = RELATIONSHIP_TYPE_POLICIES.get(relationship_type)
+    if policy is None or not type_offered:
+        return ["This type of relationship is no longer offered."]
+    return [v.message for v in _violations(policy, participants)]
+
+
+@dataclass(frozen=True)
+class TypePairing:
+    relationship_type: str
+    my_role: str
+    other_role: str
+    other_entity_type_codes: tuple[str, ...]
+
+
+def pairs_for(entity_type_code: str) -> list[TypePairing]:
+    """Every (my role, other role) that the entity can take in a two-participant relationship of
+    each type, with the entity types the counterpart may be. Computed from the policies."""
+    pairings: list[TypePairing] = []
+    for policy in RELATIONSHIP_TYPE_POLICIES.values():
+        if policy.max_participants < 2 or policy.min_participants > 2:
+            continue
+        for mine in policy.roles:
+            if entity_type_code not in mine.entity_type_codes:
+                continue
+            for theirs in policy.roles:
+                if not _two_sided_fits(policy, mine.code, theirs.code):
+                    continue
+                others = theirs.entity_type_codes
+                if policy.same_group_of:
+                    group = next((g for g in policy.same_group_of if entity_type_code in g), None)
+                    if group is None:
+                        continue
+                    others = others & group
+                if others:
+                    pairings.append(
+                        TypePairing(policy.code, mine.code, theirs.code, tuple(sorted(others)))
+                    )
+    return pairings
+
+
+def _two_sided_fits(policy: RelationshipTypePolicy, first: str, second: str) -> bool:
+    roles = [first, second]
+    if policy.exact_roles is not None:
+        return sorted(roles) == sorted(policy.exact_roles)
+    return all(needed.intersection(roles) for needed in policy.required_roles)
+
 
 MIN_PARTICIPANTS = 2
 MAX_PARTICIPANTS = 20
@@ -162,37 +533,8 @@ def normalize_stance(value: int | None, *, field: str) -> int | None:
     return value
 
 
-# Membership (15.3A-2b): who may belong to an organization, and which entity is the organization.
-ORGANIZATION_TYPE_CODES = frozenset(
-    {
-        "organization",
-        "business",
-        "government",
-        "religious_organization",
-        "military_unit",
-        "political_faction",
-    }
-)
-MEMBER_TYPE_CODES = frozenset({"npc", "player_character"}) | ORGANIZATION_TYPE_CODES
-
-
-# Routes (15.3A-2c) join two places; travel moves characters between places.
-PLACE_TYPE_CODES = frozenset(
-    {
-        "location",
-        "settlement",
-        "building",
-        "plane",
-        "continent",
-        "nation",
-        "region",
-        "district",
-        "geographic_feature",
-        "realm",
-        "dungeon",
-        "dungeon_area",
-    }
-)
+# Membership (15.3A-2b) and routes (15.3A-2c) use the entity groups above; travel moves
+# characters between places.
 MAX_TRAVELERS = 50
 
 
@@ -258,6 +600,14 @@ class RelationshipParticipantInvalidError(SafeMessageError):
     safe_status_code = 400
     safe_error_code = "participant_invalid"
     safe_message = "Choose published places, organizations, religions or characters."
+
+
+class RelationshipParticipantIncompatibleError(SafeMessageError):
+    """A usable participant cannot take that role in this type of relationship."""
+
+    safe_status_code = 400
+    safe_error_code = "participant_incompatible"
+    safe_message = "That participant cannot take that role in this type of relationship."
 
 
 class RelationshipTimeInvalidError(SafeMessageError):

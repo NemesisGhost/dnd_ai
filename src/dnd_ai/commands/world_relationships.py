@@ -32,10 +32,8 @@ from dnd_ai.domain.relationship_authoring import (
     KIND_OWNERSHIP,
     KIND_POLITICAL,
     KIND_ROUTE,
-    MEMBER_TYPE_CODES,
-    ORGANIZATION_TYPE_CODES,
     PARTICIPANT_TYPE_CODES,
-    PLACE_TYPE_CODES,
+    RELATIONSHIP_TYPE_POLICIES,
     SHORT_TEXT_MAX_LENGTH,
     MembershipOverlapError,
     MembershipStartRequiredError,
@@ -51,6 +49,7 @@ from dnd_ai.domain.relationship_authoring import (
     normalize_stance,
     normalize_text,
     relationship_kind,
+    validate_participants,
     validate_shape,
 )
 
@@ -62,7 +61,7 @@ from ._content import (
     lock_entities,
     usable_reference,
 )
-from ._shared import lifecycle_code, lookup_id
+from ._shared import lifecycle_code
 
 
 @dataclass(frozen=True)
@@ -253,7 +252,8 @@ def create_relationship(
     clean_description = normalize_text(description, field="description")
     clean_typed = _clean_typed(shape.code, typed or {})
     entity_ids = [p.entity_id for p in participants]
-    if shape.fixed_roles is not None and len(set(entity_ids)) != len(entity_ids):
+    policy = RELATIONSHIP_TYPE_POLICIES[relationship_type]
+    if policy.distinct_entities and len(set(entity_ids)) != len(entity_ids):
         raise RelationshipInvalidError("the two sides of this kind must differ")
     if len({(p.entity_id, p.role) for p in participants}) != len(participants):
         raise RelationshipInvalidError("a participant appears twice in the same role")
@@ -269,23 +269,26 @@ def create_relationship(
             type_codes=PARTICIPANT_TYPE_CODES,
             error=RelationshipParticipantInvalidError,
         )
-    if shape.code == KIND_ROUTE:
-        for participant in participants:
-            place = locked.get(participant.entity_id)
-            if place is None or place.entity_type_code not in PLACE_TYPE_CODES:
-                raise RelationshipParticipantInvalidError("a route joins two places")
-    if shape.code == KIND_MEMBERSHIP:
-        by_role = {p.role: p.entity_id for p in participants}
-        organization = locked.get(by_role["organization"])
-        member = locked.get(by_role["member"])
-        if organization is None or organization.entity_type_code not in ORGANIZATION_TYPE_CODES:
-            raise RelationshipParticipantInvalidError("the organization is not an organization")
-        if member is None or member.entity_type_code not in MEMBER_TYPE_CODES:
-            raise RelationshipParticipantInvalidError("that cannot be a member")
-    _world_time_sort_key(connection, scope.world_id, started_world_time_id)
-    type_id = lookup_id(
-        connection, "world", "relationship_types", "relationship_type_id", relationship_type
+    # Which entity types may take which role in this type (route and membership included).
+    # It runs after `usable_reference`, so a missing or other-world participant is still
+    # indistinguishable from an archived one.
+    validate_participants(
+        policy,
+        [
+            (p.role, locked[p.entity_id].entity_type_code, locked[p.entity_id].canonical_name)
+            for p in participants
+        ],
     )
+    type_row = connection.execute(
+        text(
+            "SELECT relationship_type_id, is_active FROM world.relationship_types WHERE code = :c"
+        ),
+        {"c": relationship_type},
+    ).one_or_none()
+    if type_row is None or not type_row.is_active:
+        raise RelationshipInvalidError(f"{relationship_type!r} is not offered")
+    _world_time_sort_key(connection, scope.world_id, started_world_time_id)
+    type_id = type_row.relationship_type_id
     source_id = insert_gm_source(connection, world_id=scope.world_id, actor_user_id=actor_user_id)
     relationship_id = connection.execute(
         text("""

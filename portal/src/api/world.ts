@@ -57,6 +57,10 @@ function buildWorldSearchPath(
         searchParameters.set("character_type", parameters.characterType)
     }
 
+    for (const entityType of parameters.entityTypes ?? []) {
+        searchParameters.append("entity_type", entityType)
+    }
+
     if (parameters.limit !== undefined) {
         searchParameters.set(
             "limit",

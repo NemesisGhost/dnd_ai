@@ -87,6 +87,13 @@ export function RelationshipEditor({ campaignId, relationshipId, options, onChan
                 {view.ended !== null ? ` until ${view.ended}` : ""}
                 {view.current_status !== null ? `. Now: ${view.current_status.replace(/_/g, " ")}` : ""}
             </p>
+            {view.policy_conflicts.length > 0 ? (
+                <p className="authoring-note" role="status">
+                    This relationship does not fit the current rules: {view.policy_conflicts.join(" ")} You can still
+                    correct its details, end it or archive it; to connect different records, end or archive it and add
+                    a new one.
+                </p>
+            ) : null}
             <ul className="op-list">
                 {view.participants.map((p) => (
                     <li key={`${p.entity_id}-${p.role}`}>

@@ -344,6 +344,7 @@ def search_world_entities_endpoint(
         Query(),
     ] = None,
     character_type: Annotated[Literal["npc", "player_character"] | None, Query()] = None,
+    entity_type: Annotated[list[str] | None, Query()] = None,
 ) -> WorldEntitySearchResponse:
     """Type-filtered, text-searchable, cursor-paginated browse over every
     authorized entity-rooted World Explorer category. `category` may be
@@ -358,7 +359,9 @@ def search_world_entities_endpoint(
     `character_type` (`npc` or `player_character`) narrows the `character`
     category to that one type before pagination; it is only accepted when
     `category=character` is the sole category (422 otherwise). It changes no
-    visibility rule."""
+    visibility rule. `entity_type` (repeatable) generalizes it: every value must be a type code
+    of a requested category (any category when `category` is omitted), otherwise 422; it
+    narrows the listing before pagination and changes no visibility rule."""
     categories = list(category) if category else list(WORLD_CATEGORY_TYPE_CODES)
     if character_type is not None and categories != ["character"]:
         # The same fixed 422 FastAPI's own query validation produces.
@@ -377,6 +380,20 @@ def search_world_entities_endpoint(
         type_codes.extend(WORLD_CATEGORY_TYPE_CODES[cat])
     if character_type is not None:
         type_codes = [character_type]
+    if entity_type:
+        outside = [t for t in entity_type if t not in type_codes]
+        if outside:
+            raise RequestValidationError(
+                [
+                    {
+                        "type": "value_error",
+                        "loc": ("query", "entity_type"),
+                        "msg": "entity_type must be a type of a requested category.",
+                        "input": outside[0],
+                    }
+                ]
+            )
+        type_codes = [t for t in type_codes if t in entity_type]
 
     keyset = decode_typed_cursor(cursor, keyset=ENTITY_SEARCH_KEYSET, fields=("str", "uuid"))
     after_name = cast(str, keyset[0]) if keyset is not None else None
