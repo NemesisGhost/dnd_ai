@@ -106,7 +106,8 @@ describe("ActivateAccountPage link check", () => {
             release(new Response(JSON.stringify({ valid: true }), { status: 200 }))
         })
         await ready()
-        expect(screen.getByRole("heading", { level: 1, name: "Set passphrase" })).toHaveFocus()
+        // Focus moves after the heading renders; under load that is a tick later.
+        await waitFor(() => expect(screen.getByRole("heading", { level: 1, name: "Set passphrase" })).toHaveFocus())
         expect(screen.getByLabelText(LABEL)).toHaveAttribute("autocomplete", "new-password")
         expect(screen.getByLabelText("Confirm passphrase")).toHaveAttribute("autocomplete", "new-password")
         expect(callsTo(ENDPOINT)).toHaveLength(0)
@@ -131,7 +132,8 @@ describe("ActivateAccountPage link check", () => {
         open("#token=raw-token")
         const { container } = renderPage()
         expect(await screen.findByText(INVALID_MESSAGE)).toBeInTheDocument()
-        expect(screen.getByRole("heading", { level: 1, name: INVALID_HEADING })).toHaveFocus()
+        // Focus moves after the heading renders; under load that is a tick later.
+        await waitFor(() => expect(screen.getByRole("heading", { level: 1, name: INVALID_HEADING })).toHaveFocus())
         expect(container.querySelector("input")).toBeNull()
         expect(container.innerHTML).not.toContain("raw-token")
         expect(callsTo(ENDPOINT)).toHaveLength(0)
