@@ -85,6 +85,7 @@ _MEMBER_READS = frozenset(
         f"{CAMPAIGN}/organizations/{{organization_id}}/members",
         f"{CAMPAIGN}/parties",
         f"{CAMPAIGN}/parties/{{party_id}}",
+        f"{CAMPAIGN}/parties/{{party_id}}/roster",
         f"{CAMPAIGN}/quests",
         f"{CAMPAIGN}/quests/{{quest_id}}",
         f"{CAMPAIGN}/relationships/{{relationship_id}}",

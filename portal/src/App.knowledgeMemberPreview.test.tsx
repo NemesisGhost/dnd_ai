@@ -328,7 +328,11 @@ describe("Knowledge Member preview", () => {
       const banner = await screen.findByRole("region", { name: "Preview context" })
       expect(banner).toHaveTextContent("Character perspective: Ixa. Party perspective: Red Company.")
       expect(screen.getByRole("combobox", { name: "View" })).toHaveValue("recent")
-      expect(requestsTo(listPath("m1")).at(-1)!.path).toContain("view=recent&character_id=c1&party_id=p1")
+      await waitFor(() =>
+        expect(requestsTo(listPath("m1")).at(-1)?.path).toContain(
+          "view=recent&character_id=c1&party_id=p1",
+        ),
+      )
     })
 
     it("treats an unknown view as the default rather than sending it", async () => {
