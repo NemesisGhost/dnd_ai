@@ -579,7 +579,9 @@ generic entity DTO for detail.
   six), `q` (≤200 chars, case-insensitive substring over
   `core.entities.canonical_name` + `summary` — never `core.entity_names`
   aliases, some of which are themselves a disclosure), `limit` (1–100,
-  default 25), `cursor`.
+  default 25), `cursor`, `character_type` (`npc` or `player_character`; accepted only when `character` is
+  the only `category`, otherwise a fixed 422; it narrows the type codes before paging and changes no
+  visibility rule).
 - **`/world/relationships`** params: `q` (over `description`), `type`
   (`world.relationship_types.code`), `related_entity_id`, `limit`,
   `cursor`.

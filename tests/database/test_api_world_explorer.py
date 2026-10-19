@@ -145,8 +145,19 @@ class Fixture:
         )
 
         # Characters: one plain, one the player will get a relationship to.
-        self.npc_id = make_character(connection, self.world_id, name="Vashka the Quiet")
-        self.pc_id = make_character(connection, self.world_id, name="Aldric Vane")
+        self.npc_id = make_character(
+            connection, self.world_id, name="Vashka the Quiet", entity_type_code="npc"
+        )
+        connection.execute(
+            text("INSERT INTO character.npcs (npc_id) VALUES (:i)"), {"i": self.npc_id}
+        )
+        self.pc_id = make_character(
+            connection, self.world_id, name="Aldric Vane", entity_type_code="player_character"
+        )
+        connection.execute(
+            text("INSERT INTO character.player_characters (player_character_id) VALUES (:i)"),
+            {"i": self.pc_id},
+        )
 
         # A relationship between two visible entities, and one that
         # involves a character the player cannot discover.
@@ -359,6 +370,78 @@ def test_category_filter_restricts_results(
         body = client.get(_search(f), params={"category": "religion", "limit": 100}).json()
     assert {item["category"] for item in body["items"]} == {"religion"}
     assert any(item["entity_id"] == str(f.religion_id) for item in body["items"])
+
+
+def test_character_type_filter_narrows_to_one_type(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.gm_user_id) as client:
+        npcs = client.get(
+            _search(f), params={"category": "character", "character_type": "npc", "limit": 100}
+        ).json()["items"]
+        pcs = client.get(
+            _search(f),
+            params={"category": "character", "character_type": "player_character", "limit": 100},
+        ).json()["items"]
+    assert {item["entity_type_code"] for item in npcs} == {"npc"}
+    assert str(f.npc_id) in {item["entity_id"] for item in npcs}
+    assert {item["entity_type_code"] for item in pcs} == {"player_character"}
+    assert str(f.pc_id) in {item["entity_id"] for item in pcs}
+
+
+def test_character_type_filter_keyset_pages_stay_within_the_type(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    seen: list[str] = []
+    cursor: str | None = None
+    with client_factory(f.gm_user_id) as client:
+        for _ in range(10):
+            params: dict[str, object] = {
+                "category": "character",
+                "character_type": "npc",
+                "limit": 1,
+            }
+            if cursor is not None:
+                params["cursor"] = cursor
+            body = client.get(_search(f), params=params).json()
+            assert {item["entity_type_code"] for item in body["items"]} <= {"npc"}
+            seen.extend(item["entity_id"] for item in body["items"])
+            cursor = body["next_cursor"]
+            if cursor is None:
+                break
+    assert len(seen) == len(set(seen))
+    assert str(f.npc_id) in seen
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"character_type": "npc"},
+        {"category": ["character", "location"], "character_type": "npc"},
+        {"category": "location", "character_type": "npc"},
+        {"category": "character", "character_type": "dragon"},
+    ],
+)
+def test_character_type_filter_is_422_without_the_character_category_or_for_unknown_values(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, params: dict[str, object]
+) -> None:
+    with client_factory(f.gm_user_id) as client:
+        assert client.get(_search(f), params=params).status_code == 422
+
+
+def test_character_type_filter_does_not_widen_player_visibility(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.player_user_id) as player:
+        npcs = player.get(
+            _search(f), params={"category": "character", "character_type": "npc", "limit": 100}
+        ).json()["items"]
+        pcs = player.get(
+            _search(f),
+            params={"category": "character", "character_type": "player_character", "limit": 100},
+        ).json()["items"]
+    assert str(f.npc_id) not in {item["entity_id"] for item in npcs}
+    assert str(f.pc_id) in {item["entity_id"] for item in pcs}
 
 
 def test_search_is_case_insensitive(

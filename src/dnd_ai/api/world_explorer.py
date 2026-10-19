@@ -26,6 +26,7 @@ import uuid
 from typing import Annotated, Any, Literal, cast
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel
 from sqlalchemy import Connection
 
@@ -342,6 +343,7 @@ def search_world_entities_endpoint(
         list[Literal["draft", "proposed", "approved", "rejected", "canon", "superseded"]] | None,
         Query(),
     ] = None,
+    character_type: Annotated[Literal["npc", "player_character"] | None, Query()] = None,
 ) -> WorldEntitySearchResponse:
     """Type-filtered, text-searchable, cursor-paginated browse over every
     authorized entity-rooted World Explorer category. `category` may be
@@ -352,11 +354,29 @@ def search_world_entities_endpoint(
     (GM preview) — for anyone else the flags are silently ignored. `canon_status`
     (repeatable) narrows the result to those statuses and is likewise
     honoured only for a `canon.edit` holder. An empty result — including for an authorized search with
-    no visible matches — returns `items: []`, never an existence hint."""
+    no visible matches — returns `items: []`, never an existence hint.
+    `character_type` (`npc` or `player_character`) narrows the `character`
+    category to that one type before pagination; it is only accepted when
+    `category=character` is the sole category (422 otherwise). It changes no
+    visibility rule."""
     categories = list(category) if category else list(WORLD_CATEGORY_TYPE_CODES)
+    if character_type is not None and categories != ["character"]:
+        # The same fixed 422 FastAPI's own query validation produces.
+        raise RequestValidationError(
+            [
+                {
+                    "type": "value_error",
+                    "loc": ("query", "character_type"),
+                    "msg": "character_type requires category=character as the only category.",
+                    "input": character_type,
+                }
+            ]
+        )
     type_codes: list[str] = []
     for cat in categories:
         type_codes.extend(WORLD_CATEGORY_TYPE_CODES[cat])
+    if character_type is not None:
+        type_codes = [character_type]
 
     keyset = decode_typed_cursor(cursor, keyset=ENTITY_SEARCH_KEYSET, fields=("str", "uuid"))
     after_name = cast(str, keyset[0]) if keyset is not None else None

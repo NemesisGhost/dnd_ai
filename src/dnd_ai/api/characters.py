@@ -100,7 +100,7 @@ vs-derived field policy, and known data-model limitations.
 """
 
 import uuid
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -159,6 +159,10 @@ class CharacterResourceResponse(BaseModel):
 class CharacterResponse(BaseModel):
     character_id: uuid.UUID
     name: str
+    # `npc`, `player_character`, or `character` (a bare character row). Not new
+    # disclosure: the World search card already returns the entity type to anyone
+    # who may discover the character.
+    character_kind: Literal["npc", "player_character", "character"]
     species_code: str
     size_category: str
     # None on every field below when the caller was authorized only for
@@ -311,6 +315,7 @@ class CharacterSheetMovementResponse(BaseModel):
 class CharacterSheetResponse(BaseModel):
     character_id: uuid.UUID
     name: str
+    character_kind: Literal["npc", "player_character", "character"]
     species_code: str
     species_display_name: str
     size_category: str
@@ -425,6 +430,7 @@ def get_character_endpoint(
     return CharacterResponse(
         character_id=view.character_id,
         name=view.name,
+        character_kind=view.character_kind,  # type: ignore[arg-type]
         species_code=view.species_code,
         size_category=view.size_category,
         current_hit_points=view.current_hit_points,
@@ -622,6 +628,7 @@ def get_character_sheet_endpoint(
     return CharacterSheetResponse(
         character_id=view.character_id,
         name=view.name,
+        character_kind=view.character_kind,  # type: ignore[arg-type]
         species_code=view.species_code,
         species_display_name=view.species_display_name,
         size_category=view.size_category,
