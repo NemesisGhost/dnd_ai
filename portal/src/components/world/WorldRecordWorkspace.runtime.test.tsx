@@ -416,7 +416,7 @@ describe("an organization's members and status", () => {
         fireEvent.change(within(form).getByRole("combobox", { name: "When" }), { target: { value: "t1" } })
         fireEvent.click(within(form).getByRole("button", { name: "Set status" }))
         await waitFor(() => expect(server.callsTo("POST", `/campaigns/${C}/organizations/o1/status`)).toHaveLength(1))
-        const members = within(screen.getByRole("heading", { level: 2, name: "Members and status" }).closest("section")!)
+        const members = within(screen.getByRole("heading", { level: 2, name: "Members and offices" }).closest("section")!)
         expect(await members.findByText(/may be out of date/)).toBeVisible()
         expect(members.getByText("Now: not recorded")).toBeInTheDocument()
         expect(fails.failed).toBeGreaterThan(0)

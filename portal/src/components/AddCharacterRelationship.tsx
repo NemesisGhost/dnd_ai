@@ -25,15 +25,15 @@ function statusMessage(
 ): string {
     switch (kind) {
         case "pending":
-            return "Adding character relationship…"
+            return "Giving character access…"
         case "success":
-            return "Character relationship added."
+            return "Character access added."
         case "denied":
             return "You do not have permission to make this change."
         case "conflict":
-            return "This member's character relationships changed elsewhere. Reload the page to see the current state."
+            return "This member's character access changed elsewhere. Reload the page to see the current state."
         case "error":
-            return "The character relationship could not be added. Try again."
+            return "The character access could not be added. Try again."
     }
 }
 
@@ -82,7 +82,7 @@ export function AddCharacterRelationship({
 
     const { status, submit, reset } = useAddCharacterRelationship(
         campaignId,
-        () => onChanged("Character relationship added."),
+        () => onChanged("Character access added."),
     )
 
     const isPending = status.kind === "pending"
@@ -130,7 +130,7 @@ export function AddCharacterRelationship({
                     setIsEditing(true)
                 }}
             >
-                Add character relationship
+                Give access to a character
             </button>
         )
     }
@@ -155,7 +155,7 @@ export function AddCharacterRelationship({
             }}
         >
             <label htmlFor={characterSelectId}>
-                Add a character relationship for {memberDisplayName} in{" "}
+                Give {memberDisplayName} access to a character in{" "}
                 {campaignName}
             </label>
 
@@ -177,7 +177,7 @@ export function AddCharacterRelationship({
                 ))}
             </select>
 
-            <label htmlFor={typeSelectId}>Relationship type</label>
+            <label htmlFor={typeSelectId}>Access type</label>
 
             {availableTypesForSelectedCharacter.length > 0 ? (
                 <select
@@ -199,7 +199,7 @@ export function AddCharacterRelationship({
                 </select>
             ) : (
                 <p>
-                    Every relationship type is already active for this
+                    Every access type is already active for this
                     character.
                 </p>
             )}

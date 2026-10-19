@@ -74,7 +74,8 @@ const INFO: Readonly<Record<WorldSection, WorldSectionInfo>> = {
         key: "relationships",
         stage: "prepare",
         label: "Relationships",
-        purpose: "How this record is connected to others. Each relationship is its own record and saves on its own.",
+        purpose:
+            "In-world connections between people, places, organizations and faiths. Each is its own record and saves on its own.",
     },
     review: {
         key: "review",
@@ -97,7 +98,7 @@ const INFO: Readonly<Record<WorldSection, WorldSectionInfo>> = {
     members: {
         key: "members",
         stage: "play",
-        label: "Members and status",
+        label: "Members and offices",
         purpose: "Who belongs to this organization and its operational status. Each change saves on its own.",
     },
     run: {

@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { Link } from "react-router"
 import {
     createRelationship,
     entityRelationshipsPath,
@@ -23,6 +24,7 @@ import type {
     RelationshipView,
 } from "../types/relationshipAuthoring"
 import { RELATIONSHIP_CODE_MESSAGE } from "../utils/relationshipForm"
+import type { WorldKind } from "./world/worldStages"
 import "./authoring/authoring.css"
 import { PanelFrame } from "./DetailPanel"
 
@@ -31,6 +33,23 @@ interface Props {
     entityId: string
     // A staged section already supplies the surface and the heading: render the content only.
     embedded?: boolean
+    // What the record is, so the Add form offers only the kinds that can apply to it. The server
+    // stays the authority and refuses a kind that does not fit.
+    kind?: WorldKind
+    // Where this record's own Members and offices section is, when it has one (an organization).
+    membersHref?: string
+}
+
+const PLACE_KINDS: readonly WorldKind[] = ["place", "dungeon", "area"]
+
+// A membership is one relationship record, but it is added and changed in the organization's
+// Members and offices, where a change of office keeps its history. This is where that is.
+function organizationOf(item: { participants: { entity_id: string; role: string }[] }): string | null {
+    return item.participants.find((p) => p.role === "organization")?.entity_id ?? null
+}
+
+function membersPath(campaignId: string, organizationId: string): string {
+    return `/app/${encodeURIComponent(campaignId)}/world/organization/${encodeURIComponent(organizationId)}?section=members`
 }
 
 const humanize = (code: string): string => code.replace(/_/g, " ")
@@ -38,12 +57,12 @@ const humanize = (code: string): string => code.replace(/_/g, " ")
 // The relationships an entity takes part in, for editors: every edge (private and archived
 // ones included), the editor for each, and a form to add another. Mounted on the world
 // detail pages; players and observers get nothing and send no request.
-export function RelationshipsPanel({ campaignId, entityId, embedded }: Props) {
-    if (!useCampaignCapability(campaignId, "canon.edit")) return null
-    return <LoadedPanel campaignId={campaignId} entityId={entityId} embedded={embedded} />
+export function RelationshipsPanel(props: Props) {
+    if (!useCampaignCapability(props.campaignId, "canon.edit")) return null
+    return <LoadedPanel {...props} />
 }
 
-function LoadedPanel({ campaignId, entityId, embedded }: Props) {
+function LoadedPanel({ campaignId, entityId, embedded, kind: recordKind, membersHref }: Props) {
     const [showArchived, setShowArchived] = useState(false)
     const [open, setOpen] = useState<string | null>(null)
     const list = useAuthoringResource<RelationshipList>(
@@ -63,15 +82,40 @@ function LoadedPanel({ campaignId, entityId, embedded }: Props) {
     const loadedOptions = options.state.data
     return (
         <PanelFrame embedded={embedded} title="Relationships" headingId="relationships-heading">
+            <p className="authoring-note">
+                Relationships describe the story world. They never decide who can see or play a character; that is
+                Character access, on the Access page. Memberships appear here with their office, but are added and
+                changed in the organization&rsquo;s Members and offices, where a change of office is kept as history.
+            </p>
             {items.length === 0 ? <p>No relationships recorded.</p> : null}
             <ul className="op-list">
-                {items.map((item) => (
+                {items.map((item) => {
+                    const organizationId = item.kind === "membership" ? organizationOf(item) : null
+                    const manage =
+                        organizationId === null
+                            ? null
+                            : {
+                                  to:
+                                      organizationId === entityId && membersHref !== undefined
+                                          ? membersHref
+                                          : membersPath(campaignId, organizationId),
+                                  label:
+                                      organizationId === entityId
+                                          ? "Manage in Members and offices"
+                                          : "Open organization members",
+                              }
+                    return (
                     <li key={item.relationship_id}>
                         {item.participants.map((p) => `${p.name} (${p.role_label})`).join(" and ")}:{" "}
                         {item.relationship_type_label}
                         {item.lifecycle_status !== "active" ? " (archived)" : ""}
                         {item.ended ? " (ended)" : ""}
                         {item.is_public === false ? " (private)" : ""}{" "}
+                        {manage === null ? null : (
+                            <Link to={manage.to} className="authoring-button">
+                                {manage.label}
+                            </Link>
+                        )}{" "}
                         <button
                             type="button"
                             className="authoring-button"
@@ -89,7 +133,8 @@ function LoadedPanel({ campaignId, entityId, embedded }: Props) {
                             />
                         ) : null}
                     </li>
-                ))}
+                    )
+                })}
             </ul>
             <SelectField
                 id="relationships-archived"
@@ -105,6 +150,8 @@ function LoadedPanel({ campaignId, entityId, embedded }: Props) {
                 <AddRelationship
                     campaignId={campaignId}
                     entityId={entityId}
+                    recordKind={recordKind}
+                    membersHref={membersHref}
                     options={loadedOptions}
                     onCreated={() => void list.refetch()}
                 />
@@ -116,14 +163,28 @@ function LoadedPanel({ campaignId, entityId, embedded }: Props) {
 function AddRelationship({
     campaignId,
     entityId,
-    options,
+    recordKind,
+    membersHref,
+    options: allOptions,
     onCreated,
 }: {
     campaignId: string
     entityId: string
+    recordKind?: WorldKind
+    membersHref?: string
     options: RelationshipOptions
     onCreated: () => void
 }) {
+    // Membership is added in the organization's Members and offices (it needs an office, a rank and a
+    // required start this form does not have), and a route joins two places, so offer it only on a place.
+    const options: RelationshipOptions = {
+        ...allOptions,
+        kinds: allOptions.kinds.filter(
+            (k) =>
+                k.code !== "membership" &&
+                (k.code !== "route" || recordKind === undefined || PLACE_KINDS.includes(recordKind)),
+        ),
+    }
     const { reload } = useSession()
     const announce = useAnnounce()
     const [kind, setKind] = useState("")
@@ -214,6 +275,22 @@ function AddRelationship({
             }}
         >
             <h3>Add a relationship</h3>
+            {recordKind === "organization" ? (
+                <p className="authoring-note">
+                    To add a member, use{" "}
+                    {membersHref === undefined ? (
+                        "Members and offices"
+                    ) : (
+                        <Link to={membersHref}>Members and offices</Link>
+                    )}
+                    .
+                </p>
+            ) : recordKind === "npc" || recordKind === "pc" || recordKind === "character" ? (
+                <p className="authoring-note">
+                    To make this character a member of an organization, open the organization&rsquo;s Members and
+                    offices.
+                </p>
+            ) : null}
             {explained !== null ? (
                 <p role="alert">{explained}</p>
             ) : error !== null ? (
@@ -237,6 +314,11 @@ function AddRelationship({
                     <SelectField
                         id="rel-new-type"
                         label="Type"
+                        hint={
+                            kind === "general"
+                                ? "For containment use the place\u2019s parent; for an organization\u2019s parent body use its Parent organization field."
+                                : undefined
+                        }
                         value={type}
                         placeholder="Choose a type"
                         options={shape.types.map((t) => ({ value: t, label: humanize(t) }))}

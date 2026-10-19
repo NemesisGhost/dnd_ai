@@ -62,6 +62,10 @@ export function RelationshipEditor({ campaignId, relationshipId, options, onChan
     if (state.kind !== "ready") return <p role="alert">This relationship could not be loaded.</p>
     const view = state.data
     const can = (action: string) => view.available_actions.includes(action)
+    // A membership is the same record the organization's Members and offices edits. Its office, rank,
+    // visibility, start and end are corrected, changed and ended there (a change of office keeps its
+    // history); only archive, restore and the participants' views exist nowhere else, so they stay.
+    const isMembership = view.kind === "membership"
 
     return (
         <div className="authoring-card" aria-label={`Relationship ${view.relationship_type_label}`}>
@@ -90,10 +94,11 @@ export function RelationshipEditor({ campaignId, relationshipId, options, onChan
                     </li>
                 ))}
             </ul>
-            {can("update") ? (
+            {isMembership ? <MembershipFacts view={view} /> : null}
+            {can("update") && !isMembership ? (
                 <DetailsForm key={view.row_version} view={view} options={options} busy={busy} run={run} campaignId={campaignId} />
             ) : null}
-            {can("end") ? (
+            {can("end") && !isMembership ? (
                 <EndForm view={view} busy={busy} run={run} campaignId={campaignId} />
             ) : null}
             <div className="authoring-actions">
@@ -130,6 +135,28 @@ export function RelationshipEditor({ campaignId, relationshipId, options, onChan
 }
 
 type Run = (command: RelationshipCommand, message: string) => void
+
+// A membership's details, read-only. They are managed in the organization's Members and offices.
+function MembershipFacts({ view }: { view: RelationshipView }) {
+    const office = text(view.typed.role)
+    const rank = text(view.typed.rank)
+    return (
+        <>
+            <dl className="authoring-fact-list">
+                <dt>Office</dt>
+                <dd>{office === "" ? "None" : office}</dd>
+                <dt>Rank</dt>
+                <dd>{rank === "" ? "None" : rank}</dd>
+                <dt>Known to the public</dt>
+                <dd>{view.typed.is_public === false ? "No, only editors see it" : "Yes"}</dd>
+            </dl>
+            <p className="authoring-note">
+                Office, rank, dates and ending a membership are managed in the organization&rsquo;s Members and
+                offices, where a change of office is kept as history.
+            </p>
+        </>
+    )
+}
 
 function DetailsForm({
     view,
@@ -371,7 +398,7 @@ function PerspectiveSection({
     const [holder, setHolder] = useState(first)
     const existing: PerspectiveView | undefined = view.perspectives.find((p) => p.holder_entity_id === holder)
     return (
-        <section aria-label="Perspectives">
+        <section aria-label="How each participant sees it">
             <h4>How each participant sees it</h4>
             <SelectField
                 id={`persp-holder-${view.relationship_id}`}
