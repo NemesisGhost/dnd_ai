@@ -827,6 +827,13 @@ Clergy office and organizational rank remain organization memberships.
 
 ## 11. Relationship domain
 
+### 11.0 Terminology: four things called "relationship" or "member"
+
+- A **relationship** (§11.1) is a fictional, world-scoped connection between entities. It never grants access.
+- **Character access** is the user-to-character relationship in the security domain: which campaign member may see, play or portray a character. The portal calls it *Character access*; it is not a relationship in this section.
+- **Organization membership** (§10.2) is a specialized relationship (a Membership) between an entity and an organization; the portal manages it in the organization's *Members and offices*.
+- **Party membership** is timeline state with events, not a relationship: a party is not an entity.
+
 ### 11.1 Relationship
 
 A **Relationship** connects two or more entities through a meaningful association.

@@ -356,11 +356,14 @@ The character sheet is the densest example of this visual language.
 
 Display:
 
+- an eyebrow naming the kind of character in text (**Player character**, **NPC**, **Character**), from the contract's `character_kind`, never a generic title or colour alone;
 - character name;
 - species and size;
 - classes, levels, and subclasses;
 - build label;
 - ruleset and ruleset version.
+
+With no class levels the header says **No class levels recorded** and omits the character level; it never shows a level of 0 that nobody recorded. This applies to every character, and an NPC created in the portal has no build until a GM authors one, so its sheet is built from deliberate empty states and invents no value (see UI_DESIGN §5.5).
 
 ### 9.2 Primary stats
 
