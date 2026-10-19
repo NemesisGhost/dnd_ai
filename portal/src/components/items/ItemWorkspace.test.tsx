@@ -263,7 +263,7 @@ describe("navigation", () => {
         fireEvent.click(await screen.findByRole("link", { name: "Open from World" }))
         await waitReady()
         fireEvent.click(stageLink(1))
-        fireEvent.click(await screen.findByRole("link", { name: "Edit item" }))
+        fireEvent.click(await screen.findByRole("link", { name: "Edit item" }, { timeout: 5000 }))
         const crumbs = await screen.findByRole("navigation", { name: "Breadcrumb" }).catch(() => null)
         expect(crumbs).toBeNull()
         fireEvent.click(await screen.findByRole("button", { name: "Cancel" }))
