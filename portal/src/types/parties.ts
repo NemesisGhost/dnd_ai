@@ -52,6 +52,14 @@ export interface PartyMembers {
     members: PartyMember[]
 }
 
+// GET .../parties/{id}/roster (campaign.view): the read-only roster. Current members only,
+// identity and name; `member_count` is the length of what is listed.
+export interface PartyRoster {
+    party: PartyItem
+    member_count: number
+    members: { character_id: string; character_name: string }[]
+}
+
 export interface MembershipReceipt {
     party_id: string
     party_membership_id: string

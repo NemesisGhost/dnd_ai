@@ -28,7 +28,7 @@ import {
 } from "./pages/OrganizationAuthoringPages"
 import { CreateKnowledgePage } from "./pages/KnowledgeAuthoringPages"
 import { CharacterBuildsPage, CreateCharacterBuildPage } from "./pages/CharacterBuildPages"
-import { PartyMembersPage } from "./pages/PartyMembersPage"
+import { PartyDetailPage } from "./pages/PartyDetailPage"
 import { EventDetailPage, RecordEventPage } from "./pages/EventPages"
 import {
   CreateDungeonPage,
@@ -414,7 +414,7 @@ function App() {
 
             <Route
               path="parties/:partyId"
-              element={<PartyMembersPage />}
+              element={<PartyDetailPage />}
             />
 
             <Route

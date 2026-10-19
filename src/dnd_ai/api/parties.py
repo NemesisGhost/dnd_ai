@@ -7,6 +7,7 @@
     POST /campaigns/{id}/parties/{party_id}/archive       (canon.edit)
     POST /campaigns/{id}/parties/{party_id}/restore       (canon.edit)
 
+    GET  /campaigns/{id}/parties/{party_id}/roster        (campaign.view)
     GET  /campaigns/{id}/parties/{party_id}/members       (canon.edit)
     POST /campaigns/{id}/parties/{party_id}/members       (canon.edit)
     POST /campaigns/{id}/parties/{party_id}/members/{membership_id}/end   (canon.edit)
@@ -41,6 +42,7 @@ from dnd_ai.commands.party_members import (
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.domain.authoring import DESCRIPTION_MAX_LENGTH, NAME_MAX_LENGTH, REASON_MAX_LENGTH
 from dnd_ai.domain.data_classification import content_receipt
+from dnd_ai.queries.entity_lifecycle import lifecycle_hidden_entity_ids
 from dnd_ai.queries.parties import PartyView, get_campaign_party, list_campaign_parties
 from dnd_ai.queries.party_members import list_party_members
 
@@ -50,6 +52,7 @@ from ._authoring import (
     start_campaign_idempotency,
 )
 from ._content_support import clean_note
+from ._shared import timeline_world_id
 from .access import require_campaign_capability
 from .audit import record_change_log
 from .correlation import get_request_correlation_id
@@ -125,6 +128,45 @@ def get_party_endpoint(party_id: uuid.UUID, access: _View, connection: _Conn) ->
     if view is None:
         raise NotFoundError()
     return _json(view, editor=editor)
+
+
+@router.get(_BASE + "/{party_id}/roster")
+def get_party_roster_endpoint(
+    party_id: uuid.UUID, access: _View, connection: _Conn
+) -> dict[str, Any]:
+    """Read-only roster for anyone with `campaign.view`: the party and who is a member now on the
+    campaign's own timeline — character id and name only. Join/leave reasons, history and times
+    are management data and stay on the `canon.edit` members read. A member the caller could not
+    open as a character (an unpublished NPC definition for a non-editor, or an entity-level
+    `campaign.view` deny) is left out, and `member_count` counts only what is listed. Archived
+    parties are the same 404 as a missing one for a non-editor. Reading grants nothing."""
+    editor = access.has_capability("canon.edit")
+    party = get_campaign_party(
+        connection, campaign_id=access.campaign_id, party_id=party_id, include_archived=editor
+    )
+    if party is None:
+        raise NotFoundError()
+    hidden = lifecycle_hidden_entity_ids(
+        connection,
+        world_id=timeline_world_id(connection, access.timeline_id),
+        mode="reference",
+        can_edit_canon=editor,
+    )
+    members = [
+        m
+        for m in list_party_members(connection, timeline_id=access.timeline_id, party_id=party_id)
+        if m.is_current
+        and m.character_id not in hidden
+        and access.has_capability("campaign.view", entity_id=m.character_id)
+    ]
+    return {
+        "party": _json(party, editor=editor),
+        "member_count": len(members),
+        "members": [
+            {"character_id": str(m.character_id), "character_name": m.character_name}
+            for m in members
+        ],
+    }
 
 
 def _run(

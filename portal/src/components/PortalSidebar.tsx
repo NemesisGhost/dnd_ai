@@ -14,6 +14,7 @@ import {
   ScrollText,
   ShieldCheck,
   Users,
+  UsersRound,
 } from "lucide-react"
 import { useSession } from "../context/SessionContext"
 import { useWorkspaceHierarchy } from "../context/WorkspaceHierarchyContext"
@@ -42,6 +43,7 @@ interface NavigationItem {
 // lives under the Worlds group (WorldsNavGroup).
 const campaignNavigationItems: NavigationItem[] = [
   { path: "characters", label: "Characters", icon: Users },
+  { path: "parties", label: "Parties", icon: UsersRound },
   { path: "quests", label: "Quests", icon: ScrollText },
   { path: "sessions", label: "Sessions", icon: CalendarDays },
   { path: "knowledge", label: "Knowledge", icon: BookOpen },

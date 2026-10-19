@@ -166,9 +166,9 @@ describe("party members page", () => {
   })
 
   it("says the party is unavailable to someone without access", async () => {
-    server.on("GET", MEMBERS, {
-      status: 403,
-      body: { error: { code: "forbidden", message: "m", correlation_id: "c" } },
+    server.on("GET", "/campaigns/mundivita/parties/p1/roster", {
+      status: 404,
+      body: { error: { code: "not_found", message: "m", correlation_id: "c" } },
     })
     openApp("/app/mundivita/parties/p1", ["campaign.view"])
     expect(await screen.findByRole("alert")).toHaveTextContent("does not exist, or you do not have access")

@@ -63,6 +63,9 @@ export function restoreParty(
 export const partyMembersPath = (campaignId: string, partyId: string): string =>
     `${partyPath(campaignId, partyId)}/members`
 
+export const partyRosterPath = (campaignId: string, partyId: string): string =>
+    `${partyPath(campaignId, partyId)}/roster`
+
 export function addPartyMember(
     campaignId: string,
     partyId: string,

@@ -40,8 +40,8 @@ const CODE_MESSAGE: Readonly<Record<string, string>> = {
     party_not_archived: "This party is not archived.",
 }
 
-// /app/:campaignId/parties — every member sees the active parties; editors can
-// also show archived ones, create, edit, archive, and restore.
+// /app/:campaignId/parties — anyone with campaign.view sees the active parties and opens a
+// read-only roster; editors can also show archived ones, create, edit, archive, and restore.
 export function PartiesPage() {
     const { campaignId = "" } = useParams()
     const [showArchived, setShowArchived] = useState(false)
@@ -147,7 +147,16 @@ function PartyRow({
             <strong>{party.name}</strong>
             {party.lifecycle_status === "archived" ? " (archived)" : ""}
             {party.description !== null ? <p>{party.description}</p> : null}
-            {actions.length > 0 ? (
+            {actions.length === 0 ? (
+                <p className="row-actions">
+                    <Link
+                        className="authoring-button"
+                        to={`${base(campaignId)}/parties/${encodeURIComponent(party.party_id)}`}
+                    >
+                        View {party.name}
+                    </Link>
+                </p>
+            ) : (
                 <p className="row-actions">
                     <Link
                         className="authoring-button"
@@ -188,7 +197,7 @@ function PartyRow({
                         </button>
                     ) : null}
                 </p>
-            ) : null}
+            )}
             <ConfirmDialog
                 open={dialog !== null}
                 title={dialog === "restore" ? "Restore this party?" : "Archive this party?"}
