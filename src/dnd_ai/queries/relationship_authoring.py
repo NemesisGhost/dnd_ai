@@ -136,6 +136,7 @@ def _conflicts(
         type_code,
         [(p.role, p.entity_type_code, p.name) for p in participants],
         type_offered=type_code in active,
+        entity_ids=[p.entity_id for p in participants],
     )
 
 

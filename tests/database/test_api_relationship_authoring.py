@@ -693,3 +693,43 @@ def test_world_search_entity_type_filter(s: ContentSetup) -> None:
     seen = world_search(s, s.player, category="location", entity_type="settlement")
     assert seen.status_code == 200
     assert draft not in {i["entity_id"] for i in seen.json()["items"]}
+
+
+def test_the_audit_reports_a_stored_self_relationship(
+    s: ContentSetup, db_connection: Connection
+) -> None:
+    import importlib.util
+    import pathlib
+
+    from tests.factories import make_relationship
+
+    spec = importlib.util.spec_from_file_location(
+        "audit_relationship_compatibility",
+        pathlib.Path(__file__).resolve().parents[2]
+        / "scripts"
+        / "audit_relationship_compatibility.py",
+    )
+    assert spec is not None and spec.loader is not None
+    audit_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(audit_module)
+
+    town = place(s, "Highmarch")
+    relationship_id = make_relationship(
+        db_connection, uuid.UUID(str(s.world_id)), relationship_type_code="adjacency"
+    )
+    for role in ("subject", "object"):
+        db_connection.execute(
+            text("""
+                INSERT INTO world.relationship_participants
+                    (relationship_id, entity_id, participant_role_id)
+                VALUES (:r, :e, (SELECT relationship_participant_role_id
+                                 FROM world.relationship_participant_roles WHERE code = :role))
+            """),
+            {"r": relationship_id, "e": town, "role": role},
+        )
+    reported = {row[3]: row[4] for row in audit_module.audit(db_connection)}
+    assert reported[relationship_id] == ["The same record cannot be on both sides of adjacency."]
+    # The editor view reports the same reason, and the record stays correctable.
+    current = view(s, str(relationship_id))
+    assert current["policy_conflicts"] == reported[relationship_id]
+    assert act(s, current, "update", {"description": "Kept"}).status_code == 200

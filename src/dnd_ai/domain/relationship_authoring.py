@@ -9,6 +9,7 @@ roles each takes, and the errors. Membership in an organization is the next chec
 (15.3A-2b); routes are 15.3A-2c.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from .authoring import AuthoringValidationError
@@ -359,9 +360,21 @@ PolicyParticipant = tuple[str, str] | tuple[str, str, str]
 
 
 def _violations(
-    policy: RelationshipTypePolicy, participants: list[PolicyParticipant]
+    policy: RelationshipTypePolicy,
+    participants: list[PolicyParticipant],
+    entity_ids: Sequence[object] | None = None,
 ) -> list[PolicyViolation]:
     found: list[PolicyViolation] = []
+    if (
+        policy.distinct_entities
+        and entity_ids is not None
+        and len(set(entity_ids)) != len(entity_ids)
+    ):
+        found.append(
+            PolicyViolation(
+                "shape", f"The same record cannot be on both sides of {_humanize(policy.code)}."
+            )
+        )
     roles = [p[0] for p in participants]
     for role in dict.fromkeys(roles):
         if policy.role(role) is None:
@@ -430,14 +443,18 @@ def validate_participants(
 
 
 def policy_conflicts(
-    relationship_type: str, participants: list[PolicyParticipant], *, type_offered: bool = True
+    relationship_type: str,
+    participants: list[PolicyParticipant],
+    *,
+    type_offered: bool = True,
+    entity_ids: Sequence[object] | None = None,
 ) -> list[str]:
     """Plain reasons the current policy would refuse a stored relationship; empty when it fits.
     Reports only what the policy says about the stored roles and entity types."""
     policy = RELATIONSHIP_TYPE_POLICIES.get(relationship_type)
     if policy is None or not type_offered:
         return ["This type of relationship is no longer offered."]
-    return [v.message for v in _violations(policy, participants)]
+    return [v.message for v in _violations(policy, participants, entity_ids)]
 
 
 @dataclass(frozen=True)

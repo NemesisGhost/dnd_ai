@@ -18,12 +18,12 @@ import os
 import sys
 from collections import defaultdict
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import Connection, create_engine, text
 
 from dnd_ai.domain.relationship_authoring import policy_conflicts
 
 _ROWS = """
-    SELECT r.relationship_id, w.name AS world, rt.code AS type_code, rt.is_active,
+    SELECT r.relationship_id, p.entity_id, w.name AS world, rt.code AS type_code, rt.is_active,
            ls.code AS lifecycle, e.canonical_name, et.code AS entity_type, pr.code AS role
     FROM world.relationships r
     JOIN core.worlds w ON w.world_id = r.world_id
@@ -38,29 +38,44 @@ _ROWS = """
 """
 
 
+def audit(connection: Connection) -> list[tuple[str, str, str, object, list[str]]]:
+    """(world, type, lifecycle, relationship id, reasons) for each record the policy would refuse."""
+    grouped: dict[object, list[tuple[str, str, str]]] = defaultdict(list)
+    ids: dict[object, list[object]] = defaultdict(list)
+    heads: dict[object, tuple[str, str, bool, str]] = {}
+    for row in connection.execute(text(_ROWS)):
+        heads[row.relationship_id] = (row.world, row.type_code, row.is_active, row.lifecycle)
+        grouped[row.relationship_id].append((row.role, row.entity_type, row.canonical_name))
+        ids[row.relationship_id].append(row.entity_id)
+    found = []
+    for relationship_id, participants in grouped.items():
+        world, type_code, is_active, lifecycle = heads[relationship_id]
+        reasons = policy_conflicts(
+            type_code,
+            participants,
+            type_offered=bool(is_active),
+            entity_ids=ids[relationship_id],
+        )
+        if reasons:
+            found.append((world, type_code, lifecycle, relationship_id, reasons))
+    return found
+
+
 def main() -> int:
     url = os.environ.get("DND_AI_DATABASE_URL") or os.environ.get("DATABASE_URL")
     if not url:
         print("Set DND_AI_DATABASE_URL or DATABASE_URL.", file=sys.stderr)
         return 2
     engine = create_engine(url)
-    grouped: dict[object, list[tuple[str, str, str]]] = defaultdict(list)
-    heads: dict[object, tuple[str, str, bool, str]] = {}
     with engine.connect() as connection:
         connection.execute(text("SET TRANSACTION READ ONLY"))
-        for row in connection.execute(text(_ROWS)):
-            heads[row.relationship_id] = (row.world, row.type_code, row.is_active, row.lifecycle)
-            grouped[row.relationship_id].append((row.role, row.entity_type, row.canonical_name))
-    conflicts = 0
-    for relationship_id, participants in grouped.items():
-        world, type_code, is_active, lifecycle = heads[relationship_id]
-        reasons = policy_conflicts(type_code, participants, type_offered=bool(is_active))
-        if reasons:
-            conflicts += 1
-            print(f"{world} | {type_code} | {lifecycle} | {relationship_id}")
-            for reason in reasons:
-                print(f"    {reason}")
-    print(f"{len(grouped)} relationships checked, {conflicts} with policy conflicts.")
+        found = audit(connection)
+        checked = connection.execute(text("SELECT count(*) FROM world.relationships")).scalar()
+    for world, type_code, lifecycle, relationship_id, reasons in found:
+        print(f"{world} | {type_code} | {lifecycle} | {relationship_id}")
+        for reason in reasons:
+            print(f"    {reason}")
+    print(f"{checked} relationships checked, {len(found)} with policy conflicts.")
     return 0
 
 

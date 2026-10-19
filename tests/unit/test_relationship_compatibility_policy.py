@@ -242,3 +242,14 @@ def test_the_portal_fixture_matches_the_policy() -> None:
         "portal/src/fixtures/relationshipPolicy.json is stale; regenerate it with "
         "`python -m tests.unit.relationship_policy_fixture`"
     )
+
+
+def test_a_stored_self_relationship_is_reported_when_the_type_needs_distinct_entities() -> None:
+    same, other = object(), object()
+    pair = [("subject", "settlement", "Highmarch"), ("object", "settlement", "Highmarch")]
+    reasons = policy_conflicts("adjacency", pair, entity_ids=[same, same])
+    assert reasons == ["The same record cannot be on both sides of adjacency."]
+    assert policy_conflicts("adjacency", pair, entity_ids=[same, other]) == []
+    # A type that does not require distinct entities is unaffected, and ids are optional.
+    assert policy_conflicts("other", pair, entity_ids=[same, same]) == []
+    assert policy_conflicts("adjacency", pair) == []
