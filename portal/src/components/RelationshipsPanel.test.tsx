@@ -113,6 +113,7 @@ interface SetupOptions {
     membersHref?: string
     summary?: object
     view?: object
+    kinds?: object[]
 }
 
 function setup(capabilitiesOrOptions: string[] | SetupOptions = ["canon.edit"]) {
@@ -123,9 +124,10 @@ function setup(capabilitiesOrOptions: string[] | SetupOptions = ["canon.edit"]) 
         membersHref,
         summary = SUMMARY,
         view = VIEW,
+        kinds = [...OPTIONS.kinds, ...EXTRA_KINDS],
     } = Array.isArray(capabilitiesOrOptions) ? { capabilities: capabilitiesOrOptions } : capabilitiesOrOptions
     const server = installMockServer()
-    server.on("GET", `${BASE}/options`, { body: { ...OPTIONS, kinds: [...OPTIONS.kinds, ...EXTRA_KINDS] } })
+    server.on("GET", `${BASE}/options`, { body: { ...OPTIONS, kinds } })
     server.on("GET", /authoring\/relationships\?entity_id=/, { body: { items: [summary] } })
     server.on("GET", `${BASE}/r1`, () => ({ body: view }))
     server.on("GET", /world-times/, { body: { items: [], next_cursor: null, can_create: true } })
@@ -196,8 +198,9 @@ describe("RelationshipsPanel", () => {
     it("adds a relationship with both roles, found through search", async () => {
         const server = setup()
         const form = await screen.findByRole("form", { name: "Add a relationship" })
-        fireEvent.change(within(form).getByRole("combobox", { name: "Kind" }), { target: { value: "employment" } })
-        fireEvent.change(await within(form).findByRole("combobox", { name: "Type" }), { target: { value: "employment" } })
+        fireEvent.change(await within(form).findByRole("combobox", { name: "Type" }), {
+            target: { value: "employment/employment" },
+        })
         fireEvent.change(within(form).getByRole("combobox", { name: "This record is the" }), {
             target: { value: "employer" },
         })
@@ -205,7 +208,7 @@ describe("RelationshipsPanel", () => {
             target: { value: "employee" },
         })
         fireEvent.click(within(form).getByRole("button", { name: "Add relationship" }))
-        expect(await within(form).findByText(/Choose the kind, the type, both roles/)).toBeInTheDocument()
+        expect(await within(form).findByText(/Choose the type, both roles/)).toBeInTheDocument()
         expect(server.callsTo("POST", BASE)).toHaveLength(0)
         const search = within(form).getByRole("combobox", { name: "Other participant" })
         fireEvent.focus(search)
@@ -231,8 +234,9 @@ describe("RelationshipsPanel", () => {
             body: { error: { code: "participant_invalid", message: "m", correlation_id: "c" } },
         })
         const form = await screen.findByRole("form", { name: "Add a relationship" })
-        fireEvent.change(within(form).getByRole("combobox", { name: "Kind" }), { target: { value: "family" } })
-        fireEvent.change(await within(form).findByRole("combobox", { name: "Type" }), { target: { value: "family" } })
+        fireEvent.change(await within(form).findByRole("combobox", { name: "Type" }), {
+            target: { value: "family/family" },
+        })
         fireEvent.change(within(form).getByRole("combobox", { name: "This record is the" }), { target: { value: "parent" } })
         fireEvent.change(within(form).getByRole("combobox", { name: "The other participant is the" }), { target: { value: "child" } })
         fireEvent.focus(within(form).getByRole("combobox", { name: "Other participant" }))
@@ -243,11 +247,12 @@ describe("RelationshipsPanel", () => {
 })
 
 describe("RelationshipsPanel: terminology and placement", () => {
+    // The type choices offered, as "kind/type" codes.
     const kindsOffered = async () => {
         const form = await screen.findByRole("form", { name: "Add a relationship" })
-        return within(within(form).getByRole("combobox", { name: "Kind" }))
+        return within(within(form).getByRole("combobox", { name: "Type" }))
             .getAllByRole("option")
-            .map((option) => option.textContent)
+            .map((option) => (option as HTMLOptionElement).value)
     }
 
     it("says what relationships are for and what they never do", async () => {
@@ -260,25 +265,25 @@ describe("RelationshipsPanel: terminology and placement", () => {
 
     it("offers a route only on a place", async () => {
         setup({ kind: "place" })
-        expect(await kindsOffered()).toContain("Route")
+        expect(await kindsOffered()).toContain("route/route")
     })
 
     it.each<WorldKind>(["npc", "pc", "organization", "religion", "character"])(
         "does not offer a route on %s",
         async (kind) => {
             setup({ kind })
-            expect(await kindsOffered()).not.toContain("Route")
+            expect(await kindsOffered()).not.toContain("route/route")
         },
     )
 
     it("leaves the kinds to the server when it is not told what the record is", async () => {
         setup()
-        expect(await kindsOffered()).toContain("Route")
+        expect(await kindsOffered()).toContain("route/route")
     })
 
     it("never offers Membership in the Add form, and points to Members and offices instead", async () => {
         setup({ kind: "organization", membersHref: "?section=members" })
-        expect(await kindsOffered()).not.toContain("Membership")
+        expect(await kindsOffered()).not.toContain("membership/membership")
         const form = screen.getByRole("form", { name: "Add a relationship" })
         expect(within(form).getByRole("link", { name: "Members and offices" })).toHaveAttribute(
             "href",
@@ -295,7 +300,7 @@ describe("RelationshipsPanel: terminology and placement", () => {
     it("explains containment and parent bodies next to the general parent_of type", async () => {
         setup({ kind: "place" })
         const form = await screen.findByRole("form", { name: "Add a relationship" })
-        fireEvent.change(within(form).getByRole("combobox", { name: "Kind" }), { target: { value: "general" } })
+        fireEvent.change(within(form).getByRole("combobox", { name: "Type" }), { target: { value: "general/parent_of" } })
         expect(await within(form).findByText(/use the place.s parent/)).toBeInTheDocument()
         expect(within(form).getByText(/Parent organization field/)).toBeInTheDocument()
     })
@@ -385,5 +390,109 @@ describe("RelationshipsPanel: a membership", () => {
         fireEvent.click(await screen.findByRole("button", { name: "Open family" }))
         expect(await screen.findByRole("form", { name: "Edit relationship" })).toBeInTheDocument()
         expect(screen.getByRole("form", { name: "End relationship" })).toBeInTheDocument()
+    })
+})
+
+describe("RelationshipsPanel: the type decides the kind", () => {
+    const KIND = (code: string, types: string[], roles: string[], fixed: string[] | null = null) => ({
+        code,
+        label: code[0]!.toUpperCase() + code.slice(1),
+        types,
+        roles,
+        fixed_roles: fixed,
+    })
+    const searchAndPick = async (form: HTMLElement) => {
+        fireEvent.focus(within(form).getByRole("combobox", { name: "Other participant" }))
+        fireEvent.click(await within(form).findByRole("option", { name: /Ann/ }))
+    }
+
+    it("has no separate Kind selector, and groups the types by kind", async () => {
+        setup()
+        const form = await screen.findByRole("form", { name: "Add a relationship" })
+        expect(within(form).queryByRole("combobox", { name: "Kind" })).toBeNull()
+        const type = within(form).getByRole("combobox", { name: "Type" })
+        const groups = Array.from(type.querySelectorAll("optgroup")).map((g) => g.label)
+        expect(groups).toEqual(expect.arrayContaining(["Employment", "Family", "Other connection"]))
+        expect(within(form).queryByRole("combobox", { name: "This record is the" })).toBeNull()
+    })
+
+    it("submits the kind the chosen type belongs to", async () => {
+        const server = setup({ kind: "place" })
+        const form = await screen.findByRole("form", { name: "Add a relationship" })
+        fireEvent.change(within(form).getByRole("combobox", { name: "Type" }), { target: { value: "general/parent_of" } })
+        fireEvent.change(await within(form).findByRole("combobox", { name: "This record is the" }), {
+            target: { value: "subject" },
+        })
+        fireEvent.change(within(form).getByRole("combobox", { name: "The other participant is the" }), {
+            target: { value: "object" },
+        })
+        await searchAndPick(form)
+        fireEvent.click(within(form).getByRole("button", { name: "Add relationship" }))
+        await vi.waitFor(() => expect(server.callsTo("POST", BASE)).toHaveLength(1))
+        expect(server.callsTo("POST", BASE)[0]!.body).toMatchObject({ kind: "general", relationship_type: "parent_of" })
+    })
+
+    it("clears roles and kind fields when the choice moves to another kind, and submits no stale value", async () => {
+        const server = setup()
+        const form = await screen.findByRole("form", { name: "Add a relationship" })
+        fireEvent.change(within(form).getByRole("combobox", { name: "Type" }), { target: { value: "employment/employment" } })
+        fireEvent.change(await within(form).findByRole("textbox", { name: "Job title" }), { target: { value: "Cook" } })
+        fireEvent.change(within(form).getByRole("combobox", { name: "This record is the" }), { target: { value: "employer" } })
+        fireEvent.change(within(form).getByRole("combobox", { name: "Type" }), { target: { value: "family/family" } })
+        expect(within(form).queryByRole("textbox", { name: "Job title" })).toBeNull()
+        expect(within(form).getByRole("combobox", { name: "This record is the" })).toHaveValue("")
+        fireEvent.change(within(form).getByRole("combobox", { name: "This record is the" }), { target: { value: "parent" } })
+        fireEvent.change(within(form).getByRole("combobox", { name: "The other participant is the" }), { target: { value: "child" } })
+        await searchAndPick(form)
+        fireEvent.click(within(form).getByRole("button", { name: "Add relationship" }))
+        await vi.waitFor(() => expect(server.callsTo("POST", BASE)).toHaveLength(1))
+        const body = server.callsTo("POST", BASE)[0]!.body as Record<string, unknown>
+        expect(body).toMatchObject({ kind: "family", relationship_type: "family" })
+        expect(body).not.toHaveProperty("job_title")
+        // Back to employment: the earlier title is not remembered.
+        fireEvent.change(within(form).getByRole("combobox", { name: "Type" }), { target: { value: "employment/employment" } })
+        expect(await within(form).findByRole("textbox", { name: "Job title" })).toHaveValue("")
+    })
+
+    it("selects a single available type and shows it as a labelled read-only value", async () => {
+        const server = setup({ kinds: [KIND("employment", ["employment"], ["employer", "employee"], ["employer", "employee"])] })
+        const form = await screen.findByRole("form", { name: "Add a relationship" })
+        const value = within(form).getByRole("textbox", { name: "Type" })
+        expect(value).toHaveValue("employment")
+        expect(value).toHaveAttribute("readonly")
+        expect(within(form).queryByRole("combobox", { name: "Type" })).toBeNull()
+        fireEvent.change(within(form).getByRole("combobox", { name: "This record is the" }), { target: { value: "employer" } })
+        fireEvent.change(within(form).getByRole("combobox", { name: "The other participant is the" }), { target: { value: "employee" } })
+        await searchAndPick(form)
+        fireEvent.click(within(form).getByRole("button", { name: "Add relationship" }))
+        await vi.waitFor(() => expect(server.callsTo("POST", BASE)).toHaveLength(1))
+        expect(server.callsTo("POST", BASE)[0]!.body).toMatchObject({ kind: "employment", relationship_type: "employment" })
+    })
+
+    it("says so and offers no submission when no type is available", async () => {
+        setup({ kinds: [] })
+        const form = await screen.findByRole("form", { name: "Add a relationship" })
+        expect(within(form).getByText(/No relationship types are available for this record/)).toBeInTheDocument()
+        expect(within(form).queryByRole("button", { name: "Add relationship" })).toBeNull()
+        expect(within(form).queryByRole("combobox")).toBeNull()
+    })
+
+    it("also treats a kind that lists no type as unavailable", async () => {
+        setup({ kinds: [KIND("family", [], ["parent", "child"])] })
+        const form = await screen.findByRole("form", { name: "Add a relationship" })
+        expect(within(form).getByText(/No relationship types are available/)).toBeInTheDocument()
+    })
+
+    it("tells two same-named types in different kinds apart and keeps their identifiers distinct", async () => {
+        setup({
+            kinds: [
+                KIND("family", ["other"], ["parent", "child"]),
+                KIND("general", ["other"], ["subject", "object"]),
+            ],
+        })
+        const form = await screen.findByRole("form", { name: "Add a relationship" })
+        const options = within(within(form).getByRole("combobox", { name: "Type" })).getAllByRole("option")
+        expect(options.map((o) => o.textContent)).toEqual(expect.arrayContaining(["other (Family)", "other (General)"]))
+        expect(new Set(options.map((o) => (o as HTMLOptionElement).value)).size).toBe(options.length)
     })
 })

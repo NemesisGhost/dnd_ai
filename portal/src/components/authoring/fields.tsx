@@ -185,6 +185,28 @@ function CharacterCounter({ value, maxLength }: { value: string; maxLength?: num
 export interface SelectOption {
     value: string
     label: string
+    // Options sharing a group are listed together under its heading.
+    group?: string
+}
+
+function renderOptions(options: readonly SelectOption[]) {
+    const plain = options.filter((o) => o.group === undefined)
+    const groups = [...new Set(options.flatMap((o) => (o.group === undefined ? [] : [o.group])))]
+    const item = (option: SelectOption) => (
+        <option key={option.value} value={option.value}>
+            {option.label}
+        </option>
+    )
+    return (
+        <>
+            {plain.map(item)}
+            {groups.map((group) => (
+                <optgroup key={group} label={group}>
+                    {options.filter((o) => o.group === group).map(item)}
+                </optgroup>
+            ))}
+        </>
+    )
 }
 
 interface SelectFieldProps {
@@ -230,11 +252,7 @@ export function SelectField({
                     {placeholder !== undefined ? (
                         <option value="">{placeholder}</option>
                     ) : null}
-                    {options.map((option) => (
-                        <option key={option.value} value={option.value}>
-                            {option.label}
-                        </option>
-                    ))}
+                    {renderOptions(options)}
                 </select>
             )}
         </FieldShell>

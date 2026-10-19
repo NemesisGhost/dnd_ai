@@ -187,8 +187,7 @@ function AddRelationship({
     }
     const { reload } = useSession()
     const announce = useAnnounce()
-    const [kind, setKind] = useState("")
-    const [type, setType] = useState("")
+    const [picked, setPicked] = useState("")
     const [myRole, setMyRole] = useState("")
     const [other, setOther] = useState<ReferenceOption | null>(null)
     const [otherRole, setOtherRole] = useState("")
@@ -204,7 +203,43 @@ function AddRelationship({
     const [mode, setMode] = useState("")
     const [concealed, setConcealed] = useState("no")
     const [problem, setProblem] = useState<string | null>(null)
-    const shape = options.kinds.find((k) => k.code === kind)
+    // The type decides the kind, so there is one choice. Each choice is identified by its kind and
+    // type codes (stable, and distinct even if two kinds ever shared a type); labels that repeat
+    // across kinds name their kind. Only the server's own offered types are listed.
+    const choices = options.kinds.flatMap((k) =>
+        k.types.map((t) => ({ value: `${k.code}/${t}`, type: t, kind: k, label: humanize(t) })),
+    )
+    const repeated = new Set(choices.map((c) => c.label).filter((l, i, all) => all.indexOf(l) !== i))
+    const labelled = choices.map((c) => ({
+        ...c,
+        label: repeated.has(c.label) ? `${c.label} (${c.kind.label})` : c.label,
+    }))
+    // Exactly one valid type: it is chosen for the person and shown, not asked for.
+    const only = labelled.length === 1 ? labelled[0]! : null
+    const choice = only ?? labelled.find((c) => c.value === picked) ?? null
+    const shape = choice?.kind
+    const kind = shape?.code ?? ""
+    const type = choice?.type ?? ""
+
+    function choose(next: string) {
+        const nextKind = labelled.find((c) => c.value === next)?.kind.code ?? ""
+        if (nextKind !== kind) {
+            // A different kind has its own roles and fields: nothing from the old one carries over.
+            setMyRole("")
+            setOtherRole("")
+            setUnit("")
+            setTitle("")
+            setShare("")
+            setIsPublic("yes")
+            setTerms("")
+            setDistance("")
+            setDuration("")
+            setMode("")
+            setConcealed("no")
+            setProblem(null)
+        }
+        setPicked(next)
+    }
 
     const mutation = useAuthoringMutation<CreateRelationshipBody, RelationshipView>({
         scopeKey: `create-relationship:${entityId}`,
@@ -228,7 +263,7 @@ function AddRelationship({
 
     function submit() {
         if (shape === undefined || type === "" || myRole === "" || otherRole === "" || other === null) {
-            setProblem("Choose the kind, the type, both roles and the other participant.")
+            setProblem("Choose the type, both roles and the other participant.")
             return
         }
         const shareValue = share.trim() === "" ? null : Number(share)
@@ -296,34 +331,36 @@ function AddRelationship({
             ) : error !== null ? (
                 <MutationStatusMessage error={error} onRetry={mutation.retry} onCheckSession={reload} />
             ) : null}
-            <SelectField
-                id="rel-new-kind"
-                label="Kind"
-                value={kind}
-                placeholder="Choose a kind"
-                options={options.kinds.map((k) => ({ value: k.code, label: k.label }))}
-                onChange={(next) => {
-                    setKind(next)
-                    setType("")
-                    setMyRole("")
-                    setOtherRole("")
-                }}
-            />
+            {labelled.length === 0 ? (
+                <p className="authoring-note" role="status">
+                    No relationship types are available for this record, so a relationship cannot be added here.
+                </p>
+            ) : only !== null ? (
+                <TextField
+                    id="rel-new-type"
+                    label="Type"
+                    hint="The only type available for this record."
+                    value={only.label}
+                    onChange={() => undefined}
+                    readOnly
+                />
+            ) : (
+                <SelectField
+                    id="rel-new-type"
+                    label="Type"
+                    hint={
+                        kind === "general"
+                            ? "For containment use the place\u2019s parent; for an organization\u2019s parent body use its Parent organization field."
+                            : undefined
+                    }
+                    value={choice?.value ?? ""}
+                    placeholder="Choose a type"
+                    options={labelled.map((c) => ({ value: c.value, label: c.label, group: c.kind.label }))}
+                    onChange={choose}
+                />
+            )}
             {shape !== undefined ? (
                 <>
-                    <SelectField
-                        id="rel-new-type"
-                        label="Type"
-                        hint={
-                            kind === "general"
-                                ? "For containment use the place\u2019s parent; for an organization\u2019s parent body use its Parent organization field."
-                                : undefined
-                        }
-                        value={type}
-                        placeholder="Choose a type"
-                        options={shape.types.map((t) => ({ value: t, label: humanize(t) }))}
-                        onChange={setType}
-                    />
                     <SelectField
                         id="rel-new-my-role"
                         label="This record is the"
