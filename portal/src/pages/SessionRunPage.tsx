@@ -30,6 +30,7 @@ import { useSession } from "../context/SessionContext"
 import { AwardItemSection } from "../components/AwardItemSection"
 import { EncounterList } from "../components/EncounterList"
 import { TravelSection } from "../components/TravelSection"
+import { SessionEventList } from "../components/sessionRun/SessionActivity"
 import { RunBreadcrumb, RunSectionNav, RunSectionPanel, RunStageNav } from "../components/sessionRun/RunNav"
 import { RealWorldTime, SessionReview } from "../components/sessionRun/SessionReview"
 import { SECTIONS, panelHeadingId } from "../components/sessionRun/runStages"
@@ -83,7 +84,14 @@ export function SessionRunPage() {
     const canEdit = useCampaignCapability(campaignId, "canon.edit")
     const detail = useAuthoringResource<CampaignSessionDetail>(sessionPath(campaignId, sessionId))
     const headingRef = usePageArrival(detail.state.kind === "ready")
-    const data = detail.state.kind === "ready" ? detail.state.data : null
+    // A refresh that fails for a reason worth retrying keeps the last session that loaded on
+    // screen, so the drafts in every section survive; missing or denied still fail closed.
+    const [lastGood, setLastGood] = useState<CampaignSessionDetail | null>(null)
+    if (detail.state.kind === "ready" && detail.state.data !== lastGood) {
+        setLastGood(detail.state.data)
+    }
+    const refreshFailed = detail.state.kind === "error" && detail.state.retryable && lastGood !== null
+    const data = detail.state.kind === "ready" ? detail.state.data : refreshFailed ? lastGood : null
 
     return (
         <section className="authoring-page" aria-labelledby="run-session-heading">
@@ -102,7 +110,22 @@ export function SessionRunPage() {
             ) : data === null ? (
                 <p role="alert">This session does not exist, or you do not have access to it.</p>
             ) : (
-                <RunBody campaignId={campaignId} session={data} refetch={detail.refetch} />
+                <>
+                    {refreshFailed ? (
+                        <p role="alert">
+                            The latest session data could not be loaded, so what you see may be out of date.{" "}
+                            <button type="button" className="authoring-button" onClick={() => void detail.refetch()}>
+                                Try again
+                            </button>
+                        </p>
+                    ) : null}
+                    <RunBody
+                        campaignId={campaignId}
+                        session={data}
+                        refetch={detail.refetch}
+                        refreshFailed={refreshFailed}
+                    />
+                </>
             )}
         </section>
     )
@@ -122,10 +145,13 @@ function RunBody({
     campaignId,
     session,
     refetch,
+    refreshFailed,
 }: {
     campaignId: string
     session: CampaignSessionDetail
     refetch: () => Promise<void>
+    // True when the latest read failed and `session` is the last one that loaded.
+    refreshFailed: boolean
 }) {
     const actions = session.available_actions ?? []
     const status = session.play_status ?? "unscheduled"
@@ -208,10 +234,20 @@ function RunBody({
                 reason={logReason}
             />
         ),
-        travel: canLog ? (
-            <TravelSection campaignId={campaignId} participants={participants} showHeading={false} />
-        ) : (
-            <p className="authoring-note">{whyNotPlayable(session, "record travel")}</p>
+        travel: (
+            <TravelSection
+                campaignId={campaignId}
+                sessionId={session.session_id}
+                participants={participants}
+                travel={session.travel ?? []}
+                refetch={refetch}
+                refreshFailed={refreshFailed}
+                canRecord={canLog}
+                reason={whyNotPlayable(session, "record travel")}
+                active={nav.section === "travel"}
+                eventHref={(id) => `${base(campaignId)}/events/${encodeURIComponent(id)}`}
+                showHeading={false}
+            />
         ),
         "award-item": canLog ? (
             <AwardItemSection campaignId={campaignId} participants={participants} showHeading={false} />
@@ -238,6 +274,7 @@ function RunBody({
                 sectionHref={nav.sectionHref}
                 canPrepareEncounters={canPrepareEncounters}
                 reasonLog={logReason}
+                reasonTravel={whyNotPlayable(session, "record travel")}
             />
         ),
         end: actions.includes("end") ? (
@@ -657,20 +694,13 @@ function LogSection({
             {session.events.length === 0 ? (
                 <p>Nothing has been recorded yet.</p>
             ) : (
-                <ol className="record-list" aria-label="Session log">
-                    {session.events.map((event) => (
-                        <li key={event.event_id}>
-                            <Link
-                                to={`${base(campaignId)}/events/${encodeURIComponent(event.event_id)}`}
-                            >
-                                {event.name}
-                            </Link>
-                            {event.details !== null ? (
-                                <p className="authoring-note">GM notes: {event.details}</p>
-                            ) : null}
-                        </li>
-                    ))}
-                </ol>
+                <SessionEventList
+                    events={session.events}
+                    travel={session.travel}
+                    label="Session log"
+                    ordered
+                    eventHref={(id) => `${base(campaignId)}/events/${encodeURIComponent(id)}`}
+                />
             )}
             {canLog ? (
                 <AuthoringForm label="Record an entry" onSubmit={submit}>

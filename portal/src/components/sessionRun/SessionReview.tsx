@@ -2,6 +2,7 @@ import { Link } from "react-router"
 import type { CampaignSessionDetail } from "../../types/campaignSession"
 import type { EncounterSummary } from "../../types/encounters"
 import type { SectionKey } from "./runStages"
+import { SessionEventList, TravelHistory } from "./SessionActivity"
 
 const enc = encodeURIComponent
 
@@ -34,6 +35,7 @@ export function SessionReview({
     sectionHref,
     canPrepareEncounters,
     reasonLog,
+    reasonTravel,
 }: {
     campaignId: string
     session: CampaignSessionDetail
@@ -42,6 +44,7 @@ export function SessionReview({
     sectionHref: (key: SectionKey) => string
     canPrepareEncounters: boolean
     reasonLog: string | null
+    reasonTravel: string | null
 }) {
     const actions = session.available_actions ?? []
     const participants = session.participants ?? []
@@ -50,6 +53,7 @@ export function SessionReview({
     const pending = (encounters ?? []).filter((e) => e.status === "pending")
     const started = (encounters ?? []).filter((e) => e.status !== "pending")
     const campaign = `/app/${enc(campaignId)}`
+    const travel = session.travel ?? []
 
     return (
         <div className="session-run__review">
@@ -103,16 +107,12 @@ export function SessionReview({
             <section aria-labelledby="review-log-heading">
                 <h3 id="review-log-heading">Session log ({session.events.length})</h3>
                 {session.events.length === 0 ? <p>Nothing has been recorded yet.</p> : null}
-                <ul className="record-list" aria-label="Recorded entries">
-                    {session.events.map((event) => (
-                        <li key={event.event_id}>
-                            <Link to={`${campaign}/events/${enc(event.event_id)}`}>{event.name}</Link>
-                            {event.details !== null ? (
-                                <p className="authoring-note">GM notes: {event.details}</p>
-                            ) : null}
-                        </li>
-                    ))}
-                </ul>
+                <SessionEventList
+                    events={session.events}
+                    travel={session.travel}
+                    label="Recorded entries"
+                    eventHref={(id) => `${campaign}/events/${enc(id)}`}
+                />
                 {actions.includes("log") ? (
                     <p>
                         <Link to={sectionHref("log")}>Add to the log</Link>
@@ -120,6 +120,26 @@ export function SessionReview({
                 ) : (
                     <p className="authoring-note">{reasonLog}</p>
                 )}
+            </section>
+
+            <section aria-labelledby="review-travel-heading">
+                <h3 id="review-travel-heading">Travel ({travel.length})</h3>
+                {travel.length === 0 ? <p>No travel was recorded in this session.</p> : null}
+                <TravelHistory
+                    travel={travel}
+                    label="Travel in this session"
+                    eventHref={(id) => `${campaign}/events/${enc(id)}`}
+                />
+                {actions.includes("log") ? (
+                    <p>
+                        <Link to={sectionHref("travel")}>Record travel</Link>
+                    </p>
+                ) : (
+                    <p className="authoring-note">{reasonTravel}</p>
+                )}
+                <p className="authoring-note">
+                    Travel recorded before travel was linked to sessions is not listed here.
+                </p>
             </section>
 
             <section aria-labelledby="review-encounters-heading">

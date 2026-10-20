@@ -77,6 +77,45 @@ describe("event pages", () => {
     expect(screen.getByRole("button", { name: "Void event" })).toBeEnabled()
   })
 
+  it("names a travel event's places and links its session, never printing an id", async () => {
+    server.on("GET", E, {
+      body: view({
+        name: "Characters traveled",
+        event_type_code: "characters_traveled",
+        session_id: "s1",
+        details: null,
+        effects: [
+          {
+            component: "current_location_id",
+            target_entity_id: "c1",
+            previous: null,
+            new: "5f0d1c92-0000-4000-8000-000000000001",
+            application_status: "applied",
+            target_name: "Aldric",
+            previous_name: null,
+            new_name: "Southmark",
+          },
+          {
+            component: "current_location_id",
+            target_entity_id: "c2",
+            previous: "5f0d1c92-0000-4000-8000-000000000002",
+            new: "5f0d1c92-0000-4000-8000-000000000003",
+            application_status: "applied",
+            target_name: "Mira",
+            previous_name: "Northmark",
+            new_name: null,
+          },
+        ],
+      }),
+    })
+    server.on("GET", `${E}/correction-preview`, { body: preview() })
+    openApp("/app/mundivita/events/e1")
+    expect(await screen.findByText(/Location: Aldric: No earlier location recorded to Southmark/)).toBeInTheDocument()
+    expect(screen.getByText(/Location: Mira: Northmark to Unavailable place/)).toBeInTheDocument()
+    expect(screen.queryByText(/5f0d1c92/)).toBeNull()
+    expect(screen.getByRole("link", { name: "its session" })).toHaveAttribute("href", "/app/mundivita/sessions/s1")
+  })
+
   it("explains why an event cannot be corrected and disables the actions", async () => {
     server.on("GET", E, { body: view() })
     server.on("GET", `${E}/correction-preview`, {

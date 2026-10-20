@@ -12,6 +12,7 @@ import {
 } from "../components/authoring/feedback"
 import type { FieldError } from "../components/authoring/feedback"
 import { SessionLifecycleControls } from "../components/SessionLifecycleControls"
+import { TravelSummary } from "../components/sessionRun/SessionActivity"
 import { SortableTable } from "../components/SortableTable"
 import type { SortableTableColumn } from "../components/SortableTable"
 import { useSession } from "../context/SessionContext"
@@ -22,6 +23,7 @@ import type {
     CampaignSessionDetail,
     CampaignSessionEvent,
     SessionReceipt,
+    SessionTravelEntry,
 } from "../types/campaignSession"
 import {
     DESCRIPTION_MAX,
@@ -49,13 +51,20 @@ function compareStrings(
     return applyDirection(direction, a.localeCompare(b))
 }
 
-const eventColumns: SortableTableColumn<CampaignSessionEvent>[] = [
+function eventColumnsFor(travel: SessionTravelEntry[]): SortableTableColumn<CampaignSessionEvent>[] {
+    const byEvent = new Map(travel.map((entry) => [entry.event_id, entry]))
+    return [
     {
         key: "event_name",
         label: "Name",
         compare: (a, b, direction) =>
             compareStrings(a.name, b.name, direction),
         render: (event) => event.name,
+    },
+    {
+        key: "event_time",
+        label: "In-world time",
+        render: (event) => event.world_time || "Not available",
     },
     {
         key: "event_type",
@@ -87,10 +96,17 @@ const eventColumns: SortableTableColumn<CampaignSessionEvent>[] = [
     {
         key: "event_details",
         label: "Details",
-        render: (event) =>
-            event.details ?? "No details recorded",
+        render: (event) => {
+            const entry = byEvent.get(event.event_id)
+            return entry !== undefined ? (
+                <TravelSummary entry={entry} />
+            ) : (
+                (event.details ?? "No details recorded")
+            )
+        },
     },
-]
+    ]
+}
 
 function formatTimestamp(timestamp: string): string {
     return new Intl.DateTimeFormat(undefined, {
@@ -475,7 +491,7 @@ export function SessionDetailPage({
                 {events.length > 0 ? (
                     <SortableTable
                         caption="Session events"
-                        columns={eventColumns}
+                        columns={eventColumnsFor(session.travel ?? [])}
                         rows={events}
                         getRowKey={(event) => event.event_id}
                     />

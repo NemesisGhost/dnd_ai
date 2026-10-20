@@ -29,6 +29,7 @@ import type {
     CorrectionPreview,
     CorrectionReceipt,
     EventAuthoringView,
+    EventEffectView,
     EventReceipt,
 } from "../types/eventAuthoring"
 import "../components/authoring/authoring.css"
@@ -76,6 +77,19 @@ const CODE_MESSAGE: Readonly<Record<string, string>> = {
 
 const label = (component: string): string =>
     COMPONENT_LABEL[component] ?? component.replace(/_/g, " ")
+
+const UNAVAILABLE_PLACE = "Unavailable place"
+
+// A location change reads as place names; a missing earlier value is "no earlier location", and
+// an id that does not resolve is never printed.
+function locationChange(effect: EventEffectView): string {
+    const from =
+        effect.previous === null || effect.previous === undefined
+            ? "No earlier location recorded"
+            : (effect.previous_name ?? UNAVAILABLE_PLACE)
+    const to = effect.new_name ?? UNAVAILABLE_PLACE
+    return `${effect.target_name ? `${effect.target_name}: ` : ""}${from} to ${to}`
+}
 
 const show = (value: unknown): string =>
     value === null || value === undefined ? "none" : typeof value === "string" ? value : JSON.stringify(value)
@@ -271,6 +285,11 @@ function EventBody({
                 {event.event_type_code.replace(/_/g, " ")}
             </p>
             {event.details !== null ? <p className="authoring-note">GM notes: {event.details}</p> : null}
+            {event.session_id !== null ? (
+                <p>
+                    Part of <Link to={`${base(campaignId)}/sessions/${encodeURIComponent(event.session_id)}`}>its session</Link>.
+                </p>
+            ) : null}
             {event.corrects_event_id !== null ? (
                 <p>
                     Relates to <Link to={link(event.corrects_event_id)}>an earlier event</Link>.
@@ -288,7 +307,9 @@ function EventBody({
                     <ul className="record-list">
                         {event.effects.map((effect, index) => (
                             <li key={index}>
-                                {label(effect.component)}: {show(effect.previous)} to {show(effect.new)}
+                                {effect.component === "current_location_id"
+                                    ? `${label(effect.component)}: ${locationChange(effect)}`
+                                    : `${label(effect.component)}: ${show(effect.previous)} to ${show(effect.new)}`}
                                 {plan !== null && plan.effects[index] !== undefined
                                     ? plan.effects[index]!.reversible
                                         ? " (can be reversed)"

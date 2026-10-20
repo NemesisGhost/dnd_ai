@@ -175,7 +175,7 @@ describe("session run page", () => {
     expect((await screen.findAllByText("Enter what happened.")).length).toBeGreaterThan(0)
     expect(server.callsTo("POST", /./)).toHaveLength(0)
     fireEvent.change(screen.getByLabelText(/What happened/), { target: { value: "The party enters the crypt." } })
-    fireEvent.change(screen.getByLabelText(/GM notes/), { target: { value: "The door is trapped" } })
+    fireEvent.change(screen.getByLabelText("GM notes"), { target: { value: "The door is trapped" } })
     fireEvent.click(screen.getByRole("button", { name: "Record entry" }))
     await waitFor(() => expect(server.callsTo("POST", `${S}/log`)).toHaveLength(1))
     expect(server.callsTo("POST", `${S}/log`)[0]!.body).toEqual({
@@ -481,7 +481,7 @@ describe("stages and sections", () => {
     server.on("GET", "/campaigns/mundivita/parties", { body: { can_create: true, items: [] } })
     const { router } = openApp(`${RUN}?section=log`)
     fireEvent.change(await screen.findByLabelText(/What happened/), { target: { value: "Half written" } })
-    fireEvent.change(screen.getByLabelText(/GM notes/), { target: { value: "Secret" } })
+    fireEvent.change(screen.getByLabelText("GM notes"), { target: { value: "Secret" } })
 
     fireEvent.click(screen.getByRole("link", { name: "Travel" }))
     fireEvent.click(screen.getByRole("link", { name: "1. Prepare" }))
@@ -491,7 +491,7 @@ describe("stages and sections", () => {
     expect(await screen.findByRole("region", { name: "Travel" })).toBeVisible()
     fireEvent.click(screen.getByRole("link", { name: "Session log" }))
     expect(screen.getByLabelText(/What happened/)).toHaveValue("Half written")
-    expect(screen.getByLabelText(/GM notes/)).toHaveValue("Secret")
+    expect(screen.getByLabelText("GM notes")).toHaveValue("Secret")
 
     await act(async () => {
       await router.navigate(-1)
@@ -626,7 +626,7 @@ describe("stages and sections", () => {
       openApp(`${RUN}?section=log`)
       const entry = await screen.findByLabelText(/What happened/)
       expect(entry).toHaveAccessibleDescription("Visible to everyone in the campaign.")
-      expect(screen.getByLabelText(/GM notes/)).toHaveAccessibleDescription(
+      expect(screen.getByLabelText("GM notes")).toHaveAccessibleDescription(
         "Visible only to people who can edit canon.",
       )
     })
@@ -706,21 +706,23 @@ describe("stages and sections", () => {
         },
       })
       server.on("GET", /authoring\/routes\?location_id=/, { body: { items: [] } })
-      server.on("POST", "/campaigns/mundivita/travel", {
+      server.on("POST", `${S}/travel`, {
         body: { changed: true, moved: [{}], event_id: "ev9" },
       })
       openApp(`${RUN}?section=travel`)
       const form = await screen.findByRole("form", { name: "Record travel" })
       fireEvent.focus(within(form).getByRole("combobox", { name: "Destination" }))
       fireEvent.click(await within(form).findByRole("option", { name: /Cael/ }))
-      fireEvent.change(await within(form).findByRole("combobox", { name: /whole party/ }), { target: { value: "pa1" } })
+      fireEvent.change(await within(form).findByRole("combobox", { name: "Add a party" }), { target: { value: "pa1" } })
       fireEvent.click(within(form).getByRole("button", { name: "Record travel" }))
-      await waitFor(() => expect(server.callsTo("POST", "/campaigns/mundivita/travel")).toHaveLength(1))
-      expect(server.callsTo("POST", "/campaigns/mundivita/travel")[0]!.body).toEqual({
+      await waitFor(() => expect(server.callsTo("POST", `${S}/travel`)).toHaveLength(1))
+      expect(server.callsTo("POST", `${S}/travel`)[0]!.body).toEqual({
         destination_location_id: "c1",
         character_ids: [],
         party_id: "pa1",
         route_id: null,
+        world_time_id: null,
+        note: null,
       })
     })
 
@@ -882,5 +884,162 @@ describe("stages and sections", () => {
     openApp(RUN, ["campaign.view"])
     expect(await screen.findByRole("alert")).toHaveTextContent("do not have permission")
     expect(screen.queryByRole("navigation", { name: "Session stages" })).toBeNull()
+  })
+})
+
+const TRAVEL_EVENT = {
+  event_id: "ev7",
+  name: "Characters traveled",
+  summary: null,
+  event_type_code: "characters_traveled",
+  event_status_code: "recorded",
+  world_time_id: "t1",
+  details: "GM only: ambush ahead",
+  world_time: "Year 1, Day 3",
+}
+const TRAVEL_ENTRY = {
+  event_id: "ev7",
+  world_time_id: "t1",
+  world_time: "Year 1, Day 3",
+  note: "GM only: ambush ahead",
+  legs: [
+    {
+      traveler: { entity_id: "c9", name: "Aldric" },
+      from: { state: "named", entity_id: "l1", name: "Northmark" },
+      to: { state: "named", entity_id: "l3", name: "Southmark" },
+    },
+    {
+      traveler: { entity_id: "c8", name: "Mira" },
+      from: { state: "named", entity_id: "l1", name: "Northmark" },
+      to: { state: "named", entity_id: "l3", name: "Southmark" },
+    },
+    {
+      traveler: { entity_id: "c7", name: "Tovin" },
+      from: { state: "named", entity_id: "l2", name: "Eastwatch" },
+      to: { state: "named", entity_id: "l3", name: "Southmark" },
+    },
+    {
+      traveler: { entity_id: "c6", name: "Newcomer" },
+      from: { state: "unrecorded" },
+      to: { state: "unavailable" },
+    },
+  ],
+}
+const withTravel = (extra: Record<string, unknown> = {}) =>
+  playing({ participants: [MIRA], events: [TRAVEL_EVENT], travel: [TRAVEL_ENTRY], ...extra })
+
+const TRAVEL_RECEIPT = {
+  destination_location_id: "c1",
+  session_id: "s1",
+  changed: true,
+  moved: ["c9"],
+  already_there: [],
+  event_id: "ev7",
+}
+
+async function recordTravelFor(name: string) {
+  const form = await screen.findByRole("form", { name: "Record travel" })
+  fireEvent.focus(within(form).getByRole("combobox", { name: "Destination" }))
+  fireEvent.click(await within(form).findByRole("option", { name: /Cael/ }))
+  fireEvent.click(within(form).getByRole("checkbox", { name }))
+  return form
+}
+
+describe("travel in the session", () => {
+  it("shows a travel entry in the log with grouped journeys, time and the GM note", async () => {
+    server.on("GET", S, { body: withTravel() })
+    server.on("GET", "/campaigns/mundivita/parties", { body: { can_create: true, items: [] } })
+    openApp(`${RUN}?section=log`)
+    const log = await screen.findByRole("list", { name: "Session log" })
+    expect(within(log).getByRole("link", { name: "Travel" })).toHaveAttribute("href", "/app/mundivita/events/ev7")
+    expect(within(log).getByText("In-world: Year 1, Day 3")).toBeVisible()
+    // Differing origins stay on their own lines; nothing claims one common origin.
+    expect(within(log).getByText("Aldric, Mira: Northmark to Southmark")).toBeVisible()
+    expect(within(log).getByText("Tovin: Eastwatch to Southmark")).toBeVisible()
+    expect(
+      within(log).getByText("Newcomer: arrived at A place you cannot see (no earlier location recorded)"),
+    ).toBeVisible()
+    expect(within(log).getByText("GM notes: GM only: ambush ahead")).toBeVisible()
+  })
+
+  it("shows the same history under the Travel form and in the review", async () => {
+    server.on("GET", S, { body: withTravel() })
+    server.on("GET", "/campaigns/mundivita/parties", { body: { can_create: true, items: [] } })
+    openApp(`${RUN}?section=travel`)
+    const history = await screen.findByRole("list", { name: "Travel in this session" })
+    expect(within(history).getByText("Tovin: Eastwatch to Southmark")).toBeVisible()
+    fireEvent.click(screen.getByRole("link", { name: "3. Wrap up" }))
+    const review = await screen.findByRole("region", { name: "Session review" })
+    expect(within(review).getByRole("heading", { name: "Travel (1)" })).toBeInTheDocument()
+    expect(within(review).getByRole("link", { name: "Record travel" })).toHaveAttribute(
+      "href",
+      expect.stringMatching(/\?section=travel$/),
+    )
+    expect(within(review).getByText(/before travel was linked to sessions is not listed here/)).toBeInTheDocument()
+  })
+
+  it("keeps the travel history readable, without the form, once the session has ended", async () => {
+    server.on("GET", S, {
+      body: withTravel({ play_status: "completed", available_actions: ["update", "archive"] }),
+    })
+    openApp(`${RUN}?section=travel`)
+    const travel = await screen.findByRole("region", { name: "Travel" })
+    expect(within(travel).getByText("This session has ended, so you can no longer record travel.")).toBeVisible()
+    expect(within(travel).queryByRole("form", { name: "Record travel" })).toBeNull()
+    expect(within(travel).getByText("Tovin: Eastwatch to Southmark")).toBeVisible()
+    fireEvent.click(screen.getByRole("link", { name: "3. Wrap up" }))
+    const review = await screen.findByRole("region", { name: "Session review" })
+    expect(within(review).queryByRole("link", { name: "Record travel" })).toBeNull()
+    const reviewTravel = within(review).getByRole("list", { name: "Travel in this session" })
+    expect(within(reviewTravel).getByText("Tovin: Eastwatch to Southmark")).toBeInTheDocument()
+  })
+
+  it("refreshes the session after travel without resetting the log draft", async () => {
+    let state = playing({ participants: [MIRA] })
+    server.on("GET", S, () => ({ body: state }))
+    server.on("GET", "/campaigns/mundivita/parties", { body: { can_create: true, items: [] } })
+    server.on("GET", /authoring\/routes\?location_id=/, { body: { items: [] } })
+    server.on("POST", `${S}/travel`, () => {
+      state = withTravel()
+      return { body: TRAVEL_RECEIPT }
+    })
+    openApp(`${RUN}?section=log`)
+    fireEvent.change(await screen.findByLabelText(/What happened/), { target: { value: "Half written" } })
+    fireEvent.change(screen.getByLabelText("GM notes"), { target: { value: "Secret" } })
+    fireEvent.click(screen.getByRole("link", { name: "Travel" }))
+    const form = await recordTravelFor("Mira")
+    fireEvent.click(within(form).getByRole("button", { name: "Record travel" }))
+    expect(await screen.findByRole("list", { name: "Travel in this session" })).toBeVisible()
+    await waitFor(() => expect(screen.getByTestId("authoring-announcer")).toHaveTextContent("1 traveler arrived"))
+    expect(server.callsTo("GET", S).length).toBeGreaterThan(1)
+    fireEvent.click(screen.getByRole("link", { name: "Session log" }))
+    expect(screen.getByLabelText(/What happened/)).toHaveValue("Half written")
+    expect(screen.getByLabelText("GM notes")).toHaveValue("Secret")
+  })
+
+  it("keeps the page and its drafts when a refresh fails, and offers Try again", async () => {
+    let fail = false
+    server.on("GET", S, () =>
+      fail
+        ? { status: 500, body: { error: { code: "server_error", message: "m", correlation_id: "c" } } }
+        : { body: playing({ participants: [MIRA] }) },
+    )
+    server.on("GET", "/campaigns/mundivita/parties", { body: { can_create: true, items: [] } })
+    server.on("GET", /authoring\/routes\?location_id=/, { body: { items: [] } })
+    server.on("POST", `${S}/travel`, { body: TRAVEL_RECEIPT })
+    openApp(`${RUN}?section=log`)
+    fireEvent.change(await screen.findByLabelText(/What happened/), { target: { value: "Half written" } })
+    fireEvent.click(screen.getByRole("link", { name: "Travel" }))
+    const form = await recordTravelFor("Mira")
+    fail = true
+    fireEvent.click(within(form).getByRole("button", { name: "Record travel" }))
+    expect(await screen.findByText(/The latest session data could not be loaded/)).toBeVisible()
+    expect(screen.getByText(/Do not record this journey again/)).toBeVisible()
+    expect(screen.queryByText(/does not exist, or you do not have access/)).toBeNull()
+    fail = false
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+    await waitFor(() => expect(screen.queryByText(/The latest session data could not be loaded/)).toBeNull())
+    fireEvent.click(screen.getByRole("link", { name: "Session log" }))
+    expect(screen.getByLabelText(/What happened/)).toHaveValue("Half written")
   })
 })

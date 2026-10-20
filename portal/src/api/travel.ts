@@ -8,7 +8,8 @@ export interface TravelBody {
     character_ids: string[]
     party_id: string | null
     route_id: string | null
-    world_time_id?: string
+    world_time_id?: string | null
+    note?: string | null
 }
 
 export interface TravelReceipt {
@@ -17,6 +18,8 @@ export interface TravelReceipt {
     moved: string[]
     already_there: string[]
     event_id?: string
+    // Present on a session-scoped receipt.
+    session_id?: string
 }
 
 export interface RouteItem {
@@ -38,4 +41,19 @@ export function recordTravel(
         body,
         ...ctx,
     })
+}
+
+// Travel recorded in a session in progress: the server links the event to that session
+// (the id comes from the path only). The plain route above records standalone travel.
+export function recordSessionTravel(
+    campaignId: string,
+    sessionId: string,
+    body: TravelBody,
+    ctx: MutationContext,
+): Promise<TravelReceipt> {
+    return apiRequest<TravelReceipt>(
+        "POST",
+        `/campaigns/${enc(campaignId)}/sessions/${enc(sessionId)}/travel`,
+        { body, ...ctx },
+    )
 }

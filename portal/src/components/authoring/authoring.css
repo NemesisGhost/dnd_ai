@@ -769,3 +769,14 @@
 .record-list .authoring-button:not(.authoring-dialog *, .authoring-form *) {
   padding: 0.25rem 0.75rem;
 }
+
+/* Session activity: a travel entry's in-world time and one line per distinct journey. */
+.session-activity__time {
+  color: var(--color-text-muted);
+}
+
+.session-activity__legs {
+  margin: 0.25rem 0 0;
+  padding-left: 1.25rem;
+  overflow-wrap: anywhere;
+}

@@ -196,4 +196,35 @@ describe("SessionDetailPage", () => {
         renderSessionDetail(archived, ["campaign.view"])
         expect(screen.queryByRole("button", { name: "Restore session" })).toBeNull()
     })
+    it("shows in-world time and readable travel in the events table, without a GM note for a viewer", () => {
+        const travelEvent = {
+            event_id: "event-travel",
+            name: "Characters traveled",
+            summary: null,
+            event_type_code: "characters_traveled",
+            event_status_code: "recorded",
+            world_time_id: "world-time-3",
+            world_time: "Year 2, Day 9",
+            details: null,
+        }
+        const entry = {
+            event_id: "event-travel",
+            world_time_id: "world-time-3",
+            world_time: "Year 2, Day 9",
+            note: null,
+            legs: [
+                {
+                    traveler: { entity_id: "a", name: "Aldric" },
+                    from: { state: "named" as const, entity_id: "l1", name: "Northmark" },
+                    to: { state: "named" as const, entity_id: "l2", name: "Southmark" },
+                },
+            ],
+        }
+        renderSessionDetail({ ...sessionFixture, events: [travelEvent], travel: [entry] })
+        const table = screen.getByRole("table", { name: "Session events" })
+        expect(within(table).getByRole("columnheader", { name: /In-world time/ })).toBeInTheDocument()
+        expect(within(table).getByText("Year 2, Day 9")).toBeInTheDocument()
+        expect(within(table).getByText("Aldric: Northmark to Southmark")).toBeInTheDocument()
+        expect(within(table).queryByText(/GM notes/)).toBeNull()
+    })
 })

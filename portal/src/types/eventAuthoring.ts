@@ -12,6 +12,10 @@ export interface EventEffectView {
     previous: unknown
     new: unknown
     application_status: string
+    // Readable names for a location change; null when absent or not resolvable.
+    target_name?: string | null
+    previous_name?: string | null
+    new_name?: string | null
 }
 
 export interface EventCorrectionInfo {
