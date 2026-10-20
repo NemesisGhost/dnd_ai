@@ -30,8 +30,8 @@ from tests.scenario.phase15_route_manifest import CAMPAIGN, FOUNDRY_PERMITTED, E
 pytestmark = pytest.mark.scenario
 
 # Pinned on purpose: adding or removing a route changes these and forces a conscious update.
-EXPECTED_GUARDED = 235  # 191 Phase 15 + 42 earlier-phase GM routes (two are Knowledge preview reads) + 2 world-scoped
-EXPECTED_PHASE15_GM = 191
+EXPECTED_GUARDED = 236  # 192 Phase 15 (incl. session-scoped travel) + 42 earlier-phase GM routes (two are Knowledge preview reads) + 2 world-scoped
+EXPECTED_PHASE15_GM = 192
 # 25 + the character's party list + the party roster + the World category counts
 EXPECTED_MEMBER_READS = 28
 

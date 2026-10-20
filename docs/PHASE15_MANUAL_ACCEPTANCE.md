@@ -108,6 +108,23 @@ Check at 360, 768, 1280 and 1920 px, keyboard only, and with a screen reader, as
 | Phase 15.1: the typed authoring forms' unsaved-change guard, server-code to field-error mapping, `no-store` reads after a back navigation | | |
 | Player account: every GM page above is absent from the navigation and a typed URL shows "no permission" or "not found", never a partial page | | |
 
+## Session travel (recorded, linked and reviewed)
+
+Use a throwaway database and the 8001/5174 servers. Not run yet; every result is blank on purpose.
+
+| Check | Result | Notes |
+|---|---|---|
+| GM starts a session and records travel for two participants from two different places to one destination with a GM note and an explicit earlier in-world time: the history under the form shows two origin lines, the time and the note; the Session log shows the same entry; the campaign time bar is unchanged | | |
+| A Log draft and an Award item draft typed before the travel are still there afterwards | | |
+| Choosing a party that contains a non-participant: the preview marks them "(not in this session)" and the receipt moves them too | | |
+| Recording travel to where everyone already is: "Nothing was recorded", history unchanged | | |
+| Ending the session in a second tab, then recording travel in the first: a clear message, the form is replaced by its reason, history still visible | | |
+| Wrap up: Review shows Travel (N); a completed session opened later shows the same in Session detail and in the Run page's Travel section with no form | | |
+| A player with a restricted traveler and a restricted place: the traveler is absent, the place reads "A place you cannot see", no GM note, no counts, no new Knowledge | | |
+| Editor event page of the travel event: places named and the session linked; an old unlinked travel event: places named, no session link | | |
+| Standalone: the NPC "Run this NPC" move still records an unlinked event and does not appear in any session | | |
+| Desktop and 390px widths, each supported theme, keyboard-only use of the new fields (time, notes, party, preview), screen-reader announcement of the saved journey | | |
+
 ## Summary (fill in last)
 
 | | |

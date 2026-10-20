@@ -162,6 +162,17 @@ Added:
   scoped by `session_id` instead of "most recent for the campaign."
 - `GET /campaigns/{campaign_id}/sessions` and `GET /campaigns/
   {campaign_id}/sessions/{session_id}` in `dnd_ai.api.sessions`.
+- Session travel fix (additive): each event carries `world_time` (in-world display
+  text) and the detail adds `travel[]` (`event_id`, `world_time_id`, `world_time`,
+  `note`, `legs[]`; a leg is `traveler{entity_id,name}`, `from`, `to` with
+  `state` `named`/`unrecorded`/`unavailable`). `travel[]` is built by
+  `dnd_ai.queries.session_travel` from the events already returned (so draft, voided
+  and denied-session filtering is inherited); travelers and places pass the caller's
+  entity discoverability (an undiscoverable traveler's leg is omitted, with no count;
+  an undiscoverable place is `unavailable`); `note` is the GM note, `canon.edit` only.
+  Limits: no pagination (bounded by 50 travelers per event); the existence, not the
+  content, of a hidden-traveler travel event stays visible as a bare entry, like any
+  other session event.
 
 ### 4.2 Quests had no way to enumerate a campaign's tracked quests
 
