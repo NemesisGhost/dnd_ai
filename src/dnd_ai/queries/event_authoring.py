@@ -11,6 +11,17 @@ from sqlalchemy import Connection, text
 
 from .campaign_clock import world_time_point
 
+_LOCATION_COMPONENT = "current_location_id"
+
+
+def _as_uuid(value: object) -> uuid.UUID | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return uuid.UUID(value)
+    except ValueError:
+        return None
+
 
 @dataclass(frozen=True)
 class EventParticipantView:
@@ -26,6 +37,11 @@ class EventEffectView:
     previous: object
     new: object
     application_status: str
+    # Readable names for a `current_location_id` effect (None when not a location effect, or the
+    # id does not resolve to an entity of the event's world). The raw values above are unchanged.
+    target_name: str | None = None
+    previous_name: str | None = None
+    new_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -59,7 +75,7 @@ def get_event_authoring_view(
     row = connection.execute(
         text("""
             SELECT e.event_id, ce.canonical_name, et.code AS type_code, es.code AS status_code,
-                   e.world_time_id, e.session_id, e.details
+                   e.world_time_id, e.session_id, e.details, ce.world_id
             FROM narrative.events e
             JOIN core.entities ce ON ce.entity_id = e.event_id
             JOIN narrative.event_types et ON et.event_type_id = e.event_type_id
@@ -85,6 +101,40 @@ def get_event_authoring_view(
             {"e": event_id},
         )
     ]
+    effect_rows = connection.execute(
+        text(
+            "SELECT target_component, target_entity_id, previous_value, new_value, "
+            "application_status FROM narrative.event_effects WHERE event_id = :e "
+            "ORDER BY created_at, event_effect_id"
+        ),
+        {"e": event_id},
+    ).all()
+    location_ids: set[uuid.UUID] = set()
+    for f in effect_rows:
+        if f.target_component == _LOCATION_COMPONENT:
+            location_ids.update(
+                i
+                for i in (f.target_entity_id, _as_uuid(f.previous_value), _as_uuid(f.new_value))
+                if i is not None
+            )
+    names: dict[uuid.UUID, str] = {}
+    if location_ids:
+        names = {
+            r.entity_id: str(r.canonical_name)
+            for r in connection.execute(
+                text(
+                    "SELECT entity_id, canonical_name FROM core.entities "
+                    "WHERE entity_id = ANY(CAST(:ids AS uuid[])) AND world_id = :w"
+                ),
+                {"ids": sorted(location_ids), "w": row.world_id},
+            )
+        }
+
+    def named(entity_id: uuid.UUID | None, component: object) -> str | None:
+        if component != _LOCATION_COMPONENT or entity_id is None:
+            return None
+        return names.get(entity_id)
+
     effects = [
         EventEffectView(
             component=str(f.target_component),
@@ -92,15 +142,11 @@ def get_event_authoring_view(
             previous=f.previous_value,
             new=f.new_value,
             application_status=str(f.application_status),
+            target_name=named(f.target_entity_id, f.target_component),
+            previous_name=named(_as_uuid(f.previous_value), f.target_component),
+            new_name=named(_as_uuid(f.new_value), f.target_component),
         )
-        for f in connection.execute(
-            text(
-                "SELECT target_component, target_entity_id, previous_value, new_value, "
-                "application_status FROM narrative.event_effects WHERE event_id = :e "
-                "ORDER BY created_at, event_effect_id"
-            ),
-            {"e": event_id},
-        )
+        for f in effect_rows
     ]
     correction_row = connection.execute(
         text(

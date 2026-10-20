@@ -106,6 +106,9 @@ def get_event_endpoint(event_id: uuid.UUID, access: _Edit, connection: _Conn) ->
                 "previous": _jsonable(e.previous),
                 "new": _jsonable(e.new),
                 "application_status": e.application_status,
+                "target_name": e.target_name,
+                "previous_name": e.previous_name,
+                "new_name": e.new_name,
             }
             for e in view.effects
         ],

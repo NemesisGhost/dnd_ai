@@ -33,7 +33,9 @@ verbatim (same columns, same `include_draft_events`/
 inventing a second one — see that module's docstring for the full
 rationale. This module does not re-aggregate session participants,
 locations visited, or encounter/quest/character-state changes; those
-remain deferred (see docs/PHASE13D_BACKEND_READINESS.md).
+remain deferred (see docs/PHASE13D_BACKEND_READINESS.md). Each event also carries its in-world
+time as display text; travel entries (names, origins, destinations) are built from these events
+by `dnd_ai.queries.session_travel`, which owns that audience filtering.
 
 This module is framework-free and performs no authorization decisions of
 its own: `denied_session_ids`, `include_draft_events`, and the two
@@ -49,6 +51,8 @@ from sqlalchemy import Connection, text
 
 from dnd_ai.domain.errors import DomainAuthorizationError
 from dnd_ai.domain.session_authoring import derive_play_status
+
+from .campaign_clock import clock_display
 
 
 class SessionNotFoundError(DomainAuthorizationError):
@@ -84,6 +88,8 @@ class SessionEventView:
     event_status_code: str
     world_time_id: uuid.UUID
     details: str | None
+    # In-world time as display text (the campaign clock's formatter); never a real-world timestamp.
+    world_time: str = ""
 
 
 @dataclass(frozen=True)
@@ -233,6 +239,11 @@ def get_session_view(
             "allowed_draft_events": list(allowed_draft_event_ids),
         },
     ).mappings()
+    event_list = list(event_rows)
+    time_text = {
+        time_id: clock_display(connection, time_id)
+        for time_id in {row["world_time_id"] for row in event_list}
+    }
     events = tuple(
         SessionEventView(
             event_id=row["event_id"],
@@ -242,8 +253,9 @@ def get_session_view(
             event_status_code=row["event_status_code"],
             world_time_id=row["world_time_id"],
             details=row["details"],
+            world_time=time_text[row["world_time_id"]],
         )
-        for row in event_rows
+        for row in event_list
     )
 
     return SessionView(

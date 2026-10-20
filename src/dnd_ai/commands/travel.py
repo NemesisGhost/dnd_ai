@@ -8,8 +8,14 @@ already at the destination is left alone (reported, not an error); when nobody m
 written. An optional route (a `route` relationship, see `commands.world_relationships`) must be
 active and join the traveler's current place to the destination in one direction or the other.
 
-Lock order: operation scope, the campaign party (when named), the destination and the travelers
-`FOR SHARE` in id order, the route's relationship row `FOR SHARE`, then, per traveler
+When a `session_id` is given (the session-scoped route) the event is linked to that session, in
+the same transaction as the location history: the session must be in the campaign, active, started
+and not ended (the rule behind the `log` available action, `lock_session_in_progress`), and it
+is checked before anything else, so a stale session fails even when everyone is already there.
+Without one the travel is standalone and the event stays unlinked.
+
+Lock order: operation scope, the session row `FOR SHARE` (when linked), the campaign party (when
+named), the destination and the travelers `FOR SHARE` in id order, the route's relationship row `FOR SHARE`, then, per traveler
 in id order, an advisory lock on (timeline, traveler) and the open location row `FOR UPDATE` (so two
 journeys sharing a traveler serialize, even from "nowhere").
 """
@@ -33,6 +39,7 @@ from ._operations import lock_operation_scope
 from ._shared import validate_campaign_party
 from .events import EventParticipant, _insert_event_row
 from .quest_runtime import time_or_clock
+from .session_play import lock_session_in_progress
 
 _TRAVELER_TYPES = frozenset({"npc", "player_character"})
 
@@ -42,6 +49,7 @@ class TravelResult:
     world_id: uuid.UUID
     changed: bool
     event_id: uuid.UUID | None
+    session_id: uuid.UUID | None = None
     moved: list[uuid.UUID] = field(default_factory=list)
     already_there: list[uuid.UUID] = field(default_factory=list)
 
@@ -93,8 +101,11 @@ def record_travel(
     route_id: uuid.UUID | None = None,
     world_time_id: uuid.UUID | None = None,
     note: str | None = None,
+    session_id: uuid.UUID | None = None,
 ) -> TravelResult:
     scope = lock_operation_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    if session_id is not None:
+        lock_session_in_progress(connection, campaign_id=campaign_id, session_id=session_id)
     travelers = set(character_ids)
     if party_id is not None:
         validate_campaign_party(
@@ -184,7 +195,11 @@ def record_travel(
         )
     if not movers:
         return TravelResult(
-            world_id=scope.world_id, changed=False, event_id=None, already_there=already
+            world_id=scope.world_id,
+            changed=False,
+            event_id=None,
+            session_id=session_id,
+            already_there=already,
         )
 
     event_id = _insert_event_row(
@@ -196,6 +211,7 @@ def record_travel(
         name="Characters traveled",
         details=(note.strip() or None) if note is not None else None,
         campaign_id=campaign_id,
+        session_id=session_id,
         participants=tuple(EventParticipant(entity_id=c, role_code="actor") for c, _, _ in movers),
     )
     for traveler_id, history_id, previous_location in movers:
@@ -242,6 +258,7 @@ def record_travel(
         world_id=scope.world_id,
         changed=True,
         event_id=event_id,
+        session_id=session_id,
         moved=[c for c, _, _ in movers],
         already_there=already,
     )

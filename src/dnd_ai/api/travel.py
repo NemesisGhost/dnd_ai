@@ -2,6 +2,7 @@
 
     GET  /campaigns/{id}/authoring/routes?location_id=
     POST /campaigns/{id}/travel
+    POST /campaigns/{id}/sessions/{session_id}/travel
 
 Routes are created, edited, ended and archived through the relationship endpoints (kind
 `route`: an origin and a destination place, distance, travel time and mode as text, and a flag
@@ -9,7 +10,8 @@ for a concealed route that only editors see); the list here is the editor's view
 that touch one place. Travel records characters (or a party's current members) arriving at a
 place together, with an optional route. Both are `canon.edit`; the write uses the campaign
 idempotency store, re-checks authority under lock, answers with an id-only receipt and writes
-one audit row.
+one audit row. The session-scoped route links the event to a session in progress; the plain
+route records standalone travel.
 """
 
 import uuid
@@ -97,21 +99,26 @@ def list_routes_endpoint(
     }
 
 
-@router.post("/campaigns/{campaign_id}/travel")
-def travel_endpoint(
+def _record(
     body: TravelRequest,
-    access: _Access,
-    connection: _Conn,
-    idempotency_key: _Key,
-    correlation_id: _Corr,
+    *,
+    access: AccessContext,
+    connection: Connection,
+    idempotency_key: str | None,
+    correlation_id: str | None,
+    session_id: uuid.UUID | None,
 ) -> Any:
+    payload = body.model_dump(mode="json")
+    if session_id is not None:
+        # Part of the idempotent request: the same key against another session is a mismatch.
+        payload["session_id"] = str(session_id)
     idem = start_campaign_idempotency(
         connection,
         actor_user_id=access.user_id,
         campaign_id=access.campaign_id,
         idempotency_key=idempotency_key,
         command_name="record_travel",
-        payload=body.model_dump(mode="json"),
+        payload=payload,
         correlation_id=correlation_id,
     )
     if idem.replay is not None:
@@ -126,8 +133,12 @@ def travel_endpoint(
         route_id=body.route_id,
         world_time_id=body.world_time_id,
         note=body.note,
+        session_id=session_id,
     )
     if result.changed:
+        changed_fields: dict[str, Any] = {"traveler_count": {"from": None, "to": len(result.moved)}}
+        if session_id is not None:
+            changed_fields["session_id"] = {"from": None, "to": str(session_id)}
         record_change_log(
             connection,
             change_action_code="updated",
@@ -140,7 +151,7 @@ def travel_endpoint(
             correlation_id=correlation_id,
             command_name="record_travel",
             event_id=result.event_id,
-            changed_fields={"traveler_count": {"from": None, "to": len(result.moved)}},
+            changed_fields=changed_fields,
         )
     receipt: dict[str, Any] = {
         "destination_location_id": str(body.destination_location_id),
@@ -148,7 +159,49 @@ def travel_endpoint(
         "moved": [str(c) for c in result.moved],
         "already_there": [str(c) for c in result.already_there],
     }
+    if session_id is not None:
+        receipt["session_id"] = str(session_id)
     if result.event_id is not None:
         receipt["event_id"] = str(result.event_id)
     finish_campaign_idempotency(connection, idem, status_code=200, body=receipt)
     return JSONResponse(status_code=200, content=receipt)
+
+
+@router.post("/campaigns/{campaign_id}/travel")
+def travel_endpoint(
+    body: TravelRequest,
+    access: _Access,
+    connection: _Conn,
+    idempotency_key: _Key,
+    correlation_id: _Corr,
+) -> Any:
+    """Standalone travel: the event is not linked to any session."""
+    return _record(
+        body,
+        access=access,
+        connection=connection,
+        idempotency_key=idempotency_key,
+        correlation_id=correlation_id,
+        session_id=None,
+    )
+
+
+@router.post("/campaigns/{campaign_id}/sessions/{session_id}/travel")
+def session_travel_endpoint(
+    session_id: uuid.UUID,
+    body: TravelRequest,
+    access: _Access,
+    connection: _Conn,
+    idempotency_key: _Key,
+    correlation_id: _Corr,
+) -> Any:
+    """Travel recorded in a session in progress: the event is linked to it. The session id
+    comes from the path only, so the pair cannot be mismatched by a client."""
+    return _record(
+        body,
+        access=access,
+        connection=connection,
+        idempotency_key=idempotency_key,
+        correlation_id=correlation_id,
+        session_id=session_id,
+    )

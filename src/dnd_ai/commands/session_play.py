@@ -23,8 +23,9 @@ entry sees the ended session), the character entity `FOR SHARE`, then participan
 
 import uuid
 from dataclasses import dataclass
+from typing import Any
 
-from sqlalchemy import Connection, text
+from sqlalchemy import Connection, Row, text
 from sqlalchemy.exc import IntegrityError
 
 from dnd_ai.domain.authoring import StaleWriteError
@@ -280,20 +281,17 @@ def remove_session_participant(
     )
 
 
-def record_session_log_entry(
-    connection: Connection,
-    *,
-    campaign_id: uuid.UUID,
-    actor_user_id: uuid.UUID,
-    session_id: uuid.UUID,
-    entry: str | None,
-    details: str | None = None,
-    world_time_id: uuid.UUID | None = None,
-    character_ids: tuple[uuid.UUID, ...] = (),
-) -> PlayResult:
-    clean_entry = normalize_log_entry(entry)
-    clean_details = normalize_log_details(details)
-    scope = lock_operation_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+def lock_session_in_progress(
+    connection: Connection, *, campaign_id: uuid.UUID, session_id: uuid.UUID
+) -> Row[Any]:
+    """Lock the campaign's session `FOR SHARE` and require that it is in progress.
+
+    The rule the API publishes as the `log` available action (`api.sessions._actions`): the
+    session exists in this campaign (another campaign's session is indistinguishable from a
+    missing one), is `active`, is started and has not ended. `FOR SHARE` means an
+    `end_session` (`FOR UPDATE`) waits for an entry being written and a later entry sees the
+    ended session. Shared by the log entry and by session-linked travel; keep them aligned.
+    """
     row = connection.execute(
         text("""
             SELECT s.started_at, s.ended_at, s.lifecycle_status_id, s.row_version
@@ -312,6 +310,24 @@ def record_session_log_entry(
         raise SessionNotActiveError(f"session {session_id} is {status}")
     if row.started_at is None or row.ended_at is not None:
         raise SessionNotInProgressError(f"session {session_id} is not in progress")
+    return row
+
+
+def record_session_log_entry(
+    connection: Connection,
+    *,
+    campaign_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    session_id: uuid.UUID,
+    entry: str | None,
+    details: str | None = None,
+    world_time_id: uuid.UUID | None = None,
+    character_ids: tuple[uuid.UUID, ...] = (),
+) -> PlayResult:
+    clean_entry = normalize_log_entry(entry)
+    clean_details = normalize_log_details(details)
+    scope = lock_operation_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    row = lock_session_in_progress(connection, campaign_id=campaign_id, session_id=session_id)
     time_id = _time_or_clock(connection, scope, world_time_id)
     event_id = _insert_event_row(
         connection,

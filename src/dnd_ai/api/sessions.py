@@ -38,7 +38,7 @@ from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import Connection
 
 from dnd_ai.domain.access import AccessContext
@@ -47,10 +47,13 @@ from dnd_ai.queries.session import (
     list_campaign_sessions,
     list_session_participants,
 )
+from dnd_ai.queries.session_travel import list_session_travel
 
+from ._shared import timeline_world_id
 from .access import require_campaign_capability
 from .deps import get_connection
 from .errors import NotFoundError
+from .world_explorer import resolve_world_entity_visibility
 
 router = APIRouter(tags=["sessions"])
 
@@ -97,6 +100,40 @@ class SessionEventResponse(BaseModel):
     event_status_code: str
     world_time_id: uuid.UUID
     details: str | None
+    # In-world time as display text. Real-world timestamps are separate session fields.
+    world_time: str = ""
+
+
+class TravelPlaceResponse(BaseModel):
+    """One end of a leg. `state` is `named` (readable and discoverable by the caller),
+    `unrecorded` (the traveler had no earlier location) or `unavailable` (not resolvable or not
+    discoverable by the caller). A name is only ever present when `state` is `named`."""
+
+    state: str
+    entity_id: uuid.UUID | None = None
+    name: str | None = None
+
+
+class TravelTravelerResponse(BaseModel):
+    entity_id: uuid.UUID
+    name: str
+
+
+class TravelLegResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    traveler: TravelTravelerResponse
+    from_: TravelPlaceResponse = Field(alias="from")
+    to: TravelPlaceResponse
+
+
+class SessionTravelResponse(BaseModel):
+    event_id: uuid.UUID
+    world_time_id: uuid.UUID
+    world_time: str
+    # GM note: canon.edit only, otherwise null.
+    note: str | None = None
+    legs: list[TravelLegResponse]
 
 
 class SessionParticipantResponse(BaseModel):
@@ -119,6 +156,8 @@ class SessionDetailResponse(BaseModel):
     start_world_time_id: uuid.UUID | None
     end_world_time_id: uuid.UUID | None
     events: list[SessionEventResponse]
+    # Readable travel entries for the travel events above (same order). Additive.
+    travel: list[SessionTravelResponse] = Field(default_factory=list)
     scheduled_for: datetime | None = None
     play_status: str = "unscheduled"
     row_version: int | None = None
@@ -225,6 +264,16 @@ def get_session_endpoint(
         include_archived=access.has_capability(_CANON_EDIT_CAPABILITY),
     )
 
+    can_edit = access.has_capability(_CANON_EDIT_CAPABILITY)
+    travel = list_session_travel(
+        connection,
+        events=view.events,
+        world_id=timeline_world_id(connection, access.timeline_id),
+        timeline_id=access.timeline_id,
+        visibility=resolve_world_entity_visibility(access, connection),
+        include_gm_note=can_edit,
+    )
+
     return SessionDetailResponse(
         session_id=view.session_id,
         session_number=view.session_number,
@@ -266,9 +315,39 @@ def get_session_endpoint(
                 event_type_code=e.event_type_code,
                 event_status_code=e.event_status_code,
                 world_time_id=e.world_time_id,
+                world_time=e.world_time,
                 # GM-only (D-3, data class GM_ONLY).
                 details=e.details if access.has_capability(_CANON_EDIT_CAPABILITY) else None,
             )
             for e in view.events
+        ],
+        travel=[
+            SessionTravelResponse(
+                event_id=t.event_id,
+                world_time_id=t.world_time_id,
+                world_time=t.world_time,
+                note=t.note if can_edit else None,
+                legs=[
+                    TravelLegResponse(
+                        traveler=TravelTravelerResponse(
+                            entity_id=leg.traveler_id, name=leg.traveler_name
+                        ),
+                        **{
+                            "from": TravelPlaceResponse(
+                                state=leg.origin.state,
+                                entity_id=leg.origin.entity_id,
+                                name=leg.origin.name,
+                            )
+                        },
+                        to=TravelPlaceResponse(
+                            state=leg.destination.state,
+                            entity_id=leg.destination.entity_id,
+                            name=leg.destination.name,
+                        ),
+                    )
+                    for leg in t.legs
+                ],
+            )
+            for t in travel
         ],
     )
