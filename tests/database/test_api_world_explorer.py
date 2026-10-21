@@ -34,6 +34,7 @@ from tests.factories import (
     make_campaign_membership,
     make_character,
     make_character_relationship_type,
+    make_dungeon,
     make_event,
     make_item_definition,
     make_item_instance,
@@ -1426,3 +1427,24 @@ def test_counts_require_campaign_access(
         assert client.get(_counts(f)).status_code == 404
     with client_factory(f.capless_user_id) as client:
         assert client.get(_counts(f)).status_code == 403
+
+
+def test_dungeon_danger_level_is_projected_to_the_gm_but_not_to_a_player(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as setup:
+        dungeon_id = make_dungeon(setup, f.world_id, name="Ember Deeps")
+        setup.execute(
+            text("UPDATE world.dungeons SET danger_level = 9 WHERE dungeon_id = :d"),
+            {"d": dungeon_id},
+        )
+    url = f"/campaigns/{f.campaign_id}/world/locations/{dungeon_id}"
+    with client_factory(f.gm_user_id) as gm:
+        gm_view = gm.get(url)
+    assert gm_view.status_code == 200
+    assert gm_view.json()["danger_level"] == 9
+    with client_factory(f.player_user_id) as player:
+        player_view = player.get(url)
+    assert player_view.status_code == 200
+    assert player_view.json()["danger_level"] is None
+    assert '"danger_level":9' not in player_view.text.replace(" ", "")

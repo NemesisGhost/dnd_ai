@@ -53,11 +53,17 @@ export function LocationPanels({
                                     ? humanizeCode(location.building_use)
                                     : "Not recorded",
                         },
-                        {
-                            key: "danger",
-                            label: "Danger level",
-                            value: location.danger_level ?? "Not recorded",
-                        },
+                        // Editors only: the server sends null to everyone else, so "Not recorded"
+                        // would wrongly tell a player the place has no rating.
+                        ...(location.danger_level !== null
+                            ? [
+                                  {
+                                      key: "danger",
+                                      label: "Danger level",
+                                      value: location.danger_level,
+                                  },
+                              ]
+                            : []),
                     ]}
                 />
             </DetailPanel>

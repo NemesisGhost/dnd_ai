@@ -588,7 +588,9 @@ def get_location_endpoint(
         ],
         population=view.population,
         building_use=view.building_use,
-        danger_level=view.danger_level,
+        # Editors only (owner decision D1): a dungeon's danger rating is GM-facing. A member
+        # without canon.edit receives null, the same answer as for an unrated dungeon.
+        danger_level=view.danger_level if access.has_capability(_GM_CAPABILITY) else None,
         is_searched=view.is_searched,
         is_destroyed=view.is_destroyed,
         alarm_level=view.alarm_level,

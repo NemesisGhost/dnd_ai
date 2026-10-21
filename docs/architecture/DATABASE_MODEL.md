@@ -473,7 +473,7 @@ Built in Phase 5 (revision 038): `world.locations` is the class-table-inheritanc
 
 Built in Phase 5 (revision 039):
 
-- `world.dungeons` — `danger_level` (`core.rating_1_10`, optional)
+- `world.dungeons` — `danger_level` (`core.rating_1_10`, optional; editor-only: the location read projects it only to a caller holding `canon.edit`, everyone else receives `null`)
 - `world.dungeon_areas` — `area_type`, `dimensions`, `environmental_properties`, all free text; a trigger requires `parent_location_id` to reference a `dungeon`-typed location
 - `world.connection_types` — lookup, seeded: door, secret_door, passage, portal, stair, ladder, pit, bridge, teleportation_link
 - `world.area_connections` — links two dungeon areas; requires the same world but deliberately *not* the same dungeon (a teleportation link may cross dungeons); `is_hidden` is a structural fact about the connection, never party knowledge; `from_dungeon_area_id`/`to_dungeon_area_id` are immutable once set (revision 044 — an endpoint has no legitimate "move" operation, the same reasoning revision 030 applied to `core.entities.world_id` and similar identity columns)
