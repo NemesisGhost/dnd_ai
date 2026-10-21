@@ -32,6 +32,9 @@ export interface AreaSummary {
     feature_count: number
     hazard_count: number
     interactable_count: number
+    summary: string | null
+    // The area's own lifecycle actions from its status alone; `update` offers the Edit row action.
+    available_actions: string[]
 }
 
 export interface ConnectionView {

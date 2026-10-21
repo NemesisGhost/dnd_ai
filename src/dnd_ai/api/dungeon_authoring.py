@@ -242,6 +242,8 @@ def _dungeon_json(view: DungeonAuthoringView, *, changed: bool | None = None) ->
                 "feature_count": a.feature_count,
                 "hazard_count": a.hazard_count,
                 "interactable_count": a.interactable_count,
+                "summary": a.summary,
+                "available_actions": a.available_actions,
             }
             for a in view.areas
         ],

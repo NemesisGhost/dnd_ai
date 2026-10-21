@@ -55,6 +55,10 @@ class AreaSummary:
     feature_count: int
     hazard_count: int
     interactable_count: int
+    summary: str | None = None
+    # The area's own lifecycle actions evaluated from its status alone (publish blocks are not
+    # computed per row); the Areas list reads `update` from it to offer Edit.
+    available_actions: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -244,10 +248,16 @@ def get_dungeon_authoring(
             feature_count=int(a.features),
             hazard_count=int(a.hazards),
             interactable_count=int(a.interactables),
+            summary=a.summary,
+            available_actions=evaluate_content_actions(
+                entity_type_code="dungeon_area",
+                canon_status=str(a.canon),
+                lifecycle_status=str(a.lifecycle),
+            )[0],
         )
         for a in connection.execute(
             text("""
-                SELECT da.dungeon_area_id, e.canonical_name, da.area_type, e.row_version,
+                SELECT da.dungeon_area_id, e.canonical_name, e.summary, da.area_type, e.row_version,
                        cs.code AS canon, ls.code AS lifecycle,
                        (SELECT count(*) FROM world.area_features f
                          WHERE f.dungeon_area_id = da.dungeon_area_id) AS features,

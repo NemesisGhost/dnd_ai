@@ -107,6 +107,42 @@ def test_a_dungeon_and_its_areas_are_authored_as_drafts(s: ContentSetup) -> None
     assert s.audit("create_dungeon")[0].changed_fields["danger_level"] == 6
 
 
+def test_the_dungeon_read_lists_each_area_with_its_summary_and_own_actions(s: ContentSetup) -> None:
+    dungeon = new_dungeon(s)
+    names = ["Alpha", "bravo", "Charlie", "Delta", "Echo", "Foxtrot"]
+    areas = {n: new_area(s, dungeon, n, summary=f"About {n}.") for n in names[:5]}
+    areas["Foxtrot"] = new_area(s, dungeon, "Foxtrot")
+
+    def version(name: str) -> int:
+        return int(
+            s.gm.get(s.url(f"dungeon-areas/{areas[name]['dungeon_area_id']}")).json()["row_version"]
+        )
+
+    def move(name: str, action: str, **extra: object) -> None:
+        s.transition(areas[name]["dungeon_area_id"], action, version(name), **extra)
+
+    move("bravo", "submit-for-review")
+    move("Charlie", "submit-for-review")
+    move("Charlie", "approve")
+    move("Delta", "submit-for-review")
+    move("Delta", "reject", reason="Not yet")
+    # Publishing the dungeon first lets two areas reach canon; one of them is then archived.
+    s.publish(dungeon["dungeon_id"], view(s, dungeon["dungeon_id"])["row_version"])
+    s.publish(areas["Echo"]["dungeon_area_id"], version("Echo"))
+    s.publish(areas["Foxtrot"]["dungeon_area_id"], version("Foxtrot"))
+    move("Foxtrot", "archive")
+
+    listed = view(s, dungeon["dungeon_id"])["areas"]
+    assert [a["name"] for a in listed] == names  # by name, case-insensitively
+    by_name = {a["name"]: a for a in listed}
+    assert by_name["Alpha"]["summary"] == "About Alpha." and by_name["Foxtrot"]["summary"] is None
+    editable = {n for n, a in by_name.items() if "update" in a["available_actions"]}
+    assert editable == {
+        "Alpha",
+        "Echo",
+    }  # draft and canon; not in review, approved, rejected, archived
+
+
 def test_updating_the_dungeon_and_an_area_use_their_own_versions(s: ContentSetup) -> None:
     dungeon = new_dungeon(s)
     area = new_area(s, dungeon)
