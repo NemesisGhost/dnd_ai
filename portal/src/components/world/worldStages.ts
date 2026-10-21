@@ -13,6 +13,7 @@ export type WorldSection =
     | "details"
     | "areas"
     | "connections"
+    | "contents"
     | "sources"
     | "relationships"
     | "review"
@@ -71,6 +72,13 @@ const INFO: Readonly<Record<WorldSection, WorldSectionInfo>> = {
         stage: "prepare",
         label: "Connections",
         purpose: "The passages between this dungeon's areas. Each saves on its own.",
+    },
+    contents: {
+        key: "contents",
+        stage: "prepare",
+        label: "Contents",
+        purpose:
+            "What this area holds: its features, hazards and interactables, and the connections that touch it. Each saves on its own.",
     },
     sources: {
         key: "sources",
@@ -136,7 +144,7 @@ const REVIEW: readonly WorldSection[] = ["review", "publication"]
 const KIND_SECTIONS: Readonly<Record<WorldKind, readonly WorldSection[]>> = {
     place: [...COMMON_PREPARE, ...REVIEW],
     dungeon: ["details", "areas", "connections", "sources", "relationships", ...REVIEW],
-    area: [...COMMON_PREPARE, ...REVIEW, "area-now"],
+    area: ["details", "contents", "sources", "relationships", ...REVIEW, "area-now"],
     organization: [...COMMON_PREPARE, ...REVIEW, "members"],
     religion: [...COMMON_PREPARE, ...REVIEW],
     npc: [...COMMON_PREPARE, ...REVIEW, "run", "inventory"],

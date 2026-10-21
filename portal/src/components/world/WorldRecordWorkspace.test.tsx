@@ -1061,14 +1061,106 @@ describe("World record workspace: a dungeon", () => {
 })
 
 describe("World record workspace: a dungeon area", () => {
-    function area(canon: string, lifecycleStatus = "active") {
-        return setup({
+    const OPTIONS = {
+        can_create: true,
+        connection_types: [{ value: "door", label: "Door" }],
+        limits: {
+            name_max_length: 200,
+            summary_max_length: 4000,
+            short_text_max_length: 200,
+            notes_max_length: 4000,
+            change_note_max_length: 1000,
+            rating_min: 1,
+            rating_max: 10,
+            alarm_level_max: 1000,
+        },
+    }
+    const ref = (id: string, name: string, canon = "canon") => ({
+        entity_id: id,
+        name,
+        canon_status: canon,
+        lifecycle_status: "active",
+    })
+    const child = (kind: string, id: string, type: string | null, over: object = {}) => ({
+        kind,
+        child_id: id,
+        child_type: type,
+        description: null as string | null,
+        is_hidden: false,
+        severity: null as number | null,
+        status: null as string | null,
+        is_destroyed: null as boolean | null,
+        condition_notes: null,
+        state_event_id: null as string | null,
+        ...over,
+    })
+    const EDIT = ["add_feature", "update_feature", "add_hazard", "update_hazard", "add_interactable", "update_interactable"]
+    const REMOVE = ["remove_feature", "remove_hazard", "remove_interactable"]
+    const baseArea = () => ({
+        dungeon_area_id: "l1",
+        name: "Entry hall",
+        summary: null,
+        area_type: "room",
+        dimensions: null,
+        environmental_properties: null,
+        dungeon: ref("d1", "Crypt"),
+        dungeon_row_version: 7,
+        canon_status: "canon",
+        lifecycle_status: "active",
+        row_version: 2,
+        available_actions: ["update"],
+        blocked_actions: [] as { action: string; reason: string }[],
+        structure_actions: [...EDIT, ...REMOVE],
+        features: [child("feature", "f1", "mural", { description: "A faded mural.", is_destroyed: false, state_event_id: "ev-f" })],
+        hazards: [
+            child("hazard", "h1", "Spike trap", { severity: 7, is_hidden: true, status: "armed", state_event_id: "ev1" }),
+        ],
+        interactables: [child("interactable", "i1", "Lever", { status: "active", state_event_id: "ev-i" })],
+        connections: [
+            {
+                area_connection_id: "x1",
+                from_area: ref("l1", "Entry hall"),
+                to_area: ref("a2", "Vault"),
+                connection_type: "door",
+                connection_type_label: "Door",
+                is_one_way: false,
+                is_hidden: false,
+                description: null,
+                is_conditional: false,
+                condition_description: null,
+                status: "open",
+                state_event_id: "ev-c",
+            },
+        ],
+        state: { is_searched: true, is_destroyed: false, alarm_level: 2, condition_notes: "Dusty", state_event_id: "ev0" },
+        can_set_state: true,
+        state_choices: {
+            connection_status: [
+                { value: "open", label: "Open" },
+                { value: "locked", label: "Locked" },
+            ],
+            hazard_status: [
+                { value: "armed", label: "Armed" },
+                { value: "triggered", label: "Triggered" },
+            ],
+            interactable_status: [
+                { value: "active", label: "Active" },
+                { value: "untouched", label: "Untouched" },
+            ],
+        },
+    })
+    type AreaView = ReturnType<typeof baseArea>
+
+    function area(canon = "canon", lifecycleStatus = "active", over: Partial<AreaView> = {}, options: Partial<Options> = {}) {
+        const state = { view: { ...baseArea(), canon_status: canon, lifecycle_status: lifecycleStatus, ...over } as AreaView }
+        const rendered = setup({
             typeCode: "dungeon_area",
             canon,
             detail: locationDetail({
                 name: "Entry hall",
                 location_type_code: "dungeon_area",
                 parent_location_id: "d1",
+                breadcrumbs: [{ location_id: "d1", name: "Crypt", location_type_code: "dungeon" }],
                 is_searched: true,
                 is_destroyed: false,
                 alarm_level: 2,
@@ -1080,39 +1172,313 @@ describe("World record workspace: a dungeon area", () => {
                 lifecycle_status: lifecycleStatus,
                 available_actions: [],
             }),
-            extra: (server) =>
-                server.on("GET", `/campaigns/${C}/authoring/dungeon-areas/l1`, {
-                    body: { available_actions: ["update"], blocked_actions: [] },
-                }),
+            ...options,
+            extra: (server) => {
+                server.on("GET", `/campaigns/${C}/authoring/dungeons/options`, { body: OPTIONS })
+                server.on("GET", `/campaigns/${C}/authoring/dungeon-areas/l1`, () => ({ body: state.view }))
+                server.on("POST", /\/authoring\/dungeons\/d1\/(features|hazards|interactables)(\/[a-z0-9]+\/(update|remove))?$/, (call) => {
+                    const body = call.body as { child_type?: string }
+                    const kind = /features/.test(call.path) ? "feature" : /hazards/.test(call.path) ? "hazard" : "interactable"
+                    const key = kind === "feature" ? "features" : kind === "hazard" ? "hazards" : "interactables"
+                    if (/\/remove$/.test(call.path)) {
+                        const id = call.path.split("/").at(-2)
+                        state.view = { ...state.view, [key]: state.view[key].filter((c) => c.child_id !== id) }
+                    } else if (!/\/update$/.test(call.path)) {
+                        state.view = {
+                            ...state.view,
+                            [key]: [...state.view[key], child(kind, `new-${kind}`, body.child_type ?? null)],
+                        }
+                    }
+                    state.view = { ...state.view, dungeon_row_version: state.view.dungeon_row_version + 1 }
+                    return { body: { changed: true } }
+                })
+                server.on("POST", /\/campaigns\/c1\/dungeon-areas\/l1\/state$/, () => ({
+                    body: { dungeon_area_id: "l1", kind: "area", target_id: "l1", changed: true },
+                }))
+                options.extra?.(server)
+            },
         })
+        return { ...rendered, state }
     }
 
-    it("has Use in play with the area's timeline state, kept out of its details", async () => {
-        area("canon")
+    const contents = async () => {
+        await opened("Entry hall")
+        fireEvent.click(screen.getByRole("link", { name: "Contents" }))
+        await screen.findByRole("heading", { level: 2, name: "Contents" })
+    }
+    const areaNow = async () => {
+        await opened("Entry hall")
+        fireEvent.click(screen.getByRole("link", { name: "3. Use in play" }))
+        await screen.findByRole("heading", { level: 2, name: "Area now" })
+    }
+    const group = (name: string) => within(screen.getByRole("region", { name }))
+    const stateWrites = (server: MockServer) => server.callsTo("POST", /dungeon-areas\/l1\/state$/)
+
+    it("has Contents under Prepare and Area now under Use in play", async () => {
+        area()
         await opened("Entry hall")
         expect(stageLinks()).toEqual(["1. Prepare", "2. Review & publish", "3. Use in play"])
-        // The definition's details do not show timeline state.
-        const details = screen.getByRole("heading", { level: 2, name: "Details" }).closest("section")!
-        expect(within(details).queryByText("Alarm level")).toBeNull()
-        fireEvent.click(screen.getByRole("link", { name: "3. Use in play" }))
-        expect(await screen.findByRole("heading", { level: 2, name: "Area now" })).toBeVisible()
-        expect(screen.getByText("Alarm level")).toBeVisible()
-        expect(screen.getByText("Dusty")).toBeVisible()
-        expect(screen.getByRole("link", { name: "Record what is happening here" })).toHaveAttribute(
+        expect(sectionLinks("Prepare")).toEqual(["Details", "Contents", "Sources", "Relationships"])
+    })
+
+    it("names the dungeon it is in, with a link up to the dungeon's Areas that keeps the return state", async () => {
+        const { router } = area("canon", "active", {}, {
+            entry: { pathname: "/app/c1/world/location/l1", state: { reviewSearch: "?status=draft" } },
+        })
+        await opened("Entry hall")
+        const link = screen.getByRole("link", { name: "Crypt" })
+        expect(link).toHaveAttribute("href", "/app/c1/world/location/d1?section=areas")
+        fireEvent.click(link)
+        await waitFor(() => expect(router.state.location.pathname).toBe("/app/c1/world/location/d1"))
+        expect(router.state.location.search).toBe("?section=areas")
+        expect(router.state.location.state).toEqual({ reviewSearch: "?status=draft" })
+    })
+
+    it("shows what the area holds in three compact groups, without any runtime status", async () => {
+        const { server } = area()
+        await contents()
+        expect(screen.getByRole("heading", { level: 3, name: "Features (1)" })).toBeVisible()
+        expect(screen.getByRole("heading", { level: 3, name: "Hazards (1)" })).toBeVisible()
+        expect(screen.getByRole("heading", { level: 3, name: "Interactables (1)" })).toBeVisible()
+        expect(group("Hazards").getByText("Spike trap")).toBeVisible()
+        expect(group("Hazards").getByText("Concealed · Severity 7")).toBeVisible()
+        expect(group("Features").getByText("A faded mural.")).toBeVisible()
+        // Whether the trap is armed is what is true now, not what it is.
+        const section = screen.getByRole("heading", { level: 2, name: "Contents" }).closest("section")!
+        expect(within(section).queryByText(/Armed|Now:/)).not.toBeInTheDocument()
+        expect(group("Connections of this area").getByText("Entry hall and Vault")).toBeVisible()
+        expect(writes(server)).toHaveLength(0)
+    })
+
+    it("links an area's connections to the dungeon's Connections section", async () => {
+        area()
+        await contents()
+        expect(screen.getByRole("link", { name: /Manage in the dungeon's Connections/ })).toHaveAttribute(
             "href",
-            "/app/c1/world/dungeon/d1/areas/l1/edit",
+            "/app/c1/world/location/d1?section=connections",
         )
     })
 
-    it("returns from the area's editor to the Area now section it was opened from", async () => {
-        const { router } = area("canon")
-        await opened("Entry hall")
-        fireEvent.click(screen.getByRole("link", { name: "3. Use in play" }))
-        fireEvent.click(await screen.findByRole("link", { name: "Record what is happening here" }))
-        await screen.findByText("Area edit page")
-        expect(router.state.location.state).toMatchObject({
-            returnTo: { pathname: "/app/c1/world/location/l1", search: "?section=area-now" },
+    it("adds a hazard against the dungeon version, checks the severity, and stays on the list", async () => {
+        const { server } = area()
+        await contents()
+        expect(screen.queryByRole("form", { name: "Add a hazard" })).not.toBeInTheDocument()
+        fireEvent.click(screen.getByRole("button", { name: "Add hazard" }))
+        const form = await screen.findByRole("form", { name: "Add a hazard" })
+        fireEvent.change(within(form).getByRole("textbox", { name: /Kind of hazard/ }), { target: { value: "Pit" } })
+        fireEvent.change(within(form).getByRole("textbox", { name: /Severity/ }), { target: { value: "11" } })
+        fireEvent.click(within(form).getByRole("button", { name: "Add hazard" }))
+        expect(await within(form).findByText(/whole number from 1 to 10/)).toBeVisible()
+        expect(writes(server)).toHaveLength(0)
+        fireEvent.change(within(form).getByRole("textbox", { name: /Severity/ }), { target: { value: "5" } })
+        fireEvent.click(within(form).getByRole("button", { name: "Add hazard" }))
+        await waitFor(() => expect(server.callsTo("POST", `/campaigns/${C}/authoring/dungeons/d1/hazards`)).toHaveLength(1))
+        expect(server.callsTo("POST", `/campaigns/${C}/authoring/dungeons/d1/hazards`)[0]!.body).toEqual({
+            expected_row_version: 7,
+            dungeon_area_id: "l1",
+            child_type: "Pit",
+            description: null,
+            is_hidden: false,
+            severity: 5,
         })
+        expect(await screen.findByRole("heading", { level: 3, name: "Hazards (2)" })).toBeVisible()
+        expect(within(form).getByRole("textbox", { name: /Kind of hazard/ })).toHaveValue("")
+        expect(screen.getByTestId("authoring-announcer")).toHaveTextContent("Hazard added")
+    })
+
+    it("edits a hazard against the dungeon version and closes only once it is saved", async () => {
+        const { server } = area()
+        await contents()
+        const edit = screen.getByRole("button", { name: "Edit hazard Spike trap" })
+        fireEvent.click(edit)
+        const form = await screen.findByRole("form", { name: "Edit hazard Spike trap" })
+        fireEvent.change(within(form).getByRole("textbox", { name: /Severity/ }), { target: { value: "9" } })
+        fireEvent.click(within(form).getByRole("button", { name: "Save hazard" }))
+        await waitFor(() => expect(screen.queryByRole("form", { name: "Edit hazard Spike trap" })).not.toBeInTheDocument())
+        expect(server.callsTo("POST", /dungeons\/d1\/hazards\/h1\/update$/)[0]!.body).toMatchObject({
+            expected_row_version: 7,
+            severity: 9,
+            is_hidden: true,
+        })
+        await waitFor(() => expect(edit).toHaveFocus())
+    })
+
+    it("keeps an edit open with its values when the server refuses it", async () => {
+        area("canon", "active", {}, {
+            extra: (s) =>
+                s.on("POST", /dungeons\/d1\/hazards\/h1\/update$/, {
+                    status: 409,
+                    body: { error: { code: "dungeon_not_draft", message: "m", correlation_id: "c" } },
+                }),
+        })
+        await contents()
+        fireEvent.click(screen.getByRole("button", { name: "Edit hazard Spike trap" }))
+        const form = await screen.findByRole("form", { name: "Edit hazard Spike trap" })
+        fireEvent.change(within(form).getByRole("textbox", { name: "Description" }), { target: { value: "Rusty spikes" } })
+        fireEvent.click(within(form).getByRole("button", { name: "Save hazard" }))
+        expect(await screen.findByText(/only while the dungeon is a draft/)).toBeVisible()
+        expect(screen.getByRole("form", { name: "Edit hazard Spike trap" })).toBeVisible()
+        expect(within(form).getByRole("textbox", { name: "Description" })).toHaveValue("Rusty spikes")
+    })
+
+    it("asks before removing a hazard, then removes it against the dungeon version", async () => {
+        const { server } = area()
+        await contents()
+        fireEvent.click(screen.getByRole("button", { name: "Remove hazard Spike trap" }))
+        const dialog = await screen.findByRole("dialog", { name: "Remove this hazard?" })
+        expect(writes(server)).toHaveLength(0)
+        fireEvent.click(within(dialog).getByRole("button", { name: "Remove hazard" }))
+        await waitFor(() => expect(server.callsTo("POST", /hazards\/h1\/remove$/)).toHaveLength(1))
+        expect(server.callsTo("POST", /hazards\/h1\/remove$/)[0]!.body).toEqual({ expected_row_version: 7 })
+        expect(await screen.findByRole("heading", { level: 3, name: "Hazards (0)" })).toBeVisible()
+    })
+
+    it("offers no removal while the dungeon is published, and says removal is for drafts", async () => {
+        area("canon", "active", { structure_actions: EDIT })
+        await contents()
+        expect(screen.queryByRole("button", { name: /^Remove / })).not.toBeInTheDocument()
+        expect(screen.getByText("Contents can be removed only while the dungeon is a draft.")).toBeVisible()
+        expect(screen.getByRole("button", { name: "Edit hazard Spike trap" })).toBeVisible()
+    })
+
+    it("explains why contents cannot be changed from the reported statuses, and offers no form", async () => {
+        area("canon", "active", { structure_actions: [], dungeon: ref("d1", "Crypt", "proposed") })
+        await contents()
+        expect(
+            screen.getByText(/Contents can be changed while both this area and Crypt can be edited\. This area is published; Crypt is in review\./),
+        ).toBeVisible()
+        expect(screen.queryByRole("button", { name: /^Add / })).not.toBeInTheDocument()
+        expect(screen.queryByRole("button", { name: /^Edit / })).not.toBeInTheDocument()
+    })
+
+    it("tells two parts with the same name apart", async () => {
+        area("canon", "active", {
+            hazards: [child("hazard", "h1", "Spike trap"), child("hazard", "h2", "Spike trap")],
+        })
+        await contents()
+        expect(screen.getByRole("button", { name: "Edit hazard Spike trap (1)" })).toBeVisible()
+        expect(screen.getByRole("button", { name: "Edit hazard Spike trap (2)" })).toBeVisible()
+    })
+
+    it("keeps a half-typed new hazard when another section is shown, and names it before leaving", async () => {
+        area()
+        await contents()
+        fireEvent.click(screen.getByRole("button", { name: "Add hazard" }))
+        fireEvent.change(await screen.findByRole("textbox", { name: /Kind of hazard/ }), { target: { value: "Half" } })
+        fireEvent.click(screen.getByRole("link", { name: "Sources" }))
+        await screen.findByRole("heading", { level: 2, name: "Sources" })
+        fireEvent.click(screen.getByRole("link", { name: "Contents" }))
+        expect(await screen.findByRole("textbox", { name: /Kind of hazard/ })).toHaveValue("Half")
+        fireEvent.click(screen.getByRole("link", { name: "Back to World" }))
+        expect(await screen.findByRole("dialog", { name: "Discard unsaved input?" })).toHaveTextContent("a new hazard")
+    })
+
+    it("shows the facts and a Change control for each part in Area now, with the statuses it is in", async () => {
+        const { server } = area()
+        await areaNow()
+        expect(screen.getByText("Dusty")).toBeVisible()
+        const list = within(screen.getByRole("list", { name: "What can be recorded" }))
+        expect(list.getByText(/Searched: Yes · Destroyed: No · Alarm level: 2 · Notes: Dusty/)).toBeVisible()
+        expect(list.getByText("Hazard: Armed")).toBeVisible()
+        expect(list.getByText("Interactable: Active")).toBeVisible()
+        expect(list.getByText("Feature: Intact")).toBeVisible()
+        expect(list.getByText("Connection: Open")).toBeVisible()
+        expect(screen.queryByRole("form")).not.toBeInTheDocument()
+        expect(screen.queryByRole("link", { name: "Record what is happening here" })).not.toBeInTheDocument()
+        expect(writes(server)).toHaveLength(0)
+    })
+
+    it("offers the controls only when the server says the state can be recorded", async () => {
+        area("canon", "active", { can_set_state: false, dungeon: ref("d1", "Crypt", "draft") })
+        await areaNow()
+        expect(await screen.findByText(/Publish Crypt first/)).toBeVisible()
+        expect(screen.queryByRole("button", { name: /^Change/ })).not.toBeInTheDocument()
+    })
+
+    it("records the area's state against the event it was read at, and checks the alarm level", async () => {
+        const { server } = area()
+        await areaNow()
+        fireEvent.click(screen.getByRole("button", { name: "Change the area's current state" }))
+        const form = await screen.findByRole("form", { name: "Change the area's current state" })
+        fireEvent.change(within(form).getByRole("textbox", { name: /Alarm level/ }), { target: { value: "x" } })
+        fireEvent.click(within(form).getByRole("button", { name: "Save area state" }))
+        expect(await within(form).findByText(/whole number from 0 to 1000/)).toBeVisible()
+        expect(stateWrites(server)).toHaveLength(0)
+        fireEvent.change(within(form).getByRole("textbox", { name: /Alarm level/ }), { target: { value: "3" } })
+        fireEvent.click(within(form).getByRole("button", { name: "Save area state" }))
+        await waitFor(() => expect(stateWrites(server)).toHaveLength(1))
+        expect(stateWrites(server)[0]!.body).toEqual({
+            kind: "area",
+            target_id: "l1",
+            expected_last_event_id: "ev0",
+            is_searched: true,
+            is_destroyed: false,
+            alarm_level: 3,
+            condition_notes: "Dusty",
+        })
+        await waitFor(() => expect(screen.queryByRole("form", { name: "Change the area's current state" })).not.toBeInTheDocument())
+    })
+
+    it("sets a hazard's status naming the event that last wrote it", async () => {
+        const { server } = area()
+        await areaNow()
+        fireEvent.click(screen.getByRole("button", { name: "Change status of Spike trap" }))
+        const form = await screen.findByRole("form", { name: "Change status of Spike trap" })
+        fireEvent.change(within(form).getByRole("combobox", { name: "New status for Spike trap" }), { target: { value: "triggered" } })
+        fireEvent.click(within(form).getByRole("button", { name: "Save status" }))
+        await waitFor(() => expect(stateWrites(server)).toHaveLength(1))
+        expect(stateWrites(server)[0]!.body).toEqual({
+            kind: "hazard",
+            target_id: "h1",
+            expected_last_event_id: "ev1",
+            hazard_status: "triggered",
+        })
+    })
+
+    it("pauses a state save whose state moved on, and sends the latest event only once the person chooses to", async () => {
+        const { state, server } = area()
+        await areaNow()
+        fireEvent.click(screen.getByRole("button", { name: "Change the area's current state" }))
+        const form = await screen.findByRole("form", { name: "Change the area's current state" })
+        fireEvent.change(within(form).getByRole("textbox", { name: /Alarm level/ }), { target: { value: "5" } })
+        // Someone else records the state; the next read of the area (here, after adding a feature)
+        // brings the newer event in.
+        state.view = {
+            ...state.view,
+            state: { ...state.view.state, alarm_level: 9, state_event_id: "ev9" },
+        }
+        fireEvent.click(screen.getByRole("link", { name: "1. Prepare" }))
+        fireEvent.click(await screen.findByRole("link", { name: "Contents" }))
+        fireEvent.click(await screen.findByRole("button", { name: "Add feature" }))
+        fireEvent.change(await screen.findByRole("textbox", { name: /Kind of feature/ }), { target: { value: "Pillar" } })
+        fireEvent.click(within(screen.getByRole("form", { name: "Add a feature" })).getByRole("button", { name: "Add feature" }))
+        await screen.findByRole("heading", { level: 3, name: "Features (2)" })
+        fireEvent.click(screen.getByRole("link", { name: "3. Use in play" }))
+        expect(await screen.findByText(/This state changed elsewhere/)).toBeVisible()
+        expect(within(form).getByRole("textbox", { name: /Alarm level/ })).toHaveValue("5")
+        expect(within(form).getByRole("button", { name: "Save area state" })).toBeDisabled()
+        expect(stateWrites(server)).toHaveLength(0)
+        fireEvent.click(screen.getByRole("button", { name: "Keep my changes and save over it" }))
+        fireEvent.click(within(form).getByRole("button", { name: "Save area state" }))
+        await waitFor(() => expect(stateWrites(server)).toHaveLength(1))
+        expect(stateWrites(server)[0]!.body).toMatchObject({ expected_last_event_id: "ev9", alarm_level: 5 })
+    })
+
+    it("explains a refused state record and keeps the editor open", async () => {
+        area("canon", "active", {}, {
+            extra: (s) =>
+                s.on("POST", /dungeon-areas\/l1\/state$/, {
+                    status: 409,
+                    body: { error: { code: "clock_required", message: "m", correlation_id: "c" } },
+                }),
+        })
+        await areaNow()
+        fireEvent.click(screen.getByRole("button", { name: "Change status of Lever" }))
+        const form = await screen.findByRole("form", { name: "Change status of Lever" })
+        fireEvent.change(within(form).getByRole("combobox"), { target: { value: "untouched" } })
+        fireEvent.click(within(form).getByRole("button", { name: "Save status" }))
+        expect(await screen.findByText("Set the campaign time first.")).toBeVisible()
+        expect(screen.getByRole("form", { name: "Change status of Lever" })).toBeVisible()
     })
 
     it.each([
@@ -1125,7 +1491,22 @@ describe("World record workspace: a dungeon area", () => {
         await opened("Entry hall")
         fireEvent.click(screen.getByRole("link", { name: "3. Use in play" }))
         await shown(message)
-        expect(screen.queryByRole("link", { name: "Record what is happening here" })).not.toBeInTheDocument()
+        expect(screen.queryByRole("button", { name: /^Change/ })).not.toBeInTheDocument()
+    })
+
+    it("sends no write when only moving between sections", async () => {
+        const { server } = area()
+        await contents()
+        fireEvent.click(screen.getByRole("link", { name: "3. Use in play" }))
+        await screen.findByRole("heading", { level: 2, name: "Area now" })
+        expect(writes(server)).toHaveLength(0)
+    })
+
+    it("sends no area authoring request to someone who cannot edit canon", async () => {
+        const { server } = area("canon", "active", {}, { capabilities: ["campaign.view"] })
+        expect(await screen.findByRole("heading", { level: 1, name: "Entry hall" })).toBeVisible()
+        expect(screen.queryByRole("navigation", { name: "Record stages" })).not.toBeInTheDocument()
+        expect(server.calls.some((c) => /authoring|lifecycle|provenance|revisions/.test(c.path))).toBe(false)
     })
 })
 

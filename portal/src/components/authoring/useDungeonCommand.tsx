@@ -19,6 +19,8 @@ export interface DungeonCommandHandle {
     busy: boolean
     // The section's own failure notice, or null.
     notice: ReactNode
+    // Forgets a failure, for when the form it belonged to is opened again or closed.
+    clear: () => void
 }
 
 export function useDungeonCommand({
@@ -71,5 +73,6 @@ export function useDungeonCommand({
         },
         busy: mutation.status.kind === "pending",
         notice,
+        clear: mutation.reset,
     }
 }

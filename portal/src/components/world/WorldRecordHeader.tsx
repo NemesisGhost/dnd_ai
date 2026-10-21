@@ -19,6 +19,8 @@ interface Props {
     // Where the guidance leads; null when it has no destination.
     guidanceHref: string | null
     linkState?: object
+    // The place the record sits in, as a link (an area's dungeon): where the person can go up to.
+    context?: { label: string; href: string; state?: object } | null
     // The heading's id, for a workspace whose sections name it (default: the World workspace's).
     headingId?: string
 }
@@ -36,6 +38,7 @@ export function WorldRecordHeader({
     guidance,
     guidanceHref,
     linkState,
+    context = null,
     headingId = "world-workspace-heading",
 }: Props) {
     return (
@@ -44,6 +47,14 @@ export function WorldRecordHeader({
                 <Link to={back.href}>{back.label}</Link>
             </p>
             <p className="world-detail__eyebrow">{eyebrow}</p>
+            {context !== null ? (
+                <p className="world-detail__context">
+                    In{" "}
+                    <Link to={context.href} state={context.state}>
+                        {context.label}
+                    </Link>
+                </p>
+            ) : null}
             <div className="item-header__headline">
                 <h1 id={headingId} ref={headingRef} tabIndex={-1} className="item-header__title">
                     {name}

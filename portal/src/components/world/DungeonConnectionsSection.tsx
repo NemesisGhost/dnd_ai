@@ -64,6 +64,7 @@ export function DungeonConnectionsSection({ campaignId, dungeonId, read, refresh
     const commandFor = (from: typeof origin): DungeonCommandHandle => ({
         busy: base.busy,
         notice: origin === from ? base.notice : null,
+        clear: base.clear,
         send: (command, message, after) => {
             setOrigin(from)
             base.send(command, message, after)
@@ -116,10 +117,12 @@ export function DungeonConnectionsSection({ campaignId, dungeonId, read, refresh
             return
         }
         setEditorDirty(false)
+        base.clear()
         setEditing(id)
     }
 
     function closeEditor(id: string) {
+        base.clear()
         setEditing(null)
         setEditorDirty(false)
         focusSoon(editButtonId(id))

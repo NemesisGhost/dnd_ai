@@ -302,31 +302,6 @@ describe("EditDungeonAreaPage", () => {
     const route = "/app/:campaignId/world/dungeon/:dungeonId/areas/:areaId/edit"
     const path = "/app/c1/world/dungeon/d1/areas/a1/edit"
 
-    it("shows the area contents and adds a hazard against the dungeon version", async () => {
-        const server = setup(path, <EditDungeonAreaPage />, route, area())
-        expect(await screen.findByRole("article", { name: "feature mural" })).toBeInTheDocument()
-        const form = screen.getByRole("form", { name: "Add a hazard" })
-        fireEvent.change(within(form).getByRole("textbox", { name: /Kind of hazard/ }), {
-            target: { value: "trap" },
-        })
-        fireEvent.change(within(form).getByRole("textbox", { name: /Severity/ }), { target: { value: "11" } })
-        fireEvent.click(within(form).getByRole("button", { name: "Add hazard" }))
-        expect(await within(form).findByText(/from 1 to 10/)).toBeInTheDocument()
-        fireEvent.change(within(form).getByRole("textbox", { name: /Severity/ }), { target: { value: "7" } })
-        fireEvent.click(within(form).getByRole("button", { name: "Add hazard" }))
-        await vi.waitFor(() =>
-            expect(server.callsTo("POST", `${BASE}/dungeons/d1/hazards`)).toHaveLength(1),
-        )
-        expect(server.callsTo("POST", `${BASE}/dungeons/d1/hazards`)[0]!.body).toEqual({
-            expected_row_version: 7,
-            dungeon_area_id: "a1",
-            child_type: "trap",
-            description: null,
-            is_hidden: false,
-            severity: 7,
-        })
-    })
-
     it("links back to the dungeon client-side, carrying the return state", async () => {
         setup(
             { pathname: path, state: { worldSearch: "?q=vault", reviewSearch: "?scope=mine", junk: "x" } },
@@ -342,47 +317,55 @@ describe("EditDungeonAreaPage", () => {
         )
     })
 
-    it("sets a hazard status naming the event that last wrote it", async () => {
-        const server = setup(path, <EditDungeonAreaPage />, route, area())
-        const select = await screen.findByRole("combobox", { name: "New status for pit" })
-        fireEvent.change(select, { target: { value: "triggered" } })
-        fireEvent.click(screen.getByRole("button", { name: "Set status of pit" }))
-        await vi.waitFor(() =>
-            expect(server.callsTo("POST", /dungeon-areas\/a1\/state/)).toHaveLength(1),
+    it("edits the area's details only, and points to Contents, Area now and Publication in the workspace", async () => {
+        const server = setup(
+            { pathname: path, state: { worldSearch: "?q=vault" } },
+            <EditDungeonAreaPage />,
+            route,
+            area(),
         )
-        expect(server.callsTo("POST", /dungeon-areas\/a1\/state/)[0]!.body).toEqual({
-            kind: "hazard",
-            target_id: "h1",
-            expected_last_event_id: "ev1",
-            hazard_status: "triggered",
-        })
-    })
-
-    it("saves the area state and rejects an alarm level that is not a number", async () => {
-        const server = setup(path, <EditDungeonAreaPage />, route, area())
-        const form = await screen.findByRole("form", { name: "The area now" })
-        fireEvent.change(within(form).getByRole("textbox", { name: /Alarm level/ }), { target: { value: "x" } })
-        fireEvent.click(within(form).getByRole("button", { name: "Save area state" }))
-        expect(await within(form).findByText(/whole number from 0 to 1000/)).toBeInTheDocument()
-        expect(server.callsTo("POST", /dungeon-areas\/a1\/state/)).toHaveLength(0)
-        fireEvent.change(within(form).getByRole("textbox", { name: /Alarm level/ }), { target: { value: "2" } })
-        fireEvent.change(within(form).getByRole("combobox", { name: /Searched/ }), { target: { value: "yes" } })
-        fireEvent.click(within(form).getByRole("button", { name: "Save area state" }))
-        await vi.waitFor(() =>
-            expect(server.callsTo("POST", /dungeon-areas\/a1\/state/)).toHaveLength(1),
-        )
-        expect(server.callsTo("POST", /dungeon-areas\/a1\/state/)[0]!.body).toMatchObject({
-            kind: "area",
-            target_id: "a1",
-            expected_last_event_id: null,
-            is_searched: true,
-            alarm_level: 2,
-        })
-    })
-
-    it("asks for publication before state can be recorded", async () => {
-        setup(path, <EditDungeonAreaPage />, route, area({ can_set_state: false, canon_status: "draft" }))
-        expect(await screen.findByText(/Publish the dungeon and this area/)).toBeInTheDocument()
+        expect(await screen.findByRole("textbox", { name: /Name/ })).toHaveValue("Entry Hall")
+        // No contents, state or lifecycle controls are repeated here.
+        expect(screen.queryByRole("article")).not.toBeInTheDocument()
+        expect(screen.queryByRole("form", { name: "Add a hazard" })).not.toBeInTheDocument()
         expect(screen.queryByRole("form", { name: "The area now" })).not.toBeInTheDocument()
+        expect(server.calls.some((c) => c.path.includes("/lifecycle"))).toBe(false)
+        const nav = screen.getByRole("navigation", { name: "Other parts of this record" })
+        expect(within(nav).getAllByRole("link").map((l) => [l.textContent, l.getAttribute("href")])).toEqual([
+            ["Contents", "/app/c1/world/location/a1?section=contents"],
+            ["Area now", "/app/c1/world/location/a1?section=area-now"],
+            ["Publication", "/app/c1/world/location/a1?section=publication"],
+        ])
+    })
+
+    it("returns to its dungeon's Areas when it was opened from there, and nowhere else the state names", async () => {
+        setup(
+            {
+                pathname: path,
+                state: {
+                    worldSearch: "?q=vault",
+                    returnTo: { pathname: "/app/c1/world/location/d1", search: "?section=areas" },
+                },
+            },
+            <EditDungeonAreaPage />,
+            route,
+            area(),
+        )
+        fireEvent.click(await screen.findByRole("button", { name: "Cancel" }))
+        expect(await screen.findByText(/Location page \?section=areas/)).toHaveTextContent('"worldSearch":"?q=vault"')
+    })
+
+    it("does not return to a dungeon that only the state names", async () => {
+        setup(
+            {
+                pathname: path,
+                state: { returnTo: { pathname: "/app/c1/world/location/elsewhere", search: "?section=areas" } },
+            },
+            <EditDungeonAreaPage />,
+            route,
+            area(),
+        )
+        fireEvent.click(await screen.findByRole("button", { name: "Cancel" }))
+        expect(await screen.findByText(/Location page/)).not.toHaveTextContent("section=areas")
     })
 })

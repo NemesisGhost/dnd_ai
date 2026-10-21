@@ -33,6 +33,7 @@ import { RelationshipsPanel } from "../RelationshipsPanel"
 import { SectionNav, SectionPanel, StageNav } from "../staged/StagedNav"
 import { UnsavedInputGuard } from "../staged/UnsavedInputGuard"
 import { useStagedNavigation } from "../staged/useStagedNavigation"
+import { AreaContentsSection } from "./AreaContentsSection"
 import { AreaNowSection } from "./AreaNowSection"
 import { DungeonAreasReview } from "./DungeonAreasReview"
 import { DungeonAreasSection } from "./DungeonAreasSection"
@@ -41,7 +42,7 @@ import { locationEditPath, locationNoun, locationViewPath } from "./placePaths"
 import { WorldPublicationSection } from "./WorldPublication"
 import { WorldRecordHeader } from "./WorldRecordHeader"
 import { WorldReviewSection } from "./WorldReviewSection"
-import { useDungeonRead } from "./useDungeonRead"
+import { useAreaRead, useDungeonRead } from "./useDungeonRead"
 import {
     LEGACY_SECTION_ALIASES,
     WORLD_STAGE_LABELS,
@@ -55,7 +56,7 @@ import {
     worldStagesOf,
 } from "./worldStages"
 import type { WorkspaceCategory, WorldKind, WorldSection } from "./worldStages"
-import { worldDetailPath, worldHistoryPath } from "./worldPaths"
+import { worldDetailPath, worldHistoryPath, worldRecordPath } from "./worldPaths"
 import type { WorkspaceDetail } from "./worldPaths"
 import "../authoring/authoring.css"
 
@@ -235,6 +236,8 @@ function Workspace({
     // A dungeon's Areas and Connections share one read of the dungeon, so both always name the same
     // version. Nothing is requested for any other record.
     const dungeonRead = useDungeonRead(campaignId, entityId, kind === "dungeon")
+    // The same for an area's Contents and Area now.
+    const areaRead = useAreaRead(campaignId, entityId, kind === "area")
     const guidance = lifecycleView === null ? null : worldGuidance(lifecycleView)
     const [sourcesDirty, setSourcesDirty] = useState(false)
     // How many times the record was refreshed after a step, for the links that read the record's
@@ -248,12 +251,22 @@ function Workspace({
         void refetchDetail()
         void revisions.refetch()
         void dungeonRead.reload()
+        void areaRead.reload()
     }
     // A structural command bumps the dungeon's version, which the lifecycle actions send as their
     // stale-write token: read the dungeon, its lifecycle and its revisions together, so a publish
     // right after adding a connection names the version the server now holds.
     const refreshStructure = async () => {
         await Promise.all([dungeonRead.reload(), lifecycle.refetch(), revisions.refetch()])
+    }
+    // A change to an area's contents reads the area, its lifecycle and its revisions again (the
+    // dungeon's lifecycle is not on this page).
+    const refreshContents = async () => {
+        await Promise.all([areaRead.reload(), lifecycle.refetch(), revisions.refetch()])
+    }
+    // A recorded state reads the area again, and the facts shown above its controls.
+    const refreshState = async () => {
+        await Promise.all([areaRead.reload(), refetchDetail()])
     }
 
     // Move focus to the section heading when the section changes after arrival (a link, Back or
@@ -380,13 +393,34 @@ function Workspace({
                         onRetry={() => void lifecycle.refetch()}
                     />
                 )
+            case "contents": {
+                const dungeonId = (data as LocationDetail).parent_location_id
+                return (
+                    <AreaContentsSection
+                        campaignId={campaignId}
+                        areaId={entityId}
+                        read={areaRead}
+                        refresh={refreshContents}
+                        connectionsHref={
+                            dungeonId === null
+                                ? worldRecordPath(campaignId, "location", entityId)
+                                : `${worldRecordPath(campaignId, "location", dungeonId)}?section=connections`
+                        }
+                        linkState={linkState}
+                        onUnsaved={reportUnsaved}
+                    />
+                )
+            }
             case "area-now":
                 return (
                     <AreaNowSection
+                        campaignId={campaignId}
+                        areaId={entityId}
                         location={data as LocationDetail}
                         lifecycleView={lifecycleView}
-                        editHref={locationEditPath(campaignId, data as LocationDetail)}
-                        editState={editStateFor("area-now")}
+                        read={areaRead}
+                        refresh={refreshState}
+                        onUnsaved={reportUnsaved}
                     />
                 )
             case "members": {
@@ -458,6 +492,16 @@ function Workspace({
         )
     }
 
+    // An area names the dungeon it is in, from its own containment: a link up to the dungeon's Areas.
+    const parent = category === "location" && kind === "area" ? (data as LocationDetail).breadcrumbs.at(-1) : undefined
+    const context =
+        parent !== undefined && parent.location_type_code === "dungeon" && parent.location_id === (data as LocationDetail).parent_location_id
+            ? {
+                  label: parent.name,
+                  href: `${worldRecordPath(campaignId, "location", parent.location_id)}?section=areas`,
+                  state: linkState,
+              }
+            : null
     const stages = worldStagesOf(kind)
     const inStage = worldSectionsInStage(kind, nav.stage)
     return (
@@ -472,6 +516,7 @@ function Workspace({
                 guidance={guidance}
                 guidanceHref={guidance === null ? null : sectionHref(guidance.section)}
                 linkState={linkState}
+                context={context}
             />
             {refreshFailed ? (
                 <div className="authoring-message authoring-message--warning" role="alert">

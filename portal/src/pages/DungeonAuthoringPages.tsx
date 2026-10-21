@@ -8,8 +8,6 @@ import {
     updateArea,
     updateDungeon,
 } from "../api/dungeonAuthoring"
-import { EntityLifecyclePanel } from "../components/EntityLifecyclePanel"
-import { AreaContent } from "../components/authoring/AreaContent"
 import { ContentCreatePage } from "../components/authoring/ContentCreatePage"
 import type { ContentCreateConfig } from "../components/authoring/ContentCreatePage"
 import { ContentEditPage } from "../components/authoring/ContentEditPage"
@@ -68,6 +66,12 @@ function WorkspaceLinks({
         </nav>
     )
 }
+
+const AREA_SECTIONS = [
+    { section: "contents", label: "Contents" },
+    { section: "area-now", label: "Area now" },
+    { section: "publication", label: "Publication" },
+] as const
 
 // --- the dungeon ---------------------------------------------------------------------------------
 
@@ -294,7 +298,8 @@ const editDungeonConfig: ContentEditConfig<
     renderExtra: ({ campaignId, entityId }) => <WorkspaceLinks campaignId={campaignId} entityId={entityId} sections={DUNGEON_SECTIONS} />,
 }
 
-// Edit a dungeon with its areas and connections: /app/:campaignId/world/dungeon/:dungeonId/edit.
+// Edit a dungeon's details: /app/:campaignId/world/dungeon/:dungeonId/edit. Its areas and
+// connections are in the workspace.
 export function EditDungeonPage() {
     return <ContentEditPage config={editDungeonConfig} />
 }
@@ -441,17 +446,10 @@ const editAreaConfig: ContentEditConfig<AreaAuthoringView, DungeonOptions, AreaV
     canonWarning:
         "This area is published. People with access will see the change. For a change in meaning, create a replacement instead.",
     saved: "Area saved",
-    renderExtra: ({ campaignId, entityId, view, options, refetch }) => (
+    renderExtra: ({ campaignId, entityId, view }) => (
         <>
             <DungeonLink campaignId={campaignId} dungeonId={view.dungeon.entity_id} name={view.dungeon.name} />
-            <AreaContent campaignId={campaignId} view={view} options={options} refetch={refetch} />
-            <div className="page-section section-stack">
-                <EntityLifecyclePanel
-                    campaignId={campaignId}
-                    entityId={entityId}
-                    onChanged={() => void refetch()}
-                />
-            </div>
+            <WorkspaceLinks campaignId={campaignId} entityId={entityId} sections={AREA_SECTIONS} />
         </>
     ),
 }
@@ -471,8 +469,8 @@ function DungeonLink({ campaignId, dungeonId, name }: { campaignId: string; dung
     )
 }
 
-// Edit an area, its contents and its current state:
-// /app/:campaignId/world/dungeon/:dungeonId/areas/:areaId/edit.
+// Edit an area's details: /app/:campaignId/world/dungeon/:dungeonId/areas/:areaId/edit. Its
+// contents and current state are in the workspace.
 export function EditDungeonAreaPage() {
     const { areaId = "" } = useParams()
     return <ContentEditPage key={areaId} config={editAreaConfig} />
