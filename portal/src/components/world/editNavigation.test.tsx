@@ -43,6 +43,26 @@ describe("worldEditNavigation", () => {
     })
 })
 
+describe("worldEditNavigation with extra return addresses", () => {
+    const area = worldEditNavigation("location", ({ campaignId, params }) =>
+        params.dungeonId === undefined ? [] : [`/app/${campaignId}/world/location/${params.dungeonId}`],
+    )
+    const state = { returnTo: { pathname: "/app/c1/world/location/d1", search: "?section=areas" } }
+
+    it("also returns to the address the page's own route names", () => {
+        expect(area({ campaignId: "c1", entityId: "a1", state, params: { dungeonId: "d1" } }).detail.to).toBe(
+            "/app/c1/world/location/d1?section=areas",
+        )
+    })
+
+    it("never trusts a dungeon that only the state names", () => {
+        expect(area({ campaignId: "c1", entityId: "a1", state, params: { dungeonId: "other" } }).detail.to).toBe(
+            "/app/c1/world/location/a1",
+        )
+        expect(area({ campaignId: "c1", entityId: "a1", state, params: {} }).detail.to).toBe("/app/c1/world/location/a1")
+    })
+})
+
 describe("the location edit page", () => {
     afterEach(() => vi.unstubAllGlobals())
 

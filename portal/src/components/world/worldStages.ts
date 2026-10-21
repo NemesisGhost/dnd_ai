@@ -11,7 +11,8 @@ export type WorldStage = "prepare" | "publish" | "play"
 
 export type WorldSection =
     | "details"
-    | "structure"
+    | "areas"
+    | "connections"
     | "sources"
     | "relationships"
     | "review"
@@ -58,11 +59,18 @@ const INFO: Readonly<Record<WorldSection, WorldSectionInfo>> = {
         label: "Details",
         purpose: "What this record says. Editing happens on its own page and returns here.",
     },
-    structure: {
-        key: "structure",
+    areas: {
+        key: "areas",
         stage: "prepare",
-        label: "Structure",
-        purpose: "The areas of this dungeon and the connections between them.",
+        label: "Areas",
+        purpose:
+            "The areas of this dungeon. Each area is its own record with its own status; publishing the dungeon does not publish them.",
+    },
+    connections: {
+        key: "connections",
+        stage: "prepare",
+        label: "Connections",
+        purpose: "The passages between this dungeon's areas. Each saves on its own.",
     },
     sources: {
         key: "sources",
@@ -127,7 +135,7 @@ const REVIEW: readonly WorldSection[] = ["review", "publication"]
 // The sections each kind has, in the order they are listed within their stage.
 const KIND_SECTIONS: Readonly<Record<WorldKind, readonly WorldSection[]>> = {
     place: [...COMMON_PREPARE, ...REVIEW],
-    dungeon: ["details", "structure", "sources", "relationships", ...REVIEW],
+    dungeon: ["details", "areas", "connections", "sources", "relationships", ...REVIEW],
     area: [...COMMON_PREPARE, ...REVIEW, "area-now"],
     organization: [...COMMON_PREPARE, ...REVIEW, "members"],
     religion: [...COMMON_PREPARE, ...REVIEW],
@@ -150,6 +158,10 @@ export function worldKindOf(category: WorkspaceCategory, entityTypeCode: string 
             return entityTypeCode === "npc" ? "npc" : entityTypeCode === "player_character" ? "pc" : "character"
     }
 }
+
+// Section keys an older address may still carry, and the section that replaced each. Applied (with
+// the address replaced, not pushed) before the section is resolved.
+export const LEGACY_SECTION_ALIASES: Readonly<Record<string, WorldSection>> = { structure: "areas" }
 
 export const worldSectionInfo = (key: WorldSection): WorldSectionInfo => INFO[key]
 

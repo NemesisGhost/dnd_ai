@@ -47,7 +47,12 @@ export interface ContentEditConfig<TView extends EditableView, TOptions, TValues
     detailPath: (campaignId: string, entityId: string) => string
     // Optional: a record that can be reached from more than one place returns to where the person
     // came from (the router state names it) instead of the single `worldPath`/`detailPath`.
-    navigation?: (context: { campaignId: string; entityId: string; state: unknown }) => EditNavigation
+    navigation?: (context: {
+        campaignId: string
+        entityId: string
+        state: unknown
+        params: Record<string, string | undefined>
+    }) => EditNavigation
     viewPath: (campaignId: string, entityId: string) => string
     optionsPath: (campaignId: string) => string
     name: (view: TView) => string
@@ -101,7 +106,7 @@ export function ContentEditPage<TView extends EditableView, TOptions, TValues, T
     const headingRef = usePageArrival(ready)
     const [keptChanges, setKeptChanges] = useState<TValues | null>(null)
     const location = useLocation()
-    const target: EditNavigation = config.navigation?.({ campaignId, entityId, state: location.state }) ?? {
+    const target: EditNavigation = config.navigation?.({ campaignId, entityId, state: location.state, params }) ?? {
         listPath: config.worldPath(campaignId),
         detail: { to: config.detailPath(campaignId, entityId) },
     }

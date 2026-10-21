@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import type { ReactNode, RefObject } from "react"
 import { Link, useLocation } from "react-router"
 import { entityLifecyclePath } from "../../api/entityLifecycle"
@@ -34,12 +34,16 @@ import { SectionNav, SectionPanel, StageNav } from "../staged/StagedNav"
 import { UnsavedInputGuard } from "../staged/UnsavedInputGuard"
 import { useStagedNavigation } from "../staged/useStagedNavigation"
 import { AreaNowSection } from "./AreaNowSection"
-import { DungeonStructureSection } from "./DungeonStructureSection"
+import { DungeonAreasReview } from "./DungeonAreasReview"
+import { DungeonAreasSection } from "./DungeonAreasSection"
+import { DungeonConnectionsSection } from "./DungeonConnectionsSection"
 import { locationEditPath, locationNoun, locationViewPath } from "./placePaths"
 import { WorldPublicationSection } from "./WorldPublication"
 import { WorldRecordHeader } from "./WorldRecordHeader"
 import { WorldReviewSection } from "./WorldReviewSection"
+import { useDungeonRead } from "./useDungeonRead"
 import {
+    LEGACY_SECTION_ALIASES,
     WORLD_STAGE_LABELS,
     defaultWorldSection,
     playBlockedText,
@@ -224,7 +228,13 @@ function Workspace({
         lifecycle.state.kind === "ready" && lifecycle.state.data.lifecycle_managed ? lifecycle.state.data : null
     const kind = worldKindOf(category, lifecycleView?.entity_type_code ?? null)
     const sections = worldSectionsOf(kind)
-    const nav = useStagedNavigation(sections, defaultWorldSection(lifecycleView), { ready: settled && !unmanaged })
+    const nav = useStagedNavigation(sections, defaultWorldSection(lifecycleView), {
+        ready: settled && !unmanaged,
+        aliases: LEGACY_SECTION_ALIASES,
+    })
+    // A dungeon's Areas and Connections share one read of the dungeon, so both always name the same
+    // version. Nothing is requested for any other record.
+    const dungeonRead = useDungeonRead(campaignId, entityId, kind === "dungeon")
     const guidance = lifecycleView === null ? null : worldGuidance(lifecycleView)
     const [sourcesDirty, setSourcesDirty] = useState(false)
     // How many times the record was refreshed after a step, for the links that read the record's
@@ -237,6 +247,13 @@ function Workspace({
         setChanges((n) => n + 1)
         void refetchDetail()
         void revisions.refetch()
+        void dungeonRead.reload()
+    }
+    // A structural command bumps the dungeon's version, which the lifecycle actions send as their
+    // stale-write token: read the dungeon, its lifecycle and its revisions together, so a publish
+    // right after adding a connection names the version the server now holds.
+    const refreshStructure = async () => {
+        await Promise.all([dungeonRead.reload(), lifecycle.refetch(), revisions.refetch()])
     }
 
     // Move focus to the section heading when the section changes after arrival (a link, Back or
@@ -249,7 +266,21 @@ function Workspace({
         }
     }, [nav.section])
 
-    const unsaved = [sourcesDirty ? "a source" : null].filter((part) => part !== null)
+    // What is typed and not sent, by reporter, for the page's one guard.
+    const [unsentBy, setUnsentBy] = useState<Record<string, string[]>>({})
+    const reportUnsaved = useCallback((source: string, labels: string[]) => {
+        setUnsentBy((current) => {
+            const before = current[source] ?? []
+            if (before.join("|") === labels.join("|")) return current
+            const next = { ...current }
+            if (labels.length === 0) delete next[source]
+            else next[source] = labels
+            return next
+        })
+    }, [])
+    const unsaved = [...new Set([sourcesDirty ? "a source" : null, ...Object.values(unsentBy).flat()])].filter(
+        (part) => part !== null,
+    )
     const info = describe(category, kind, data)
     const here = location.pathname
     const sectionHref = (key: WorldSection): string => nav.sectionHref(key)
@@ -275,15 +306,28 @@ function Workspace({
                         editState={editState}
                     />
                 )
-            case "structure":
+            case "areas":
                 return (
-                    <DungeonStructureSection
+                    <DungeonAreasSection
                         campaignId={campaignId}
                         dungeonId={entityId}
-                        refreshToken={data}
+                        read={dungeonRead}
+                        refresh={refreshStructure}
                         linkState={linkState}
-                        editHref={locationEditPath(campaignId, data as LocationDetail)}
-                        editState={editStateFor("structure")}
+                        editState={editStateFor("areas")}
+                        onUnsaved={reportUnsaved}
+                    />
+                )
+            case "connections":
+                return (
+                    <DungeonConnectionsSection
+                        campaignId={campaignId}
+                        dungeonId={entityId}
+                        read={dungeonRead}
+                        refresh={refreshStructure}
+                        areasHref={sectionHref("areas")}
+                        linkState={linkState}
+                        onUnsaved={reportUnsaved}
                     />
                 )
             case "sources":
@@ -324,6 +368,7 @@ function Workspace({
                         detailsHref={sectionHref("details")}
                         publicationHref={sectionHref("publication")}
                         linkState={linkState}
+                        summary={kind === "dungeon" ? <DungeonAreasReview view={dungeonRead.view} /> : undefined}
                     />
                 )
             case "publication":

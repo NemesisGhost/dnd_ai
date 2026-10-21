@@ -15,8 +15,8 @@ import type { ContentCreateConfig } from "../components/authoring/ContentCreateP
 import { ContentEditPage } from "../components/authoring/ContentEditPage"
 import type { ContentEditConfig } from "../components/authoring/ContentEditPage"
 import { worldEditNavigation } from "../components/world/editNavigation"
+import { worldRecordPath } from "../components/world/worldPaths"
 import { pickWorldReturnState } from "../hooks/useWorldBackPath"
-import { DungeonStructure } from "../components/authoring/DungeonStructure"
 import type { FieldError } from "../components/authoring/feedback"
 import { SelectField, TextAreaField, TextField } from "../components/authoring/fields"
 import { ReferenceCombobox } from "../components/authoring/ReferenceCombobox"
@@ -34,6 +34,40 @@ const root = (campaignId: string): string => `/app/${encodeURIComponent(campaign
 const worldPath = (campaignId: string): string => `${root(campaignId)}/world`
 const locationDetail = (campaignId: string, id: string): string =>
     `${root(campaignId)}/world/location/${encodeURIComponent(id)}`
+
+// The sections of the record's workspace that hold what this page does not: where its structure
+// and publication are. Client-side links that keep where the person came from.
+const DUNGEON_SECTIONS = [
+    { section: "areas", label: "Areas" },
+    { section: "connections", label: "Connections" },
+    { section: "publication", label: "Publication" },
+] as const
+
+function WorkspaceLinks({
+    campaignId,
+    entityId,
+    sections,
+}: {
+    campaignId: string
+    entityId: string
+    sections: readonly { section: string; label: string }[]
+}) {
+    const { state } = useLocation()
+    return (
+        <nav aria-label="Other parts of this record" className="page-section">
+            <p className="authoring-note">This page edits the details only. The rest is in the workspace:</p>
+            <ul className="world-detail__links">
+                {sections.map(({ section, label }) => (
+                    <li key={section}>
+                        <Link to={`${locationDetail(campaignId, entityId)}?section=${section}`} state={pickWorldReturnState(state)}>
+                            {label}
+                        </Link>
+                    </li>
+                ))}
+            </ul>
+        </nav>
+    )
+}
 
 // --- the dungeon ---------------------------------------------------------------------------------
 
@@ -181,7 +215,7 @@ const createDungeonConfig: ContentCreateConfig<
 > = {
     noun: "dungeon",
     heading: "New dungeon",
-    lead: "A new dungeon is saved as a draft. Add its areas, connections and contents on the next page; only people who can edit canon see it until it is published.",
+    lead: "A new dungeon is saved as a draft. Add its areas and connections next; only people who can edit canon see it until it is published.",
     breadcrumbLabel: "World",
     worldPath,
     optionsPath: dungeonOptionsPath,
@@ -191,8 +225,8 @@ const createDungeonConfig: ContentCreateConfig<
     validate: validateDungeon,
     toBody: (values) => dungeonBody(values),
     create: createDungeon,
-    resultPath: (campaignId, created) =>
-        `${root(campaignId)}/world/dungeon/${encodeURIComponent(created.dungeon_id)}/edit`,
+    resultPath: (campaignId, created) => `${locationDetail(campaignId, created.dungeon_id)}?section=areas`,
+    resultState: (state) => pickWorldReturnState(state),
     announce: "Dungeon created as a draft",
     saveLabel: "Create dungeon",
     pendingLabel: "Creating…",
@@ -257,18 +291,7 @@ const editDungeonConfig: ContentEditConfig<
     canonWarning:
         "This dungeon is published. People with access will see the change. For a change in meaning, create a replacement instead.",
     saved: "Dungeon saved",
-    renderExtra: ({ campaignId, entityId, view, options, refetch }) => (
-        <>
-            <DungeonStructure campaignId={campaignId} view={view} options={options} refetch={refetch} />
-            <div className="page-section section-stack">
-                <EntityLifecyclePanel
-                    campaignId={campaignId}
-                    entityId={entityId}
-                    onChanged={() => void refetch()}
-                />
-            </div>
-        </>
-    ),
+    renderExtra: ({ campaignId, entityId }) => <WorkspaceLinks campaignId={campaignId} entityId={entityId} sections={DUNGEON_SECTIONS} />,
 }
 
 // Edit a dungeon with its areas and connections: /app/:campaignId/world/dungeon/:dungeonId/edit.
@@ -346,7 +369,11 @@ const editAreaConfig: ContentEditConfig<AreaAuthoringView, DungeonOptions, AreaV
     breadcrumbLabel: "World",
     worldPath,
     detailPath: locationDetail,
-    navigation: worldEditNavigation("location"),
+    // An area returns to the page it was opened from: its own, or its dungeon's Areas list (the
+    // dungeon the address names, never one taken from the state).
+    navigation: worldEditNavigation("location", ({ campaignId, params }) =>
+        params.dungeonId === undefined ? [] : [worldRecordPath(campaignId, "location", params.dungeonId)],
+    ),
     viewPath: areaAuthoringPath,
     optionsPath: dungeonOptionsPath,
     name: (view) => view.name,
@@ -435,7 +462,7 @@ function DungeonLink({ campaignId, dungeonId, name }: { campaignId: string; dung
     return (
         <p>
             <Link
-                to={`${locationDetail(campaignId, dungeonId)}?section=structure`}
+                to={`${locationDetail(campaignId, dungeonId)}?section=areas`}
                 state={pickWorldReturnState(state)}
             >
                 Back to {name}

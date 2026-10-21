@@ -225,15 +225,23 @@ function setup(path: string | { pathname: string; state?: unknown }, element: Re
 }
 
 describe("CreateDungeonPage", () => {
-    it("creates a draft dungeon and opens its editor", async () => {
-        const server = setup("/app/c1/world/dungeon/new", <CreateDungeonPage />, "/app/:campaignId/world/dungeon/new", dungeon())
+    it("creates a draft dungeon and opens its Areas, keeping where the person came from", async () => {
+        const server = setup(
+            { pathname: "/app/c1/world/dungeon/new", state: { worldSearch: "?category=location", junk: "x" } },
+            <CreateDungeonPage />,
+            "/app/:campaignId/world/dungeon/new",
+            dungeon(),
+        )
         server.on("POST", `${BASE}/dungeons`, { status: 201, body: dungeon() })
         fireEvent.change(await screen.findByRole("textbox", { name: /Name/ }), {
             target: { value: " The Sunken Vault " },
         })
         fireEvent.change(screen.getByRole("combobox", { name: /Danger level/ }), { target: { value: "6" } })
         fireEvent.click(screen.getByRole("button", { name: "Create dungeon" }))
-        await screen.findByText("Dungeon editor page")
+        const opened = await screen.findByText(/Location page \?section=areas/)
+        expect(opened).toHaveTextContent('"worldSearch":"?category=location"')
+        expect(opened).toHaveTextContent('"announce":"Dungeon created as a draft"')
+        expect(opened).not.toHaveTextContent("junk")
         expect(server.callsTo("POST", `${BASE}/dungeons`)[0]!.body).toEqual({
             name: "The Sunken Vault",
             summary: null,
@@ -254,70 +262,39 @@ describe("CreateDungeonPage", () => {
 describe("EditDungeonPage", () => {
     const route = "/app/:campaignId/world/dungeon/:dungeonId/edit"
 
-    it("lists areas and connections", async () => {
-        setup("/app/c1/world/dungeon/d1/edit", <EditDungeonPage />, route, dungeon())
-        expect(await screen.findByRole("link", { name: "Entry Hall" })).toBeInTheDocument()
-        expect(screen.getByRole("article", { name: "Connection Entry Hall to Vault" })).toBeInTheDocument()
-    })
-
-    it("adds a connection naming the dungeon version, after checking the areas differ", async () => {
-        const server = setup("/app/c1/world/dungeon/d1/edit", <EditDungeonPage />, route, dungeon())
-        const form = await screen.findByRole("form", { name: "Add a connection" })
-        const [from, to, kind] = within(form).getAllByRole("combobox")
-        fireEvent.change(from!, { target: { value: "a1" } })
-        fireEvent.change(to!, { target: { value: "a1" } })
-        fireEvent.change(kind!, { target: { value: "secret_door" } })
-        fireEvent.click(within(form).getByRole("button", { name: "Add connection" }))
-        expect(await within(form).findByText("Choose two different areas.")).toBeInTheDocument()
-        expect(server.callsTo("POST", `${BASE}/dungeons/d1/connections`)).toHaveLength(0)
-        fireEvent.change(to!, { target: { value: "a2" } })
-        fireEvent.click(within(form).getByRole("button", { name: "Add connection" }))
-        await vi.waitFor(() =>
-            expect(server.callsTo("POST", `${BASE}/dungeons/d1/connections`)).toHaveLength(1),
-        )
-        expect(server.callsTo("POST", `${BASE}/dungeons/d1/connections`)[0]!.body).toMatchObject({
-            expected_row_version: 3,
-            from_area_id: "a1",
-            to_area_id: "a2",
-            connection_type: "secret_door",
-            is_hidden: false,
-            is_conditional: false,
-        })
-    })
-
-    it("removes a connection while the dungeon is a draft", async () => {
-        const server = setup("/app/c1/world/dungeon/d1/edit", <EditDungeonPage />, route, dungeon())
-        fireEvent.click(await screen.findByRole("button", { name: "Remove connection Entry Hall to Vault" }))
-        await vi.waitFor(() =>
-            expect(server.callsTo("POST", `${BASE}/dungeons/d1/connections/c1/remove`)).toHaveLength(1),
-        )
-        expect(server.callsTo("POST", `${BASE}/dungeons/d1/connections/c1/remove`)[0]!.body).toEqual({
-            expected_row_version: 3,
-        })
-    })
-
-    it("offers no removal once the dungeon is published", async () => {
-        setup(
-            "/app/c1/world/dungeon/d1/edit",
+    it("edits the details only, and points to the workspace for areas, connections and publication", async () => {
+        const server = setup(
+            { pathname: "/app/c1/world/dungeon/d1/edit", state: { reviewSearch: "?status=draft" } },
             <EditDungeonPage />,
             route,
-            dungeon({
-                canon_status: "canon",
-                available_actions: ["update", "add_area", "add_connection", "update_connection"],
-            }),
+            dungeon(),
         )
-        await screen.findByRole("article", { name: "Connection Entry Hall to Vault" })
-        expect(screen.queryByRole("button", { name: /Remove connection/ })).not.toBeInTheDocument()
+        expect(await screen.findByRole("textbox", { name: /Name/ })).toHaveValue("The Sunken Vault")
+        // The structure forms, the area list and the lifecycle panel are not repeated here.
+        expect(screen.queryByRole("form", { name: "Add an area" })).not.toBeInTheDocument()
+        expect(screen.queryByRole("form", { name: "Add a connection" })).not.toBeInTheDocument()
+        expect(screen.queryByRole("link", { name: "Entry Hall" })).not.toBeInTheDocument()
+        expect(screen.queryByRole("article")).not.toBeInTheDocument()
+        expect(server.calls.some((c) => c.path.includes("/lifecycle"))).toBe(false)
+        const nav = screen.getByRole("navigation", { name: "Other parts of this record" })
+        expect(within(nav).getAllByRole("link").map((l) => [l.textContent, l.getAttribute("href")])).toEqual([
+            ["Areas", "/app/c1/world/location/d1?section=areas"],
+            ["Connections", "/app/c1/world/location/d1?section=connections"],
+            ["Publication", "/app/c1/world/location/d1?section=publication"],
+        ])
     })
 
-    it("explains a refused removal", async () => {
-        const server = setup("/app/c1/world/dungeon/d1/edit", <EditDungeonPage />, route, dungeon())
-        server.on("POST", `${BASE}/dungeons/d1/connections/c1/remove`, {
-            status: 409,
-            body: { error: { code: "dungeon_not_draft", message: "m", correlation_id: "c" } },
-        })
-        fireEvent.click(await screen.findByRole("button", { name: "Remove connection Entry Hall to Vault" }))
-        expect(await screen.findByRole("alert")).toHaveTextContent(/only while the dungeon is a draft/)
+    it("carries the return state on those links", async () => {
+        setup(
+            { pathname: "/app/c1/world/dungeon/d1/edit", state: { reviewSearch: "?status=draft" } },
+            <EditDungeonPage />,
+            route,
+            dungeon(),
+        )
+        fireEvent.click(await screen.findByRole("link", { name: "Connections" }))
+        expect(await screen.findByText(/Location page \?section=connections/)).toHaveTextContent(
+            '{"reviewSearch":"?status=draft"}',
+        )
     })
 })
 
@@ -358,9 +335,9 @@ describe("EditDungeonAreaPage", () => {
             area(),
         )
         const link = await screen.findByRole("link", { name: "Back to The Sunken Vault" })
-        expect(link).toHaveAttribute("href", "/app/c1/world/location/d1?section=structure")
+        expect(link).toHaveAttribute("href", "/app/c1/world/location/d1?section=areas")
         fireEvent.click(link)
-        expect(await screen.findByText(/Location page \?section=structure/)).toHaveTextContent(
+        expect(await screen.findByText(/Location page \?section=areas/)).toHaveTextContent(
             '{"worldSearch":"?q=vault","reviewSearch":"?scope=mine"}',
         )
     })

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
+    LEGACY_SECTION_ALIASES,
+    WORLD_STAGE_LABELS,
     defaultWorldSection,
     isWorkspaceCategory,
     playBlockedText,
@@ -43,6 +45,14 @@ describe("workspace categories", () => {
     })
 })
 
+describe("stage labels", () => {
+    it("name the work, never the words stage or phase", () => {
+        for (const label of Object.values(WORLD_STAGE_LABELS)) {
+            expect(label).not.toMatch(/stage|phase/i)
+        }
+    })
+})
+
 describe("sections by kind", () => {
     it("gives every kind the same review and publication sections", () => {
         for (const kind of ["place", "dungeon", "area", "organization", "religion", "npc", "pc", "character"] as const) {
@@ -50,11 +60,25 @@ describe("sections by kind", () => {
         }
     })
 
-    it("adds a Structure section for a dungeon only", () => {
-        expect(keys("dungeon")).toContain("structure")
+    it("gives a dungeon Areas and Connections, in that order, and no other kind", () => {
+        expect(keys("dungeon")).toEqual([
+            "details",
+            "areas",
+            "connections",
+            "sources",
+            "relationships",
+            "review",
+            "publication",
+        ])
+        expect(keys("dungeon")).not.toContain("structure")
         for (const kind of ["place", "area", "organization", "religion", "npc", "pc", "character"] as const) {
-            expect(keys(kind)).not.toContain("structure")
+            expect(keys(kind)).not.toContain("areas")
+            expect(keys(kind)).not.toContain("connections")
         }
+    })
+
+    it("maps the old Structure address to Areas", () => {
+        expect(LEGACY_SECTION_ALIASES).toEqual({ structure: "areas" })
     })
 
     it("offers Use in play only for the kinds the server lets you run", () => {

@@ -508,7 +508,55 @@ describe("World record workspace: failing closed", () => {
 })
 
 describe("World record workspace: a dungeon", () => {
-    const dungeonView = {
+    const OPTIONS = {
+        can_create: true,
+        connection_types: [
+            { value: "door", label: "Door" },
+            { value: "secret_door", label: "Secret door" },
+        ],
+        limits: {
+            name_max_length: 200,
+            summary_max_length: 4000,
+            short_text_max_length: 200,
+            notes_max_length: 4000,
+            change_note_max_length: 1000,
+            rating_min: 1,
+            rating_max: 10,
+            alarm_level_max: 1000,
+        },
+    }
+    const ref = (id: string, name: string) => ({ entity_id: id, name, canon_status: "draft", lifecycle_status: "active" })
+    const areaRow = (id: string, name: string, over: object = {}) => ({
+        dungeon_area_id: id,
+        name,
+        summary: null,
+        area_type: null,
+        canon_status: "draft",
+        lifecycle_status: "active",
+        row_version: 1,
+        feature_count: 0,
+        hazard_count: 0,
+        interactable_count: 0,
+        available_actions: ["update"],
+        ...over,
+    })
+    const connectionRow = (id: string, from: [string, string], to: [string, string], over: object = {}) => ({
+        area_connection_id: id,
+        from_area: ref(...from),
+        to_area: ref(...to),
+        connection_type: "door",
+        connection_type_label: "Door",
+        is_one_way: false,
+        is_hidden: false,
+        description: null as string | null,
+        is_conditional: false,
+        condition_description: null as string | null,
+        status: null,
+        state_event_id: null,
+        ...over,
+    })
+    const ALL = ["update", "add_area", "add_connection", "update_connection", "remove_connection"]
+    const baseView = () => ({
         dungeon_id: "l1",
         name: "Crypt",
         summary: null,
@@ -517,59 +565,498 @@ describe("World record workspace: a dungeon", () => {
         canon_status: "draft",
         lifecycle_status: "active",
         row_version: 2,
-        available_actions: ["update"],
-        blocked_actions: [],
+        available_actions: ALL,
+        blocked_actions: [] as { action: string; reason: string }[],
         field_locks: [],
         areas: [
-            { dungeon_area_id: "a1", name: "Entry hall", area_type: "hall", canon_status: "draft", lifecycle_status: "active", row_version: 1, feature_count: 1, hazard_count: 0, interactable_count: 2 },
+            areaRow("a2", "Collapsed Stair", { area_type: "corridor" }),
+            areaRow("a1", "Entry Hall", {
+                area_type: "room",
+                summary: "The great doors open onto a hall of broken pillars.",
+                canon_status: "canon",
+                feature_count: 2,
+                hazard_count: 1,
+            }),
+            areaRow("a3", "Old Vault", {
+                lifecycle_status: "archived",
+                canon_status: "canon",
+                interactable_count: 1,
+                available_actions: [],
+            }),
         ],
         connections: [
-            { area_connection_id: "x1", from_area: { entity_id: "a1", name: "Entry hall", canon_status: "draft", lifecycle_status: "active" }, to_area: { entity_id: "a2", name: "Vault", canon_status: "draft", lifecycle_status: "active" }, connection_type: "door", connection_type_label: "Door", is_one_way: false, is_hidden: true, description: null, is_conditional: false, condition_description: null, status: null, state_event_id: null },
+            connectionRow("x1", ["a1", "Entry Hall"], ["a2", "Collapsed Stair"]),
+            connectionRow("x2", ["a2", "Collapsed Stair"], ["a3", "Old Vault"], {
+                connection_type: "secret_door",
+                connection_type_label: "Secret door",
+                is_one_way: true,
+                is_hidden: true,
+            }),
         ],
-    }
+    })
+    type View = ReturnType<typeof baseView>
 
-    function dungeon(editView: object = dungeonView) {
-        return setup({
+    // A dungeon whose authoring read follows its writes: every structural command bumps the version
+    // (as the server does) and the lifecycle read reports the same one.
+    function dungeon(over: Partial<View> = {}, options: Partial<Options> = {}) {
+        const state = { view: { ...baseView(), ...over } as View }
+        const bump = () => {
+            state.view = { ...state.view, row_version: state.view.row_version + 1 }
+        }
+        const rendered = setup({
             typeCode: "dungeon",
             detail: locationDetail({ name: "Crypt", location_type_code: "dungeon" }),
-            lifecycle: lifecycle({ entity_type_code: "dungeon", canonical_name: "Crypt" }),
+            lifecycle: () =>
+                lifecycle({ entity_type_code: "dungeon", canonical_name: "Crypt", row_version: state.view.row_version }),
+            ...options,
             extra: (server) => {
-                server.on("GET", `/campaigns/${C}/authoring/dungeons/l1`, { body: editView })
+                server.on("GET", `/campaigns/${C}/authoring/dungeons/options`, { body: OPTIONS })
+                server.on("GET", `/campaigns/${C}/authoring/dungeons/l1`, () => ({ body: state.view }))
+                server.on("POST", `/campaigns/${C}/authoring/dungeons/l1/areas`, (call) => {
+                    const body = call.body as { name: string; area_type: string | null }
+                    state.view = {
+                        ...state.view,
+                        areas: [
+                            ...state.view.areas,
+                            areaRow(`n${state.view.areas.length}`, body.name, { area_type: body.area_type }),
+                        ],
+                    }
+                    return { status: 201, body: { dungeon_area_id: "n", changed: true } }
+                })
+                server.on("POST", /\/authoring\/dungeons\/l1\/connections$/, () => {
+                    state.view = {
+                        ...state.view,
+                        connections: [
+                            ...state.view.connections,
+                            connectionRow("x9", ["a1", "Entry Hall"], ["a3", "Old Vault"]),
+                        ],
+                    }
+                    bump()
+                    return { status: 201, body: { changed: true } }
+                })
+                server.on("POST", /\/authoring\/dungeons\/l1\/connections\/x\d\/(update|remove)$/, () => {
+                    bump()
+                    return { body: { changed: true } }
+                })
+                server.on("POST", `/campaigns/${C}/entities/l1/lifecycle/submit-for-review`, (call) => ({
+                    body: {
+                        entity_id: "l1",
+                        canon_status: "proposed",
+                        lifecycle_status: "active",
+                        row_version: (call.body as { expected_row_version: number }).expected_row_version + 1,
+                    },
+                }))
+                options.extra?.(server)
             },
         })
+        return { ...rendered, state }
     }
 
-    it("has a Structure section listing its areas and connections, and no Use in play", async () => {
+    const areaList = async () => within(await screen.findByRole("list", { name: "Areas" }))
+    const openSection = async (name: string) => {
+        await opened("Crypt")
+        fireEvent.click(screen.getByRole("link", { name }))
+        await screen.findByRole("heading", { level: 2, name })
+    }
+
+    it("has Areas and Connections instead of Structure, and no Use in play", async () => {
         dungeon()
         await opened("Crypt")
         expect(stageLinks()).toEqual(["1. Prepare", "2. Review & publish"])
-        expect(sectionLinks("Prepare")).toEqual(["Details", "Structure", "Sources", "Relationships"])
-        fireEvent.click(screen.getByRole("link", { name: "Structure" }))
-        const areas = await screen.findByRole("list", { name: "Areas" })
-        expect(within(areas).getByRole("link", { name: "Entry hall" })).toHaveAttribute("href", "/app/c1/world/location/a1")
-        expect(areas).toHaveTextContent("1 feature, 0 hazards, 2 interactables")
-        expect(screen.getByRole("list", { name: "Connections" })).toHaveTextContent("Entry hall and Vault: Door (hidden)")
-        expect(screen.getByRole("link", { name: "Edit dungeon structure" })).toHaveAttribute(
+        expect(sectionLinks("Prepare")).toEqual(["Details", "Areas", "Connections", "Sources", "Relationships"])
+        fireEvent.click(screen.getByRole("link", { name: "2. Review & publish" }))
+        expect(sectionLinks("Review & publish")).toEqual(["Review", "Publication"])
+    })
+
+    it("lists the areas in the server's order, each with its own status, contents and connections", async () => {
+        const { server } = dungeon()
+        await openSection("Areas")
+        const list = await areaList()
+        const rows = list.getAllByRole("listitem")
+        expect(
+            rows.map((row) => within(row).getByRole("link", { name: /^(Collapsed Stair|Entry Hall|Old Vault)$/ }).textContent),
+        ).toEqual(["Collapsed Stair", "Entry Hall", "Old Vault"])
+        const stair = within(rows[0]!)
+        expect(stair.getByText("corridor")).toBeVisible()
+        expect(stair.getByText("Draft")).toBeVisible()
+        expect(stair.getByText("No contents")).toBeVisible()
+        expect(stair.getByText("2 connections")).toBeVisible()
+        const hall = within(rows[1]!)
+        expect(hall.getByText("Canon")).toBeVisible()
+        expect(hall.getByText("2 features · 1 hazard")).toBeVisible()
+        expect(hall.getByText("1 connection")).toBeVisible()
+        expect(hall.getByText(/broken pillars/)).toBeVisible()
+        // An archived area reads as archived whatever the dungeon is, and has no kind to show.
+        const vault = within(rows[2]!)
+        expect(vault.getByText("Archived")).toBeVisible()
+        expect(vault.getByText("1 interactable")).toBeVisible()
+        expect(vault.getByText("not set")).toBeInTheDocument()
+        expect(writes(server)).toHaveLength(0)
+    })
+
+    it("opens an area's own workspace from its name, keeping where the person came from", async () => {
+        const { router } = dungeon(
+            {},
+            {
+                entry: {
+                    pathname: "/app/c1/world/location/l1",
+                    search: "?section=areas",
+                    state: { reviewSearch: "?status=draft" },
+                },
+            },
+        )
+        const list = await areaList()
+        expect(list.getByRole("link", { name: "Entry Hall" })).toHaveAttribute("href", "/app/c1/world/location/a1")
+        fireEvent.click(list.getByRole("link", { name: "Entry Hall" }))
+        await waitFor(() => expect(router.state.location.pathname).toBe("/app/c1/world/location/a1"))
+        expect(router.state.location.state).toEqual({ reviewSearch: "?status=draft" })
+    })
+
+    it("offers Edit only for the areas the server says can be edited, and returns to this list", async () => {
+        const { router } = dungeon(
+            {},
+            {
+                entry: {
+                    pathname: "/app/c1/world/location/l1",
+                    search: "?section=areas",
+                    state: { worldSearch: "?category=location" },
+                },
+            },
+        )
+        const list = await areaList()
+        expect(list.getAllByRole("link", { name: /^Edit / }).map((l) => l.getAttribute("aria-label"))).toEqual([
+            "Edit Collapsed Stair",
+            "Edit Entry Hall",
+        ])
+        fireEvent.click(list.getByRole("link", { name: "Edit Entry Hall" }))
+        await screen.findByText("Area edit page")
+        expect(router.state.location.pathname).toBe("/app/c1/world/dungeon/l1/areas/a1/edit")
+        expect(router.state.location.state).toEqual({
+            worldSearch: "?category=location",
+            returnTo: { pathname: "/app/c1/world/location/l1", search: "?section=areas" },
+        })
+    })
+
+    it("lists all thirty areas of a large dungeon without paging", async () => {
+        const many = Array.from({ length: 30 }, (_, i) =>
+            areaRow(`m${i}`, `Chamber ${String(i + 1).padStart(2, "0")} of the long forgotten under halls`, {
+                area_type: "a very long kind of area that keeps going",
+            }),
+        )
+        dungeon({ areas: many, connections: [] })
+        await openSection("Areas")
+        expect((await areaList()).getAllByRole("listitem")).toHaveLength(30)
+        expect(screen.getByText("30 areas")).toBeVisible()
+    })
+
+    it("says so when there are no areas, and still offers Add area", async () => {
+        dungeon({ areas: [], connections: [] })
+        await openSection("Areas")
+        expect(await screen.findByText("No areas yet.")).toBeVisible()
+        expect(screen.getByRole("button", { name: "Add area" })).toBeVisible()
+    })
+
+    it("offers no Add area, and says why, when the dungeon cannot be changed", async () => {
+        dungeon({ available_actions: [], blocked_actions: [{ action: "update", reason: "review_in_progress" }] })
+        await openSection("Areas")
+        expect(await screen.findByText(/Adding an area is unavailable: it is awaiting review/)).toBeVisible()
+        expect(screen.queryByRole("button", { name: "Add area" })).not.toBeInTheDocument()
+    })
+
+    it("adds an area, stays on the list, clears the form, keeps focus in Name and announces it", async () => {
+        const { server } = dungeon()
+        await openSection("Areas")
+        expect(screen.queryByRole("form", { name: "Add an area" })).not.toBeInTheDocument()
+        fireEvent.click(screen.getByRole("button", { name: "Add area" }))
+        const form = await screen.findByRole("form", { name: "Add an area" })
+        fireEvent.change(within(form).getByRole("textbox", { name: /Area name/ }), { target: { value: " Shrine of Ash " } })
+        fireEvent.change(within(form).getByRole("textbox", { name: "Kind of area" }), { target: { value: "chamber" } })
+        fireEvent.click(within(form).getByRole("button", { name: "Add area" }))
+        await waitFor(() => expect(server.callsTo("POST", `/campaigns/${C}/authoring/dungeons/l1/areas`)).toHaveLength(1))
+        expect(server.callsTo("POST", `/campaigns/${C}/authoring/dungeons/l1/areas`)[0]!.body).toEqual({
+            name: "Shrine of Ash",
+            area_type: "chamber",
+        })
+        expect(await (await areaList()).findByRole("link", { name: "Shrine of Ash" })).toBeVisible()
+        expect(within(form).getByRole("textbox", { name: /Area name/ })).toHaveValue("")
+        await waitFor(() => expect(within(form).getByRole("textbox", { name: /Area name/ })).toHaveFocus())
+        expect(screen.getByTestId("authoring-announcer")).toHaveTextContent("Area Shrine of Ash added as a draft")
+        // It did not navigate to the new area.
+        expect(screen.getByRole("heading", { level: 1, name: "Crypt" })).toBeVisible()
+    })
+
+    it("requires a name and sends nothing otherwise", async () => {
+        const { server } = dungeon()
+        await openSection("Areas")
+        fireEvent.click(screen.getByRole("button", { name: "Add area" }))
+        fireEvent.click(
+            within(await screen.findByRole("form", { name: "Add an area" })).getByRole("button", { name: "Add area" }),
+        )
+        expect(await screen.findByText("Enter a name.")).toBeVisible()
+        expect(writes(server)).toHaveLength(0)
+    })
+
+    it("keeps a half-typed new area when another section is shown, and names it before leaving", async () => {
+        dungeon()
+        await openSection("Areas")
+        fireEvent.click(screen.getByRole("button", { name: "Add area" }))
+        fireEvent.change(await screen.findByRole("textbox", { name: /Area name/ }), { target: { value: "Half typed" } })
+        fireEvent.click(screen.getByRole("link", { name: "Connections" }))
+        await screen.findByRole("heading", { level: 2, name: "Connections" })
+        fireEvent.click(screen.getByRole("link", { name: "Areas" }))
+        expect(await screen.findByRole("textbox", { name: /Area name/ })).toHaveValue("Half typed")
+        fireEvent.click(screen.getByRole("link", { name: "Back to World" }))
+        const dialog = await screen.findByRole("dialog", { name: "Discard unsaved input?" })
+        expect(dialog).toHaveTextContent("a new area")
+    })
+
+    it("replaces the old Structure address with Areas, keeping the rest of the address and the state", async () => {
+        const { router } = dungeon(
+            {},
+            {
+                entry: {
+                    pathname: "/app/c1/world/location/l1",
+                    search: "?section=structure&x=1",
+                    state: { worldSearch: "?category=location" },
+                },
+            },
+        )
+        await screen.findByRole("heading", { level: 2, name: "Areas" })
+        await waitFor(() => expect(router.state.location.search).toBe("?section=areas&x=1"))
+        expect(router.state.location.state).toEqual({ worldSearch: "?category=location" })
+        expect(router.state.historyAction).toBe("REPLACE")
+    })
+
+    it("sends no write when only moving between sections", async () => {
+        const { server } = dungeon()
+        await openSection("Areas")
+        fireEvent.click(screen.getByRole("link", { name: "Connections" }))
+        await screen.findByRole("heading", { level: 2, name: "Connections" })
+        fireEvent.click(screen.getByRole("link", { name: "2. Review & publish" }))
+        await screen.findByRole("heading", { level: 2, name: "Review" })
+        expect(writes(server)).toHaveLength(0)
+    })
+
+    it("lists the connections in words, with the endpoints named in the accessible name", async () => {
+        dungeon()
+        await openSection("Connections")
+        const list = within(await screen.findByRole("list", { name: "Connections" }))
+        const rows = list.getAllByRole("listitem")
+        expect(rows).toHaveLength(2)
+        expect(within(rows[0]!).getByText("Entry Hall and Collapsed Stair")).toBeInTheDocument()
+        expect(within(rows[0]!).getByText("Door")).toBeVisible()
+        expect(within(rows[1]!).getByText("Collapsed Stair to Old Vault")).toBeInTheDocument()
+        expect(within(rows[1]!).getByText("Secret door · one way · concealed")).toBeVisible()
+    })
+
+    it("explains connections need two areas, with a link to Areas", async () => {
+        dungeon({ areas: [areaRow("a1", "Entry Hall")], connections: [] })
+        await openSection("Connections")
+        expect(await screen.findByText(/Add at least two areas to connect them/)).toBeVisible()
+        expect(screen.getByRole("link", { name: "Go to Areas" })).toHaveAttribute(
             "href",
-            "/app/c1/world/dungeon/l1/edit",
+            expect.stringContaining("section=areas"),
+        )
+        expect(screen.queryByRole("button", { name: "Add connection" })).not.toBeInTheDocument()
+    })
+
+    it("adds a connection against the dungeon version, and a submit right after names the new one", async () => {
+        const { server } = dungeon()
+        await openSection("Connections")
+        fireEvent.click(await screen.findByRole("button", { name: "Add connection" }))
+        const form = await screen.findByRole("form", { name: "Add a connection" })
+        const [from, to, kind] = within(form).getAllByRole("combobox")
+        fireEvent.change(from!, { target: { value: "a1" } })
+        fireEvent.change(to!, { target: { value: "a1" } })
+        fireEvent.change(kind!, { target: { value: "door" } })
+        fireEvent.click(within(form).getByRole("button", { name: "Add connection" }))
+        expect(await within(form).findByText("Choose two different areas.")).toBeVisible()
+        expect(writes(server)).toHaveLength(0)
+        fireEvent.change(to!, { target: { value: "a3" } })
+        fireEvent.click(within(form).getByRole("button", { name: "Add connection" }))
+        await waitFor(() =>
+            expect(server.callsTo("POST", `/campaigns/${C}/authoring/dungeons/l1/connections`)).toHaveLength(1),
+        )
+        expect(server.callsTo("POST", `/campaigns/${C}/authoring/dungeons/l1/connections`)[0]!.body).toMatchObject({
+            expected_row_version: 2,
+            from_area_id: "a1",
+            to_area_id: "a3",
+            connection_type: "door",
+        })
+        expect(await screen.findByText("3 connections")).toBeVisible()
+        // The dungeon is now at version 3. Submitting it must name that, not the version read before.
+        fireEvent.click(screen.getByRole("link", { name: "2. Review & publish" }))
+        fireEvent.click(await screen.findByRole("button", { name: "Submit for review" }))
+        await waitFor(() =>
+            expect(server.callsTo("POST", `/campaigns/${C}/entities/l1/lifecycle/submit-for-review`)).toHaveLength(1),
+        )
+        expect(server.callsTo("POST", `/campaigns/${C}/entities/l1/lifecycle/submit-for-review`)[0]!.body).toEqual({
+            expected_row_version: 3,
+        })
+    })
+
+    it("asks before removing a connection, and sends nothing if it is cancelled", async () => {
+        const { server } = dungeon()
+        await openSection("Connections")
+        fireEvent.click(await screen.findByRole("button", { name: "Remove connection Entry Hall and Collapsed Stair" }))
+        const dialog = await screen.findByRole("dialog", { name: "Remove this connection?" })
+        expect(dialog).toHaveTextContent("Entry Hall and Collapsed Stair")
+        fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }))
+        expect(writes(server)).toHaveLength(0)
+    })
+
+    it("removes a connection against the dungeon version once it is confirmed", async () => {
+        const { server } = dungeon()
+        await openSection("Connections")
+        fireEvent.click(await screen.findByRole("button", { name: "Remove connection Entry Hall and Collapsed Stair" }))
+        const dialog = await screen.findByRole("dialog", { name: "Remove this connection?" })
+        fireEvent.click(within(dialog).getByRole("button", { name: "Remove connection" }))
+        await waitFor(() => expect(server.callsTo("POST", /connections\/x1\/remove$/)).toHaveLength(1))
+        expect(server.callsTo("POST", /connections\/x1\/remove$/)[0]!.body).toEqual({ expected_row_version: 2 })
+        await waitFor(() =>
+            expect(screen.getByTestId("authoring-announcer")).toHaveTextContent(
+                "Connection between Entry Hall and Collapsed Stair removed",
+            ),
         )
     })
 
-    it("offers editing the dungeon from Details through the dungeon editor", async () => {
-        dungeon()
-        expect(await screen.findByRole("link", { name: "Edit dungeon" })).toHaveAttribute("href", "/app/c1/world/dungeon/l1/edit")
+    it("offers no removal once the dungeon is published, and says removal is for drafts", async () => {
+        dungeon({
+            canon_status: "canon",
+            available_actions: ["update", "add_area", "add_connection", "update_connection"],
+            blocked_actions: [{ action: "remove_connection", reason: "dungeon_not_draft" }],
+        })
+        await openSection("Connections")
+        await screen.findByRole("list", { name: "Connections" })
+        expect(screen.queryByRole("button", { name: /Remove connection/ })).not.toBeInTheDocument()
+        expect(screen.getByText("Connections can be removed only while the dungeon is a draft.")).toBeVisible()
+        expect(screen.getAllByRole("button", { name: /Edit connection/ })).toHaveLength(2)
     })
 
-    it("explains why the structure cannot be edited while it is in review", async () => {
-        dungeon({
-            ...dungeonView,
-            available_actions: [],
-            blocked_actions: [{ action: "update", reason: "review_in_progress" }],
+    it("keeps an edit open with its values when the server refuses the save", async () => {
+        const { server } = dungeon(
+            {},
+            {
+                extra: (s) =>
+                    s.on("POST", /connections\/x1\/update$/, {
+                        status: 409,
+                        body: { error: { code: "connection_invalid", message: "m", correlation_id: "c" } },
+                    }),
+            },
+        )
+        await openSection("Connections")
+        fireEvent.click(await screen.findByRole("button", { name: "Edit connection Entry Hall and Collapsed Stair" }))
+        const form = await screen.findByRole("form", { name: "Edit connection Entry Hall and Collapsed Stair" })
+        fireEvent.change(within(form).getByRole("textbox", { name: "Description" }), { target: { value: "A heavy door" } })
+        fireEvent.click(within(form).getByRole("button", { name: "Save connection" }))
+        expect(await screen.findByText(/Choose two different areas/)).toBeVisible()
+        expect(server.callsTo("POST", /connections\/x1\/update$/)).toHaveLength(1)
+        expect(screen.getByRole("form", { name: "Edit connection Entry Hall and Collapsed Stair" })).toBeVisible()
+        expect(within(form).getByRole("textbox", { name: "Description" })).toHaveValue("A heavy door")
+    })
+
+    it("saves an edit, closes the editor and returns focus to the row's Edit button", async () => {
+        const { server } = dungeon()
+        await openSection("Connections")
+        const edit = await screen.findByRole("button", { name: "Edit connection Entry Hall and Collapsed Stair" })
+        fireEvent.click(edit)
+        const form = await screen.findByRole("form", { name: "Edit connection Entry Hall and Collapsed Stair" })
+        fireEvent.change(within(form).getByRole("combobox", { name: /One way only/ }), { target: { value: "yes" } })
+        fireEvent.click(within(form).getByRole("button", { name: "Save connection" }))
+        await waitFor(() => expect(screen.queryByRole("form", { name: /Edit connection/ })).not.toBeInTheDocument())
+        expect(server.callsTo("POST", /connections\/x1\/update$/)[0]!.body).toMatchObject({
+            expected_row_version: 2,
+            is_one_way: true,
         })
+        await waitFor(() => expect(edit).toHaveFocus())
+    })
+
+    it("opens one editor at a time, and does not discard an editor with unsent edits", async () => {
+        dungeon()
+        await openSection("Connections")
+        fireEvent.click(await screen.findByRole("button", { name: "Edit connection Entry Hall and Collapsed Stair" }))
+        expect(await screen.findAllByRole("form", { name: /Edit connection/ })).toHaveLength(1)
+        // Untouched: opening the other row replaces it.
+        fireEvent.click(screen.getByRole("button", { name: "Edit connection Collapsed Stair to Old Vault" }))
+        const second = await screen.findByRole("form", { name: "Edit connection Collapsed Stair to Old Vault" })
+        expect(screen.getAllByRole("form", { name: /Edit connection/ })).toHaveLength(1)
+        // Edited: opening another row leaves it open, with its values.
+        fireEvent.change(within(second).getByRole("textbox", { name: "Description" }), { target: { value: "Typed" } })
+        fireEvent.click(screen.getByRole("button", { name: "Edit connection Entry Hall and Collapsed Stair" }))
+        expect(screen.queryByRole("form", { name: "Edit connection Entry Hall and Collapsed Stair" })).not.toBeInTheDocument()
+        expect(within(second).getByRole("textbox", { name: "Description" })).toHaveValue("Typed")
+    })
+
+    it("lets an untouched editor follow the saved row, and pauses a dirty one whose row changed elsewhere", async () => {
+        const { state } = dungeon()
+        await openSection("Connections")
+        fireEvent.click(await screen.findByRole("button", { name: "Edit connection Entry Hall and Collapsed Stair" }))
+        const form = await screen.findByRole("form", { name: "Edit connection Entry Hall and Collapsed Stair" })
+        // Another editor changes the connection; the next read of the dungeon (here, adding an area
+        // from the Areas section) brings that change in.
+        const changeElsewhere = async (description: string) => {
+            state.view = {
+                ...state.view,
+                row_version: state.view.row_version + 1,
+                connections: state.view.connections.map((c) =>
+                    c.area_connection_id === "x1" ? { ...c, description } : c,
+                ),
+            }
+            fireEvent.click(screen.getByRole("link", { name: "Areas" }))
+            fireEvent.click(await screen.findByRole("button", { name: "Add area" }))
+            const add = await screen.findByRole("form", { name: "Add an area" })
+            fireEvent.change(within(add).getByRole("textbox", { name: /Area name/ }), {
+                target: { value: `Area ${description}` },
+            })
+            fireEvent.click(within(add).getByRole("button", { name: "Add area" }))
+            await screen.findByRole("link", { name: `Area ${description}` })
+            fireEvent.click(screen.getByRole("link", { name: "Connections" }))
+        }
+        await changeElsewhere("one")
+        await waitFor(() =>
+            expect(within(form).getByRole("textbox", { name: "Description" })).toHaveValue(
+                "one",
+            ),
+        )
+        fireEvent.change(within(form).getByRole("textbox", { name: "Description" }), { target: { value: "Mine" } })
+        await changeElsewhere("two")
+        expect(await screen.findByText(/This connection changed elsewhere/)).toBeVisible()
+        expect(within(form).getByRole("textbox", { name: "Description" })).toHaveValue("Mine")
+        expect(within(form).getByRole("button", { name: "Save connection" })).toBeDisabled()
+        fireEvent.click(screen.getByRole("button", { name: "Keep my changes and save over it" }))
+        expect(within(form).getByRole("button", { name: "Save connection" })).toBeEnabled()
+    })
+
+    it("says where the areas stand in Review, and that publishing the dungeon does not publish them", async () => {
+        dungeon()
         await opened("Crypt")
-        fireEvent.click(screen.getByRole("link", { name: "Structure" }))
-        expect((await screen.findAllByText(/Editing unavailable/)).length).toBeGreaterThan(0)
-        expect(screen.queryByRole("link", { name: "Edit dungeon structure" })).not.toBeInTheDocument()
+        fireEvent.click(screen.getByRole("link", { name: "2. Review & publish" }))
+        const review = (await screen.findByRole("heading", { level: 2, name: "Review" })).closest("section")!
+        expect(await within(review).findByText(/3 areas: 1 published, 1 draft, 1 archived\./)).toBeVisible()
+        expect(within(review).getByText(/Publishing the dungeon does not publish its areas/)).toBeVisible()
+    })
+
+    it("keeps the dungeon's and the areas' statuses apart: a published dungeon does not publish a draft area", async () => {
+        dungeon({ canon_status: "canon" }, { canon: "canon" })
+        await openSection("Areas")
+        const list = await areaList()
+        expect(within(list.getByText("Collapsed Stair").closest("li")!).getByText("Draft")).toBeVisible()
+    })
+
+    it("sends no dungeon authoring request to someone who cannot edit canon, and ignores the section", async () => {
+        const { server } = dungeon({}, { capabilities: ["campaign.view"], entry: "/app/c1/world/location/l1?section=areas" })
+        expect(await screen.findByRole("heading", { level: 1, name: "Crypt" })).toBeVisible()
+        expect(screen.queryByRole("navigation", { name: "Record stages" })).not.toBeInTheDocument()
+        expect(screen.queryByRole("list", { name: "Areas" })).not.toBeInTheDocument()
+        expect(server.calls.some((c) => /authoring|lifecycle|provenance|revisions/.test(c.path))).toBe(false)
+    })
+
+    it("offers editing the dungeon's details from Details through the dungeon editor", async () => {
+        dungeon()
+        expect(await screen.findByRole("link", { name: "Edit dungeon" })).toHaveAttribute(
+            "href",
+            "/app/c1/world/dungeon/l1/edit",
+        )
     })
 })
 
