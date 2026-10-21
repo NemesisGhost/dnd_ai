@@ -14,6 +14,7 @@ export const BLOCKED_REASON: Readonly<Record<string, string>> = {
         "a quest needs at least one stage with an objective before it can be published.",
     character_has_user_relationships:
         "a player or account is linked to this character. Remove those links first.",
+    dungeon_has_active_areas: "the dungeon still has active areas. Archive its areas first.",
 }
 
 // Reasons that only restate the record's status, which the lifecycle panel already shows. They

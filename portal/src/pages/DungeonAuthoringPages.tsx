@@ -1,4 +1,4 @@
-import { useParams } from "react-router"
+import { Link, useLocation, useParams } from "react-router"
 import { fetchLocationParentOptions } from "../api/locationAuthoring"
 import {
     areaAuthoringPath,
@@ -15,6 +15,7 @@ import type { ContentCreateConfig } from "../components/authoring/ContentCreateP
 import { ContentEditPage } from "../components/authoring/ContentEditPage"
 import type { ContentEditConfig } from "../components/authoring/ContentEditPage"
 import { worldEditNavigation } from "../components/world/editNavigation"
+import { pickWorldReturnState } from "../hooks/useWorldBackPath"
 import { DungeonStructure } from "../components/authoring/DungeonStructure"
 import type { FieldError } from "../components/authoring/feedback"
 import { SelectField, TextAreaField, TextField } from "../components/authoring/fields"
@@ -415,11 +416,7 @@ const editAreaConfig: ContentEditConfig<AreaAuthoringView, DungeonOptions, AreaV
     saved: "Area saved",
     renderExtra: ({ campaignId, entityId, view, options, refetch }) => (
         <>
-            <p>
-                <a href={`${root(campaignId)}/world/dungeon/${encodeURIComponent(view.dungeon.entity_id)}/edit`}>
-                    Back to {view.dungeon.name}
-                </a>
-            </p>
+            <DungeonLink campaignId={campaignId} dungeonId={view.dungeon.entity_id} name={view.dungeon.name} />
             <AreaContent campaignId={campaignId} view={view} options={options} refetch={refetch} />
             <div className="page-section section-stack">
                 <EntityLifecyclePanel
@@ -430,6 +427,21 @@ const editAreaConfig: ContentEditConfig<AreaAuthoringView, DungeonOptions, AreaV
             </div>
         </>
     ),
+}
+
+// The area's dungeon, as a client-side link that carries the World or Review return state.
+function DungeonLink({ campaignId, dungeonId, name }: { campaignId: string; dungeonId: string; name: string }) {
+    const { state } = useLocation()
+    return (
+        <p>
+            <Link
+                to={`${locationDetail(campaignId, dungeonId)}?section=structure`}
+                state={pickWorldReturnState(state)}
+            >
+                Back to {name}
+            </Link>
+        </p>
+    )
 }
 
 // Edit an area, its contents and its current state:

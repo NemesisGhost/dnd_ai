@@ -137,4 +137,5 @@ export const ERROR_CODE_MESSAGE: Readonly<Record<string, string>> = {
         "This quest already has progress recorded, so its structure cannot change. Wording can still be edited.",
     quest_definition_incomplete:
         "A quest needs at least one stage with an objective before it can be published.",
+    dungeon_has_active_areas: "The dungeon still has active areas. Archive its areas first.",
 }

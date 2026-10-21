@@ -1,4 +1,5 @@
 import { fireEvent, screen, within } from "@testing-library/react"
+import { useLocation } from "react-router"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import { bootstrapWith, installMockServer, renderAuthoringRoutes } from "../test/authoringHarness"
@@ -175,7 +176,16 @@ afterEach(() => {
     vi.unstubAllGlobals()
 })
 
-function setup(path: string, element: React.ReactNode, routePath: string, view: object) {
+function LocationProbe() {
+    const location = useLocation()
+    return (
+        <p>
+            Location page {location.search} {JSON.stringify(location.state)}
+        </p>
+    )
+}
+
+function setup(path: string | { pathname: string; state?: unknown }, element: React.ReactNode, routePath: string, view: object) {
     const server = installMockServer()
     server.on("GET", `${BASE}/dungeons/options`, { body: OPTIONS })
     server.on("GET", `${BASE}/dungeons/d1`, () => ({ body: view }))
@@ -208,7 +218,7 @@ function setup(path: string, element: React.ReactNode, routePath: string, view: 
         routes: [
             { path: routePath, element },
             { path: "/app/:campaignId/world/dungeon/:dungeonId/edit", element: <p>Dungeon editor page</p> },
-            { path: "/app/:campaignId/world/location/:entityId", element: <p>Location page</p> },
+            { path: "/app/:campaignId/world/location/:entityId", element: <LocationProbe /> },
         ],
     })
     return server
@@ -338,6 +348,21 @@ describe("EditDungeonAreaPage", () => {
             is_hidden: false,
             severity: 7,
         })
+    })
+
+    it("links back to the dungeon client-side, carrying the return state", async () => {
+        setup(
+            { pathname: path, state: { worldSearch: "?q=vault", reviewSearch: "?scope=mine", junk: "x" } },
+            <EditDungeonAreaPage />,
+            route,
+            area(),
+        )
+        const link = await screen.findByRole("link", { name: "Back to The Sunken Vault" })
+        expect(link).toHaveAttribute("href", "/app/c1/world/location/d1?section=structure")
+        fireEvent.click(link)
+        expect(await screen.findByText(/Location page \?section=structure/)).toHaveTextContent(
+            '{"worldSearch":"?q=vault","reviewSearch":"?scope=mine"}',
+        )
     })
 
     it("sets a hazard status naming the event that last wrote it", async () => {
