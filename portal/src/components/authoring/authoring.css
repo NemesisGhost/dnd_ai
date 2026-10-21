@@ -824,19 +824,31 @@
   margin-top: 0.75rem;
 }
 
+/* The list answers to its own width, not the viewport's: beside the campaign panel a wide screen
+   still gives it a narrow column. Narrow: the name and its action on one line, then one meta line.
+   Wide enough (56rem): one column per fact under a header row. */
+.area-section {
+  container-type: inline-size;
+}
+
 .area-list__head {
   display: none;
 }
 
 .area-list > li {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 0.125rem 0.75rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "name actions"
+    "meta meta";
+  gap: 0.25rem 0.75rem;
+  align-items: start;
 }
 
 .area-list__name {
   display: flex;
   flex-direction: column;
+  grid-area: name;
   min-width: 0;
   font-weight: 600;
 }
@@ -855,18 +867,16 @@
 .area-list__meta {
   display: flex;
   flex-wrap: wrap;
+  grid-area: meta;
   align-items: center;
+  gap: 0.125rem 0.875rem;
   color: var(--color-text-muted);
   font-size: 0.9375rem;
 }
 
-.area-list__meta > span + span::before {
-  content: "·";
-  margin: 0 0.5rem;
-}
-
 .area-list__actions {
-  justify-self: start;
+  grid-area: actions;
+  justify-self: end;
 }
 
 .area-list__actions .authoring-button {
@@ -914,11 +924,16 @@
   }
 }
 
-@media (min-width: 40rem) {
+@container (min-width: 56rem) {
   .area-list__head,
   .area-list > li {
-    grid-template-columns: minmax(0, 2.4fr) minmax(0, 1fr) 8rem minmax(0, 2fr) 7.5rem 3.5rem;
+    grid-template-columns: minmax(0, 2.4fr) minmax(6rem, 1fr) 7.5rem minmax(0, 2fr) 7.5rem 3.5rem;
+    grid-template-areas: none;
     align-items: baseline;
+  }
+
+  .area-list > li > * {
+    grid-area: auto;
   }
 
   .area-list__head {
@@ -933,15 +948,7 @@
     display: contents;
   }
 
-  .area-list__meta > span + span::before {
-    content: none;
-  }
-
   .area-list__meta > span {
     min-width: 0;
-  }
-
-  .area-list__actions {
-    justify-self: end;
   }
 }

@@ -2226,6 +2226,12 @@ a.app-header__title:focus-visible {
   text-transform: uppercase;
 }
 
+/* "In <Dungeon>": where the record sits, as a link up, directly under the eyebrow. */
+.world-detail__context {
+  margin: 0.125rem 0 0;
+  color: var(--color-text-muted);
+}
+
 .world-detail__summary {
   margin: 0.25rem 0 1rem;
   max-width: 60rem;

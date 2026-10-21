@@ -209,8 +209,9 @@ export function AreaNowSection({ campaignId, areaId, location, lifecycleView, re
                             <span className="connection-list__main">
                                 <span className="connection-list__ends">The area</span>
                                 <span className="connection-list__what">
-                                    Searched: {s.is_searched ? "Yes" : "No"} · Destroyed: {s.is_destroyed ? "Yes" : "No"} ·
-                                    Alarm level: {s.alarm_level} · Notes: {s.condition_notes ?? "None"}
+                                    {s.state_event_id === null
+                                        ? "Nothing has been recorded for this area yet."
+                                        : `Searched: ${s.is_searched ? "Yes" : "No"} · Destroyed: ${s.is_destroyed ? "Yes" : "No"} · Alarm level: ${s.alarm_level} · Notes: ${s.condition_notes ?? "None"}`}
                                 </span>
                             </span>
                             <span className="connection-list__actions">

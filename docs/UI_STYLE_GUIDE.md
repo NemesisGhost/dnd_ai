@@ -280,6 +280,7 @@ Five contracts say how a region is contained. Choose by purpose, not by counting
 
 - **Operational list** (`.op-list`): records that carry their own commands or links (attached sources, relationships, builds, the review queue). Rows are separated by a rule, not boxed; row buttons are compact and wrap with their row and are never stretched to full width on a phone. Form actions (`.authoring-actions`) stay full width below 40rem.
 - **Draft roster** (`.calendar-roster__*`): the rows of an unsaved parent (the months of a calendar being created). It uses the operational-list idiom (ruled rows, compact wrapping row buttons, a header row from 40rem), shows each row's position and its own actions, says in words that Add, Edit and Remove change the draft only, expands one row's editor at a time under that row, and keeps the panel that adds a row above the list, always open and ready for the next row (no open or close button), so nothing large is appended at the bottom.
+- **Child collection in a workspace section** (`.area-list`, `.connection-list`): the children of a record inside a guided workspace section (a dungeon's areas and connections, an area's features, hazards and interactables) use ruled operational rows. A bar above the list gives the count and the **Add** button; **Add** reveals one small form above the list, which stays open for the next child and is closed by **Done**; **Edit** opens **one** editor at a time under its row (opening another while the first holds unsent edits is refused, not discarded); the editor closes only when the server accepted the save, returns focus to the row's Edit button, follows its saved row while untouched and pauses on a conflict. **Remove** asks first. The area list is the example: it answers to its own width (a container query), so beside the campaign panel it keeps the name and its action on one line over one meta line, and from 56rem wide shows one column per fact under an `aria-hidden` header row, each cell carrying a visually hidden label. The summary is one clamped line. Nothing scrolls horizontally.
 - **Chronology / summary list** (`.record-list`): provenance, revisions, logs and read-only summaries. A numbered list keeps its numbers.
 - **Status strip**: the compact campaign-time bar. **Messages** (`.authoring-message--error` / `--warning`) are for errors and warnings; a success or neutral result uses `.form-status` and is never styled as an error. A one-time secret uses the `OneTimeSecretPanel` panel with a warning rule.
 
@@ -510,7 +511,7 @@ Non-linear workflows stay non-linear. Phases are numbered for orientation and ev
 | New calendar | Local creation steps (this section) |
 | Lists, Review queue, revision history, Campaign Home, settings, access, parties, party members, world times, worlds, timelines | One job; plain sections |
 | Item definitions | Not lifecycle-managed; one form |
-| Dungeon and area edit pages; NPC portrayal and character builds | Candidates to fold into the World record workspace's sections later; not part of the Quest work |
+| NPC portrayal and character builds | Candidates to fold into the World record workspace's sections later |
 | Character sheet tabs (UI_DESIGN §5.5) | Reading views of one character; not a workflow |
 
 ## 11. Knowledge standard
