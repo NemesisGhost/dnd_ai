@@ -49,6 +49,13 @@ const PUBLIC_OPTIONS = [
     { value: "yes", label: "Yes" },
     { value: "no", label: "No, only editors see it" },
 ]
+// A stored flag that is missing from the read is shown as not recorded and is never sent unless the
+// person chooses a value.
+const NOT_RECORDED = "Not recorded"
+const flag = (value: unknown, yes: string, no: string): string =>
+    value === true ? yes : value === false ? no : NOT_RECORDED
+const choice = (value: unknown, yes: string, no: string): string =>
+    value === true ? yes : value === false ? no : ""
 const YES_NO = [
     { value: "no", label: "No" },
     { value: "yes", label: "Yes" },
@@ -257,9 +264,7 @@ export function RelationshipEditor({
             </h4>
             <p className="relationship-editor__summary">
                 {view.kind_label} · {periodSummary(view)}
-                {view.kind === "political" && typeof view.typed.is_active === "boolean"
-                    ? ` · In force: ${view.typed.is_active ? "Yes" : "No"}`
-                    : ""}
+                {view.kind === "political" ? ` · In force: ${flag(view.typed.is_active, "Yes", "No")}` : ""}
                 {view.current_status_label ? ` · Timeline status: ${view.current_status_label}` : ""}
             </p>
             {view.policy_conflicts.length > 0 ? (
@@ -414,7 +419,7 @@ function MembershipFacts({ view, manage }: { view: RelationshipView; manage: { t
                 rows={[
                     ["Office", office === "" ? "None" : office],
                     ["Rank", rank === "" ? "None" : rank],
-                    ["Known to the public", view.typed.is_public === false ? "No, only editors see it" : "Yes"],
+                    ["Known to the public", flag(view.typed.is_public, "Yes", "No, only editors see it")],
                 ]}
             />
             <p className="authoring-note">
@@ -436,22 +441,22 @@ function ArchivedFacts({ view }: { view: RelationshipView }) {
     if (view.kind === "employment") rows.push(["Job title", text(typed.job_title) || "None"])
     if (view.kind === "ownership") {
         rows.push(["Share", typed.ownership_share === null || typed.ownership_share === undefined ? "None" : `${text(typed.ownership_share)}%`])
-        rows.push(["Known to the public", typed.is_public === false ? "No, only editors see it" : "Yes"])
+        rows.push(["Known to the public", flag(typed.is_public, "Yes", "No, only editors see it")])
     }
     if (view.kind === "political") {
-        rows.push(["In force", typed.is_active === false ? "No" : "Yes"])
+        rows.push(["In force", flag(typed.is_active, "Yes", "No")])
         rows.push(["Terms", text(typed.treaty_terms) || "None"])
     }
     if (view.kind === "route") {
         rows.push(["Distance", text(typed.distance_text) || "None"])
         rows.push(["Travel time", text(typed.travel_time_text) || "None"])
         rows.push(["Mode of travel", text(typed.travel_mode) || "None"])
-        rows.push(["Concealed", typed.is_hidden === true ? "Yes" : "No"])
+        rows.push(["Concealed", flag(typed.is_hidden, "Yes", "No")])
     }
     if (view.kind === "membership") {
         rows.push(["Office", text(typed.role) || "None"])
         rows.push(["Rank", text(typed.rank) || "None"])
-        rows.push(["Known to the public", typed.is_public === false ? "No, only editors see it" : "Yes"])
+        rows.push(["Known to the public", flag(typed.is_public, "Yes", "No, only editors see it")])
     }
     return (
         <>
@@ -472,17 +477,17 @@ function serverDetails(view: RelationshipView): Record<string, string> {
     if (view.kind === "employment") values.title = text(typed.job_title)
     if (view.kind === "ownership") {
         values.share = text(typed.ownership_share)
-        values.isPublic = typed.is_public === false ? "no" : "yes"
+        values.isPublic = choice(typed.is_public, "yes", "no")
     }
     if (view.kind === "political") {
-        values.active = typed.is_active === false ? "no" : "yes"
+        values.active = choice(typed.is_active, "yes", "no")
         values.terms = text(typed.treaty_terms)
     }
     if (view.kind === "route") {
         values.distance = text(typed.distance_text)
         values.duration = text(typed.travel_time_text)
         values.mode = text(typed.travel_mode)
-        values.hidden = typed.is_hidden === true ? "yes" : "no"
+        values.hidden = choice(typed.is_hidden, "yes", "no")
     }
     return values
 }
@@ -512,16 +517,16 @@ function DetailsForm({
         if (view.kind === "employment") typed.job_title = orNull(v.title ?? "")
         if (view.kind === "ownership") {
             typed.ownership_share = num(v.share ?? "")
-            typed.is_public = v.isPublic === "yes"
+            if (v.isPublic) typed.is_public = v.isPublic === "yes"
         }
         if (view.kind === "route") {
             typed.distance_text = orNull(v.distance ?? "")
             typed.travel_time_text = orNull(v.duration ?? "")
             typed.travel_mode = orNull(v.mode ?? "")
-            typed.is_hidden = v.hidden === "yes"
+            if (v.hidden) typed.is_hidden = v.hidden === "yes"
         }
         if (view.kind === "political") {
-            typed.is_active = v.active === "yes"
+            if (v.active) typed.is_active = v.active === "yes"
             typed.treaty_terms = orNull(v.terms ?? "")
         }
         return typed
@@ -595,7 +600,8 @@ function DetailsForm({
                     <SelectField
                         id={`rel-public-${id}`}
                         label="Known to the public"
-                        value={v.isPublic ?? "yes"}
+                        value={v.isPublic ?? ""}
+                        placeholder={NOT_RECORDED}
                         options={PUBLIC_OPTIONS}
                         onChange={set("isPublic")}
                     />
@@ -610,7 +616,8 @@ function DetailsForm({
                         id={`rel-hidden-${id}`}
                         label="Concealed"
                         hint="Only editors see a concealed route."
-                        value={v.hidden ?? "no"}
+                        value={v.hidden ?? ""}
+                        placeholder={NOT_RECORDED}
                         options={YES_NO}
                         onChange={set("hidden")}
                     />
@@ -621,7 +628,8 @@ function DetailsForm({
                     <SelectField
                         id={`rel-active-${id}`}
                         label="In force"
-                        value={v.active ?? "yes"}
+                        value={v.active ?? ""}
+                        placeholder={NOT_RECORDED}
                         options={[
                             { value: "yes", label: "Yes" },
                             { value: "no", label: "No" },

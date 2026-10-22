@@ -1437,3 +1437,79 @@ describe("RelationshipsPanel: archive, end and what each state offers", () => {
         expect(server.callsTo("POST", /authoring\/relationships/)).toHaveLength(0)
     })
 })
+
+describe("RelationshipsPanel: a flag the read does not carry is not invented", () => {
+    const withTyped = (kind: string, typed: object, actions = ["update", "archive", "set_perspective"]) => ({
+        view: { ...VIEW, kind, kind_label: kind, typed, available_actions: actions },
+        summaries: [{ ...SUMMARY, kind }],
+    })
+
+    it.each([
+        ["ownership", "Known to the public", "is_public", "Yes", "No, only editors see it"],
+        ["route", "Concealed", "is_hidden", "Yes", "No"],
+        ["political", "In force", "is_active", "Yes", "No"],
+    ])("%s: archived facts say true, false and missing differently", async (kind, label, field, yes, no) => {
+        for (const [value, expected] of [
+            [true, kind === "route" ? yes : yes],
+            [false, no],
+            [undefined, "Not recorded"],
+            [null, "Not recorded"],
+        ] as [boolean | null | undefined, string][]) {
+            const typed = value === undefined ? {} : { [field]: value }
+            const o = withTyped(kind, typed, ["restore"])
+            setup({ ...o, view: { ...o.view, lifecycle_status: "archived" } })
+            await openRow()
+            const term = await screen.findByText(label, { selector: "dt" })
+            expect(term.nextSibling).toHaveTextContent(expected)
+            cleanup()
+        }
+    })
+
+    it("a membership's visibility is not recorded rather than yes when missing", async () => {
+        const MEMBER = {
+            ...SUMMARY,
+            kind: "membership",
+            relationship_type_label: "Membership",
+            participants: [participant("e1", "Varek", "member", "Member"), participant("org1", "Guild", "organization", "Organization")],
+        }
+        setup({
+            kind: "npc",
+            summaries: [MEMBER],
+            view: { ...VIEW, kind: "membership", typed: { role: "Clerk", rank: null }, participants: MEMBER.participants },
+        })
+        await openRow(/^Open Membership with Guild$/)
+        expect((await screen.findByText("Known to the public", { selector: "dt" })).nextSibling).toHaveTextContent("Not recorded")
+    })
+
+    it.each([
+        ["ownership", { ownership_share: 40 }, "Known to the public", "is_public"],
+        ["route", { distance_text: "9 mi" }, "Concealed", "is_hidden"],
+        ["political", { treaty_terms: "Peace" }, "In force", "is_active"],
+    ])("%s: an unrelated save sends no fabricated %s, and an explicit choice is sent", async (kind, typed, label, field) => {
+        const o = withTyped(kind, typed)
+        const server = setup(o)
+        await openRow()
+        const form = await screen.findByRole("form", { name: "Edit relationship" })
+        const select = within(form).getByRole("combobox", { name: label })
+        expect(select).toHaveValue("")
+        expect(within(select).getByRole("option", { name: "Not recorded" })).toBeInTheDocument()
+        fireEvent.change(within(form).getByRole("textbox", { name: "Description" }), { target: { value: "note" } })
+        fireEvent.click(within(form).getByRole("button", { name: "Save relationship" }))
+        await vi.waitFor(() => expect(server.callsTo("POST", `${BASE}/r1/update`)).toHaveLength(1))
+        const body = server.callsTo("POST", `${BASE}/r1/update`)[0]!.body as Record<string, unknown>
+        expect(body).toMatchObject({ description: "note" })
+        expect(body).not.toHaveProperty(field)
+        await within(form).findByText("Relationship saved")
+        fireEvent.change(select, { target: { value: "no" } })
+        fireEvent.click(within(form).getByRole("button", { name: "Save relationship" }))
+        await vi.waitFor(() => expect(server.callsTo("POST", `${BASE}/r1/update`)).toHaveLength(2))
+        expect(server.callsTo("POST", `${BASE}/r1/update`)[1]!.body).toMatchObject({ [field]: false })
+    })
+
+    it("keeps true and false as they are in the editable form", async () => {
+        setup(withTyped("ownership", { ownership_share: 40, is_public: false }))
+        await openRow()
+        const form = await screen.findByRole("form", { name: "Edit relationship" })
+        expect(within(form).getByRole("combobox", { name: "Known to the public" })).toHaveValue("no")
+    })
+})
