@@ -851,6 +851,8 @@ Examples:
 - worship
 - adjacency
 
+A relationship's recorded period is a fact of the record; whether the campaign clock currently sits inside it is a derived read for editors. The period is read as half-open `[start, end)` over `core.world_times.sort_key` against the timeline's effective clock, giving *undated*, *not started*, *in effect*, *ended*, or *campaign time not set*. It is distinct from the lifecycle (archived), a political relationship's *in force* flag, and the event-driven `campaign.relationship_state` status, and it never changes what readers are shown.
+
 ### 11.2 Relationship participant
 
 A **Relationship Participant** identifies an entity's role in a relationship.

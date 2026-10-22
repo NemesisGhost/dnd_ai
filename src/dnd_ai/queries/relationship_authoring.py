@@ -22,9 +22,10 @@ from dnd_ai.domain.relationship_authoring import (
     KIND_ROUTE,
     RELATIONSHIP_KINDS,
     policy_conflicts,
+    relationship_period_status,
 )
 
-from .campaign_clock import world_time_point
+from .campaign_clock import resolve_effective_clock, world_time_point
 
 
 @dataclass(frozen=True)
@@ -71,6 +72,10 @@ class RelationshipAuthoringView:
     current_status: str | None = None
     available_actions: list[str] = field(default_factory=list)
     policy_conflicts: list[str] = field(default_factory=list)
+    # Derived for editors from the effective campaign clock; see `relationship_period_status`.
+    period_status: str = "undated"
+    as_of: str | None = None
+    current_status_label: str | None = None
 
 
 @dataclass(frozen=True)
@@ -86,6 +91,22 @@ class RelationshipSummary:
     row_version: int
     participants: list[Participant]
     policy_conflicts: list[str] = field(default_factory=list)
+    started_world_time_id: uuid.UUID | None = None
+    started: str | None = None
+    ended_world_time_id: uuid.UUID | None = None
+    ended_at: str | None = None
+    period_status: str = "undated"
+    in_force: bool | None = None
+    is_hidden: bool | None = None
+    current_status: str | None = None
+    current_status_label: str | None = None
+
+
+@dataclass(frozen=True)
+class RelationshipList:
+    items: list[RelationshipSummary]
+    # The campaign clock the period statuses compare against; None when no clock is set.
+    as_of: str | None
 
 
 _KIND_LABEL = {k.code: k.label for k in RELATIONSHIP_KINDS}
@@ -255,16 +276,27 @@ def get_relationship_authoring(
             {"r": relationship_id},
         )
     ]
-    status = connection.execute(
+    status_row = connection.execute(
         text("""
-            SELECT st.code FROM campaign.relationship_state rs
+            SELECT st.code, st.display_name FROM campaign.relationship_state rs
             JOIN campaign.relationship_statuses st
               ON st.relationship_status_id = rs.relationship_status_id
             WHERE rs.timeline_id = :t AND rs.relationship_id = :r
               AND rs.perspective_holder_entity_id IS NULL
         """),
         {"t": timeline_id, "r": relationship_id},
-    ).scalar()
+    ).one_or_none()
+    clock = resolve_effective_clock(connection, timeline_id=timeline_id)
+    start_key = (
+        None
+        if row.started_world_time_id is None
+        else world_time_point(connection, row.started_world_time_id)[0]
+    )
+    end_key = (
+        None
+        if row.ended_world_time_id is None
+        else world_time_point(connection, row.ended_world_time_id)[0]
+    )
     archived = str(row.lifecycle) != "active"
     actions: list[str] = ["restore"] if archived else ["update", "archive", "set_perspective"]
     if not archived and row.ended_world_time_id is None and row.started_world_time_id is not None:
@@ -293,11 +325,16 @@ def get_relationship_authoring(
         typed=_typed(connection, relationship_id, kind),
         participants=participants,
         perspectives=perspectives,
-        current_status=None if status is None else str(status),
+        current_status=None if status_row is None else str(status_row.code),
         available_actions=actions,
         policy_conflicts=_conflicts(
             str(row.type_code), participants, active_type_codes(connection)
         ),
+        period_status=relationship_period_status(
+            start_key, end_key, None if clock is None else clock.sort_key
+        ),
+        as_of=None if clock is None else clock.display,
+        current_status_label=None if status_row is None else str(status_row.display_name),
     )
 
 
@@ -305,24 +342,37 @@ def list_entity_relationships(
     connection: Connection,
     *,
     world_id: uuid.UUID,
+    timeline_id: uuid.UUID,
     entity_id: uuid.UUID,
     include_archived: bool,
-) -> list[RelationshipSummary]:
+) -> RelationshipList:
     rows = connection.execute(
         text("""
-            SELECT r.relationship_id, r.description, r.ended_world_time_id, r.row_version,
-                   rt.code AS type_code, rt.display_name AS type_label, ls.code AS lifecycle
+            SELECT r.relationship_id, r.description, r.started_world_time_id,
+                   r.ended_world_time_id, r.row_version,
+                   rt.code AS type_code, rt.display_name AS type_label, ls.code AS lifecycle,
+                   sw.sort_key AS start_key, ew.sort_key AS end_key,
+                   st.code AS status_code, st.display_name AS status_label
             FROM world.relationships r
             JOIN world.relationship_types rt ON rt.relationship_type_id = r.relationship_type_id
             JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = r.lifecycle_status_id
+            LEFT JOIN core.world_times sw ON sw.world_time_id = r.started_world_time_id
+            LEFT JOIN core.world_times ew ON ew.world_time_id = r.ended_world_time_id
+            LEFT JOIN campaign.relationship_state rs
+              ON rs.relationship_id = r.relationship_id AND rs.timeline_id = :t
+             AND rs.perspective_holder_entity_id IS NULL
+            LEFT JOIN campaign.relationship_statuses st
+              ON st.relationship_status_id = rs.relationship_status_id
             WHERE r.world_id = :w
               AND EXISTS (SELECT 1 FROM world.relationship_participants p
                           WHERE p.relationship_id = r.relationship_id AND p.entity_id = :e)
               AND (CAST(:archived AS boolean) OR ls.code = 'active')
             ORDER BY r.created_at, r.relationship_id
         """),
-        {"w": world_id, "e": entity_id, "archived": include_archived},
+        {"w": world_id, "e": entity_id, "t": timeline_id, "archived": include_archived},
     ).all()
+    clock = resolve_effective_clock(connection, timeline_id=timeline_id)
+    clock_key = None if clock is None else clock.sort_key
     summaries: list[RelationshipSummary] = []
     active = active_type_codes(connection)
     for r in rows:
@@ -342,6 +392,23 @@ def list_entity_relationships(
                 row_version=int(r.row_version),
                 participants=participants,
                 policy_conflicts=_conflicts(str(r.type_code), participants, active),
+                started_world_time_id=r.started_world_time_id,
+                started=(
+                    None
+                    if r.started_world_time_id is None
+                    else world_time_point(connection, r.started_world_time_id)[1]
+                ),
+                ended_world_time_id=r.ended_world_time_id,
+                ended_at=(
+                    None
+                    if r.ended_world_time_id is None
+                    else world_time_point(connection, r.ended_world_time_id)[1]
+                ),
+                period_status=relationship_period_status(r.start_key, r.end_key, clock_key),
+                in_force=typed.get("is_active") if kind == KIND_POLITICAL else None,
+                is_hidden=typed.get("is_hidden") if kind == KIND_ROUTE else None,
+                current_status=None if r.status_code is None else str(r.status_code),
+                current_status_label=None if r.status_label is None else str(r.status_label),
             )
         )
-    return summaries
+    return RelationshipList(items=summaries, as_of=None if clock is None else clock.display)

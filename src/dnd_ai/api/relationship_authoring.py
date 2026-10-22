@@ -227,6 +227,9 @@ def _view_json(view: RelationshipAuthoringView, *, changed: bool | None = None) 
         "current_status": view.current_status,
         "available_actions": view.available_actions,
         "policy_conflicts": view.policy_conflicts,
+        "period_status": view.period_status,
+        "as_of": view.as_of,
+        "current_status_label": view.current_status_label,
     }
     if changed is not None:
         body["changed"] = changed
@@ -373,13 +376,15 @@ def list_endpoint(
     entity_id: Annotated[uuid.UUID, Query()],
     include_archived: bool = False,
 ) -> dict[str, Any]:
-    items = list_entity_relationships(
+    roster = list_entity_relationships(
         connection,
         world_id=timeline_world_id(connection, access.timeline_id),
+        timeline_id=access.timeline_id,
         entity_id=entity_id,
         include_archived=include_archived,
     )
     return {
+        "as_of": roster.as_of,
         "items": [
             {
                 "relationship_id": str(i.relationship_id),
@@ -393,9 +398,22 @@ def list_endpoint(
                 "row_version": i.row_version,
                 "participants": [_participant_json(p) for p in i.participants],
                 "policy_conflicts": i.policy_conflicts,
+                "started_world_time_id": None
+                if i.started_world_time_id is None
+                else str(i.started_world_time_id),
+                "started": i.started,
+                "ended_world_time_id": None
+                if i.ended_world_time_id is None
+                else str(i.ended_world_time_id),
+                "ended_at": i.ended_at,
+                "period_status": i.period_status,
+                "in_force": i.in_force,
+                "is_hidden": i.is_hidden,
+                "current_status": i.current_status,
+                "current_status_label": i.current_status_label,
             }
-            for i in items
-        ]
+            for i in roster.items
+        ],
     }
 
 

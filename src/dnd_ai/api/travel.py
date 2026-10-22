@@ -65,9 +65,10 @@ def list_routes_endpoint(
         for i in list_entity_relationships(
             connection,
             world_id=timeline_world_id(connection, access.timeline_id),
+            timeline_id=access.timeline_id,
             entity_id=location_id,
             include_archived=False,
-        )
+        ).items
         if i.kind == "route"
     ]
     return {

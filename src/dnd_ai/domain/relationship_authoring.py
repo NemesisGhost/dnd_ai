@@ -673,3 +673,30 @@ class PerspectiveHolderInvalidError(SafeMessageError):
     safe_status_code = 400
     safe_error_code = "perspective_holder_invalid"
     safe_message = "Choose one of the relationship's participants."
+
+
+PERIOD_UNDATED = "undated"
+PERIOD_NOT_STARTED = "not_started"
+PERIOD_IN_EFFECT = "in_effect"
+PERIOD_ENDED = "ended"
+PERIOD_CLOCK_UNSET = "clock_unset"
+
+
+def relationship_period_status(
+    start_key: int | None, end_key: int | None, clock_key: int | None
+) -> str:
+    """Where the campaign clock sits against a relationship's recorded period.
+
+    The period is half-open, `[start, end)`, over `core.world_times.sort_key`, like the other
+    world-time periods. This is an editor-facing derived read: it is not the lifecycle (archived),
+    the political `is_active` flag, or the event-driven `campaign.relationship_state` status.
+    """
+    if start_key is None and end_key is None:
+        return PERIOD_UNDATED
+    if clock_key is None:
+        return PERIOD_CLOCK_UNSET
+    if start_key is not None and clock_key < start_key:
+        return PERIOD_NOT_STARTED
+    if end_key is not None and clock_key >= end_key:
+        return PERIOD_ENDED
+    return PERIOD_IN_EFFECT

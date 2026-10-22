@@ -63,6 +63,9 @@ export interface RelationshipParticipant {
     role_label: string
 }
 
+// Where the campaign clock sits against a relationship's recorded period, derived by the server.
+export type RelationshipPeriodStatus = "undated" | "not_started" | "in_effect" | "ended" | "clock_unset"
+
 export interface RelationshipSummary {
     relationship_id: string
     kind: string
@@ -76,9 +79,23 @@ export interface RelationshipSummary {
     participants: RelationshipParticipant[]
     // Why the current rules would not accept this record; empty when they do.
     policy_conflicts: string[]
+    started_world_time_id: string | null
+    started: string | null
+    ended_world_time_id: string | null
+    // The end as a world-time display (the boolean `ended` only says an end is recorded).
+    ended_at: string | null
+    period_status: RelationshipPeriodStatus
+    // Political only: the treaty is in force. Separate from the period and from archiving.
+    in_force: boolean | null
+    // Route only.
+    is_hidden: boolean | null
+    current_status: string | null
+    current_status_label: string | null
 }
 
 export interface RelationshipList {
+    // The campaign clock the period statuses compare against; null when none is set.
+    as_of: string | null
     items: RelationshipSummary[]
 }
 
@@ -113,6 +130,9 @@ export interface RelationshipView {
     current_status: string | null
     available_actions: string[]
     policy_conflicts: string[]
+    period_status: RelationshipPeriodStatus
+    as_of: string | null
+    current_status_label: string | null
     changed?: boolean
 }
 

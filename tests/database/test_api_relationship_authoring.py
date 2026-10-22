@@ -733,3 +733,144 @@ def test_the_audit_reports_a_stored_self_relationship(
     current = view(s, str(relationship_id))
     assert current["policy_conflicts"] == reported[relationship_id]
     assert act(s, current, "update", {"description": "Kept"}).status_code == 200
+
+
+def _listed(s: ContentSetup, entity: str, cid: str | None = None, **query: str) -> dict:
+    base = s.url("relationships") if cid is None else f"/campaigns/{cid}/authoring/relationships"
+    response = s.gm.get(base, entity_id=entity, **query)
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_the_list_derives_each_period_against_the_campaign_clock(s: ContentSetup) -> None:
+    mira, tom, ann, guild = npc(s, "Mira"), npc(s, "Tom"), npc(s, "Ann"), organization(s, "Guild")
+    times = Times(s)
+    y1, y3, y5, y8 = times.at(1), times.at(3), times.at(5), times.at(8)
+    undated = create(s, "general", "other", [(mira, "subject"), (tom, "object")]).json()
+    # Before any clock is set, a dated record cannot be placed against campaign time.
+    pending = create(
+        s, "family", "family", [(mira, "parent"), (ann, "child")], started_world_time_id=y5
+    ).json()
+    unset = _listed(s, mira)
+    assert unset["as_of"] is None
+    assert {i["relationship_id"]: i["period_status"] for i in unset["items"]} == {
+        undated["relationship_id"]: "undated",
+        pending["relationship_id"]: "clock_unset",
+    }
+    assert _advance(s, y3, 0).status_code == 200
+    past = create(
+        s,
+        "employment",
+        "employment",
+        [(guild, "employer"), (mira, "employee")],
+        started_world_time_id=y1,
+        job_title="Cook",
+    ).json()
+    assert act(s, past, "end", {"ended_world_time_id": y3}).status_code == 200
+    current = create(
+        s, "family", "family", [(mira, "parent"), (tom, "child")], started_world_time_id=y1
+    ).json()
+    listed = _listed(s, mira)
+    assert listed["as_of"] == "Common Reckoning: Year 3"
+    by_id = {i["relationship_id"]: i for i in listed["items"]}
+    assert by_id[pending["relationship_id"]]["period_status"] == "not_started"
+    assert by_id[current["relationship_id"]]["period_status"] == "in_effect"
+    # [start, end): a clock equal to the end has ended.
+    ended = by_id[past["relationship_id"]]
+    assert ended["period_status"] == "ended" and ended["ended"] is True
+    assert ended["started_world_time_id"] == y1 and ended["ended_world_time_id"] == y3
+    assert ended["started"] == "Year 1" and ended["ended_at"] == "Year 3"
+    assert by_id[undated["relationship_id"]]["period_status"] == "undated"
+    assert by_id[undated["relationship_id"]]["started"] is None
+    # A recorded end later than the clock is still in effect.
+    future_end = create(
+        s,
+        "family",
+        "family",
+        [(mira, "parent"), (ann, "child")],
+        started_world_time_id=y1,
+    ).json()
+    assert act(s, future_end, "end", {"ended_world_time_id": y8}).status_code == 200
+    row = {i["relationship_id"]: i for i in _listed(s, mira)["items"]}[
+        future_end["relationship_id"]
+    ]
+    assert row["ended"] is True and row["period_status"] == "in_effect"
+    # The detail and a command response carry the same derivation.
+    detail = view(s, current["relationship_id"])
+    assert detail["period_status"] == "in_effect" and detail["as_of"] == listed["as_of"]
+    ended_now = act(s, current, "end", {"ended_world_time_id": y5})
+    assert ended_now.json()["period_status"] == "in_effect"
+
+
+def test_a_branch_compares_against_its_inherited_clock(s: ContentSetup) -> None:
+    from tests.database.test_api_campaign_clock import _branch_campaign
+
+    mira, tom = npc(s, "Mira"), npc(s, "Tom")
+    times = Times(s)
+    y2, y4, y9 = times.at(2), times.at(4), times.at(9)
+    pact = create(
+        s, "family", "family", [(mira, "parent"), (tom, "child")], started_world_time_id=y2
+    ).json()
+    later = create(
+        s, "family", "family", [(tom, "parent"), (mira, "child")], started_world_time_id=y9
+    ).json()
+    assert _advance(s, y4, 0).status_code == 200
+    assert _advance(s, y9, 1).status_code == 200
+    parent = {i["relationship_id"]: i for i in _listed(s, mira)["items"]}
+    assert parent[later["relationship_id"]]["period_status"] == "in_effect"
+    branch_cid = _branch_campaign(s, y4)
+    branch = {i["relationship_id"]: i for i in _listed(s, mira, cid=branch_cid)["items"]}
+    # The branch never sees parent time after its branch point.
+    assert branch[pact["relationship_id"]]["period_status"] == "in_effect"
+    assert branch[later["relationship_id"]]["period_status"] == "not_started"
+
+
+def test_the_list_reports_in_force_hidden_and_the_timeline_status(s: ContentSetup) -> None:
+    guild, town, mira, tom = (
+        organization(s, "Guild"),
+        place(s, "Stonebridge"),
+        npc(s, "Mira"),
+        npc(s, "Tom"),
+    )
+    times = Times(s)
+    y1, y3 = times.at(1), times.at(3)
+    pact = create(
+        s, "political", "alliance", [(guild, "ally"), (town, "ally")], started_world_time_id=y1
+    ).json()
+    other = place(s, "Oakford")
+    road = create(
+        s,
+        "route",
+        "route",
+        [(town, "origin"), (other, "destination")],
+        is_hidden=True,
+    ).json()
+    general = create(s, "general", "other", [(mira, "subject"), (tom, "object")]).json()
+    listed = {i["relationship_id"]: i for i in _listed(s, town)["items"]}
+    assert listed[pact["relationship_id"]]["in_force"] is True
+    assert listed[pact["relationship_id"]]["is_hidden"] is None
+    assert listed[road["relationship_id"]]["is_hidden"] is True
+    assert listed[road["relationship_id"]]["in_force"] is None
+    assert act(s, pact, "end", {"ended_world_time_id": y3}).status_code == 200
+    after = {i["relationship_id"]: i for i in _listed(s, town)["items"]}[pact["relationship_id"]]
+    # Ending sets both facts: the period has an end and the pact is no longer in force.
+    assert after["ended"] is True and after["in_force"] is False
+    # No shared timeline status until an event records one.
+    mine = {i["relationship_id"]: i for i in _listed(s, mira)["items"]}
+    assert mine[general["relationship_id"]]["current_status"] is None
+    assert mine[general["relationship_id"]]["current_status_label"] is None
+    evolved = s.gm.post_raw(
+        f"/campaigns/{s.cid}/relationships/{general['relationship_id']}/evolve",
+        {"world_time_id": y1, "new_status_code": "active"},
+        key=s.gm.fresh_key(),
+    )
+    assert evolved.status_code == 200, evolved.text
+    seeded = {i["relationship_id"]: i for i in _listed(s, mira)["items"]}[
+        general["relationship_id"]
+    ]
+    assert seeded["current_status"] == "active"
+    label = s.connection.execute(
+        text("SELECT display_name FROM campaign.relationship_statuses WHERE code = 'active'")
+    ).scalar()
+    assert seeded["current_status_label"] == label
+    assert view(s, general["relationship_id"])["current_status_label"] == label
