@@ -17,6 +17,9 @@ export interface UseAuthoringResourceResult<T> {
     // refetch that proves a write. The previous data stays on screen,
     // marked `refreshing`, until the new data arrives.
     refetch: () => Promise<void>
+    // Whether the latest `refetch` that completed read the record. `refetch` never rejects, so a
+    // caller that must tell a successful write whose re-read failed reads this once it resolves.
+    refreshOk: { readonly current: boolean }
 }
 
 interface Snapshot<T> {
@@ -56,6 +59,7 @@ export function useAuthoringResource<T>(
     const { reload } = useSession()
     const [snapshot, setSnapshot] = useState<Snapshot<T>>({ path, state: LOADING })
     const refetchController = useRef<AbortController | null>(null)
+    const refreshOk = useRef(true)
 
     const apply = useCallback(
         (forPath: string, outcome: Outcome<T>) => {
@@ -104,10 +108,11 @@ export function useAuthoringResource<T>(
         )
         const outcome = await load<T>(path, controller.signal)
         if (!controller.signal.aborted) {
+            refreshOk.current = outcome.kind === "ready"
             apply(path, outcome)
         }
     }, [path, apply])
 
     const state = snapshot.path === path ? snapshot.state : LOADING
-    return { state, refetch }
+    return { state, refetch, refreshOk }
 }

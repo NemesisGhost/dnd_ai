@@ -19,6 +19,9 @@ export interface RowDraft<T extends Fields> {
     loadLatest: () => void
     // Keep the draft and save over the newer fields, now that the person has seen them.
     keepMine: () => void
+    // A form that stays open after its own save calls this with the values the save sent, so it is
+    // clean whether or not the read that follows succeeds. Editors that close on save never need it.
+    accept: (sent: T) => void
 }
 
 // One on-demand editor of a row that stays mounted while the page reads the row again. `server` is
@@ -29,7 +32,12 @@ export interface RowDraft<T extends Fields> {
 export function useRowDraft<T extends Fields>(server: T): RowDraft<T> {
     const [agreed, setAgreed] = useState(server)
     const [values, setValues] = useState(server)
-    const serverChanged = !same(server, agreed)
+    // The server fields as they were when `accept` ran: until the read after a save brings newer
+    // ones, the accepted values are not a difference from the row and are not replaced by it.
+    const [held, setHeld] = useState<T | null>(null)
+    const awaiting = held !== null && same(server, held)
+    if (held !== null && !awaiting) setHeld(null)
+    const serverChanged = !awaiting && !same(server, agreed)
     const dirty = !same(values, agreed)
     if (serverChanged && !dirty) {
         setAgreed(server)
@@ -46,5 +54,10 @@ export function useRowDraft<T extends Fields>(server: T): RowDraft<T> {
             setValues(server)
         },
         keepMine: () => setAgreed(server),
+        accept: (sent) => {
+            setHeld(server)
+            setAgreed(sent)
+            setValues(sent)
+        },
     }
 }

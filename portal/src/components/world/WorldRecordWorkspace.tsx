@@ -370,6 +370,7 @@ function Workspace({
                         entityId={entityId}
                         kind={kind}
                         membersHref={kind === "organization" ? sectionHref("members") : undefined}
+                        onUnsaved={reportUnsaved}
                     />
                 )
             case "review":

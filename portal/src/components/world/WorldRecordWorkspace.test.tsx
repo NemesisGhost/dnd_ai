@@ -1693,3 +1693,61 @@ describe("records that keep their own pages", () => {
         expect(screen.queryByRole("link", { name: "Open the event record" })).not.toBeInTheDocument()
     })
 })
+
+describe("World record workspace: Relationships", () => {
+    const relationshipReads = (server: MockServer) => {
+        server.on("GET", /authoring\/relationships\/options/, {
+            body: {
+                can_create: true,
+                kinds: [
+                    { code: "general", label: "Other connection", types: ["worship"], roles: [], fixed_roles: null },
+                    { code: "ownership", label: "Ownership", types: ["ownership"], roles: [], fixed_roles: null },
+                ],
+                relationship_types: [],
+                limits: {
+                    text_max_length: 4000,
+                    short_text_max_length: 200,
+                    stance_min: -100,
+                    stance_max: 100,
+                    min_participants: 2,
+                    max_participants: 20,
+                },
+                for_entity: {
+                    entity_id: "l1",
+                    entity_type_code: "building",
+                    pairings: [
+                        { relationship_type: "worship", my_role: "object", other_role: "subject", other_entity_type_codes: ["npc"] },
+                        { relationship_type: "ownership", my_role: "property", other_role: "owner", other_entity_type_codes: ["npc"] },
+                    ],
+                },
+            },
+        })
+        server.on("GET", /authoring\/relationships\?entity_id=/, { body: { as_of: null, items: [] } })
+    }
+
+    it("names a half-entered new relationship before leaving, and leaves quietly when nothing was entered", async () => {
+        setup({ extra: relationshipReads })
+        await opened("Old Mill")
+        fireEvent.click(screen.getByRole("link", { name: "Relationships" }))
+        fireEvent.click(await screen.findByRole("button", { name: "Add relationship" }))
+        const form = await screen.findByRole("form", { name: "Add a relationship" })
+        fireEvent.change(within(form).getByRole("combobox", { name: "Type" }), { target: { value: "ownership/ownership" } })
+        fireEvent.click(screen.getByRole("link", { name: "Back to World" }))
+        expect(await screen.findByRole("dialog", { name: "Discard unsaved input?" })).toHaveTextContent("a new relationship")
+        fireEvent.click(screen.getByRole("button", { name: "Keep editing" }))
+        expect(within(form).getByRole("combobox", { name: "Type" })).toHaveValue("ownership/ownership")
+    })
+
+    it("keeps the Add form when another section is shown", async () => {
+        setup({ extra: relationshipReads })
+        await opened("Old Mill")
+        fireEvent.click(screen.getByRole("link", { name: "Relationships" }))
+        fireEvent.click(await screen.findByRole("button", { name: "Add relationship" }))
+        const form = await screen.findByRole("form", { name: "Add a relationship" })
+        fireEvent.change(within(form).getByRole("combobox", { name: "Type" }), { target: { value: "ownership/ownership" } })
+        fireEvent.click(screen.getByRole("link", { name: "Sources" }))
+        await screen.findByRole("heading", { level: 2, name: "Sources" })
+        fireEvent.click(screen.getByRole("link", { name: "Relationships" }))
+        expect(await screen.findByRole("combobox", { name: "Type" })).toHaveValue("ownership/ownership")
+    })
+})
