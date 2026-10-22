@@ -273,7 +273,12 @@ def set_dungeon_state(
             ).scalar()
         return value
 
-    differing = {name: v for name, v in values.items() if current(name) != v[0]}
+    # An absent state row means the value has never been recorded. Even when an explicit
+    # choice matches the field's effective default (for example, marking a new feature intact),
+    # persist that first observation so the read model can distinguish it from "Not recorded".
+    differing = {
+        name: value for name, value in values.items() if row is None or current(name) != value[0]
+    }
     if not differing:
         return DungeonStateResult(
             world_id=scope.world_id,
@@ -297,7 +302,7 @@ def set_dungeon_state(
         details=normalize_long_text(note, field="note"),
         campaign_id=campaign_id,
     )
-    previous = {name: current(name) for name in differing}
+    previous = {name: None if row is None else current(name) for name in differing}
     if row is None:
         insert_columns = [spec.fields[n].column for n in differing]
         connection.execute(

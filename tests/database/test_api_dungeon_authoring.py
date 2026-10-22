@@ -495,6 +495,26 @@ def test_state_commands_change_each_kind_with_an_event(s: ContentSetup) -> None:
     assert seen["connections"][0]["connection_status_code"] == "open"
 
 
+def test_explicit_default_feature_state_is_recorded_once(s: ContentSetup) -> None:
+    dungeon, hall, _, current = published_dungeon(s)
+    set_clock(s)
+    mural = current["features"][0]["child_id"]
+
+    intact = state(s, hall, "feature", mural, None, is_destroyed=False)
+    assert intact.status_code == 200
+    assert intact.json()["changed"] is True
+    event_id = intact.json()["event_id"]
+    assert event_id
+
+    feature = next(row for row in hall_view(s, hall)["features"] if row["child_id"] == mural)
+    assert feature["is_destroyed"] is False
+    assert feature["state_event_id"] == event_id
+
+    repeated = state(s, hall, "feature", mural, event_id, is_destroyed=False)
+    assert repeated.status_code == 200
+    assert repeated.json()["changed"] is False
+
+
 def test_state_tokens_values_and_targets_are_checked(s: ContentSetup) -> None:
     dungeon, hall, vault, current = published_dungeon(s)
     set_clock(s)
