@@ -44,7 +44,7 @@ Record **Pass**, **Fail** (with a note and the issue), or **Accepted** (with the
 | 12 | Quest editor and quest progress | `…/quests/new`, `…/quests/:id/edit`, `…/quests/:id/progress` | | | | | | | | |
 | 13 | Knowledge claim page (claim, About, canonical information, character knowledge, Who knows this roster) and the New claim form | `…/knowledge/new`, `…/knowledge/:id` (`/edit` and `/audience` redirect here) | | | | | | | | |
 | 14 | Dungeon, areas, connections, features, hazards, interactables, area state | `…/world/dungeon/new` (opens the dungeon's Areas), the workspace `…/world/location/:dungeonId?section=areas\|connections` and `…/world/location/:areaId?section=contents\|area-now`, and the details-only `…/dungeon/:id/edit`, `…/areas/:id/edit` (the old `?section=structure` redirects to `areas`) | | | | | | | | |
-| 15 | Relationships panel and editor | the Relationships panel on location, organization, religion and character pages | | | | | | | | |
+| 15 | Relationships roster, Add form and editor (rows and period/visibility labels, Include archived, revealed Add, Details / Perspectives / End or archive, discard prompts, Members and offices handoff) | the Relationships panel on location, organization, religion and character pages | | | | | | | | |
 | 16 | Organization members and offices | `…/world/organization/:id` | | | | | | | | |
 | 17 | Item definitions | `…/item-definitions`, `…/new`, `…/:id` | | | | | | | | |
 | 18 | Items and the Run this item panel; inventories | `…/items`, `…/items/new`, `…/items/:id/edit`, an item's World page, a character's Inventory, a party's Party inventory | | | | | | | | |
