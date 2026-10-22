@@ -1203,7 +1203,8 @@ describe("RelationshipsPanel: the editor keeps each form's input separate", () =
         // What was sent is accepted: the form is clean, with the saved text still shown.
         expect(screen.getByRole("form", { name: "Edit relationship" })).toBeInTheDocument()
         expect(description()).toHaveValue("Saved text")
-        expect(screen.queryByRole("button", { name: "Details (unsaved)" })).toBeNull()
+        // The marker clears in an effect, a render after the alert appears.
+        await vi.waitFor(() => expect(screen.queryByRole("button", { name: "Details (unsaved)" })).toBeNull())
         expect(server.callsTo("POST", `${BASE}/r1/update`)).toHaveLength(1)
     })
 })
