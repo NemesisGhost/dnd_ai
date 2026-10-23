@@ -31,6 +31,9 @@ export function CharacterManageLinks({
             <Link className="authoring-button" to={`${root}/characters/${id}/edit`}>
                 Edit
             </Link>
+            <Link className="authoring-button" to={`${root}/world/character/${id}?section=relationships`}>
+                Relationships
+            </Link>
             <BuildsLink campaignId={campaignId} characterId={characterId} />
             {kind === "npc" ? (
                 <>

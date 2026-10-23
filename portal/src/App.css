@@ -4576,6 +4576,16 @@ a.app-header__title:focus-visible {
   font-size: 0.9375rem;
 }
 
+/* The reader-only Relationships section on a character's page reuses the roster rows. */
+.character-relationships {
+  margin-top: 1.5rem;
+}
+
+.character-relationships .relationship-roster__clock {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .relationship-roster__add,
 .relationship-roster__editor {
   max-width: 48rem;

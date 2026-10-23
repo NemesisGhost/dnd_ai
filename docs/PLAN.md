@@ -2145,6 +2145,7 @@ Implement in independently verifiable increments. Each increment includes comman
 - Add NPC detail/simulation level and a minimal portrayal profile needed for consistent human-authored play.
 - Keep identity/build/state/portrayal as separate write boundaries.
 - Do not require Foundry synchronization.
+- Player-facing, read-only character Relationships section on `/characters/:characterId` (reader projection `GET …/characters/{id}/relationships`: active, public, fully discoverable relationships with names, role labels and campaign-visible fields only; editors keep the World workspace roster). Evidence in [PHASE15_VERIFICATION.md](PHASE15_VERIFICATION.md); the Phase 15 exit criteria and its not-complete status are unchanged.
 
 #### 15D. Quests and narrative planning
 

@@ -89,6 +89,10 @@ beforeEach(() => {
   server.on("GET", "/campaigns/mundivita/characters/character-ixamarra/sheet", {
     body: sheet("character-ixamarra", "Ixamarra", "player_character"),
   })
+  // The reader Relationships section on a character's page: none visible by default.
+  server.on("GET", /^\/campaigns\/mundivita\/characters\/[^/]+\/relationships$/, {
+    body: { character_id: "any", as_of: null, truncated: false, items: [] },
+  })
   // Authoring reads that self-gate the Manage links: only an NPC answers the NPC read, and the
   // builds read answers for either buildable kind.
   server.on("GET", "/campaigns/mundivita/authoring/npcs/npc-1", { body: { npc_id: "npc-1" } })

@@ -127,6 +127,21 @@ Use a throwaway database and the 8001/5174 servers. Not run yet; every result is
 
 ## Summary (fill in last)
 
+## Character Relationships (player-facing, read-only)
+
+Use a throwaway database and your own ports. GM fixture: a player character Aria linked to a player; relationships with Ser Bran (family, Parent/Child), a guild membership (office and rank), an ended employment, a not-yet-started worship, a private ownership and an archived alliance; a second NPC with no player path. Give the player a view-summary path to Ser Bran in Access and set the campaign clock.
+
+| Check | Result | Notes |
+|---|---|---|
+| As the player with no party selected, Characters → Aria: **Relationships** lists Ser Bran (link), the guild (link, office and rank on Details), the ended employment (**Ended**, name only) and the worship (**Not started**); not the NPC without a path, the private ownership or the archived alliance; nothing hints at hidden ones | | |
+| **Details** shows the period against campaign time, the timeline status and the kind's fields, and the Network tab shows no request on expand and no `/authoring/` request on the page | | |
+| Clicking Ser Bran opens his summary page; removing the path in Access and reloading Aria drops the Ser Bran relationships | | |
+| A character with nothing visible shows **No visible relationships.** | | |
+| Stopping the API and reloading shows **Relationships could not be loaded.** with **Try again**, distinct from empty; restarting and retrying lists them | | |
+| Advancing the clock past an end date turns the row's badge to **Ended** | | |
+| As the GM, Aria's page has no Relationships section and a **Relationships** link in Manage that opens the World workspace section unchanged | | |
+| Desktop and 390px widths, each supported theme, keyboard-only use of the **Details** toggle (`aria-expanded` announced) | | |
+
 | | |
 |---|---|
 | Date and tester | |

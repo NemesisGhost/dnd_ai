@@ -1,6 +1,7 @@
 import { Link, useParams } from "react-router"
 import { CharacterBoundary } from "../components/CharacterBoundary"
 import { CharacterManageLinks } from "../components/CharacterManageLinks"
+import { CharacterRelationshipsSection } from "../components/CharacterRelationshipsSection"
 import { CharacterSheetBoundary } from "../components/CharacterSheetBoundary"
 import { useCharactersBackPath } from "../hooks/useCharactersBackPath"
 import { characterKindLabel } from "../utils/characterKind"
@@ -11,7 +12,8 @@ import PlaceholderPage from "./PlaceholderPage"
 // One character's sheet by address: /app/:campaignId/characters/:characterId. It is independent
 // of the selected perspective: opening a character here never selects it, never adds it to the
 // selector and never grants control. What the person sees is decided by the server for this
-// character: the full sheet at the full tier, the summary panels at the summary tier.
+// character: the full sheet at the full tier, the summary panels at the summary tier. A reader
+// (no canon.edit) also gets the read-only Relationships section below either one.
 function CharacterSheetRoute({ campaignId, characterId }: { campaignId: string; characterId: string }) {
     const back = useCharactersBackPath(campaignId)
     return (
@@ -43,6 +45,7 @@ function CharacterSheetRoute({ campaignId, characterId }: { campaignId: string; 
                         >
                             {(sheet) => <CharacterSheetPage sheet={sheet} character={character} />}
                         </CharacterSheetBoundary>
+                        <CharacterRelationshipsSection campaignId={campaignId} characterId={characterId} />
                     </>
                 )}
             </CharacterBoundary>
