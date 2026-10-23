@@ -575,6 +575,50 @@ def discoverable_entity_ids(
 # ---------------------------------------------------------------------------
 
 
+# The reader rule for a relationship definition (ADR 0017 decision 2), as one SQL boolean over
+# `world.relationships r`: lifecycle `active`, and no subtype row marking the edge non-public
+# (`ownership_relationships.is_public`, `organization_memberships.is_public`,
+# `route_relationships.is_hidden`). Not time-based: an ended or not-yet-started edge is still
+# returned. Shared by the world relationship list, the relationship detail route and the
+# character page's Relationships section so the three cannot drift.
+READER_RELATIONSHIP_VISIBLE_SQL = """(
+    NOT EXISTS (
+        SELECT 1 FROM core.lifecycle_statuses rls
+        WHERE rls.lifecycle_status_id = r.lifecycle_status_id
+          AND rls.code <> 'active'
+    )
+    AND NOT EXISTS (
+        SELECT 1 FROM world.ownership_relationships orl
+        WHERE orl.relationship_id = r.relationship_id AND NOT orl.is_public
+    )
+    AND NOT EXISTS (
+        SELECT 1 FROM world.organization_memberships oml
+        WHERE oml.relationship_id = r.relationship_id AND NOT oml.is_public
+    )
+    AND NOT EXISTS (
+        SELECT 1 FROM world.route_relationships rrl
+        WHERE rrl.relationship_id = r.relationship_id AND rrl.is_hidden
+    )
+)"""
+
+
+def all_participants_discoverable_sql() -> str:
+    """A SQL boolean over `world.relationships r`: TRUE when *every* participant is independently
+    discoverable by the caller (`_entity_discoverable_expr`). One undiscoverable participant
+    suppresses the whole relationship, leaving no trace of it. Needs the `disc_*` parameters from
+    `_entity_visibility_params`."""
+    return f"""NOT EXISTS (
+        SELECT 1
+        FROM world.relationship_participants rpv
+        JOIN core.entities pe ON pe.entity_id = rpv.entity_id
+        JOIN core.entity_types pet ON pet.entity_type_id = pe.entity_type_id
+        LEFT JOIN narrative.events pev ON pev.event_id = rpv.entity_id
+        LEFT JOIN narrative.event_statuses pes ON pes.event_status_id = pev.event_status_id
+        WHERE rpv.relationship_id = r.relationship_id
+          AND NOT {_entity_discoverable_expr(e="pe", et="pet", ev="pev", es="pes")}
+    )"""
+
+
 @dataclass(frozen=True)
 class RelationshipCard:
     relationship_id: uuid.UUID
@@ -642,25 +686,7 @@ def list_world_relationships(
             WHERE r.world_id = :world_id
               AND (
                     CAST(:include_private AS boolean)
-                    OR (
-                        NOT EXISTS (
-                            SELECT 1 FROM core.lifecycle_statuses rls
-                            WHERE rls.lifecycle_status_id = r.lifecycle_status_id
-                              AND rls.code <> 'active'
-                        )
-                        AND NOT EXISTS (
-                            SELECT 1 FROM world.ownership_relationships orl
-                            WHERE orl.relationship_id = r.relationship_id AND NOT orl.is_public
-                        )
-                        AND NOT EXISTS (
-                            SELECT 1 FROM world.organization_memberships oml
-                            WHERE oml.relationship_id = r.relationship_id AND NOT oml.is_public
-                        )
-                        AND NOT EXISTS (
-                            SELECT 1 FROM world.route_relationships rrl
-                            WHERE rrl.relationship_id = r.relationship_id AND rrl.is_hidden
-                        )
-                    )
+                    OR {READER_RELATIONSHIP_VISIBLE_SQL}
                   )
               AND (CAST(:type_code AS text) IS NULL OR rt.code = CAST(:type_code AS text))
               AND (
@@ -679,19 +705,7 @@ def list_world_relationships(
                     AND rp.entity_id = CAST(:related_entity_id AS uuid)
                 )
               )
-              -- Suppress the whole relationship if any participant is not
-              -- independently discoverable by this caller.
-              AND NOT EXISTS (
-                SELECT 1
-                FROM world.relationship_participants rpv
-                JOIN core.entities pe ON pe.entity_id = rpv.entity_id
-                JOIN core.entity_types pet ON pet.entity_type_id = pe.entity_type_id
-                LEFT JOIN narrative.events pev ON pev.event_id = rpv.entity_id
-                LEFT JOIN narrative.event_statuses pes
-                       ON pes.event_status_id = pev.event_status_id
-                WHERE rpv.relationship_id = r.relationship_id
-                  AND NOT {_entity_discoverable_expr(e="pe", et="pet", ev="pev", es="pes")}
-              )
+              AND {all_participants_discoverable_sql()}
             ORDER BY r.relationship_id
             LIMIT :limit_plus_one
         """),

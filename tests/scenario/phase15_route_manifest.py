@@ -75,6 +75,7 @@ _MEMBER_READS = frozenset(
         f"{CAMPAIGN}/characters/{{character_id}}",
         f"{CAMPAIGN}/characters/{{character_id}}/inventory",
         f"{CAMPAIGN}/characters/{{character_id}}/parties",
+        f"{CAMPAIGN}/characters/{{character_id}}/relationships",
         f"{CAMPAIGN}/characters/{{character_id}}/sheet",
         f"{CAMPAIGN}/clock",
         f"{CAMPAIGN}/dungeon-areas/{{dungeon_area_id}}",

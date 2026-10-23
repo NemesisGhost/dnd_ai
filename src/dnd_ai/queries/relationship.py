@@ -41,7 +41,11 @@ from dataclasses import dataclass
 from sqlalchemy import Connection, text
 
 from dnd_ai.domain.errors import DomainAuthorizationError
-from dnd_ai.queries.world_explorer import WorldEntityVisibility, discoverable_entity_ids
+from dnd_ai.queries.world_explorer import (
+    READER_RELATIONSHIP_VISIBLE_SQL,
+    WorldEntityVisibility,
+    discoverable_entity_ids,
+)
 
 
 class RelationshipNotFoundError(DomainAuthorizationError):
@@ -108,23 +112,11 @@ def get_relationship_view(
     relationships an audience may see."""
     row = (
         connection.execute(
-            text("""
+            text(f"""
                 SELECT r.relationship_id, r.world_id, r.description, rt.code AS type_code,
-                       (
-                           ls.code <> 'active'
-                           OR EXISTS (SELECT 1 FROM world.ownership_relationships o
-                                      WHERE o.relationship_id = r.relationship_id
-                                        AND NOT o.is_public)
-                           OR EXISTS (SELECT 1 FROM world.organization_memberships m
-                                      WHERE m.relationship_id = r.relationship_id
-                                        AND NOT m.is_public)
-                           OR EXISTS (SELECT 1 FROM world.route_relationships rr
-                                      WHERE rr.relationship_id = r.relationship_id
-                                        AND rr.is_hidden)
-                       ) AS not_for_readers
+                       NOT {READER_RELATIONSHIP_VISIBLE_SQL} AS not_for_readers
                 FROM world.relationships r
                 JOIN world.relationship_types rt ON rt.relationship_type_id = r.relationship_type_id
-                JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = r.lifecycle_status_id
                 WHERE r.relationship_id = :relationship
             """),
             {"relationship": relationship_id},

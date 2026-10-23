@@ -112,7 +112,7 @@ class RelationshipList:
 _KIND_LABEL = {k.code: k.label for k in RELATIONSHIP_KINDS}
 
 
-def _kind(connection: Connection, relationship_id: uuid.UUID) -> str:
+def relationship_kind(connection: Connection, relationship_id: uuid.UUID) -> str:
     for code, table in (
         (KIND_FAMILY, "family_relationships"),
         (KIND_EMPLOYMENT, "employment_relationships"),
@@ -252,7 +252,7 @@ def get_relationship_authoring(
     ).one_or_none()
     if row is None:
         return None
-    kind = _kind(connection, relationship_id)
+    kind = relationship_kind(connection, relationship_id)
     participants = _participants(connection, relationship_id)
     names = {p.entity_id: p.name for p in participants}
     perspectives = [
@@ -376,7 +376,7 @@ def list_entity_relationships(
     summaries: list[RelationshipSummary] = []
     active = active_type_codes(connection)
     for r in rows:
-        kind = _kind(connection, r.relationship_id)
+        kind = relationship_kind(connection, r.relationship_id)
         typed = _typed(connection, r.relationship_id, kind)
         participants = _participants(connection, r.relationship_id)
         summaries.append(

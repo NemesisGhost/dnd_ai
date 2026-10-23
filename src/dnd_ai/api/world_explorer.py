@@ -132,7 +132,7 @@ def _grant_denied_entity_ids(access: AccessContext) -> frozenset[uuid.UUID]:
 
 
 def _campaign_view_denied_entity_ids(
-    access: AccessContext, connection: Connection
+    access: AccessContext, connection: Connection, *, reader_only: bool = False
 ) -> frozenset[uuid.UUID]:
     """Reference-mode denied set: grant denies plus the lifecycle-managed
     entities the caller may not reference at all (draft/proposed/approved/
@@ -144,22 +144,27 @@ def _campaign_view_denied_entity_ids(
         connection,
         world_id=timeline_world_id(connection, access.timeline_id),
         mode="reference",
-        can_edit_canon=access.has_capability(_GM_CAPABILITY),
+        can_edit_canon=access.has_capability(_GM_CAPABILITY) and not reader_only,
     )
 
 
 def resolve_world_entity_visibility(
-    access: AccessContext, connection: Connection
+    access: AccessContext, connection: Connection, *, reader_only: bool = False
 ) -> WorldEntityVisibility:
     """The full discoverability bundle for the caller — the same inputs
     `search_world_entities` applies, packaged so a *second* consumer (the
     relationship list and detail, Issue 1) decides "may this relationship
-    name this participant" the identical way."""
+    name this participant" the identical way. `reader_only` resolves the
+    audience as a reader without `canon.edit` even for a caller who holds it
+    (unpublished definitions and draft events stay hidden) — the character
+    page's Relationships section is the same view for everyone."""
     draft_denied, draft_allowed = access.resource_grant_targets(_GM_CAPABILITY, "event_id")
     return WorldEntityVisibility(
-        campaign_view_denied_entity_ids=_campaign_view_denied_entity_ids(access, connection),
+        campaign_view_denied_entity_ids=_campaign_view_denied_entity_ids(
+            access, connection, reader_only=reader_only
+        ),
         character_visibility=resolve_world_character_visibility(access),
-        include_draft_events=access.has_capability(_GM_CAPABILITY),
+        include_draft_events=access.has_capability(_GM_CAPABILITY) and not reader_only,
         draft_event_allowed_ids=draft_allowed,
         draft_event_denied_ids=draft_denied,
     )

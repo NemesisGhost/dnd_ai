@@ -32,8 +32,8 @@ pytestmark = pytest.mark.scenario
 # Pinned on purpose: adding or removing a route changes these and forces a conscious update.
 EXPECTED_GUARDED = 236  # 192 Phase 15 (incl. session-scoped travel) + 42 earlier-phase GM routes (two are Knowledge preview reads) + 2 world-scoped
 EXPECTED_PHASE15_GM = 192
-# 25 + the character's party list + the party roster + the World category counts
-EXPECTED_MEMBER_READS = 28
+# 25 + the character's party list + the party roster + the World category counts + the character's reader relationships
+EXPECTED_MEMBER_READS = 29
 
 
 @pytest.fixture

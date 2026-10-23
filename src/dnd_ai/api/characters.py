@@ -97,6 +97,18 @@ character_sheet`'s own docstring for the active-build resolution rule
 input, the newest build, or a guess) and `docs/
 PHASE13D_CHARACTER_SHEET_BACKEND.md` for the full response contract, raw-
 vs-derived field policy, and known data-model limitations.
+
+A fourth sub-resource, `GET /campaigns/{campaign_id}/characters/{character_id}/relationships`
+(`dnd_ai.queries.character_relationships`), backs the character page's player-facing, read-only
+Relationships section. It passes exactly the gates the character read passes (`campaign.view`, the
+entity-targeted `campaign.view` deny, published, and either character-view tier — the summary tier
+is enough), then always returns the *reader* projection, even for a caller who can edit canon:
+active relationships whose subtype is public, whose every participant is discoverable by this
+caller, with counterpart names, role labels, the period status against the effective campaign
+clock and only the campaign-visible typed fields. `description`, treaty terms, participant notes,
+perspectives and every stance/tone/interpretation field are never selected. A relationship that
+is hidden for any reason leaves no trace (no count, no placeholder). No client-supplied party,
+perspective, world or timeline is read. Editors manage relationships through the authoring routes.
 """
 
 import uuid
@@ -108,6 +120,7 @@ from sqlalchemy import Connection, text
 
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.queries.character import get_character_view
+from dnd_ai.queries.character_relationships import list_character_relationships_for_reader
 from dnd_ai.queries.character_sheet import get_character_sheet_view
 from dnd_ai.queries.entity_lifecycle import lifecycle_hidden_entity_ids
 from dnd_ai.queries.inventory import get_inventory_view
@@ -121,6 +134,7 @@ from .access import (
 )
 from .deps import get_connection
 from .errors import NotFoundError
+from .world_explorer import resolve_world_entity_visibility
 
 router = APIRouter(tags=["characters"])
 
@@ -523,6 +537,145 @@ def list_character_parties_endpoint(
         character_id=character_id,
         can_open=editor,
         items=[CharacterPartyResponse(party_id=p.party_id, name=p.name) for p in parties],
+    )
+
+
+class RelationshipParticipantResponse(BaseModel):
+    entity_id: uuid.UUID
+    name: str
+    entity_type_code: str
+    # The World category the participant browses under; the portal builds a link from it only when
+    # `can_open` is true.
+    category: str | None
+    role: str
+    role_label: str
+    is_self: bool
+    can_open: bool
+
+
+class RelationshipDetailsResponse(BaseModel):
+    """Only the campaign-visible and structural typed fields; every one optional."""
+
+    family_unit_name: str | None = None
+    job_title: str | None = None
+    ownership_share: int | None = None
+    office: str | None = None
+    rank: str | None = None
+    in_force: bool | None = None
+    distance_text: str | None = None
+    travel_time_text: str | None = None
+    travel_mode: str | None = None
+
+
+class CharacterRelationshipResponse(BaseModel):
+    relationship_id: uuid.UUID
+    kind: str
+    kind_label: str
+    relationship_type: str
+    relationship_type_label: str
+    symmetric: bool
+    participants: list[RelationshipParticipantResponse]
+    started: str | None
+    ended_at: str | None
+    period_status: str
+    current_status_label: str | None
+    details: RelationshipDetailsResponse
+
+
+class CharacterRelationshipsResponse(BaseModel):
+    character_id: uuid.UUID
+    as_of: str | None
+    truncated: bool
+    items: list[CharacterRelationshipResponse]
+
+
+# Categories whose records the World reader detail routes open for anyone who can discover them.
+_OPENABLE_WORLD_CATEGORIES = frozenset({"location", "organization", "religion"})
+
+
+def _can_open_participant(
+    access: AccessContext, category: str | None, entity_id: uuid.UUID
+) -> bool:
+    if category in _OPENABLE_WORLD_CATEGORIES:
+        return True
+    if category == "character":
+        try:
+            resolve_character_view_tier(access, character_id=entity_id)
+        except CharacterViewNotAuthorizedError:
+            return False
+        return True
+    return False
+
+
+@router.get(
+    "/campaigns/{campaign_id}/characters/{character_id}/relationships",
+    response_model=CharacterRelationshipsResponse,
+    status_code=200,
+)
+def list_character_relationships_endpoint(
+    character_id: uuid.UUID,
+    access: Annotated[
+        AccessContext, Depends(require_campaign_capability(_CHARACTER_VIEW_CAPABILITY))
+    ],
+    connection: Annotated[Connection, Depends(get_connection)],
+) -> CharacterRelationshipsResponse:
+    """The reader view of a character's relationships — see this module's docstring. Available
+    exactly when the character page itself is; anything else is the same fixed 404 a nonexistent
+    character gets."""
+    if not access.has_capability(_CHARACTER_VIEW_CAPABILITY, entity_id=character_id):
+        raise NotFoundError()
+    _require_published_character(connection, access, character_id)
+    # Either tier opens the page; only the fixed 404 for neither is needed here.
+    resolve_character_view_tier(access, character_id=character_id)
+    world_id = timeline_world_id(connection, access.timeline_id)
+    in_world = connection.execute(
+        text("SELECT 1 FROM core.entities WHERE entity_id = :e AND world_id = :w"),
+        {"e": character_id, "w": world_id},
+    ).scalar()
+    if in_world is None:
+        raise NotFoundError()
+
+    result = list_character_relationships_for_reader(
+        connection,
+        world_id=world_id,
+        timeline_id=access.timeline_id,
+        character_id=character_id,
+        visibility=resolve_world_entity_visibility(access, connection, reader_only=True),
+    )
+    return CharacterRelationshipsResponse(
+        character_id=character_id,
+        as_of=result.as_of,
+        truncated=result.truncated,
+        items=[
+            CharacterRelationshipResponse(
+                relationship_id=item.relationship_id,
+                kind=item.kind,
+                kind_label=item.kind_label,
+                relationship_type=item.relationship_type,
+                relationship_type_label=item.relationship_type_label,
+                symmetric=item.symmetric,
+                participants=[
+                    RelationshipParticipantResponse(
+                        entity_id=p.entity_id,
+                        name=p.name,
+                        entity_type_code=p.entity_type_code,
+                        category=p.category,
+                        role=p.role,
+                        role_label=p.role_label,
+                        is_self=p.is_self,
+                        can_open=not p.is_self
+                        and _can_open_participant(access, p.category, p.entity_id),
+                    )
+                    for p in item.participants
+                ],
+                started=item.started,
+                ended_at=item.ended_at,
+                period_status=item.period_status,
+                current_status_label=item.current_status_label,
+                details=RelationshipDetailsResponse(**item.details),
+            )
+            for item in result.items
+        ],
     )
 
 
