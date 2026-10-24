@@ -1335,6 +1335,59 @@ describe("shared roster on the run page", () => {
     expect(server.callsTo("POST", `${S}/participants/p1/remove`)).toHaveLength(1)
   })
 
+  it("keeps a confirmed remove unrefreshed when its read is superseded, then resumes writes once the new version lands", async () => {
+    const removed = playing({ row_version: 4, participants: [{ ...MIRA, removed_at: "2026-10-12T20:00:00Z" }, BORIN] })
+    const resolvers: Array<(value: { body: unknown }) => void> = []
+    let reads = 0
+    server.on("GET", S, () => {
+      reads += 1
+      // The first read loads the page; every later read is held until the test releases it.
+      return reads === 1
+        ? { body: playing({ participants: [MIRA, BORIN] }) }
+        : new Promise((resolve) => resolvers.push(resolve))
+    })
+    server.on("POST", `${S}/participants/p1/remove`, {
+      body: { session_id: "s1", row_version: 4, changed: true, session_participant_id: "p1" },
+    })
+    server.on("POST", `${S}/participants`, {
+      status: 409,
+      body: { error: { code: "session_participant_exists", message: "m", correlation_id: "c" } },
+    })
+    openApp(`${RUN}?section=participants`)
+    fireEvent.click(await screen.findByRole("button", { name: "Remove Mira" }))
+    // The remove's own read (the second GET) is now in flight.
+    await waitFor(() => expect(resolvers).toHaveLength(1))
+    // A refused duplicate add starts another read, which supersedes the remove's.
+    fireEvent.focus(screen.getByRole("combobox", { name: "Character" }))
+    fireEvent.click(await screen.findByRole("option", { name: /Cael/ }))
+    fireEvent.click(screen.getByRole("button", { name: "Add participant" }))
+    await waitFor(() => expect(resolvers).toHaveLength(2))
+    // The superseded read answers late with the old roster: it must change nothing.
+    resolvers[0]!({ body: playing({ participants: [MIRA, BORIN] }) })
+
+    // Removed but not yet shown: told so, nothing announced, and no participant write can be sent.
+    expect(await screen.findByText(/Participant removed\. The latest participant list could not be loaded/)).toBeInTheDocument()
+    expect(screen.getByTestId("authoring-announcer")).not.toHaveTextContent("Participant removed")
+    expect(screen.getByRole("button", { name: "Remove Mira" })).toBeDisabled()
+    const borin = screen.getByRole("button", { name: "Remove Borin" })
+    expect(borin).toBeDisabled()
+    expect(screen.getByRole("button", { name: "Add participant" })).toBeDisabled()
+    fireEvent.click(borin)
+    fireEvent.click(screen.getByRole("button", { name: "Add participant" }))
+    expect(server.callsTo("POST", `${S}/participants/p1/remove`)).toHaveLength(1)
+    expect(server.callsTo("POST", `${S}/participants/p5/remove`)).toHaveLength(0)
+    expect(server.callsTo("POST", `${S}/participants`)).toHaveLength(1)
+
+    // The authoritative version arrives: the removal shows and writes resume.
+    resolvers[1]!({ body: removed })
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Remove Mira" })).toBeNull())
+    expect(await rosterRow("Mira")).toHaveTextContent("Mira (NPC; role: NPC). Left.")
+    expect(screen.queryByText(/The latest participant list could not be loaded/)).toBeNull()
+    expect(screen.getByRole("button", { name: "Remove Borin" })).toBeEnabled()
+    expect(screen.getByRole("button", { name: "Add participant" })).toBeEnabled()
+    expect(server.callsTo("POST", `${S}/participants/p1/remove`)).toHaveLength(1)
+  })
+
   it("never shows one session's roster on another session after navigation", async () => {
     server.on("GET", S, { body: playing({ participants: [MIRA] }) })
     server.on("GET", "/campaigns/mundivita/sessions/s2", { status: 500, body: {} })

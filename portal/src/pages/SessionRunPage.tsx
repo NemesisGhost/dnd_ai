@@ -18,6 +18,7 @@ import {
     ErrorSummary,
     FormActions,
     MutationStatusMessage,
+    SavedRefreshFailedNotice,
     StaleWriteNotice,
 } from "../components/authoring/feedback"
 import type { FieldError } from "../components/authoring/feedback"
@@ -446,13 +447,23 @@ function Participants({
                 ctx,
             ),
         onSuccess: async () => {
-            if ((await refetch()) === "failed") {
-                return "failed"
+            const outcome = await refetch()
+            if (outcome !== "ok") {
+                // Removed, but no completed read: a failed one, or one a newer read took over.
+                // Neither shows the removal, so it stays confirmed-but-unrefreshed (no
+                // announcement, no further write) until this session reaches the receipt's version.
+                return outcome
             }
             announce("Participant removed")
         },
     })
     const removeError = remove.status.kind === "error" ? remove.status.error : null
+    // The removal is confirmed but the session held here has not caught up with the version the
+    // server returned: any write from it would send a version the server has already moved past.
+    const removeBehind =
+        remove.status.kind === "confirmed" &&
+        (session.row_version ?? 0) < (remove.receipt?.row_version ?? 0)
+    const writesHeld = refreshFailed || removeBehind
     const removeMessage = useMessage(removeError)
 
     return (
@@ -466,7 +477,7 @@ function Participants({
                               <button
                                   type="button"
                                   className="authoring-button"
-                                  disabled={refreshFailed}
+                                  disabled={writesHeld}
                                   onClick={() => {
                                       remove.reset()
                                       remove.submit(p)
@@ -494,13 +505,21 @@ function Participants({
                     onCheckSession={reload}
                 />
             ) : null}
+            {removeBehind ? (
+                <SavedRefreshFailedNotice
+                    what="participant list"
+                    done="Participant removed."
+                    quiet={refreshFailed}
+                    onRetry={refreshFailed ? undefined : () => void refetch()}
+                />
+            ) : null}
             {canManage ? (
                 <ParticipantForm
                     campaignId={campaignId}
                     session={session}
                     presentCharacterIds={presentIds}
                     refetch={refetch}
-                    refreshFailed={refreshFailed}
+                    refreshFailed={writesHeld}
                 />
             ) : (
                 <p className="authoring-note">
