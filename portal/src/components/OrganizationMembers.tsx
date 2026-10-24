@@ -79,7 +79,12 @@ export function OrganizationMembers({
         )
     }
     const roster = kept
+    // Member and office changes edit shared world canon (`can_edit`: a campaign editor who also holds
+    // the world Editor capability); the operational status is campaign state (`can_set_status`).
+    // A campaign GM with no world role therefore sets the status and reads the same roster an
+    // editor does, but is offered no member or office change. An older server sends only `can_edit`.
     const manage = roster.can_edit && !commandsBlocked
+    const canSetStatus = (roster.can_set_status ?? roster.can_edit) && !commandsBlocked
     return (
         <PanelFrame embedded={embedded} title="Members and offices" headingId="members-heading">
             {stale ? <StaleReadNotice what="members and status" onRetry={() => void refetch()} /> : null}
@@ -88,9 +93,10 @@ export function OrganizationMembers({
                 organizationId={organizationId}
                 roster={roster}
                 manage={manage}
+                editorView={roster.can_set_status ?? roster.can_edit}
                 onChanged={changed}
             />
-            {manage ? (
+            {canSetStatus ? (
                 <StatusControl
                     campaignId={campaignId}
                     organizationId={organizationId}
@@ -107,12 +113,15 @@ function MemberRoster({
     organizationId,
     roster,
     manage,
+    editorView,
     onChanged,
 }: {
     campaignId: string
     organizationId: string
     roster: Roster
     manage: boolean
+    // The roster includes private and archived stints (a campaign editor's view).
+    editorView: boolean
     onChanged: () => void
 }) {
     const [adding, setAdding] = useState(false)
@@ -164,13 +173,13 @@ function MemberRoster({
                 <>
                     <div
                         className={
-                            roster.can_edit ? "member-roster__head member-roster__head--editor" : "member-roster__head"
+                            editorView ? "member-roster__head member-roster__head--editor" : "member-roster__head"
                         }
                         aria-hidden="true"
                     >
                         <span>Member</span>
                         <span>Office and rank</span>
-                        {roster.can_edit ? <span>Visible to</span> : null}
+                        {editorView ? <span>Visible to</span> : null}
                         <span>Period</span>
                         {manage ? <span /> : null}
                     </div>
@@ -179,7 +188,7 @@ function MemberRoster({
                             <li
                                 key={m.relationship_id}
                                 className={
-                                    roster.can_edit
+                                    editorView
                                         ? "member-roster__row member-roster__row--editor"
                                         : "member-roster__row"
                                 }
@@ -192,7 +201,7 @@ function MemberRoster({
                                 <span className="member-roster__office">
                                     <MemberOffice member={m} />
                                 </span>
-                                {roster.can_edit ? (
+                                {editorView ? (
                                     <span className="member-roster__visibility">
                                         {m.is_public ? "Public" : "Editors only"}
                                     </span>

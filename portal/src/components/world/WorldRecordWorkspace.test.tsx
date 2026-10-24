@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { sessionBootstrapFixture } from "../../fixtures/sessionBootstrap"
 import { bootstrapWith, installMockServer, renderAuthoringRoutes } from "../../test/authoringHarness"
 import type { MockServer } from "../../test/authoringHarness"
+import { FULL_RECORD_AUTHORING } from "../../test/recordAuthoring"
 import { installRecordReads } from "../../test/worldWorkspaceMocks"
 import type { RevisionFixture } from "../../test/worldWorkspaceMocks"
 import { CampaignWorldDetailPage } from "../../pages/CampaignWorldDetailPage"
@@ -25,6 +26,7 @@ const lifecycle = (over: object = {}) => ({
 })
 
 const locationDetail = (over: object = {}) => ({
+    authoring: FULL_RECORD_AUTHORING,
     location_id: "l1",
     name: "Old Mill",
     summary: "A quiet mill.",
@@ -42,6 +44,7 @@ const locationDetail = (over: object = {}) => ({
 })
 
 const organizationDetail = {
+    authoring: FULL_RECORD_AUTHORING,
     organization_id: "o1",
     name: "The Guild",
     summary: "Merchants.",
@@ -54,9 +57,11 @@ const organizationDetail = {
     religion: null,
 }
 
-const characterDetail = (name = "Mira") => ({
+const characterDetail = (name = "Mira", kind: "npc" | "player_character" = "npc") => ({
+    authoring: FULL_RECORD_AUTHORING,
     character_id: "n1",
     name,
+    character_kind: kind,
     species_code: "human",
     size_category: "medium",
     current_hit_points: null,
@@ -1560,7 +1565,14 @@ describe("World record workspace: a religion", () => {
             entityId: "r1",
             typeCode: "religion",
             detailPath: `/campaigns/${C}/world/religions/r1`,
-            detail: { religion_id: "r1", name: "The Dawn", summary: null, pantheon_structure: "Monotheistic", serving_organization_ids: [] },
+            detail: {
+                authoring: FULL_RECORD_AUTHORING,
+                religion_id: "r1",
+                name: "The Dawn",
+                summary: null,
+                pantheon_structure: "Monotheistic",
+                serving_organization_ids: [],
+            },
             lifecycle: lifecycle({ entity_id: "r1", entity_type_code: "religion" }),
         })
         await opened("The Dawn")
@@ -1577,7 +1589,7 @@ describe("World record workspace: characters", () => {
             typeCode,
             canon,
             detailPath: `/campaigns/${C}/characters/n1`,
-            detail: characterDetail(),
+            detail: characterDetail("Mira", typeCode === "player_character" ? "player_character" : "npc"),
             lifecycle: lifecycle({ entity_id: "n1", entity_type_code: typeCode, canon_status: canon, available_actions: [] }),
             extra: (server) => {
                 server.on("GET", `/campaigns/${C}/authoring/npcs/n1`, {
@@ -1612,12 +1624,28 @@ describe("World record workspace: characters", () => {
         expect(sectionLinks("Use in play")).toEqual(["Player", "Inventory"])
     })
 
-    it("does not guess a character's kind when the lifecycle cannot be read", async () => {
+    it("takes a character's kind from the character itself when the lifecycle cannot be read", async () => {
+        // The character read names its kind, so a lifecycle that is unreadable (an error here; not
+        // the caller's to read in the campaign-only case below) never turns an NPC into a generic
+        // character and its runtime sections away.
         setup({
             category: "character",
             entityId: "n1",
             detailPath: `/campaigns/${C}/characters/n1`,
             detail: characterDetail(),
+            extra: (server) => server.on("GET", `/campaigns/${C}/entities/n1/lifecycle`, { status: 500, body: {} }),
+        })
+        await opened("Mira")
+        fireEvent.click(await screen.findByRole("link", { name: "3. Use in play" }))
+        expect(sectionLinks("Use in play")).toEqual(["Run this NPC", "Inventory"])
+    })
+
+    it("does not guess the kind of a bare character row whose lifecycle cannot be read", async () => {
+        setup({
+            category: "character",
+            entityId: "n1",
+            detailPath: `/campaigns/${C}/characters/n1`,
+            detail: { ...characterDetail(), character_kind: "character" },
             extra: (server) => server.on("GET", `/campaigns/${C}/entities/n1/lifecycle`, { status: 500, body: {} }),
         })
         await opened("Mira")

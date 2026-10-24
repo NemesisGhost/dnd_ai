@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { characterSheetFixture } from "./fixtures/characterSheet"
 import { installCampaignShellMocks, openApp } from "./test/campaignRoutes"
 import type { FetchCall, MockServer } from "./test/authoringHarness"
+import { FULL_RECORD_AUTHORING } from "./test/recordAuthoring"
 
 vi.mock("./hooks/useSessionBootstrap", () => ({ useSessionBootstrap: vi.fn() }))
 vi.mock("./api/userPreferences", () => ({
@@ -32,6 +33,7 @@ const ALL = [
 ]
 
 const character = (id: string, name: string, kind: string, full = true) => ({
+  authoring: FULL_RECORD_AUTHORING,
   character_id: id,
   name,
   character_kind: kind,

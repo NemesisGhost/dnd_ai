@@ -1,3 +1,5 @@
+import type { RecordAuthoring } from "../utils/recordAuthoring"
+
 export type WorldCategory =
     | "location"
     | "character"
@@ -78,6 +80,8 @@ export interface LocationCrumb {
 }
 
 export interface LocationDetail {
+    // What the caller may do to this record, resolved by the server (utils/recordAuthoring).
+    authoring?: RecordAuthoring
     location_id: string
     name: string
     summary: string | null
@@ -101,6 +105,7 @@ export interface OrganizationLink {
 // Audience-safe: never the GM-only notes, and a link is present only when the
 // caller may see the record it names.
 export interface OrganizationDetail {
+    authoring?: RecordAuthoring
     organization_id: string
     name: string
     summary: string | null
@@ -122,6 +127,7 @@ export interface OrganizationDetail {
 }
 
 export interface ReligionDetail {
+    authoring?: RecordAuthoring
     religion_id: string
     name: string
     summary: string | null
@@ -130,6 +136,7 @@ export interface ReligionDetail {
 }
 
 export interface ItemDetail {
+    authoring?: RecordAuthoring
     item_instance_id: string
     name: string
     summary: string | null

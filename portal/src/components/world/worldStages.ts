@@ -188,6 +188,56 @@ export const worldSectionsInStage = (kind: WorldKind, stage: WorldStage): WorldS
 
 export const worldHeadingId = (key: WorldSection): string => `world-section-${key}-heading`
 
+// Who may use a section, which is a question about shared world canon (ADR 0020), not about the
+// campaign. Preparation of a record is the world's private side; the record's own review and
+// publication need the server to say the record's private side is the caller's; the rest of the
+// record (its published details, and what a campaign does with it) is the campaign's.
+//
+//   open            the audience-safe record and the campaign's own operations
+//   record_private  the record's lifecycle: `authoring.can_read_private` from the server
+//   world_private  the world's preparation of the record (structure, sources, relationships): the
+//                   caller's `world.canon.read_private` on the world, whatever the record is
+type SectionGate = "open" | "record_private" | "world_private"
+
+const SECTION_GATES: Readonly<Record<WorldSection, SectionGate>> = {
+    details: "open",
+    areas: "world_private",
+    connections: "world_private",
+    contents: "world_private",
+    sources: "world_private",
+    relationships: "world_private",
+    review: "record_private",
+    publication: "record_private",
+    "area-now": "world_private",
+    members: "open",
+    run: "open",
+    player: "open",
+    inventory: "open",
+}
+
+export interface SectionAccessInput {
+    // The record's `authoring.can_read_private`.
+    canReadRecordPrivate: boolean
+    // The caller's `world.canon.read_private` on the world (the campaign's bootstrap snapshot).
+    canReadWorldPrivate: boolean
+}
+
+const WITHHELD_TEXT: Readonly<Record<Exclude<SectionGate, "open">, string>> = {
+    record_private:
+        "Review and publication of shared world canon need a world Reviewer or Editor role. Ask the world owner.",
+    world_private:
+        "Preparing shared world canon needs a world Editor or Reviewer role. Ask the world owner.",
+}
+
+// Why a section is not the caller's to use, or `null` when it is. A withheld section stays in the
+// structure as unavailable text and its content is never mounted or requested.
+export function sectionWithheldReason(key: WorldSection, access: SectionAccessInput): string | null {
+    const gate = SECTION_GATES[key]
+    if (gate === "open") return null
+    const allowed = gate === "record_private" ? access.canReadRecordPrivate : access.canReadWorldPrivate
+    return allowed ? null : WITHHELD_TEXT[gate]
+}
+
 type StatusView = Pick<EntityLifecycleView, "canon_status" | "lifecycle_status">
 
 // Where an editor lands when the address names no section. Derived from the loaded lifecycle only;

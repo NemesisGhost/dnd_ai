@@ -2,6 +2,7 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { installCampaignShellMocks, openApp } from "./test/campaignRoutes"
 import type { MockServer } from "./test/authoringHarness"
+import { FULL_RECORD_AUTHORING } from "./test/recordAuthoring"
 
 vi.mock("./hooks/useSessionBootstrap", () => ({ useSessionBootstrap: vi.fn() }))
 vi.mock("./api/userPreferences", () => ({
@@ -36,6 +37,7 @@ const OPTIONS = {
 const SUBJECT = { entity_id: "l1", name: "Keep", category: "location", entity_type_code: "fortress" }
 
 const detail = (extra: Record<string, unknown> = {}) => ({
+  authoring: FULL_RECORD_AUTHORING,
   knowledge_item_id: "k1",
   knowledge_type_code: "secret",
   statement: "The duke is a vampire.",

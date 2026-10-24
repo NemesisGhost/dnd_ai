@@ -2,6 +2,7 @@ import { fireEvent, screen, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { installCampaignShellMocks, openApp } from "./test/campaignRoutes"
 import type { MockServer } from "./test/authoringHarness"
+import { FULL_RECORD_AUTHORING } from "./test/recordAuthoring"
 
 vi.mock("./hooks/useSessionBootstrap", () => ({ useSessionBootstrap: vi.fn() }))
 vi.mock("./api/userPreferences", () => ({
@@ -41,6 +42,7 @@ const ORG_VIEW = {
   field_locks: [],
 }
 const ORG_DETAIL = {
+  authoring: FULL_RECORD_AUTHORING,
   organization_id: "o1",
   name: "The Crown",
   summary: null,

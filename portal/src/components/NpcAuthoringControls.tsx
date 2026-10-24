@@ -6,6 +6,7 @@ import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import type { CharacterBuilds } from "../types/characterBuilds"
 import type { PlayerCharacterAuthoringView } from "../types/npcAuthoring"
+import type { RecordAuthoring } from "../utils/recordAuthoring"
 
 interface NpcAuthoringControlsProps {
     campaignId: string
@@ -95,14 +96,17 @@ function LoadedBuildsLink({ campaignId, characterId }: NpcAuthoringControlsProps
     )
 }
 
-// For an NPC, editors get a link to how it is played (its portrayal profile).
+// For an NPC, editors get a link to how it is played (its portrayal profile). The profile is the
+// private side of shared world canon, so the link is mounted, and its read sent, only when the
+// record's `authoring` says that side is the caller's to read.
 export function PortrayalLink({
     campaignId,
     characterId,
     detail,
     asButton,
-}: NpcAuthoringControlsProps & { detail: number; asButton?: boolean }) {
-    if (!useCampaignCapability(campaignId, "canon.edit")) {
+    authoring,
+}: NpcAuthoringControlsProps & { detail: number; asButton?: boolean; authoring: RecordAuthoring }) {
+    if (!useCampaignCapability(campaignId, "canon.edit") || !authoring.can_read_private) {
         return null
     }
     return (

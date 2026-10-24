@@ -188,6 +188,9 @@ export interface QuestWorkspaceSetup {
     lifecycle?: Record<string, unknown>
     progress?: object
     capabilities?: string[]
+    // The caller's capabilities on the campaign's world (the bootstrap snapshot); the fixture's are
+    // an Owner's.
+    worldCapabilities?: readonly string[]
     entry?: string | { pathname: string; search?: string; state?: unknown }
     // The lifecycle read fails with a server error.
     lifecycleError?: boolean
@@ -238,6 +241,9 @@ export function setupQuestWorkspace(setup: QuestWorkspaceSetup = {}) {
                     ...sessionBootstrapFixture.campaigns[0]!,
                     campaign_id: "c1",
                     capabilities: setup.capabilities ?? ["canon.edit"],
+                    ...(setup.worldCapabilities === undefined
+                        ? {}
+                        : { world_capabilities: [...setup.worldCapabilities] }),
                 },
             ],
         }),

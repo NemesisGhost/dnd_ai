@@ -3231,6 +3231,19 @@ a.app-header__title:focus-visible {
   font-weight: 700;
 }
 
+/* A stage or section the caller may not use stays in the structure as plain text (never a link),
+   dimmed but still readable; its explanation is in the hidden text beside it. */
+.session-run__stage--unavailable,
+.session-run__section-link--unavailable {
+  color: var(--color-text-muted, inherit);
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.session-run__stage--unavailable:hover {
+  border-color: var(--color-border);
+}
+
 .session-run__layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr);

@@ -1,6 +1,7 @@
 import { screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { installCampaignShellMocks, openApp } from "./test/campaignRoutes"
+import { FULL_RECORD_AUTHORING } from "./test/recordAuthoring"
 import type { MockServer } from "./test/authoringHarness"
 import { installRecordReads } from "./test/worldWorkspaceMocks"
 
@@ -38,6 +39,8 @@ const view = (canon: string) => ({
   field_locks: [],
 })
 const CHARACTER = {
+  authoring: FULL_RECORD_AUTHORING,
+  character_kind: "player_character",
   character_id: "p1",
   name: "Aldric",
   species_code: "human",

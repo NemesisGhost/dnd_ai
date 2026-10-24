@@ -1,3 +1,5 @@
+import type { RecordAuthoring } from "../utils/recordAuthoring"
+
 export type KnowledgeView =
     | "known"
     | "rumors"
@@ -83,6 +85,9 @@ export interface CharacterKnowledge {
 }
 
 export interface KnowledgeDetail {
+    // What the caller may do to this claim's definition (utils/recordAuthoring); set by the detail
+    // route only, absent from a member preview.
+    authoring?: RecordAuthoring
     knowledge_item_id: string
     knowledge_type_code: string
     statement: string

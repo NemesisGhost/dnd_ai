@@ -39,6 +39,16 @@ export const sessionBootstrapFixture = {
       ],
       selected_character_id: "character-ixamarra",
       capabilities: ["access.manage"],
+      // The caller's capabilities on the campaign's world (the bootstrap's per-campaign snapshot):
+      // an Owner's, so a test that is not about roles is not stopped by one.
+      world_capabilities: [
+        "world.view",
+        "world.canon.read",
+        "world.canon.read_private",
+        "world.canon.edit",
+        "world.canon.review",
+        "timeline.manage",
+      ],
     },
   ],
 

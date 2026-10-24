@@ -28,6 +28,7 @@ function CharacterSheetRoute({ campaignId, characterId }: { campaignId: string; 
                             campaignId={campaignId}
                             characterId={characterId}
                             kind={character.character_kind}
+                            authoring={character.authoring}
                         />
                         <CharacterSheetBoundary
                             campaignId={campaignId}

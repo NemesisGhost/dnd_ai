@@ -7,6 +7,8 @@ import { provenancePath } from "../../api/sources"
 import { useAuthoringResource } from "../../hooks/useAuthoringResource"
 import type { UseAuthoringResourceResult } from "../../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../../hooks/useCampaignCapability"
+import { useGatedAuthoringResource } from "../../hooks/useGatedAuthoringResource"
+import { useHeldWorldCapability, WORLD_CANON_READ_PRIVATE } from "../../hooks/useWorldCapability"
 import { pickReturnState, useItemsBackPath } from "../../hooks/useItemsBackPath"
 import { usePageArrival } from "../../hooks/usePageArrival"
 import { useWorldBackPath } from "../../hooks/useWorldBackPath"
@@ -77,7 +79,12 @@ export function ItemWorkspace(props: Props) {
 function Loaded({ campaignId, itemId, origin }: Props) {
     const view = useAuthoringResource<ItemView>(itemAuthoringPath(campaignId, itemId))
     const lifecycle = useAuthoringResource<EntityLifecycleView>(entityLifecyclePath(campaignId, itemId))
-    const provenance = useAuthoringResource<Provenance>(provenancePath(campaignId, itemId))
+    // An item instance is a campaign-originated record (decision E2): its definition, its lifecycle
+    // and its operations are the campaign's, so a campaign GM with no world role runs it whole.
+    // Where its sources came from is the world's private side, so that read is sent only when the
+    // bootstrap says the world's private side is the caller's.
+    const canReadSources = useHeldWorldCapability(campaignId, WORLD_CANON_READ_PRIVATE)
+    const provenance = useGatedAuthoringResource<Provenance>(provenancePath(campaignId, itemId), canReadSources)
     const headingRef = usePageArrival(view.state.kind === "ready", "path")
     // The last item read that succeeded for this item. A refresh that fails recoverably (a network
     // or server error) keeps the workspace mounted on it, so unsent input in any section survives

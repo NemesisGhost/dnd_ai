@@ -1,5 +1,7 @@
 // Organization roster and status (Phase 15 checkpoint 15.3A-2b).
 
+import type { RecordAuthoring } from "../utils/recordAuthoring"
+
 export interface MemberRow {
     relationship_id: string
     member_entity_id: string
@@ -25,7 +27,11 @@ export interface MemberRow {
 export interface OrganizationMembers {
     organization_id: string
     status: string | null
+    // Member and office changes (shared world canon): campaign editor and world Editor.
     can_edit: boolean
+    // The operational status is campaign state; absent from an older server (then `can_edit`).
+    can_set_status?: boolean
+    authoring?: RecordAuthoring
     // The caller's effective timeline clock as display text; null when it is unset.
     as_of?: string | null
     status_choices: { value: string; label: string }[]

@@ -60,6 +60,20 @@ export const CLAIM_SECTIONS: readonly ClaimSectionInfo[] = [
     },
 ]
 
+// Which sections are the private side of the claim's definition (ADR 0020): its sources, its review
+// and its publication. They belong to the world, so they need the server to say the claim's private
+// side is the caller's (`authoring.can_read_private`). The claim's own facts (read-only for anyone
+// without that), who knows it and what a character knows are the campaign's own and are always open.
+const PRIVATE_SECTIONS: ReadonlySet<ClaimSection> = new Set<ClaimSection>(["sources", "review", "publication"])
+
+export const CLAIM_SECTION_WITHHELD_TEXT =
+    "Preparing, reviewing and publishing a claim belong to the shared world and need a world role. Ask the world owner."
+
+// Why a section is not the caller's to use, or `null` when it is.
+export function claimSectionWithheldReason(key: ClaimSection, canPrepare: boolean): string | null {
+    return PRIVATE_SECTIONS.has(key) && !canPrepare ? CLAIM_SECTION_WITHHELD_TEXT : null
+}
+
 export const claimHeadingId = (key: ClaimSection): string => `claim-section-${key}-heading`
 
 export const claimSectionInfo = (key: ClaimSection): ClaimSectionInfo =>

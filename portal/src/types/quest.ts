@@ -1,3 +1,5 @@
+import type { RecordAuthoring } from "../utils/recordAuthoring"
+
 export interface CampaignQuestListItem {
     quest_id: string
     name: string
@@ -30,6 +32,8 @@ export interface QuestStage {
 }
 
 export interface QuestDetail {
+    // What the caller may do to this quest's definition, never to its progress (utils/recordAuthoring).
+    authoring?: RecordAuthoring
     quest_id: string
     name: string
     status_code: string | null

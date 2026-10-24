@@ -8,8 +8,10 @@ import { playerCharacterAuthoringPath } from "../../api/playerCharacterAuthoring
 import { provenancePath } from "../../api/sources"
 import { revisionsPath } from "../../api/review"
 import { useAuthoringResource } from "../../hooks/useAuthoringResource"
+import { useGatedAuthoringResource } from "../../hooks/useGatedAuthoringResource"
 import type { UseAuthoringResourceResult } from "../../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../../hooks/useCampaignCapability"
+import { useHeldWorldCapability, WORLD_CANON_READ_PRIVATE } from "../../hooks/useWorldCapability"
 import { usePageArrival } from "../../hooks/usePageArrival"
 import { pickWorldReturnState, useReviewBackPath, useWorldBackPath } from "../../hooks/useWorldBackPath"
 import { CharacterPanels } from "../../pages/CharacterDetailPage"
@@ -22,6 +24,8 @@ import type { Provenance } from "../../types/provenance"
 import type { RevisionHistory } from "../../types/review"
 import type { LocationDetail, OrganizationDetail, ReligionDetail } from "../../types/world"
 import { humanizeCode } from "../../utils/humanize"
+import { authoringOf } from "../../utils/recordAuthoring"
+import type { RecordAuthoring } from "../../utils/recordAuthoring"
 import { AuthoringEditLink } from "../AuthoringEditLink"
 import { LifecycleActionsProvider } from "../EntityLifecyclePanel"
 import { EntitySourcesSection } from "../EntitySourcesSection"
@@ -48,6 +52,7 @@ import {
     WORLD_STAGE_LABELS,
     defaultWorldSection,
     playBlockedText,
+    sectionWithheldReason,
     worldGuidance,
     worldHeadingId,
     worldKindOf,
@@ -55,7 +60,7 @@ import {
     worldSectionsOf,
     worldStagesOf,
 } from "./worldStages"
-import type { WorkspaceCategory, WorldKind, WorldSection } from "./worldStages"
+import type { WorkspaceCategory, WorldKind, WorldSection, WorldStage } from "./worldStages"
 import { worldDetailPath, worldHistoryPath, worldRecordPath } from "./worldPaths"
 import type { WorkspaceDetail } from "./worldPaths"
 import "../authoring/authoring.css"
@@ -104,11 +109,6 @@ export function WorldRecordWorkspace(props: Props) {
 
 function Loaded({ campaignId, category, entityId }: Props) {
     const detail = useAuthoringResource<WorkspaceDetail>(worldDetailPath(campaignId, category, entityId))
-    const lifecycle = useAuthoringResource<EntityLifecycleView>(entityLifecyclePath(campaignId, entityId))
-    const provenance = useAuthoringResource<Provenance>(provenancePath(campaignId, entityId))
-    const revisions = useAuthoringResource<RevisionHistory>(revisionsPath(campaignId, entityId))
-    const worldBack = useWorldBackPath(campaignId)
-    const headingRef = usePageArrival(detail.state.kind === "ready", "path")
     // The last read that succeeded for this record. A refresh that fails recoverably (a network or
     // server error) keeps the workspace mounted on it, so unsent input in any section survives and
     // the person can retry; a denied or unavailable answer, or a loading state, discards it and
@@ -116,6 +116,26 @@ function Loaded({ campaignId, category, entityId }: Props) {
     const [kept, setKept] = useState<WorkspaceDetail | null>(null)
     if (detail.state.kind === "ready" && kept !== detail.state.data) setKept(detail.state.data)
     if ((detail.state.kind === "denied" || detail.state.kind === "unavailable") && kept !== null) setKept(null)
+    // What the server says this caller may do to the record. The private side of a record
+    // (its lifecycle, sources, revisions and preparation) is requested only once it says so, and
+    // not at all otherwise: a runtime GM with no world role reads and runs the published record
+    // without a single refused request.
+    const authoring = authoringOf(detail.state.kind === "ready" ? detail.state.data : kept)
+    const canReadWorldPrivate = useHeldWorldCapability(campaignId, WORLD_CANON_READ_PRIVATE)
+    const lifecycle = useGatedAuthoringResource<EntityLifecycleView>(
+        entityLifecyclePath(campaignId, entityId),
+        authoring.can_read_private,
+    )
+    const provenance = useGatedAuthoringResource<Provenance>(
+        provenancePath(campaignId, entityId),
+        canReadWorldPrivate,
+    )
+    const revisions = useGatedAuthoringResource<RevisionHistory>(
+        revisionsPath(campaignId, entityId),
+        canReadWorldPrivate,
+    )
+    const worldBack = useWorldBackPath(campaignId)
+    const headingRef = usePageArrival(detail.state.kind === "ready", "path")
     const stale = detail.state.kind === "error" && kept !== null
     const noun = NOUN[category]
     const title = `${noun.charAt(0).toUpperCase()}${noun.slice(1)}`
@@ -161,9 +181,33 @@ function Loaded({ campaignId, category, entityId }: Props) {
             lifecycle={lifecycle}
             provenance={provenance}
             revisions={revisions}
+            authoring={authoring}
+            canReadWorldPrivate={canReadWorldPrivate}
             headingRef={headingRef}
         />
     )
+}
+
+// The entity type of a record, from the audience-safe detail, for the kinds whose category holds
+// more than one (a place is a dungeon or an area; a character is an NPC or a player character).
+function typeCodeOf(category: WorkspaceCategory, data: WorkspaceDetail): string | null {
+    switch (category) {
+        case "location":
+            return (data as LocationDetail).location_type_code
+        case "character":
+            return (data as CharacterDetail).character_kind
+        default:
+            return null
+    }
+}
+
+// The canon and lifecycle status the audience-safe detail carries (places, organizations and
+// religions do; a character does not), for explaining what play cannot do yet.
+function statusOf(data: WorkspaceDetail): { canon_status: string; lifecycle_status: string } | null {
+    const d = data as Partial<{ canon_status: string; lifecycle_status: string }>
+    return typeof d.canon_status === "string" && typeof d.lifecycle_status === "string"
+        ? { canon_status: d.canon_status, lifecycle_status: d.lifecycle_status }
+        : null
 }
 
 // What the header says about the record, from the audience-safe detail the page already read.
@@ -202,6 +246,8 @@ function Workspace({
     lifecycle,
     provenance,
     revisions,
+    authoring,
+    canReadWorldPrivate,
     headingRef,
 }: Props & {
     data: WorkspaceDetail
@@ -211,6 +257,10 @@ function Workspace({
     lifecycle: UseAuthoringResourceResult<EntityLifecycleView>
     provenance: UseAuthoringResourceResult<Provenance>
     revisions: UseAuthoringResourceResult<RevisionHistory>
+    // What the server says the caller may do to this record, and whether the world's private side
+    // is theirs to read (it decides the preparation sections; see worldStages.sectionWithheldReason).
+    authoring: RecordAuthoring
+    canReadWorldPrivate: boolean
     headingRef: RefObject<HTMLHeadingElement | null>
 }) {
     const location = useLocation()
@@ -227,8 +277,18 @@ function Workspace({
     const unmanaged = lifecycle.state.kind === "ready" && !lifecycle.state.data.lifecycle_managed
     const lifecycleView =
         lifecycle.state.kind === "ready" && lifecycle.state.data.lifecycle_managed ? lifecycle.state.data : null
-    const kind = worldKindOf(category, lifecycleView?.entity_type_code ?? null)
-    const sections = worldSectionsOf(kind)
+    // The kind comes from the lifecycle read when there is one and from the record itself when the
+    // lifecycle is not the caller's to read, so a withheld lifecycle never turns a player character
+    // or an NPC into a generic character (and its runtime sections away).
+    // The record's status for the explanations of what play cannot do yet: the lifecycle read when
+    // the caller has one, else the audience-safe detail (which carries the status fields).
+    const playStatus = lifecycleView ?? statusOf(data)
+    const kind = worldKindOf(category, lifecycleView?.entity_type_code ?? typeCodeOf(category, data))
+    const access = { canReadRecordPrivate: authoring.can_read_private, canReadWorldPrivate }
+    const everySection = worldSectionsOf(kind)
+    // Only the sections that are the caller's are navigable, mounted and requested; the rest stay in
+    // the structure as text with their reason (stable structure), never as links.
+    const sections = everySection.filter((section) => sectionWithheldReason(section.key, access) === null)
     const nav = useStagedNavigation(sections, defaultWorldSection(lifecycleView), {
         ready: settled && !unmanaged,
         aliases: LEGACY_SECTION_ALIASES,
@@ -427,9 +487,9 @@ function Workspace({
             case "members": {
                 // Unknown status (the lifecycle read failed) is not eligibility: withhold the commands.
                 const blocked =
-                    lifecycleView === null
+                    playStatus === null
                         ? `The ${playNoun}'s status could not be loaded, so recording members or a status is not offered.`
-                        : playBlockedText(lifecycleView, playNoun)
+                        : playBlockedText(playStatus, playNoun)
                 return (
                     <>
                         {blocked !== null ? <p className="authoring-note">{blocked}</p> : null}
@@ -452,7 +512,7 @@ function Workspace({
                         characterId={entityId}
                         refreshToken={changes}
                         onChanged={refreshDetail}
-                        blockedText={playBlockedText(lifecycleView, "NPC")}
+                        blockedText={playBlockedText(playStatus, "NPC")}
                     />
                 )
             case "player":
@@ -504,7 +564,19 @@ function Workspace({
               }
             : null
     const stages = worldStagesOf(kind)
-    const inStage = worldSectionsInStage(kind, nav.stage)
+    // The stage's sections as listed, withheld ones included (marked), and which stages hold
+    // nothing the caller may use.
+    const listed = (stage: WorldStage) =>
+        worldSectionsInStage(kind, stage).map((section) => {
+            const reason = sectionWithheldReason(section.key, access)
+            return reason === null ? section : { ...section, unavailableReason: reason }
+        })
+    const stageReason = (stage: WorldStage): string | undefined => {
+        const inside = listed(stage)
+        return inside.every((section) => "unavailableReason" in section) ? (inside[0] as { unavailableReason: string }).unavailableReason : undefined
+    }
+    const inStage = listed(nav.stage)
+    const withheldNote = !authoring.can_read_private || !canReadWorldPrivate
     return (
         <section className="authoring-page item-workspace" aria-labelledby="world-workspace-heading">
             <WorldRecordHeader
@@ -519,6 +591,12 @@ function Workspace({
                 linkState={linkState}
                 context={context}
             />
+            {withheldNote && !authoring.campaign_originated ? (
+                <p className="authoring-note">
+                    You can read and use this {playNoun} in this campaign. Preparing, reviewing and publishing
+                    it belong to the shared world and need a world role; ask the world owner.
+                </p>
+            ) : null}
             {refreshFailed ? (
                 <div className="authoring-message authoring-message--warning" role="alert">
                     <p>
@@ -542,7 +620,11 @@ function Workspace({
                 >
                     <StageNav
                         ariaLabel="Record stages"
-                        stages={stages.map((stage) => ({ key: stage, label: WORLD_STAGE_LABELS[stage] }))}
+                        stages={stages.map((stage) => ({
+                            key: stage,
+                            label: WORLD_STAGE_LABELS[stage],
+                            unavailableReason: stageReason(stage),
+                        }))}
                         current={nav.stage}
                         hrefFor={nav.stageHref}
                         linkState={linkState}
@@ -656,8 +738,8 @@ function DetailsSection({
             const character = data as CharacterDetail
             const id = character.character_id
             const editPath = `${root}/characters/${encodeURIComponent(id)}/edit`
-            // Each kind's authoring read is a 404 for the other, so exactly one edit link can
-            // appear (and the portrayal link only for an NPC).
+            // Exactly one edit link, by the character's kind (and the portrayal link only for an
+            // NPC); a bare character row has none.
             return (
                 <>
                     <CharacterPanels character={character} />
@@ -667,23 +749,32 @@ function DetailsSection({
                             Open character sheet
                         </Link>
                     </p>
-                    <AuthoringEditLink
+                    {character.character_kind === "npc" ? (
+                        <AuthoringEditLink
+                            campaignId={campaignId}
+                            noun="NPC"
+                            viewPath={npcAuthoringPath(campaignId, id)}
+                            editPath={editPath}
+                            detail={data}
+                            linkState={editState}
+                        />
+                    ) : null}
+                    {character.character_kind === "player_character" ? (
+                        <AuthoringEditLink
+                            campaignId={campaignId}
+                            noun="player character"
+                            viewPath={playerCharacterAuthoringPath(campaignId, id)}
+                            editPath={editPath}
+                            detail={data}
+                            linkState={editState}
+                        />
+                    ) : null}
+                    <PortrayalLink
                         campaignId={campaignId}
-                        noun="NPC"
-                        viewPath={npcAuthoringPath(campaignId, id)}
-                        editPath={editPath}
-                        detail={data}
-                        linkState={editState}
+                        characterId={id}
+                        detail={changes}
+                        authoring={authoringOf(character)}
                     />
-                    <AuthoringEditLink
-                        campaignId={campaignId}
-                        noun="player character"
-                        viewPath={playerCharacterAuthoringPath(campaignId, id)}
-                        editPath={editPath}
-                        detail={data}
-                        linkState={editState}
-                    />
-                    <PortrayalLink campaignId={campaignId} characterId={id} detail={changes} />
                     <BuildsLink campaignId={campaignId} characterId={id} />
                 </>
             )

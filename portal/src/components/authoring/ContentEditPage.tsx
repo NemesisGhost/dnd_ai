@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import type { ReactNode } from "react"
 import { Link, useLocation, useNavigate, useParams } from "react-router"
 import { useSession } from "../../context/SessionContext"
@@ -12,6 +12,8 @@ import type { MutationContext } from "../../api/worlds"
 import type { EntityBlockedAction } from "../../types/entityLifecycle"
 import { REASON_MAX, ERROR_CODE_MESSAGE, fieldForErrorCode } from "../../utils/authoringValidation"
 import { describeBlockedReason } from "../../utils/blockedReason"
+import { retainedChanges } from "../../utils/retainedChanges"
+import type { RetainedChange } from "../../utils/retainedChanges"
 import { StaleReadNotice } from "../StaleReadNotice"
 import { ConfirmDialog } from "./ConfirmDialog"
 import { TextField } from "./fields"
@@ -24,6 +26,7 @@ import {
 } from "./feedback"
 import type { FieldError } from "./feedback"
 import type { FieldsRenderProps } from "./ContentCreatePage"
+import { PermissionLost } from "./PermissionLost"
 import { ReadFailedNotice } from "./ReadState"
 import "./authoring.css"
 
@@ -121,6 +124,15 @@ export function ContentEditPage<TView extends EditableView, TOptions, TValues, T
     const needsWorldEdit = config.campaignOriginated !== true && !hasWorldEdit
     const headingRef = usePageArrival(ready || needsWorldEdit)
     const [keptChanges, setKeptChanges] = useState<TValues | null>(null)
+    // What the person has changed in the open form, kept by the page (the form is unmounted when a
+    // read is refused). Only changes are kept, never the record the server sent: when the right to
+    // edit or read is lost, that is all that may be shown back (see utils/retainedChanges).
+    const [live, setLive] = useState<{ path: string; changes: RetainedChange[] } | null>(null)
+    const [lost, setLost] = useState<{ path: string; changes: RetainedChange[] } | null>(null)
+    const readRefused = state.kind === "denied" || state.kind === "unavailable"
+    const refusedWhileEditing = readRefused && live !== null && live.path === viewPath ? live : null
+    if (refusedWhileEditing !== null && lost?.path !== viewPath) setLost(refusedWhileEditing)
+    const permissionLost = lost !== null && lost.path === viewPath ? lost : null
     const location = useLocation()
     const target: EditNavigation = config.navigation?.({ campaignId, entityId, state: location.state, params }) ?? {
         listPath: config.worldPath(campaignId),
@@ -144,7 +156,9 @@ export function ContentEditPage<TView extends EditableView, TOptions, TValues, T
             <h1 id={headingId} ref={headingRef} tabIndex={-1}>
                 {config.heading}
             </h1>
-            {needsWorldEdit ? (
+            {permissionLost !== null ? (
+                <PermissionLost noun={config.noun} retained={permissionLost.changes} back={target.detail} />
+            ) : needsWorldEdit ? (
                 <p role="alert">Editing shared world content requires the world Editor role. Ask the world owner.</p>
             ) : state.kind === "loading" || options.state.kind === "loading" ? (
                 <p role="status">Loading {config.noun}…</p>
@@ -191,6 +205,8 @@ export function ContentEditPage<TView extends EditableView, TOptions, TValues, T
                         onKeepChanges={setKeptChanges}
                         refetch={refetch}
                         target={target.detail}
+                        onChanges={(changes) => setLive({ path: viewPath, changes })}
+                        onPermissionLost={(changes) => setLost({ path: viewPath, changes })}
                     />
                 </>
             )}
@@ -233,6 +249,10 @@ interface EditFormProps<TView extends EditableView, TOptions, TValues, TBody> {
     onKeepChanges: (values: TValues | null) => void
     refetch: () => Promise<unknown>
     target: EditNavigation["detail"]
+    // The changes the person has made so far, reported on every edit.
+    onChanges: (changes: RetainedChange[]) => void
+    // The save was refused because the right to edit is gone: stop, and hand over what to keep.
+    onPermissionLost: (changes: RetainedChange[]) => void
 }
 
 function EditForm<TView extends EditableView, TOptions, TValues, TBody>({
@@ -247,6 +267,8 @@ function EditForm<TView extends EditableView, TOptions, TValues, TBody>({
     onKeepChanges,
     refetch,
     target,
+    onChanges,
+    onPermissionLost,
 }: EditFormProps<TView, TOptions, TValues, TBody>) {
     const navigate = useNavigate()
     const { reload } = useSession()
@@ -275,6 +297,29 @@ function EditForm<TView extends EditableView, TOptions, TValues, TBody>({
 
     const pending = mutation.status.kind === "pending"
     const error = mutation.status.kind === "error" ? mutation.status.error : null
+    // Refused because the world role is gone (403 `world_authority_required`) or because the record
+    // is no longer the person's to reach (404): nothing more can be sent, and what they typed is all
+    // that is kept. A bare 403 is not that: it is also what a stale CSRF token or session answers,
+    // which "Check my session" recovers with the form intact.
+    const refused =
+        error !== null &&
+        ((error.kind === "denied" && error.code === "world_authority_required") ||
+            error.kind === "unavailable")
+    const [reported, setReported] = useState(false)
+    const changes = retainedChanges(initial, values, changeNote)
+    const changesKey = JSON.stringify(changes)
+    useEffect(() => {
+        onChanges(JSON.parse(changesKey) as RetainedChange[])
+        // Reported when the changes change (their serialization), not on every render.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [changesKey])
+    if (refused && !reported) {
+        setReported(true)
+        onPermissionLost(changes)
+        // Read the record again so whatever the server still holds for this person is dropped with
+        // the form; a refused read clears it.
+        void refetch()
+    }
     const serverField = error ? fieldForErrorCode(error.code) : null
     const serverErrors: FieldError[] =
         serverField !== null && error?.code

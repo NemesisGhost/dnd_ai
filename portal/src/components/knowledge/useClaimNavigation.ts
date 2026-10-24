@@ -25,12 +25,24 @@ const sectionOfHash = (hash: string): ClaimSection | null => parseClaimSection(h
 // loaded record, and `enabled` is false for a reader, whose address is left alone.
 export function useClaimNavigation(
     defaultSection: ClaimSection,
-    { ready, enabled }: { ready: boolean; enabled: boolean },
+    {
+        ready,
+        enabled,
+        allowed,
+    }: {
+        ready: boolean
+        enabled: boolean
+        // The sections the caller may use; any other named by the address is treated as unknown
+        // and replaced by the default. Omitted means every section.
+        allowed?: readonly ClaimSection[]
+    },
 ): ClaimNavigation {
     const [params, setParams] = useSearchParams()
     const { hash } = useLocation()
-    const parsed = parseClaimSection(params.get("section"))
-    const legacy = parsed === null ? sectionOfHash(hash) : null
+    const usable = (key: ClaimSection | null): ClaimSection | null =>
+        key !== null && (allowed === undefined || allowed.includes(key)) ? key : null
+    const parsed = usable(parseClaimSection(params.get("section")))
+    const legacy = parsed === null ? usable(sectionOfHash(hash)) : null
     const section = parsed ?? legacy ?? defaultSection
     const stage = claimStageOf(section)
     const [remembered, setRemembered] = useState<Remembered>({})
@@ -54,6 +66,11 @@ export function useClaimNavigation(
         return `?${next.toString()}`
     }
     const stageHref = (target: ClaimStage): string =>
-        sectionHref(target === stage ? section : (remembered[target] ?? claimSectionsOf(target)[0]!.key))
+        sectionHref(
+            target === stage
+                ? section
+                : (remembered[target] ??
+                      (claimSectionsOf(target).find((s) => usable(s.key) !== null) ?? claimSectionsOf(target)[0]!).key),
+        )
     return { section, stage, sectionHref, stageHref }
 }

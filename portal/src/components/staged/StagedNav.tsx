@@ -8,12 +8,18 @@ import { Link } from "react-router"
 export interface StageDef<S extends string> {
     key: S
     label: string
+    // Present when nothing in this stage is the caller's to use: the stage stays listed (the
+    // structure of the page does not change with a role) as text with this explanation, not a link.
+    unavailableReason?: string
 }
 
 export interface SectionDef<K extends string> {
     key: K
     label: string
     purpose: string
+    // Present when the section is not the caller's to use: it stays listed as text with this
+    // explanation, not a link, and its content is never mounted or requested.
+    unavailableReason?: string
 }
 
 // The stages. Links, because choosing one changes the address and nothing else.
@@ -36,6 +42,15 @@ export function StageNav<S extends string>({
             <ol>
                 {stages.map((stage, index) => (
                     <li key={stage.key}>
+                        {stage.unavailableReason !== undefined ? (
+                            <span
+                                aria-disabled="true"
+                                className="session-run__stage session-run__stage--unavailable"
+                            >
+                                {index + 1}. {stage.label}
+                                <span className="visually-hidden"> (unavailable: {stage.unavailableReason})</span>
+                            </span>
+                        ) : (
                         <Link
                             to={hrefFor(stage.key)}
                             state={linkState}
@@ -48,6 +63,7 @@ export function StageNav<S extends string>({
                         >
                             {index + 1}. {stage.label}
                         </Link>
+                        )}
                     </li>
                 ))}
             </ol>
@@ -74,6 +90,15 @@ export function SectionNav<K extends string>({
             <ul>
                 {sections.map((section) => (
                     <li key={section.key}>
+                        {section.unavailableReason !== undefined ? (
+                            <span
+                                aria-disabled="true"
+                                className="session-run__section-link session-run__section-link--unavailable"
+                            >
+                                {section.label}
+                                <span className="visually-hidden"> (unavailable: {section.unavailableReason})</span>
+                            </span>
+                        ) : (
                         <Link
                             to={hrefFor(section.key)}
                             state={linkState}
@@ -86,6 +111,7 @@ export function SectionNav<K extends string>({
                         >
                             {section.label}
                         </Link>
+                        )}
                     </li>
                 ))}
             </ul>

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { sessionBootstrapFixture } from "../../fixtures/sessionBootstrap"
 import { bootstrapWith, installMockServer, renderAuthoringRoutes } from "../../test/authoringHarness"
 import type { MockServer } from "../../test/authoringHarness"
+import { FULL_RECORD_AUTHORING } from "../../test/recordAuthoring"
 import { installRecordReads } from "../../test/worldWorkspaceMocks"
 import { CampaignWorldDetailPage } from "../../pages/CampaignWorldDetailPage"
 
@@ -76,6 +77,8 @@ function setupNpc(initial: Partial<State> = {}) {
             ? failing()
             : {
         body: {
+            authoring: FULL_RECORD_AUTHORING,
+            character_kind: "npc",
             character_id: "n1",
             name: "Mira",
             species_code: "human",
@@ -280,6 +283,7 @@ describe("an NPC's Run section agrees with the workspace", () => {
 
 describe("an organization's members and status", () => {
     const orgDetail = {
+        authoring: FULL_RECORD_AUTHORING,
         organization_id: "o1",
         name: "The Guild",
         summary: null,
@@ -449,6 +453,8 @@ describe("an organization's members and status", () => {
 
 describe("a record the server says is not lifecycle-managed", () => {
     const characterDetail = {
+        authoring: FULL_RECORD_AUTHORING,
+        character_kind: "character",
         character_id: "b1",
         name: "Bare",
         species_code: "human",

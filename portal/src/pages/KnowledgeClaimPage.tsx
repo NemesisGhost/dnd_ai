@@ -22,14 +22,17 @@ import { ClaimPublication } from "../components/knowledge/ClaimPublication"
 import { ClaimReview } from "../components/knowledge/ClaimReview"
 import {
     CLAIM_SECTIONS,
+    CLAIM_SECTION_WITHHELD_TEXT,
     CLAIM_STAGES,
     claimGuidance,
     claimHeadingId,
+    claimSectionWithheldReason,
     claimSectionsOf,
     claimStageLabel,
     defaultClaimSection,
 } from "../components/knowledge/claimStages"
 import type { ClaimGuidance, ClaimSection } from "../components/knowledge/claimStages"
+import { authoringOf } from "../utils/recordAuthoring"
 import { KnowledgeClaimHeader } from "../components/knowledge/KnowledgeClaimHeader"
 import { KnowledgeRoster } from "../components/knowledge/KnowledgeRoster"
 import type { Restriction } from "../components/knowledge/KnowledgeRoster"
@@ -38,7 +41,7 @@ import { KnowledgeSubjectLink } from "../components/KnowledgeSubjectLink"
 import { SectionNav, SectionPanel, StageNav } from "../components/staged/StagedNav"
 import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
-import { useAuthoringResource } from "../hooks/useAuthoringResource"
+import { useGatedAuthoringResource } from "../hooks/useGatedAuthoringResource"
 import type { UseAuthoringResourceResult } from "../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard"
@@ -104,18 +107,23 @@ export function KnowledgeClaimPage({
     refreshDetail,
 }: KnowledgeClaimPageProps) {
     const canEdit = useCampaignCapability(campaignId, "canon.edit")
+    // What the server says this caller may do to the claim's definition. A campaign GM with no world
+    // role keeps the claim's facts and the whole of play (who knows it, what a character knows) but
+    // is not sent the claim's private side: nothing below is requested for them.
+    const authoring = authoringOf(item)
+    const canPrepare = canEdit && authoring.can_read_private
     // The editor's own read model, the record's lifecycle and its provenance are loaded once here:
     // they feed the claim form, the header, the review summary and the roster's publication gate.
-    const view = useAuthoringResource<KnowledgeAuthoringView>(
-        canEdit ? knowledgeAuthoringPath(campaignId, knowledgeItemId) : null,
+    const view = useGatedAuthoringResource<KnowledgeAuthoringView>(
+        knowledgeAuthoringPath(campaignId, knowledgeItemId),
+        canPrepare,
     )
-    const options = useAuthoringResource<KnowledgeOptions>(canEdit ? knowledgeOptionsPath(campaignId) : null)
-    const lifecycle = useAuthoringResource<EntityLifecycleView>(
-        canEdit ? entityLifecyclePath(campaignId, knowledgeItemId) : null,
+    const options = useGatedAuthoringResource<KnowledgeOptions>(knowledgeOptionsPath(campaignId), canPrepare)
+    const lifecycle = useGatedAuthoringResource<EntityLifecycleView>(
+        entityLifecyclePath(campaignId, knowledgeItemId),
+        canPrepare,
     )
-    const provenance = useAuthoringResource<Provenance>(
-        canEdit ? provenancePath(campaignId, knowledgeItemId) : null,
-    )
+    const provenance = useGatedAuthoringResource<Provenance>(provenancePath(campaignId, knowledgeItemId), canPrepare)
     // The unsaved claim edits live here, above the claim form, so the lifecycle controls can say
     // plainly that they are not part of a submit, approve or publish, and so they survive the form
     // being replaced by a read-only presentation.
@@ -139,7 +147,16 @@ export function KnowledgeClaimPage({
     const lifecycleStatus = lifecycleView?.lifecycle_status ?? status?.lifecycle_status ?? null
     // The default section needs the lifecycle read, so the workspace waits for it to settle.
     const settled = lifecycle.state.kind !== "loading"
-    const nav = useClaimNavigation(defaultClaimSection(lifecycleView), { ready: settled, enabled: canEdit })
+    const usableSections = CLAIM_SECTIONS.map((section) => section.key).filter(
+        (key) => claimSectionWithheldReason(key, canPrepare) === null,
+    )
+    // Where a person lands with no section named: the lifecycle's next step for someone who can
+    // prepare; play for a campaign GM, whose claim is always published.
+    const nav = useClaimNavigation(canPrepare ? defaultClaimSection(lifecycleView) : "who-knows", {
+        ready: settled,
+        enabled: canEdit,
+        allowed: usableSections,
+    })
     const location = useLocation()
 
     // Move focus to the section heading when the section changes after arrival (a link, Back or
@@ -366,7 +383,12 @@ export function KnowledgeClaimPage({
                 >
                     <StageNav
                         ariaLabel="Claim stages"
-                        stages={CLAIM_STAGES}
+                        stages={CLAIM_STAGES.map((stage) => {
+                            const inside = claimSectionsOf(stage.key)
+                            return inside.every((section) => claimSectionWithheldReason(section.key, canPrepare) !== null)
+                                ? { ...stage, unavailableReason: CLAIM_SECTION_WITHHELD_TEXT }
+                                : stage
+                        })}
                         current={nav.stage}
                         hrefFor={nav.stageHref}
                     />
@@ -374,12 +396,15 @@ export function KnowledgeClaimPage({
                         <div className="session-run__layout">
                             <SectionNav
                                 ariaLabel={`${claimStageLabel(nav.stage)} sections`}
-                                sections={claimSectionsOf(nav.stage)}
+                                sections={claimSectionsOf(nav.stage).map((section) => {
+                                    const reason = claimSectionWithheldReason(section.key, canPrepare)
+                                    return reason === null ? section : { ...section, unavailableReason: reason }
+                                })}
                                 current={nav.section}
                                 hrefFor={nav.sectionHref}
                             />
                             <div className="session-run__content">
-                                {CLAIM_SECTIONS.map((section) => (
+                                {CLAIM_SECTIONS.filter((section) => usableSections.includes(section.key)).map((section) => (
                                     <SectionPanel
                                         key={section.key}
                                         wide

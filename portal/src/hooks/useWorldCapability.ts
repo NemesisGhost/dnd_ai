@@ -21,19 +21,20 @@ export function useWorldCapability(campaignId: string | undefined, capability: s
     return worldCapabilities === undefined ? true : worldCapabilities.includes(capability)
 }
 
+// Whether the bootstrap says the caller holds `capability` on the campaign's world. Unlike
+// `useWorldCapability` it fails closed: with no list to consult it answers false. Use it to decide
+// whether to *send a request* (a read of the world's private side), never to decide what to offer.
+export function useHeldWorldCapability(campaignId: string | undefined, capability: string): boolean {
+    const state = useContext(SessionContext)?.state
+    if (state?.status !== "authenticated") {
+        return false
+    }
+    const worldCapabilities = state.bootstrap.campaigns.find(
+        (c) => c.campaign_id === campaignId,
+    )?.world_capabilities
+    return worldCapabilities?.includes(capability) ?? false
+}
+
 export const WORLD_CANON_EDIT = "world.canon.edit"
 export const WORLD_CANON_REVIEW = "world.canon.review"
-
-// The world capability a lifecycle action needs: preparing and withdrawing a draft is
-// editing; approving, rejecting, publishing, superseding, archiving and restoring are
-// reviewing. Player characters and item instances are campaign-originated records and
-// need no world capability.
-const CAMPAIGN_ORIGINATED_TYPES = new Set(["player_character", "item_instance"])
-const EDIT_ACTIONS = new Set(["submit_for_review", "return_to_draft", "delete_draft"])
-
-export function lifecycleActionNeeds(action: string, entityTypeCode: string): string | null {
-    if (CAMPAIGN_ORIGINATED_TYPES.has(entityTypeCode)) {
-        return null
-    }
-    return EDIT_ACTIONS.has(action) ? WORLD_CANON_EDIT : WORLD_CANON_REVIEW
-}
+export const WORLD_CANON_READ_PRIVATE = "world.canon.read_private"

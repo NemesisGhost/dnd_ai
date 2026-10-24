@@ -1,3 +1,5 @@
+import type { RecordAuthoring } from "../utils/recordAuthoring"
+
 export type CharacterKind = "npc" | "player_character" | "character"
 
 export interface CharacterCondition {
@@ -12,6 +14,7 @@ export interface CharacterResource {
 }
 
 export interface CharacterDetail {
+    authoring?: RecordAuthoring
     character_id: string
     name: string
     // "character" is a bare character row that is neither an NPC nor a player character.

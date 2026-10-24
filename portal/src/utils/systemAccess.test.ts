@@ -5,7 +5,6 @@ import {
     canManageAccounts,
     canManageSystemRoles,
 } from "./systemAccess"
-import { lifecycleActionNeeds } from "../hooks/useWorldCapability"
 
 describe("system access helpers", () => {
     it("read only the server-computed global capabilities", () => {
@@ -23,21 +22,5 @@ describe("system access helpers", () => {
         expect(canManageAccounts({ global_capabilities: ["world.create", "campaign.host"] })).toBe(false)
         // Granting Administrator is its own switch.
         expect(canGrantAdmin({ global_capabilities: ["system_roles.manage"] })).toBe(false)
-    })
-})
-
-describe("lifecycleActionNeeds", () => {
-    it("maps preparing and withdrawing a draft to editing and the rest to reviewing", () => {
-        for (const action of ["submit_for_review", "return_to_draft", "delete_draft"]) {
-            expect(lifecycleActionNeeds(action, "location")).toBe("world.canon.edit")
-        }
-        for (const action of ["approve", "reject", "publish", "supersede", "archive", "restore"]) {
-            expect(lifecycleActionNeeds(action, "location")).toBe("world.canon.review")
-        }
-    })
-
-    it("needs no world capability for campaign-originated records", () => {
-        expect(lifecycleActionNeeds("publish", "player_character")).toBeNull()
-        expect(lifecycleActionNeeds("approve", "item_instance")).toBeNull()
     })
 })

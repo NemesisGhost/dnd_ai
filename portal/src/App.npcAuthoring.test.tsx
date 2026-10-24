@@ -2,6 +2,7 @@ import { fireEvent, screen, within } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { installCampaignShellMocks, openApp } from "./test/campaignRoutes"
 import type { MockServer } from "./test/authoringHarness"
+import { FULL_RECORD_AUTHORING } from "./test/recordAuthoring"
 import { installRecordReads } from "./test/worldWorkspaceMocks"
 
 vi.mock("./hooks/useSessionBootstrap", () => ({ useSessionBootstrap: vi.fn() }))
@@ -38,6 +39,7 @@ const VIEW = {
   field_locks: [],
 }
 const CHARACTER = {
+  authoring: FULL_RECORD_AUTHORING,
   character_id: "n1",
   name: "Mira",
   character_kind: "npc",
