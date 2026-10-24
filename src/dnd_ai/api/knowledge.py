@@ -729,6 +729,33 @@ def resolve_knowledge_response(
     character_id: uuid.UUID | None,
     party_id: uuid.UUID | None,
 ) -> KnowledgeResponse | None:
+    """The caller-facing response, carrying what the *caller's* access may do to the definition. A
+    member preview passes the subject's access, so a preview stays byte-identical to the subject's
+    own request."""
+    response = _resolve_knowledge_response_inner(
+        connection,
+        access=access,
+        campaign_id=campaign_id,
+        knowledge_item_id=knowledge_item_id,
+        character_id=character_id,
+        party_id=party_id,
+    )
+    if response is not None:
+        response.authoring = record_authoring_response(
+            connection, access=access, entity_type_code="knowledge_item"
+        )
+    return response
+
+
+def _resolve_knowledge_response_inner(
+    connection: Connection,
+    *,
+    access: AccessContext,
+    campaign_id: uuid.UUID,
+    knowledge_item_id: uuid.UUID,
+    character_id: uuid.UUID | None,
+    party_id: uuid.UUID | None,
+) -> KnowledgeResponse | None:
     """The exact audience-scoped `KnowledgeResponse` `access` would see for
     `knowledge_item_id` in `campaign_id`, or `None` for the identical non-
     disclosing "this caller may not see this item at all" case
@@ -959,9 +986,6 @@ def get_knowledge_endpoint(
     )
     if response is None:
         raise NotFoundError()
-    response.authoring = record_authoring_response(
-        connection, access=access, entity_type_code="knowledge_item"
-    )
     return response
 
 

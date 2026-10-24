@@ -330,6 +330,33 @@ def resolve_quest_response(
     character_id: uuid.UUID | None,
     party_id: uuid.UUID | None,
 ) -> QuestResponse | None:
+    """The caller-facing response, carrying what the *caller's* access may do to the definition. A
+    member preview passes the subject's access, so a preview stays byte-identical to the subject's
+    own request."""
+    response = _resolve_quest_response_inner(
+        connection,
+        access=access,
+        campaign_id=campaign_id,
+        quest_id=quest_id,
+        character_id=character_id,
+        party_id=party_id,
+    )
+    if response is not None:
+        response.authoring = record_authoring_response(
+            connection, access=access, entity_type_code="quest"
+        )
+    return response
+
+
+def _resolve_quest_response_inner(
+    connection: Connection,
+    *,
+    access: AccessContext,
+    campaign_id: uuid.UUID,
+    quest_id: uuid.UUID,
+    character_id: uuid.UUID | None,
+    party_id: uuid.UUID | None,
+) -> QuestResponse | None:
     """The exact audience-scoped `QuestResponse` `access` would see for
     `quest_id` in `campaign_id`, or `None` for the identical non-disclosing
     "this caller may not see this quest at all" case `get_quest_endpoint`
@@ -473,9 +500,6 @@ def get_quest_endpoint(
     )
     if response is None:
         raise NotFoundError()
-    response.authoring = record_authoring_response(
-        connection, access=access, entity_type_code="quest"
-    )
     return response
 
 
