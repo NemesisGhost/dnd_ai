@@ -480,7 +480,7 @@ describe("portal routing", () => {
         status: "authenticated",
         bootstrap: {
           ...sessionBootstrapFixture,
-          is_platform_administrator: true,
+          global_capabilities: ["accounts.manage", "system_roles.manage"],
         },
       },
       reload: vi.fn(), refresh: vi.fn(),
@@ -499,7 +499,7 @@ describe("portal routing", () => {
         status: "authenticated",
         bootstrap: {
           ...sessionBootstrapFixture,
-          is_platform_administrator: true,
+          global_capabilities: ["accounts.manage", "system_roles.manage"],
         },
       },
       reload: vi.fn(), refresh: vi.fn(),

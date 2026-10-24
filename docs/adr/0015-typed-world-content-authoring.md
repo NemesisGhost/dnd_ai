@@ -1,6 +1,6 @@
 # ADR 0015: Typed world-content authoring (Phase 15.1)
 
-- **Status**: Accepted
+- **Status**: Accepted; decision 3 amended by [ADR 0020](0020-scoped-system-world-and-campaign-roles.md) (world-definition writes also need a world capability)
 - **Date**: 2026-10-04
 - **Builds on**: [ADR 0014](0014-world-authoring-authority.md) (authority), [ADR 0003](0003-separate-world-timeline-and-campaign.md) (world, timeline, campaign), [ADR 0004](0004-use-event-assisted-state.md) (state needs a causal event).
 - **Related**: [ENTITY_LIFECYCLE.md](../ENTITY_LIFECYCLE.md) §3, §21.1; [PLAN.md](../PLAN.md) Phase 15.

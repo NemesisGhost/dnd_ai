@@ -9,6 +9,7 @@ import { Link } from "react-router"
 import { useSession } from "../context/SessionContext"
 import { useLogout } from "../hooks/useLogout"
 import { deriveProfileAvatar } from "../utils/profileIdentity"
+import { canManageAccounts } from "../utils/systemAccess"
 import { ProfileAvatar } from "./ProfileAvatar"
 
 // The profile button and its popup (UI_DESIGN §4.3). A disclosure
@@ -71,7 +72,7 @@ export function ProfileMenu() {
     const displayName = bootstrap.user.display_name
     const usableName = displayName.trim().length > 0
     const avatar = deriveProfileAvatar({ displayName })
-    const isPlatformAdministrator = bootstrap.is_platform_administrator
+    const isPlatformAdministrator = canManageAccounts(bootstrap)
 
     function closeAndFocusButton(): void {
         setOpen(false)

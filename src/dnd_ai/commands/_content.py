@@ -31,10 +31,12 @@ from dnd_ai.domain.authoring import (
     ContentNotEditableError,
     StaleWriteError,
     WorldArchivedError,
+    WorldAuthorityRequiredError,
     WorldNotAuthorizedError,
 )
 from dnd_ai.domain.content_authoring import content_edit_blocked_reason, is_reference_eligible
 from dnd_ai.domain.errors import DomainAuthorizationError, SafeMessageError
+from dnd_ai.queries.world_authority import resolve_world_authority
 
 from ._shared import lifecycle_code, lookup_id
 
@@ -91,12 +93,31 @@ class ContentWriteResult:
 
 
 def lock_authoring_scope(
-    connection: Connection, *, campaign_id: uuid.UUID, actor_user_id: uuid.UUID
+    connection: Connection,
+    *,
+    campaign_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    world_capability: str | None,
 ) -> AuthoringScope:
     """Lock and re-authorize. Raises `CampaignNotAuthorizedError` (404) if the
     campaign does not exist or the actor no longer holds `canon.edit`,
     `WorldArchivedError`/`CampaignArchivedError` (409) if either is no longer
-    active."""
+    active.
+
+    `world_capability` is the world capability the operation needs on the
+    campaign's world (docs/adr/0020-scoped-system-world-and-campaign-roles.md,
+    D6): `world.canon.edit` for definition writes, `world.canon.review` for the
+    canon lifecycle. It is required **in addition to** campaign `canon.edit`,
+    and it is resolved here, under the world `FOR SHARE` lock (which a concurrent
+    `end_world_role` / ownership transfer, taking the world `FOR UPDATE`,
+    serializes against), so a role ended mid-command is honoured. A caller
+    without it gets `WorldAuthorityRequiredError` (403 `world_authority_required`).
+
+    `None` means campaign authority alone suffices. It is for the explicitly
+    campaign-originated records that live in world tables (D8: world-time points,
+    item instances, player-character identity) and for the campaign-state
+    operations wrapped by `dnd_ai.commands._operations.lock_operation_scope`. It is
+    required (no default) so no caller can omit the world check by accident."""
     world_id = connection.execute(
         text("""
             SELECT t.world_id FROM campaign.campaigns c
@@ -161,6 +182,12 @@ def lock_authoring_scope(
     access = resolve_access_context(connection, user_id=actor_user_id, campaign_id=campaign_id)
     if access is None or not access.has_capability(CANON_EDIT):
         raise CampaignNotAuthorizedError(f"user {actor_user_id} lacks canon.edit on {campaign_id}")
+    if world_capability is not None:
+        authority = resolve_world_authority(connection, user_id=actor_user_id, world_id=world_id)
+        if authority is None or not authority.has_capability(world_capability):
+            raise WorldAuthorityRequiredError(
+                f"user {actor_user_id} lacks {world_capability} on world {world_id}"
+            )
     return AuthoringScope(world_id=world_id, campaign_id=campaign_id)
 
 

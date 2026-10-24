@@ -24,6 +24,7 @@ from dnd_ai.commands.npcs import create_npc, update_npc
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.domain.authoring import DESCRIPTION_MAX_LENGTH, NAME_MAX_LENGTH, REASON_MAX_LENGTH
 from dnd_ai.domain.npc_authoring import NPC_TEXT_MAX_LENGTH, SIZE_CATEGORIES
+from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.npc_authoring import NpcAuthoringView, get_npc_authoring, list_species_options
 
 from ._authoring import (
@@ -44,6 +45,13 @@ _BASE = "/campaigns/{campaign_id}/authoring/npcs"
 _CAPABILITY = "canon.edit"
 
 _Access = Annotated[AccessContext, Depends(require_campaign_capability(_CAPABILITY))]
+# Reads of the private side of shared world canon (drafts, GM-only prep, revisions,
+# provenance, sources, the review queue) also need `world.canon.read_private`
+# (docs/adr/0020-scoped-system-world-and-campaign-roles.md, D6).
+_PrivateRead = Annotated[
+    AccessContext,
+    Depends(require_campaign_capability(_CAPABILITY, world_capability=WORLD_CANON_READ_PRIVATE)),
+]
 _Conn = Annotated[Connection, Depends(get_connection)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
@@ -110,7 +118,7 @@ def _response(
 
 
 @router.get(_BASE + "/options")
-def npc_options_endpoint(access: _Access, connection: _Conn) -> dict[str, Any]:
+def npc_options_endpoint(access: _PrivateRead, connection: _Conn) -> dict[str, Any]:
     world_id = timeline_world_id(connection, access.timeline_id)
     return {
         "can_create": True,
@@ -183,7 +191,7 @@ def create_npc_endpoint(
 
 @router.get(_BASE + "/{npc_id}")
 def get_npc_authoring_endpoint(
-    npc_id: uuid.UUID, access: _Access, connection: _Conn
+    npc_id: uuid.UUID, access: _PrivateRead, connection: _Conn
 ) -> dict[str, Any]:
     world_id = timeline_world_id(connection, access.timeline_id)
     view = get_npc_authoring(connection, world_id=world_id, npc_id=npc_id)

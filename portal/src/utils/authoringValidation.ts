@@ -92,6 +92,13 @@ export function fieldForErrorCode(code: string | null): string | null {
 // not listed falls back to the generic per-kind message.
 export const ERROR_CODE_MESSAGE: Readonly<Record<string, string>> = {
     ruleset_not_available: "One of the selected rulesets is not available.",
+    world_authority_required:
+        "Changing shared world content requires a role on the world. Ask the world owner.",
+    system_gm_required: "Creating a campaign requires the game master system role.",
+    world_role_target_ineligible: "That account cannot be given this access.",
+    target_requires_system_gm: "A world owner must hold the game master system role.",
+    world_owner_required: "A world must keep at least one owner.",
+    invalid_ownership_transfer: "Ownership cannot be transferred to the current owner.",
     branch_point_invalid: "That branch point is not valid for this timeline.",
     supersession_target_invalid: "That replacement is not valid for this record.",
     world_archived: "The world is archived. Restore it first.",

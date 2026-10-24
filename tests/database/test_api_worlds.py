@@ -59,7 +59,7 @@ def test_the_bootstrap_advertises_world_create_to_eligible_humans_only(
     harness: AuthoringHarness,
 ) -> None:
     gm = harness.new_actor("GM", world_creator=True)
-    assert gm.get("/auth/session").json()["global_capabilities"] == ["world.create"]
+    assert "world.create" in gm.get("/auth/session").json()["global_capabilities"]
     player = harness.new_actor("Player")
     assert player.get("/auth/session").json()["global_capabilities"] == []
 
@@ -139,9 +139,16 @@ def test_the_creator_then_sees_the_world_with_full_capabilities(
     assert listing["items"][0]["capabilities"] == [
         "campaign.create",
         "timeline.manage",
+        "world.canon.edit",
+        "world.canon.read",
+        "world.canon.read_private",
+        "world.canon.review",
         "world.manage",
+        "world.share",
+        "world.transfer",
         "world.view",
     ]
+    assert listing["items"][0]["role_codes"] == ["world_owner"]
     assert listing["items"][0]["primary_timeline_id"] == created["primary_timeline_id"]
     assert listing["next_cursor"] is None
 

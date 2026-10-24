@@ -6,8 +6,8 @@ Covers: a platform administrator sees the list; a non-administrator,
 including a campaign owner holding `access.manage`, gets a non-disclosing
 404; a pending account shows the activation-token login name; search
 matches display name and login name; `email` never appears in any
-response; keyset pagination is stable; `is_platform_administrator` is
-correct in the session bootstrap for both an administrator and an
+response; keyset pagination is stable; `accounts.manage` is
+reported only in the session bootstrap for both an administrator and an
 ordinary user.
 """
 
@@ -201,9 +201,9 @@ def test_session_bootstrap_reports_platform_administrator_status(
     with client_factory(admin_user_id) as client:
         admin_response = client.get("/auth/session")
     assert admin_response.status_code == 200, admin_response.text
-    assert admin_response.json()["is_platform_administrator"] is True
+    assert "accounts.manage" in admin_response.json()["global_capabilities"]
 
     with client_factory(plain_user_id) as client:
         plain_response = client.get("/auth/session")
     assert plain_response.status_code == 200, plain_response.text
-    assert plain_response.json()["is_platform_administrator"] is False
+    assert "accounts.manage" not in plain_response.json()["global_capabilities"]

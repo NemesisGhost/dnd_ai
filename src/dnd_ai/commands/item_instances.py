@@ -70,7 +70,14 @@ def create_item_instance(
     clean_name = normalize_name(name)
     clean_summary = normalize_description(summary)
     clean_notes = normalize_origin_notes(origin_notes)
-    scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_authoring_scope(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        # D8/E2: item instances are created when loot is awarded; campaign authority
+        # alone suffices (no world capability).
+        world_capability=None,
+    )
     _require_usable_definition(
         connection,
         campaign_id=campaign_id,
@@ -126,7 +133,14 @@ def update_item_instance(
     change_note: str | None = None,
 ) -> ContentWriteResult:
     normalize_reason(change_note)
-    scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_authoring_scope(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        # D8/E2: item instances are created when loot is awarded; campaign authority
+        # alone suffices (no world capability).
+        world_capability=None,
+    )
     locked = lock_entities(connection, world_id=scope.world_id, update_ids=[item_instance_id])
     target = editable_target(
         locked,

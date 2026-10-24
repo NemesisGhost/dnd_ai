@@ -673,25 +673,31 @@ def resolve_user_by_external_identity(
 
 
 def is_platform_administrator(connection: Connection, *, user_id: uuid.UUID) -> bool:
-    """True iff `user_id` names an active user with `security.users.
-    is_platform_administrator` set (Phase 11R workstream A). This is a
-    deliberately minimal, campaign-independent authorization primitive —
-    `AccessContext`/`resolve_access_context` above resolve capabilities
-    *within one campaign membership*, but account-management operations
-    (creating a local account, issuing a password-reset token, bootstrap)
-    have no campaign to scope against at all (docs/PLAN.md §23.1:
-    "possessing an active login account does not grant access to any
-    campaign" — the reverse is equally true, campaign roles grant no
-    platform-account authority). A deactivated administrator's own
-    lifecycle status already gates this the same way it gates every other
-    login path — there is no separate "revoke admin" step beyond
-    deactivating the account."""
+    """True iff `user_id` names an active user holding an unrevoked system `admin`
+    assignment (`security.user_system_roles`; docs/adr/0019-scoped-system-world-
+    and-campaign-roles.md). A deliberately minimal, campaign-independent
+    authorization primitive -- `AccessContext`/`resolve_access_context` above
+    resolve capabilities *within one campaign membership*, but account-management
+    operations (creating a local account, issuing a password-reset token,
+    bootstrap) have no campaign to scope against at all (docs/PLAN.md §23.1:
+    "possessing an active login account does not grant access to any campaign" --
+    the reverse is equally true, campaign roles grant no platform-account
+    authority). Admin implies no GM, world, or campaign authority. A deactivated
+    administrator's own lifecycle status gates this the same way it gates every
+    other login path."""
     value = connection.execute(
         text("""
-            SELECT u.is_platform_administrator
-            FROM security.users u
-            JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
-            WHERE u.user_id = :user_id AND ls.code = 'active'
+            SELECT EXISTS (
+                SELECT 1
+                FROM security.user_system_roles usr
+                JOIN security.system_roles sr ON sr.system_role_id = usr.system_role_id
+                JOIN security.users u ON u.user_id = usr.user_id
+                JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
+                WHERE usr.user_id = :user_id
+                  AND usr.revoked_at IS NULL
+                  AND sr.code = 'admin' AND sr.is_active
+                  AND ls.code = 'active'
+            )
         """),
         {"user_id": user_id},
     ).scalar()

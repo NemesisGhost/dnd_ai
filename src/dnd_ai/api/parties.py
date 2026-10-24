@@ -152,6 +152,7 @@ def get_party_roster_endpoint(
         connection,
         world_id=timeline_world_id(connection, access.timeline_id),
         mode="reference",
+        viewer_user_id=access.user_id,
         can_edit_canon=editor,
     )
     members = [

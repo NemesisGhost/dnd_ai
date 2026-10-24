@@ -9,7 +9,7 @@ ownership. It is trusted infrastructure only, like
 
 It is also the remediation path for a **historical player-owned world**: one
 created before world creation was limited to platform administrators and
-effective GMs (docs/adr/0018-world-creation-eligibility.md). Nothing revokes
+effective GMs (ADR 0018, now the system `gm` role of docs/adr/0020-scoped-system-world-and-campaign-roles.md). Nothing revokes
 such ownership automatically and no world is deleted:
 
   1. `--list-ineligible-owners` reports every open `world_owner` membership
@@ -100,7 +100,7 @@ def resolve_local_user(connection: Connection, *, login_name: str) -> uuid.UUID 
 
 def list_ineligible_owners(connection: Connection) -> list[IneligibleOwner]:
     """Open `world_owner` memberships whose holder may not create worlds
-    today (ADR 0018) — the candidates for transfer. Read-only."""
+    today (the system `gm` role, ADR 0020) — the candidates for transfer. Read-only."""
     rows = connection.execute(
         text("""
             SELECT w.world_id, w.slug, w.name, u.user_id, u.display_name

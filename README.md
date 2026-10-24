@@ -255,6 +255,7 @@ The detailed service, transaction, AI, integration, and deployment architecture 
 - Cookie-authenticated mutations require an allowed Origin and an in-memory CSRF token.
 - Authorization is resolved from current server-side state; hiding a control in the portal is presentation, not enforcement.
 - Campaign, character-perspective, resource, and administrative access are capability-gated.
+- Authority has three independent scopes ([ADR 0020](docs/adr/0020-scoped-system-world-and-campaign-roles.md)): **system** roles (Admin, GM, Player, Observer), **world** roles (Owner, Editor, Reviewer, Reader, plus a separate permission to host campaigns), and the full **campaign** role model. No scope implies another: a system GM is not a GM in anyone's campaign, a world Owner is not a member of its campaigns, and a campaign GM cannot edit shared world canon without a role on the world. Authorship is provenance, never authority.
 - Inaccessible resources must not be disclosed through routes, identifiers, counts, suggestions, cached content, or error details.
 - Human browser sessions, optional OIDC bearer principals, Foundry device credentials, and machine principals remain separate trust boundaries.
 - Security-sensitive actions produce durable, non-secret audit records.
@@ -266,7 +267,7 @@ See the security and authentication contracts under [`docs/`](docs/) for authori
 | Schema | Responsibility |
 |---|---|
 | `core` | Worlds, entities, names, sources, statuses, tags, calendars, world time |
-| `security` | Users, sessions, roles, memberships, capabilities, grants, access groups |
+| `security` | Users, sessions, system roles, world roles and use grants, campaign roles, memberships, capabilities, grants, access groups |
 | `rules` | Rulesets and reusable mechanical definitions |
 | `character` | Shared character mechanics plus NPC and player-character extensions |
 | `world` | Locations, organizations, items, relationships, economies, religions |

@@ -44,6 +44,7 @@ from dnd_ai.domain.quest_authoring import (
     normalize_objective_fields,
     normalize_stage_fields,
 )
+from dnd_ai.domain.world_authority import WORLD_CANON_EDIT
 
 from ._content import (
     AuthoringScope,
@@ -110,7 +111,12 @@ def _lock_quest(
     expected_row_version: int,
     target_ids: tuple[uuid.UUID | None, ...] = (),
 ) -> tuple[AuthoringScope, LockedContent, dict[uuid.UUID, LockedContent]]:
-    scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_authoring_scope(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        world_capability=WORLD_CANON_EDIT,
+    )
     locked = lock_entities(
         connection,
         world_id=scope.world_id,
@@ -218,7 +224,12 @@ def create_quest(
 ) -> ContentWriteResult:
     clean_name = normalize_name(name)
     clean_summary = normalize_description(summary)
-    scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_authoring_scope(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        world_capability=WORLD_CANON_EDIT,
+    )
     source_id = insert_gm_source(connection, world_id=scope.world_id, actor_user_id=actor_user_id)
     entity_id, row_version = insert_draft_entity(
         connection,

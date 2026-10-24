@@ -41,6 +41,7 @@ from dnd_ai.domain.organization_authoring import (
     OrganizationField,
     OrganizationKind,
 )
+from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.organization_authoring import (
     OrganizationAuthoringView,
     ReferenceSummary,
@@ -77,6 +78,13 @@ _REL = "/campaigns/{campaign_id}/authoring/religions"
 _CAPABILITY = "canon.edit"
 
 _Access = Annotated[AccessContext, Depends(require_campaign_capability(_CAPABILITY))]
+# Reads of the private side of shared world canon (drafts, GM-only prep, revisions,
+# provenance, sources, the review queue) also need `world.canon.read_private`
+# (docs/adr/0020-scoped-system-world-and-campaign-roles.md, D6).
+_PrivateRead = Annotated[
+    AccessContext,
+    Depends(require_campaign_capability(_CAPABILITY, world_capability=WORLD_CANON_READ_PRIVATE)),
+]
 _Conn = Annotated[Connection, Depends(get_connection)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
@@ -221,7 +229,7 @@ def _religion_json(view: ReligionAuthoringView, *, changed: bool | None = None) 
 
 
 @router.get(_ORG + "/options")
-def organization_options_endpoint(access: _Access) -> dict[str, Any]:
+def organization_options_endpoint(access: _PrivateRead) -> dict[str, Any]:
     del access
     return {
         "can_create": True,
@@ -238,7 +246,7 @@ def organization_options_endpoint(access: _Access) -> dict[str, Any]:
 
 @router.get(_ORG + "/parent-options")
 def organization_parent_options_endpoint(
-    access: _Access,
+    access: _PrivateRead,
     connection: _Conn,
     for_organization: Annotated[uuid.UUID | None, Query(alias="for")] = None,
     q: Annotated[str | None, Query(max_length=200)] = None,
@@ -333,7 +341,7 @@ def create_organization_endpoint(
 
 @router.get(_ORG + "/{organization_id}")
 def get_organization_authoring_endpoint(
-    organization_id: uuid.UUID, access: _Access, connection: _Conn
+    organization_id: uuid.UUID, access: _PrivateRead, connection: _Conn
 ) -> dict[str, Any]:
     world_id = timeline_world_id(connection, access.timeline_id)
     view = get_organization_authoring(
@@ -409,7 +417,7 @@ def _organization_response(
 
 
 @router.get(_REL + "/options")
-def religion_options_endpoint(access: _Access) -> dict[str, Any]:
+def religion_options_endpoint(access: _PrivateRead) -> dict[str, Any]:
     del access
     return {
         "can_create": True,
@@ -424,7 +432,7 @@ def religion_options_endpoint(access: _Access) -> dict[str, Any]:
 
 @router.get(_REL + "/reference-options")
 def religion_reference_options_endpoint(
-    access: _Access,
+    access: _PrivateRead,
     connection: _Conn,
     q: Annotated[str | None, Query(max_length=200)] = None,
     limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
@@ -498,7 +506,7 @@ def create_religion_endpoint(
 
 @router.get(_REL + "/{religion_id}")
 def get_religion_authoring_endpoint(
-    religion_id: uuid.UUID, access: _Access, connection: _Conn
+    religion_id: uuid.UUID, access: _PrivateRead, connection: _Conn
 ) -> dict[str, Any]:
     world_id = timeline_world_id(connection, access.timeline_id)
     view = get_religion_authoring(connection, world_id=world_id, religion_id=religion_id)

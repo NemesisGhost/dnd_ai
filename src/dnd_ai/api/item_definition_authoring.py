@@ -32,6 +32,7 @@ from dnd_ai.domain.item_definition_authoring import (
     NAME_MAX_LENGTH,
     RARITIES,
 )
+from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.item_definitions import (
     ItemDefinitionView,
     get_item_definition,
@@ -55,6 +56,13 @@ router = APIRouter(tags=["item-definitions"])
 
 _BASE = "/campaigns/{campaign_id}/authoring/item-definitions"
 _Access = Annotated[AccessContext, Depends(require_campaign_capability("canon.edit"))]
+# Reads of the private side of shared world canon (drafts, GM-only prep, revisions,
+# provenance, sources, the review queue) also need `world.canon.read_private`
+# (docs/adr/0020-scoped-system-world-and-campaign-roles.md, D6).
+_PrivateRead = Annotated[
+    AccessContext,
+    Depends(require_campaign_capability("canon.edit", world_capability=WORLD_CANON_READ_PRIVATE)),
+]
 _Conn = Annotated[Connection, Depends(get_connection)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
@@ -100,7 +108,7 @@ def _view_json(view: ItemDefinitionView) -> dict[str, Any]:
 
 @router.get(_BASE)
 def list_endpoint(
-    access: _Access,
+    access: _PrivateRead,
     connection: _Conn,
     category: Annotated[str | None, Query(max_length=100)] = None,
     homebrew: Annotated[bool, Query()] = False,
@@ -131,7 +139,9 @@ def options_endpoint(connection: _Conn) -> dict[str, Any]:
 
 
 @router.get(_BASE + "/{definition_id}")
-def get_endpoint(definition_id: uuid.UUID, access: _Access, connection: _Conn) -> dict[str, Any]:
+def get_endpoint(
+    definition_id: uuid.UUID, access: _PrivateRead, connection: _Conn
+) -> dict[str, Any]:
     view = get_item_definition(
         connection,
         campaign_id=access.campaign_id,

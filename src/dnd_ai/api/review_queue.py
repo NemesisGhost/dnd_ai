@@ -18,6 +18,7 @@ from sqlalchemy import Connection
 
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.domain.entity_lifecycle import ENTITY_LIFECYCLE_ELIGIBLE_TYPE_CODES
+from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.review_queue import (
     STATUS_FILTERS,
     compare_revisions,
@@ -35,6 +36,13 @@ from .pagination import build_page, decode_typed_cursor
 router = APIRouter(tags=["review"])
 
 _Access = Annotated[AccessContext, Depends(require_campaign_capability("canon.edit"))]
+# Reads of the private side of shared world canon (drafts, GM-only prep, revisions,
+# provenance, sources, the review queue) also need `world.canon.read_private`
+# (docs/adr/0020-scoped-system-world-and-campaign-roles.md, D6).
+_PrivateRead = Annotated[
+    AccessContext,
+    Depends(require_campaign_capability("canon.edit", world_capability=WORLD_CANON_READ_PRIVATE)),
+]
 _Conn = Annotated[Connection, Depends(get_connection)]
 
 _KEYSET = "review_queue"
@@ -53,7 +61,7 @@ _STATUS_LABELS = {
 
 @router.get("/campaigns/{campaign_id}/review-queue")
 def review_queue_endpoint(
-    access: _Access,
+    access: _PrivateRead,
     connection: _Conn,
     status: Annotated[
         Literal["pending", "draft", "in_review", "approved", "rejected", "archived"], Query()
@@ -110,7 +118,9 @@ def review_queue_endpoint(
 
 
 @router.get("/campaigns/{campaign_id}/entities/{entity_id}/revisions")
-def revisions_endpoint(entity_id: uuid.UUID, access: _Access, connection: _Conn) -> dict[str, Any]:
+def revisions_endpoint(
+    entity_id: uuid.UUID, access: _PrivateRead, connection: _Conn
+) -> dict[str, Any]:
     history = get_revision_history(
         connection, world_id=timeline_world_id(connection, access.timeline_id), entity_id=entity_id
     )
@@ -140,7 +150,7 @@ def revisions_endpoint(entity_id: uuid.UUID, access: _Access, connection: _Conn)
 @router.get("/campaigns/{campaign_id}/entities/{entity_id}/revisions/compare")
 def compare_endpoint(
     entity_id: uuid.UUID,
-    access: _Access,
+    access: _PrivateRead,
     connection: _Conn,
     from_version: Annotated[int, Query(alias="from", ge=1)],
     to_version: Annotated[int, Query(alias="to", ge=1)],

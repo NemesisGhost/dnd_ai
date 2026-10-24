@@ -28,6 +28,7 @@ from dnd_ai.domain.npc_portrayal import (
     normalize_detail_level,
     normalize_profile_field,
 )
+from dnd_ai.domain.world_authority import WORLD_CANON_EDIT
 
 from ._content import (
     ContentWriteResult,
@@ -61,7 +62,12 @@ def update_npc_detail_level(
     detail_level: str,
 ) -> ContentWriteResult:
     level = normalize_detail_level(detail_level)
-    scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_authoring_scope(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        world_capability=WORLD_CANON_EDIT,
+    )
     locked = lock_entities(connection, world_id=scope.world_id, update_ids=[npc_id])
     target = editable_target(
         locked, entity_id=npc_id, type_codes=_NPC, expected_row_version=expected_row_version
@@ -117,7 +123,12 @@ def save_npc_portrayal_profile(
         name: normalize_profile_field(fields.get(name), field=name) for name in PROFILE_FIELD_NAMES
     }
     note = normalize_reason(change_note)
-    scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_authoring_scope(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        world_capability=WORLD_CANON_EDIT,
+    )
     locked = lock_entities(connection, world_id=scope.world_id, update_ids=[npc_id])
     npc = locked.get(npc_id)
     if npc is None or npc.entity_type_code != "npc":

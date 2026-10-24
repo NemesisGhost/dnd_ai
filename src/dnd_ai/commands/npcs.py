@@ -29,6 +29,7 @@ from dnd_ai.domain.content_authoring import (
     initial_fields,
 )
 from dnd_ai.domain.npc_authoring import normalize_npc_fields
+from dnd_ai.domain.world_authority import WORLD_CANON_EDIT
 
 from ._content import (
     ContentWriteResult,
@@ -74,6 +75,13 @@ def _text_id(value: uuid.UUID | None) -> str | None:
     return None if value is None else str(value)
 
 
+def _identity_world_capability(kind: CharacterKind) -> str | None:
+    """NPC identity is shared world canon (`world.canon.edit`). Player-character
+    identity is the explicit D8/E3 exception: it stays campaign-authorized until
+    Phase 16 defines player authoring."""
+    return None if kind == "player_character" else WORLD_CANON_EDIT
+
+
 def create_character_identity(
     connection: Connection,
     *,
@@ -97,7 +105,12 @@ def create_character_identity(
         appearance=appearance,
         notes=notes,
     )
-    scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_authoring_scope(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        world_capability=_identity_world_capability(kind),
+    )
     locked = lock_entities(
         connection,
         world_id=scope.world_id,
@@ -194,7 +207,12 @@ def update_character_identity(
     change_note: str | None = None,
 ) -> ContentWriteResult:
     normalize_reason(change_note)
-    scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_authoring_scope(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        world_capability=_identity_world_capability(kind),
+    )
     current_origin = connection.execute(
         text("SELECT origin_location_id FROM character.characters WHERE character_id = :id"),
         {"id": character_id},

@@ -64,6 +64,7 @@ from dnd_ai.domain.quest_authoring import (
     QUANTITY_MAX,
     REWARD_DESCRIPTION_MAX_LENGTH,
 )
+from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.quest_authoring import (
     QuestAuthoringView,
     get_quest_authoring,
@@ -97,6 +98,13 @@ _BASE = "/campaigns/{campaign_id}/authoring/quests"
 _CAPABILITY = "canon.edit"
 
 _Access = Annotated[AccessContext, Depends(require_campaign_capability(_CAPABILITY))]
+# Reads of the private side of shared world canon (drafts, GM-only prep, revisions,
+# provenance, sources, the review queue) also need `world.canon.read_private`
+# (docs/adr/0020-scoped-system-world-and-campaign-roles.md, D6).
+_PrivateRead = Annotated[
+    AccessContext,
+    Depends(require_campaign_capability(_CAPABILITY, world_capability=WORLD_CANON_READ_PRIVATE)),
+]
 _Conn = Annotated[Connection, Depends(get_connection)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
@@ -344,7 +352,7 @@ def _run(
 
 
 @router.get(_BASE + "/options")
-def quest_options_endpoint(access: _Access, connection: _Conn) -> dict[str, Any]:
+def quest_options_endpoint(access: _PrivateRead, connection: _Conn) -> dict[str, Any]:
     del access
     catalogs = quest_option_catalogs()
     return {
@@ -372,7 +380,7 @@ def quest_options_endpoint(access: _Access, connection: _Conn) -> dict[str, Any]
 
 @router.get(_BASE + "/target-options")
 def quest_target_options_endpoint(
-    access: _Access,
+    access: _PrivateRead,
     connection: _Conn,
     q: Annotated[str | None, Query(max_length=200)] = None,
     limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
@@ -402,7 +410,7 @@ def quest_target_options_endpoint(
 
 @router.get(_BASE + "/{quest_id}")
 def get_quest_authoring_endpoint(
-    quest_id: uuid.UUID, access: _Access, connection: _Conn
+    quest_id: uuid.UUID, access: _PrivateRead, connection: _Conn
 ) -> dict[str, Any]:
     view = get_quest_authoring(
         connection, world_id=timeline_world_id(connection, access.timeline_id), quest_id=quest_id

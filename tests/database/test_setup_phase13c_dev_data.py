@@ -54,6 +54,7 @@ from tests.factories import (
     make_event,
     make_platform_administrator,
     make_session,
+    make_system_role_assignment,
     make_timeline,
     make_user,
     make_world,
@@ -103,6 +104,9 @@ def _make_local_account(
         if is_platform_administrator
         else make_user(connection, display_name)
     )
+    if is_platform_administrator:
+        # The script also creates the fixture world, which needs system GM.
+        make_system_role_assignment(connection, user_id, "gm")
     connection.execute(
         text(
             "INSERT INTO security.external_identities (user_id, issuer, subject) "
@@ -1360,8 +1364,11 @@ def _access(db_connection: Connection, campaign: CampaignBootstrapView):
             # the one platform administrator among them.
             text(
                 "SELECT sm.user_id FROM security.campaign_memberships sm "
-                "JOIN security.users u ON u.user_id = sm.user_id "
-                "WHERE sm.campaign_id = :c AND u.is_platform_administrator "
+                "JOIN security.user_system_roles usr ON usr.user_id = sm.user_id "
+                "AND usr.revoked_at IS NULL "
+                "JOIN security.system_roles sr ON sr.system_role_id = usr.system_role_id "
+                "AND sr.code = 'admin' "
+                "WHERE sm.campaign_id = :c "
                 "ORDER BY sm.user_id"
             ),
             {"c": campaign.campaign_id},

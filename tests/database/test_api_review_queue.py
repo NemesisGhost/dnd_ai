@@ -173,6 +173,13 @@ def test_approving_ones_own_work_is_allowed_and_audited_but_a_reviewer_is_not_fl
     stage(s, mine, "submit-for-review", "approve")
     reviewer = s.harness.new_actor("Reviewer")
     add_member(s.connection, s.cid, reviewer.user_id, "gm")
+    assert (
+        s.gm.post(
+            f"/worlds/{s.world_id}/roles",
+            {"login_name": reviewer.login_name, "role_code": "world_reviewer"},
+        ).status_code
+        == 201
+    )
     theirs = new_place(s, "Reviewed By Another")
     version = stage(s, theirs, "submit-for-review")
     approved = reviewer.post(

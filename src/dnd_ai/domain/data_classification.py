@@ -304,6 +304,16 @@ COLUMN_CLASSES: dict[str, DataClass] = {
 # names, identifiers, enumerated codes, or numbers. Everything else is redacted.
 AUDIT_STRUCTURAL_FIELDS: frozenset[str] = frozenset(
     {
+        "system_role_code",
+        "assigned",
+        "relinquished",
+        "world_role_code",
+        "previous_owner_user_id",
+        "new_owner_user_id",
+        "retained_role_code",
+        "ended",
+        "target_user_id",
+        "revoked",
         "name",
         "category",
         "kind",

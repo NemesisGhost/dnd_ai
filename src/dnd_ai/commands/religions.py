@@ -16,6 +16,7 @@ from dnd_ai.domain.organization_authoring import (
     DESCRIPTION_FIELD_MAX_LENGTH,
     normalize_optional_text,
 )
+from dnd_ai.domain.world_authority import WORLD_CANON_EDIT
 
 from ._content import (
     ContentWriteResult,
@@ -48,7 +49,12 @@ def create_religion(
     clean_name = normalize_name(name)
     clean_summary = normalize_description(summary)
     clean_pantheon = _pantheon(pantheon_structure)
-    scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_authoring_scope(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        world_capability=WORLD_CANON_EDIT,
+    )
     source_id = insert_gm_source(connection, world_id=scope.world_id, actor_user_id=actor_user_id)
     entity_id, row_version = insert_draft_entity(
         connection,
@@ -90,7 +96,12 @@ def update_religion(
     change_note: str | None = None,
 ) -> ContentWriteResult:
     normalize_reason(change_note)
-    scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_authoring_scope(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        world_capability=WORLD_CANON_EDIT,
+    )
     locked = lock_entities(connection, world_id=scope.world_id, update_ids=[religion_id])
     target = editable_target(
         locked,

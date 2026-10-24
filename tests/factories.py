@@ -217,30 +217,49 @@ def make_user(
     return value
 
 
-def make_platform_administrator(
-    connection: Connection, display_name: str = "Admin", *, status_code: str = "active"
+def make_system_role_assignment(
+    connection: Connection,
+    user_id: uuid.UUID,
+    role_code: str,
+    *,
+    granted_by_user_id: uuid.UUID | None = None,
+    revoked: bool = False,
 ) -> uuid.UUID:
-    """A `security.users` row with `is_platform_administrator = true`
-    (revision 099_local_authentication, Phase 11R workstream A) — for
-    tests exercising `dnd_ai.commands.local_auth.create_local_account`/
-    `issue_password_reset_token`, both gated on this flag rather than any
-    campaign-scoped capability. A direct raw insert (this module's own
-    docstring's established "production commands don't exist yet"
-    exception applies loosely here too: `dnd_ai.commands.local_auth.
-    bootstrap_initial_admin` is the real production path, but it only
-    succeeds against a completely empty `security.users` table — never
-    true in this shared session database once any other fixture has run —
-    so ordinary tests need this shortcut instead)."""
+    """An open (or, with `revoked=True`, revoked) `security.user_system_roles`
+    assignment of the system role `role_code` -- a direct raw insert, the
+    shortcut ordinary tests use instead of the (admin-gated) commands."""
     value = connection.execute(
         text("""
-            INSERT INTO security.users (display_name, lifecycle_status_id, is_platform_administrator)
-            VALUES (:name, :status, true)
-            RETURNING user_id
+            INSERT INTO security.user_system_roles
+                (user_id, system_role_id, granted_by_user_id, revoked_at, revoked_by_user_id)
+            SELECT CAST(:u AS uuid), sr.system_role_id, CAST(:granted_by AS uuid),
+                   CASE WHEN CAST(:revoked AS boolean) THEN now() ELSE NULL END,
+                   CASE WHEN CAST(:revoked AS boolean) THEN CAST(:granted_by AS uuid) END
+            FROM security.system_roles sr WHERE sr.code = :code
+            RETURNING user_system_role_id
         """),
-        {"name": display_name, "status": status_id(connection, "lifecycle_statuses", status_code)},
+        {"u": user_id, "code": role_code, "granted_by": granted_by_user_id, "revoked": revoked},
     ).scalar()
     assert isinstance(value, uuid.UUID)
     return value
+
+
+def make_platform_administrator(
+    connection: Connection, display_name: str = "Admin", *, status_code: str = "active"
+) -> uuid.UUID:
+    """A user holding an open system `admin` assignment (docs/adr/0019-scoped-
+    system-world-and-campaign-roles.md) -- for tests exercising
+    `dnd_ai.commands.local_auth.create_local_account`/`issue_password_reset_token`,
+    gated on platform administration rather than any campaign-scoped
+    capability. Admin alone implies no GM, world, or campaign authority; tests
+    that also need world creation add `make_system_role_assignment(..., "gm")`.
+    A direct raw insert: `dnd_ai.commands.local_auth.bootstrap_initial_admin` is
+    the real production path, but it only succeeds against a completely empty
+    `security.users` table -- never true in this shared session database once
+    any other fixture has run."""
+    user_id = make_user(connection, display_name, status_code=status_code)
+    make_system_role_assignment(connection, user_id, "admin")
+    return user_id
 
 
 def make_external_identity(

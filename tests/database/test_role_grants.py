@@ -244,6 +244,10 @@ MANAGED_TABLES = [
     # (migrations 110, 112)
     ("security", "world_roles"),
     ("security", "world_memberships"),
+    # Scoped roles (ADR 0020): system roles (migration 137), world use grants (137)
+    ("security", "system_roles"),
+    ("security", "user_system_roles"),
+    ("security", "world_use_grants"),
     ("security", "actor_idempotent_requests"),
 ]
 

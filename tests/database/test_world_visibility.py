@@ -112,7 +112,12 @@ def _assert_no_world_mutation(actor: Actor, world: AuthoredWorld, expected: int)
         },
         key=actor.fresh_key(),
     )
-    assert campaign.status_code == 404, campaign.text
+    # A caller without the system `gm` role is refused before the timeline is looked up
+    # (ADR 0020: `campaign.host`), which discloses nothing about this world; either way
+    # nothing is created.
+    assert campaign.status_code in (403, 404), campaign.text
+    if campaign.status_code == 403:
+        assert campaign.json()["error"]["code"] == "system_gm_required"
 
 
 # --- world_viewer -------------------------------------------------------------------------
@@ -490,7 +495,19 @@ def test_observed_player_with_a_legacy_world_and_a_roleless_membership(
     # The campaign-visible world comes from the bootstrap, the owned one from /worlds.
     assert session["campaigns"][0]["world_id"] == str(hosted.world_id)
     assert [(w["world_id"], w["capabilities"]) for w in worlds] == [
-        (str(owned_id), ["campaign.create", "timeline.manage", "world.manage", "world.view"])
+        # A pre-ADR-0018 owner without the system `gm` role keeps editing, reviewing, reading
+        # and timeline work but loses world management and campaign creation (ADR 0020, D11).
+        (
+            str(owned_id),
+            [
+                "timeline.manage",
+                "world.canon.edit",
+                "world.canon.read",
+                "world.canon.read_private",
+                "world.canon.review",
+                "world.view",
+            ],
+        )
     ]
     # Campaign World opens through campaign.view; the inaccessible one does not.
     assert player.get(f"/campaigns/{campaign_a}/world/search").status_code == 200
@@ -498,9 +515,10 @@ def test_observed_player_with_a_legacy_world_and_a_roleless_membership(
     # The campaign-visible world exposes no world route, so no editing.
     assert player.get(f"/worlds/{hosted.world_id}").status_code == 404
     _assert_no_world_mutation(player, hosted, expected=404)
-    # Only the owned world exposes editing.
+    # Only the owned world exposes any action. Its owner lacks the system `gm` role, so
+    # world management (`update`, archive) is withheld while timeline work stays (ADR 0020).
     owned = player.get(f"/worlds/{owned_id}").json()
-    assert "update" in owned["available_actions"]
+    assert owned["available_actions"] == ["create_timeline"]
     # The inaccessible campaign cannot be stored as a preference either.
     refused = player.client.put(
         "/auth/preferences/last-visited-campaign",

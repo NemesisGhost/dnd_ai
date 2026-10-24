@@ -66,7 +66,7 @@ def test_a_gm_can_author_a_world_a_campaign_a_branch_and_canon_through_the_porta
 
     # 1. The session says this human may create worlds (server-computed), and
     #    that an ordinary user may not.
-    assert _ok(gm.get("/auth/session"))["global_capabilities"] == ["world.create"]
+    assert "world.create" in _ok(gm.get("/auth/session"))["global_capabilities"]
     assert _ok(stranger.get("/auth/session"))["global_capabilities"] == []
 
     # 2. Rulesets come from the server.

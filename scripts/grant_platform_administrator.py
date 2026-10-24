@@ -1,10 +1,11 @@
 """Out-of-band platform-administrator promotion CLI (Phase 13E checkpoint
 9b; owner decision D-10).
 
-Recovers from the single-active-administrator bus factor: today, `is_
-platform_administrator` is set on an *existing* account by exactly this
-script — no HTTP route or portal control ever promotes an account, the
-same "trusted infrastructure, never over HTTP" posture `scripts/
+Recovers from the single-active-administrator bus factor: by default the
+system `admin` role (`security.user_system_roles`, ADR 0020) is granted to an
+*existing* account by exactly this script — no HTTP route or portal control
+promotes an account unless the deployment enables `DND_AI_ALLOW_IN_APP_ADMIN_GRANT`
+(off by default) — the same "trusted infrastructure, never over HTTP" posture `scripts/
 bootstrap_admin.py` and `security.timeline_bootstrap_grants` already
 establish for their own analogous first-campaign entitlement. Standing
 recommendation: promote a second administrator early, so this recovery
@@ -27,7 +28,8 @@ Usage:
       # preview only -- prints what would happen, changes nothing
 
   uv run python scripts/grant_platform_administrator.py --login-name gm2 --apply
-      # promotes the account, if it is not already an administrator
+      # grants the system `admin` role (and nothing else: no GM, world or campaign
+      # access), if the account is not already an administrator
 """
 
 from __future__ import annotations
@@ -45,7 +47,7 @@ from dnd_ai.commands.local_auth import (
     grant_platform_administrator,
     normalize_login_name,
 )
-from dnd_ai.domain.access import LOCAL_AUTH_ISSUER
+from dnd_ai.domain.access import LOCAL_AUTH_ISSUER, is_platform_administrator
 
 _GRANT_COMMAND_NAME = "grant_platform_administrator"
 
@@ -70,7 +72,7 @@ def _preview(connection: Connection, *, login_name: str) -> int:
     row = (
         connection.execute(
             text("""
-                SELECT u.user_id, u.display_name, u.is_platform_administrator
+                SELECT u.user_id, u.display_name
                 FROM security.users u
                 JOIN security.external_identities ei ON ei.user_id = u.user_id
                 JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
@@ -96,8 +98,9 @@ def _preview(connection: Connection, *, login_name: str) -> int:
     print(f"  user_id: {row['user_id']}")
     print(f"  login_name: {normalized_login_name}")
     print(f"  display_name: {row['display_name']}")
-    print(f"  currently_platform_administrator: {row['is_platform_administrator']}")
-    if row["is_platform_administrator"]:
+    already_administrator = is_platform_administrator(connection, user_id=row["user_id"])
+    print(f"  currently_platform_administrator: {already_administrator}")
+    if already_administrator:
         print("  This account is already a platform administrator -- --apply would be a no-op.")
     else:
         print("  Re-run with --apply to promote this account.")
@@ -137,7 +140,7 @@ def _apply(engine: Engine, *, login_name: str) -> int:
             correlation_id=None,
             command_name=_GRANT_COMMAND_NAME,
             event_id=None,
-            changed_fields={"is_platform_administrator": True},
+            changed_fields={"system_role_assigned": "admin"},
         )
 
     print(f"user_id: {result.user_id}")

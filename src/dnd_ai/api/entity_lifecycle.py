@@ -27,6 +27,7 @@ from sqlalchemy import Connection, text
 
 from dnd_ai.commands._revisions import REVISION_LIFECYCLE, capture_revision
 from dnd_ai.commands.entity_lifecycle import (
+    CAMPAIGN_ORIGINATED_TYPES,
     EntityTransitionResult,
     approve_entity,
     archive_entity,
@@ -39,10 +40,11 @@ from dnd_ai.commands.entity_lifecycle import (
     supersede_entity,
 )
 from dnd_ai.domain.access import AccessContext
+from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.entity_lifecycle import get_entity_lifecycle, list_replacement_candidates
 
 from ._shared import timeline_world_id
-from .access import require_campaign_capability
+from .access import require_campaign_capability, require_world_capability_for_campaign
 from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
@@ -85,6 +87,20 @@ class SupersedeRequest(_Strict):
     replacement_expected_row_version: int = Field(ge=1)
 
 
+def _require_private_read(
+    connection: Connection, access: AccessContext, entity_type_code: str
+) -> None:
+    """The lifecycle view of shared world canon needs `world.canon.read_private`
+    (docs/adr/0020-scoped-system-world-and-campaign-roles.md, D6). The
+    campaign-originated records (player characters, item instances; D8/E3, E2)
+    stay readable with campaign authority alone, as their authoring is."""
+    if entity_type_code in CAMPAIGN_ORIGINATED_TYPES:
+        return
+    require_world_capability_for_campaign(
+        connection, access=access, world_capability=WORLD_CANON_READ_PRIVATE
+    )
+
+
 @router.get(_BASE)
 def get_entity_lifecycle_endpoint(
     entity_id: uuid.UUID,
@@ -95,6 +111,7 @@ def get_entity_lifecycle_endpoint(
     view = get_entity_lifecycle(connection, world_id=world_id, entity_id=entity_id)
     if view is None:
         raise NotFoundError()
+    _require_private_read(connection, access, view.entity_type_code)
     return {
         "entity_id": str(view.entity_id),
         "entity_type_code": view.entity_type_code,
@@ -126,8 +143,10 @@ def list_replacement_candidates_endpoint(
     cursor: Annotated[str | None, Query(max_length=2048)] = None,
 ) -> dict[str, Any]:
     world_id = timeline_world_id(connection, access.timeline_id)
-    if get_entity_lifecycle(connection, world_id=world_id, entity_id=entity_id) is None:
+    current = get_entity_lifecycle(connection, world_id=world_id, entity_id=entity_id)
+    if current is None:
         raise NotFoundError()
+    _require_private_read(connection, access, current.entity_type_code)
     decoded = decode_typed_cursor(cursor, keyset=_CANDIDATE_KEYSET, fields=["str", "uuid"])
     after: tuple[str, uuid.UUID] | None = None
     if decoded is not None:
@@ -307,6 +326,13 @@ def _clean(reason: str | None) -> str | None:
 
 
 _Access = Annotated[AccessContext, Depends(require_campaign_capability(_CAPABILITY))]
+# Reads of the private side of shared world canon (drafts, GM-only prep, revisions,
+# provenance, sources, the review queue) also need `world.canon.read_private`
+# (docs/adr/0020-scoped-system-world-and-campaign-roles.md, D6).
+_PrivateRead = Annotated[
+    AccessContext,
+    Depends(require_campaign_capability(_CAPABILITY, world_capability=WORLD_CANON_READ_PRIVATE)),
+]
 _Conn = Annotated[Connection, Depends(get_connection)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]

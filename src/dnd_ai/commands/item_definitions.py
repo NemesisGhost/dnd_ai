@@ -28,6 +28,7 @@ from dnd_ai.domain.item_definition_authoring import (
     normalize_rarity,
     normalize_weight,
 )
+from dnd_ai.domain.world_authority import WORLD_CANON_EDIT
 
 from ._content import EntityNotFoundError, lock_authoring_scope
 
@@ -126,7 +127,12 @@ def create_item_definition(
         base_cost_gp=base_cost_gp,
         canon_status=canon_status,
     )
-    scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_authoring_scope(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        world_capability=WORLD_CANON_EDIT,
+    )
     category_id = _category_id(connection, values.category)
     version_id = connection.execute(
         text("SELECT ruleset_version_id FROM campaign.campaigns WHERE campaign_id = :c"),
@@ -211,7 +217,12 @@ def update_item_definition(
         base_cost_gp=base_cost_gp,
         canon_status=canon_status,
     )
-    scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_authoring_scope(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        world_capability=WORLD_CANON_EDIT,
+    )
     category_id = _category_id(connection, values.category)
     row = (
         connection.execute(

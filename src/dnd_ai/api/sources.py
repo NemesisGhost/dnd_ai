@@ -28,6 +28,7 @@ from dnd_ai.domain.source_authoring import (
     SOURCE_TYPES,
     TITLE_MAX_LENGTH,
 )
+from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.provenance import (
     EntityRef,
     LinkRow,
@@ -51,6 +52,13 @@ from .errors import NotFoundError
 router = APIRouter(tags=["sources"])
 
 _Access = Annotated[AccessContext, Depends(require_campaign_capability("canon.edit"))]
+# Reads of the private side of shared world canon (drafts, GM-only prep, revisions,
+# provenance, sources, the review queue) also need `world.canon.read_private`
+# (docs/adr/0020-scoped-system-world-and-campaign-roles.md, D6).
+_PrivateRead = Annotated[
+    AccessContext,
+    Depends(require_campaign_capability("canon.edit", world_capability=WORLD_CANON_READ_PRIVATE)),
+]
 _Conn = Annotated[Connection, Depends(get_connection)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
@@ -128,7 +136,7 @@ def _provenance_json(connection: Connection, access: AccessContext, entity_id: u
 
 
 @router.get("/campaigns/{campaign_id}/sources")
-def list_sources_endpoint(access: _Access, connection: _Conn) -> dict[str, Any]:
+def list_sources_endpoint(access: _PrivateRead, connection: _Conn) -> dict[str, Any]:
     sources = list_world_sources(
         connection, world_id=timeline_world_id(connection, access.timeline_id)
     )
@@ -143,7 +151,7 @@ def list_sources_endpoint(access: _Access, connection: _Conn) -> dict[str, Any]:
 
 
 @router.get("/campaigns/{campaign_id}/entities/{entity_id}/provenance")
-def provenance_endpoint(entity_id: uuid.UUID, access: _Access, connection: _Conn) -> Any:
+def provenance_endpoint(entity_id: uuid.UUID, access: _PrivateRead, connection: _Conn) -> Any:
     return _provenance_json(connection, access, entity_id)
 
 

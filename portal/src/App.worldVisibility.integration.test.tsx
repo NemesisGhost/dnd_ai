@@ -27,7 +27,6 @@ const OWNER = ["campaign.create", "timeline.manage", "world.manage", "world.view
 const bootstrap: SessionBootstrap = {
   ...sessionBootstrapFixture,
   user: { user_id: "player-a", display_name: "Phase13E Dev Player A" },
-  is_platform_administrator: false,
   global_capabilities: [],
   startup_campaign_id: "camp-a",
   campaign_preferences: {

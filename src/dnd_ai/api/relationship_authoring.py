@@ -52,6 +52,7 @@ from dnd_ai.domain.relationship_authoring import (
     TypePairing,
     pairs_for,
 )
+from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.relationship_authoring import (
     Participant,
     RelationshipAuthoringView,
@@ -77,6 +78,13 @@ router = APIRouter(tags=["relationship-authoring"])
 
 _BASE = "/campaigns/{campaign_id}/authoring/relationships"
 _Access = Annotated[AccessContext, Depends(require_campaign_capability("canon.edit"))]
+# Reads of the private side of shared world canon (drafts, GM-only prep, revisions,
+# provenance, sources, the review queue) also need `world.canon.read_private`
+# (docs/adr/0020-scoped-system-world-and-campaign-roles.md, D6).
+_PrivateRead = Annotated[
+    AccessContext,
+    Depends(require_campaign_capability("canon.edit", world_capability=WORLD_CANON_READ_PRIVATE)),
+]
 _Conn = Annotated[Connection, Depends(get_connection)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
@@ -318,7 +326,7 @@ def pairing_json(pairing: TypePairing) -> dict[str, Any]:
 
 @router.get(_BASE + "/options")
 def options_endpoint(
-    access: _Access,
+    access: _PrivateRead,
     connection: _Conn,
     entity_id: Annotated[uuid.UUID | None, Query()] = None,
 ) -> dict[str, Any]:
@@ -371,7 +379,7 @@ def options_endpoint(
 
 @router.get(_BASE)
 def list_endpoint(
-    access: _Access,
+    access: _PrivateRead,
     connection: _Conn,
     entity_id: Annotated[uuid.UUID, Query()],
     include_archived: bool = False,
@@ -418,7 +426,7 @@ def list_endpoint(
 
 
 @router.get(_BASE + "/{relationship_id}")
-def get_endpoint(relationship_id: uuid.UUID, access: _Access, connection: _Conn) -> Any:
+def get_endpoint(relationship_id: uuid.UUID, access: _PrivateRead, connection: _Conn) -> Any:
     view = get_relationship_authoring(
         connection,
         world_id=timeline_world_id(connection, access.timeline_id),

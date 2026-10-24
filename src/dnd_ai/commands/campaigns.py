@@ -76,15 +76,21 @@ before anything is written:
    of a prior campaign is not evidence the caller was ever meant to be the
    one who creates the first one.
 3. If a `campaign.campaigns` row **does** already reference `timeline_id`,
-   the caller must hold an active `access.manage` membership in *at
-   least one* of them — the same capability `security.
-   assert_campaign_retains_access_manager()` already treats as "this
-   user administers this campaign." Anyone else, including a caller who
-   only holds `campaign.view` in an existing campaign on that timeline,
-   or who holds an otherwise-valid bootstrap grant for it (that grant
-   only ever authorized being *first*; it is never consulted once a
-   campaign already exists), is rejected. No bootstrap grant is consumed
-   or even looked up on this branch.
+   the caller must hold the world capability `timeline.manage` (a world
+   Owner or Editor; docs/adr/0020-scoped-system-world-and-campaign-roles.md).
+   Campaigns sharing a timeline share its state, so only someone with write
+   access to the world may start another one on it; a user holding only a
+   world-use grant, or `access.manage` in a campaign already on the timeline,
+   is rejected. The earlier "`access.manage` in any campaign on the timeline"
+   path (finding F3) borrowed authority from another campaign and no longer
+   exists. No bootstrap grant is consumed or even looked up on this branch.
+   Before any of this, the creator must also hold the system capability
+   `campaign.host` (the system `gm` role); without it `create_campaign`
+   raises `SystemGmRequiredError` (403 `system_gm_required`) before
+   anything about the timeline is looked up. The creator then receives both
+   the `campaign_owner` and the `gm` template roles in the creating
+   transaction.
+
 4. Every rejection — a nonexistent `timeline_id`, an unclaimed one with
    no matching bootstrap grant, and an already-claimed one the caller
    isn't entitled to reuse — raises the identical
@@ -208,11 +214,10 @@ the one write in this codebase with no existing campaign to key a
 reservation against until `create_campaign` itself returns. This command
 function stays unaware of idempotency entirely, the same separation of
 concerns every other Phase 10 command/API pair already keeps. Without it, a
-dropped response and a naive client retry would fall through to `_
-authorize_timeline_reuse()`'s *reuse* branch (the retry's own creator now
-holds `access.manage` on the timeline it just claimed) and mint a second
-campaign, membership, owner role, and audit row for what the caller
-believes is one logical request — see `dnd_ai.api.idempotency`'s module
+dropped response and a naive client retry would be authorized a second time (an
+Owner remains entitled, and a bootstrap-grant holder is simply refused) and
+could mint a second campaign, membership, owner role, and audit row for what
+the caller believes is one logical request — see `dnd_ai.api.idempotency`'s module
 docstring for the full mechanism and concurrency argument."""
 
 import uuid
@@ -241,13 +246,16 @@ from dnd_ai.domain.authoring_policy import (
     world_blocked_reason,
 )
 from dnd_ai.domain.data_classification import audit_change
-from dnd_ai.domain.errors import DomainAuthorizationError
-from dnd_ai.domain.world_authority import CAMPAIGN_CREATE
+from dnd_ai.domain.errors import DomainAuthorizationError, SafeMessageError
+from dnd_ai.domain.system_authority import CAMPAIGN_HOST
+from dnd_ai.domain.world_authority import CAMPAIGN_CREATE, TIMELINE_MANAGE
+from dnd_ai.queries.system_authority import has_system_capability
 from dnd_ai.queries.world_authority import resolve_world_authority
 
 from ._shared import lifecycle_code, lookup_id
 
 _CAMPAIGN_OWNER_ROLE_CODE = "campaign_owner"
+_GM_ROLE_CODE = "gm"
 _ACCESS_MANAGE_CAPABILITY_CODE = "access.manage"
 _ACTIVE_LIFECYCLE_STATUS_CODE = "active"
 _ACTIVE_MEMBERSHIP_STATUS_CODE = "active"
@@ -268,6 +276,18 @@ class TimelineNotAuthorizedError(DomainAuthorizationError):
     unclassified 500 first, before that FK is ever reached. The supplied
     `timeline_id`/`creator_user_id` are included only in the constructor's
     `detail` argument (`str(self)`), never in `safe_message`."""
+
+
+class SystemGmRequiredError(SafeMessageError):
+    """Raised by `create_campaign()` when the creator lacks the system
+    `campaign.host` capability (the system `gm` role). Checked first, before
+    the timeline is looked up, so it discloses nothing about any world or
+    timeline: the caller learns only that their own account may not host
+    campaigns."""
+
+    safe_status_code = 403
+    safe_error_code = "system_gm_required"
+    safe_message = "Creating a campaign requires the game master system role."
 
 
 class CampaignRulesetNotAllowedError(ValueError):
@@ -361,9 +381,11 @@ def _authorize_timeline_reuse(
     bootstrap grant, so `create_campaign` can mark it consumed only after
     the campaign it authorizes actually exists. See this module's
     docstring for the full policy and its concurrency-safety argument;
-    briefly: locks the timeline row, requires a live bootstrap grant for
-    an unclaimed timeline, and otherwise requires an active `access.
-    manage` membership in at least one existing campaign already on it."""
+    briefly: locks the timeline row, requires the caller to hold the world
+    capability `campaign.create` (and, once the timeline already has a
+    campaign, `timeline.manage`), or a live bootstrap grant for an unclaimed
+    timeline. The caller's system `campaign.host` capability is checked by
+    `create_campaign` before this runs."""
     world_id = connection.execute(
         text("SELECT world_id FROM campaign.timelines WHERE timeline_id = :timeline"),
         {"timeline": timeline_id},
@@ -395,22 +417,28 @@ def _authorize_timeline_reuse(
     world_status = lifecycle_code(connection, world_status_id)
     timeline_status = lifecycle_code(connection, timeline_status_id)
 
-    # Path A (Phase 14): world authority. `campaign.create` is held by an active
-    # world owner; no bootstrap grant is looked up or consumed, and the owner
-    # gets no membership in campaigns they did not create.
+    # Path A: world authority. `campaign.create` is held by a world Owner (and,
+    # once world-use grants exist, a use-grant holder); no bootstrap grant is
+    # looked up or consumed, and the holder gets no membership in campaigns they
+    # did not create. A timeline that already hosts a campaign additionally needs
+    # `timeline.manage` (Owner or Editor): campaigns on one timeline share its
+    # state, so a use-grant holder may only start the first campaign on one.
     authority = resolve_world_authority(connection, user_id=creator_user_id, world_id=world_id)
-    if authority is not None and authority.has_capability(CAMPAIGN_CREATE):
+    already_used = connection.execute(
+        text("SELECT EXISTS (SELECT 1 FROM campaign.campaigns WHERE timeline_id = :timeline)"),
+        {"timeline": timeline_id},
+    ).scalar()
+    if (
+        authority is not None
+        and authority.has_capability(CAMPAIGN_CREATE)
+        and (not already_used or authority.has_capability(TIMELINE_MANAGE))
+    ):
         return _TimelineAuthorization(
             world_id=world_id,
             world_status=world_status,
             timeline_status=timeline_status,
             bootstrap_grant_id=None,
         )
-
-    already_used = connection.execute(
-        text("SELECT EXISTS (SELECT 1 FROM campaign.campaigns WHERE timeline_id = :timeline)"),
-        {"timeline": timeline_id},
-    ).scalar()
 
     if not already_used:
         grant_id = connection.execute(
@@ -439,62 +467,12 @@ def _authorize_timeline_reuse(
             bootstrap_grant_id=grant_id,
         )
 
-    # Path B: an `access.manage` holder in an existing campaign on the timeline.
-    # A campaign's lifecycle must be revalidated *under lock*: the campaigns are
-    # locked `FOR SHARE` (bare rows, in id order, after the world and timeline
-    # locks above — the global order), which waits for an in-flight archive
-    # (`FOR UPDATE`) and, under READ COMMITTED, makes the entitlement query
-    # below see its committed result. Archived/deleted campaigns retain their
-    # memberships and roles by design, so they must never authorize reuse.
-    connection.execute(
-        text(
-            "SELECT campaign_id FROM campaign.campaigns WHERE timeline_id = :timeline "
-            "ORDER BY campaign_id FOR SHARE"
-        ),
-        {"timeline": timeline_id},
-    ).all()
-    is_entitled = connection.execute(
-        text("""
-            SELECT EXISTS (
-                SELECT 1
-                FROM campaign.campaigns c
-                JOIN core.lifecycle_statuses cls
-                    ON cls.lifecycle_status_id = c.lifecycle_status_id
-                   AND cls.code NOT IN ('archived', 'deleted')
-                JOIN security.campaign_memberships cm ON cm.campaign_id = c.campaign_id
-                JOIN security.membership_statuses ms
-                    ON ms.membership_status_id = cm.membership_status_id
-                JOIN security.membership_roles mr
-                    ON mr.campaign_membership_id = cm.campaign_membership_id
-                JOIN security.roles r ON r.role_id = mr.role_id
-                JOIN security.role_capabilities rc ON rc.role_id = r.role_id
-                JOIN security.capabilities cap ON cap.capability_id = rc.capability_id
-                WHERE c.timeline_id = :timeline
-                  AND cm.user_id = :user
-                  AND cm.ended_at IS NULL
-                  AND ms.code = 'active' AND ms.is_active
-                  AND mr.revoked_at IS NULL
-                  AND (mr.expires_at IS NULL OR mr.expires_at > now())
-                  AND r.is_active
-                  AND cap.code = :capability AND cap.is_active
-            )
-        """),
-        {
-            "timeline": timeline_id,
-            "user": creator_user_id,
-            "capability": _ACCESS_MANAGE_CAPABILITY_CODE,
-        },
-    ).scalar()
-    if not is_entitled:
-        raise TimelineNotAuthorizedError(
-            f"user {creator_user_id} holds no active access.manage membership in any existing "
-            f"campaign on timeline {timeline_id}"
-        )
-    return _TimelineAuthorization(
-        world_id=world_id,
-        world_status=world_status,
-        timeline_status=timeline_status,
-        bootstrap_grant_id=None,
+    # No Path B. Holding `access.manage` in another campaign on the timeline
+    # confers no authority to start one more (scoped-role finding F3): the
+    # caller has no world authority and no bootstrap grant for an unused timeline.
+    raise TimelineNotAuthorizedError(
+        f"user {creator_user_id} holds no world authority to host a campaign on "
+        f"timeline {timeline_id}"
     )
 
 
@@ -533,6 +511,12 @@ def create_campaign(
     pre-checked before anything is written."""
     clean_name = normalize_name(name)
     clean_description = normalize_description(description)
+    if not has_system_capability(
+        connection, user_id=creator_user_id, capability_code=CAMPAIGN_HOST
+    ):
+        raise SystemGmRequiredError(
+            f"user {creator_user_id} lacks the system campaign.host capability"
+        )
     authorization = _authorize_timeline_reuse(
         connection, timeline_id=timeline_id, creator_user_id=creator_user_id
     )
@@ -617,14 +601,24 @@ def create_campaign(
     ).scalar()
     assert isinstance(campaign_owner_role_id, uuid.UUID)
 
-    connection.execute(
-        text("""
-            INSERT INTO security.membership_roles
-                (campaign_membership_id, role_id, granted_by_membership_id)
-            VALUES (:membership, :role, NULL)
-        """),
-        {"membership": campaign_membership_id, "role": campaign_owner_role_id},
-    )
+    gm_role_id = connection.execute(
+        text("SELECT role_id FROM security.roles WHERE code = :code AND campaign_id IS NULL"),
+        {"code": _GM_ROLE_CODE},
+    ).scalar()
+    assert isinstance(gm_role_id, uuid.UUID)
+
+    # The creator is both the campaign owner (access management) and its GM
+    # (running the game), assigned explicitly: neither follows from the other and
+    # neither follows from any system or world role.
+    for role_id in (campaign_owner_role_id, gm_role_id):
+        connection.execute(
+            text("""
+                INSERT INTO security.membership_roles
+                    (campaign_membership_id, role_id, granted_by_membership_id)
+                VALUES (:membership, :role, NULL)
+            """),
+            {"membership": campaign_membership_id, "role": role_id},
+        )
 
     # Consumed last, only once the campaign it authorized is fully
     # written — a failure anywhere above (including the ruleset check,

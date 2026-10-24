@@ -40,6 +40,11 @@ export function worldDestination(
     return worldAccess(world) === "none" ? null : `/worlds/${encodeURIComponent(world.world_id)}`
 }
 
+// What the server says the caller may do on a world, from its own `capabilities` (ADR 0020).
+export function worldCan(world: Partial<Pick<WorldSummary, "capabilities">>, capability: string): boolean {
+    return (world.capabilities ?? []).includes(capability)
+}
+
 // One entry in any list of worlds the portal presents (All worlds, the
 // hierarchy panel). Built only from server data: GET /worlds (explicit world
 // authority) and the bootstrap's campaigns (campaign-scoped visibility).
@@ -59,6 +64,9 @@ export interface WorldChoice {
     campaign_name: string | null
     description: string | null
     lifecycle_status: string
+    // Display only (ADR 0020): the caller's world roles and whether they hold a use grant.
+    role_codes: string[]
+    has_use_grant: boolean
 }
 
 type CampaignWorldSource = Pick<
@@ -101,6 +109,8 @@ export function buildWorldChoices(
             campaign_name: null,
             description: world.description,
             lifecycle_status: world.lifecycle_status,
+            role_codes: world.role_codes ?? [],
+            has_use_grant: world.has_use_grant === true,
         })
     }
 
@@ -121,6 +131,8 @@ export function buildWorldChoices(
             // Bootstrap campaigns are active, and an active campaign keeps its
             // world from being archived.
             lifecycle_status: "active",
+            role_codes: [],
+            has_use_grant: false,
         })
     }
 

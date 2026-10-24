@@ -8,6 +8,7 @@ import {
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { useWorldCategoryCounts } from "../hooks/useWorldCategoryCounts"
 import { useWorldBrowseState } from "../hooks/useWorldBrowseState"
+import { useWorldCapability, WORLD_CANON_EDIT } from "../hooks/useWorldCapability"
 import {
     WorldEntitiesBoundary,
 } from "../components/WorldEntitiesBoundary"
@@ -44,7 +45,12 @@ function CampaignWorldContent({
     }
     // The toggle is offered from the bootstrap's capability list; the server
     // re-checks and ignores the flags for anyone without canon.edit.
-    const canPreviewHidden = useCampaignCapability(campaignId, "canon.edit")
+    const hasCanonEdit = useCampaignCapability(campaignId, "canon.edit")
+    // Unpublished definitions belong to the world: previewing them needs the world's private-read
+    // capability as well, and creating shared canon needs the world Editor role (ADR 0020).
+    const canReadPrivate = useWorldCapability(campaignId, "world.canon.read_private")
+    const canAuthorWorld = useWorldCapability(campaignId, WORLD_CANON_EDIT)
+    const canPreviewHidden = hasCanonEdit && canReadPrivate
     const includeHidden = browse.showHidden && canPreviewHidden
     const { setQuery } = browse
 
@@ -66,7 +72,7 @@ function CampaignWorldContent({
 
     // New NPC is contextual: offered only while People is selected. It opens NPC
     // creation directly; player characters are created from the Characters page.
-    const createLinks = canPreviewHidden
+    const createLinks = hasCanonEdit && canAuthorWorld
         ? [
               {
                   label: "New location",

@@ -26,6 +26,7 @@ from dnd_ai.domain.source_authoring import (
     normalize_source_type,
     normalize_title,
 )
+from dnd_ai.domain.world_authority import WORLD_CANON_EDIT
 
 from ._content import EntityNotFoundError, lock_authoring_scope, lock_entities
 from ._shared import lookup_id
@@ -54,7 +55,12 @@ def create_source(
     code = normalize_source_type(source_type)
     clean_title = normalize_title(title)
     clean_reference = normalize_reference(reference)
-    scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_authoring_scope(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        world_capability=WORLD_CANON_EDIT,
+    )
     type_id = lookup_id(connection, "core", "source_types", "source_type_id", code)
     source_id = connection.execute(
         text("""
@@ -90,7 +96,12 @@ def _lock_pair(
     entity_id: uuid.UUID,
     source_id: uuid.UUID,
 ) -> uuid.UUID:
-    scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_authoring_scope(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        world_capability=WORLD_CANON_EDIT,
+    )
     locked = lock_entities(connection, world_id=scope.world_id, share_ids=[entity_id])
     if entity_id not in locked:
         raise EntityNotFoundError(f"entity {entity_id} is not in this world")

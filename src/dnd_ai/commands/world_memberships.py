@@ -20,10 +20,15 @@ Rules shared by every command here:
   here (a clear `WorldMembershipChangeRefusedError`, nothing written) and is
   also the database's own deferred guarantee (revision 110).
 - A new `world_owner` must satisfy the world-creation policy
-  (`may_create_worlds`: an active platform administrator or an effective
-  built-in `gm`, ADR 0018). Ownership is authoring authority; an operator
-  cannot hand it to an account that could not have created the world itself.
-  `world_viewer` needs only an active account.
+  (`may_create_worlds`: the system `gm` role, ADR 0020, which superseded
+  ADR 0018's rule). Ownership is authoring authority and managing a world needs
+  system GM, so an operator cannot hand it to an account that could not have
+  created the world itself. Every other role needs only an active account.
+- A user may hold several world roles at once (ADR 0020). These operator
+  commands treat a user's roles as one set: `set_world_role` gives exactly one
+  role (closing every other open row of that user), `end_world_membership`
+  closes all of them. Sharing with several roles, and use grants, are the
+  product routes in `dnd_ai.commands.world_access`.
 - Nothing here reads or writes campaign memberships. Ending a user's world
   role never touches what their campaign roles let them see.
 """
@@ -81,10 +86,10 @@ def _require_active_user(connection: Connection, user_id: uuid.UUID) -> None:
         raise WorldMembershipChangeRefusedError(f"user {user_id} does not exist or is not active")
 
 
-def _open_membership(
+def _open_memberships(
     connection: Connection, *, world_id: uuid.UUID, user_id: uuid.UUID
-) -> _OpenMembership | None:
-    row = connection.execute(
+) -> list[_OpenMembership]:
+    rows = connection.execute(
         text("""
             SELECT wm.world_membership_id, wr.code, (ms.code = 'active' AND ms.is_active) AS active
             FROM security.world_memberships wm
@@ -92,16 +97,18 @@ def _open_membership(
             JOIN security.membership_statuses ms
               ON ms.membership_status_id = wm.membership_status_id
             WHERE wm.world_id = :w AND wm.user_id = :u AND wm.ended_at IS NULL
+            ORDER BY wm.world_membership_id
         """),
         {"w": world_id, "u": user_id},
-    ).one_or_none()
-    if row is None:
-        return None
-    return _OpenMembership(
-        world_membership_id=row.world_membership_id,
-        role_code=str(row.code),
-        is_active=bool(row.active),
-    )
+    ).all()
+    return [
+        _OpenMembership(
+            world_membership_id=row.world_membership_id,
+            role_code=str(row.code),
+            is_active=bool(row.active),
+        )
+        for row in rows
+    ]
 
 
 def _other_active_owner_exists(
@@ -194,24 +201,27 @@ def _set_role(
     _require_active_user(connection, user_id)
     if role_code == WORLD_OWNER_ROLE and not may_create_worlds(connection, user_id=user_id):
         raise WorldMembershipChangeRefusedError(
-            f"user {user_id} may not own worlds: not an active platform administrator "
-            "or effective built-in gm (docs/adr/0018-world-creation-eligibility.md)"
+            f"user {user_id} may not own worlds: they do not hold the system gm role "
+            "(docs/adr/0020-scoped-system-world-and-campaign-roles.md)"
         )
-    current = _open_membership(connection, world_id=world_id, user_id=user_id)
-    if current is not None and current.role_code == role_code and current.is_active:
+    current = _open_memberships(connection, world_id=world_id, user_id=user_id)
+    if len(current) == 1 and current[0].role_code == role_code and current[0].is_active:
         return []
-    if (
-        current is not None
-        and current.role_code == WORLD_OWNER_ROLE
-        and not _other_active_owner_exists(connection, world_id=world_id, excluding_user_id=user_id)
+    if any(row.role_code == WORLD_OWNER_ROLE for row in current) and not (
+        role_code == WORLD_OWNER_ROLE
+        or _other_active_owner_exists(connection, world_id=world_id, excluding_user_id=user_id)
     ):
         raise WorldMembershipChangeRefusedError(
             f"world {world_id} would be left with no active world_owner; transfer ownership first"
         )
+    keep = [row for row in current if row.role_code == role_code and row.is_active]
     changes: list[WorldMembershipChange] = []
-    if current is not None:
-        changes.append(_close(connection, world_id=world_id, user_id=user_id, open_row=current))
-    changes.append(_open(connection, world_id=world_id, user_id=user_id, role_code=role_code))
+    for row in current:
+        if row in keep:
+            continue
+        changes.append(_close(connection, world_id=world_id, user_id=user_id, open_row=row))
+    if not keep:
+        changes.append(_open(connection, world_id=world_id, user_id=user_id, role_code=role_code))
     return changes
 
 
@@ -231,18 +241,18 @@ def end_world_membership(
     """Close `user_id`'s open membership on `world_id`. Refuses when there is
     none, and when it is the world's last active owner."""
     _lock_world(connection, world_id)
-    current = _open_membership(connection, world_id=world_id, user_id=user_id)
-    if current is None:
+    current = _open_memberships(connection, world_id=world_id, user_id=user_id)
+    if not current:
         raise WorldMembershipChangeRefusedError(
             f"user {user_id} has no open membership on world {world_id}"
         )
-    if current.role_code == WORLD_OWNER_ROLE and not _other_active_owner_exists(
+    if any(row.role_code == WORLD_OWNER_ROLE for row in current) and not _other_active_owner_exists(
         connection, world_id=world_id, excluding_user_id=user_id
     ):
         raise WorldMembershipChangeRefusedError(
             f"world {world_id} would be left with no active world_owner; transfer ownership first"
         )
-    return [_close(connection, world_id=world_id, user_id=user_id, open_row=current)]
+    return [_close(connection, world_id=world_id, user_id=user_id, open_row=row) for row in current]
 
 
 def transfer_world_ownership(
@@ -260,8 +270,8 @@ def transfer_world_ownership(
     if from_user_id == to_user_id:
         raise WorldMembershipChangeRefusedError("ownership cannot be transferred to the same user")
     _lock_world(connection, world_id)
-    current = _open_membership(connection, world_id=world_id, user_id=from_user_id)
-    if current is None or current.role_code != WORLD_OWNER_ROLE:
+    current = _open_memberships(connection, world_id=world_id, user_id=from_user_id)
+    if not any(row.role_code == WORLD_OWNER_ROLE for row in current):
         raise WorldMembershipChangeRefusedError(
             f"user {from_user_id} does not own world {world_id}"
         )
@@ -273,7 +283,8 @@ def transfer_world_ownership(
             connection, world_id=world_id, user_id=from_user_id, role_code=WORLD_VIEWER_ROLE
         )
     else:
-        changes.append(
-            _close(connection, world_id=world_id, user_id=from_user_id, open_row=current)
-        )
+        changes += [
+            _close(connection, world_id=world_id, user_id=from_user_id, open_row=row)
+            for row in current
+        ]
     return changes

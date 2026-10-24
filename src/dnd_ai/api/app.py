@@ -109,7 +109,9 @@ from .summary import router as summary_router
 from .timelines import router as timelines_router
 from .travel import router as travel_router
 from .user_preferences import router as user_preferences_router
+from .world_canon import router as world_canon_router
 from .world_explorer import router as world_explorer_router
+from .world_sharing import router as world_sharing_router
 from .world_time import router as world_time_router
 from .worlds import router as worlds_router
 
@@ -227,6 +229,8 @@ def create_app() -> FastAPI:
     app.include_router(timelines_router)
     app.include_router(user_preferences_router)
     app.include_router(world_explorer_router)
+    app.include_router(world_canon_router)
+    app.include_router(world_sharing_router)
     app.include_router(world_time_router)
     app.include_router(worlds_router)
 

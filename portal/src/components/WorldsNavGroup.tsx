@@ -27,6 +27,10 @@ interface WorldsNavGroupProps {
   // caller author it. A view-only world keeps its read-only overview and
   // timeline list; timeline-authoring routes stay visible but disabled.
   canAuthorWorld: boolean
+  // From the active world's own server-computed capabilities: `world.share` (Owner with system
+  // GM) and `world.canon.read` (any role that may read published canon).
+  canShareWorld: boolean
+  canReadCanon: boolean
   collapsed: boolean
   onNavigate: () => void
 }
@@ -42,6 +46,8 @@ export function WorldsNavGroup({
   campaignWorldPath,
   canCreateWorld,
   canAuthorWorld,
+  canShareWorld,
+  canReadCanon,
   collapsed,
   onNavigate,
 }: WorldsNavGroupProps) {
@@ -249,6 +255,42 @@ export function WorldsNavGroup({
                   ? NOT_AVAILABLE_FOR_ACCOUNT
                   : SELECT_TIMELINE_FIRST
               }
+              collapsed={collapsed}
+            />
+          )}
+        </li>
+        <li>
+          {worldPath !== null && canReadCanon ? (
+            <NavLink
+              end
+              className={subLinkClassName}
+              to={`${worldPath}/canon`}
+              onClick={handleChildActivated}
+            >
+              <span className="portal-sidebar__label">Published canon</span>
+            </NavLink>
+          ) : (
+            <DisabledNavItem
+              label="Published canon"
+              reason={worldPath === null ? SELECT_WORLD_FIRST : NOT_AVAILABLE_FOR_ACCOUNT}
+              collapsed={collapsed}
+            />
+          )}
+        </li>
+        <li>
+          {worldPath !== null && canShareWorld ? (
+            <NavLink
+              end
+              className={subLinkClassName}
+              to={`${worldPath}/sharing`}
+              onClick={handleChildActivated}
+            >
+              <span className="portal-sidebar__label">Sharing</span>
+            </NavLink>
+          ) : (
+            <DisabledNavItem
+              label="Sharing"
+              reason={worldPath === null ? SELECT_WORLD_FIRST : NOT_AVAILABLE_FOR_ACCOUNT}
               collapsed={collapsed}
             />
           )}

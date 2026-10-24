@@ -43,7 +43,7 @@ from dnd_ai.commands.local_auth import _create_local_account_impl
 from dnd_ai.domain.access import AuthenticatedPrincipal
 from dnd_ai.domain.rate_limit import RateLimiter
 from tests.builders import make_world_creator
-from tests.factories import make_platform_administrator
+from tests.factories import make_platform_administrator, make_system_role_assignment
 
 ORIGIN = "http://localhost:5173"
 PASSWORD = "a genuinely random passphrase 1"
@@ -73,6 +73,7 @@ class Actor:
     csrf: str
     user_id: uuid.UUID
     name: str
+    login_name: str = ""
     _keys: int = field(default=0, repr=False)
 
     def headers(self, *, key: str | None = None, csrf: bool = True, origin: bool = True) -> dict:
@@ -191,11 +192,18 @@ class AuthoringHarness:
         else:
             savepoint.commit()
 
-    def new_actor(self, name: str = "Author", *, world_creator: bool = False) -> Actor:
+    def new_actor(
+        self,
+        name: str = "Author",
+        *,
+        world_creator: bool = False,
+        system_roles: tuple[str, ...] = (),
+    ) -> Actor:
         """A signed-in human. `world_creator=True` makes the account a
         legitimate world creator (`tests.builders.make_world_creator`) for a
         test that authors a world through `POST /worlds`; every other actor is
-        an ordinary user who may not create worlds."""
+        an ordinary user who may not create worlds. `system_roles` adds open
+        system-role assignments (every new account already holds `player`)."""
         login_name = f"{name.lower().replace(' ', '-')}-{uuid.uuid4().hex[:8]}"
         issued = _create_local_account_impl(
             self.connection,
@@ -220,12 +228,15 @@ class AuthoringHarness:
         assert login.status_code == 200, login.text
         if world_creator:
             make_world_creator(self.connection, issued.user_id)
+        for role_code in system_roles:
+            make_system_role_assignment(self.connection, issued.user_id, role_code)
         return Actor(
             harness=self,
             client=client,
             csrf=login.json()["csrf_token"],
             user_id=issued.user_id,
             name=name,
+            login_name=login_name,
         )
 
     def anonymous_client(self) -> TestClient:

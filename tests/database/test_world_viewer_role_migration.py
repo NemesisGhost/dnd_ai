@@ -24,7 +24,8 @@ REVISION = "136_world_viewer_role"
 def test_world_viewer_is_seeded_active_after_world_owner(db_connection: Connection) -> None:
     rows = db_connection.execute(
         text(
-            "SELECT code, display_name, sort_order, is_active FROM security.world_roles ORDER BY sort_order"
+            "SELECT code, display_name, sort_order, is_active FROM security.world_roles "
+            "WHERE code IN ('world_owner', 'world_viewer') ORDER BY sort_order"
         )
     ).all()
     assert [tuple(row) for row in rows] == [

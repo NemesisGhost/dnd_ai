@@ -5,6 +5,7 @@ import { useSession } from "../../context/SessionContext"
 import { useAuthoringMutation } from "../../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../../hooks/useAuthoringResource"
 import { usePageArrival } from "../../hooks/usePageArrival"
+import { useWorldCapability, WORLD_CANON_EDIT } from "../../hooks/useWorldCapability"
 import { useUnsavedChangesGuard } from "../../hooks/useUnsavedChangesGuard"
 import type { MutationContext } from "../../api/worlds"
 import { ERROR_CODE_MESSAGE, fieldForErrorCode } from "../../utils/authoringValidation"
@@ -41,6 +42,9 @@ export interface ContentCreateConfig<TOptions, TValues, TBody, TResult> {
     breadcrumbLabelFor?: (campaignId: string, state: unknown) => string
     optionsPath: (campaignId: string) => string
     canCreate: (options: TOptions) => boolean
+    // Records that are campaign-originated (player-character identity, ADR 0020 E3) need no
+    // world Editor role; every other definition is shared world canon and does.
+    campaignOriginated?: boolean
     initialValues: (options: TOptions) => TValues
     isDirty: (values: TValues, initial: TValues) => boolean
     validate: (values: TValues, options: TOptions) => FieldError[]
@@ -62,7 +66,9 @@ export function ContentCreatePage<TOptions, TValues, TBody, TResult>({
 }: Props<TOptions, TValues, TBody, TResult>) {
     const { campaignId = "" } = useParams()
     const { state } = useAuthoringResource<TOptions>(config.optionsPath(campaignId))
-    const headingRef = usePageArrival(state.kind === "ready")
+    const hasWorldEdit = useWorldCapability(campaignId, WORLD_CANON_EDIT)
+    const needsWorldEdit = config.campaignOriginated !== true && !hasWorldEdit
+    const headingRef = usePageArrival(state.kind === "ready" || needsWorldEdit)
     const headingId = `create-${config.noun.replace(/\s+/g, "-")}-heading`
     const arrival = useLocation().state
     const listPath = config.listPath?.(campaignId, arrival) ?? config.worldPath(campaignId)
@@ -80,7 +86,9 @@ export function ContentCreatePage<TOptions, TValues, TBody, TResult>({
             <h1 id={headingId} ref={headingRef} tabIndex={-1}>
                 {config.heading}
             </h1>
-            {state.kind === "loading" ? (
+            {needsWorldEdit ? (
+                <p role="alert">Editing shared world content requires the world Editor role. Ask the world owner.</p>
+            ) : state.kind === "loading" ? (
                 <p role="status">Loading…</p>
             ) : state.kind === "denied" || state.kind === "unavailable" ? (
                 denied

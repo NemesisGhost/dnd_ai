@@ -164,6 +164,7 @@ The current PostgreSQL/API Compose services and development topology are retaine
 | 13 | Complete | Portal foundation, campaign reads, account/settings, invitations, and access management |
 | **14** | **Complete with accepted limitations** | **Shared authoring kernel plus world/timeline/campaign setup** (provenance presentation and prior-version history arrive with Phase 15) |
 | **15** | **Implemented; acceptance pending (not complete)** | **Game Master world, campaign, and session authoring.** 15.1 is merged; every completion checkpoint is implemented on `phase15/completion` with local automated evidence. The owner's manual accessibility/responsive acceptance, a CI run on the final head and the merge remain (`PHASE15_MANUAL_ACCEPTANCE.md`) |
+| — | **Scoped-role authorization (ADR 0020): implemented on `feature/scoped-role-model`; not merged** | Independent system, world and campaign roles. Sequenced after the Phase 15 merge and before Phase 16; phases are not renumbered. See [SCOPED_ROLE_IMPLEMENTATION_PLAN.md](SCOPED_ROLE_IMPLEMENTATION_PLAN.md). |
 | **16** | **Blocked by the Phase 15 completion gate** | **Player character authoring, notes, theories, contributions, and collaboration** |
 | **17** | Planned | **Standalone-product acceptance and self-hosted production packaging** |
 | 18 | Planned | Session intelligence and controlled world/campaign import |
@@ -192,6 +193,7 @@ flowchart TD
 Rules for starting work:
 
 - Phase 15 may start only after Phase 14's command and lifecycle conventions are verified.
+- The scoped-role workstream ([ADR 0020](adr/0020-scoped-system-world-and-campaign-roles.md)) lands after the Phase 15 merge and before Phase 16 starts, so Phase 16's privacy criteria are tested against the final role model.
 - Phase 16 may overlap late Phase 15 increments only when it reuses already accepted commands and authorization rules.
 - Phase 17 closes only after Phases 14–16 satisfy the standalone loop in §2.1.
 - Phase 18 may not promote imported content until the matching manual-authoring commands exist.

@@ -131,7 +131,7 @@ function installFakeServer(): void {
           user: { user_id: "u1", display_name: "Gina GM" },
           csrf_token: "csrf",
           browser_session_id: "s1",
-          is_platform_administrator: false,
+          system_roles: ["player"],
           global_capabilities: [],
           startup_campaign_id: server.startup,
           campaign_preferences: {

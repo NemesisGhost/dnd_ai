@@ -111,6 +111,9 @@ export function WorldsPage() {
                                     {world.access === "view" ? (
                                         <span className="authoring-badge">View only</span>
                                     ) : null}
+                                    {roleLabels(world) !== "" ? (
+                                        <span className="authoring-badge">{roleLabels(world)}</span>
+                                    ) : null}
                                     {world.lifecycle_status === "archived" ? (
                                         <LifecycleBadge status="archived" />
                                     ) : null}
@@ -125,6 +128,22 @@ export function WorldsPage() {
             </div>
         </div>
     )
+}
+
+const ROLE_LABEL: Record<string, string> = {
+    world_owner: "Owner",
+    world_viewer: "Viewer",
+    world_editor: "Editor",
+    world_reviewer: "Reviewer",
+    world_reader: "Reader",
+}
+
+// "Owner", "Editor · Reviewer", "Reader", "Can host campaigns" (display only; every gate
+// reads the world's `capabilities`, never these labels).
+function roleLabels(world: WorldChoice): string {
+    const labels = (world.role_codes ?? []).map((code) => ROLE_LABEL[code] ?? code)
+    if (world.has_use_grant === true) labels.push("Can host campaigns")
+    return labels.join(" · ")
 }
 
 function WorldSourceHint({ world }: { world: WorldChoice }) {

@@ -51,6 +51,7 @@ from dnd_ai.domain.dungeon_authoring import (
     normalize_long_text,
     normalize_rating,
 )
+from dnd_ai.domain.world_authority import WORLD_CANON_EDIT
 
 from ._content import (
     ContentWriteResult,
@@ -96,7 +97,12 @@ def create_dungeon(
     clean_name = normalize_name(name)
     clean_summary = normalize_description(summary)
     clean_danger = normalize_rating(danger_level, field="danger_level")
-    scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_authoring_scope(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        world_capability=WORLD_CANON_EDIT,
+    )
     if parent_location_id is not None:
         locked = lock_entities(connection, world_id=scope.world_id, share_ids=[parent_location_id])
         usable_reference(
@@ -156,7 +162,12 @@ def update_dungeon(
     change_note: str | None = None,
 ) -> ContentWriteResult:
     normalize_reason(change_note)
-    scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_authoring_scope(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        world_capability=WORLD_CANON_EDIT,
+    )
     current = connection.execute(
         text(
             "SELECT l.parent_location_id, d.danger_level FROM world.locations l "
@@ -256,7 +267,12 @@ def create_dungeon_area(
     clean_environment = normalize_long_text(
         environmental_properties, field="environmental_properties"
     )
-    scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_authoring_scope(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        world_capability=WORLD_CANON_EDIT,
+    )
     locked = lock_entities(connection, world_id=scope.world_id, share_ids=[dungeon_id])
     usable_reference(locked, dungeon_id, type_codes=_DUNGEON, error=ParentLocationInvalidError)
     count = connection.execute(
@@ -323,7 +339,12 @@ def update_dungeon_area(
     change_note: str | None = None,
 ) -> ContentWriteResult:
     normalize_reason(change_note)
-    scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_authoring_scope(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        world_capability=WORLD_CANON_EDIT,
+    )
     current = connection.execute(
         text(
             "SELECT l.parent_location_id, a.area_type, a.dimensions, a.environmental_properties "
@@ -423,7 +444,12 @@ def _lock_aggregate(
     expected_row_version: int,
     area_ids: tuple[uuid.UUID, ...],
 ) -> _Aggregate:
-    scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_authoring_scope(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        world_capability=WORLD_CANON_EDIT,
+    )
     locked = lock_entities(
         connection,
         world_id=scope.world_id,

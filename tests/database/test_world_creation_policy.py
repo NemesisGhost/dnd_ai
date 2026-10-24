@@ -1,10 +1,10 @@
-"""World-creation eligibility (docs/adr/0018-world-creation-eligibility.md).
+"""World-creation eligibility (docs/adr/0020-scoped-system-world-and-campaign-roles.md).
 
-Only an active platform administrator, or an active user with an effective
-assignment of the built-in (`campaign_id IS NULL`) `gm` role, may create a
-world. One table of account shapes drives four checks so they cannot drift
-apart: the policy function, the `create_world` command, `POST /worlds`, and the
-session bootstrap's `world.create`.
+Only an active user holding an unrevoked system `gm` assignment may create a
+world. Platform administration, campaign roles (including the built-in campaign
+`gm` template), and world ownership never confer it. One table of account shapes
+drives four checks so they cannot drift apart: the policy function, the
+`create_world` command, `POST /worlds`, and the session bootstrap's `world.create`.
 """
 
 import uuid
@@ -16,7 +16,7 @@ from sqlalchemy import Connection, text
 
 from dnd_ai.commands.worlds import claim_unowned_world, create_world
 from dnd_ai.domain.authoring import WorldCreationNotAuthorizedError
-from dnd_ai.queries.world_authority import holds_effective_system_gm_role, may_create_worlds
+from dnd_ai.queries.world_authority import may_create_worlds
 from tests.authoring_support import AuthoringHarness, harness_fixture_factory
 from tests.builders import dnd5e_ids, make_authored_campaign, make_authored_world
 from tests.factories import (
@@ -24,6 +24,7 @@ from tests.factories import (
     make_membership_role,
     make_platform_administrator,
     make_role,
+    make_system_role_assignment,
     make_user,
     make_world,
     status_id,
@@ -94,10 +95,35 @@ def _nothing(connection: Connection, user_id: uuid.UUID) -> None:
 
 
 def _administrator(connection: Connection, user_id: uuid.UUID) -> None:
-    connection.execute(
-        text("UPDATE security.users SET is_platform_administrator = true WHERE user_id = :u"),
-        {"u": user_id},
-    )
+    make_system_role_assignment(connection, user_id, "admin")
+
+
+def _system_gm(connection: Connection, user_id: uuid.UUID) -> None:
+    make_system_role_assignment(connection, user_id, "gm")
+
+
+def _system_player(connection: Connection, user_id: uuid.UUID) -> None:
+    # Every account already holds `player` (the default classification).
+    return None
+
+
+def _system_observer(connection: Connection, user_id: uuid.UUID) -> None:
+    make_system_role_assignment(connection, user_id, "observer")
+
+
+def _administrator_and_gm(connection: Connection, user_id: uuid.UUID) -> None:
+    _administrator(connection, user_id)
+    _system_gm(connection, user_id)
+
+
+def _revoked_system_gm(connection: Connection, user_id: uuid.UUID) -> None:
+    make_system_role_assignment(connection, user_id, "gm", revoked=True)
+
+
+def _campaign_gm(connection: Connection, user_id: uuid.UUID) -> None:
+    """The built-in campaign `gm` template is a campaign role: it never confers
+    platform-wide creation (finding F4)."""
+    _system_role("gm")(connection, user_id)
 
 
 def _world_owner(connection: Connection, user_id: uuid.UUID) -> None:
@@ -117,64 +143,21 @@ def _custom_role_named_gm(connection: Connection, user_id: uuid.UUID) -> None:
     )
 
 
-def _revoked_gm(connection: Connection, user_id: uuid.UUID) -> None:
-    _assign(connection, user_id, _system_role_id(connection, "gm"), revoked=True)
-
-
-def _expired_gm(connection: Connection, user_id: uuid.UUID) -> None:
-    _, membership_role_id = _assign(connection, user_id, _system_role_id(connection, "gm"))
-    connection.execute(
-        text("""
-            UPDATE security.membership_roles
-            SET granted_at = now() - interval '2 days', expires_at = now() - interval '1 day'
-            WHERE membership_role_id = :m
-        """),
-        {"m": membership_role_id},
-    )
-
-
-def _suspended_gm(connection: Connection, user_id: uuid.UUID) -> None:
-    _assign(connection, user_id, _system_role_id(connection, "gm"), membership_status="suspended")
-
-
-def _ended_gm(connection: Connection, user_id: uuid.UUID) -> None:
-    _assign(connection, user_id, _system_role_id(connection, "gm"), ended=True)
-
-
-def _gm_in_archived_campaign(connection: Connection, user_id: uuid.UUID) -> None:
-    campaign_id, _ = _assign(connection, user_id, _system_role_id(connection, "gm"))
-    connection.execute(
-        text("UPDATE campaign.campaigns SET lifecycle_status_id = :s WHERE campaign_id = :c"),
-        {"s": status_id(connection, "lifecycle_statuses", "archived"), "c": campaign_id},
-    )
-
-
-def _gm_with_inactive_role(connection: Connection, user_id: uuid.UUID) -> None:
-    role_id = _system_role_id(connection, "gm")
-    _assign(connection, user_id, role_id)
-    connection.execute(
-        text("UPDATE security.roles SET is_active = false WHERE role_id = :r"), {"r": role_id}
-    )
-
-
 # Every shape a signed-in human can have; inactive accounts cannot sign in and
 # are covered separately below.
 SHAPES: dict[str, tuple[Callable[[Connection, uuid.UUID], None], bool]] = {
-    "platform administrator without campaign membership": (_administrator, True),
-    "effective built-in gm": (_system_role("gm"), True),
+    "system gm": (_system_gm, True),
+    "system administrator and gm": (_administrator_and_gm, True),
+    "platform administrator alone": (_administrator, False),
     "ordinary user": (_nothing, False),
-    "player": (_system_role("player"), False),
-    "observer": (_system_role("observer"), False),
+    "system player": (_system_player, False),
+    "system observer": (_system_observer, False),
+    "revoked system gm": (_revoked_system_gm, False),
+    "campaign gm template without system gm": (_campaign_gm, False),
     "assistant_gm": (_system_role("assistant_gm"), False),
     "campaign_owner": (_system_role("campaign_owner"), False),
     "world_owner": (_world_owner, False),
     "custom campaign-scoped role named gm": (_custom_role_named_gm, False),
-    "revoked gm assignment": (_revoked_gm, False),
-    "expired gm assignment": (_expired_gm, False),
-    "suspended gm membership": (_suspended_gm, False),
-    "ended gm membership": (_ended_gm, False),
-    "gm in an archived campaign": (_gm_in_archived_campaign, False),
-    "gm role deactivated": (_gm_with_inactive_role, False),
 }
 
 
@@ -223,7 +206,7 @@ def test_policy_command_route_and_bootstrap_agree(
     # authorize the caller.
     session = actor.get("/auth/session")
     assert session.status_code == 200
-    assert session.json()["global_capabilities"] == (["world.create"] if eligible else [])
+    assert ("world.create" in session.json()["global_capabilities"]) is eligible
 
     before = _counts(db_connection, actor.user_id)
     response = actor.post("/worlds", _body(db_connection, f"{shape} world"), key="policy-key")
@@ -259,7 +242,7 @@ def test_a_refused_request_reserves_no_key_so_a_later_eligible_retry_succeeds(
     body = _body(db_connection, "Retry World")
     assert actor.post("/worlds", body, key="retry-key").status_code == 403
 
-    _administrator(db_connection, actor.user_id)
+    _system_gm(db_connection, actor.user_id)
     assert actor.post("/worlds", body, key="retry-key").status_code == 201
 
 
@@ -267,16 +250,19 @@ def test_losing_eligibility_blocks_replaying_an_earlier_success(
     harness: AuthoringHarness, db_connection: Connection
 ) -> None:
     actor = harness.new_actor("Former GM")
-    _administrator(db_connection, actor.user_id)
+    _system_gm(db_connection, actor.user_id)
     body = _body(db_connection, "Once")
     assert actor.post("/worlds", body, key="replay-key").status_code == 201
 
     db_connection.execute(
-        text("UPDATE security.users SET is_platform_administrator = false WHERE user_id = :u"),
+        text("""
+            UPDATE security.user_system_roles SET revoked_at = now()
+            WHERE user_id = :u AND revoked_at IS NULL
+        """),
         {"u": actor.user_id},
     )
     assert actor.post("/worlds", body, key="replay-key").status_code == 403
-    assert actor.get("/auth/session").json()["global_capabilities"] == []
+    assert "world.create" not in actor.get("/auth/session").json()["global_capabilities"]
 
 
 def test_invalid_input_from_an_ineligible_user_is_refused_before_validation(
@@ -293,7 +279,7 @@ def test_invalid_input_from_an_ineligible_user_is_refused_before_validation(
 # --- accounts that cannot sign in --------------------------------------------------
 
 
-@pytest.mark.parametrize("make_eligible", [_administrator, _system_role("gm")])
+@pytest.mark.parametrize("make_eligible", [_system_gm, _administrator_and_gm])
 def test_an_inactive_account_is_never_eligible(
     db_connection: Connection, make_eligible: Callable[[Connection, uuid.UUID], None]
 ) -> None:
@@ -323,15 +309,15 @@ def test_an_unknown_user_is_not_eligible(db_connection: Connection) -> None:
     assert not may_create_worlds(db_connection, user_id=uuid.uuid4())
 
 
-def test_one_effective_gm_assignment_suffices_among_lapsed_ones(
+def test_one_open_gm_assignment_suffices_among_revoked_ones(
     db_connection: Connection,
 ) -> None:
     user_id = make_user(db_connection, "Veteran")
-    _revoked_gm(db_connection, user_id)
-    _ended_gm(db_connection, user_id)
-    assert not holds_effective_system_gm_role(db_connection, user_id=user_id)
-    _system_role("gm")(db_connection, user_id)
-    assert holds_effective_system_gm_role(db_connection, user_id=user_id)
+    _revoked_system_gm(db_connection, user_id)
+    _revoked_system_gm(db_connection, user_id)
+    assert not may_create_worlds(db_connection, user_id=user_id)
+    _system_gm(db_connection, user_id)
+    assert may_create_worlds(db_connection, user_id=user_id)
 
 
 # --- eligibility grants creation only -----------------------------------------------
@@ -344,9 +330,9 @@ def test_creation_eligibility_grants_no_authority_over_other_worlds(
     world_id = owner.post("/worlds", _body(db_connection, "Private World")).json()["world_id"]
 
     admin = harness.new_actor("Other Admin")
-    _administrator(db_connection, admin.user_id)
+    _administrator_and_gm(db_connection, admin.user_id)
     gm = harness.new_actor("Other GM")
-    _system_role("gm")(db_connection, gm.user_id)
+    _system_gm(db_connection, gm.user_id)
     for other in (admin, gm):
         assert other.get(f"/worlds/{world_id}").status_code == 404
         assert other.get("/worlds").json()["items"] == []

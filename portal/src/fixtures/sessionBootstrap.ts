@@ -14,8 +14,7 @@ export const sessionBootstrapFixture = {
   },
   csrf_token: "fixture-csrf-token-not-a-secret",
   browser_session_id: "browser-session-fixture-001",
-  is_platform_administrator: false,
-  global_capabilities: ["world.create"],
+  global_capabilities: ["world.create", "campaign.host", "world.administer"],
 
   campaigns: [
     {

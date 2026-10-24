@@ -268,7 +268,11 @@ def _subject_summaries(
         # row or their own authorized party's.
         is_gm = access.has_capability(_KNOWLEDGE_GROUND_TRUTH_CAPABILITY)
         hidden = lifecycle_hidden_entity_ids(
-            connection, world_id=world_id, mode="reference", can_edit_canon=is_gm
+            connection,
+            world_id=world_id,
+            mode="reference",
+            viewer_user_id=access.user_id,
+            can_edit_canon=is_gm,
         )
         candidates = [
             quest_id
@@ -624,6 +628,7 @@ def resolve_knowledge_list(
         connection,
         world_id=world_id,
         mode="browse",
+        viewer_user_id=access.user_id,
         can_edit_canon=include_ground_truth,
         include_noncanon=include_ground_truth,
         include_archived=False,
@@ -747,6 +752,7 @@ def resolve_knowledge_response(
         connection,
         world_id=timeline_world_id(connection, access.timeline_id),
         mode="reference",
+        viewer_user_id=access.user_id,
         can_edit_canon=include_ground_truth,
     ):
         return None
