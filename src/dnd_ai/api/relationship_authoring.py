@@ -68,7 +68,7 @@ from ._authoring import (
     start_campaign_idempotency,
 )
 from ._shared import timeline_world_id
-from .access import require_campaign_capability
+from .access import can_create_definitions, require_campaign_capability
 from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
@@ -336,7 +336,7 @@ def options_endpoint(
     active = active_type_codes(connection)
     offered = [policy for policy in RELATIONSHIP_TYPE_POLICIES.values() if policy.code in active]
     body: dict[str, Any] = {
-        "can_create": True,
+        "can_create": can_create_definitions(connection, access=access),
         "kinds": [
             {
                 "code": k.code,

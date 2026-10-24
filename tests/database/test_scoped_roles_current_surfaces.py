@@ -531,3 +531,24 @@ def test_knowledge_reads_show_published_claims_to_a_campaign_only_gm_and_hide_dr
 
     # The private side belongs to the world Editor.
     assert x.editor.get(f"{x.base_b}/knowledge/{draft['knowledge_item_id']}").status_code == 200
+
+
+def test_authoring_option_catalogs_offer_creation_only_to_a_world_editor(x: Roles) -> None:
+    for path in (
+        "authoring/locations/options",
+        "authoring/organizations/options",
+        "authoring/religions/options",
+        "authoring/npcs/options",
+        "authoring/knowledge/options",
+        "authoring/quests/options",
+        "authoring/dungeons/options",
+        "authoring/relationships/options",
+    ):
+        url = f"{x.base_b}/{path}"
+        # The catalogs are the private side: a Reviewer reads them but is not offered creation, an
+        # Editor is, and a campaign-only GM or a Reader is refused the read outright.
+        assert x.editor.get(url).json()["can_create"] is True, path
+        assert x.both.get(url).json()["can_create"] is True, path
+        assert x.reviewer.get(url).json()["can_create"] is False, path
+        assert _denied(x.b.get(url)), path
+        assert _denied(x.reader.get(url)), path

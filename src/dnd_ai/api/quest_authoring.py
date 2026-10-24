@@ -86,7 +86,7 @@ from ._content_support import (
     write_receipt,
 )
 from ._shared import timeline_world_id
-from .access import require_campaign_capability
+from .access import can_create_definitions, require_campaign_capability
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .errors import NotFoundError
@@ -353,10 +353,9 @@ def _run(
 
 @router.get(_BASE + "/options")
 def quest_options_endpoint(access: _PrivateRead, connection: _Conn) -> dict[str, Any]:
-    del access
     catalogs = quest_option_catalogs()
     return {
-        "can_create": True,
+        "can_create": can_create_definitions(connection, access=access),
         "objective_types": [
             {"value": code, "label": label} for code, label in list_objective_types(connection)
         ],

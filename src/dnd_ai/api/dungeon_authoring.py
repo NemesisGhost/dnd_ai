@@ -71,7 +71,7 @@ from ._authoring import (
 )
 from ._content_support import audit_content_write, clean_note
 from ._shared import timeline_world_id
-from .access import require_campaign_capability
+from .access import can_create_definitions, require_campaign_capability
 from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
@@ -394,9 +394,8 @@ def _dungeon_of(connection: Connection, result: ContentWriteResult) -> uuid.UUID
 
 @router.get(_BASE + "/options")
 def dungeon_options_endpoint(access: _PrivateRead, connection: _Conn) -> dict[str, Any]:
-    del access
     return {
-        "can_create": True,
+        "can_create": can_create_definitions(connection, access=access),
         "connection_types": [
             {"value": code, "label": label} for code, label in list_connection_types(connection)
         ],

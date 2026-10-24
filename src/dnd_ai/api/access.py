@@ -177,6 +177,17 @@ def resolve_record_authoring(
     )
 
 
+def can_create_definitions(connection: Connection, *, access: AccessContext) -> bool:
+    """Whether the caller may create shared world definitions through this campaign: campaign
+    `canon.edit` and the world Editor capability. The "can create" flag of the authoring option
+    catalogs reports it, so a Reviewer, who can read the catalogs, is not offered a form the
+    command would refuse. Campaign-originated records (player characters, item instances) need
+    neither and keep their own flag."""
+    return resolve_record_authoring(
+        connection, access=access, entity_type_code="definition"
+    ).can_edit
+
+
 def require_campaign_capability(
     capability_code: str,
     *,

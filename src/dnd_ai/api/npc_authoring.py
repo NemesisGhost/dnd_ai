@@ -34,7 +34,7 @@ from ._authoring import (
 )
 from ._content_support import audit_content_write, clean_note, write_receipt
 from ._shared import timeline_world_id
-from .access import require_campaign_capability
+from .access import can_create_definitions, require_campaign_capability
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .errors import NotFoundError
@@ -121,7 +121,7 @@ def _response(
 def npc_options_endpoint(access: _PrivateRead, connection: _Conn) -> dict[str, Any]:
     world_id = timeline_world_id(connection, access.timeline_id)
     return {
-        "can_create": True,
+        "can_create": can_create_definitions(connection, access=access),
         "species": [
             {
                 "species_id": str(s.species_id),

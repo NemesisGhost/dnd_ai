@@ -65,7 +65,7 @@ from ._content_support import (
     write_receipt,
 )
 from ._shared import timeline_world_id
-from .access import require_campaign_capability
+from .access import can_create_definitions, require_campaign_capability
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .errors import NotFoundError
@@ -229,10 +229,9 @@ def _religion_json(view: ReligionAuthoringView, *, changed: bool | None = None) 
 
 
 @router.get(_ORG + "/options")
-def organization_options_endpoint(access: _PrivateRead) -> dict[str, Any]:
-    del access
+def organization_options_endpoint(access: _PrivateRead, connection: _Conn) -> dict[str, Any]:
     return {
-        "can_create": True,
+        "can_create": can_create_definitions(connection, access=access),
         "kinds": [_kind_json(k) for k in list_organization_kinds()],
         "limits": {
             "name_max_length": NAME_MAX_LENGTH,
@@ -417,10 +416,9 @@ def _organization_response(
 
 
 @router.get(_REL + "/options")
-def religion_options_endpoint(access: _PrivateRead) -> dict[str, Any]:
-    del access
+def religion_options_endpoint(access: _PrivateRead, connection: _Conn) -> dict[str, Any]:
     return {
-        "can_create": True,
+        "can_create": can_create_definitions(connection, access=access),
         "limits": {
             "name_max_length": NAME_MAX_LENGTH,
             "summary_max_length": DESCRIPTION_MAX_LENGTH,

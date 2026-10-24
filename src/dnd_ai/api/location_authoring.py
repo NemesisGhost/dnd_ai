@@ -48,7 +48,7 @@ from ._authoring import (
 )
 from ._content_support import audit_content_write, clean_note, write_receipt
 from ._shared import timeline_world_id
-from .access import require_campaign_capability
+from .access import can_create_definitions, require_campaign_capability
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .errors import InvalidCursorError, NotFoundError
@@ -139,10 +139,9 @@ def _view_json(view: LocationAuthoringView, *, changed: bool | None = None) -> d
 
 
 @router.get(_BASE + "/options")
-def location_options_endpoint(access: _PrivateRead) -> dict[str, Any]:
-    del access  # authorization is the dependency's job
+def location_options_endpoint(access: _PrivateRead, connection: _Conn) -> dict[str, Any]:
     return {
-        "can_create": True,
+        "can_create": can_create_definitions(connection, access=access),
         "categories": [_category_json(c) for c in list_location_categories()],
         "limits": {
             "name_max_length": NAME_MAX_LENGTH,
