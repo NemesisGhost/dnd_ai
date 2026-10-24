@@ -85,6 +85,40 @@ export interface AreaStateView {
     state_event_id: string | null
 }
 
+// What the "Area now" panel reads to record what is happening in a published area
+// (`GET .../dungeon-areas/{id}/runtime`): the campaign's own projection, with none of the
+// definition's preparation and no world-private read behind it.
+export interface RuntimeChild {
+    child_id: string
+    child_type: string | null
+    status: string | null
+    is_destroyed: boolean | null
+    state_event_id: string | null
+}
+
+export interface RuntimeConnection {
+    area_connection_id: string
+    from_area: { entity_id: string; name: string }
+    to_area: { entity_id: string; name: string }
+    is_one_way: boolean
+    status: string | null
+    state_event_id: string | null
+}
+
+export interface AreaRuntimeView {
+    dungeon_area_id: string
+    name: string
+    dungeon: { entity_id: string; name: string }
+    can_set_state: boolean
+    state: AreaStateView
+    state_choices: Record<string, DungeonChoice[]>
+    connections: RuntimeConnection[]
+    features: RuntimeChild[]
+    hazards: RuntimeChild[]
+    interactables: RuntimeChild[]
+    limits: { alarm_level_max: number; notes_max_length: number }
+}
+
 export interface AreaAuthoringView extends AuthoringReadModel {
     dungeon_area_id: string
     name: string

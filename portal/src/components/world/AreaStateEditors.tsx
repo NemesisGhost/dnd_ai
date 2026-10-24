@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import type { DungeonChoice, DungeonOptions, SetStateBody } from "../../types/dungeonAuthoring"
+import type { DungeonChoice, SetStateBody } from "../../types/dungeonAuthoring"
 import { YES_NO } from "../../utils/dungeonForm"
 import { SelectField, TextAreaField, TextField } from "../authoring/fields"
 import { focusSoon } from "../authoring/focusSoon"
@@ -37,7 +37,8 @@ export function AreaFactsEditor({
 }: {
     areaId: string
     state: { is_searched: boolean; is_destroyed: boolean; alarm_level: number; condition_notes: string | null; state_event_id: string | null }
-    options: DungeonOptions
+    // Only the limit the form checks: the runtime projection carries it.
+    options: { limits: { alarm_level_max: number } }
     command: DungeonCommandHandle
     onClose: () => void
     onUnsaved: ReportUnsaved

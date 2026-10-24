@@ -1156,6 +1156,29 @@ describe("World record workspace: a dungeon area", () => {
     })
     type AreaView = ReturnType<typeof baseArea>
 
+    // The runtime projection the server derives from the same area (see `get_area_runtime_endpoint`):
+    // what "Area now" reads, with none of the definition's preparation.
+    const runtimeOf = (v: AreaView) => ({
+        dungeon_area_id: v.dungeon_area_id,
+        name: v.name,
+        dungeon: { entity_id: v.dungeon.entity_id, name: v.dungeon.name },
+        can_set_state: v.can_set_state,
+        state: v.state,
+        state_choices: v.state_choices,
+        connections: v.connections.map((c) => ({
+            area_connection_id: c.area_connection_id,
+            from_area: { entity_id: c.from_area.entity_id, name: c.from_area.name },
+            to_area: { entity_id: c.to_area.entity_id, name: c.to_area.name },
+            is_one_way: c.is_one_way,
+            status: c.status,
+            state_event_id: c.state_event_id,
+        })),
+        features: v.features.map((c) => ({ child_id: c.child_id, child_type: c.child_type, status: c.status, is_destroyed: c.is_destroyed, state_event_id: c.state_event_id })),
+        hazards: v.hazards.map((c) => ({ child_id: c.child_id, child_type: c.child_type, status: c.status, is_destroyed: c.is_destroyed, state_event_id: c.state_event_id })),
+        interactables: v.interactables.map((c) => ({ child_id: c.child_id, child_type: c.child_type, status: c.status, is_destroyed: c.is_destroyed, state_event_id: c.state_event_id })),
+        limits: { alarm_level_max: 1000, notes_max_length: 4000 },
+    })
+
     function area(canon = "canon", lifecycleStatus = "active", over: Partial<AreaView> = {}, options: Partial<Options> = {}) {
         const state = { view: { ...baseArea(), canon_status: canon, lifecycle_status: lifecycleStatus, ...over } as AreaView }
         const rendered = setup({
@@ -1181,6 +1204,7 @@ describe("World record workspace: a dungeon area", () => {
             extra: (server) => {
                 server.on("GET", `/campaigns/${C}/authoring/dungeons/options`, { body: OPTIONS })
                 server.on("GET", `/campaigns/${C}/authoring/dungeon-areas/l1`, () => ({ body: state.view }))
+                server.on("GET", `/campaigns/${C}/dungeon-areas/l1/runtime`, () => ({ body: runtimeOf(state.view) }))
                 server.on("POST", /\/authoring\/dungeons\/d1\/(features|hazards|interactables)(\/[a-z0-9]+\/(update|remove))?$/, (call) => {
                     const body = call.body as { child_type?: string }
                     const kind = /features/.test(call.path) ? "feature" : /hazards/.test(call.path) ? "hazard" : "interactable"

@@ -21,6 +21,10 @@ export const dungeonOptionsPath = (campaignId: string): string =>
 export const dungeonAuthoringPath = (campaignId: string, dungeonId: string): string =>
     `${base(campaignId)}/dungeons/${enc(dungeonId)}`
 
+// The campaign's runtime projection of a published area (no world-private read).
+export const areaRuntimePath = (campaignId: string, areaId: string): string =>
+    `/campaigns/${encodeURIComponent(campaignId)}/dungeon-areas/${encodeURIComponent(areaId)}/runtime`
+
 export const areaAuthoringPath = (campaignId: string, areaId: string): string =>
     `${base(campaignId)}/dungeon-areas/${enc(areaId)}`
 

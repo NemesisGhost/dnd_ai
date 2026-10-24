@@ -7,15 +7,18 @@ import { focusSoon } from "../authoring/focusSoon"
 import { useDungeonCommand } from "../authoring/useDungeonCommand"
 import type { ReportUnsaved } from "../quests/useUnsavedReport"
 import { AreaFactsEditor, StatusEditor } from "./AreaStateEditors"
-import type { AreaRead } from "./useDungeonRead"
+import type { AreaRuntimeRead } from "./useDungeonRead"
 import { playBlockedText } from "./worldStages"
 
 interface Props {
     campaignId: string
     areaId: string
     location: LocationDetail
-    lifecycleView: EntityLifecycleView | null
-    read: AreaRead
+    // The area's canon and lifecycle status: the lifecycle read when the caller has one, else the
+    // audience-safe detail's (a campaign GM with no world role has no lifecycle read). `null` only
+    // when neither is known.
+    lifecycleView: Pick<EntityLifecycleView, "canon_status" | "lifecycle_status"> | null
+    read: AreaRuntimeRead
     // Reads the area again, and the facts above (the page's own detail).
     refresh: () => Promise<void>
     onUnsaved: ReportUnsaved
@@ -64,7 +67,7 @@ export function AreaNowSection({ campaignId, areaId, location, lifecycleView, re
         [onUnsaved],
     )
     const blocked = playBlockedText(lifecycleView, "area")
-    const { view, options } = read
+    const { view } = read
 
     function open(key: string) {
         if (editing === key) {
@@ -92,7 +95,14 @@ export function AreaNowSection({ campaignId, areaId, location, lifecycleView, re
 
     const controls = (): React.ReactNode => {
         if (read.status === "loading") return <p role="status">Loading what can be recorded…</p>
-        if (read.status !== "ready" || view === null || options === null) {
+        if (read.status === "unavailable") {
+            return (
+                <p className="authoring-note" role="status">
+                    What is happening in this area is not available to you.
+                </p>
+            )
+        }
+        if (read.status !== "ready" || view === null) {
             return (
                 <div role="alert">
                     <p>What can be recorded here could not be loaded.</p>
@@ -233,7 +243,7 @@ export function AreaNowSection({ campaignId, areaId, location, lifecycleView, re
                                 <AreaFactsEditor
                                     areaId={areaId}
                                     state={s}
-                                    options={options}
+                                    options={view}
                                     command={command}
                                     onClose={() => close("area")}
                                     onUnsaved={report}

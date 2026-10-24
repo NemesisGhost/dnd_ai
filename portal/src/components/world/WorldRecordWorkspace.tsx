@@ -46,7 +46,7 @@ import { locationEditPath, locationNoun, locationViewPath } from "./placePaths"
 import { WorldPublicationSection } from "./WorldPublication"
 import { WorldRecordHeader } from "./WorldRecordHeader"
 import { WorldReviewSection } from "./WorldReviewSection"
-import { useAreaRead, useDungeonRead } from "./useDungeonRead"
+import { useAreaRead, useAreaRuntimeRead, useDungeonRead } from "./useDungeonRead"
 import {
     LEGACY_SECTION_ALIASES,
     WORLD_STAGE_LABELS,
@@ -297,7 +297,11 @@ function Workspace({
     // version. Nothing is requested for any other record.
     const dungeonRead = useDungeonRead(campaignId, entityId, kind === "dungeon")
     // The same for an area's Contents and Area now.
-    const areaRead = useAreaRead(campaignId, entityId, kind === "area")
+    // The area's structure reads the authoring view, which is the world's private side: asked for
+    // only when that is the caller's. "Area now" reads the campaign's own runtime projection, which
+    // needs no world role, so a campaign GM can run the area without any private request.
+    const areaRead = useAreaRead(campaignId, entityId, kind === "area" && canReadWorldPrivate)
+    const areaRuntime = useAreaRuntimeRead(campaignId, entityId, kind === "area")
     const guidance = lifecycleView === null ? null : worldGuidance(lifecycleView)
     const [sourcesDirty, setSourcesDirty] = useState(false)
     // How many times the record was refreshed after a step, for the links that read the record's
@@ -312,6 +316,7 @@ function Workspace({
         void revisions.refetch()
         void dungeonRead.reload()
         void areaRead.reload()
+        void areaRuntime.reload()
     }
     // A structural command bumps the dungeon's version, which the lifecycle actions send as their
     // stale-write token: read the dungeon, its lifecycle and its revisions together, so a publish
@@ -322,11 +327,11 @@ function Workspace({
     // A change to an area's contents reads the area, its lifecycle and its revisions again (the
     // dungeon's lifecycle is not on this page).
     const refreshContents = async () => {
-        await Promise.all([areaRead.reload(), lifecycle.refetch(), revisions.refetch()])
+        await Promise.all([areaRead.reload(), areaRuntime.reload(), lifecycle.refetch(), revisions.refetch()])
     }
     // A recorded state reads the area again, and the facts shown above its controls.
     const refreshState = async () => {
-        await Promise.all([areaRead.reload(), refetchDetail()])
+        await Promise.all([areaRuntime.reload(), refetchDetail()])
     }
 
     // Move focus to the section heading when the section changes after arrival (a link, Back or
@@ -478,8 +483,8 @@ function Workspace({
                         campaignId={campaignId}
                         areaId={entityId}
                         location={data as LocationDetail}
-                        lifecycleView={lifecycleView}
-                        read={areaRead}
+                        lifecycleView={playStatus}
+                        read={areaRuntime}
                         refresh={refreshState}
                         onUnsaved={reportUnsaved}
                     />

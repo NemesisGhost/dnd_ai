@@ -208,7 +208,7 @@ const SECTION_GATES: Readonly<Record<WorldSection, SectionGate>> = {
     relationships: "world_private",
     review: "record_private",
     publication: "record_private",
-    "area-now": "world_private",
+    "area-now": "open",
     members: "open",
     run: "open",
     player: "open",

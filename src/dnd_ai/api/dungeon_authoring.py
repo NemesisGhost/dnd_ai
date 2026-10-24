@@ -63,6 +63,7 @@ from dnd_ai.queries.dungeon_authoring import (
     get_dungeon_authoring,
     list_connection_types,
 )
+from dnd_ai.queries.entity_lifecycle import lifecycle_hidden_entity_ids
 
 from ._authoring import (
     BaseAuthoringRequest,
@@ -795,6 +796,89 @@ _STATE_FIELDS = (
     "hazard_status",
     "interactable_status",
 )
+
+
+def _runtime_child_json(c: ChildRow) -> dict[str, Any]:
+    # Only what recording state needs: which part it is, what it is called, what is recorded now.
+    return {
+        "child_id": str(c.child_id),
+        "child_type": c.child_type,
+        "status": c.status,
+        "is_destroyed": c.is_destroyed,
+        "state_event_id": None if c.state_event_id is None else str(c.state_event_id),
+    }
+
+
+@router.get("/campaigns/{campaign_id}/dungeon-areas/{dungeon_area_id}/runtime")
+def get_area_runtime_endpoint(
+    dungeon_area_id: uuid.UUID, access: _Access, connection: _Conn
+) -> dict[str, Any]:
+    """What the "Area now" panel needs to record what is happening in a published area, for the
+    campaign's own GM (`canon.edit`) and nothing of the area's definition or preparation.
+
+    It authorizes like the audience-safe area read (`GET .../dungeon-areas/{id}`): a per-area
+    `campaign.view` deny, and an unpublished area or dungeon (or any area for a caller without
+    the private-read capability), are the same non-disclosing 404. It deliberately does *not*
+    require `world.canon.read_private`, and returns none of the private fields of the authoring
+    read: no summary, dimensions, environmental properties, descriptions, severities, hidden flags,
+    revisions or actions. A connection to an area the caller cannot see is not listed. Recording
+    state is a separate command with its own authorization (`POST .../state`); nothing here grants
+    it, and editing the definition is untouched."""
+    if not access.has_capability("campaign.view", entity_id=dungeon_area_id):
+        raise NotFoundError()
+    world_id = timeline_world_id(connection, access.timeline_id)
+    view = get_area_authoring(
+        connection,
+        world_id=world_id,
+        timeline_id=access.timeline_id,
+        dungeon_area_id=dungeon_area_id,
+    )
+    if view is None:
+        raise NotFoundError()
+    hidden = lifecycle_hidden_entity_ids(
+        connection,
+        world_id=world_id,
+        mode="reference",
+        viewer_user_id=access.user_id,
+        can_edit_canon=True,
+    )
+    if dungeon_area_id in hidden or view.dungeon.entity_id in hidden:
+        raise NotFoundError()
+    return {
+        "dungeon_area_id": str(view.dungeon_area_id),
+        "name": view.name,
+        "dungeon": {"entity_id": str(view.dungeon.entity_id), "name": view.dungeon.name},
+        "can_set_state": view.can_set_state,
+        "state": {
+            "is_searched": view.state.is_searched,
+            "is_destroyed": view.state.is_destroyed,
+            "alarm_level": view.state.alarm_level,
+            "condition_notes": view.state.condition_notes,
+            "state_event_id": None
+            if view.state.state_event_id is None
+            else str(view.state.state_event_id),
+        },
+        "state_choices": {
+            name: [{"value": v, "label": label} for v, label in pairs]
+            for name, pairs in view.state_choices.items()
+        },
+        "connections": [
+            {
+                "area_connection_id": str(c.area_connection_id),
+                "from_area": {"entity_id": str(c.from_area.entity_id), "name": c.from_area.name},
+                "to_area": {"entity_id": str(c.to_area.entity_id), "name": c.to_area.name},
+                "is_one_way": c.is_one_way,
+                "status": c.status,
+                "state_event_id": None if c.state_event_id is None else str(c.state_event_id),
+            }
+            for c in view.connections
+            if c.from_area.entity_id not in hidden and c.to_area.entity_id not in hidden
+        ],
+        "features": [_runtime_child_json(c) for c in view.features],
+        "hazards": [_runtime_child_json(c) for c in view.hazards],
+        "interactables": [_runtime_child_json(c) for c in view.interactables],
+        "limits": {"alarm_level_max": ALARM_LEVEL_MAX, "notes_max_length": NOTES_MAX_LENGTH},
+    }
 
 
 @router.post("/campaigns/{campaign_id}/dungeon-areas/{dungeon_area_id}/state")
