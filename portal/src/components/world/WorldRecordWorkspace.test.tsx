@@ -1108,7 +1108,7 @@ describe("World record workspace: a dungeon", () => {
         expect(server.callsTo("POST", `/campaigns/${C}/authoring/dungeons/l1/areas`)).toHaveLength(1)
     })
 
-    it("on a refused add-connection, shows back the chosen areas and typed fields only", async () => {
+    it("on a refused add-connection, shows back typed fields and no private area names", async () => {
         const { server } = dungeon()
         await openSection("Connections")
         fireEvent.click(await screen.findByRole("button", { name: "Add connection" }))
@@ -1122,9 +1122,13 @@ describe("World record workspace: a dungeon", () => {
         fireEvent.click(within(form).getByRole("button", { name: "Add connection" }))
 
         const panel = await alertPanel()
-        expect(panel).toHaveTextContent("Entry Hall")
-        expect(panel).toHaveTextContent("Old Vault")
         expect(panel).toHaveTextContent("Rubble hides it")
+        expect(panel).toHaveTextContent("door")
+        // The area names came from the private read; only the fact that areas were chosen is kept.
+        for (const name of ["Entry Hall", "Old Vault", "Collapsed Stair"]) {
+            expect(within(panel).queryByText(new RegExp(name))).not.toBeInTheDocument()
+            expect(panel).not.toHaveTextContent(name)
+        }
         // The saved connections the server had loaded are not shown back.
         expect(screen.queryByRole("list", { name: "Connections" })).not.toBeInTheDocument()
         expect(screen.queryByText("Collapsed Stair")).not.toBeInTheDocument()

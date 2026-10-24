@@ -76,10 +76,11 @@ export function DungeonConnectionsSection({ campaignId, dungeonId, read, refresh
         to !== "" ||
         Object.keys(EMPTY_CONNECTION).some((key) => draft[key]!.trim() !== EMPTY_CONNECTION[key]!)
     useUnsavedReport(onUnsaved, "new-connection", dirtyNew ? ["a connection"] : [])
-    const areaName = (id: string): string => read.view?.areas.find((a) => a.dungeon_area_id === id)?.name ?? ""
+    // The chosen areas are shown only as chosen: their names come from the private read, which a
+    // permission loss discards, so no server-loaded name is copied into what is retained.
     useRetainedInput("new-connection", "New connection", [
-        ...(from === "" ? [] : [{ label: "From area", value: areaName(from) }]),
-        ...(to === "" ? [] : [{ label: "To area", value: areaName(to) }]),
+        ...(from === "" ? [] : [{ label: "From area", value: "Selected" }]),
+        ...(to === "" ? [] : [{ label: "To area", value: "Selected" }]),
         ...changedFields(EMPTY_CONNECTION, draft),
     ])
     // The open editor reports its own unsent edits; remember whether it holds any, so opening a
