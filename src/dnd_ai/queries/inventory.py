@@ -79,6 +79,12 @@ class InventoryItemView:
     'fully_identified'` (or the caller is a GM), the identification row's
     own `known_properties_jsonb` when `'partially_identified'`, and `None`
     otherwise."""
+    name: str = ""
+    """The instance's own name (a named sword), as opposed to its definition's `display_name`."""
+    last_event_id: uuid.UUID | None = None
+    """The item's optimistic token (`campaign.item_state.last_event_id`)."""
+    is_published: bool = True
+    """False for a draft or archived instance, which only a GM (`reveal_all_properties`) sees."""
 
 
 def get_inventory_view(
@@ -110,8 +116,10 @@ def get_inventory_view(
 
     rows = connection.execute(
         text("""
-            SELECT ii.item_instance_id, idef.display_name, icat.code AS item_category_code,
-                   idef.rarity, idef.properties_jsonb,
+            SELECT ii.item_instance_id, ie_ent.canonical_name AS instance_name,
+                   idef.display_name, icat.code AS item_category_code,
+                   idef.rarity, idef.properties_jsonb, ist.last_event_id,
+                   (ie_cs.code = 'canon' AND ie_ls.code = 'active') AS is_published,
                    COALESCE(ist.quantity, 1) AS quantity, ist.condition_percentage,
                    ist.charges_current, ist.charges_maximum,
                    COALESCE(ist.is_equipped, false) AS is_equipped,
@@ -121,6 +129,10 @@ def get_inventory_view(
                    idn.known_properties_jsonb
             FROM campaign.inventory_entries ie
             JOIN world.item_instances ii ON ii.item_instance_id = ie.item_instance_id
+            JOIN core.entities ie_ent ON ie_ent.entity_id = ii.item_instance_id
+            JOIN core.canon_statuses ie_cs ON ie_cs.canon_status_id = ie_ent.canon_status_id
+            JOIN core.lifecycle_statuses ie_ls
+                 ON ie_ls.lifecycle_status_id = ie_ent.lifecycle_status_id
             JOIN rules.item_definitions idef ON idef.item_definition_id = ii.item_definition_id
             JOIN rules.item_categories icat ON icat.item_category_id = idef.item_category_id
             LEFT JOIN campaign.item_state ist
@@ -132,12 +144,14 @@ def get_inventory_view(
                   AND idn.item_instance_id = ie.item_instance_id
                   AND idn.knower_entity_id = ie.holder_entity_id
             WHERE ie.timeline_id = :timeline AND ie.holder_entity_id = :holder
-            ORDER BY ii.item_instance_id
+              AND (:gm OR (ie_cs.code = 'canon' AND ie_ls.code = 'active'))
+            ORDER BY lower(ie_ent.canonical_name), ii.item_instance_id
         """),
         {
             "timeline": timeline_id,
             "holder": holder_entity_id,
             "default_level": _DEFAULT_IDENTIFICATION_LEVEL,
+            "gm": reveal_all_properties,
         },
     ).mappings()
 
@@ -166,6 +180,9 @@ def get_inventory_view(
                 owner_entity_id=row["owner_entity_id"],
                 identification_level=identification_level,
                 properties=properties,
+                name=row["instance_name"],
+                last_event_id=row["last_event_id"],
+                is_published=bool(row["is_published"]),
             )
         )
 

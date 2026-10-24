@@ -29,6 +29,9 @@ export type KnowledgeDetailState =
 export interface UseKnowledgeDetailResult {
     state: KnowledgeDetailState
     retry: () => void
+    // Re-reads the detail in place: the current item stays on screen (nothing remounts)
+    // until the new one arrives, unlike `retry`, which starts again from "loading".
+    refresh: () => void
 }
 
 interface KnowledgeDetailSnapshot {
@@ -56,6 +59,7 @@ export function useKnowledgeDetail(
 ): UseKnowledgeDetailResult {
     const { reload } = useSession()
     const [requestVersion, setRequestVersion] = useState(0)
+    const [refreshVersion, setRefreshVersion] = useState(0)
 
     const [snapshot, setSnapshot] =
         useState<KnowledgeDetailSnapshot>(() => ({
@@ -66,6 +70,10 @@ export function useKnowledgeDetail(
             requestVersion: 0,
             state: initialState,
         }))
+
+    const refresh = useCallback(() => {
+        setRefreshVersion((currentVersion) => currentVersion + 1)
+    }, [])
 
     const retry = useCallback(() => {
         setRequestVersion(
@@ -179,10 +187,12 @@ export function useKnowledgeDetail(
         partyId,
         reload,
         requestVersion,
+        refreshVersion,
     ])
 
     return {
         state,
         retry,
+        refresh,
     }
 }

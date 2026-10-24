@@ -43,12 +43,13 @@ violation in this codebase does.
 
 import json
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from sqlalchemy import Connection, Engine, text
 
-from ._shared import require_state_targetable, validate_session_campaign
+from ._shared import validate_session_campaign
 from .events import EventParticipant, _insert_event_row
+from .item_operations import UNSET, Token, transfer_in_context
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,7 @@ class TransferItemPossessionResult:
     inventory_entry_id: uuid.UUID
     event_id: uuid.UUID
     world_id: uuid.UUID
+    changed_fields: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -93,36 +95,6 @@ def _lock_item_instance(connection: Connection, item_instance_id: uuid.UUID) -> 
     )
 
 
-@dataclass(frozen=True)
-class _ExistingInventoryEntry:
-    inventory_entry_id: uuid.UUID
-    holder_entity_id: uuid.UUID | None
-    container_id: uuid.UUID | None
-    location_id: uuid.UUID | None
-
-
-def _lock_inventory_entry(
-    connection: Connection, *, timeline_id: uuid.UUID, item_instance_id: uuid.UUID
-) -> _ExistingInventoryEntry | None:
-    row = connection.execute(
-        text("""
-            SELECT inventory_entry_id, holder_entity_id, container_id, location_id
-            FROM campaign.inventory_entries
-            WHERE timeline_id = :timeline AND item_instance_id = :item
-            FOR UPDATE
-        """),
-        {"timeline": timeline_id, "item": item_instance_id},
-    ).one_or_none()
-    if row is None:
-        return None
-    return _ExistingInventoryEntry(
-        inventory_entry_id=row.inventory_entry_id,
-        holder_entity_id=row.holder_entity_id,
-        container_id=row.container_id,
-        location_id=row.location_id,
-    )
-
-
 def _transfer_item_possession_impl(
     connection: Connection,
     *,
@@ -138,6 +110,8 @@ def _transfer_item_possession_impl(
     cause_interaction_id: uuid.UUID | None = None,
     cause_event_id: uuid.UUID | None = None,
     event_details: str | None = None,
+    expected_last_event_id: Token = UNSET,
+    transfer_ownership: bool = False,
 ) -> TransferItemPossessionResult:
     """The actual work of transfer_item_possession(), on a connection the
     caller already has open — see that function's docstring for why this
@@ -148,105 +122,46 @@ def _transfer_item_possession_impl(
 
     Validates session_id/campaign_id agreement
     (dnd_ai.commands._shared.validate_session_campaign) before inserting
-    anything."""
+    anything.
+
+    Phase 15.3B-1b: the placement itself is `dnd_ai.commands.item_operations.
+    transfer_in_context`, the one implementation the item operations share, so
+    this adapter now also refuses an unpublished or destroyed item, an equipped
+    or attuned item changing holder, a holder that is not a published
+    character, a container that would form a loop, and a move to where the item
+    already is. It takes no optimistic token (it predates it) and records the
+    same `item_state.last_event_id` the token reads."""
     validate_session_campaign(connection, campaign_id=campaign_id, session_id=session_id)
 
     world_id = _item_instance_world(connection, item_instance_id)
-    require_state_targetable(connection, holder_entity_id, location_id)
-    _lock_item_instance(connection, item_instance_id)
-
-    existing = _lock_inventory_entry(
-        connection, timeline_id=timeline_id, item_instance_id=item_instance_id
-    )
-
-    event_id = _insert_event_row(
+    result = transfer_in_context(
         connection,
         world_id=world_id,
         timeline_id=timeline_id,
-        world_time_id=world_time_id,
-        event_type_code="item_transferred",
-        name="Item transferred",
-        details=event_details,
         campaign_id=campaign_id,
+        item_id=item_instance_id,
+        time_id=world_time_id,
+        holder_entity_id=holder_entity_id,
+        container_id=container_id,
+        location_id=location_id,
         session_id=session_id,
+        transfer_ownership=transfer_ownership,
+        expected=expected_last_event_id,
         participants=(
             (EventParticipant(entity_id=actor_entity_id, role_code="actor"),)
             if actor_entity_id is not None
             else ()
         ),
+        note=event_details,
         cause_interaction_id=cause_interaction_id,
         cause_event_id=cause_event_id,
     )
-
-    if existing is None:
-        inventory_entry_id = connection.execute(
-            text("""
-                INSERT INTO campaign.inventory_entries
-                    (timeline_id, item_instance_id, holder_entity_id, container_id,
-                     location_id, last_event_id)
-                VALUES (:timeline, :item, :holder, :container, :location, :event)
-                RETURNING inventory_entry_id
-            """),
-            {
-                "timeline": timeline_id,
-                "item": item_instance_id,
-                "holder": holder_entity_id,
-                "container": container_id,
-                "location": location_id,
-                "event": event_id,
-            },
-        ).scalar()
-        assert isinstance(inventory_entry_id, uuid.UUID)
-        previous_location = None
-    else:
-        inventory_entry_id = existing.inventory_entry_id
-        previous_location = {
-            "holder_entity_id": str(existing.holder_entity_id)
-            if existing.holder_entity_id
-            else None,
-            "container_id": str(existing.container_id) if existing.container_id else None,
-            "location_id": str(existing.location_id) if existing.location_id else None,
-        }
-        connection.execute(
-            text("""
-                UPDATE campaign.inventory_entries
-                SET holder_entity_id = :holder, container_id = :container,
-                    location_id = :location, last_event_id = :event, updated_at = now()
-                WHERE inventory_entry_id = :id
-            """),
-            {
-                "holder": holder_entity_id,
-                "container": container_id,
-                "location": location_id,
-                "event": event_id,
-                "id": inventory_entry_id,
-            },
-        )
-
-    connection.execute(
-        text("""
-            INSERT INTO narrative.event_effects
-                (event_id, target_entity_id, target_component, previous_value,
-                 new_value, effective_world_time_id)
-            VALUES (:event, :item, 'inventory_entries.location', :previous, :new, :world_time)
-        """),
-        {
-            "event": event_id,
-            "item": item_instance_id,
-            "previous": json.dumps(previous_location) if previous_location is not None else None,
-            "new": json.dumps(
-                {
-                    "holder_entity_id": str(holder_entity_id) if holder_entity_id else None,
-                    "container_id": str(container_id) if container_id else None,
-                    "location_id": str(location_id) if location_id else None,
-                }
-            ),
-            "world_time": world_time_id,
-        },
-    )
-
+    assert result.inventory_entry_id is not None
     return TransferItemPossessionResult(
-        inventory_entry_id=inventory_entry_id, event_id=event_id, world_id=world_id
+        inventory_entry_id=result.inventory_entry_id,
+        event_id=result.event_id,
+        world_id=world_id,
+        changed_fields=result.changed_fields,
     )
 
 

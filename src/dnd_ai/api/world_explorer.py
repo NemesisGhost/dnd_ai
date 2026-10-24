@@ -26,6 +26,7 @@ import uuid
 from typing import Annotated, Any, Literal, cast
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel
 from sqlalchemy import Connection
 
@@ -41,6 +42,7 @@ from dnd_ai.queries.world_explorer import (
     WORLD_CATEGORY_TYPE_CODES,
     CharacterVisibility,
     WorldEntityVisibility,
+    count_world_entities,
     get_event_view,
     get_item_view,
     get_location_view,
@@ -130,7 +132,7 @@ def _grant_denied_entity_ids(access: AccessContext) -> frozenset[uuid.UUID]:
 
 
 def _campaign_view_denied_entity_ids(
-    access: AccessContext, connection: Connection
+    access: AccessContext, connection: Connection, *, reader_only: bool = False
 ) -> frozenset[uuid.UUID]:
     """Reference-mode denied set: grant denies plus the lifecycle-managed
     entities the caller may not reference at all (draft/proposed/approved/
@@ -142,22 +144,27 @@ def _campaign_view_denied_entity_ids(
         connection,
         world_id=timeline_world_id(connection, access.timeline_id),
         mode="reference",
-        can_edit_canon=access.has_capability(_GM_CAPABILITY),
+        can_edit_canon=access.has_capability(_GM_CAPABILITY) and not reader_only,
     )
 
 
 def resolve_world_entity_visibility(
-    access: AccessContext, connection: Connection
+    access: AccessContext, connection: Connection, *, reader_only: bool = False
 ) -> WorldEntityVisibility:
     """The full discoverability bundle for the caller — the same inputs
     `search_world_entities` applies, packaged so a *second* consumer (the
     relationship list and detail, Issue 1) decides "may this relationship
-    name this participant" the identical way."""
+    name this participant" the identical way. `reader_only` resolves the
+    audience as a reader without `canon.edit` even for a caller who holds it
+    (unpublished definitions and draft events stay hidden) — the character
+    page's Relationships section is the same view for everyone."""
     draft_denied, draft_allowed = access.resource_grant_targets(_GM_CAPABILITY, "event_id")
     return WorldEntityVisibility(
-        campaign_view_denied_entity_ids=_campaign_view_denied_entity_ids(access, connection),
+        campaign_view_denied_entity_ids=_campaign_view_denied_entity_ids(
+            access, connection, reader_only=reader_only
+        ),
         character_visibility=resolve_world_character_visibility(access),
-        include_draft_events=access.has_capability(_GM_CAPABILITY),
+        include_draft_events=access.has_capability(_GM_CAPABILITY) and not reader_only,
         draft_event_allowed_ids=draft_allowed,
         draft_event_denied_ids=draft_denied,
     )
@@ -195,6 +202,14 @@ class WorldEntityCardResponse(BaseModel):
 class WorldEntitySearchResponse(BaseModel):
     items: list[WorldEntityCardResponse]
     next_cursor: str | None
+
+
+class WorldCategoryCountsResponse(BaseModel):
+    """Authorized totals per World category for the same search, over every
+    page — never a count of what is loaded."""
+
+    counts: dict[WorldCategory, int]
+    total: int
 
 
 class RelationshipCardResponse(BaseModel):
@@ -266,6 +281,10 @@ class OrganizationDetailResponse(BaseModel):
     headquarters: OrganizationLinkResponse | None
     religion: OrganizationLinkResponse | None
     status_code: str | None
+    founded: str | None = None
+    dissolved: str | None = None
+    government_form: str | None = None
+    ideology: str | None = None
     canon_status: str
     lifecycle_status: str
     superseded_by: "SupersededByResponse | None" = None
@@ -333,6 +352,8 @@ def search_world_entities_endpoint(
         list[Literal["draft", "proposed", "approved", "rejected", "canon", "superseded"]] | None,
         Query(),
     ] = None,
+    character_type: Annotated[Literal["npc", "player_character"] | None, Query()] = None,
+    entity_type: Annotated[list[str] | None, Query()] = None,
 ) -> WorldEntitySearchResponse:
     """Type-filtered, text-searchable, cursor-paginated browse over every
     authorized entity-rooted World Explorer category. `category` may be
@@ -343,11 +364,45 @@ def search_world_entities_endpoint(
     (GM preview) — for anyone else the flags are silently ignored. `canon_status`
     (repeatable) narrows the result to those statuses and is likewise
     honoured only for a `canon.edit` holder. An empty result — including for an authorized search with
-    no visible matches — returns `items: []`, never an existence hint."""
+    no visible matches — returns `items: []`, never an existence hint.
+    `character_type` (`npc` or `player_character`) narrows the `character`
+    category to that one type before pagination; it is only accepted when
+    `category=character` is the sole category (422 otherwise). It changes no
+    visibility rule. `entity_type` (repeatable) generalizes it: every value must be a type code
+    of a requested category (any category when `category` is omitted), otherwise 422; it
+    narrows the listing before pagination and changes no visibility rule."""
     categories = list(category) if category else list(WORLD_CATEGORY_TYPE_CODES)
+    if character_type is not None and categories != ["character"]:
+        # The same fixed 422 FastAPI's own query validation produces.
+        raise RequestValidationError(
+            [
+                {
+                    "type": "value_error",
+                    "loc": ("query", "character_type"),
+                    "msg": "character_type requires category=character as the only category.",
+                    "input": character_type,
+                }
+            ]
+        )
     type_codes: list[str] = []
     for cat in categories:
         type_codes.extend(WORLD_CATEGORY_TYPE_CODES[cat])
+    if character_type is not None:
+        type_codes = [character_type]
+    if entity_type:
+        outside = [t for t in entity_type if t not in type_codes]
+        if outside:
+            raise RequestValidationError(
+                [
+                    {
+                        "type": "value_error",
+                        "loc": ("query", "entity_type"),
+                        "msg": "entity_type must be a type of a requested category.",
+                        "input": outside[0],
+                    }
+                ]
+            )
+        type_codes = [t for t in type_codes if t in entity_type]
 
     keyset = decode_typed_cursor(cursor, keyset=ENTITY_SEARCH_KEYSET, fields=("str", "uuid"))
     after_name = cast(str, keyset[0]) if keyset is not None else None
@@ -406,6 +461,54 @@ def search_world_entities_endpoint(
 
 
 @router.get(
+    "/campaigns/{campaign_id}/world/search/counts",
+    response_model=WorldCategoryCountsResponse,
+    status_code=200,
+)
+def count_world_entities_endpoint(
+    access: Annotated[AccessContext, Depends(require_campaign_capability(_VIEW_CAPABILITY))],
+    connection: Annotated[Connection, Depends(get_connection)],
+    q: Annotated[str | None, Query(max_length=_MAX_QUERY_LEN)] = None,
+    include_noncanon: Annotated[bool, Query()] = False,
+    include_archived: Annotated[bool, Query()] = False,
+) -> WorldCategoryCountsResponse:
+    """The complete number of entries per World category (every category is
+    present, `0` included) and in total for the same search, under exactly the
+    visibility `GET .../world/search` applies — the same campaign and timeline,
+    per-entity denies, character tiers, event scope and the `canon.edit`-only
+    draft/archived preview flags. Each category is counted independently of
+    any selected category, and the total is the sum, so "All entries" equals
+    the result set a client would page through."""
+    world_id = timeline_world_id(connection, access.timeline_id)
+    draft_denied, draft_allowed = access.resource_grant_targets(_GM_CAPABILITY, "event_id")
+    type_codes = [code for codes in WORLD_CATEGORY_TYPE_CODES.values() for code in codes]
+    counts = count_world_entities(
+        connection,
+        world_id=world_id,
+        timeline_id=access.timeline_id,
+        category_type_codes=type_codes,
+        query_text=q,
+        campaign_view_denied_entity_ids=_grant_denied_entity_ids(access)
+        | lifecycle_hidden_entity_ids(
+            connection,
+            world_id=world_id,
+            mode="browse",
+            can_edit_canon=access.has_capability(_GM_CAPABILITY),
+            include_noncanon=include_noncanon,
+            include_archived=include_archived,
+        ),
+        character_visibility=resolve_world_character_visibility(access),
+        include_draft_events=access.has_capability(_GM_CAPABILITY),
+        draft_event_allowed_ids=draft_allowed,
+        draft_event_denied_ids=draft_denied,
+    )
+    return WorldCategoryCountsResponse(
+        counts=counts,  # type: ignore[arg-type]
+        total=sum(counts.values()),
+    )
+
+
+@router.get(
     "/campaigns/{campaign_id}/world/relationships",
     response_model=RelationshipListResponse,
     status_code=200,
@@ -439,6 +542,7 @@ def list_world_relationships_endpoint(
         visibility=resolve_world_entity_visibility(access, connection),
         limit=limit,
         after_relationship_id=after_relationship_id,
+        include_private=access.has_capability("canon.edit"),
     )
 
     page = build_page(
@@ -493,11 +597,14 @@ def get_location_endpoint(
         ],
         population=view.population,
         building_use=view.building_use,
-        danger_level=view.danger_level,
+        # Editors only (owner decision D1): a dungeon's danger rating is GM-facing. A member
+        # without canon.edit receives null, the same answer as for an unrated dungeon.
+        danger_level=view.danger_level if access.has_capability(_GM_CAPABILITY) else None,
         is_searched=view.is_searched,
         is_destroyed=view.is_destroyed,
         alarm_level=view.alarm_level,
-        condition_notes=view.condition_notes,
+        # GM-only (D-3, data class GM_ONLY): never projected to a member without canon.edit.
+        condition_notes=view.condition_notes if access.has_capability(_GM_CAPABILITY) else None,
         **_status_fields(
             get_entity_status_summary(connection, entity_id=location_id, hidden_entity_ids=denied)
         ),
@@ -570,6 +677,10 @@ def get_organization_detail_endpoint(
         headquarters=link(view.headquarters),
         religion=link(view.religion),
         status_code=view.status_code,
+        founded=view.founded,
+        dissolved=view.dissolved,
+        government_form=view.government_form,
+        ideology=view.ideology,
         **_status_fields(
             get_entity_status_summary(
                 connection, entity_id=organization_id, hidden_entity_ids=denied
@@ -601,7 +712,8 @@ def get_item_endpoint(
         name=view.name,
         summary=view.summary,
         item_definition_id=view.item_definition_id,
-        origin_notes=view.origin_notes,
+        # GM-only (D-3, data class GM_ONLY).
+        origin_notes=view.origin_notes if access.has_capability(_GM_CAPABILITY) else None,
         quantity=view.quantity,
         condition_percentage=view.condition_percentage,
         charges_current=view.charges_current,
@@ -641,7 +753,8 @@ def get_event_endpoint(
         event_type_code=view.event_type_code,
         event_status_code=view.event_status_code,
         world_time_id=view.world_time_id,
-        details=view.details,
+        # GM-only (D-3, data class GM_ONLY): the free-form event record is not a recap.
+        details=view.details if access.has_capability(_GM_CAPABILITY) else None,
         session_id=view.session_id,
         participants=[
             EventParticipantResponse(entity_id=p.entity_id, role_code=p.role_code)

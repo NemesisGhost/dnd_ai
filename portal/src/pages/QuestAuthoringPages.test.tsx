@@ -1,4 +1,4 @@
-import { createEvent, fireEvent, screen, waitFor, within } from "@testing-library/react"
+import { cleanup, createEvent, fireEvent, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import {
@@ -7,7 +7,9 @@ import {
     installMockServer,
     renderAuthoringRoutes,
 } from "../test/authoringHarness"
-import { CreateQuestPage, EditQuestPage } from "./QuestAuthoringPages"
+import { installRecordReads } from "../test/worldWorkspaceMocks"
+import { CampaignQuestDetailPage } from "./CampaignQuestDetailPage"
+import { CreateQuestPage } from "./QuestAuthoringPages"
 
 const CHOICES = (pairs: [string, string][]) => pairs.map(([value, label]) => ({ value, label }))
 
@@ -34,7 +36,23 @@ const OPTIONS = {
         ["visible", "Visible"],
         ["gm_only", "GM only"],
     ]),
+    dependency_types: CHOICES([["prerequisite", "Prerequisite"]]),
+    participant_roles: CHOICES([
+        ["giver", "Quest giver"],
+        ["involved", "Involved"],
+    ]),
+    outcome_categories: CHOICES([
+        ["success", "Success"],
+        ["failure", "Failure"],
+    ]),
+    reward_types: CHOICES([
+        ["other", "Other"],
+        ["knowledge", "Knowledge"],
+    ]),
     limits: {
+        gm_notes_max_length: 4000,
+        outcome_description_max_length: 4000,
+        reward_description_max_length: 1000,
         name_max_length: 200,
         summary_max_length: 4000,
         change_note_max_length: 1000,
@@ -79,6 +97,10 @@ function quest(overrides: object = {}) {
         name: "The Lost Amulet",
         summary: "Find it.",
         has_progress: false,
+        gm_notes: null,
+        dependencies: [],
+        participants: [],
+        outcomes: [],
         stages: [stage()],
         canon_status: "draft",
         lifecycle_status: "active",
@@ -102,6 +124,9 @@ function quest(overrides: object = {}) {
 
 const BASE = "/campaigns/c1/authoring/quests"
 
+// The stage cards' headings.
+const stageHeadings = () => screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent)
+
 afterEach(() => {
     vi.unstubAllGlobals()
 })
@@ -110,7 +135,8 @@ afterEach(() => {
 const expandAll = async () =>
     fireEvent.click(await screen.findByRole("button", { name: "Expand all" }))
 
-function setupEdit(initial: object = quest()) {
+// Opens the quest workspace at a section (the stage cards live in Stages and objectives).
+function setupEdit(initial: object = quest(), section = "structure") {
     const server = installMockServer()
     let current: any = initial // eslint-disable-line @typescript-eslint/no-explicit-any
     server.on("GET", `${BASE}/q1`, () => ({ body: current }))
@@ -142,8 +168,9 @@ function setupEdit(initial: object = quest()) {
         mutate(current)
         return { body: { ...current, changed: true } }
     }
+    installRecordReads(server, { campaignId: "c1", entityId: "q1", name: "The Lost Amulet", entityTypeCode: "quest" })
     const rendered = renderAuthoringRoutes({
-        initialEntry: "/app/c1/quests/q1/edit",
+        initialEntry: `/app/c1/quests/q1?section=${section}`,
         bootstrap: bootstrapWith({
             campaigns: [
                 {
@@ -154,7 +181,7 @@ function setupEdit(initial: object = quest()) {
             ],
         }),
         routes: [
-            { path: "/app/:campaignId/quests/:questId/edit", element: <EditQuestPage /> },
+            { path: "/app/:campaignId/quests/:questId", element: <CampaignQuestDetailPage /> },
             { path: "/app/:campaignId/quests", element: <p>Quests list page</p> },
         ],
     })
@@ -169,25 +196,26 @@ describe("CreateQuestPage", () => {
             initialEntry: "/app/c1/quests/new",
             routes: [
                 { path: "/app/:campaignId/quests/new", element: <CreateQuestPage /> },
-                { path: "/app/:campaignId/quests/:questId/edit", element: <p>Quest editor page</p> },
+                { path: "/app/:campaignId/quests/:questId", element: <p>Quest workspace page</p> },
             ],
         })
         return { server, ...rendered }
     }
 
-    it("creates a draft and replaces history with the quest's editor", async () => {
+    it("creates a draft and replaces history with the quest's Stages and objectives section", async () => {
         const { server, router } = setup()
         server.on("POST", BASE, { status: 201, body: quest({ stages: [] }) })
         fireEvent.change(await screen.findByRole("textbox", { name: /Name/ }), {
             target: { value: " The Lost Amulet " },
         })
         fireEvent.click(screen.getByRole("button", { name: "Create quest" }))
-        await screen.findByText("Quest editor page")
+        await screen.findByText("Quest workspace page")
         const [call] = server.callsTo("POST", BASE)
         expect(call!.headers["X-CSRF-Token"]).toBe(TEST_CSRF)
         expect(call!.body).toEqual({ name: "The Lost Amulet", summary: null })
         expect(router.state.historyAction).toBe("REPLACE")
-        expect(router.state.location.pathname).toBe("/app/c1/quests/q1/edit")
+        expect(router.state.location.pathname).toBe("/app/c1/quests/q1")
+        expect(router.state.location.search).toBe("?section=structure")
     })
 
     it("requires a name and sends nothing otherwise", async () => {
@@ -199,21 +227,20 @@ describe("CreateQuestPage", () => {
     })
 })
 
-describe("EditQuestPage", () => {
+describe("Quest workspace: Prepare", () => {
     it("renders the aggregate by name, with one h1 and no identifiers", async () => {
         setupEdit()
         await expandAll()
         await screen.findByRole("heading", { level: 3, name: /Opening/ })
         expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1)
-        expect(screen.getByRole("heading", { level: 1, name: "Edit quest" })).toHaveFocus()
+        expect(screen.getByRole("heading", { level: 1, name: "The Lost Amulet" })).toHaveFocus()
         expect(screen.getByRole("heading", { level: 5, name: "Reach the ruin" })).toBeInTheDocument()
         expect(screen.getByText(/Target: Old Ruin/)).toBeInTheDocument()
-        expect(screen.getByRole("textbox", { name: /^Name/ })).toHaveValue("The Lost Amulet")
         expect(document.body.textContent).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/i)
     })
 
     it("saves details against the loaded version", async () => {
-        const { server, commit } = setupEdit()
+        const { server, commit } = setupEdit(quest(), "details")
         server.on("POST", `${BASE}/q1/update`, () => commit((d) => (d.name = "The Found Amulet")))
         await screen.findByRole("textbox", { name: /^Name/ })
         fireEvent.change(screen.getByRole("textbox", { name: /^Name/ }), {
@@ -430,17 +457,22 @@ describe("EditQuestPage", () => {
     })
 
     it("explains a quest under review and offers no edit controls", async () => {
-        setupEdit(
-            quest({
-                canon_status: "proposed",
-                available_actions: ["approve"],
-                blocked_actions: [{ action: "update", reason: "review_in_progress" }],
-            }),
-        )
-        expect(await screen.findByRole("note")).toHaveTextContent("review in progress")
+        const review = quest({
+            canon_status: "proposed",
+            available_actions: ["approve"],
+            blocked_actions: [{ action: "update", reason: "review_in_progress" }],
+        })
+        setupEdit(review, "details")
+        expect(await screen.findByRole("note")).toHaveTextContent("This quest is in review. Return it to draft to edit it.")
+        // The details are text, not disabled fields.
+        expect(screen.queryByRole("textbox", { name: /^Name/ })).toBeNull()
+        expect(screen.getByText("The Lost Amulet", { selector: "dd" })).toBeInTheDocument()
+        expect(screen.queryByRole("button", { name: "Save details" })).toBeNull()
+        cleanup()
+        setupEdit(review, "structure")
+        await screen.findByRole("heading", { level: 3, name: /Opening/ })
         expect(screen.queryByRole("button", { name: "Add stage" })).toBeNull()
         expect(screen.queryByRole("button", { name: /Edit stage/ })).toBeNull()
-        expect(screen.getByRole("textbox", { name: /^Name/ })).toBeDisabled()
     })
 
     it("guards an unsaved panel against leaving", async () => {
@@ -451,23 +483,31 @@ describe("EditQuestPage", () => {
             { target: { value: "Half" } },
         )
         void router.navigate("/app/c1/quests")
-        const dialog = await screen.findByRole("dialog", { name: "Discard unsaved changes?" })
+        const dialog = await screen.findByRole("dialog", { name: "Discard unsaved input?" })
+        expect(dialog).toHaveTextContent("a stage")
         fireEvent.click(within(dialog).getByRole("button", { name: "Keep editing" }))
-        expect(router.state.location.pathname).toBe("/app/c1/quests/q1/edit")
+        expect(router.state.location.pathname).toBe("/app/c1/quests/q1")
     })
 
-    it("mounts the lifecycle panel for an editor", async () => {
-        setupEdit()
-        expect(await screen.findByRole("heading", { name: "Lifecycle" })).toBeInTheDocument()
+    it("offers the lifecycle steps the server reports in Publication", async () => {
+        setupEdit(quest(), "publication")
+        expect(await screen.findByRole("button", { name: /Submit for review/ })).toBeInTheDocument()
     })
 
     it("explains an unavailable quest without a form", async () => {
         const server = installMockServer()
         server.on("GET", `${BASE}/q1`, { status: 404 })
         server.on("GET", `${BASE}/options`, { body: OPTIONS })
+        server.on("GET", /\/entities\/q1\/lifecycle$/, { status: 404 })
+        installRecordReads(server, { campaignId: "c1", entityId: "q1", entityTypeCode: "quest" })
         renderAuthoringRoutes({
-            initialEntry: "/app/c1/quests/q1/edit",
-            routes: [{ path: "/app/:campaignId/quests/:questId/edit", element: <EditQuestPage /> }],
+            initialEntry: "/app/c1/quests/q1",
+            bootstrap: bootstrapWith({
+                campaigns: [
+                    { ...sessionBootstrapFixture.campaigns[0]!, campaign_id: "c1", capabilities: ["canon.edit"] },
+                ],
+            }),
+            routes: [{ path: "/app/:campaignId/quests/:questId", element: <CampaignQuestDetailPage /> }],
         })
         expect(await screen.findByRole("alert")).toHaveTextContent(
             "This quest does not exist, or you do not have access to it.",
@@ -646,7 +686,7 @@ describe("Quest stage cards", () => {
         release()
         await waitFor(() =>
             expect(
-                screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent),
+                stageHeadings(),
             ).toEqual([expect.stringMatching(/Third/), expect.stringMatching(/Second/), expect.stringMatching(/Opening/)]),
         )
         expect(screen.getByRole("button", { name: /Second/, expanded: false })).toBeInTheDocument()
@@ -665,7 +705,7 @@ describe("Quest stage cards", () => {
         fireEvent.click(await screen.findByRole("button", { name: "Move down Opening" }))
         expect(await screen.findByRole("alert")).toBeInTheDocument()
         expect(
-            screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent),
+            stageHeadings(),
         ).toEqual([expect.stringMatching(/Opening/), expect.stringMatching(/Second/), expect.stringMatching(/Third/)])
     })
 

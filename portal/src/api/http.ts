@@ -22,6 +22,10 @@ export class ApiRequestError extends Error {
     }
 }
 
+// Dispatched on window when any request comes back 401, so the session
+// provider can leave the signed-in UI immediately.
+export const SESSION_EXPIRED_EVENT = "dnd-ai:session-expired"
+
 export type ApiMethod = "GET" | "POST"
 
 export interface ApiRequestOptions {
@@ -90,6 +94,10 @@ export async function apiRequest<T>(
         // fetch itself rejected: the network is down or the server is
         // unreachable. Status 0 is the portal's "no response" marker.
         throw new ApiRequestError(0, "network_error", null)
+    }
+
+    if (response.status === 401) {
+        window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT))
     }
 
     if (!response.ok) {

@@ -19,6 +19,7 @@ this harness; they commit and clean up explicitly
 (`tests/database/test_authoring_concurrency.py`).
 """
 
+import json
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
@@ -41,6 +42,7 @@ from dnd_ai.api.local_auth import (
 from dnd_ai.commands.local_auth import _create_local_account_impl
 from dnd_ai.domain.access import AuthenticatedPrincipal
 from dnd_ai.domain.rate_limit import RateLimiter
+from tests.builders import make_world_creator
 from tests.factories import make_platform_administrator
 
 ORIGIN = "http://localhost:5173"
@@ -49,6 +51,17 @@ PASSWORD = "a genuinely random passphrase 1"
 
 def _generous() -> RateLimiter:
     return RateLimiter(max_attempts=10_000, window=timedelta(minutes=15))
+
+
+# Receipt id field -> authoring GET route segment (see Actor.post).
+_RECEIPT_ROUTES = {
+    "location_id": "locations",
+    "organization_id": "organizations",
+    "religion_id": "religions",
+    "npc_id": "npcs",
+    "knowledge_item_id": "knowledge",
+    "quest_id": "quests",
+}
 
 
 @dataclass
@@ -75,6 +88,23 @@ class Actor:
     def get(self, path: str, **params: Any) -> Response:
         return self.client.get(path, params=params or None)
 
+    def post_raw(
+        self,
+        path: str,
+        body: dict | None = None,
+        *,
+        key: str | None = None,
+        csrf: bool = True,
+        origin: bool = True,
+    ) -> Response:
+        """The response exactly as the server sent it (a typed authoring write
+        answers with a receipt: ids, `row_version`, `created`, `changed`)."""
+        return self.client.post(
+            path,
+            json=body if body is not None else {},
+            headers=self.headers(key=key, csrf=csrf, origin=origin),
+        )
+
     def post(
         self,
         path: str,
@@ -84,11 +114,34 @@ class Actor:
         csrf: bool = True,
         origin: bool = True,
     ) -> Response:
-        return self.client.post(
-            path,
-            json=body if body is not None else {},
-            headers=self.headers(key=key, csrf=csrf, origin=origin),
-        )
+        """Like `post_raw`, but a successful typed authoring write is followed by
+        the authoritative GET (as the portal does) and the response body becomes
+        that view plus the receipt's `changed` flag, so tests can assert on the
+        authored record. Tests of the receipt contract itself use `post_raw`."""
+        response = self.post_raw(path, body, key=key, csrf=csrf, origin=origin)
+        return self._hydrate(path, response)
+
+    def _hydrate(self, path: str, response: Response) -> Response:
+        if response.status_code not in (200, 201) or "/authoring/" not in path:
+            return response
+        try:
+            receipt = response.json()
+        except ValueError:
+            return response
+        if not isinstance(receipt, dict) or not {"row_version", "created", "changed"} <= set(
+            receipt
+        ):
+            return response
+        prefix = path.split("/authoring/")[0] + "/authoring/"
+        for id_field, route in _RECEIPT_ROUTES.items():
+            if id_field in receipt:
+                view = self.client.get(f"{prefix}{route}/{receipt[id_field]}")
+                assert view.status_code == 200, view.text
+                body = view.json()
+                body["changed"] = receipt["changed"]
+                response._content = json.dumps(body).encode()
+                return response
+        return response
 
     def fresh_key(self) -> str:
         self._keys += 1
@@ -138,7 +191,11 @@ class AuthoringHarness:
         else:
             savepoint.commit()
 
-    def new_actor(self, name: str = "Author") -> Actor:
+    def new_actor(self, name: str = "Author", *, world_creator: bool = False) -> Actor:
+        """A signed-in human. `world_creator=True` makes the account a
+        legitimate world creator (`tests.builders.make_world_creator`) for a
+        test that authors a world through `POST /worlds`; every other actor is
+        an ordinary user who may not create worlds."""
         login_name = f"{name.lower().replace(' ', '-')}-{uuid.uuid4().hex[:8]}"
         issued = _create_local_account_impl(
             self.connection,
@@ -161,6 +218,8 @@ class AuthoringHarness:
             headers={"Origin": ORIGIN},
         )
         assert login.status_code == 200, login.text
+        if world_creator:
+            make_world_creator(self.connection, issued.user_id)
         return Actor(
             harness=self,
             client=client,

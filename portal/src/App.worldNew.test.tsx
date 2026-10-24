@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { useSyncExternalStore } from "react"
 import { RouterProvider, createMemoryRouter, useLocation } from "react-router"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -150,16 +150,41 @@ describe("/worlds/new inside the authenticated shell", () => {
     )
   })
 
-  it("does not offer creation without the server capability and never sends a request", async () => {
+  it("renders not-found for a direct visit without world.create and never requests rulesets", async () => {
     useState_(authenticated({ global_capabilities: [] }))
     render(tree())
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "You do not have permission to create worlds.",
-    )
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "Page not found" }),
+    ).toBeInTheDocument()
+    expect(screen.getByTestId("location")).toHaveTextContent("/worlds/new")
+    expect(screen.queryByRole("heading", { name: "Create a world" })).toBeNull()
     expect(screen.queryByRole("textbox", { name: /World name/ })).toBeNull()
     expect(screen.queryByRole("button", { name: "Create world" })).toBeNull()
+    expect(server.callsTo("GET", "/rulesets")).toEqual([])
     expect(server.callsTo("POST", /./)).toEqual([])
+    // The workspace keeps its single <main>.
+    expect(screen.getAllByRole("main")).toHaveLength(1)
+  })
+
+  it("keeps the New world navigation slot visible but disabled for a player", async () => {
+    useState_(authenticated({ global_capabilities: [] }))
+    render(tree("/worlds"))
+    await screen.findByRole("heading", { level: 1, name: "Worlds" })
+
+    const nav = screen.getByRole("navigation", { name: "Main" })
+    const slot = within(nav)
+      .getByText("New world", { selector: "[aria-disabled='true'] .portal-sidebar__label" })
+      .closest("[aria-disabled]")
+    expect(slot).not.toBeNull()
+    expect(slot).toHaveAttribute("aria-disabled", "true")
+    expect(slot?.tagName).not.toBe("A")
+    expect(slot).not.toHaveAttribute("href")
+    expect(slot).not.toHaveAttribute("tabindex")
+    expect(within(nav).queryByRole("link", { name: "New world", hidden: true })).toBeNull()
+    // And no contextual creation action anywhere on the page.
+    expect(screen.queryByRole("link", { name: "Create world" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Create world" })).toBeNull()
   })
 
   it("uses the established session recovery when the session has expired", async () => {
@@ -189,6 +214,60 @@ describe("/worlds/new inside the authenticated shell", () => {
     render(tree("/worlds"))
 
     expect(await screen.findByRole("heading", { level: 1, name: "Worlds" })).toBeInTheDocument()
+  })
+})
+
+const worldDetail = (overrides: object = {}) => ({
+  world_id: "w1",
+  name: "Eberron",
+  description: null,
+  lifecycle_status: "active",
+  row_version: 2,
+  primary_timeline_id: "t1",
+  capabilities: ["campaign.create", "timeline.manage", "world.manage", "world.view"],
+  default_ruleset_id: null,
+  allowed_rulesets: [],
+  timelines: [],
+  managed_campaigns: [],
+  available_actions: ["update", "archive"],
+  blocked_actions: [],
+  ...overrides,
+})
+
+describe("/worlds/:worldId/edit inside the authenticated shell", () => {
+  it("opens the edit form for a world the server lets the caller update", async () => {
+    server.on("GET", "/worlds/w1", { body: worldDetail() })
+    render(tree("/worlds/w1/edit"))
+
+    expect(await screen.findByRole("textbox", { name: /World name/ })).toHaveValue("Eberron")
+    expect(screen.getAllByRole("main")).toHaveLength(1)
+  })
+
+  it.each([
+    ["a viewer", { capabilities: ["world.view"], available_actions: [] }],
+    ["an owner of an archived world", { available_actions: ["restore"] }],
+  ])("renders not-found and never mounts the form for %s", async (_label, overrides) => {
+    server.on("GET", "/worlds/w1", { body: worldDetail(overrides) })
+    render(tree("/worlds/w1/edit"))
+
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "Page not found" }),
+    ).toBeInTheDocument()
+    expect(screen.queryByRole("heading", { name: "Edit world" })).toBeNull()
+    expect(screen.queryByRole("textbox", { name: /World name/ })).toBeNull()
+    expect(screen.queryByRole("link", { name: "Edit world" })).toBeNull()
+    expect(server.callsTo("POST", /./)).toEqual([])
+    expect(screen.getAllByRole("main")).toHaveLength(1)
+  })
+
+  it("renders the same not-found for an unknown or undisclosed world", async () => {
+    server.on("GET", "/worlds/w1", { status: 404 })
+    render(tree("/worlds/w1/edit"))
+
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "Page not found" }),
+    ).toBeInTheDocument()
+    expect(screen.queryByRole("textbox", { name: /World name/ })).toBeNull()
   })
 })
 

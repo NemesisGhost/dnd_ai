@@ -4,6 +4,7 @@ import {
     type IssuedPasswordReset,
 } from "../components/AccountLifecycleActions"
 import { CreateAccountPanel } from "../components/CreateAccountPanel"
+import { TableScroll } from "../components/TableScroll"
 import { OneTimeSecretPanel } from "../components/OneTimeSecretPanel"
 import { usePlatformAccounts } from "../hooks/usePlatformAccounts"
 import { NotFoundPage } from "./NotFoundPage"
@@ -69,7 +70,7 @@ export function AdminAccountsPage({ bootstrap }: AdminAccountsPageProps) {
                 {state.status === "error" && (
                     <>
                         <p>Accounts could not be loaded.</p>
-                        <button type="button" onClick={retry}>
+                        <button type="button" className="authoring-button" onClick={retry}>
                             Try again
                         </button>
                     </>
@@ -77,6 +78,7 @@ export function AdminAccountsPage({ bootstrap }: AdminAccountsPageProps) {
 
                 {state.status === "success" && (
                     <>
+                        <TableScroll label="Platform accounts">
                         <table className="admin-accounts__table">
                             <caption>Platform accounts</caption>
                             <thead>
@@ -137,9 +139,10 @@ export function AdminAccountsPage({ bootstrap }: AdminAccountsPageProps) {
                                 ))}
                             </tbody>
                         </table>
+                        </TableScroll>
 
                         {state.nextCursor !== null && (
-                            <button type="button" onClick={loadMore}>
+                            <button type="button" className="authoring-button" onClick={loadMore}>
                                 Load more
                             </button>
                         )}

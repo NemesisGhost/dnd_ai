@@ -65,6 +65,7 @@ const locationFixture: LocationDetail = {
 const characterFixture: CharacterDetail = {
     character_id: "character-a",
     name: "Sella Vane",
+    character_kind: "character",
     species_code: "human",
     size_category: "medium",
     current_hit_points: null,

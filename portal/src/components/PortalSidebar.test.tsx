@@ -114,6 +114,8 @@ function nav() {
 const worldDetail = {
     world_id: "world-a",
     name: "World A",
+    // world_owner's server-computed world capabilities.
+    capabilities: ["campaign.create", "timeline.manage", "world.manage", "world.view"],
     timelines: [
         { timeline_id: "timeline-a", name: "Timeline A" },
         { timeline_id: "timeline-b", name: "Timeline B" },
@@ -134,6 +136,67 @@ beforeEach(() => {
 afterEach(() => {
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
+})
+
+describe("PortalSidebar Items group", () => {
+    const editor: CampaignContext = { ...first, capabilities: ["canon.edit"] }
+    const editorBootstrap = () => makeBootstrap({ campaigns: [editor, second] })
+
+    it("is offered only on a campaign that grants canon.edit, with Inventory and Definitions inside", () => {
+        const { unmount } = renderSidebar("/app/campaign-a/home", {
+            status: "authenticated",
+            bootstrap: editorBootstrap(),
+        })
+        expect(within(nav()).getByRole("button", { name: "Items" })).toHaveAttribute("aria-expanded", "false")
+        // No separate top-level destination for definitions or the inventory.
+        expect(within(nav()).queryByRole("link", { name: "Item definitions" })).not.toBeInTheDocument()
+        fireEvent.click(within(nav()).getByRole("button", { name: "Items" }))
+        expect(within(nav()).getByRole("link", { name: "Inventory" })).toHaveAttribute(
+            "href",
+            "/app/campaign-a/items",
+        )
+        expect(within(nav()).getByRole("link", { name: "Definitions" })).toHaveAttribute(
+            "href",
+            "/app/campaign-a/item-definitions",
+        )
+        expect(within(nav()).getByRole("link", { name: "Review queue" })).toHaveAttribute(
+            "href",
+            "/app/campaign-a/review",
+        )
+        unmount()
+        renderSidebar("/app/campaign-a/home")
+        expect(within(nav()).queryByRole("button", { name: "Items" })).not.toBeInTheDocument()
+        expect(within(nav()).queryByRole("link", { name: "Inventory" })).not.toBeInTheDocument()
+        expect(within(nav()).queryByRole("link", { name: "Definitions" })).not.toBeInTheDocument()
+        expect(within(nav()).queryByRole("link", { name: "Review queue" })).not.toBeInTheDocument()
+    })
+
+    it.each([
+        ["/app/campaign-a/items", "Inventory"],
+        ["/app/campaign-a/items/new", "Inventory"],
+        ["/app/campaign-a/items/i1", "Inventory"],
+        ["/app/campaign-a/items/i1/edit", "Inventory"],
+        ["/app/campaign-a/item-definitions", "Definitions"],
+        ["/app/campaign-a/item-definitions/new", "Definitions"],
+        ["/app/campaign-a/item-definitions/d1", "Definitions"],
+    ])("opens on %s with %s current", (path, current) => {
+        renderSidebar(path, { status: "authenticated", bootstrap: editorBootstrap() })
+        expect(within(nav()).getByRole("button", { name: "Items" })).toHaveAttribute("aria-expanded", "true")
+        expect(within(nav()).getByRole("link", { name: current })).toHaveAttribute("aria-current", "page")
+        const other = current === "Inventory" ? "Definitions" : "Inventory"
+        expect(within(nav()).getByRole("link", { name: other })).not.toHaveAttribute("aria-current")
+    })
+
+    it("does not select Items for an item opened from the World page", () => {
+        renderSidebar("/app/campaign-a/world/item/i1", {
+            status: "authenticated",
+            bootstrap: editorBootstrap(),
+        })
+        expect(within(nav()).getByRole("button", { name: "Items" })).toHaveAttribute("aria-expanded", "false")
+        expect(within(nav()).getByRole("link", { name: "Inventory", hidden: true })).not.toHaveAttribute(
+            "aria-current",
+        )
+    })
 })
 
 describe("PortalSidebar destinations", () => {
@@ -249,11 +312,14 @@ describe("PortalSidebar campaign resolution", () => {
             authenticated(makeBootstrap({ startup_campaign_id: "campaign-a" })),
         )
 
+        // The explicit destination is not authorized: the startup campaign
+        // does not stand in for it, so campaign-scoped entries stay disabled.
         expect(nav().innerHTML).not.toContain("ghost-campaign")
         openWorlds()
-        expect(
-            within(nav()).getByRole("link", { name: "Campaign world" }),
-        ).toHaveAttribute("href", "/app/campaign-a/world")
+        for (const name of ["Campaign world", "Characters", "Campaign Home"]) {
+            expect(within(nav()).queryByRole("link", { name })).not.toBeInTheDocument()
+        }
+        expect(disabledEntry("Characters")).toBeInTheDocument()
     })
 
     it("keeps campaign destinations as disabled slots with no resolvable campaign", () => {
@@ -771,6 +837,12 @@ describe("PortalSidebar Worlds group (Phase 14)", () => {
         )
         openWorlds()
         expect(within(nav()).queryByRole("link", { name: "New world" })).toBeNull()
+        // The slot stays visible as a disabled, non-focusable non-anchor.
+        const slot = disabledEntry("New world")
+        expect(slot.tagName).not.toBe("A")
+        expect(slot).not.toHaveAttribute("href")
+        expect(slot).not.toHaveAttribute("tabindex")
+        expect(slot).toHaveAccessibleDescription("Not available for your account")
     })
 
     it("does not infer creation when the bootstrap carries no global capabilities", () => {
@@ -1235,6 +1307,23 @@ describe("PortalSidebar World authoring navigation on a campaign route", () => {
         expect(within(nav()).getByRole("link", { name: "Campaign world" })).toHaveAttribute(
             "href",
             "/app/campaign-a/world",
+        )
+    })
+
+    it("gives a view-only world its read-only overview but no timeline-authoring destination", async () => {
+        server.on("GET", "/worlds/world-a", {
+            body: { ...worldDetail, capabilities: ["world.view"] },
+        })
+        renderSidebar("/app/campaign-a/home", campaignState())
+        openWorlds()
+
+        expect(
+            await within(nav()).findByRole("link", { name: "World overview" }),
+        ).toHaveAttribute("href", "/worlds/world-a")
+        expect(within(nav()).getByRole("link", { name: "Timelines" })).toBeInTheDocument()
+        expect(within(nav()).queryByRole("link", { name: "Timeline overview" })).toBeNull()
+        expect(disabledEntry("Timeline overview")).toHaveAccessibleDescription(
+            "Not available for your account",
         )
     })
 

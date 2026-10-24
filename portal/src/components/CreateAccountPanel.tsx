@@ -52,7 +52,7 @@ export function CreateAccountPanel({ onCreated }: CreateAccountPanelProps) {
 
     return (
         <form
-            className="access-role-editor"
+            className="authoring-form"
             aria-label="Create account"
             onSubmit={(event) => {
                 event.preventDefault()
@@ -62,58 +62,67 @@ export function CreateAccountPanel({ onCreated }: CreateAccountPanelProps) {
                 submit(loginName.trim(), displayName.trim(), email.trim() === "" ? null : email.trim())
             }}
         >
-            <label htmlFor={loginNameId}>Login name</label>
-            <input
-                id={loginNameId}
-                type="text"
-                autoComplete="off"
-                autoCapitalize="none"
-                spellCheck={false}
-                minLength={3}
-                maxLength={64}
-                value={loginName}
-                disabled={isPending}
-                onChange={(event) => {
-                    setLoginName(event.currentTarget.value)
-                    if (status.kind !== "idle") {
-                        reset()
-                    }
-                }}
-                required
-            />
+            <div className="authoring-field">
+                <label htmlFor={loginNameId} className="authoring-field__label">Login name</label>
+                <input
+                    className="authoring-field__control"
+                    id={loginNameId}
+                    type="text"
+                    autoComplete="off"
+                    autoCapitalize="none"
+                    spellCheck={false}
+                    minLength={3}
+                    maxLength={64}
+                    value={loginName}
+                    disabled={isPending}
+                    onChange={(event) => {
+                        setLoginName(event.currentTarget.value)
+                        if (status.kind !== "idle") {
+                            reset()
+                        }
+                    }}
+                    required
+                />
+            </div>
 
-            <label htmlFor={displayNameId}>Display name</label>
-            <input
-                id={displayNameId}
-                type="text"
-                autoComplete="off"
-                minLength={1}
-                maxLength={100}
-                value={displayName}
-                disabled={isPending}
-                onChange={(event) => {
-                    setDisplayName(event.currentTarget.value)
-                    if (status.kind !== "idle") {
-                        reset()
-                    }
-                }}
-                required
-            />
+            <div className="authoring-field">
+                <label htmlFor={displayNameId} className="authoring-field__label">Display name</label>
+                <input
+                    className="authoring-field__control"
+                    id={displayNameId}
+                    type="text"
+                    autoComplete="off"
+                    minLength={1}
+                    maxLength={100}
+                    value={displayName}
+                    disabled={isPending}
+                    onChange={(event) => {
+                        setDisplayName(event.currentTarget.value)
+                        if (status.kind !== "idle") {
+                            reset()
+                        }
+                    }}
+                    required
+                />
+            </div>
 
-            <label htmlFor={emailId}>Optional email label</label>
-            <input
-                id={emailId}
-                type="text"
-                autoComplete="off"
-                value={email}
-                disabled={isPending}
-                onChange={(event) => {
-                    setEmail(event.currentTarget.value)
-                }}
-            />
+            <div className="authoring-field">
+                <label htmlFor={emailId} className="authoring-field__label">Optional email label</label>
+                <input
+                    className="authoring-field__control"
+                    id={emailId}
+                    type="text"
+                    autoComplete="off"
+                    value={email}
+                    disabled={isPending}
+                    onChange={(event) => {
+                        setEmail(event.currentTarget.value)
+                    }}
+                />
+            </div>
 
-            <div className="access-role-editor__actions">
-                <button type="submit" disabled={isPending} aria-busy={isPending}>
+            <div className="authoring-actions">
+                <button type="submit" className="authoring-button authoring-button--primary" disabled={isPending} aria-busy={isPending}>
                     {isPending ? "Creating…" : "Create account"}
                 </button>
             </div>

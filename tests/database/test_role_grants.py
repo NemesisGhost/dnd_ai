@@ -64,6 +64,7 @@ MANAGED_TABLES = [
     ("rules", "feats"),
     ("rules", "spells"),
     ("character", "characters"),
+    ("character", "npc_portrayal_profiles"),
     ("character", "npcs"),
     ("character", "player_characters"),
     ("character", "character_descriptions"),
@@ -116,6 +117,8 @@ MANAGED_TABLES = [
     ("narrative", "event_locations"),
     ("narrative", "event_causes"),
     ("narrative", "event_effects"),
+    # Phase 15 checkpoint 15.2E-1 (revision 124): event corrections.
+    ("narrative", "event_corrections"),
     ("narrative", "event_observations"),
     # Phase 6 — interactions
     ("interaction", "interaction_types"),
@@ -166,10 +169,17 @@ MANAGED_TABLES = [
     ("world", "ownership_relationships"),
     ("world", "family_relationships"),
     ("world", "political_relationships"),
+    ("world", "route_relationships"),
     ("campaign", "organization_statuses"),
     ("campaign", "organization_state"),
     ("campaign", "relationship_statuses"),
     ("campaign", "relationship_state"),
+    # Phase 15 checkpoint 15.2W-2 (revision 118): the campaign clock.
+    ("campaign", "timeline_clocks"),
+    # Phase 15 checkpoint 15.2D-2 (revision 123): session participants.
+    ("campaign", "session_participants"),
+    # Phase 15 checkpoint 15.3C-1 (revision 134): sources attached to an entity.
+    ("core", "entity_source_links"),
     # Phase 9 — item domain
     ("rules", "item_categories"),
     ("rules", "item_definitions"),
@@ -257,6 +267,10 @@ EXCLUDED_TABLES: dict[tuple[str, str], str] = {
         "append-only to application roles at the grant level (conventions §24.2) — "
         "narrower grants than the standard set, asserted in test_audit_change_log.py"
     ),
+    ("core", "entity_revisions"): (
+        "append-only revision history (Phase 15, revision 117): app roles hold SELECT/INSERT "
+        "only, and the reporting role holds nothing — asserted in test_entity_revisions.py"
+    ),
     ("core", "alembic_version"): (
         "Alembic's own migration-bookkeeping table, not project data — owned and used "
         "by migration_runner/migration_owner only, never by an application role"
@@ -282,9 +296,12 @@ MANAGED_SCHEMAS = [
 ]
 
 # Privileges each application role must hold on every managed table.
+# `app_read_only` is deliberately absent: since migration 115 it is deny-by-
+# default (SELECT only on an explicit allowlist of lookup/reference tables), so
+# its positive and negative grants are asserted in
+# test_reporting_role_boundary.py rather than as a blanket expectation here.
 EXPECTED_GRANTS = {
     "app_read_write": {"SELECT", "INSERT", "UPDATE", "DELETE"},
-    "app_read_only": {"SELECT"},
 }
 
 

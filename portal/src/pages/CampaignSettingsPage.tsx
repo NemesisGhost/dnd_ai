@@ -8,16 +8,22 @@ import {
     ErrorSummary,
     FormActions,
     MutationStatusMessage,
+    SavedRefreshFailedNotice,
     StaleWriteNotice,
 } from "../components/authoring/feedback"
 import type { FieldError } from "../components/authoring/feedback"
+import { ReadFailedNotice } from "../components/authoring/ReadState"
+import { StaleReadNotice } from "../components/StaleReadNotice"
 import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
+import type { RefetchOutcome } from "../hooks/useAuthoringResource"
+import { useKept } from "../hooks/useKeptResource"
 import { usePageArrival } from "../hooks/usePageArrival"
 import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard"
 import type { CampaignMutationResponse, CampaignSettings, UpdateCampaignRequest } from "../types/campaignSettings"
 import type { TransitionRequest } from "../types/worldAuthoring"
+import { bootstrapRefreshOutcome } from "../utils/refreshOutcome"
 import {
     DESCRIPTION_MAX,
     ERROR_CODE_MESSAGE,
@@ -35,56 +41,104 @@ interface Values {
 
 export function CampaignSettingsPage() {
     const { campaignId = "" } = useParams()
-    const { state: session } = useSession()
+    const { state: session, refresh } = useSession()
     const campaign =
         session.status === "authenticated"
             ? session.bootstrap.campaigns.find((c) => c.campaign_id === campaignId)
             : undefined
     const allowed = campaign?.capabilities.includes("access.manage") === true
-    const { state, refetch } = useAuthoringResource<CampaignSettings>(
-        allowed ? campaignSettingsPath(campaignId) : null,
-    )
+    const path = allowed ? campaignSettingsPath(campaignId) : null
+    const { state, refetch } = useAuthoringResource<CampaignSettings>(path)
+    // The last settings that loaded, kept through a recoverable failure so what was typed survives;
+    // a denied or missing answer, or another campaign, drops them.
+    const settings = useKept(state, path ?? "")
     const headingRef = usePageArrival(!allowed || state.kind !== "loading")
     const [kept, setKept] = useState<Values | null>(null)
+    // A save the server confirmed whose follow-up reads have not all come back. It lives here, not
+    // in the form, because the form is rebuilt when the settings reload.
+    const [confirmedSave, setConfirmedSave] = useState(false)
+    const [menusStale, setMenusStale] = useState(false)
+    const [retrying, setRetrying] = useState(false)
+    const settingsStale = state.kind === "error" && settings !== null
+
+    async function retryReads() {
+        setRetrying(true)
+        let allRead = true
+        if (menusStale) {
+            if ((await bootstrapRefreshOutcome(refresh)) === "failed") allRead = false
+            else setMenusStale(false)
+        }
+        if (settingsStale && (await refetch()) === "failed") allRead = false
+        if (allRead) setConfirmedSave(false)
+        setRetrying(false)
+    }
+
+    const stale = settingsStale || menusStale
+    const what =
+        settingsStale && menusStale
+            ? "campaign settings and the campaign list"
+            : settingsStale
+              ? "campaign settings"
+              : "campaign name in menus and lists"
 
     return (
-        <main className="app-main">
-            <div className="authoring-page">
-                <h1 ref={headingRef} tabIndex={-1}>
-                    Campaign settings
-                </h1>
-                {!allowed ? (
-                    <p role="alert">You do not have permission to manage this campaign's settings.</p>
-                ) : state.kind === "loading" ? (
-                    <p role="status">Loading settings…</p>
-                ) : state.kind !== "ready" ? (
-                    <p role="alert">The campaign settings are not available.</p>
+        <div className="authoring-page">
+            <h1 ref={headingRef} tabIndex={-1}>
+                Campaign settings
+            </h1>
+            {!allowed ? (
+                <p role="alert">You do not have permission to manage this campaign's settings.</p>
+            ) : state.kind === "loading" ? (
+                <p role="status">Loading settings…</p>
+            ) : settings === null ? (
+                state.kind === "error" ? (
+                    <ReadFailedNotice what="campaign settings" onRetry={() => void refetch()} />
                 ) : (
+                    <p role="alert">The campaign settings are not available.</p>
+                )
+            ) : (
+                <>
+                    {stale && confirmedSave ? (
+                        <SavedRefreshFailedNotice what={what} onRetry={() => void retryReads()} retrying={retrying} />
+                    ) : settingsStale ? (
+                        <StaleReadNotice what="campaign settings" onRetry={() => void retryReads()} />
+                    ) : null}
                     <SettingsForm
-                        key={state.data.row_version}
-                        settings={state.data}
-                        refreshing={state.refreshing}
+                        key={settings.row_version}
+                        settings={settings}
+                        refreshing={state.kind === "ready" && state.refreshing}
+                        readStale={settingsStale}
                         kept={kept}
                         onKeep={setKept}
                         refetch={refetch}
+                        onSaved={(reads) => {
+                            setConfirmedSave(reads.menusFailed || reads.settingsFailed)
+                            setMenusStale(reads.menusFailed)
+                        }}
                     />
-                )}
-            </div>
-        </main>
+                </>
+            )}
+        </div>
     )
 }
 
 interface Props {
     settings: CampaignSettings
     refreshing: boolean
+    // The latest read failed and `settings` is the last that loaded: its version may be behind, so
+    // another version-checked save is held until it reloads.
+    readStale: boolean
     kept: Values | null
     onKeep: (v: Values | null) => void
-    refetch: () => Promise<void>
+    refetch: () => Promise<RefetchOutcome>
+    // A save was confirmed; says which follow-up reads failed.
+    onSaved: (reads: { menusFailed: boolean; settingsFailed: boolean }) => void
 }
 
-function SettingsForm({ settings, refreshing, kept, onKeep, refetch }: Props) {
+function SettingsForm({ settings, refreshing, readStale, kept, onKeep, refetch, onSaved }: Props) {
     const navigate = useNavigate()
     const { refresh, reload } = useSession()
+    const [retryingArchive, setRetryingArchive] = useState(false)
     const [name, setName] = useState(settings.name)
     const [description, setDescription] = useState(settings.description ?? "")
     const [errors, setErrors] = useState<FieldError[]>([])
@@ -104,10 +158,13 @@ function SettingsForm({ settings, refreshing, kept, onKeep, refetch }: Props) {
         onSuccess: async () => {
             guard.release()
             onKeep(null)
-            // The bootstrap carries the campaign's name, so refresh it, then
-            // reload the authoritative settings in place.
-            await refresh().catch(() => undefined)
-            await refetch()
+            // The bootstrap carries the campaign's name, so refresh it, then reload the
+            // authoritative settings in place. Either read failing leaves the save confirmed.
+            const menus = await bootstrapRefreshOutcome(refresh)
+            const reloaded = await refetch()
+            const reads = { menusFailed: menus === "failed", settingsFailed: reloaded === "failed" }
+            onSaved(reads)
+            return reads.menusFailed || reads.settingsFailed ? "failed" : undefined
         },
     })
 
@@ -116,12 +173,27 @@ function SettingsForm({ settings, refreshing, kept, onKeep, refetch }: Props) {
         request: (body, ctx) => archiveCampaign(settings.campaign_id, body, ctx),
         onSuccess: async () => {
             guard.release()
-            await refresh().catch(() => undefined)
+            if ((await bootstrapRefreshOutcome(refresh)) === "failed") {
+                // Archived, but the campaign list still shows it as active: stay, say so, and offer the read.
+                setArchiveOpen(false)
+                return "failed"
+            }
             void navigate("/campaigns", { state: { announce: "Campaign archived" } })
         },
     })
+    const archivedAwaitingList = archive.status.kind === "confirmed"
+
+    async function retryArchiveRefresh() {
+        setRetryingArchive(true)
+        const outcome = await bootstrapRefreshOutcome(refresh)
+        setRetryingArchive(false)
+        if (outcome !== "failed") {
+            void navigate("/campaigns", { state: { announce: "Campaign archived" } })
+        }
+    }
 
     function handleSubmit() {
+        if (readStale || archivedAwaitingList) return
         const found: FieldError[] = []
         const nameError = validateName(name)
         if (nameError) found.push({ fieldId: "settings-name", message: nameError })
@@ -180,6 +252,15 @@ function SettingsForm({ settings, refreshing, kept, onKeep, refetch }: Props) {
                 </section>
             ) : null}
 
+            {archivedAwaitingList ? (
+                <SavedRefreshFailedNotice
+                    done="Campaign archived."
+                    what="campaign list"
+                    onRetry={() => void retryArchiveRefresh()}
+                    retrying={retryingArchive}
+                />
+            ) : null}
+
             {canUpdate ? (
                 <AuthoringForm label="Campaign settings" onSubmit={handleSubmit}>
                     <ErrorSummary errors={errors} attempt={attempt} />
@@ -222,6 +303,7 @@ function SettingsForm({ settings, refreshing, kept, onKeep, refetch }: Props) {
                     />
                     <FormActions
                         pending={save.status.kind === "pending"}
+                        saveDisabled={readStale || archivedAwaitingList}
                         onCancel={() => void navigate(`/app/${settings.campaign_id}/home`)}
                     />
                 </AuthoringForm>
@@ -239,7 +321,7 @@ function SettingsForm({ settings, refreshing, kept, onKeep, refetch }: Props) {
                 </ul>
             ) : null}
 
-            {canArchive ? (
+            {canArchive && !archivedAwaitingList ? (
                 <section className="authoring-section" aria-labelledby="archive-heading">
                     <h2 id="archive-heading">Archive campaign</h2>
                     <p className="authoring-note">

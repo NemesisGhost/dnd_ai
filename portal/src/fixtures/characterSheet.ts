@@ -3,6 +3,7 @@ import type { CharacterSheet } from "../types/characterSheet"
 export const characterSheetFixture = {
     character_id: "character-ixamarra",
     name: "Ixamarra",
+    character_kind: "character",
     species_code: "dragonborn",
     species_display_name: "Dragonborn",
     size_category: "medium",
@@ -279,6 +280,7 @@ export const characterSheetFixture = {
 export const sparseCharacterSheetFixture = {
     character_id: "character-sparse",
     name: "Sparse Fighter",
+    character_kind: "character",
     species_code: "human",
     species_display_name: "Human",
     size_category: "medium",

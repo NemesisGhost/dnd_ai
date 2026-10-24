@@ -8,7 +8,8 @@ interface KnowledgeDetailBoundaryProps {
     knowledgeItemId: string
     characterId: string | null
     partyId: string | null
-    children: (item: KnowledgeDetail) => ReactNode
+    // `refresh` re-reads the detail without remounting anything below.
+    children: (item: KnowledgeDetail, refresh: () => void) => ReactNode
 }
 
 export function KnowledgeDetailBoundary({
@@ -18,7 +19,7 @@ export function KnowledgeDetailBoundary({
     partyId,
     children,
 }: KnowledgeDetailBoundaryProps) {
-    const { state, retry } = useKnowledgeDetail(
+    const { state, retry, refresh } = useKnowledgeDetail(
         campaignId,
         knowledgeItemId,
         characterId,
@@ -65,5 +66,5 @@ export function KnowledgeDetailBoundary({
         )
     }
 
-    return <>{children(state.item)}</>
+    return <>{children(state.item, refresh)}</>
 }

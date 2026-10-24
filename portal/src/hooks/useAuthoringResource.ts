@@ -10,13 +10,22 @@ export type AuthoringResourceState<T> =
     | { kind: "denied" }
     | { kind: "error"; retryable: boolean }
 
+// What a refetch did: "ok" the record was read and applied; "failed" it was not (denied, gone,
+// signed out or a recoverable error: `state` says which); "superseded" a newer read or a change of
+// record replaced it, so this one says nothing about the record.
+export type RefetchOutcome = "ok" | "failed" | "superseded"
+
 export interface UseAuthoringResourceResult<T> {
     state: AuthoringResourceState<T>
     // Re-fetches the authoritative record. Resolves once the response has been
     // applied (or failed), so a caller can sequence an announcement after the
-    // refetch that proves a write. The previous data stays on screen,
-    // marked `refreshing`, until the new data arrives.
-    refetch: () => Promise<void>
+    // refetch that proves a write, and tell a write whose re-read failed from one that
+    // completed. It never rejects. The previous data stays on screen, marked
+    // `refreshing`, until the new data arrives.
+    refetch: () => Promise<RefetchOutcome>
+    // Whether the latest `refetch` that completed read the record. `refetch` never rejects, so a
+    // caller that must tell a successful write whose re-read failed reads this once it resolves.
+    refreshOk: { readonly current: boolean }
 }
 
 interface Snapshot<T> {
@@ -56,6 +65,7 @@ export function useAuthoringResource<T>(
     const { reload } = useSession()
     const [snapshot, setSnapshot] = useState<Snapshot<T>>({ path, state: LOADING })
     const refetchController = useRef<AbortController | null>(null)
+    const refreshOk = useRef(true)
 
     const apply = useCallback(
         (forPath: string, outcome: Outcome<T>) => {
@@ -90,9 +100,9 @@ export function useAuthoringResource<T>(
         }
     }, [path, apply])
 
-    const refetch = useCallback(async () => {
+    const refetch = useCallback(async (): Promise<RefetchOutcome> => {
         if (path === null) {
-            return
+            return "superseded"
         }
         refetchController.current?.abort()
         const controller = new AbortController()
@@ -103,11 +113,14 @@ export function useAuthoringResource<T>(
                 : current,
         )
         const outcome = await load<T>(path, controller.signal)
-        if (!controller.signal.aborted) {
-            apply(path, outcome)
+        if (controller.signal.aborted) {
+            return "superseded"
         }
+        refreshOk.current = outcome.kind === "ready"
+        apply(path, outcome)
+        return outcome.kind === "ready" ? "ok" : "failed"
     }, [path, apply])
 
     const state = snapshot.path === path ? snapshot.state : LOADING
-    return { state, refetch }
+    return { state, refetch, refreshOk }
 }

@@ -216,6 +216,7 @@ describe("CampaignKnowledgePage", () => {
             "",
             null,
             null,
+            true,
         )
 
         expect(
@@ -250,7 +251,7 @@ describe("CampaignKnowledgePage", () => {
                 )
                 .map((option) => option.textContent),
         ).toEqual([
-            "No party selected",
+            "All parties",
             "The Adventuring Party",
             "The Merchant Council",
         ])
@@ -275,6 +276,7 @@ describe("CampaignKnowledgePage", () => {
             "",
             null,
             "next-knowledge-page",
+            true,
         )
 
         fireEvent.change(
@@ -298,6 +300,7 @@ describe("CampaignKnowledgePage", () => {
             "",
             null,
             null,
+            true,
         )
 
         typeInSearch("ossuary")
@@ -312,6 +315,7 @@ describe("CampaignKnowledgePage", () => {
             "ossuary",
             null,
             null,
+            true,
         )
 
         fireEvent.click(
@@ -341,6 +345,7 @@ describe("CampaignKnowledgePage", () => {
             "ossuary",
             null,
             null,
+            true,
         )
     })
 
@@ -505,6 +510,7 @@ describe("CampaignKnowledgePage", () => {
             "",
             null,
             null,
+            true,
         )
 
         act(() => {
@@ -521,6 +527,7 @@ describe("CampaignKnowledgePage", () => {
             "oss",
             null,
             null,
+            true,
         )
     })
 
@@ -592,6 +599,7 @@ describe("CampaignKnowledgePage", () => {
             "",
             null,
             "next-knowledge-page",
+            true,
         )
 
         getSelectedCharacterId.mockReturnValue(
@@ -632,6 +640,7 @@ describe("CampaignKnowledgePage", () => {
             "",
             null,
             null,
+            true,
         )
 
         expect(
@@ -702,6 +711,7 @@ describe("CampaignKnowledgePage", () => {
             "ossuary",
             null,
             "next-knowledge-page",
+            true,
         )
 
         fireEvent.click(
@@ -720,6 +730,7 @@ describe("CampaignKnowledgePage", () => {
             "",
             null,
             null,
+            true,
         )
 
         expect(
@@ -868,5 +879,85 @@ describe("CampaignKnowledgePage", () => {
         expect(
             useKnowledgeItemsMock,
         ).not.toHaveBeenCalled()
+    })
+
+    it("includes public knowledge by default and only drops it on an explicit opt-out", () => {
+        renderCampaignKnowledgePage()
+
+        fireEvent.click(
+            screen.getByRole("button", {
+                name: "Next page",
+            }),
+        )
+
+        fireEvent.click(
+            screen.getByRole("checkbox", {
+                name: "Include public knowledge",
+            }),
+        )
+
+        expect(
+            useKnowledgeItemsMock,
+        ).toHaveBeenLastCalledWith(
+            "campaign-a",
+            "known",
+            "character-a",
+            null,
+            "",
+            null,
+            null,
+            false,
+        )
+
+        // Selecting a party adds that audience; it never re-enables or
+        // removes public knowledge on its own.
+        fireEvent.change(
+            screen.getByRole("combobox", {
+                name: "Party",
+            }),
+            {
+                target: {
+                    value: "party-primary",
+                },
+            },
+        )
+
+        expect(
+            useKnowledgeItemsMock,
+        ).toHaveBeenLastCalledWith(
+            "campaign-a",
+            "known",
+            "character-a",
+            "party-primary",
+            "",
+            null,
+            null,
+            false,
+        )
+
+        // The public-only view ignores the opt-out.
+        fireEvent.change(
+            screen.getByRole("combobox", {
+                name: "View",
+            }),
+            {
+                target: {
+                    value: "public",
+                },
+            },
+        )
+
+        expect(
+            useKnowledgeItemsMock,
+        ).toHaveBeenLastCalledWith(
+            "campaign-a",
+            "public",
+            "character-a",
+            "party-primary",
+            "",
+            null,
+            null,
+            true,
+        )
     })
 })

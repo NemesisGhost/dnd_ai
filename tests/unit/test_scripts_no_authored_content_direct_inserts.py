@@ -20,6 +20,10 @@ _TABLES = (
     "campaign.campaigns",
     "security.world_memberships",
     "rules.world_rulesets",
+    # Phase 15 world time (checkpoint 15.2W-1).
+    "core.calendars",
+    "core.calendar_months",
+    "core.world_times",
     # Phase 15.1 authored content.
     "world.locations",
     "world.settlements",
@@ -32,14 +36,96 @@ _TABLES = (
     "world.religious_organizations",
     "world.religions",
     "character.npcs",
+    # Phase 15.2B-1 player-character identity.
+    "character.characters",
+    "character.player_characters",
+    "character.character_descriptions",
+    # Phase 15.2B-2 builds and starting state.
+    "character.character_builds",
+    "character.character_ability_scores",
+    "character.character_class_levels",
+    "character.character_proficiencies",
+    "character.character_features",
+    "character.character_spellcasting_profiles",
+    "character.character_known_spells",
+    "character.character_prepared_spells",
+    "campaign.character_state",
+    # Phase 15.2C-1 party definitions.
+    "campaign.parties",
+    "campaign.campaign_parties",
+    "campaign.party_memberships",
+    # Phase 15.2D-1 session definitions.
+    "campaign.sessions",
+    # Phase 15.2E-1 events.
+    "narrative.events",
+    "narrative.event_participants",
+    "narrative.event_effects",
+    "campaign.session_participants",
     "narrative.quests",
     "narrative.quest_stages",
     "narrative.quest_objectives",
+    # Phase 15.2E-2a quest completion.
+    "narrative.quest_participants",
+    "narrative.quest_outcomes",
+    "narrative.quest_rewards",
+    # Phase 15.2E-2b quest runtime state.
+    "campaign.quest_state",
+    "campaign.objective_state",
+    # Phase 15.2E-3 knowledge runtime state.
+    "knowledge.entity_knowledge",
+    "knowledge.information_transfers",
+    "knowledge.public_knowledge",
+    "knowledge.party_discoveries",
+    "campaign.party_knowledge",
+    # Phase 15.3A-1 dungeon definitions and runtime state.
+    "world.dungeons",
+    "world.dungeon_areas",
+    "world.area_connections",
+    "world.area_features",
+    "world.area_hazards",
+    "world.area_interactables",
+    "campaign.location_state",
+    "campaign.area_connection_state",
+    "campaign.area_feature_state",
+    "campaign.hazard_state",
+    "campaign.interactable_state",
+    # Phase 15.3A-2a world relationships.
+    "world.relationships",
+    "world.relationship_participants",
+    "world.relationship_perspectives",
+    "world.family_relationships",
+    "world.employment_relationships",
+    "world.ownership_relationships",
+    "world.political_relationships",
+    # Phase 15.3A-2b memberships and organization status.
+    "world.organization_memberships",
+    "campaign.organization_state",
+    # Phase 15.3A-2c routes and travel.
+    "world.route_relationships",
+    "campaign.character_location_history",
+    # Phase 15.3A-3 NPC portrayal.
+    "character.npc_portrayal_profiles",
+    # Phase 15.3B-1a/1b item definitions, instances and custody.
+    "rules.item_definitions",
+    "world.item_instances",
+    "world.item_containers",
+    "campaign.item_state",
+    "campaign.item_ownership",
+    "campaign.inventory_entries",
+    "campaign.item_attunements",
+    "narrative.objective_dependencies",
     "knowledge.knowledge_items",
 )
 _INSERT = re.compile(r"INSERT\s+INTO\s+(" + "|".join(re.escape(t) for t in _TABLES) + r")\b", re.I)
 _MARKERS = ("phase14-direct-insert: allowed", "authored-content-direct-insert: allowed")
 _MARKER = _MARKERS[0]
+
+# Product security reference data (Phase 15 checkpoint 15.2A-1). These tables are
+# seeded by migrations only; no marker can excuse a script inserting into them.
+_NEVER_FROM_SCRIPTS = ("security.character_relationship_type_capabilities",)
+_FORBIDDEN_INSERT = re.compile(
+    r"INSERT\s+INTO\s+(" + "|".join(re.escape(t) for t in _NEVER_FROM_SCRIPTS) + r")\b", re.I
+)
 
 
 def _violations(source: str) -> list[tuple[int, str]]:
@@ -88,3 +174,27 @@ def test_the_guard_detects_an_unmarked_insert_and_accepts_a_marked_one() -> None
         )
         == []
     )
+
+
+def test_no_script_ever_inserts_security_reference_data() -> None:
+    problems: dict[str, list[tuple[int, str]]] = {}
+    for path in sorted(_SCRIPTS.glob("*.py")):
+        hits = [
+            (index + 1, match.group(1))
+            for index, line in enumerate(path.read_text(encoding="utf-8").splitlines())
+            if (match := _FORBIDDEN_INSERT.search(line))
+        ]
+        if hits:
+            problems[path.name] = hits
+    assert not problems, (
+        "Relationship-capability defaults are production reference data seeded by "
+        f"migration 114_relationship_defaults; scripts may not insert them: {problems}"
+    )
+
+
+def test_the_security_reference_guard_accepts_no_marker_exception() -> None:
+    marked = (
+        "# phase14-direct-insert: allowed\n"
+        "INSERT INTO security.character_relationship_type_capabilities (a) VALUES (1)"
+    )
+    assert _FORBIDDEN_INSERT.search(marked) is not None

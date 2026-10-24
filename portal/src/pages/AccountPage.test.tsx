@@ -63,6 +63,16 @@ describe("AccountPage", () => {
         expect(screen.getByText(/choose a passphrase of at least 15 characters/i)).toBeInTheDocument()
     })
 
+    it("announces a changed password as a success, not as an error, and shows no empty error box when idle", () => {
+        const { container, rerender } = render(<AccountPage />)
+        expect(container.querySelector(".login-error")).toBeNull()
+        changeStatusRef.current = { kind: "success" }
+        rerender(<AccountPage />)
+        const message = screen.getByText("Password changed.")
+        expect(message.closest(".login-error")).toBeNull()
+        expect(message.closest("[role=status]")).not.toBeNull()
+    })
+
     it("shows a generic message for a wrong current password", () => {
         changeStatusRef.current = { kind: "denied" }
         render(<AccountPage />)

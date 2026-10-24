@@ -141,7 +141,7 @@ A world owns:
 
 A world does not directly contain mutable campaign state. Mutable state belongs to timelines.
 
-**World authority (Phase 14, [ADR 0014](adr/0014-world-authoring-authority.md)).** Who may *author* a world is a separate concept from campaign membership and from platform administration. A user holds the `world_owner` role on a world through an open, active `security.world_memberships` row; the closed set of world capabilities that role carries (`world.view`, `world.manage`, `timeline.manage`, `campaign.create`) lives in application code, not in `security.capabilities`. Any active human principal may create a world (global capability `world.create`) and becomes its first owner; Foundry device principals and machine principals never hold authority. World authority is never inferred from campaign roles, and owning a world grants no campaign membership or campaign reads. A world created before the ownership model has no owner and cannot be authored until an operator claims it. Worlds are archived and restored, never deleted; archiving is refused while any non-archived campaign exists on its timelines.
+**World authority (Phase 14, [ADR 0014](adr/0014-world-authoring-authority.md), creation amended by [ADR 0018](adr/0018-world-creation-eligibility.md)).** Who may *author* a world is a separate concept from campaign membership and from platform administration. A user holds the `world_owner` role on a world through an open, active `security.world_memberships` row; the closed set of world capabilities that role carries (`world.view`, `world.manage`, `timeline.manage`, `campaign.create`) lives in application code, not in `security.capabilities`. Only an active platform administrator or an active user with an effective assignment of the built-in (`campaign_id IS NULL`) `gm` role may create a world (global capability `world.create`, [ADR 0018](adr/0018-world-creation-eligibility.md)); `create_world` enforces this in its own transaction and the creator becomes the world's first owner. No other campaign role, world role, or capability qualifies, and being eligible to create grants no authority over any existing world. Foundry device principals and machine principals never hold authority. World authority is never inferred from campaign roles, and owning a world grants no campaign membership or campaign reads. A world created before the ownership model has no owner and cannot be authored until an operator claims it. **World visibility ([ADR 0019](adr/0019-world-visibility-and-viewer-role.md)).** The `world_viewer` world role carries `world.view` only: read-only access to a world, its timelines, and its calendars outside any campaign, with no world or timeline action offered or accepted. Separately, `campaign.view` in a campaign lets its member read that campaign's world through the campaign's audience-filtered World Explorer; it is not world authority and never grants a world route or action. A campaign is offered to a user (session bootstrap, startup, stored preferences) only while they hold `campaign.view` in it. World memberships are changed only by trusted infrastructure; ownership granted before ADR 0018 to an account that may no longer create worlds is remediated by an explicit operator transfer, never by deleting the world. Worlds are archived and restored, never deleted; archiving is refused while any non-archived campaign exists on its timelines.
 
 ### 4.2 Entity
 
@@ -321,6 +321,8 @@ A session records:
 
 A session is organizational context; timeline events remain the authority for world changes.
 
+**Participation role (Phase 15 CP-1).** A session participant is a character, and its *participation role* says how it takes part; the role is not the character's identity (the entity subtype `player_character` or `npc`). A character may take the role matching its own kind, or `guest`: a player character takes `player_character` or `guest`, an NPC takes `npc` or `guest`, and any other or unusable character (unpublished, inactive, another world) takes none. The policy lives in `domain/session_participation.py`; the add command enforces it and the session read model publishes it to editors as `participant_role_options` (character kind to roles, matching role first), so the Run Session form offers nothing the server would refuse. Observer, controller and GM are account roles in the access model and are never participation roles. A usable character with an incompatible role is refused with `session_participant_role_mismatch`; an unknown, unpublished, inactive or foreign character with `session_participant_invalid` (which never says which). Neither changes participant rows or the session version.
+
 ---
 
 ## 6. Time domain
@@ -489,6 +491,8 @@ The PC subtype adds:
 - campaign preferences
 
 It does not duplicate shared mechanics.
+
+Implementation note (Phase 15.2B-1): a PC's **identity** (name, species, size, origin, background, appearance, GM notes) is authored by the GM as a draft and published like any definition; the `player_character` type is lifecycle-eligible. The owning user is **not** stored on the character (`player_user_id` stays unset); ownership and control are `membership_character_relationships`, which confer a perspective only while the character is published and active.
 
 ### 8.6 NPC
 
@@ -825,6 +829,13 @@ Clergy office and organizational rank remain organization memberships.
 
 ## 11. Relationship domain
 
+### 11.0 Terminology: four things called "relationship" or "member"
+
+- A **relationship** (§11.1) is a fictional, world-scoped connection between entities. It never grants access.
+- **Character access** is the user-to-character relationship in the security domain: which campaign member may see, play or portray a character. The portal calls it *Character access*; it is not a relationship in this section.
+- **Organization membership** (§10.2) is a specialized relationship (a Membership) between an entity and an organization; the portal manages it in the organization's *Members and offices*.
+- **Party membership** is timeline state with events, not a relationship: a party is not an entity.
+
 ### 11.1 Relationship
 
 A **Relationship** connects two or more entities through a meaningful association.
@@ -841,6 +852,8 @@ Examples:
 - control
 - worship
 - adjacency
+
+A relationship's recorded period is a fact of the record; whether the campaign clock currently sits inside it is a derived read for editors. The period is read as half-open `[start, end)` over `core.world_times.sort_key` against the timeline's effective clock, giving *undated*, *not started*, *in effect*, *ended*, or *campaign time not set*. It is distinct from the lifecycle (archived), a political relationship's *in force* flag, and the event-driven `campaign.relationship_state` status, and it never changes what readers are shown.
 
 ### 11.2 Relationship participant
 
@@ -880,6 +893,34 @@ Examples:
 - ownership
 - family
 - political control
+
+### 11.5 Relationship type compatibility
+
+A relationship type does not connect just any entities. Which entities may take which role in which type is **application policy**, applied when a relationship is created. Participants and type are fixed afterwards (ADR 0017), so no later command re-checks it. The code source of truth is `RELATIONSHIP_TYPE_POLICIES` in `src/dnd_ai/domain/relationship_authoring.py`; the Add form reads the same policy from the options endpoint, so the form and the server cannot disagree. There is no database trigger or constraint for it.
+
+**Entity groups** (subtype codes from `core.entity_types`): *person* = `npc`, `player_character`; *organization* = `organization`, `business`, `government`, `religious_organization`, `military_unit`, `political_faction`; *religion* = `religion`; *place* = `location`, `plane`, `realm`, `continent`, `nation`, `region`, `district`, `geographic_feature`, `settlement`, `building`, `dungeon`, `dungeon_area`; *polity place* (a place that can act politically) = `nation`, `region`, `realm`, `settlement`, `district`, `location`. The generic `location` counts as any place subtype, so a place without a more specific subtype is never locked out. Items and events are not participants.
+
+| Type | Direction | Role: allowed entities | Participants |
+|---|---|---|---|
+| `family` | by role | `parent`, `child`, `subject`, `object`, `other`: person | 2 to 20 |
+| `employment` | employer to employee | `employer`, `employee`: person, organization | one each, different |
+| `ownership` | owner to property | `owner`: person, organization, religion; `property`: person, place, organization | one each, different |
+| `membership` | member to organization | `member`: person, organization; `organization`: organization (added only in Members and offices) | one each |
+| `route` | origin to destination | both: place | one each, different |
+| `alliance`, `rivalry` | symmetric | `ally` / `rival`: person, organization, religion, polity place | 2 to 20, one role |
+| `war` | side A and side B | `subject` (side A), `object` (side B), `other` (third party): person, organization, religion, polity place | 2 to 20, at least one `subject` and one `object` |
+| `control` | controller to controlled | `ruler`: person, organization, religion, polity place; `territory`: place; `object`: person, organization | 2 to 20, at least one `ruler` and one `territory` or `object` |
+| `worship` | worshipper to worshipped | `subject`: person, organization, place; `object`: religion, person, place, organization | 2 to 20, at least one of each |
+| `adjacency` | symmetric | `subject`, `object`: place except `dungeon_area` (dungeon areas use `world.area_connections`) | exactly two, different |
+| `capital_of` | capital to governed place | `subject`: `settlement`, `location`; `object`: `nation`, `region`, `realm`, `continent`, `plane`, `location` | exactly two, different |
+| `parent_of` | parent to child | `subject`, `object`: religion, organization or place, both sides the same group; never a person (Family is the home for that, and containment and parent bodies have their own fields) | exactly two, different |
+| `other` | any | `subject`, `object`, `other`: any participant | 2 to 20 |
+
+**People.** An NPC or a player character may be the owner or the owned, the controller or the controlled, the worshipper or the worshipped, in every pairing and from either record's page. A worshipped character needs no religion, deity flag or classification. **These relationships are fictional.** Creating one writes no `security.*` row, capability, perspective eligibility, controller assignment, event or `campaign.*_state` row; who may see or play a character is Character access, and no relationship grants a mechanical effect.
+
+**Refusals.** A usable participant that cannot take the role is refused with `participant_incompatible` (400). A role, count or pairing that does not fit the type (a `ruler` in an alliance, a war without a second side, two capitals) is `relationship_invalid`. A participant that does not exist, is in another world or is archived is still `participant_invalid`, indistinguishable from one another, and route and membership keep that code. A type whose lookup row is no longer active is `relationship_invalid` and is no longer offered.
+
+**Existing records.** The policy is never applied retroactively and nothing is rewritten: a record the policy would now refuse stays readable (editors, readers and NPC portrayal), and can be corrected, ended, archived, restored and given perspectives. The editor shows the reasons as `policy_conflicts`; the way to connect different records is to end or archive it and add a correct one. A label never reinterprets a record. `scripts/audit_relationship_compatibility.py` lists such records read-only.
 
 ---
 

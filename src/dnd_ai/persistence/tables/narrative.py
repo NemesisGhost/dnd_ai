@@ -543,6 +543,15 @@ quests = Table(
         "story_arc_id", UUID(), ForeignKey("narrative.story_arcs.story_arc_id", ondelete="SET NULL")
     ),
     *_timestamps(),
+    # Added by revision 125 (Phase 15 checkpoint 15.2E-2a).
+    Column(
+        "gm_notes",
+        Text(),
+        comment=(
+            "GM-only planning text for the quest. Never shown to a player, never in an "
+            "audience-safe read, preview, or audit value."
+        ),
+    ),
     schema="narrative",
     comment=(
         "A structured narrative challenge or objective set (docs/DOMAIN_MODEL.md "
@@ -852,4 +861,58 @@ Index(
     "ix_quest_rewards_reward_knowledge_item_id",
     quest_rewards.c.reward_knowledge_item_id,
     postgresql_where=quest_rewards.c.reward_knowledge_item_id.isnot(None),
+)
+
+
+# Added by revision 124 (Phase 15 checkpoint 15.2E-1).
+event_corrections = Table(
+    "event_corrections",
+    metadata,
+    _uuid_pk("event_correction_id"),
+    Column(
+        "corrected_event_id",
+        UUID(),
+        ForeignKey("narrative.events.event_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "correcting_event_id",
+        UUID(),
+        ForeignKey("narrative.events.event_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "replacement_event_id",
+        UUID(),
+        ForeignKey("narrative.events.event_id", ondelete="RESTRICT"),
+    ),
+    Column("correction_kind", Text(), nullable=False),
+    Column(
+        "reason", Text(), nullable=False, comment="Why the event was voided or corrected. GM-only."
+    ),
+    Column(
+        "created_by_user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="SET NULL"),
+    ),
+    Column("created_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    UniqueConstraint("corrected_event_id", name="ux_event_corrections_corrected"),
+    schema="narrative",
+    comment=(
+        "The link from a corrected or voided event to the correcting event that carries its "
+        "compensating effects, the reason, and (for a correction) the replacement event "
+        "(decision D-15). Append-only; an event is corrected at most once."
+    ),
+)
+
+Index("ix_event_corrections_correcting_event_id", event_corrections.c.correcting_event_id)
+Index(
+    "ix_event_corrections_replacement_event_id",
+    event_corrections.c.replacement_event_id,
+    postgresql_where=event_corrections.c.replacement_event_id.isnot(None),
+)
+Index(
+    "ix_event_corrections_created_by_user_id",
+    event_corrections.c.created_by_user_id,
+    postgresql_where=event_corrections.c.created_by_user_id.isnot(None),
 )

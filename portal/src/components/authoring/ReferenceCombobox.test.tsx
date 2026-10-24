@@ -215,4 +215,43 @@ describe("ReferenceCombobox", () => {
         expect(describedBy).toBeTruthy()
         expect(document.getElementById(describedBy!)).toHaveTextContent("That parent is not valid.")
     })
+
+    it("drops a response that resolves after the search scope changes, and searches again", async () => {
+        const pending: { resolve: (options: ReferenceOption[]) => void; signal: AbortSignal }[] = []
+        const search: Search = (_query, signal) =>
+            new Promise<ReferenceOption[]>((resolve) => {
+                pending.push({ resolve, signal })
+            })
+        function Scoped({ scope }: { scope: string }) {
+            return (
+                <ReferenceCombobox
+                    id="parent"
+                    label="Contained in"
+                    value={null}
+                    onChange={() => {}}
+                    search={search}
+                    searchKey={scope}
+                />
+            )
+        }
+        const { rerender } = render(<Scoped scope="one" />)
+        fireEvent.focus(combobox())
+        await waitFor(() => expect(pending).toHaveLength(1))
+
+        rerender(<Scoped scope="two" />)
+        // The request begun under the old scope is aborted and a new one runs for the new scope.
+        await waitFor(() => expect(pending).toHaveLength(2))
+        expect(pending[0]!.signal.aborted).toBe(true)
+
+        await act(async () => {
+            pending[0]!.resolve([OPTIONS[0]!])
+        })
+        expect(screen.queryByRole("option")).toBeNull()
+
+        await act(async () => {
+            pending[1]!.resolve([OPTIONS[1]!])
+        })
+        expect(await screen.findAllByRole("option")).toHaveLength(1)
+        expect(screen.getByRole("option")).toHaveTextContent("Brindlemoor")
+    })
 })

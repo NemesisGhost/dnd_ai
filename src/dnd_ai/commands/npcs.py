@@ -14,6 +14,7 @@ policy. Lock order: authority scope, then entities by ascending id (the target
 """
 
 import uuid
+from typing import Any, Literal
 
 from sqlalchemy import Connection, text
 
@@ -40,7 +41,13 @@ from ._content import (
     usable_reference,
 )
 
-_NPC = frozenset({"npc"})
+CharacterKind = Literal["npc", "player_character"]
+
+# The subtype marker row each kind owns: (table, primary-key column).
+_MARKER: dict[str, tuple[str, str]] = {
+    "npc": ("character.npcs", "npc_id"),
+    "player_character": ("character.player_characters", "player_character_id"),
+}
 
 
 def _require_species(connection: Connection, *, world_id: uuid.UUID, species_id: uuid.UUID) -> None:
@@ -67,9 +74,10 @@ def _text_id(value: uuid.UUID | None) -> str | None:
     return None if value is None else str(value)
 
 
-def create_npc(
+def create_character_identity(
     connection: Connection,
     *,
+    kind: CharacterKind,
     campaign_id: uuid.UUID,
     actor_user_id: uuid.UUID,
     name: str | None,
@@ -107,7 +115,7 @@ def create_npc(
     entity_id, row_version = insert_draft_entity(
         connection,
         world_id=scope.world_id,
-        entity_type_code="npc",
+        entity_type_code=kind,
         name=fields.name,
         summary=fields.summary,
         source_id=source_id,
@@ -126,7 +134,11 @@ def create_npc(
             "origin": origin_location_id,
         },
     )
-    connection.execute(text("INSERT INTO character.npcs (npc_id) VALUES (:id)"), {"id": entity_id})
+    marker_table, marker_column = _MARKER[kind]
+    connection.execute(
+        text(f"INSERT INTO {marker_table} ({marker_column}) VALUES (:id)"),  # noqa: S608
+        {"id": entity_id},
+    )
     connection.execute(
         text("""
             INSERT INTO character.character_descriptions
@@ -143,7 +155,7 @@ def create_npc(
     return ContentWriteResult(
         entity_id=entity_id,
         world_id=scope.world_id,
-        entity_type_code="npc",
+        entity_type_code=kind,
         row_version=row_version,
         created=True,
         changed=True,
@@ -163,11 +175,12 @@ def create_npc(
     )
 
 
-def update_npc(
+def update_character_identity(
     connection: Connection,
     *,
+    kind: CharacterKind,
     campaign_id: uuid.UUID,
-    npc_id: uuid.UUID,
+    character_id: uuid.UUID,
     actor_user_id: uuid.UUID,
     expected_row_version: int,
     name: str | None,
@@ -184,7 +197,7 @@ def update_npc(
     scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
     current_origin = connection.execute(
         text("SELECT origin_location_id FROM character.characters WHERE character_id = :id"),
-        {"id": npc_id},
+        {"id": character_id},
     ).scalar()
     share_ids = (
         [origin_location_id]
@@ -192,10 +205,13 @@ def update_npc(
         else []
     )
     locked = lock_entities(
-        connection, world_id=scope.world_id, update_ids=[npc_id], share_ids=share_ids
+        connection, world_id=scope.world_id, update_ids=[character_id], share_ids=share_ids
     )
     target = editable_target(
-        locked, entity_id=npc_id, type_codes=_NPC, expected_row_version=expected_row_version
+        locked,
+        entity_id=character_id,
+        type_codes=frozenset({kind}),
+        expected_row_version=expected_row_version,
     )
     fields = normalize_npc_fields(
         name=name,
@@ -213,7 +229,7 @@ def update_npc(
             LEFT JOIN character.character_descriptions d ON d.character_id = c.character_id
             WHERE c.character_id = :id
         """),
-        {"id": npc_id},
+        {"id": character_id},
     ).one()
     changed_fields = diff_fields(
         {
@@ -239,9 +255,9 @@ def update_npc(
     )
     if not changed_fields:
         return ContentWriteResult(
-            entity_id=npc_id,
+            entity_id=character_id,
             world_id=scope.world_id,
-            entity_type_code="npc",
+            entity_type_code=kind,
             row_version=target.row_version,
             created=False,
             changed=False,
@@ -262,7 +278,7 @@ def update_npc(
         _require_species(connection, world_id=scope.world_id, species_id=species_id)
 
     new_version = touch_entity(
-        connection, entity_id=npc_id, name=fields.name, summary=fields.summary
+        connection, entity_id=character_id, name=fields.name, summary=fields.summary
     )
     if {"species_id", "size_category", "origin_location_id"} & set(changed_fields):
         connection.execute(
@@ -275,7 +291,7 @@ def update_npc(
                 "species": species_id,
                 "size": fields.size_category,
                 "origin": origin_location_id,
-                "id": npc_id,
+                "id": character_id,
             },
         )
     if {"background", "appearance", "notes"} & set(changed_fields):
@@ -290,18 +306,26 @@ def update_npc(
                     notes = EXCLUDED.notes
             """),
             {
-                "id": npc_id,
+                "id": character_id,
                 "background": fields.background,
                 "appearance": fields.appearance,
                 "notes": fields.notes,
             },
         )
     return ContentWriteResult(
-        entity_id=npc_id,
+        entity_id=character_id,
         world_id=scope.world_id,
-        entity_type_code="npc",
+        entity_type_code=kind,
         row_version=new_version,
         created=False,
         changed=True,
         changed_fields=dict(changed_fields),
     )
+
+
+def create_npc(connection: Connection, **kwargs: Any) -> ContentWriteResult:
+    return create_character_identity(connection, kind="npc", **kwargs)
+
+
+def update_npc(connection: Connection, *, npc_id: uuid.UUID, **kwargs: Any) -> ContentWriteResult:
+    return update_character_identity(connection, kind="npc", character_id=npc_id, **kwargs)

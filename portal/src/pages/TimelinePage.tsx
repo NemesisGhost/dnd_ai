@@ -67,7 +67,7 @@ interface TimelineViewProps {
     worldId: string
     timeline: TimelineDetail
     headingRef: RefObject<HTMLHeadingElement | null>
-    refetch: () => Promise<void>
+    refetch: () => Promise<unknown>
 }
 
 function TimelineView({ worldId, timeline, headingRef, refetch }: TimelineViewProps) {

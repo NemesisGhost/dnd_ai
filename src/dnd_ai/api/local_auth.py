@@ -91,15 +91,17 @@ from dnd_ai.commands.local_auth import (
     list_browser_sessions,
     normalize_login_name,
     resolve_browser_session_csrf_token,
+    resolve_browser_session_lifetime,
     revoke_browser_session,
     revoke_browser_session_by_token,
 )
 from dnd_ai.domain.access import AuthenticatedPrincipal
 from dnd_ai.domain.passwords import MAX_PASSWORD_LENGTH
 from dnd_ai.domain.rate_limit import RateLimiter
-from dnd_ai.domain.world_authority import HUMAN_GLOBAL_CAPABILITIES
+from dnd_ai.domain.world_authority import WORLD_CREATE
 from dnd_ai.queries.accounts import ACCOUNT_LIST_KEYSET, list_platform_accounts
 from dnd_ai.queries.bootstrap import get_session_bootstrap
+from dnd_ai.queries.world_authority import may_create_worlds
 
 from .audit import record_change_log
 from .auth import (
@@ -579,10 +581,19 @@ class SessionBootstrapResponse(BaseModel):
     user: SessionUserResponse
     csrf_token: str
     browser_session_id: uuid.UUID | None
+    # Browser-session lifetime, so the portal can leave the signed-in UI the
+    # moment the session lapses: the idle window slides with each
+    # authenticated request; the absolute expiry is fixed. Both null for a
+    # non-browser (bearer-token) caller.
+    session_idle_timeout_seconds: int | None = None
+    session_absolute_expires_at: str | None = None
     is_platform_administrator: bool
-    # Server-computed global (not campaign-scoped) capabilities — currently
-    # `world.create` for a human principal (docs/adr/0014). The portal gates
-    # world-authoring entry points on this and never infers it.
+    # Server-computed global (not campaign-scoped) capabilities for *this*
+    # user — currently only `world.create`, present exactly when
+    # `create_world` would authorize the caller: a human principal who is an
+    # active platform administrator or holds an effective built-in `gm`
+    # assignment (docs/adr/0018-world-creation-eligibility.md). The portal
+    # gates world-creation entry points on this and never infers it.
     global_capabilities: list[str] = Field(default_factory=list)
     startup_campaign_id: uuid.UUID | None
     campaign_preferences: CampaignPreferencesResponse
@@ -629,14 +640,24 @@ def session_bootstrap_endpoint(
         if principal.local_session_id is not None
         else None
     )
+    lifetime = (
+        resolve_browser_session_lifetime(connection, browser_session_id=principal.local_session_id)
+        if principal.local_session_id is not None
+        else None
+    )
     bootstrap = get_session_bootstrap(connection, user_id=principal.user_id)
     return SessionBootstrapResponse(
         user=SessionUserResponse(user_id=bootstrap.user_id, display_name=bootstrap.display_name),
         csrf_token=csrf_token or "",
         browser_session_id=principal.local_session_id,
+        session_idle_timeout_seconds=lifetime[0] if lifetime else None,
+        session_absolute_expires_at=lifetime[1].isoformat() if lifetime else None,
         is_platform_administrator=bootstrap.is_platform_administrator,
         global_capabilities=(
-            sorted(HUMAN_GLOBAL_CAPABILITIES) if principal.auth_method in HUMAN_AUTH_METHODS else []
+            [WORLD_CREATE]
+            if principal.auth_method in HUMAN_AUTH_METHODS
+            and may_create_worlds(connection, user_id=principal.user_id)
+            else []
         ),
         startup_campaign_id=bootstrap.startup_campaign_id,
         campaign_preferences=CampaignPreferencesResponse(

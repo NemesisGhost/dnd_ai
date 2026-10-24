@@ -50,6 +50,7 @@ from dnd_ai.domain.authoring import (
     SupersessionTargetInvalidError,
     normalize_reason,
 )
+from dnd_ai.domain.dungeon_authoring import DungeonHasActiveAreasError
 from dnd_ai.domain.entity_lifecycle import (
     APPROVE,
     ARCHIVE,
@@ -67,6 +68,7 @@ from dnd_ai.domain.entity_lifecycle import (
     target_canon_status,
 )
 from dnd_ai.queries.content_preconditions import (
+    DUNGEON_HAS_ACTIVE_AREAS,
     archive_blocked_reason,
     publish_blocked_reason,
     publish_reference_ids,
@@ -96,6 +98,14 @@ ENTITY_REFERENCE_CLASSIFICATION: dict[tuple[str, str, str], str] = {
     # --- owned: the definition's own rows -----------------------------------
     ("core", "entity_names", "entity_id"): OWNED_CASCADE,
     ("core", "entity_tags", "entity_id"): OWNED_CASCADE,
+    # Canonical revision history (Phase 15, revision 117): removed with a deleted draft.
+    ("core", "entity_revisions", "entity_id"): OWNED_CASCADE,
+    ("core", "entity_source_links", "entity_id"): OWNED_CASCADE,
+    ("character", "npc_portrayal_profiles", "npc_id"): OWNED_CASCADE,
+    # An item instance's own subtype and container rows go with a draft; its timeline state,
+    # custody, attunement, identification and combat records block deletion.
+    ("world", "item_instances", "item_instance_id"): OWNED_CASCADE,
+    ("world", "item_containers", "container_id"): OWNED_CASCADE,
     ("world", "locations", "location_id"): OWNED_CASCADE,
     ("world", "settlements", "settlement_id"): OWNED_CASCADE,
     ("world", "buildings", "building_id"): OWNED_CASCADE,
@@ -105,12 +115,22 @@ ENTITY_REFERENCE_CLASSIFICATION: dict[tuple[str, str, str], str] = {
     ("world", "military_units", "military_unit_id"): OWNED_CASCADE,
     ("world", "political_factions", "political_faction_id"): OWNED_CASCADE,
     ("world", "religions", "religion_id"): OWNED_CASCADE,
+    # Dungeon structure (Phase 15.3A-1): the aggregate's own definition rows, which exist
+    # only while the dungeon is a draft that can be deleted (state and knowledge point at
+    # them from other tables and block earlier).
+    ("world", "area_connections", "from_dungeon_area_id"): OWNED_CASCADE,
+    ("world", "area_connections", "to_dungeon_area_id"): OWNED_CASCADE,
+    ("world", "area_features", "dungeon_area_id"): OWNED_CASCADE,
+    ("world", "area_hazards", "dungeon_area_id"): OWNED_CASCADE,
+    ("world", "area_interactables", "dungeon_area_id"): OWNED_CASCADE,
     ("world", "religious_organizations", "religious_organization_id"): OWNED_CASCADE,
     # --- blocking: references to core.entities -------------------------------
     ("ai", "agent_assignments", "entity_id"): BLOCKING,
     ("campaign", "inventory_entries", "holder_entity_id"): BLOCKING,
     ("campaign", "item_ownership", "owner_entity_id"): BLOCKING,
     ("campaign", "party_memberships", "member_entity_id"): BLOCKING,
+    # A character that has taken part in a session keeps that history (15.2D-2).
+    ("campaign", "session_participants", "character_id"): BLOCKING,
     ("campaign", "relationship_state", "perspective_holder_entity_id"): BLOCKING,
     ("integration", "external_identifiers", "entity_id"): BLOCKING,
     ("integration", "sync_jobs", "target_entity_id"): BLOCKING,
@@ -130,10 +150,15 @@ ENTITY_REFERENCE_CLASSIFICATION: dict[tuple[str, str, str], str] = {
     ("narrative", "events", "event_id"): BLOCKING,
     ("narrative", "quest_objectives", "target_entity_id"): BLOCKING,
     ("narrative", "quest_participants", "participant_entity_id"): BLOCKING,
+    ("campaign", "inventory_entries", "item_instance_id"): BLOCKING,
+    ("campaign", "item_attunements", "item_instance_id"): BLOCKING,
+    ("campaign", "item_ownership", "item_instance_id"): BLOCKING,
+    ("campaign", "item_state", "item_instance_id"): BLOCKING,
+    ("interaction", "combat_actions", "item_instance_id"): BLOCKING,
+    ("knowledge", "item_identification", "item_instance_id"): BLOCKING,
     ("security", "resource_grants", "entity_id"): BLOCKING,
     ("world", "employment_relationships", "employee_entity_id"): BLOCKING,
     ("world", "employment_relationships", "employer_entity_id"): BLOCKING,
-    ("world", "item_instances", "item_instance_id"): BLOCKING,
     ("world", "organization_memberships", "member_entity_id"): BLOCKING,
     ("world", "ownership_relationships", "owned_entity_id"): BLOCKING,
     ("world", "ownership_relationships", "owner_entity_id"): BLOCKING,
@@ -196,7 +221,8 @@ ENTITY_REFERENCE_CLASSIFICATION: dict[tuple[str, str, str], str] = {
     ("campaign", "item_attunements", "character_id"): BLOCKING,
     ("character", "character_builds", "character_id"): BLOCKING,
     ("character", "character_religious_affiliations", "character_id"): BLOCKING,
-    ("character", "player_characters", "player_character_id"): BLOCKING,
+    # A player character's marker row is part of its identity (Phase 15.2B-1).
+    ("character", "player_characters", "player_character_id"): OWNED_CASCADE,
     ("knowledge", "character_expertise", "character_id"): BLOCKING,
     ("security", "membership_character_relationships", "character_id"): BLOCKING,
     ("security", "resource_grants", "character_id"): BLOCKING,
@@ -663,12 +689,12 @@ def archive_entity(
         expected_row_version=expected_row_version,
     )
     require_transition(ARCHIVE, entity.canon_status, entity.lifecycle_status)
-    if (
-        archive_blocked_reason(
-            connection, entity_id=entity_id, entity_type_code=entity.entity_type_code
-        )
-        is not None
-    ):
+    blocked = archive_blocked_reason(
+        connection, entity_id=entity_id, entity_type_code=entity.entity_type_code
+    )
+    if blocked == DUNGEON_HAS_ACTIVE_AREAS:
+        raise DungeonHasActiveAreasError(f"dungeon {entity_id} has active areas")
+    if blocked is not None:
         raise CharacterHasUserRelationshipsError(f"entity {entity_id} is linked to a user")
     new_version = _set_lifecycle(connection, entity_id, "archived", archived=True)
     return _result(

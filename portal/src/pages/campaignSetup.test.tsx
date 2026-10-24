@@ -56,7 +56,10 @@ afterEach(() => {
 })
 
 describe("CampaignSetupPage", () => {
-    function setup(entry: string, options: { refreshes?: boolean } = {}) {
+    function setup(
+        entry: string,
+        options: { refreshes?: boolean; bootstrap?: ReturnType<typeof bootstrapWith> } = {},
+    ) {
         const server = installMockServer()
         server.on("GET", /^\/worlds\?status=active/, {
             body: {
@@ -76,7 +79,7 @@ describe("CampaignSetupPage", () => {
         const rendered = renderAuthoringRoutes({
             initialEntry: entry,
             routes,
-            bootstrap: bootstrapWith(),
+            bootstrap: options.bootstrap ?? bootstrapWith(),
             onRefresh:
                 options.refreshes === false
                     ? () => Promise.reject(new Error("offline"))
@@ -95,6 +98,13 @@ describe("CampaignSetupPage", () => {
         )
         expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled()
         expect(screen.getByRole("listitem", { current: "step" })).toHaveTextContent("1. World")
+    })
+
+    it("omits Create a new world without the server-computed world.create", async () => {
+        setup("/campaigns/new", { bootstrap: bootstrapWith({ global_capabilities: [] }) })
+        expect(await screen.findByRole("radio", { name: "Eberron" })).toBeInTheDocument()
+        expect(screen.queryByRole("link", { name: "Create a new world" })).not.toBeInTheDocument()
+        expect(document.querySelector('a[href^="/worlds/new"]')).toBeNull()
     })
 
     it("walks the steps through the URL so Back and refresh resume them", async () => {

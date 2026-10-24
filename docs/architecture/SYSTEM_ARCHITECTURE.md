@@ -298,6 +298,8 @@ External calls to AI providers, Discord or FoundryVTT should not normally occur 
 
 ### 7.1 Global lock order (Phase 14)
 
+Phase 15.2B-2 note: build and state commands (`create_character_build`, `initialize_character_state`, `activate_character_build`) take the operation scope, then the character's `core.entities` row `FOR SHARE`, then the character's `campaign.character_state` row `FOR UPDATE` (activation and initialization only).
+
 Commands that lock more than one row take locks in this order, so two commands that share rows can never deadlock on each other:
 
 ```text
@@ -311,6 +313,8 @@ core.worlds
 ```
 
 Phase 15.1 typed content commands and the canon-lifecycle commands (entity transitions) both take, in order: world `FOR SHARE`, the actor's open campaign membership and unrevoked membership-role rows `FOR SHARE` (and the actor's account row), campaign `FOR SHARE` (required `active`), then entities by `entity_id` ascending (the target `FOR UPDATE`, referenced records `FOR SHARE`), then any per-world advisory lock. Holding the actor's membership and role rows `FOR SHARE` serializes an authoring command against `revoke_membership_role` and `end_campaign_membership`. **The membership rows are taken before the campaign row on purpose:** a role revocation writes the membership-role row and, at commit, its deferred access-manager retention trigger takes the campaign row `FOR UPDATE`; a command holding the campaign `FOR SHARE` while waiting on that row deadlocks with it (found and pinned by `tests/database/test_content_authoring_concurrency.py`). See [ADR 0015](../adr/0015-typed-world-content-authoring.md).
+
+**Campaign operations (Phase 15 completion).** Operation commands (world time, the clock, and later sessions, parties, events, and state) start with `dnd_ai.commands._operations.lock_operation_scope`, which delegates to the 15.1 sequence above (world, the actor's membership/role/account rows, campaign) and adds the campaign's own timeline (no timeline row lock: archiving a timeline already refuses while a campaign is active). After the campaign, operations lock in this order: sessions (by id) → parties (by id) → `core.entities` (by id) → `world.relationships` (by id) → typed state rows in table order — `timeline_clocks`, `party_memberships`, `session_participants`, `character_state`, `character_conditions`, `character_resources`, `character_location_history`, `quest_state`, `objective_state`, `party_knowledge`, `entity_knowledge`, `item_state`, `item_ownership`, `inventory_entries`, `item_attunements`, `organization_state`, `relationship_state`, then the five dungeon-state tables — each by key → `narrative.event_corrections` (insert) → per-world advisory locks (for example `core.world_times.sort:<world>`). A command that locks several rows of one table takes them in key order.
 
 Writers of a row take `FOR UPDATE`. A command that only needs a parent to *stay active* for its duration (create timeline, branch, create campaign, reactivate, entity transitions) takes `FOR SHARE` on the parent, which conflicts with the parent's `FOR UPDATE` archive. Idempotency reservation INSERTs happen first and touch only their own unique index, so they introduce no cycle. Deferred constraint triggers (world-owner and campaign access-manager retention) take their own `FOR UPDATE` at commit on the world/campaign row respectively; commands pre-check these invariants so callers get a classified 409 instead of a raw integrity failure.
 
@@ -560,6 +564,8 @@ Operational telemetry should include:
 - proposal approval rates
 - validation failures
 - import extraction and matching quality
+
+**What telemetry may contain (ADR 0016).** Logs, metrics, traces, and error responses carry identifiers, codes, durations, and outcomes only. They never carry request bodies, field values, narrative, statements, notes, or tokens, and never anything classified `PLAYER_PRIVATE` or `SECRET`. Error handlers log exception class, status, error code, correlation ID, and route template only; `tests/unit/test_privacy_guards.py` pins that a rejected request body is neither echoed nor logged.
 
 ## 20. Failure handling
 

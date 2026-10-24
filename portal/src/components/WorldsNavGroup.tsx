@@ -6,7 +6,11 @@ import type {
 import { NavLink, useLocation } from "react-router"
 import { ChevronDown, Landmark } from "lucide-react"
 import { DisabledNavItem } from "./DisabledNavItem"
-import { SELECT_TIMELINE_FIRST, SELECT_WORLD_FIRST } from "./navigationReasons"
+import {
+  NOT_AVAILABLE_FOR_ACCOUNT,
+  SELECT_TIMELINE_FIRST,
+  SELECT_WORLD_FIRST,
+} from "./navigationReasons"
 
 interface WorldsNavGroupProps {
   // The one world whose routes are nested, already verified against the
@@ -17,19 +21,27 @@ interface WorldsNavGroupProps {
   activeTimelineId: string | null
   // The resolved campaign's world page, when a campaign resolves to this world.
   campaignWorldPath: string | null
+  // From the bootstrap's server-computed `global_capabilities` only.
   canCreateWorld: boolean
+  // True when the active world's own server-computed capabilities let the
+  // caller author it. A view-only world keeps its read-only overview and
+  // timeline list; timeline-authoring routes stay visible but disabled.
+  canAuthorWorld: boolean
   collapsed: boolean
   onNavigate: () => void
 }
 
 // The single world-navigation group: the authorized worlds collection,
 // creation (server-authorized only), and — when a world context exists — that
-// world's routes. Same disclosure pattern as AccessNavGroup.
+// world's routes. Same disclosure pattern as AccessNavGroup: an entry the
+// caller may not use stays in its slot as a DisabledNavItem (never an anchor)
+// rather than disappearing.
 export function WorldsNavGroup({
   activeWorldId,
   activeTimelineId,
   campaignWorldPath,
   canCreateWorld,
+  canAuthorWorld,
   collapsed,
   onNavigate,
 }: WorldsNavGroupProps) {
@@ -179,7 +191,7 @@ export function WorldsNavGroup({
           ) : (
             <DisabledNavItem
               label="New world"
-              reason="Not available for your account"
+              reason={NOT_AVAILABLE_FOR_ACCOUNT}
               collapsed={collapsed}
             />
           )}
@@ -221,7 +233,7 @@ export function WorldsNavGroup({
           )}
         </li>
         <li>
-          {worldPath !== null && activeTimelineId !== null ? (
+          {worldPath !== null && activeTimelineId !== null && canAuthorWorld ? (
             <NavLink
               className={subLinkClassName}
               to={`${worldPath}/timelines/${activeTimelineId}`}
@@ -232,7 +244,11 @@ export function WorldsNavGroup({
           ) : (
             <DisabledNavItem
               label="Timeline overview"
-              reason={SELECT_TIMELINE_FIRST}
+              reason={
+                worldPath !== null && activeTimelineId !== null
+                  ? NOT_AVAILABLE_FOR_ACCOUNT
+                  : SELECT_TIMELINE_FIRST
+              }
               collapsed={collapsed}
             />
           )}

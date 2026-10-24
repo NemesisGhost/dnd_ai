@@ -51,6 +51,7 @@ const secondSheetFixture = {
     ...characterSheetFixture,
     character_id: "character-b",
     name: "Character B",
+    character_kind: "character",
     character_build_id: "build-character-b",
     build_label: "Alternate Build",
 } satisfies CharacterSheet

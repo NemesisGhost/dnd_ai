@@ -3,7 +3,7 @@
 ## Authoring-First Roadmap Revision
 
 **Revision date:** 2026-10-03
-**Status:** Proposed replacement for the future-delivery portion of `PLAN.md`
+**Status:** Accepted; the authoritative product roadmap. It replaces the future-delivery portion of `PLAN.md` (as of 2026-10-05 the Phase 15 completion sequence in `PLAN.md` implements it).
 **Inputs:** Current implementation plan, Platform Review dated 2026-09-25, and AI D&D Campaign Intelligence Platform marketing and feature proposal
 
 ---
@@ -162,9 +162,9 @@ The current PostgreSQL/API Compose services and development topology are retaine
 | 11 | Foundation delivered; remaining work reassigned | Existing Foundry backend/module retained; live acceptance and portal UI move to Phase 21 |
 | 12 | Foundation delivered; remaining work reassigned | Existing AI/context/proposal foundation retained; product surfaces and real-provider acceptance move to Phase 20 |
 | 13 | Complete | Portal foundation, campaign reads, account/settings, invitations, and access management |
-| **14** | **Next** | **Shared authoring kernel plus world/timeline/campaign setup** |
-| **15** | Planned | **Game Master world, campaign, and session authoring** |
-| **16** | Planned | **Player character authoring, notes, theories, contributions, and collaboration** |
+| **14** | **Complete with accepted limitations** | **Shared authoring kernel plus world/timeline/campaign setup** (provenance presentation and prior-version history arrive with Phase 15) |
+| **15** | **Implemented; acceptance pending (not complete)** | **Game Master world, campaign, and session authoring.** 15.1 is merged; every completion checkpoint is implemented on `phase15/completion` with local automated evidence. The owner's manual accessibility/responsive acceptance, a CI run on the final head and the merge remain (`PHASE15_MANUAL_ACCEPTANCE.md`) |
+| **16** | **Blocked by the Phase 15 completion gate** | **Player character authoring, notes, theories, contributions, and collaboration** |
 | **17** | Planned | **Standalone-product acceptance and self-hosted production packaging** |
 | 18 | Planned | Session intelligence and controlled world/campaign import |
 | 19 | Planned | Rules-aware character, creature, and encounter expansion |

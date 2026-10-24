@@ -1,3 +1,5 @@
+import { enqueuePreferenceWrite } from "./preferenceWrites"
+
 export class UserPreferenceRequestError extends Error {
     readonly status: number
 
@@ -49,15 +51,18 @@ export function setCampaignStartupPreference(
     )
 }
 
+// Never aborted: a request cancelled by the page that issued it may or may not
+// commit, which is what let a bootstrap read return the previous campaign.
+// Writes are ordered (see preferenceWrites.ts), so the latest selection wins.
 export function recordLastVisitedCampaign(
     campaignId: string,
     csrfToken: string,
-    signal?: AbortSignal,
 ): Promise<void> {
-    return putPreference(
-        "/api/auth/preferences/last-visited-campaign",
-        { campaign_id: campaignId },
-        csrfToken,
-        signal,
+    return enqueuePreferenceWrite(() =>
+        putPreference(
+            "/api/auth/preferences/last-visited-campaign",
+            { campaign_id: campaignId },
+            csrfToken,
+        ),
     )
 }

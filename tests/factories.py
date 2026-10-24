@@ -375,6 +375,16 @@ def make_role_capability(
     )
 
 
+def system_role_id(connection: Connection, code: str) -> uuid.UUID:
+    """A built-in system-template role (`campaign_id IS NULL`) by code."""
+    value = connection.execute(
+        text("SELECT role_id FROM security.roles WHERE campaign_id IS NULL AND code = :code"),
+        {"code": code},
+    ).scalar()
+    assert isinstance(value, uuid.UUID), code
+    return value
+
+
 def make_membership_role(
     connection: Connection,
     campaign_membership_id: uuid.UUID,
@@ -461,7 +471,9 @@ def make_relationship_type_capability(
     connection.execute(
         text(
             "INSERT INTO security.character_relationship_type_capabilities "
-            "(character_relationship_type_id, capability_id) VALUES (:rt, :c)"
+            "(character_relationship_type_id, capability_id) VALUES (:rt, :c) "
+            # The production matrix (migration 114) already seeds the built-in pairs.
+            "ON CONFLICT DO NOTHING"
         ),
         {"rt": character_relationship_type_id, "c": capability_id},
     )

@@ -4,6 +4,7 @@ import {
     waitFor,
 } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import { SESSION_EXPIRED_EVENT } from "../api/http"
 import { fetchSessionBootstrap } from "../api/session"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import { useSessionBootstrap } from "./useSessionBootstrap"
@@ -209,6 +210,60 @@ describe("useSessionBootstrap", () => {
                 status: "authenticated",
                 bootstrap: sessionBootstrapFixture,
             })
+        })
+    })
+
+    describe("session expiry", () => {
+        const withLifetime = {
+            ...sessionBootstrapFixture,
+            session_idle_timeout_seconds: 60,
+            session_absolute_expires_at: null,
+        }
+
+        it("signs out when the idle deadline passes and the server says 401", async () => {
+            vi.useFakeTimers()
+            try {
+                fetchSessionBootstrapMock.mockResolvedValueOnce(withLifetime)
+                const { result } = renderHook(() => useSessionBootstrap())
+                await act(async () => {
+                    await vi.advanceTimersByTimeAsync(0)
+                })
+                expect(result.current.state.status).toBe("authenticated")
+
+                fetchSessionBootstrapMock.mockResolvedValueOnce(null)
+                await act(async () => {
+                    await vi.advanceTimersByTimeAsync(62_000)
+                })
+                expect(result.current.state.status).toBe("unauthenticated")
+            } finally {
+                vi.useRealTimers()
+            }
+        })
+
+        it("stays signed in when the server still accepts the session", async () => {
+            vi.useFakeTimers()
+            try {
+                fetchSessionBootstrapMock.mockResolvedValue(withLifetime)
+                const { result } = renderHook(() => useSessionBootstrap())
+                await act(async () => {
+                    await vi.advanceTimersByTimeAsync(62_000)
+                })
+                expect(result.current.state.status).toBe("authenticated")
+            } finally {
+                vi.useRealTimers()
+            }
+        })
+
+        it("signs out immediately on a session-expired event", async () => {
+            fetchSessionBootstrapMock.mockResolvedValue(withLifetime)
+            const { result } = renderHook(() => useSessionBootstrap())
+            await waitFor(() =>
+                expect(result.current.state.status).toBe("authenticated"),
+            )
+            act(() => {
+                window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT))
+            })
+            expect(result.current.state.status).toBe("unauthenticated")
         })
     })
 })

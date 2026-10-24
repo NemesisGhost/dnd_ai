@@ -39,6 +39,9 @@ export function useLogout(): UseLogoutResult {
 
     async function handleLogout(): Promise<void> {
         if (state.status !== "authenticated") {
+            // Already signed out (e.g. the session expired): logging out
+            // always ends on the login screen.
+            navigate("/login", { replace: true })
             return
         }
 

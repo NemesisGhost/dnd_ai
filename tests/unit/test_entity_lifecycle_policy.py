@@ -75,12 +75,13 @@ def test_registry_excludes_every_documented_exclusion() -> None:
     assert not (
         el.ENTITY_LIFECYCLE_ELIGIBLE_TYPE_CODES & set(el.ENTITY_LIFECYCLE_EXCLUDED_TYPE_CODES)
     )
-    for code in ("character", "player_character", "event"):
+    for code in ("character", "event"):
         assert not el.is_lifecycle_eligible(code)
         with pytest.raises(LifecycleNotSupportedError):
             el.require_lifecycle_eligible(code)
     assert el.is_lifecycle_eligible("location")
     assert el.is_lifecycle_eligible("npc")
+    assert el.is_lifecycle_eligible("player_character")
     assert el.is_lifecycle_eligible("quest")
     assert el.is_lifecycle_eligible("knowledge_item")
 
@@ -99,7 +100,7 @@ def test_previews_use_the_same_policy_as_enforcement() -> None:
 
 def test_an_ineligible_type_previews_as_wholly_blocked() -> None:
     available, blocked = el.evaluate_actions(
-        entity_type_code="player_character", canon_status="draft", lifecycle_status="active"
+        entity_type_code="event", canon_status="draft", lifecycle_status="active"
     )
     assert available == []
     assert [(b.action, b.reason) for b in blocked] == [("all", el.BLOCKED_NOT_SUPPORTED)]

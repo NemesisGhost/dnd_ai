@@ -1,7 +1,6 @@
 import { useId } from "react"
 import type { ReactNode } from "react"
 import { Link } from "react-router"
-import { AudiencePreviewSection } from "../components/AudiencePreviewSection"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import type { AuthorizedParty } from "../types/bootstrap"
 import type { KnowledgeView } from "../types/knowledge"
@@ -12,9 +11,11 @@ interface KnowledgePageProps {
     query: string
     partyId: string | null
     parties: AuthorizedParty[]
+    includePublic: boolean
     onViewChange: (view: KnowledgeView) => void
     onQueryChange: (query: string) => void
     onPartyChange: (partyId: string | null) => void
+    onIncludePublicChange: (includePublic: boolean) => void
     children: ReactNode
 }
 
@@ -29,7 +30,7 @@ const viewOptions: ViewOption[] = [
     { value: "party_shared", label: "Party shared" },
     { value: "character_private", label: "Character private" },
     { value: "recent", label: "Recent" },
-    { value: "public", label: "Public" },
+    { value: "public", label: "Public only" },
 ]
 
 export function KnowledgePage({
@@ -38,15 +39,19 @@ export function KnowledgePage({
     query,
     partyId,
     parties,
+    includePublic,
     onViewChange,
     onQueryChange,
     onPartyChange,
+    onIncludePublicChange,
     children,
 }: KnowledgePageProps) {
     const canAuthor = useCampaignCapability(campaignId, "canon.edit")
     const viewSelectId = useId()
     const searchInputId = useId()
     const partySelectId = useId()
+    const includePublicId = useId()
+    const publicOnly = view === "public"
 
     const hasParties = parties.length > 0
 
@@ -64,8 +69,6 @@ export function KnowledgePage({
                     </Link>
                 </p>
             ) : null}
-
-            <AudiencePreviewSection campaignId={campaignId} resourceType="knowledge_item" />
 
             <div
                 className="knowledge-page__filters"
@@ -132,7 +135,7 @@ export function KnowledgePage({
                             disabled={!hasParties}
                         >
                             {hasParties
-                                ? "No party selected"
+                                ? "All parties"
                                 : "No party available"}
                         </option>
 
@@ -145,6 +148,23 @@ export function KnowledgePage({
                             </option>
                         ))}
                     </select>
+                </div>
+
+                <div className="knowledge-page__field">
+                    <label htmlFor={includePublicId}>
+                        <input
+                            id={includePublicId}
+                            type="checkbox"
+                            checked={includePublic || publicOnly}
+                            disabled={publicOnly}
+                            onChange={(event) =>
+                                onIncludePublicChange(
+                                    event.currentTarget.checked,
+                                )
+                            }
+                        />{" "}
+                        Include public knowledge
+                    </label>
                 </div>
             </div>
 

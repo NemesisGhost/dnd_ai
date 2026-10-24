@@ -80,6 +80,8 @@ export const ERROR_CODE_FIELD: Readonly<Record<string, string>> = {
     origin_location_invalid: "npc-origin",
     objective_target_invalid: "objective-target",
     knowledge_subject_invalid: "knowledge-subject",
+    calendar_id_invalid: "time-calendar",
+    world_time_id_invalid: "time-after",
 }
 
 export function fieldForErrorCode(code: string | null): string | null {
@@ -125,10 +127,15 @@ export const ERROR_CODE_MESSAGE: Readonly<Record<string, string>> = {
         "A player or account is linked to this character. Remove those links first.",
     objective_target_invalid: "The selected objective target is not valid. Choose another.",
     knowledge_subject_invalid: "The selected subject is not valid. Choose another.",
+    calendar_id_invalid: "That calendar is not available. Choose another.",
+    world_time_id_invalid: "That time is not available. Choose another.",
+    world_time_no_gap:
+        "There is no room to place a new time there. Choose a different position.",
     knowledge_already_known:
         "Someone already knows this claim, so its statement, type, and subject cannot change. Truth and sensitivity can still be edited; for a change in meaning, create a replacement claim.",
     quest_has_progress:
         "This quest already has progress recorded, so its structure cannot change. Wording can still be edited.",
     quest_definition_incomplete:
         "A quest needs at least one stage with an objective before it can be published.",
+    dungeon_has_active_areas: "The dungeon still has active areas. Archive its areas first.",
 }

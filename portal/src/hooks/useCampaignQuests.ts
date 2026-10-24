@@ -36,6 +36,7 @@ export interface UseCampaignQuestsResult {
 interface CampaignQuestsSnapshot {
     campaignId: string
     characterId: string | null
+    partyId: string | null
     requestVersion: number
     state: CampaignQuestsState
 }
@@ -47,6 +48,7 @@ const initialState: CampaignQuestsState = {
 export function useCampaignQuests(
     campaignId: string,
     characterId: string | null,
+    partyId: string | null = null,
 ): UseCampaignQuestsResult {
     const { reload } = useSession()
 
@@ -57,6 +59,7 @@ export function useCampaignQuests(
         useState<CampaignQuestsSnapshot>(() => ({
             campaignId,
             characterId,
+            partyId,
             requestVersion: 0,
             state: initialState,
         }))
@@ -70,6 +73,7 @@ export function useCampaignQuests(
     const snapshotMatchesRequest =
         snapshot.campaignId === campaignId &&
         snapshot.characterId === characterId &&
+        snapshot.partyId === partyId &&
         snapshot.requestVersion === requestVersion
 
     const state = snapshotMatchesRequest
@@ -82,6 +86,7 @@ export function useCampaignQuests(
         void fetchCampaignQuests(
             campaignId,
             characterId,
+            partyId,
             controller.signal,
         )
             .then((quests) => {
@@ -92,6 +97,7 @@ export function useCampaignQuests(
                 setSnapshot({
                     campaignId,
                     characterId,
+                    partyId,
                     requestVersion,
                     state: {
                         status: "success",
@@ -127,6 +133,7 @@ export function useCampaignQuests(
                     setSnapshot({
                         campaignId,
                         characterId,
+                        partyId,
                         requestVersion,
                         state: {
                             status: "unavailable",
@@ -138,6 +145,7 @@ export function useCampaignQuests(
                 setSnapshot({
                     campaignId,
                     characterId,
+                    partyId,
                     requestVersion,
                     state: {
                         status: "error",
@@ -152,6 +160,7 @@ export function useCampaignQuests(
     }, [
         campaignId,
         characterId,
+        partyId,
         reload,
         requestVersion,
     ])

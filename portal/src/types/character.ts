@@ -1,3 +1,5 @@
+export type CharacterKind = "npc" | "player_character" | "character"
+
 export interface CharacterCondition {
     condition_code: string
     source_description: string | null
@@ -12,6 +14,8 @@ export interface CharacterResource {
 export interface CharacterDetail {
     character_id: string
     name: string
+    // "character" is a bare character row that is neither an NPC nor a player character.
+    character_kind: CharacterKind
     species_code: string
     size_category: string
 

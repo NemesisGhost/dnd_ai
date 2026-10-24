@@ -22,7 +22,7 @@ interface TransitionControlsProps {
     archive: (body: TransitionRequest, ctx: MutationContext) => Promise<unknown>
     restore: (body: TransitionRequest, ctx: MutationContext) => Promise<unknown>
     // Authoritative refetch of the record; awaited before the success announcement.
-    refetch: () => Promise<void>
+    refetch: () => Promise<unknown>
     archiveDescription: string
     restoreDescription: string
 }

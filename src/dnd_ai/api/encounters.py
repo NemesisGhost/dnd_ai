@@ -100,7 +100,7 @@ endpoint has neither.
 """
 
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
@@ -114,8 +114,13 @@ from dnd_ai.commands.encounters import (
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.queries.encounter import get_encounter_view
 
+from ._authoring import finish_campaign_idempotency, start_campaign_idempotency
+from ._shared import timeline_world_id
 from .access import require_campaign_capability
-from .deps import get_connection
+from .audit import record_change_log
+from .correlation import get_request_correlation_id
+from .deps import get_connection, get_idempotency_key
+from .items import _time_or_clock
 
 router = APIRouter(tags=["encounters"])
 
@@ -148,10 +153,12 @@ class EncounterResponse(BaseModel):
 
 
 class ResolveCombatTurnRequest(BaseModel):
-    round_number: int = Field(ge=1)
-    turn_order: int = Field(ge=0)
+    # Omitted: the encounter's current round, and the next free turn in it (Phase 15.3B-2b).
+    round_number: int | None = Field(default=None, ge=1)
+    turn_order: int | None = Field(default=None, ge=0)
     actor_entity_id: uuid.UUID
-    world_time_id: uuid.UUID
+    # Omitted: the campaign clock.
+    world_time_id: uuid.UUID | None = None
     action_kind: str = "attack"
     target_entity_id: uuid.UUID | None = None
     item_instance_id: uuid.UUID | None = None
@@ -179,7 +186,7 @@ class EncounterOutcome(BaseModel):
 
 
 class EndEncounterRequest(BaseModel):
-    world_time_id: uuid.UUID
+    world_time_id: uuid.UUID | None = None
     outcomes: list[EncounterOutcome] = Field(default_factory=list)
     summary: str | None = None
     session_id: uuid.UUID | None = None
@@ -276,18 +283,31 @@ def resolve_combat_turn_endpoint(
     # Enforces canon.edit; the resolved AccessContext itself isn't needed —
     # unlike start_encounter_endpoint, this route derives no value from it
     # (encounter_id, not the campaign's timeline, is what's already trusted).
-    _access: Annotated[
+    access: Annotated[
         AccessContext, Depends(require_campaign_capability(_ENCOUNTER_MANAGE_CAPABILITY))
     ],
     connection: Annotated[Connection, Depends(get_connection)],
-) -> ResolveCombatTurnResponse:
+    idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
+    correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
+) -> Any:
+    idem = start_campaign_idempotency(
+        connection,
+        actor_user_id=access.user_id,
+        campaign_id=campaign_id,
+        idempotency_key=idempotency_key,
+        command_name="resolve_combat_turn",
+        payload={"encounter_id": str(encounter_id), **body.model_dump(mode="json")},
+        correlation_id=correlation_id,
+    )
+    if idem.replay is not None:
+        return idem.replay
     result = _resolve_combat_turn_impl(
         connection,
         encounter_id=encounter_id,
         round_number=body.round_number,
         turn_order=body.turn_order,
         actor_entity_id=body.actor_entity_id,
-        world_time_id=body.world_time_id,
+        world_time_id=_time_or_clock(connection, access.timeline_id, body.world_time_id),
         action_kind=body.action_kind,
         target_entity_id=body.target_entity_id,
         item_instance_id=body.item_instance_id,
@@ -301,13 +321,30 @@ def resolve_combat_turn_endpoint(
         session_id=body.session_id,
         event_details=body.event_details,
     )
-    return ResolveCombatTurnResponse(
+    record_change_log(
+        connection,
+        change_action_code="created",
+        schema_name="narrative",
+        table_name="encounter_turns",
+        record_id=result.encounter_turn_id,
+        entity_id=None,
+        world_id=timeline_world_id(connection, access.timeline_id),
+        actor_user_id=access.user_id,
+        correlation_id=correlation_id,
+        command_name="resolve_combat_turn",
+        event_id=result.event_id,
+    )
+    response = ResolveCombatTurnResponse(
         encounter_turn_id=result.encounter_turn_id,
         combat_action_id=result.combat_action_id,
         event_id=result.event_id,
         previous_hit_points=result.previous_hit_points,
         new_hit_points=result.new_hit_points,
     )
+    finish_campaign_idempotency(
+        connection, idem, status_code=201, body=response.model_dump(mode="json")
+    )
+    return response
 
 
 @router.post(
@@ -321,21 +358,53 @@ def end_encounter_endpoint(
     body: EndEncounterRequest,
     # See resolve_combat_turn_endpoint's identical parameter for why the
     # resolved AccessContext itself is unused here.
-    _access: Annotated[
+    access: Annotated[
         AccessContext, Depends(require_campaign_capability(_ENCOUNTER_MANAGE_CAPABILITY))
     ],
     connection: Annotated[Connection, Depends(get_connection)],
-) -> EndEncounterResponse:
+    idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
+    correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
+) -> Any:
+    idem = start_campaign_idempotency(
+        connection,
+        actor_user_id=access.user_id,
+        campaign_id=campaign_id,
+        idempotency_key=idempotency_key,
+        command_name="end_encounter",
+        payload={"encounter_id": str(encounter_id), **body.model_dump(mode="json")},
+        correlation_id=correlation_id,
+    )
+    if idem.replay is not None:
+        return idem.replay
     result = _end_encounter_impl(
         connection,
         encounter_id=encounter_id,
-        world_time_id=body.world_time_id,
+        world_time_id=_time_or_clock(connection, access.timeline_id, body.world_time_id),
         outcomes=tuple((o.participant_entity_id, o.outcome) for o in body.outcomes),
         summary=body.summary,
         campaign_id=campaign_id,
         session_id=body.session_id,
     )
-    return EndEncounterResponse(event_id=result.event_id)
+    record_change_log(
+        connection,
+        change_action_code="updated",
+        schema_name="narrative",
+        table_name="encounters",
+        record_id=encounter_id,
+        entity_id=None,
+        world_id=timeline_world_id(connection, access.timeline_id),
+        actor_user_id=access.user_id,
+        correlation_id=correlation_id,
+        command_name="end_encounter",
+        event_id=result.event_id,
+        previous_status="active",
+        new_status="completed",
+    )
+    response = EndEncounterResponse(event_id=result.event_id)
+    finish_campaign_idempotency(
+        connection, idem, status_code=200, body=response.model_dump(mode="json")
+    )
+    return response
 
 
 @router.get(

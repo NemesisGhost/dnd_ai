@@ -23,6 +23,12 @@ export interface WorldEntityPage {
     next_cursor: string | null
 }
 
+// Authorized totals per World category for one search, over every page.
+export interface WorldCategoryCounts {
+    counts: Record<WorldCategory, number>
+    total: number
+}
+
 export interface WorldEntitySearchParameters {
     category: WorldCategory | null
     query: string
@@ -30,7 +36,15 @@ export interface WorldEntitySearchParameters {
     limit?: number
     // GM preview: also list drafts, superseded and archived records.
     includeHidden?: boolean
+    // Narrows the People category to one character type before paging. The server
+    // accepts it only with category "character".
+    characterType?: CharacterType
+    // Narrows the listing to these entity type codes before paging (repeatable). Each must be a
+    // type of the requested category; the server refuses others.
+    entityTypes?: readonly string[]
 }
+
+export type CharacterType = "npc" | "player_character"
 
 // World categories with an independently loadable, audience-safe detail
 // contract (UI_STYLE_GUIDE.md §10.2). "organization" joined in Phase 15.1 with
@@ -97,6 +111,12 @@ export interface OrganizationDetail {
     headquarters: OrganizationLink | null
     religion: OrganizationLink | null
     status_code: string | null
+    // Display text only, never a world-time id. Absent from an older server.
+    founded?: string | null
+    dissolved?: string | null
+    // The public subtype text of a government or a political faction.
+    government_form?: string | null
+    ideology?: string | null
     canon_status?: string
     lifecycle_status?: string
 }

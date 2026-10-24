@@ -1,3 +1,4 @@
+import { useWorldBackPath } from "../hooks/useWorldBackPath"
 import { Link } from "react-router"
 import { DetailPanel } from "../components/DetailPanel"
 import { FactGrid } from "../components/FactGrid"
@@ -20,10 +21,11 @@ export function WorldEventDetailPage({
     campaignId,
     event,
 }: WorldEventDetailPageProps) {
+    const worldBackPath = useWorldBackPath(campaignId)
     return (
         <section aria-labelledby="world-event-heading">
             <p>
-                <Link to={`/app/${encodeURIComponent(campaignId)}/world`}>
+                <Link to={worldBackPath}>
                     Back to World
                 </Link>
             </p>

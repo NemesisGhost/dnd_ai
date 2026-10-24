@@ -6,6 +6,8 @@ import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { usePageArrival } from "../hooks/usePageArrival"
 import { useAuthenticatedSession } from "../layouts/useAuthenticatedSession"
 import type { WorldListResponse } from "../types/worldAuthoring"
+import { buildWorldChoices, canCreateWorlds } from "../utils/worldAccess"
+import type { WorldChoice } from "../utils/worldAccess"
 import "../components/authoring/authoring.css"
 
 type StatusFilter = "active" | "archived"
@@ -19,10 +21,17 @@ function readFilter(value: string | null): StatusFilter {
     return value === "archived" ? "archived" : "active"
 }
 
-// The worlds the signed-in user owns, from GET /worlds. The list is filtered by
-// the server (only worlds the user holds authority over are ever returned), and
-// the "Create world" action appears only when the bootstrap's server-computed
-// `global_capabilities` includes `world.create` — never inferred.
+// Every world the signed-in user can see, from two server sources merged by
+// `buildWorldChoices`: GET /worlds (explicit world authority) and the
+// bootstrap's campaigns (campaign-scoped visibility). Nothing here links to a
+// world neither returned. A world the caller manages opens its authoring
+// overview; one held by a view-only world role opens the read-only overview;
+// one visible only through a campaign opens that campaign's read-only World
+// Explorer (/app/{campaignId}/world) and never a /worlds route. Both read-only
+// kinds are marked "View only". Campaign visibility is listed under Active
+// only: bootstrap campaigns are active, and an active campaign keeps its
+// world from being archived. "Create world" appears only when the bootstrap's
+// server-computed `global_capabilities` includes `world.create`.
 export function WorldsPage() {
     const { bootstrap } = useAuthenticatedSession()
     const [params, setParams] = useSearchParams()
@@ -31,7 +40,14 @@ export function WorldsPage() {
         `${worldsListPath(filter)}&limit=100`,
     )
     const headingRef = usePageArrival(state.kind !== "loading")
-    const canCreate = bootstrap.global_capabilities?.includes("world.create") === true
+    const canCreate = canCreateWorlds(bootstrap)
+    const choices =
+        state.kind === "ready"
+            ? buildWorldChoices(
+                  state.data.items,
+                  filter === "active" ? bootstrap.campaigns : [],
+              )
+            : []
 
     return (
         <div className="world-page">
@@ -40,8 +56,8 @@ export function WorldsPage() {
                     Worlds
                 </h1>
                 <p className="authoring-page__lead">
-                    Worlds you own. A world holds its timelines and the campaigns played on
-                    them.
+                    Worlds you have access to. A world holds its timelines and the campaigns
+                    played on them.
                 </p>
 
                 {canCreate ? (
@@ -69,11 +85,11 @@ export function WorldsPage() {
                     <p role="alert">Worlds are not available to you.</p>
                 ) : state.kind === "error" ? (
                     <p role="alert">Worlds could not be loaded. Try reloading the page.</p>
-                ) : state.data.items.length === 0 ? (
+                ) : choices.length === 0 ? (
                     <p>
                         {filter === "archived"
                             ? "You have no archived worlds."
-                            : "You do not own any worlds yet."}
+                            : "You do not have access to any worlds yet."}
                         {canCreate && filter === "active"
                             ? " Create one to start a campaign."
                             : ""}
@@ -81,16 +97,20 @@ export function WorldsPage() {
                 ) : (
                     <>
                         <ul className="authoring-list" aria-label="Worlds">
-                            {state.data.items.map((world) => (
+                            {choices.map((world) => (
                                 <li className="authoring-list__item" key={world.world_id}>
                                     <div>
                                         <h2>
-                                            <Link to={`/worlds/${world.world_id}`}>{world.name}</Link>
+                                            <Link to={world.to}>{world.name}</Link>
                                         </h2>
                                         {world.description ? (
                                             <p className="authoring-field__hint">{world.description}</p>
                                         ) : null}
+                                        <WorldSourceHint world={world} />
                                     </div>
+                                    {world.access === "view" ? (
+                                        <span className="authoring-badge">View only</span>
+                                    ) : null}
                                     {world.lifecycle_status === "archived" ? (
                                         <LifecycleBadge status="archived" />
                                     ) : null}
@@ -105,4 +125,10 @@ export function WorldsPage() {
             </div>
         </div>
     )
+}
+
+function WorldSourceHint({ world }: { world: WorldChoice }) {
+    return world.source === "campaign" ? (
+        <p className="authoring-field__hint">Through campaign {world.campaign_name}</p>
+    ) : null
 }

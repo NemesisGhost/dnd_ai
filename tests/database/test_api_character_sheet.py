@@ -404,6 +404,31 @@ def test_full_tier_returns_the_active_build_sheet(
     assert athletics["is_proficient"] is True
 
 
+@pytest.mark.parametrize("kind", [None, "npc", "player_character"])
+def test_the_sheet_names_the_character_kind(
+    client_factory: Callable[[uuid.UUID], TestClient],
+    f: Fixture,
+    postgres_engine: Engine,
+    kind: str | None,
+) -> None:
+    with postgres_engine.begin() as setup:
+        character_id = make_character(
+            setup, f.world_id, name="Kinded", entity_type_code=kind or "character"
+        )
+        if kind == "npc":
+            setup.execute(
+                text("INSERT INTO character.npcs (npc_id) VALUES (:i)"), {"i": character_id}
+            )
+        elif kind == "player_character":
+            setup.execute(
+                text("INSERT INTO character.player_characters (player_character_id) VALUES (:i)"),
+                {"i": character_id},
+            )
+    with client_factory(f.gm_user_id) as client:
+        body = client.get(_sheet_url(f, character_id)).json()
+    assert body["character_kind"] == (kind or "character")
+
+
 def test_a_gm_gets_the_sheet_without_any_character_specific_relationship(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
 ) -> None:

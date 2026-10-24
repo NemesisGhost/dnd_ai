@@ -287,6 +287,18 @@ class KnowledgeSubjectInvalidError(SafeMessageError):
     safe_message = "The selected subject is not valid."
 
 
+class WorldCreationNotAuthorizedError(SafeMessageError):
+    """The caller is neither an active platform administrator nor an active
+    holder of the built-in `gm` role (docs/adr/0018-world-creation-
+    eligibility.md). A 403, not a 404: creation names no existing resource,
+    so refusing it discloses nothing beyond the caller's own eligibility,
+    which the session bootstrap already reports as `world.create`."""
+
+    safe_status_code = 403
+    safe_error_code = "forbidden"
+    safe_message = "You do not have permission to perform this action."
+
+
 class WorldNotAuthorizedError(DomainAuthorizationError):
     """No world authority, or no such world — indistinguishable (fixed 404)."""
 
@@ -306,6 +318,14 @@ class WorldAlreadyClaimedError(ValueError):
     """`claim_unowned_world` refused: the world has (or ever had) a
     membership row. Raised only to trusted infrastructure (a script), never
     over HTTP."""
+
+
+class WorldMembershipChangeRefusedError(ValueError):
+    """A trusted-infrastructure world-membership change
+    (`dnd_ai.commands.world_memberships`) was refused before writing anything:
+    unknown world, inactive account, unknown role, an ineligible new owner, no
+    open membership to end, or a change that would leave the world without an
+    active owner. Raised only to a script, never over HTTP."""
 
 
 def _normalize(value: str | None, *, field: str, max_length: int, required: bool) -> str | None:

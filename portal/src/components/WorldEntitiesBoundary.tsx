@@ -1,6 +1,7 @@
 import type { ReactNode } from "react"
 import { useWorldEntities } from "../hooks/useWorldEntities"
 import type {
+    CharacterType,
     WorldCategory,
     WorldEntityPage,
 } from "../types/world"
@@ -11,6 +12,7 @@ interface WorldEntitiesBoundaryProps {
     query: string
     cursor?: string | null
     includeHidden?: boolean
+    characterType?: CharacterType
     children: (
         page: WorldEntityPage,
         refreshing: boolean,
@@ -23,6 +25,7 @@ export function WorldEntitiesBoundary({
     query,
     cursor = null,
     includeHidden = false,
+    characterType,
     children,
 }: WorldEntitiesBoundaryProps) {
     const { state, retry } = useWorldEntities(
@@ -31,6 +34,8 @@ export function WorldEntitiesBoundary({
         query,
         cursor,
         includeHidden,
+        // Passed only when set, so the World browser's calls are unchanged.
+        ...(characterType === undefined ? [] : [characterType] as const),
     )
 
     // Rendered inside WorldPage, which already carries the page's <h1>, so

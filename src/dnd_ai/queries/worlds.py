@@ -6,7 +6,10 @@ database and pagination is applied after filtering. `get_world_detail` assumes
 the caller has already been authorized for `world.view` (the route dependency)
 and builds the read model, including the server-computed
 `available_actions` / `blocked_actions` from the same policy functions the
-commands call (`dnd_ai.domain.authoring_policy`).
+commands call (`dnd_ai.domain.authoring_policy`), restricted to the actions the
+caller's world roles carry the capability for
+(`dnd_ai.domain.world_authority.WORLD_ACTION_CAPABILITIES`) — a `world_viewer`
+is offered none.
 
 `managed_campaigns` deliberately lists only campaigns on which the *caller*
 holds an active `access.manage` membership: a world owner learns nothing about
@@ -19,7 +22,11 @@ from dataclasses import dataclass
 from sqlalchemy import Connection, text
 
 from dnd_ai.domain.authoring_policy import BlockedAction, world_actions
-from dnd_ai.domain.world_authority import capabilities_for_roles
+from dnd_ai.domain.world_authority import (
+    WORLD_ACTION_CAPABILITIES,
+    authorized_actions,
+    capabilities_for_roles,
+)
 from dnd_ai.queries.timelines import TimelineSummary, list_timeline_summaries
 
 NAME_SORT_PREFIX = 200
@@ -252,8 +259,11 @@ def get_world_detail(
         ).all()
     ]
     blocking = world_has_blocking_campaigns(connection, world_id=world_id)
-    available, blocked = world_actions(
-        lifecycle_status=str(row.lifecycle_code), has_blocking_campaigns=blocking
+    capabilities = capabilities_for_roles(role_codes)
+    available, blocked = authorized_actions(
+        *world_actions(lifecycle_status=str(row.lifecycle_code), has_blocking_campaigns=blocking),
+        capabilities=capabilities,
+        required=WORLD_ACTION_CAPABILITIES,
     )
     summary = WorldSummary(
         world_id=row.world_id,
@@ -262,7 +272,7 @@ def get_world_detail(
         lifecycle_status=str(row.lifecycle_code),
         row_version=int(row.row_version),
         primary_timeline_id=row.primary_timeline_id,
-        capabilities=sorted(capabilities_for_roles(role_codes)),
+        capabilities=sorted(capabilities),
         sort_name=str(row.sort_name),
     )
     return WorldDetail(

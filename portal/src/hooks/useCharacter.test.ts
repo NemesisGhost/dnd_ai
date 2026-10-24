@@ -43,6 +43,7 @@ vi.mock("../context/SessionContext", () => ({
 const characterFixture: CharacterDetail = {
     character_id: "character-a",
     name: "Character A",
+    character_kind: "character",
     species_code: "human",
     size_category: "medium",
     current_hit_points: 10,
@@ -61,6 +62,7 @@ const secondCharacterFixture: CharacterDetail = {
     ...characterFixture,
     character_id: "character-b",
     name: "Character B",
+    character_kind: "character",
 }
 
 beforeEach(() => {

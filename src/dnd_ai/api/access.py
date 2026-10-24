@@ -373,3 +373,23 @@ def resolve_character_view_tier(access: AccessContext, *, character_id: uuid.UUI
     raise CharacterViewNotAuthorizedError(
         f"user {access.user_id} holds no character-view capability for character {character_id}"
     )
+
+
+# Categories whose records the World reader detail routes open for anyone who can discover them.
+_OPENABLE_WORLD_CATEGORIES = frozenset({"location", "organization", "religion"})
+
+
+def can_open_participant(access: AccessContext, category: str | None, entity_id: uuid.UUID) -> bool:
+    """Whether a reader may follow a listed record to its own page: a location, organization or
+    religion always opens; a character opens only where `resolve_character_view_tier` passes, so
+    discovering a character (`character.discover`) lists it without making it a link. Shared by
+    every reader roster that names other records."""
+    if category in _OPENABLE_WORLD_CATEGORIES:
+        return True
+    if category == "character":
+        try:
+            resolve_character_view_tier(access, character_id=entity_id)
+        except CharacterViewNotAuthorizedError:
+            return False
+        return True
+    return False

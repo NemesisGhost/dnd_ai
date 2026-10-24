@@ -14,6 +14,7 @@ import { CharacterSheetPage } from "./CharacterSheetPage"
 const richCharacter: CharacterDetail = {
     character_id: "character-ixamarra",
     name: "Ixamarra",
+    character_kind: "character",
     species_code: "dragonborn",
     size_category: "medium",
     current_hit_points: 30,
@@ -42,6 +43,7 @@ const richCharacter: CharacterDetail = {
 const sparseCharacter: CharacterDetail = {
     character_id: "character-sparse",
     name: "Sparse Fighter",
+    character_kind: "character",
     species_code: "human",
     size_category: "medium",
     current_hit_points: null,
@@ -112,7 +114,9 @@ describe("CharacterSheetPage", () => {
     it("keeps deliberate no-build fallbacks in Character Details", () => {
         renderPage(sparseCharacterSheetFixture, sparseCharacter)
         const header = screen.getByRole("banner", { name: "Sparse Fighter" })
-        expect(header).toHaveTextContent("None recorded")
+        expect(header).toHaveTextContent("No class levels recorded")
+        // No class levels means no level: never "Character level 0".
+        expect(header).not.toHaveTextContent("Character level")
         expect(header).toHaveTextContent("No active build")
         expect(header).toHaveTextContent("RulesetNot recorded")
     })
@@ -509,5 +513,78 @@ describe("CharacterSheetPage", () => {
         expect(
             screen.getByRole("heading", { level: 1, name: "Sparse Fighter" }),
         ).toBeInTheDocument()
+    })
+
+    describe("for an NPC", () => {
+        const npcSheetWithoutBuild: CharacterSheet = {
+            ...sparseCharacterSheetFixture,
+            character_id: "npc-mira",
+            name: "Mira",
+            character_kind: "npc",
+            languages: [],
+            senses: [],
+            movements: [],
+        }
+        const npcState: CharacterDetail = {
+            ...sparseCharacter,
+            character_id: "npc-mira",
+            name: "Mira",
+            character_kind: "npc",
+        }
+
+        it("labels the sheet by kind, never as a generic or player character", () => {
+            renderPage(npcSheetWithoutBuild, npcState)
+            const header = screen.getByRole("banner", { name: "Mira" })
+            expect(within(header).getByText("NPC")).toBeInTheDocument()
+            expect(within(header).queryByText("Character Details")).not.toBeInTheDocument()
+            expect(within(header).queryByText("Player character")).not.toBeInTheDocument()
+        })
+
+        it("shows every unrecorded value honestly when there is no build and no recorded state", () => {
+            renderPage(npcSheetWithoutBuild, npcState)
+
+            expect(screen.getByText("No class levels recorded")).toBeInTheDocument()
+            expect(screen.queryByText("Character level")).not.toBeInTheDocument()
+            expect(screen.getByText("Proficiency bonus").parentElement).toHaveTextContent("Not available")
+            expect(screen.getByText("Movement").parentElement).toHaveTextContent("Not recorded")
+            expect(screen.getByText("Hit points").parentElement).toHaveTextContent("Not recorded")
+            expect(screen.getByText("Exhaustion").parentElement).toHaveTextContent("Not recorded")
+            expect(screen.getByText("Death saves").parentElement).toHaveTextContent("Not recorded")
+            expect(screen.getByText("No ability scores recorded.")).toBeInTheDocument()
+            expect(screen.getByText("No languages recorded.")).toBeInTheDocument()
+            expect(screen.getByText("No senses recorded.")).toBeInTheDocument()
+            expect(screen.getByText("No features recorded.")).toBeInTheDocument()
+            expect(screen.getByText("No spellcasting abilities recorded.")).toBeInTheDocument()
+        })
+
+        it("invents no monster mechanics or player-only controls", () => {
+            renderPage(npcSheetWithoutBuild, npcState)
+            const text = document.body.textContent ?? ""
+            for (const invented of [
+                "Armor class",
+                "Challenge",
+                "Initiative",
+                "Hit dice",
+                "Legendary",
+                "Resistances",
+                "GM notes",
+                "Background",
+                "Appearance",
+                "portrayal",
+            ]) {
+                expect(text).not.toMatch(new RegExp(invented, "i"))
+            }
+        })
+
+        it("renders a built NPC from its recorded build and runtime state", () => {
+            renderPage(
+                { ...characterSheetFixture, character_id: "npc-mira", name: "Mira", character_kind: "npc" },
+                { ...richCharacter, character_id: "npc-mira", name: "Mira", character_kind: "npc" },
+            )
+            const header = screen.getByRole("banner", { name: "Mira" })
+            expect(within(header).getByText("NPC")).toBeInTheDocument()
+            expect(screen.getByRole("meter", { name: "Hit points" })).toHaveAttribute("aria-valuenow", "30")
+            expect(screen.getByText("Giant spider bite", { exact: false })).toBeInTheDocument()
+        })
     })
 })
