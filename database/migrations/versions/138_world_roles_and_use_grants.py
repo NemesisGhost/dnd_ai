@@ -203,6 +203,12 @@ def downgrade() -> None:
                 AND o.ended_at IS NULL AND orr.code = 'world_owner'
           );
     """)
+    # The deletes and the update above queue deferred constraint-trigger events on
+    # security.world_memberships (the owner-retention check). PostgreSQL refuses to build an
+    # index on a table with pending trigger events, so run them now: the Owner rows are
+    # untouched, so the check passes.
+    op.execute("SET CONSTRAINTS ALL IMMEDIATE;")
+    op.execute("SET CONSTRAINTS ALL DEFERRED;")
     op.execute("DROP INDEX security.ux_world_memberships_open;")
     op.execute("""
         CREATE UNIQUE INDEX ux_world_memberships_open

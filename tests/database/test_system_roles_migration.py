@@ -253,3 +253,113 @@ def test_upgrade_backfills_by_policy_and_round_trips() -> None:
             engine.dispose()
     finally:
         _drop(admin_url, test_url)
+
+
+def _world_role_row(
+    conn: Connection, world: uuid.UUID, user_id: uuid.UUID, code: str, *, granted_by: uuid.UUID
+) -> None:
+    conn.execute(
+        text("""
+            INSERT INTO security.world_memberships
+                (world_id, user_id, world_role_id, membership_status_id, granted_by_user_id)
+            VALUES (:w, :u, (SELECT world_role_id FROM security.world_roles WHERE code = :r),
+                    (SELECT membership_status_id FROM security.membership_statuses
+                     WHERE code = 'active'), :g)
+        """),
+        {"w": world, "u": user_id, "r": code, "g": granted_by},
+    )
+
+
+def test_downgrade_with_new_model_data_loses_exactly_what_it_documents() -> None:
+    """The supported downgrade is lossy by design (docs/LOCAL_DEPLOYMENT.md): Editor, Reviewer and
+    Reader assignments and world-use grants are discarded, a Viewer that sits beside an Owner of the
+    same user is closed (kept as history, never deleted), and non-admin system roles are dropped.
+    It must also *complete* on a database that holds that data: the discarding and closing leave
+    deferred trigger events pending on `security.world_memberships`, and the old unique index
+    cannot be created until they have run."""
+    admin_url, test_url = _provision()
+    try:
+        _alembic(test_url, "upgrade", _BEFORE)
+        engine = create_engine(test_url)
+        try:
+            with engine.begin() as conn:
+                admin = _user(conn, "Old Admin", admin=True)
+                helper = _user(conn, "Helper")
+                world = make_world(conn, f"w-{uuid.uuid4().hex[:6]}")
+                _own_world(conn, world, admin)
+        finally:
+            engine.dispose()
+        _alembic(test_url, "upgrade", _WORLD_ROLES)
+
+        engine = create_engine(test_url)
+        try:
+            with engine.begin() as conn:
+                for code in ("world_editor", "world_reviewer", "world_reader"):
+                    _world_role_row(conn, world, helper, code, granted_by=admin)
+                # A Viewer beside an Owner of the same user: legal only under the per-role index.
+                _world_role_row(conn, world, admin, "world_viewer", granted_by=admin)
+                conn.execute(
+                    text(
+                        "INSERT INTO security.world_use_grants (world_id, user_id, granted_by_user_id) "
+                        "VALUES (:w, :u, :g)"
+                    ),
+                    {"w": world, "u": helper, "g": admin},
+                )
+                conn.execute(
+                    text("""
+                        INSERT INTO security.user_system_roles (user_id, system_role_id)
+                        SELECT :u, system_role_id FROM security.system_roles WHERE code = 'gm'
+                    """),
+                    {"u": helper},
+                )
+        finally:
+            engine.dispose()
+
+        _alembic(test_url, "downgrade", _BEFORE)
+
+        engine = create_engine(test_url)
+        try:
+            with engine.connect() as conn:
+                open_roles = sorted(
+                    row.code
+                    for row in conn.execute(
+                        text("""
+                            SELECT wr.code FROM security.world_memberships wm
+                            JOIN security.world_roles wr ON wr.world_role_id = wm.world_role_id
+                            WHERE wm.world_id = :w AND wm.ended_at IS NULL
+                        """),
+                        {"w": world},
+                    )
+                )
+                # Only the Owner stays open: the new roles are gone, the Viewer beside the Owner
+                # is closed.
+                assert open_roles == ["world_owner"]
+                viewer_rows = conn.execute(
+                    text("""
+                        SELECT count(*) FROM security.world_memberships wm
+                        JOIN security.world_roles wr ON wr.world_role_id = wm.world_role_id
+                        WHERE wm.user_id = :u AND wr.code = 'world_viewer'
+                    """),
+                    {"u": admin},
+                ).scalar_one()
+                assert viewer_rows == 1, "the closed Viewer row is history, not deleted"
+                assert conn.execute(
+                    text("SELECT to_regclass('security.world_use_grants') IS NULL")
+                ).scalar_one()
+                assert {
+                    r.code for r in conn.execute(text("SELECT code FROM security.world_roles"))
+                } == {"world_owner", "world_viewer"}
+        finally:
+            engine.dispose()
+
+        # And the database upgrades again.
+        _alembic(test_url, "upgrade", _WORLD_ROLES)
+        engine = create_engine(test_url)
+        try:
+            with engine.connect() as conn:
+                assert _roles(conn, admin) == {"admin", "gm"}
+                assert _roles(conn, helper) == {"player"}
+        finally:
+            engine.dispose()
+    finally:
+        _drop(admin_url, test_url)
