@@ -597,7 +597,7 @@ class SessionBootstrapResponse(BaseModel):
     session_idle_timeout_seconds: int | None = None
     session_absolute_expires_at: str | None = None
     # The caller's unrevoked system roles (docs/adr/0020-scoped-system-world-and-
-    # campaign-roles.md) â€” for display only; the portal gates on
+    # campaign-roles.md) — for display only; the portal gates on
     # `global_capabilities`, never on a role label.
     system_roles: list[str] = Field(default_factory=list)
     # Server-computed global (not campaign-scoped) capabilities for *this*
