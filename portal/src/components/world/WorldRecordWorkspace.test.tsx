@@ -670,6 +670,8 @@ describe("World record workspace: a dungeon", () => {
         expect(stageLinks()).toEqual(["1. Prepare", "2. Review & publish"])
         expect(sectionLinks("Prepare")).toEqual(["Details", "Areas", "Connections", "Sources", "Relationships"])
         fireEvent.click(screen.getByRole("link", { name: "2. Review & publish" }))
+        // The stage's sections follow the address change, which is not synchronous with the click.
+        await screen.findByRole("navigation", { name: "Review & publish sections" })
         expect(sectionLinks("Review & publish")).toEqual(["Review", "Publication"])
     })
 

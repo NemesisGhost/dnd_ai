@@ -295,7 +295,7 @@ function Workspace({
     })
     // A dungeon's Areas and Connections share one read of the dungeon, so both always name the same
     // version. Nothing is requested for any other record.
-    const dungeonRead = useDungeonRead(campaignId, entityId, kind === "dungeon")
+    const dungeonRead = useDungeonRead(campaignId, entityId, kind === "dungeon" && canReadWorldPrivate)
     // The same for an area's Contents and Area now.
     // The area's structure reads the authoring view, which is the world's private side: asked for
     // only when that is the caller's. "Area now" reads the campaign's own runtime projection, which

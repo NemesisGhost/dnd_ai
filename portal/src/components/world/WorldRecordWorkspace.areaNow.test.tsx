@@ -240,3 +240,20 @@ describe("Area now for a world Owner", () => {
         await waitFor(() => expect(server.calls.some((c) => /\/authoring\/dungeon-areas\/l1$/.test(c.path))).toBe(true))
     })
 })
+
+describe("A dungeon for a campaign GM with no world role", () => {
+    it("requests none of the dungeon's authoring reads", async () => {
+        const { server } = setup({
+            authoring: CAMPAIGN_ONLY_RECORD_AUTHORING,
+            worldCapabilities: NO_WORLD_CAPABILITIES,
+            extra: (srv) =>
+                srv.on("GET", `/campaigns/${C}/world/locations/l1`, {
+                    body: { ...detail(CAMPAIGN_ONLY_RECORD_AUTHORING), name: "Crypt", location_type_code: "dungeon", parent_location_id: null, breadcrumbs: [] },
+                }),
+        })
+        expect(await screen.findByRole("heading", { level: 1, name: "Crypt" })).toBeInTheDocument()
+        await waitFor(() => expect(server.calls.some((c) => /world\/locations\/l1$/.test(c.path))).toBe(true))
+        await new Promise((resolve) => setTimeout(resolve, 200))
+        expect(server.calls.map((c) => c.path).filter((p) => PRIVATE.test(p))).toEqual([])
+    })
+})
