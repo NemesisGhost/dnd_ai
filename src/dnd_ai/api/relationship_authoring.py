@@ -68,7 +68,7 @@ from ._authoring import (
     start_campaign_idempotency,
 )
 from ._shared import timeline_world_id
-from .access import can_create_definitions, require_campaign_capability
+from .access import can_create_definitions, require_campaign_capability, restrict_authoring_view
 from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
@@ -435,7 +435,7 @@ def get_endpoint(relationship_id: uuid.UUID, access: _PrivateRead, connection: _
     )
     if view is None:
         raise NotFoundError()
-    return _view_json(view)
+    return restrict_authoring_view(connection, access=access, body=_view_json(view))
 
 
 @router.post(_BASE, status_code=201)

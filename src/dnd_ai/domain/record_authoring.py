@@ -115,6 +115,13 @@ class RecordAuthoring:
             "can_review": self.can_review,
         }
 
+    def holds_content_action(self, action: str) -> bool:
+        """Whether an action offered by an authoring read of a *definition* is this caller's. The
+        lifecycle actions follow the mapping above; every other action (update, add a stage,
+        remove a connection, ...) edits the definition and needs the edit capability."""
+        needed = RECORD_ACTION_CAPABILITIES.get(action, WORLD_CANON_EDIT)
+        return self.can_edit if needed == WORLD_CANON_EDIT else self.can_review
+
     def holds(self, action: str) -> bool:
         needed = RECORD_ACTION_CAPABILITIES.get(action)
         if needed is None:
@@ -170,3 +177,31 @@ def authorized_record_actions[B: _HasAction](
         [action for action in available if authoring.holds(action)],
         [item for item in blocked if item.action == ALL_ACTIONS or authoring.holds(item.action)],
     )
+
+
+_ACTION_KEYS = frozenset({"available_actions", "blocked_actions", "structure_actions"})
+
+
+def restrict_view_actions(body: object, authoring: RecordAuthoring) -> object:
+    """Remove from an authoring read model every action the caller does not hold, wherever the
+    model lists them (`available_actions`, `blocked_actions`, `structure_actions`, also on nested
+    children such as a dungeon's areas). A Reviewer can read a definition's private side, but the
+    read must not offer them Edit; an Editor must not be offered Approve. A blocked action is
+    dropped with the available ones: it is not theirs, not blocked."""
+    if isinstance(body, dict):
+        out: dict[str, object] = {}
+        for key, value in body.items():
+            if key in _ACTION_KEYS and isinstance(value, list):
+                out[key] = [
+                    item
+                    for item in value
+                    if authoring.holds_content_action(
+                        item["action"] if isinstance(item, dict) else str(item)
+                    )
+                ]
+            else:
+                out[key] = restrict_view_actions(value, authoring)
+        return out
+    if isinstance(body, list):
+        return [restrict_view_actions(item, authoring) for item in body]
+    return body

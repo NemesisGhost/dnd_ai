@@ -71,7 +71,7 @@ from ._authoring import (
 )
 from ._content_support import audit_content_write, clean_note
 from ._shared import timeline_world_id
-from .access import can_create_definitions, require_campaign_capability
+from .access import can_create_definitions, require_campaign_capability, restrict_authoring_view
 from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
@@ -418,7 +418,7 @@ def get_dungeon_endpoint(dungeon_id: uuid.UUID, access: _PrivateRead, connection
     view = get_dungeon_authoring(connection, world_id=world_id, dungeon_id=dungeon_id)
     if view is None:
         raise NotFoundError()
-    return _dungeon_json(view)
+    return restrict_authoring_view(connection, access=access, body=_dungeon_json(view))
 
 
 @router.get(_AREAS + "/{dungeon_area_id}")
@@ -432,7 +432,7 @@ def get_area_endpoint(dungeon_area_id: uuid.UUID, access: _PrivateRead, connecti
     )
     if view is None:
         raise NotFoundError()
-    return _area_json(view)
+    return restrict_authoring_view(connection, access=access, body=_area_json(view))
 
 
 # --- dungeon and area writes ---------------------------------------------------------------------

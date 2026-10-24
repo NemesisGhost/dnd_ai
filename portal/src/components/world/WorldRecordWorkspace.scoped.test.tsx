@@ -70,6 +70,7 @@ function setup(options: {
     entityId?: string
     detail?: object
     typeCode?: string
+    extra?: (server: ReturnType<typeof installMockServer>) => void
 }) {
     const category = options.category ?? "organization"
     const entityId = options.entityId ?? "o1"
@@ -93,6 +94,7 @@ function setup(options: {
     server.on("GET", `/campaigns/${C}/authoring/player-characters/${entityId}`, {
         body: { canon_status: "canon", available_actions: ["update"], blocked_actions: [] },
     })
+    options.extra?.(server)
     const rendered = renderAuthoringRoutes({
         initialEntry: `/app/${C}/world/${category}/${entityId}`,
         bootstrap: bootstrapWith({
@@ -168,6 +170,38 @@ describe("World record workspace: a Reviewer", () => {
         await waitFor(() => expect(within(stages).getByRole("link", { name: "2. Review & publish" })).toBeInTheDocument())
         expect(privateRequests(server).some((p) => p.endsWith("/lifecycle"))).toBe(true)
         expect(screen.queryByRole("link", { name: /^Edit / })).toBeNull()
+    })
+})
+
+describe("World record workspace: sources for a Reviewer", () => {
+    it("lists where the record came from and offers no way to change it", async () => {
+        setup({
+            authoring: REVIEWER_RECORD_AUTHORING,
+            worldCapabilities: OWNER_WORLD_CAPABILITIES,
+            extra: (server) =>
+                server.on("GET", `/campaigns/${C}/entities/o1/provenance`, {
+                    body: {
+                        entity_id: "o1",
+                        name: "The Guild",
+                        entity_type_code: "organization",
+                        canon_status: "canon",
+                        lifecycle_status: "active",
+                        created_at: "2026-01-01T10:00:00Z",
+                        created_by_name: "Gina",
+                        can_edit: false,
+                        origin: null,
+                        links: [],
+                        transitions: [],
+                        superseded_by: null,
+                        supersedes: [],
+                    },
+                }),
+        })
+        await screen.findByRole("heading", { level: 1, name: "The Guild" })
+        fireEvent.click(await screen.findByRole("link", { name: "Sources" }))
+        expect(await screen.findByText(/needs the world Editor role/)).toBeInTheDocument()
+        expect(screen.queryByRole("button", { name: /Add source/ })).toBeNull()
+        expect(screen.queryByRole("button", { name: /^Detach / })).toBeNull()
     })
 })
 

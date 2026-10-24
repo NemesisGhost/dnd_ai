@@ -65,7 +65,7 @@ from ._content_support import (
     write_receipt,
 )
 from ._shared import timeline_world_id
-from .access import can_create_definitions, require_campaign_capability
+from .access import can_create_definitions, require_campaign_capability, restrict_authoring_view
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .errors import NotFoundError
@@ -348,7 +348,7 @@ def get_organization_authoring_endpoint(
     )
     if view is None:
         raise NotFoundError()
-    return _organization_json(view)
+    return restrict_authoring_view(connection, access=access, body=_organization_json(view))
 
 
 @router.post(_ORG + "/{organization_id}/update")
@@ -510,7 +510,7 @@ def get_religion_authoring_endpoint(
     view = get_religion_authoring(connection, world_id=world_id, religion_id=religion_id)
     if view is None:
         raise NotFoundError()
-    return _religion_json(view)
+    return restrict_authoring_view(connection, access=access, body=_religion_json(view))
 
 
 @router.post(_REL + "/{religion_id}/update")

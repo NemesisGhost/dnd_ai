@@ -119,6 +119,8 @@ export function EntitySourcesSection({
     const attachedIds = new Set(view.links.filter((l) => l.is_attached).map((l) => l.source_id))
     const available = list.items.filter((s) => !attachedIds.has(s.source_id))
     const attached = view.links.filter((l) => l.is_attached)
+    // A Reviewer reads where a record came from; changing its sources edits the definition.
+    const readOnly = view.can_edit === false
     const run = (command: Command, message: string) => {
         setProblem(null)
         setDone(message)
@@ -147,34 +149,42 @@ export function EntitySourcesSection({
                 </Link>
             </p>
             {attached.length === 0 ? <p>No further sources attached.</p> : null}
-            <p>
-                <button
-                    type="button"
-                    className="authoring-button"
-                    aria-expanded={adding}
-                    aria-controls={`add-source-${entityId}`}
-                    onClick={() => setAdding(!adding)}
-                >
-                    {adding ? "Hide add source" : "Add source"}
-                </button>
-            </p>
+            {readOnly ? (
+                <p className="authoring-note">
+                    Changing a record's sources edits the shared definition and needs the world Editor role.
+                </p>
+            ) : (
+                <p>
+                    <button
+                        type="button"
+                        className="authoring-button"
+                        aria-expanded={adding}
+                        aria-controls={`add-source-${entityId}`}
+                        onClick={() => setAdding(!adding)}
+                    >
+                        {adding ? "Hide add source" : "Add source"}
+                    </button>
+                </p>
+            )}
             <ul className="op-list">
                 {attached.map((l) => (
                     <li key={l.source_id}>
                         {l.title} ({l.source_type_label})
                         {l.reference !== null ? `: ${l.reference}` : ""}{" "}
-                        <button
-                            type="button"
-                            className="authoring-button"
-                            disabled={busy}
-                            onClick={() => run({ op: "detach", sourceId: l.source_id }, "Source detached")}
-                        >
-                            Detach {l.title}
-                        </button>
+                        {readOnly ? null : (
+                            <button
+                                type="button"
+                                className="authoring-button"
+                                disabled={busy}
+                                onClick={() => run({ op: "detach", sourceId: l.source_id }, "Source detached")}
+                            >
+                                Detach {l.title}
+                            </button>
+                        )}
                     </li>
                 ))}
             </ul>
-            <div id={`add-source-${entityId}`} hidden={!adding}>
+            <div id={`add-source-${entityId}`} hidden={readOnly || !adding}>
                 {available.length > 0 ? (
                     <form
                         noValidate

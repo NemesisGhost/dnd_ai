@@ -48,7 +48,7 @@ from ._content_support import (
     write_receipt,
 )
 from ._shared import timeline_world_id
-from .access import can_create_definitions, require_campaign_capability
+from .access import can_create_definitions, require_campaign_capability, restrict_authoring_view
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .errors import NotFoundError
@@ -228,7 +228,7 @@ def get_knowledge_authoring_endpoint(
     )
     if view is None:
         raise NotFoundError()
-    return _view_json(view)
+    return restrict_authoring_view(connection, access=access, body=_view_json(view))
 
 
 @router.post(_BASE + "/{knowledge_item_id}/update")

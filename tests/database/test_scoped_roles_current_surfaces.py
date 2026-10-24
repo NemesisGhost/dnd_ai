@@ -381,6 +381,26 @@ def test_org_membership_definition_needs_the_world_editor_but_status_does_not(x:
     )
     created = x.editor.post(f"{x.base_b}/authoring/relationships", join, key=x.editor.fresh_key())
     assert created.status_code == 201, created.text
+    relationship = created.json()
+
+    # A relationship's definition is shared canon (world Editor); its status and reactions in this
+    # timeline are campaign state, which the campaign-only GM records.
+    edited = x.b.post(
+        f"{x.base_b}/authoring/relationships/{relationship['relationship_id']}/update",
+        {
+            "expected_row_version": relationship["row_version"],
+            "description": "Rewritten by B",
+            "started_world_time_id": None,
+        },
+        key=x.b.fresh_key(),
+    )
+    assert _denied(edited), edited.text
+    evolved = x.b.post(
+        f"{x.base_b}/relationships/{relationship['relationship_id']}/evolve",
+        {"world_time_id": start_id, "new_status_code": "active"},
+        key=x.b.fresh_key(),
+    )
+    assert evolved.status_code == 200, evolved.text
 
     # The operational status is campaign state: the campaign-only GM sets it, with no world role.
     clock = x.b.get(f"{x.base_b}/clock").json()
@@ -552,3 +572,41 @@ def test_authoring_option_catalogs_offer_creation_only_to_a_world_editor(x: Role
         assert x.reviewer.get(url).json()["can_create"] is False, path
         assert _denied(x.b.get(url)), path
         assert _denied(x.reader.get(url)), path
+
+
+def test_authoring_reads_offer_only_the_actions_the_caller_holds(x: Roles) -> None:
+    draft = x.location("Under Review")
+    proposed = x.s.transition(draft["location_id"], "submit-for-review", draft["row_version"])
+    assert proposed["canon_status"] == "proposed"
+    path = f"{x.base_b}/authoring/locations/{draft['location_id']}"
+
+    def offered(who: Actor) -> set[str]:
+        body = who.get(path).json()
+        return set(body["available_actions"]) | {b["action"] for b in body["blocked_actions"]}
+
+    # An Editor can withdraw a proposal but not decide it; a Reviewer decides but never edits.
+    editor = offered(x.editor)
+    reviewer = offered(x.reviewer)
+    both = offered(x.both)
+    assert "return_to_draft" in editor and not editor & {"approve", "reject", "publish", "archive"}
+    assert {"approve", "reject"} <= reviewer
+    assert not reviewer & {"update", "return_to_draft", "submit_for_review", "delete_draft"}
+    assert {"return_to_draft", "approve", "reject"} <= both
+    # The same holds for a draft that is editable: the Reviewer is not offered `update`.
+    other = x.location("Editable Draft")
+    other_path = f"{x.base_b}/authoring/locations/{other['location_id']}"
+    assert "update" in x.editor.get(other_path).json()["available_actions"]
+    assert "update" not in x.reviewer.get(other_path).json()["available_actions"]
+
+
+def test_provenance_tells_a_reviewer_it_cannot_change_sources(x: Roles) -> None:
+    location = x.location("Sourced")
+    path = f"{x.base_b}/entities/{location['location_id']}/provenance"
+    assert x.editor.get(path).json()["can_edit"] is True
+    assert x.reviewer.get(path).json()["can_edit"] is False
+    attach = x.reviewer.post(
+        f"{x.base_b}/entities/{location['location_id']}/sources/attach",
+        {"source_id": str(uuid.uuid4())},
+        key=x.reviewer.fresh_key(),
+    )
+    assert _denied(attach), attach.text

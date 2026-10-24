@@ -34,7 +34,7 @@ from ._authoring import (
 )
 from ._content_support import audit_content_write, clean_note, write_receipt
 from ._shared import timeline_world_id
-from .access import can_create_definitions, require_campaign_capability
+from .access import can_create_definitions, require_campaign_capability, restrict_authoring_view
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .errors import NotFoundError
@@ -197,7 +197,7 @@ def get_npc_authoring_endpoint(
     view = get_npc_authoring(connection, world_id=world_id, npc_id=npc_id)
     if view is None:
         raise NotFoundError()
-    return _view_json(view)
+    return restrict_authoring_view(connection, access=access, body=_view_json(view))
 
 
 @router.post(_BASE + "/{npc_id}/update")

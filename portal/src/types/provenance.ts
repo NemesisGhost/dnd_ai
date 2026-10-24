@@ -45,6 +45,9 @@ export interface Provenance {
     lifecycle_status: string
     created_at: string
     created_by_name: string | null
+    // Whether the caller may attach and detach sources (the shared definition's world Editor
+    // capability). Absent from an older server, which is read as editable (the server still checks).
+    can_edit?: boolean
     origin: SourceItem | null
     links: SourceLink[]
     transitions: ProvenanceTransition[]

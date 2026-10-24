@@ -43,7 +43,7 @@ from ._authoring import (
     start_campaign_idempotency,
 )
 from ._shared import timeline_world_id
-from .access import require_campaign_capability
+from .access import require_campaign_capability, resolve_record_authoring
 from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
@@ -118,6 +118,11 @@ def _provenance_json(connection: Connection, access: AccessContext, entity_id: u
         "lifecycle_status": view.lifecycle_status,
         "created_at": view.created_at.isoformat(),
         "created_by_name": view.created_by_name,
+        # Attaching and detaching sources edits the shared definition: the caller's world Editor
+        # capability, which a Reviewer who can read this does not hold.
+        "can_edit": resolve_record_authoring(
+            connection, access=access, entity_type_code="definition"
+        ).can_edit,
         "origin": None if view.origin is None else _source_json(view.origin),
         "links": [_link_json(link) for link in view.links],
         "transitions": [

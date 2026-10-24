@@ -110,7 +110,12 @@ from dnd_ai.domain.access import (
 from dnd_ai.domain.authoring import WorldAuthorityRequiredError
 from dnd_ai.domain.errors import DomainAuthorizationError
 from dnd_ai.domain.foundry_pairing import FOUNDRY_SCOPES
-from dnd_ai.domain.record_authoring import NO_AUTHORING, RecordAuthoring, record_authoring
+from dnd_ai.domain.record_authoring import (
+    NO_AUTHORING,
+    RecordAuthoring,
+    record_authoring,
+    restrict_view_actions,
+)
 from dnd_ai.queries.world_authority import resolve_world_authority
 
 from ._shared import timeline_world_id
@@ -175,6 +180,13 @@ def resolve_record_authoring(
             world_id=timeline_world_id(connection, access.timeline_id),
         ),
     )
+
+
+def restrict_authoring_view[T](connection: Connection, *, access: AccessContext, body: T) -> T:
+    """An authoring read of a shared definition, with only the actions this caller holds on the
+    world (see `dnd_ai.domain.record_authoring.restrict_view_actions`)."""
+    authoring = resolve_record_authoring(connection, access=access, entity_type_code="definition")
+    return restrict_view_actions(body, authoring)  # type: ignore[return-value]
 
 
 def can_create_definitions(connection: Connection, *, access: AccessContext) -> bool:
