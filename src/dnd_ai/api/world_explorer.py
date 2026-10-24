@@ -50,12 +50,17 @@ from dnd_ai.queries.world_explorer import (
     get_location_view,
     get_organization_detail_view,
     get_religion_view,
+    item_instance_in_context,
     list_world_relationships,
     search_world_entities,
 )
 
 from ._shared import timeline_world_id
-from .access import require_campaign_capability
+from .access import (
+    RecordAuthoringResponse,
+    record_authoring_response,
+    require_campaign_capability,
+)
 from .deps import get_connection
 from .pagination import (
     DEFAULT_PAGE_SIZE,
@@ -146,6 +151,24 @@ def _may_preview_unpublished(access: AccessContext, connection: Connection) -> b
         world_id=timeline_world_id(connection, access.timeline_id),
     )
     return authority is not None and authority.has_capability(WORLD_CANON_READ_PRIVATE)
+
+
+def item_origin_notes_visible(
+    access: AccessContext, connection: Connection, item_instance_id: uuid.UUID
+) -> bool:
+    """Whether the caller may read the GM-only `origin_notes` of an item instance. Instances are
+    world rows with no campaign column, so campaign `canon.edit` alone would show one campaign's
+    notes to every other campaign on the world: the notes need the instance to belong to the
+    caller's own context (`item_instance_in_context`), or `world.canon.read_private` on the world
+    (decision D8, E2)."""
+    if not access.has_capability(_GM_CAPABILITY):
+        return False
+    return item_instance_in_context(
+        connection,
+        timeline_id=access.timeline_id,
+        item_instance_id=item_instance_id,
+        user_id=access.user_id,
+    ) or _may_preview_unpublished(access, connection)
 
 
 def _campaign_view_denied_entity_ids(
@@ -254,6 +277,7 @@ class LocationCrumbResponse(BaseModel):
 
 
 class LocationDetailResponse(BaseModel):
+    authoring: RecordAuthoringResponse
     location_id: uuid.UUID
     name: str
     summary: str | None
@@ -273,6 +297,7 @@ class LocationDetailResponse(BaseModel):
 
 
 class ReligionDetailResponse(BaseModel):
+    authoring: RecordAuthoringResponse
     religion_id: uuid.UUID
     name: str
     summary: str | None
@@ -289,6 +314,7 @@ class OrganizationLinkResponse(BaseModel):
 
 
 class OrganizationDetailResponse(BaseModel):
+    authoring: RecordAuthoringResponse
     organization_id: uuid.UUID
     name: str
     summary: str | None
@@ -309,6 +335,7 @@ class OrganizationDetailResponse(BaseModel):
 
 
 class ItemDetailResponse(BaseModel):
+    authoring: RecordAuthoringResponse
     item_instance_id: uuid.UUID
     name: str
     summary: str | None
@@ -606,6 +633,7 @@ def get_location_endpoint(
         denied_entity_ids=denied,
     )
     return LocationDetailResponse(
+        authoring=record_authoring_response(connection, access=access, entity_type_code="location"),
         location_id=view.location_id,
         name=view.name,
         summary=view.summary,
@@ -651,6 +679,7 @@ def get_religion_endpoint(
         denied_entity_ids=denied,
     )
     return ReligionDetailResponse(
+        authoring=record_authoring_response(connection, access=access, entity_type_code="religion"),
         religion_id=view.religion_id,
         name=view.name,
         summary=view.summary,
@@ -689,6 +718,9 @@ def get_organization_detail_endpoint(
         )
 
     return OrganizationDetailResponse(
+        authoring=record_authoring_response(
+            connection, access=access, entity_type_code="organization"
+        ),
         organization_id=view.organization_id,
         name=view.name,
         summary=view.summary,
@@ -730,12 +762,19 @@ def get_item_endpoint(
         denied_entity_ids=denied,
     )
     return ItemDetailResponse(
+        authoring=record_authoring_response(
+            connection, access=access, entity_type_code="item_instance"
+        ),
         item_instance_id=view.item_instance_id,
         name=view.name,
         summary=view.summary,
         item_definition_id=view.item_definition_id,
         # GM-only (D-3, data class GM_ONLY).
-        origin_notes=view.origin_notes if access.has_capability(_GM_CAPABILITY) else None,
+        origin_notes=(
+            view.origin_notes
+            if item_origin_notes_visible(access, connection, item_instance_id)
+            else None
+        ),
         quantity=view.quantity,
         condition_percentage=view.condition_percentage,
         charges_current=view.charges_current,

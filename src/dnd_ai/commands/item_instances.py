@@ -130,8 +130,12 @@ def update_item_instance(
     name: str | None,
     summary: str | None,
     origin_notes: str | None = None,
+    keep_origin_notes: bool = False,
     change_note: str | None = None,
 ) -> ContentWriteResult:
+    """`keep_origin_notes` leaves the stored notes as they are: the caller could not read them
+    (another campaign's GM-only notes, decision D8 E2), so their absence from the request is not
+    an instruction to clear them."""
     normalize_reason(change_note)
     scope = lock_authoring_scope(
         connection,
@@ -150,11 +154,11 @@ def update_item_instance(
     )
     clean_name = normalize_name(name)
     clean_summary = normalize_description(summary)
-    clean_notes = normalize_origin_notes(origin_notes)
     current_notes = connection.execute(
         text("SELECT origin_notes FROM world.item_instances WHERE item_instance_id = :i"),
         {"i": item_instance_id},
     ).scalar()
+    clean_notes = current_notes if keep_origin_notes else normalize_origin_notes(origin_notes)
     changed_fields = diff_fields(
         {"name": target.canonical_name, "summary": target.summary, "origin_notes": current_notes},
         {"name": clean_name, "summary": clean_summary, "origin_notes": clean_notes},

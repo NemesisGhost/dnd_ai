@@ -97,6 +97,7 @@ from collections.abc import Callable
 from typing import Annotated
 
 from fastapi import Depends
+from pydantic import BaseModel
 from sqlalchemy import Connection, text
 
 from dnd_ai.commands._shared import validate_campaign_party
@@ -109,6 +110,7 @@ from dnd_ai.domain.access import (
 from dnd_ai.domain.authoring import WorldAuthorityRequiredError
 from dnd_ai.domain.errors import DomainAuthorizationError
 from dnd_ai.domain.foundry_pairing import FOUNDRY_SCOPES
+from dnd_ai.domain.record_authoring import NO_AUTHORING, RecordAuthoring, record_authoring
 from dnd_ai.queries.world_authority import resolve_world_authority
 
 from ._shared import timeline_world_id
@@ -132,6 +134,47 @@ def require_world_capability_for_campaign(
         raise WorldAuthorityRequiredError(
             f"user {access.user_id} lacks {world_capability} on the campaign's world"
         )
+
+
+class RecordAuthoringResponse(BaseModel):
+    """The per-record eligibility fields every record read model carries
+    (`dnd_ai.domain.record_authoring.RecordAuthoring`)."""
+
+    campaign_originated: bool
+    can_read_private: bool
+    can_edit: bool
+    can_review: bool
+
+
+def record_authoring_response(
+    connection: Connection, *, access: AccessContext, entity_type_code: str
+) -> RecordAuthoringResponse:
+    return RecordAuthoringResponse(
+        **resolve_record_authoring(
+            connection, access=access, entity_type_code=entity_type_code
+        ).as_json()
+    )
+
+
+def resolve_record_authoring(
+    connection: Connection, *, access: AccessContext, entity_type_code: str
+) -> RecordAuthoring:
+    """What the caller may do to a record of `entity_type_code` in the campaign's world: the
+    per-record eligibility fields of the read models (`dnd_ai.domain.record_authoring`). It uses
+    the same resolver the commands use (`resolve_world_authority`), so a flag and its command
+    cannot disagree about a role. A caller without campaign `canon.edit` holds nothing and costs
+    no query; the command or endpoint still re-checks under its own lock."""
+    if not access.has_capability("canon.edit"):
+        return NO_AUTHORING
+    return record_authoring(
+        entity_type_code=entity_type_code,
+        has_campaign_canon_edit=True,
+        authority=resolve_world_authority(
+            connection,
+            user_id=access.user_id,
+            world_id=timeline_world_id(connection, access.timeline_id),
+        ),
+    )
 
 
 def require_campaign_capability(

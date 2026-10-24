@@ -1067,6 +1067,46 @@ class ItemDetailView:
     is_destroyed: bool | None
 
 
+def item_instance_in_context(
+    connection: Connection,
+    *,
+    timeline_id: uuid.UUID,
+    item_instance_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> bool:
+    """Whether the item instance belongs to the caller's own context: it has a recorded state, a
+    place in an inventory or an owner on `timeline_id`, or the caller created it and it has not been
+    awarded anywhere yet. Item instances are world rows with no campaign column, so this is the
+    only record of which campaign an instance was created or awarded in. Another campaign on the
+    same world sees the shared definition but not this campaign's GM-only `origin_notes` (decision
+    D8, E2). Authorship is used only to keep an author's own not-yet-awarded notes readable; it
+    grants no authority over anything."""
+    return bool(
+        connection.execute(
+            text("""
+                SELECT EXISTS (
+                    SELECT 1 FROM campaign.item_state
+                    WHERE timeline_id = :t AND item_instance_id = :i
+                    UNION ALL
+                    SELECT 1 FROM campaign.inventory_entries
+                    WHERE timeline_id = :t AND item_instance_id = :i
+                    UNION ALL
+                    SELECT 1 FROM campaign.item_ownership
+                    WHERE timeline_id = :t AND item_instance_id = :i
+                    UNION ALL
+                    SELECT 1 FROM core.entities e
+                    WHERE e.entity_id = :i AND e.created_by_user_id = :u
+                      AND NOT EXISTS (SELECT 1 FROM campaign.item_state s
+                                      WHERE s.item_instance_id = :i)
+                      AND NOT EXISTS (SELECT 1 FROM campaign.inventory_entries x
+                                      WHERE x.item_instance_id = :i)
+                )
+            """),
+            {"t": timeline_id, "i": item_instance_id, "u": user_id},
+        ).scalar()
+    )
+
+
 def get_item_view(
     connection: Connection,
     *,

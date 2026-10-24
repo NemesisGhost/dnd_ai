@@ -71,6 +71,8 @@ from dnd_ai.queries.world_explorer import discoverable_entity_ids, world_categor
 from ._shared import timeline_world_id
 from .access import (
     PartyPerspectiveNotAuthorizedError,
+    RecordAuthoringResponse,
+    record_authoring_response,
     require_campaign_capability,
     resolve_party_perspective,
 )
@@ -138,6 +140,9 @@ class CharacterKnowledgeResponse(BaseModel):
 
 class KnowledgeResponse(BaseModel):
     knowledge_item_id: uuid.UUID
+    # What the *route's* caller may do to this claim's definition. Set only by the detail route
+    # (never by a member preview, whose subject has its own audience).
+    authoring: RecordAuthoringResponse | None = None
     knowledge_type_code: str
     statement: str
     truth_status_code: str | None
@@ -954,6 +959,9 @@ def get_knowledge_endpoint(
     )
     if response is None:
         raise NotFoundError()
+    response.authoring = record_authoring_response(
+        connection, access=access, entity_type_code="knowledge_item"
+    )
     return response
 
 

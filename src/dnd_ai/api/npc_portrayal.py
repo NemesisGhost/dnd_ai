@@ -110,7 +110,10 @@ def _view_json(view: NpcPortrayalView) -> dict[str, Any]:
 
 
 @router.get("/campaigns/{campaign_id}/authoring/npc-runtime-options")
-def runtime_options_endpoint(access: _PrivateRead, connection: _Conn) -> dict[str, Any]:
+def runtime_options_endpoint(access: _Access, connection: _Conn) -> dict[str, Any]:
+    # The ruleset's conditions and resources the GM picks from while running an NPC: campaign
+    # state, not the private side of shared canon, so campaign `canon.edit` alone is enough
+    # (a campaign-only GM runs NPCs; docs/adr/0020-scoped-system-world-and-campaign-roles.md).
     options = get_runtime_options(connection, campaign_id=access.campaign_id)
     return {
         "conditions": [{"value": str(i), "label": n, "code": c} for i, n, c in options.conditions],

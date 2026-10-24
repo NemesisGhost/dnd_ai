@@ -145,7 +145,12 @@ from dnd_ai.queries.entity_lifecycle import lifecycle_hidden_entity_ids
 from dnd_ai.queries.quest import get_quest_view, list_campaign_quests
 
 from ._shared import timeline_world_id
-from .access import require_campaign_capability, resolve_party_perspective
+from .access import (
+    RecordAuthoringResponse,
+    record_authoring_response,
+    require_campaign_capability,
+    resolve_party_perspective,
+)
 from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
@@ -221,6 +226,9 @@ class QuestStageResponse(BaseModel):
 
 class QuestResponse(BaseModel):
     quest_id: uuid.UUID
+    # What the route's caller may do to this quest's definition (never to its progress, which is
+    # campaign state). Set only by the detail route.
+    authoring: RecordAuthoringResponse | None = None
     name: str
     status_code: str | None
     stages: list[QuestStageResponse]
@@ -465,6 +473,9 @@ def get_quest_endpoint(
     )
     if response is None:
         raise NotFoundError()
+    response.authoring = record_authoring_response(
+        connection, access=access, entity_type_code="quest"
+    )
     return response
 
 

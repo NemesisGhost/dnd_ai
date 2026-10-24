@@ -67,7 +67,10 @@ from dnd_ai.domain.entity_lifecycle import (
     require_transition,
     target_canon_status,
 )
-from dnd_ai.domain.world_authority import WORLD_CANON_EDIT, WORLD_CANON_REVIEW
+from dnd_ai.domain.record_authoring import (
+    LIFECYCLE_ACTION_CAPABILITIES,
+    lifecycle_world_capability,
+)
 from dnd_ai.queries.content_preconditions import (
     DUNGEON_HAS_ACTIVE_AREAS,
     archive_blocked_reason,
@@ -271,36 +274,15 @@ def _publish_reference_ids(
     return publish_reference_ids(connection, entity_id=entity_id, entity_type_code=type_code)
 
 
-# What each lifecycle action needs on the world (docs/adr/0020-scoped-system-world-and-
-# campaign-roles.md, Q13): preparing and withdrawing a draft is editing; approving,
-# rejecting, publishing, superseding, archiving and restoring change what every
-# campaign on the world sees, so they are reviewing. Campaign `canon.edit` is
-# required in addition, as for every authoring write.
-_ACTION_WORLD_CAPABILITY: dict[str, str] = {
-    SUBMIT_FOR_REVIEW: WORLD_CANON_EDIT,
-    RETURN_TO_DRAFT: WORLD_CANON_EDIT,
-    DELETE_DRAFT: WORLD_CANON_EDIT,
-    APPROVE: WORLD_CANON_REVIEW,
-    REJECT: WORLD_CANON_REVIEW,
-    PUBLISH: WORLD_CANON_REVIEW,
-    SUPERSEDE: WORLD_CANON_REVIEW,
-    ARCHIVE: WORLD_CANON_REVIEW,
-    RESTORE: WORLD_CANON_REVIEW,
-}
-
-# The campaign-originated records that live in world tables (D8: E2 item instances,
-# E3 player-character identity) stay authorized by the campaign, lifecycle included:
-# a campaign GM who creates one must be able to finish it without a world role.
-CAMPAIGN_ORIGINATED_TYPES: frozenset[str] = frozenset({"player_character", "item_instance"})
-
-
 def _lifecycle_world_capability(
     connection: Connection, *, entity_id: uuid.UUID, action: str
 ) -> str | None:
     """The world capability `action` needs on `entity_id`, or `None` for the
-    campaign-originated exceptions. The entity type is read without a lock: it can
-    never change (entity-type-change protection), and an unknown entity falls
-    through to the strict capability and then to the normal not-found error."""
+    campaign-originated exceptions (`dnd_ai.domain.record_authoring`, which the
+    read models and the per-record eligibility fields share). The entity type is
+    read without a lock: it can never change (entity-type-change protection), and
+    an unknown entity falls through to the strict capability and then to the
+    normal not-found error."""
     type_code = connection.execute(
         text("""
             SELECT et.code FROM core.entities e
@@ -309,9 +291,11 @@ def _lifecycle_world_capability(
         """),
         {"e": entity_id},
     ).scalar()
-    if type_code in CAMPAIGN_ORIGINATED_TYPES:
-        return None
-    return _ACTION_WORLD_CAPABILITY[action]
+    return (
+        lifecycle_world_capability(str(type_code), action)
+        if type_code is not None
+        else (LIFECYCLE_ACTION_CAPABILITIES[action])
+    )
 
 
 def _prepare(

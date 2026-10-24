@@ -18,6 +18,7 @@ the item's last-event-seen token (`expected_last_event_id`, `null` when the item
 yet), records one event, and runs on the campaign idempotency store with one audit row.
 """
 
+import dataclasses
 import uuid
 from collections.abc import Callable
 from typing import Annotated, Any
@@ -66,6 +67,7 @@ from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .errors import NotFoundError
+from .world_explorer import item_origin_notes_visible
 
 router = APIRouter(tags=["items"])
 
@@ -171,7 +173,15 @@ def _load_view(
     )
     if view is None:
         raise NotFoundError()
+    if view.origin_notes is not None and not item_origin_notes_visible(access, connection, item_id):
+        # Another campaign's GM-only notes (decision D8, E2): never read here, and
+        # `_update_notes_hidden` keeps an update from overwriting them unseen.
+        return dataclasses.replace(view, origin_notes=None)
     return view
+
+
+def _origin_notes_hidden(connection: Connection, access: AccessContext, item_id: uuid.UUID) -> bool:
+    return not item_origin_notes_visible(access, connection, item_id)
 
 
 # --- reads -------------------------------------------------------------------------------------
@@ -336,6 +346,7 @@ def update_item_endpoint(
             name=body.name,
             summary=body.summary,
             origin_notes=body.origin_notes,
+            keep_origin_notes=_origin_notes_hidden(connection, access, item_instance_id),
             change_note=body.change_note,
         ),
     )

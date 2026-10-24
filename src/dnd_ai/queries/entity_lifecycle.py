@@ -38,6 +38,7 @@ from dnd_ai.domain.entity_lifecycle import (
     evaluate_actions,
     is_lifecycle_eligible,
 )
+from dnd_ai.domain.record_authoring import CAMPAIGN_ORIGINATED_TYPES
 from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.content_preconditions import (
     replacement_publish_blocked_reason,
@@ -67,14 +68,24 @@ def lifecycle_hidden_entity_ids(
     `world.canon.read_private` on `world_id` (docs/adr/0020-scoped-system-world-and-
     campaign-roles.md, D6). Drafts belong to the world, so a GM of another campaign
     on the same world never sees them; every caller passes its own user, so no
-    call site can skip the world check."""
+    call site can skip the world check. The campaign-originated records
+    (`dnd_ai.domain.record_authoring.CAMPAIGN_ORIGINATED_TYPES`: player-character
+    identity and item instances, decisions E2/E3) are the exception: the campaign
+    capability alone shows their unpublished versions, as it alone authors them."""
+    campaign_can_edit = can_edit_canon
     if can_edit_canon:
         authority = resolve_world_authority(connection, user_id=viewer_user_id, world_id=world_id)
         can_edit_canon = authority is not None and authority.has_capability(
             WORLD_CANON_READ_PRIVATE
         )
+    # Per row: the campaign-originated types follow the campaign capability, everything else the
+    # world-checked one.
+    edit_ok = (
+        "(CASE WHEN et.code = ANY(CAST(:originated AS text[])) "
+        "THEN CAST(:campaign_can_edit AS boolean) ELSE CAST(:can_edit AS boolean) END)"
+    )
     rows = connection.execute(
-        text("""
+        text(f"""
             SELECT e.entity_id
             FROM core.entities e
             JOIN core.entity_types et ON et.entity_type_id = e.entity_type_id
@@ -86,16 +97,16 @@ def lifecycle_hidden_entity_ids(
                     ls.code = 'deleted'
                     OR (
                         :mode = 'reference'
-                        AND NOT CAST(:can_edit AS boolean)
+                        AND NOT {edit_ok}
                         AND NOT (cs.code = ANY(CAST(:reference_visible AS text[])))
                     )
                     OR (
                         :mode = 'browse'
                         AND NOT (
                             (cs.code = 'canon'
-                             OR (CAST(:can_edit AS boolean) AND CAST(:inc_noncanon AS boolean)))
+                             OR ({edit_ok} AND CAST(:inc_noncanon AS boolean)))
                             AND (ls.code = 'active'
-                                 OR (CAST(:can_edit AS boolean) AND CAST(:inc_archived AS boolean)))
+                                 OR ({edit_ok} AND CAST(:inc_archived AS boolean)))
                         )
                     )
                   )
@@ -103,8 +114,10 @@ def lifecycle_hidden_entity_ids(
         {
             "world_id": world_id,
             "eligible": sorted(ENTITY_LIFECYCLE_ELIGIBLE_TYPE_CODES),
+            "originated": sorted(CAMPAIGN_ORIGINATED_TYPES),
             "mode": mode,
             "can_edit": can_edit_canon,
+            "campaign_can_edit": campaign_can_edit,
             "inc_noncanon": include_noncanon,
             "inc_archived": include_archived,
             "reference_visible": list(REFERENCE_VISIBLE_CANON_STATUSES),

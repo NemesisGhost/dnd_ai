@@ -2,9 +2,14 @@
 
     GET /campaigns/{id}/organizations/{organization_id}/members
 
-`campaign.view`. An editor (`canon.edit`) sees every stint, private and archived ones included,
-and the choices for the organization's operational status; everyone else sees the active, public
-members they can independently discover, current and ended. Every row carries `period_status`
+`campaign.view`. An editor (`canon.edit`) sees every stint, private and archived ones included
+(a GM-only field of the published definition, so a campaign-only GM sees it too), and the choices
+for the organization's operational status, which is campaign state; everyone else sees the active,
+public members they can independently discover, current and ended. Changing the stints themselves
+edits shared world canon, so `can_edit` also needs the world Editor capability
+(docs/adr/0020-scoped-system-world-and-campaign-roles.md): a campaign-only GM can read and set the
+status but is not offered member or office changes. `authoring` carries the same per-record fields
+every record read model carries. Every row carries `period_status`
 against the caller's timeline clock (also returned as `as_of`) and `can_open`, which says whether
 the member's own page opens for this caller (the rule the character reader uses). Memberships are
 authored through the relationship endpoints (kind `membership`) and the status through the existing
@@ -22,7 +27,11 @@ from dnd_ai.queries.entity_lifecycle import lifecycle_hidden_entity_ids
 from dnd_ai.queries.organization_members import list_organization_members
 
 from ._shared import timeline_world_id
-from .access import can_open_participant, require_campaign_capability
+from .access import (
+    can_open_participant,
+    record_authoring_response,
+    require_campaign_capability,
+)
 from .deps import get_connection
 from .errors import NotFoundError
 from .world_explorer import resolve_world_entity_visibility
@@ -61,12 +70,23 @@ def list_members_endpoint(
     )
     if result is None:
         raise NotFoundError()
+    authoring = record_authoring_response(
+        connection, access=access, entity_type_code="organization"
+    )
     return {
         "organization_id": str(result.organization_id),
         "status": result.status,
-        "can_edit": editor,
+        # Member and office changes are relationship definitions (shared world canon): the
+        # campaign editor must also hold the world Editor capability.
+        "can_edit": editor and authoring.can_edit,
+        # The operational status is campaign state (`campaign.organization_state`): campaign
+        # authority alone, as its route enforces.
+        "can_set_status": editor,
+        "authoring": authoring.model_dump(),
         "as_of": result.as_of,
-        "status_choices": [{"value": v, "label": label} for v, label in result.status_choices],
+        "status_choices": (
+            [{"value": v, "label": label} for v, label in result.status_choices] if editor else []
+        ),
         "members": [
             {
                 "relationship_id": str(m.relationship_id),

@@ -217,6 +217,36 @@ def make_user(
     return value
 
 
+def make_world_role_assignment(
+    connection: Connection,
+    world_id: uuid.UUID,
+    user_id: uuid.UUID,
+    role_code: str,
+    *,
+    granted_by_user_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    """An open `security.world_memberships` assignment of the world role `role_code` -- a direct raw
+    insert, the shortcut ordinary tests use instead of the Sharing commands. A campaign GM edits
+    shared canon only with the matching world role (docs/adr/0020-scoped-system-world-and-
+    campaign-roles.md), so a factory-built GM that must author or preview drafts is given one."""
+    value = connection.execute(
+        text("""
+            INSERT INTO security.world_memberships
+                (world_id, user_id, world_role_id, membership_status_id, granted_by_user_id)
+            VALUES (
+                :w, :u,
+                (SELECT world_role_id FROM security.world_roles WHERE code = :role),
+                (SELECT membership_status_id FROM security.membership_statuses WHERE code = 'active'),
+                :granted_by
+            )
+            RETURNING world_membership_id
+        """),
+        {"w": world_id, "u": user_id, "role": role_code, "granted_by": granted_by_user_id},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
 def make_system_role_assignment(
     connection: Connection,
     user_id: uuid.UUID,

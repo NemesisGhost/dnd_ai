@@ -44,6 +44,7 @@ from tests.factories import (
     make_timeline,
     make_user,
     make_world,
+    make_world_role_assignment,
     make_world_time,
     oidc_principal,
 )
@@ -220,6 +221,10 @@ class Fixture:
         branch_membership = member(self.branch_campaign_id, self.player_user_id, view)
         self.gm_user_id = make_user(connection, "Org Reader GM")
         member(self.campaign_id, self.gm_user_id, view, canon)
+        # Unpublished definitions are shared world canon: previewing them takes the world's
+        # private-read capability as well as campaign `canon.edit` (ADR 0020). This GM also edits
+        # members, so is given the world Editor role.
+        make_world_role_assignment(connection, self.world_id, self.gm_user_id, "world_editor")
         self.stranger_user_id = make_user(connection, "Org Reader Stranger")
         member(self.campaign_id, self.stranger_user_id, view)
         self.capless_user_id = make_user(connection, "Org Reader Capless")

@@ -1270,6 +1270,16 @@ def test_gm_only_free_text_is_projected_to_the_gm_but_not_to_a_player(
             ),
             {"i": f.item_id},
         )
+        # The item has been brought into this campaign's timeline (an award records its state
+        # there): GM-only notes are readable in the context that holds the item, not from another
+        # campaign on the same world (decision D8, E2).
+        setup.execute(
+            text(
+                "INSERT INTO campaign.item_state (timeline_id, item_instance_id, quantity) "
+                "VALUES (:t, :i, 1) ON CONFLICT DO NOTHING"
+            ),
+            {"t": f.timeline_id, "i": f.item_id},
+        )
         detailed_event_id = make_event(
             setup,
             f.world_id,

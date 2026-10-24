@@ -27,7 +27,6 @@ from sqlalchemy import Connection, text
 
 from dnd_ai.commands._revisions import REVISION_LIFECYCLE, capture_revision
 from dnd_ai.commands.entity_lifecycle import (
-    CAMPAIGN_ORIGINATED_TYPES,
     EntityTransitionResult,
     approve_entity,
     archive_entity,
@@ -40,11 +39,16 @@ from dnd_ai.commands.entity_lifecycle import (
     supersede_entity,
 )
 from dnd_ai.domain.access import AccessContext
+from dnd_ai.domain.record_authoring import CAMPAIGN_ORIGINATED_TYPES, authorized_record_actions
 from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.entity_lifecycle import get_entity_lifecycle, list_replacement_candidates
 
 from ._shared import timeline_world_id
-from .access import require_campaign_capability, require_world_capability_for_campaign
+from .access import (
+    require_campaign_capability,
+    require_world_capability_for_campaign,
+    resolve_record_authoring,
+)
 from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
@@ -112,6 +116,14 @@ def get_entity_lifecycle_endpoint(
     if view is None:
         raise NotFoundError()
     _require_private_read(connection, access, view.entity_type_code)
+    authoring = resolve_record_authoring(
+        connection, access=access, entity_type_code=view.entity_type_code
+    )
+    # Only the actions this caller holds on the world are offered, from both lists: the same
+    # mapping the lifecycle commands enforce (`dnd_ai.domain.record_authoring`).
+    available, blocked = authorized_record_actions(
+        view.available_actions, view.blocked_actions, authoring=authoring
+    )
     return {
         "entity_id": str(view.entity_id),
         "entity_type_code": view.entity_type_code,
@@ -128,8 +140,9 @@ def get_entity_lifecycle_endpoint(
                 "canonical_name": view.superseded_by_name,
             }
         ),
-        "available_actions": view.available_actions,
-        "blocked_actions": [{"action": b.action, "reason": b.reason} for b in view.blocked_actions],
+        "available_actions": available,
+        "blocked_actions": [{"action": b.action, "reason": b.reason} for b in blocked],
+        "authoring": authoring.as_json(),
     }
 
 

@@ -129,7 +129,9 @@ from dnd_ai.queries.parties import list_character_parties
 from ._shared import timeline_world_id
 from .access import (
     CharacterViewNotAuthorizedError,
+    RecordAuthoringResponse,
     can_open_participant,
+    record_authoring_response,
     require_campaign_capability,
     resolve_character_view_tier,
 )
@@ -172,6 +174,9 @@ class CharacterResourceResponse(BaseModel):
 
 
 class CharacterResponse(BaseModel):
+    # What the caller may do to this character's definition, resolved by the server (an NPC is
+    # shared world canon; player-character identity is campaign-originated).
+    authoring: RecordAuthoringResponse
     character_id: uuid.UUID
     name: str
     # `npc`, `player_character`, or `character` (a bare character row). Not new
@@ -444,6 +449,9 @@ def get_character_endpoint(
     )
 
     return CharacterResponse(
+        authoring=record_authoring_response(
+            connection, access=access, entity_type_code=view.character_kind
+        ),
         character_id=view.character_id,
         name=view.name,
         character_kind=view.character_kind,  # type: ignore[arg-type]
