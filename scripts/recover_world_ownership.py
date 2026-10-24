@@ -1,4 +1,4 @@
-"""Out-of-band recovery of a stranded world (docs/adr/0019-scoped-system-world-and-
+"""Out-of-band recovery of a stranded world (docs/adr/0020-scoped-system-world-and-
 campaign-roles.md, plan section 4.5; owner question Q11: scripts first).
 
 A world is stranded when it has no Owner who can manage it: an Owner needs an active

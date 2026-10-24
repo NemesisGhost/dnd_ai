@@ -1,4 +1,4 @@
-"""Out-of-band recovery of a campaign with no access manager (docs/adr/0019-scoped-
+"""Out-of-band recovery of a campaign with no access manager (docs/adr/0020-scoped-
 system-world-and-campaign-roles.md, plan section 4.5; owner question Q11: scripts first).
 
 A campaign is stranded when no *active account* holds a non-expiring `access.manage`

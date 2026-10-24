@@ -64,7 +64,7 @@ def lifecycle_hidden_entity_ids(
 
     `can_edit_canon` is the caller's *campaign* capability to see unpublished
     definitions; it only takes effect while `viewer_user_id` also holds
-    `world.canon.read_private` on `world_id` (docs/adr/0019-scoped-system-world-and-
+    `world.canon.read_private` on `world_id` (docs/adr/0020-scoped-system-world-and-
     campaign-roles.md, D6). Drafts belong to the world, so a GM of another campaign
     on the same world never sees them; every caller passes its own user, so no
     call site can skip the world check."""

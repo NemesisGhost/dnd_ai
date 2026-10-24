@@ -543,7 +543,7 @@ class Settings(BaseSettings):
     feature_discord_integration: bool = False
     feature_foundry_integration: bool = False
 
-    # DND_AI_ALLOW_IN_APP_ADMIN_GRANT (docs/adr/0019-scoped-system-world-and-
+    # DND_AI_ALLOW_IN_APP_ADMIN_GRANT (docs/adr/0020-scoped-system-world-and-
     # campaign-roles.md): whether an Administrator may grant the system `admin`
     # role over HTTP. Off by default: Admin is granted only by the operator
     # script `scripts/grant_platform_administrator.py` (decision D-10).

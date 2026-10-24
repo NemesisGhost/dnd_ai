@@ -271,7 +271,7 @@ def _publish_reference_ids(
     return publish_reference_ids(connection, entity_id=entity_id, entity_type_code=type_code)
 
 
-# What each lifecycle action needs on the world (docs/adr/0019-scoped-system-world-and-
+# What each lifecycle action needs on the world (docs/adr/0020-scoped-system-world-and-
 # campaign-roles.md, Q13): preparing and withdrawing a draft is editing; approving,
 # rejecting, publishing, superseding, archiving and restoring change what every
 # campaign on the world sees, so they are reviewing. Campaign `canon.edit` is

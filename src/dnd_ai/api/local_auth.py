@@ -1151,7 +1151,7 @@ class StrandedResponse(BaseModel):
     """IDs only: the administrator is not shown names they could not otherwise
     read. Worlds with no manageable Owner (an Owner needs an active account and
     system GM) and campaigns with no access manager on an active account; the
-    operator recovery scripts apply (docs/adr/0019-scoped-system-world-and-
+    operator recovery scripts apply (docs/adr/0020-scoped-system-world-and-
     campaign-roles.md, plan section 4.5)."""
 
     world_ids: list[uuid.UUID] = Field(default_factory=list)

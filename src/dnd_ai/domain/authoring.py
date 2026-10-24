@@ -288,7 +288,7 @@ class KnowledgeSubjectInvalidError(SafeMessageError):
 
 
 class WorldCreationNotAuthorizedError(SafeMessageError):
-    """The caller does not hold the system `gm` role (docs/adr/0019-scoped-
+    """The caller does not hold the system `gm` role (docs/adr/0020-scoped-
     system-world-and-campaign-roles.md, which supersedes ADR 0018). A 403, not a 404: creation names no existing resource,
     so refusing it discloses nothing beyond the caller's own eligibility,
     which the session bootstrap already reports as `world.create`."""
@@ -300,7 +300,7 @@ class WorldCreationNotAuthorizedError(SafeMessageError):
 
 class WorldAuthorityRequiredError(SafeMessageError):
     """The caller holds the campaign capability (`canon.edit`) but not the world
-    capability the operation needs (docs/adr/0019-scoped-system-world-and-campaign-
+    capability the operation needs (docs/adr/0020-scoped-system-world-and-campaign-
     roles.md, decision D6): shared world canon belongs to the world, not to any one
     campaign. A 403 rather than a 404, because the caller can already see the
     record and the portal needs to explain why it is read-only."""

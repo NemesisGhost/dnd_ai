@@ -247,7 +247,7 @@ def make_system_role_assignment(
 def make_platform_administrator(
     connection: Connection, display_name: str = "Admin", *, status_code: str = "active"
 ) -> uuid.UUID:
-    """A user holding an open system `admin` assignment (docs/adr/0019-scoped-
+    """A user holding an open system `admin` assignment (docs/adr/0020-scoped-
     system-world-and-campaign-roles.md) -- for tests exercising
     `dnd_ai.commands.local_auth.create_local_account`/`issue_password_reset_token`,
     gated on platform administration rather than any campaign-scoped

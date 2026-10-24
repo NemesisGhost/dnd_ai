@@ -42,7 +42,7 @@ def dnd5e_ids(connection: Connection) -> tuple[uuid.UUID, uuid.UUID]:
 
 
 def make_world_creator(connection: Connection, user_id: uuid.UUID) -> uuid.UUID:
-    """Make `user_id` a legitimate world creator (docs/adr/0019-scoped-system-
+    """Make `user_id` a legitimate world creator (docs/adr/0020-scoped-system-
     world-and-campaign-roles.md) by giving the account the system `gm` role. A
     no-op for a user who already qualifies.
 

@@ -139,7 +139,7 @@ class CampaignBootstrapView:
     character_perspectives: tuple[CharacterPerspectiveView, ...]
     selected_character_id: uuid.UUID | None
     capabilities: tuple[str, ...]
-    # The caller's capabilities on this campaign's *world* (docs/adr/0019-scoped-system-
+    # The caller's capabilities on this campaign's *world* (docs/adr/0020-scoped-system-
     # world-and-campaign-roles.md): independent of `capabilities`, which are campaign-
     # scoped. Lets the portal present shared-canon authoring read-only without inferring
     # it from a campaign role.

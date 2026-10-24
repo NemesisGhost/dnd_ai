@@ -674,7 +674,7 @@ def resolve_user_by_external_identity(
 
 def is_platform_administrator(connection: Connection, *, user_id: uuid.UUID) -> bool:
     """True iff `user_id` names an active user holding an unrevoked system `admin`
-    assignment (`security.user_system_roles`; docs/adr/0019-scoped-system-world-
+    assignment (`security.user_system_roles`; docs/adr/0020-scoped-system-world-
     and-campaign-roles.md). A deliberately minimal, campaign-independent
     authorization primitive -- `AccessContext`/`resolve_access_context` above
     resolve capabilities *within one campaign membership*, but account-management
