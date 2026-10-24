@@ -52,6 +52,25 @@ Two further gaps follow: a campaign `canon.edit` holder can write the shared can
 - Shared canon secrets (an NPC's secret name, a quest's `gm_notes`) are known to everyone who writes or reviews the world and to every campaign GM running on it. This is inherent to a shared world and is documented rather than engineered around.
 - Excluded: world forks, per-campaign revision pinning, hosted multi-tenant scopes, custom system roles, impersonation.
 
+## Amendment: integration into Phase 15 (2026-10-24)
+
+**Sequencing.** The accepted Q10 said the roles land after the Phase 15 merge and before Phase 16. The owner revised that: the roles integrate into `phase15/completion` *before Phase 15 closes*, so Phase 15's final acceptance runs against the final authority model. This amends Q10's sequencing only; nothing else in the decision is reopened. The integration is the merge of `feature/scoped-role-model` into an isolated `integration/scoped-roles` branch from `phase15/completion`, followed by focused reconciliation commits; it reaches `phase15/completion` only by a later, owner-approved fast-forward together with a matching database upgrade. Until then the roles are neither merged into the Phase 15 branch nor deployed, and Phase 15 remains "implemented; acceptance pending".
+
+**What the integration settled** (the current-side surfaces the roles branch never saw):
+
+- *Campaign-originated records are readable by the campaign.* A player-character identity or an item instance, unpublished, is shown by campaign `canon.edit` alone (the D8 exceptions apply to reading as they do to writing and to the lifecycle). Before this, a campaign GM could create one and then not read it.
+- *Item `origin_notes` do not cross campaigns.* Item instances are world rows with no campaign column, so the GM-only notes are read only in the context that holds the item (a recorded state, inventory entry or owner on the caller's timeline, or created by the caller and not yet awarded) or by `world.canon.read_private`; an edit that could not read them leaves them unchanged. Authorship is used only to keep an author's own not-yet-awarded notes readable; it grants nothing.
+- *Runtime stays runtime.* The NPC runtime option catalog (conditions and resources to pick from while running an NPC) is campaign state and needs campaign `canon.edit` only; it had been gated like private canon.
+- *Organization members and offices split.* Stint changes are shared definitions (campaign editor and world Editor, `can_edit`); the operational status is campaign state (`can_set_status`). Private and archived stints stay visible to a campaign editor: they are GM-only fields of published definitions.
+- *Published member reads need no world role.* Characters, parties, knowledge, quests, organization members, world search and counts and travel were checked; nothing private appears because a runtime GM is present, and counts and lists share one filter.
+- *Per-record eligibility is server-computed.* A record's read carries `authoring {campaign_originated, can_read_private, can_edit, can_review}`, and the lifecycle read offers only the actions the caller holds. Both come from one module (`dnd_ai.domain.record_authoring`) that also states the action-to-capability mapping and the exceptions, so previews, read models and commands agree; the portal reads these fields and never a role or a category. The option catalogs report `can_create` for the world Editor only.
+- *Losing permission is handled.* A refused save for lack of the world role stops writes, clears what the server's private read had filled the form with, and shows back only what the person changed.
+- *Revision 138's downgrade completes* on a database that holds the new data (it deferred-trigger-blocked its own index rebuild before); the lossy downgrade is rehearsed, but it is not the rollback path.
+
+**Deployment.** The upgrade is offline: stop the writers, `pg_dump`, `alembic upgrade head` (137, 138), start the matching API and portal together. Rollback is restoring the dump with the previous commit, never the lossy downgrade. `scripts/operations/verify_scoped_role_upgrade.py` checks a restored copy before and after. Assigning Editor/Reviewer to secondary GMs who should keep authoring is a per-world owner decision made afterwards in the Sharing screen.
+
+**Still defaults, not decisions.** Q2, Q5, Q8, Q11, Q12, Q13, the lifecycle of the campaign-originated records, Viewer/Reader coexistence and the Q4 interpretation ("no campaign role requires system GM") are implemented as the defaults above and remain for the owner's confirmation (decision register DR-7) before the integration branch is landed.
+
 ## References
 
 - [SCOPED_ROLE_IMPLEMENTATION_PLAN.md](../SCOPED_ROLE_IMPLEMENTATION_PLAN.md)

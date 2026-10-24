@@ -718,3 +718,16 @@ Verified on head `27db91d` (which contains `origin/phase15/completion` at `c1b70
 - **CI was not run** against this head. The workflow triggers only on pushes to `main` and pull requests to `main`; no PR was opened.
 - **Manual validation (section 13.2) was not performed.** Browser walkthroughs of the portal and operator scripts against a real deployment remain for the owner.
 - The 14 frozen-seed failures above are unresolved on Windows.
+
+### 16.7 Integration addendum (2026-10-24)
+
+This branch was integrated into the Phase 15 completion code on `integration/scoped-roles` (see
+the ADR 0020 amendment and `SCOPED_ROLE_INTEGRATION_VERIFICATION.md`). Differences from the plan as
+written: the sequencing of Q10 moved (before Phase 15 closes); the portal reconciliation covered the
+workspaces built after the branch diverged (World record, Knowledge claim, Quest and item
+workspaces, the character links, the readers); eligibility previews became a server contract
+(`authoring`) instead of client capability tests; the campaign-originated records are readable (not
+only writable) by the campaign; item `origin_notes` are context-scoped (SR-5's E2 check found them
+readable across campaigns); the NPC runtime catalog and the organization status are campaign state;
+and the revision 138 downgrade was fixed. The verification record in 16.6 describes the feature
+branch as it stood and is not evidence for the integrated tree.
