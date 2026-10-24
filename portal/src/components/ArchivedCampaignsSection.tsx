@@ -29,12 +29,13 @@ export function ArchivedCampaignsSection() {
 
     const mutation = useAuthoringMutation<{ expected_row_version: number }, unknown>({
         scopeKey: `reactivate:${target?.campaign_id ?? "none"}`,
+        ownsRefreshNotice: true,
         request: (body, ctx) => reactivateCampaign(target!.campaign_id, body, ctx),
         onSuccess: async () => {
             // Authoritative state first: the bootstrap lists the campaign again, then the archived
             // list drops it.
             const bootstrap = (await bootstrapRefreshOutcome(refresh)) === "failed"
-            const reloaded = (await refetch()) === "failed"
+            const reloaded = (await refetch()) !== "ok"
             setDialogOpen(false)
             if (bootstrap || reloaded) {
                 setUnread({ bootstrap, list: reloaded })
@@ -49,7 +50,7 @@ export function ArchivedCampaignsSection() {
     async function retryReads() {
         setRetrying(true)
         const bootstrap = unread.bootstrap ? (await bootstrapRefreshOutcome(refresh)) === "failed" : false
-        const reloaded = unread.list ? (await refetch()) === "failed" : false
+        const reloaded = unread.list ? (await refetch()) !== "ok" : false
         setRetrying(false)
         setUnread({ bootstrap, list: reloaded })
         if (!bootstrap && !reloaded) {

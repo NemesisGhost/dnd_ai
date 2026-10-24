@@ -36,6 +36,7 @@ import type { SectionKey } from "../components/sessionRun/runStages"
 import { useRunNavigation } from "../components/sessionRun/useRunNavigation"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
+import { useKept } from "../hooks/useKeptResource"
 import type { RefetchOutcome } from "../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { usePageArrival } from "../hooks/usePageArrival"
@@ -66,16 +67,15 @@ const STATUS_LABEL: Readonly<Record<string, string>> = {
 export function SessionRunPage() {
     const { campaignId = "", sessionId = "" } = useParams()
     const canEdit = useCampaignCapability(campaignId, "canon.edit")
-    const detail = useAuthoringResource<CampaignSessionDetail>(sessionPath(campaignId, sessionId))
+    const path = sessionPath(campaignId, sessionId)
+    const detail = useAuthoringResource<CampaignSessionDetail>(path)
     const headingRef = usePageArrival(detail.state.kind === "ready")
     // A refresh that fails for a reason worth retrying keeps the last session that loaded on
-    // screen, so the drafts in every section survive; missing or denied still fail closed.
-    const [lastGood, setLastGood] = useState<CampaignSessionDetail | null>(null)
-    if (detail.state.kind === "ready" && detail.state.data !== lastGood) {
-        setLastGood(detail.state.data)
-    }
-    const refreshFailed = detail.state.kind === "error" && detail.state.retryable && lastGood !== null
-    const data = detail.state.kind === "ready" ? detail.state.data : refreshFailed ? lastGood : null
+    // screen, so the drafts in every section survive. The kept session belongs to this campaign
+    // and session only (a history jump to another session starts empty), and a denied or missing
+    // answer drops it: protected data is never shown past the end of the right to see it.
+    const data = useKept(detail.state, path)
+    const refreshFailed = detail.state.kind === "error" && data !== null
 
     return (
         <section className="authoring-page" aria-labelledby="run-session-heading">
@@ -104,6 +104,8 @@ export function SessionRunPage() {
                         </p>
                     ) : null}
                     <RunBody
+                        // Drafts belong to one session: another session starts with empty forms.
+                        key={`${campaignId}:${sessionId}`}
                         campaignId={campaignId}
                         session={data}
                         refetch={detail.refetch}
@@ -542,6 +544,7 @@ function LogSection({
         PlayReceipt
     >({
         scopeKey: `log-entry:${session.session_id}`,
+        holdUnresolved: true,
         request: (body, ctx) =>
             logSessionEntry(
                 campaignId,
@@ -549,14 +552,21 @@ function LogSection({
                 { entry: body.entry, details: body.details, world_time_id: body.timeId },
                 ctx,
             ),
-        onSuccess: async () => {
-            setEntry("")
-            setDetails("")
+        // The confirmed entry may be an earlier one than the text now in the form (see `submit`):
+        // the draft is cleared only when it is what was recorded, so later edits survive.
+        onSuccess: async (_receipt, recorded) => {
+            if (entry.trim() === recorded.entry && (details.trim() === "" ? null : details.trim()) === recorded.details) {
+                setEntry("")
+                setDetails("")
+            }
             setErrors([])
-            await refetch()
+            const outcome = await refetch()
+            if (outcome !== "ok") return outcome === "failed" ? "failed" : "superseded"
             announce("Entry recorded")
         },
     })
+    // The text in the form differs from an entry that may already have been recorded.
+    const [earlierFirst, setEarlierFirst] = useState(false)
     const error = mutation.status.kind === "error" ? mutation.status.error : null
     const message = useMessage(error)
     const errorFor = (id: string) => errors.find((e) => e.fieldId === id)?.message ?? null
@@ -574,11 +584,12 @@ function LogSection({
         setErrors(found)
         setAttempt((n) => n + 1)
         if (found.length > 0) return
-        mutation.submit({
+        const result = mutation.submit({
             entry: entry.trim(),
             details: details.trim() === "" ? null : details.trim(),
             timeId: timeId === "" ? null : timeId,
         })
+        setEarlierFirst(result === "resolving-earlier")
     }
 
     return (
@@ -601,6 +612,15 @@ function LogSection({
                         <p role="alert">{message}</p>
                     ) : error !== null ? (
                         <MutationStatusMessage error={error} onRetry={mutation.retry} onCheckSession={reload} />
+                    ) : null}
+                    {earlierFirst && mutation.status.kind === "pending" ? (
+                        <p role="status">Confirming your earlier entry first. What you changed is kept.</p>
+                    ) : null}
+                    {earlierFirst && mutation.status.kind !== "pending" && mutation.status.kind !== "error" ? (
+                        <p role="status">
+                            Your earlier entry was recorded. What you changed is still here; record it only if you
+                            still want it.
+                        </p>
                     ) : null}
                     <TextField
                         id="log-entry"

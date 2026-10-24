@@ -152,6 +152,7 @@ function TravelForm({
 
     const mutation = useAuthoringMutation<TravelBody, TravelReceipt>({
         scopeKey: `travel:${sessionId}`,
+        holdUnresolved: true,
         request: (body, ctx) => recordSessionTravel(campaignId, sessionId, body, ctx),
         onSuccess: async (receipt) => {
             setOutcome(receipt)

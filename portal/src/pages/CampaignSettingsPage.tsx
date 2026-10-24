@@ -104,7 +104,6 @@ export function CampaignSettingsPage() {
                         <StaleReadNotice what="campaign settings" onRetry={() => void retryReads()} />
                     ) : null}
                     <SettingsForm
-                        key={settings.row_version}
                         settings={settings}
                         refreshing={state.kind === "ready" && state.refreshing}
                         readStale={settingsStale}
@@ -141,28 +140,51 @@ function SettingsForm({ settings, refreshing, readStale, kept, onKeep, refetch, 
     const [retryingArchive, setRetryingArchive] = useState(false)
     const [name, setName] = useState(settings.name)
     const [description, setDescription] = useState(settings.description ?? "")
+    // What the server is known to hold: the loaded settings, or the values of a confirmed save
+    // whose re-read has not arrived. Edits made after a save are measured against it, so they stay
+    // protected (and are never overwritten) while the latest version is still being loaded.
+    const [baseline, setBaseline] = useState<Values>({ name: settings.name, description: settings.description ?? "" })
+    const [applied, setApplied] = useState({ version: settings.row_version, replace: false })
+    // The version a confirmed save returned. While the loaded settings are older than this, the
+    // form holds a version the server has moved past, so neither Save nor Archive may use it.
+    const [confirmedVersion, setConfirmedVersion] = useState<number | null>(null)
+    if (settings.row_version !== applied.version) {
+        // A newer version loaded into this same form (it is not rebuilt, so typing survives).
+        const loaded = { name: settings.name, description: settings.description ?? "" }
+        if ((name === baseline.name && description === baseline.description) || applied.replace) {
+            setName(loaded.name)
+            setDescription(loaded.description)
+        }
+        setBaseline(loaded)
+        setApplied({ version: settings.row_version, replace: false })
+    }
+    const versionBehind = confirmedVersion !== null && settings.row_version < confirmedVersion
+    const writesHeld = readStale || versionBehind
     const [errors, setErrors] = useState<FieldError[]>([])
     const [attempt, setAttempt] = useState(0)
     const [archiveOpen, setArchiveOpen] = useState(false)
     const [reason, setReason] = useState("")
     const [reasonError, setReasonError] = useState<string | null>(null)
-    const guard = useUnsavedChangesGuard(
-        name !== settings.name || description !== (settings.description ?? ""),
-    )
+    const guard = useUnsavedChangesGuard(name !== baseline.name || description !== baseline.description)
     const canUpdate = settings.available_actions.includes("update")
     const canArchive = settings.available_actions.includes("archive")
 
     const save = useAuthoringMutation<UpdateCampaignRequest, CampaignMutationResponse>({
         scopeKey: `settings:${settings.campaign_id}:${settings.row_version}`,
         request: (body, ctx) => updateCampaign(settings.campaign_id, body, ctx),
-        onSuccess: async () => {
-            guard.release()
+        ownsRefreshNotice: true,
+        onSuccess: async (receipt, saved) => {
+            // Confirmed: the saved values are the new baseline (so leaving is not "discarding"
+            // them, while anything typed since is still guarded), and the version moves on.
+            setConfirmedVersion(receipt.row_version)
+            setBaseline({ name: saved.name, description: saved.description ?? "" })
             onKeep(null)
             // The bootstrap carries the campaign's name, so refresh it, then reload the
             // authoritative settings in place. Either read failing leaves the save confirmed.
             const menus = await bootstrapRefreshOutcome(refresh)
             const reloaded = await refetch()
-            const reads = { menusFailed: menus === "failed", settingsFailed: reloaded === "failed" }
+            // A superseded read answers nothing yet: it counts as not read until a newer one lands.
+            const reads = { menusFailed: menus === "failed", settingsFailed: reloaded !== "ok" }
             onSaved(reads)
             return reads.menusFailed || reads.settingsFailed ? "failed" : undefined
         },
@@ -170,6 +192,7 @@ function SettingsForm({ settings, refreshing, readStale, kept, onKeep, refetch, 
 
     const archive = useAuthoringMutation<TransitionRequest, CampaignMutationResponse>({
         scopeKey: `archive-campaign:${settings.campaign_id}`,
+        ownsRefreshNotice: true,
         request: (body, ctx) => archiveCampaign(settings.campaign_id, body, ctx),
         onSuccess: async () => {
             guard.release()
@@ -193,7 +216,7 @@ function SettingsForm({ settings, refreshing, readStale, kept, onKeep, refetch, 
     }
 
     function handleSubmit() {
-        if (readStale || archivedAwaitingList) return
+        if (writesHeld || archivedAwaitingList) return
         const found: FieldError[] = []
         const nameError = validateName(name)
         if (nameError) found.push({ fieldId: "settings-name", message: nameError })
@@ -252,6 +275,12 @@ function SettingsForm({ settings, refreshing, readStale, kept, onKeep, refetch, 
                 </section>
             ) : null}
 
+            {versionBehind && !readStale ? (
+                <p role="status" className="authoring-note">
+                    Saved. Loading the latest settings; saving or archiving waits for them.
+                </p>
+            ) : null}
+
             {archivedAwaitingList ? (
                 <SavedRefreshFailedNotice
                     done="Campaign archived."
@@ -278,6 +307,7 @@ function SettingsForm({ settings, refreshing, readStale, kept, onKeep, refetch, 
                             onLoadLatest={() => {
                                 onKeep({ name, description })
                                 save.reset()
+                                setApplied((a) => ({ ...a, replace: true }))
                                 void refetch()
                             }}
                         />
@@ -303,7 +333,7 @@ function SettingsForm({ settings, refreshing, readStale, kept, onKeep, refetch, 
                     />
                     <FormActions
                         pending={save.status.kind === "pending"}
-                        saveDisabled={readStale || archivedAwaitingList}
+                        saveDisabled={writesHeld || archivedAwaitingList}
                         onCancel={() => void navigate(`/app/${settings.campaign_id}/home`)}
                     />
                 </AuthoringForm>
@@ -331,6 +361,7 @@ function SettingsForm({ settings, refreshing, readStale, kept, onKeep, refetch, 
                     <button
                         type="button"
                         className="authoring-button"
+                        disabled={writesHeld}
                         onClick={() => {
                             archive.reset()
                             setReason("")
@@ -349,6 +380,8 @@ function SettingsForm({ settings, refreshing, readStale, kept, onKeep, refetch, 
                 description="Members will no longer be able to open it until it is reactivated."
                 confirmLabel="Archive campaign"
                 onConfirm={() => {
+                    // The version in hand may be behind a save that was just confirmed.
+                    if (writesHeld) return
                     const problem = validateReason(reason, false)
                     setReasonError(problem)
                     if (problem) return

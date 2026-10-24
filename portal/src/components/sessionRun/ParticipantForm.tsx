@@ -68,6 +68,7 @@ export function ParticipantForm({
 
     const add = useAuthoringMutation<AddBody, PlayReceipt>({
         scopeKey: `add-participant:${session.session_id}`,
+        ownsRefreshNotice: true,
         request: (body, ctx) =>
             addSessionParticipant(
                 campaignId,
@@ -84,9 +85,12 @@ export function ParticipantForm({
             setWantsGuest(false)
             setErrors([])
             const outcome = await refetch()
-            if (outcome === "failed") {
-                // Saved, but the roster did not reload: no announcement of a roster we cannot show.
-                return "failed"
+            if (outcome !== "ok") {
+                // Saved, but no completed read of the roster: a failed one, or one a newer read took
+                // over. Neither is evidence that the roster or its version is current, so the add
+                // stays confirmed-but-unrefreshed (no announcement, no further add) until the
+                // session this form holds reaches the version the server returned.
+                return outcome
             }
             announce("Participant added")
         },

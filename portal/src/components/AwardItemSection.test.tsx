@@ -100,4 +100,57 @@ describe("AwardItemSection", () => {
         setup([ITEM("i2", "Carried", { holder_name: "Bryn" })])
         expect(await screen.findByText(/No published item is waiting/)).toBeInTheDocument()
     })
+
+    describe("an award whose answer was lost", () => {
+        const AWARD = "/campaigns/c1/items/i1/award"
+        const TOKEN = "/campaigns/c1/authoring/items/i1"
+
+        // The server applies the first award, so the item's token moves on, but the answer never arrives.
+        function lostAnswer() {
+            const server = setup([ITEM("i1", "Free Sword")])
+            let token = "e9"
+            let posts = 0
+            server.on("GET", TOKEN, () => ({ body: { last_event_id: token } }))
+            server.on("POST", AWARD, () => {
+                posts += 1
+                if (posts === 1) {
+                    token = "e10"
+                    return { networkError: true }
+                }
+                return { body: { changed: true } }
+            })
+            return server
+        }
+
+        async function award() {
+            fireEvent.change(await screen.findByRole("combobox", { name: "Item" }), { target: { value: "i1" } })
+            fireEvent.change(screen.getByRole("combobox", { name: "Award to" }), { target: { value: "n1" } })
+            fireEvent.click(screen.getByRole("button", { name: "Award item" }))
+            await screen.findByRole("alert")
+        }
+
+        it("Retry sends the same token, target, body and key without reading a new token", async () => {
+            const server = lostAnswer()
+            await award()
+            fireEvent.click(screen.getByRole("button", { name: "Retry" }))
+            await vi.waitFor(() => expect(server.callsTo("POST", AWARD)).toHaveLength(2))
+            const [first, second] = server.callsTo("POST", AWARD)
+            expect(first!.body).toEqual({ expected_last_event_id: "e9", holder_entity_id: "n1" })
+            expect(second!.body).toEqual(first!.body)
+            expect(second!.headers["Idempotency-Key"]).toBe(first!.headers["Idempotency-Key"])
+            expect(server.callsTo("GET", TOKEN)).toHaveLength(1)
+        })
+
+        it("pressing Award again with the same choices sends the same request", async () => {
+            const server = lostAnswer()
+            await award()
+            fireEvent.click(screen.getByRole("button", { name: "Award item" }))
+            await vi.waitFor(() => expect(server.callsTo("POST", AWARD)).toHaveLength(2))
+            const [first, second] = server.callsTo("POST", AWARD)
+            expect(second!.body).toEqual(first!.body)
+            expect(second!.headers["Idempotency-Key"]).toBe(first!.headers["Idempotency-Key"])
+            expect(server.callsTo("GET", TOKEN)).toHaveLength(1)
+        })
+    })
 })
+

@@ -44,6 +44,7 @@ function setup(register: (server: MockServer) => void, onRefresh?: () => Promise
         routes: [
             { path: "/app/:campaignId/settings", element: <CampaignSettingsPage /> },
             { path: "/campaigns", element: <h1>Campaigns stub</h1> },
+            { path: "/app/:campaignId/home", element: <h1>Home stub</h1> },
         ],
     })
     return server
@@ -219,5 +220,82 @@ describe("campaign settings: saves, refreshes and read states", () => {
         fireEvent.click(screen.getByRole("button", { name: "Try again" }))
         expect(await screen.findByLabelText(/Campaign name/)).toHaveValue("The Hollow Road")
         expect(server.callsTo("POST", /./)).toHaveLength(0)
+    })
+})
+
+describe("campaign settings: edits after a confirmed save whose re-read failed", () => {
+    // The server holds version 4 ("Renamed") but the re-read after the save fails until `failRead` clears.
+    function afterConfirmedSave() {
+        let current = settings()
+        const state = { failRead: false }
+        const server = setup((s) => {
+            s.on("GET", SETTINGS, () => (state.failRead ? { status: 500, body: {} } : { body: current }))
+            s.on("POST", UPDATE, () => {
+                current = settings({ name: "Renamed", row_version: 4 })
+                state.failRead = true
+                return { body: { campaign_id: "c1", row_version: 4 } }
+            })
+            s.on("POST", ARCHIVE, { body: { campaign_id: "c1", row_version: 5, lifecycle_status: "archived" } })
+        })
+        return { server, state }
+    }
+
+    async function saveRenamed() {
+        await screen.findByLabelText(/Campaign name/)
+        rename("Renamed")
+        save()
+        await screen.findByRole("status")
+    }
+
+    it("keeps what was typed after the save when the latest version is loaded", async () => {
+        const { server, state } = afterConfirmedSave()
+        await saveRenamed()
+        rename("Typed after the save")
+        state.failRead = false
+        fireEvent.click(screen.getByRole("button", { name: "Load latest" }))
+        await waitFor(() => expect(screen.queryByRole("status")).toBeNull())
+        // The form is the same one: the draft was not replaced by the loaded name.
+        expect(screen.getByLabelText(/Campaign name/)).toHaveValue("Typed after the save")
+        save()
+        await waitFor(() => expect(server.callsTo("POST", UPDATE)).toHaveLength(2))
+        expect(server.callsTo("POST", UPDATE)[1]!.body).toMatchObject({
+            expected_row_version: 4,
+            name: "Typed after the save",
+        })
+    })
+
+    it("treats the saved values as saved, but guards navigation for anything typed after them", async () => {
+        const { state } = afterConfirmedSave()
+        await saveRenamed()
+        void state
+        // Nothing typed since the save: leaving is not discarding anything.
+        fireEvent.click(screen.getByRole("link", { name: "Back to Campaign Home" }))
+        expect(await screen.findByRole("heading", { name: "Home stub" })).toBeInTheDocument()
+    })
+
+    it("holds navigation behind the discard dialog when a draft was typed after the save", async () => {
+        afterConfirmedSave()
+        await saveRenamed()
+        rename("Typed after the save")
+        fireEvent.click(screen.getByRole("link", { name: "Back to Campaign Home" }))
+        expect(await screen.findByRole("button", { name: "Keep editing" })).toBeInTheDocument()
+        expect(screen.queryByRole("heading", { name: "Home stub" })).toBeNull()
+        fireEvent.click(screen.getByRole("button", { name: "Keep editing" }))
+        expect(screen.getByLabelText(/Campaign name/)).toHaveValue("Typed after the save")
+    })
+
+    it("cannot archive with the obsolete version until the latest settings load", async () => {
+        const { server, state } = afterConfirmedSave()
+        await saveRenamed()
+        expect(screen.getByRole("button", { name: "Archive campaign" })).toBeDisabled()
+        expect(server.callsTo("POST", ARCHIVE)).toHaveLength(0)
+        state.failRead = false
+        fireEvent.click(screen.getByRole("button", { name: "Load latest" }))
+        await waitFor(() => expect(screen.getByRole("button", { name: "Archive campaign" })).toBeEnabled())
+        fireEvent.click(screen.getByRole("button", { name: "Archive campaign" }))
+        const buttons = await screen.findAllByRole("button", { name: "Archive campaign" })
+        fireEvent.click(buttons[buttons.length - 1]!)
+        await waitFor(() => expect(server.callsTo("POST", ARCHIVE)).toHaveLength(1))
+        expect(server.callsTo("POST", ARCHIVE)[0]!.body).toMatchObject({ expected_row_version: 4 })
     })
 })

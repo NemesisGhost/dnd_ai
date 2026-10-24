@@ -60,7 +60,7 @@ describe("useAuthoringMutation", () => {
 
         expect(request.mock.calls[0]![1]).toMatchObject({ csrfToken: "csrf-1" })
         expect(request.mock.calls[0]![1].idempotencyKey).toMatch(/[0-9a-f-]{36}/)
-        expect(onSuccess).toHaveBeenCalledWith("done")
+        expect(onSuccess).toHaveBeenCalledWith("done", { name: "x" })
         expect(order).toEqual(["onSuccess"])
     })
 
@@ -99,9 +99,9 @@ describe("useAuthoringMutation", () => {
         act(() => result.current.retry())
         await waitFor(() => expect(request).toHaveBeenCalledTimes(2))
         await waitFor(() => expect(result.current.status.kind).toBe("error"))
+        // Without holdUnresolved an edited body is simply a new request with a new key.
         act(() => result.current.submit({ name: "changed" }))
         await waitFor(() => expect(request).toHaveBeenCalledTimes(3))
-
         expect(keys[0]).toBe(keys[1])
         expect(keys[2]).not.toBe(keys[0])
     })
@@ -237,20 +237,83 @@ describe("useAuthoringMutation", () => {
             expect(sent[1]!.version).toBe(3)
         })
 
-        it("does not reuse the key for edited input", async () => {
-            const keys: string[] = []
-            const request = vi.fn((_b: Body, c: MutationRequestContext) => {
-                keys.push(c.idempotencyKey)
-                return Promise.reject(network())
+        it("resolves a lost-answer write before edited input can become a second write, then gives the edit a new key", async () => {
+            const sent: { body: Body; key: string }[] = []
+            let lose = true
+            const request = vi.fn((b: Body, c: MutationRequestContext) => {
+                sent.push({ body: b, key: c.idempotencyKey })
+                if (lose && b.name === "x") {
+                    lose = false
+                    // The server committed it; the answer never arrived.
+                    return Promise.reject(network())
+                }
+                return Promise.resolve("done")
+            })
+            const confirmed: Body[] = []
+            const { result } = renderHook(
+                () =>
+                    useAuthoringMutation<Body, string>({
+                        scopeKey: "a",
+                        request,
+                        holdUnresolved: true,
+                        onSuccess: (_r, body) => {
+                            confirmed.push(body)
+                        },
+                    }),
+                { wrapper: wrapperWith() },
+            )
+            act(() => result.current.submit({ name: "x" }))
+            await waitFor(() => expect(result.current.status.kind).toBe("error"))
+            let outcome: string | undefined
+            act(() => {
+                outcome = result.current.submit({ name: "edited" })
+            })
+            expect(outcome).toBe("resolving-earlier")
+            await waitFor(() => expect(result.current.status.kind).toBe("success"))
+            // Only the original body was sent again, under its own key; the edit was not sent.
+            expect(sent.map((s) => s.body.name)).toEqual(["x", "x"])
+            expect(sent[1]!.key).toBe(sent[0]!.key)
+            expect(confirmed).toEqual([{ name: "x" }])
+            // Now that it is final, the edit is an ordinary new request with a new key.
+            act(() => result.current.submit({ name: "edited" }))
+            await waitFor(() => expect(sent).toHaveLength(3))
+            expect(sent[2]!.key).not.toBe(sent[0]!.key)
+        })
+
+        it("re-sends the unresolved attempt exactly for an unchanged ordinary submission", async () => {
+            const sent: { body: Body; key: string }[] = []
+            const request = vi.fn((b: Body, c: MutationRequestContext) => {
+                sent.push({ body: b, key: c.idempotencyKey })
+                return sent.length === 1 ? Promise.reject(network()) : Promise.resolve("done")
             })
             const { result } = renderHook(() => useAuthoringMutation<Body, string>({ scopeKey: "a", request }), {
                 wrapper: wrapperWith(),
             })
             act(() => result.current.submit({ name: "x" }))
             await waitFor(() => expect(result.current.status.kind).toBe("error"))
-            act(() => result.current.submit({ name: "edited" }))
+            act(() => result.current.submit({ name: "x" }))
+            await waitFor(() => expect(result.current.status.kind).toBe("success"))
+            expect(sent[1]).toEqual(sent[0])
+        })
+
+        it("lets a definitive refusal release the unresolved attempt", async () => {
+            const request = vi
+                .fn<(b: Body, c: MutationRequestContext) => Promise<string>>()
+                .mockRejectedValueOnce(network())
+                .mockRejectedValueOnce(new ApiRequestError(400, "x", null))
+                .mockResolvedValue("done")
+            const { result } = renderHook(
+                () => useAuthoringMutation<Body, string>({ scopeKey: "a", request, holdUnresolved: true }),
+                { wrapper: wrapperWith() },
+            )
+            act(() => result.current.submit({ name: "x" }))
+            await waitFor(() => expect(result.current.status.kind).toBe("error"))
+            act(() => result.current.retry())
             await waitFor(() => expect(request).toHaveBeenCalledTimes(2))
-            expect(keys[1]).not.toBe(keys[0])
+            await waitFor(() => expect(result.current.status).toMatchObject({ error: { kind: "invalid" } }))
+            act(() => result.current.submit({ name: "edited" }))
+            await waitFor(() => expect(request).toHaveBeenCalledTimes(3))
+            expect(request.mock.calls[2]![0]).toEqual({ name: "edited" })
         })
 
         it("reports a confirmed write whose refresh returned failed as confirmed, never as an error, and cannot be retried", async () => {
@@ -292,7 +355,7 @@ describe("useAuthoringMutation", () => {
             expect(request).toHaveBeenCalledTimes(1)
         })
 
-        it("is a plain success when the refresh was superseded or returned nothing", async () => {
+        it("keeps a write whose refresh was superseded unresolved, and a plain success when nothing was reported", async () => {
             const { result } = renderHook(
                 () =>
                     useAuthoringMutation<Body, string>({
@@ -303,7 +366,7 @@ describe("useAuthoringMutation", () => {
                 { wrapper: wrapperWith() },
             )
             act(() => result.current.submit({ name: "x" }))
-            await waitFor(() => expect(result.current.status.kind).toBe("success"))
+            await waitFor(() => expect(result.current.status.kind).toBe("confirmed"))
         })
 
         it("keeps a stale-version refusal as an error the caller resolves, with no receipt", async () => {

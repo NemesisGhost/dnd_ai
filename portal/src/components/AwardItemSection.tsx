@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { itemAuthoringPath, itemsPath, runItemOperation } from "../api/items"
 import { apiRequest } from "../api/http"
 import { useSession } from "../context/SessionContext"
@@ -18,9 +18,12 @@ interface Props {
     showHeading?: boolean
 }
 
+// The whole request: what to award, to whom, and the item version it was prepared against.
+// Retry and an unchanged resubmission send exactly this, so the body never changes under a key.
 interface Award {
     itemId: string
     holderId: string
+    expectedLastEventId: string | null
 }
 
 const CODE_MESSAGE: Readonly<Record<string, string>> = {
@@ -30,8 +33,10 @@ const CODE_MESSAGE: Readonly<Record<string, string>> = {
 }
 
 // Awards an unplaced, published item to a character in the session, from the run page. The
-// campaign clock supplies the time. The item's current token is read just before the award so
-// a change made elsewhere meanwhile is reported as stale instead of overwritten.
+// campaign clock supplies the time. The item's current token is read once, when the award is
+// prepared, so a change made elsewhere meanwhile is reported as stale instead of overwritten. That
+// prepared award is then the request: if the answer is lost, Retry (or pressing Award again) sends
+// the same token, target, body and key, and never reads a new token under the old key.
 export function AwardItemSection({ campaignId, participants, showHeading = true }: Props) {
     const { reload } = useSession()
     const announce = useAnnounce()
@@ -39,26 +44,55 @@ export function AwardItemSection({ campaignId, participants, showHeading = true 
     const [itemId, setItemId] = useState("")
     const [holderId, setHolderId] = useState("")
     const [problem, setProblem] = useState<string | null>(null)
+    const [preparing, setPreparing] = useState(false)
+    const [prepareFailed, setPrepareFailed] = useState(false)
+    const prepared = useRef<Award | null>(null)
     const present = participants.filter((p) => p.removed_at === null)
     const mutation = useAuthoringMutation<Award, ItemView>({
         scopeKey: `award-item:${campaignId}`,
-        request: async (award, ctx) => {
-            const current = await apiRequest<ItemView>("GET", itemAuthoringPath(campaignId, award.itemId))
-            return runItemOperation(
+        request: (award, ctx) =>
+            runItemOperation(
                 campaignId,
                 award.itemId,
                 "award",
-                { expected_last_event_id: current.last_event_id, holder_entity_id: award.holderId },
+                { expected_last_event_id: award.expectedLastEventId, holder_entity_id: award.holderId },
                 ctx,
-            )
-        },
+            ),
         onSuccess: async () => {
+            prepared.current = null
             setItemId("")
-            await items.refetch()
+            const outcome = await items.refetch()
+            if (outcome !== "ok") return outcome
             announce("Item awarded")
         },
     })
     const error = mutation.status.kind === "error" ? mutation.status.error : null
+
+    async function submitAward() {
+        if (itemId === "" || holderId === "") {
+            setProblem("Choose an item and who receives it.")
+            return
+        }
+        setProblem(null)
+        setPrepareFailed(false)
+        const earlier = prepared.current
+        if (earlier !== null && error !== null && (error.kind === "network" || error.kind === "server")) {
+            // An award whose answer was lost may have happened: send that one again, unchanged.
+            mutation.submit(earlier)
+            return
+        }
+        setPreparing(true)
+        try {
+            const current = await apiRequest<ItemView>("GET", itemAuthoringPath(campaignId, itemId))
+            const award = { itemId, holderId, expectedLastEventId: current.last_event_id }
+            prepared.current = award
+            mutation.submit(award)
+        } catch {
+            setPrepareFailed(true)
+        } finally {
+            setPreparing(false)
+        }
+    }
     const explained = error?.code ? (CODE_MESSAGE[error.code] ?? null) : null
 
     if (items.state.kind === "loading") return <p role="status">Loading items…</p>
@@ -75,6 +109,7 @@ export function AwardItemSection({ campaignId, participants, showHeading = true 
     return (
         <Wrapper aria-labelledby={showHeading ? "award-heading" : undefined}>
             {showHeading ? <h2 id="award-heading">Award an item</h2> : null}
+            {prepareFailed ? <p role="alert">The item could not be checked, so nothing was awarded. Try again.</p> : null}
             {explained !== null ? (
                 <p role="alert">{explained}</p>
             ) : error !== null ? (
@@ -89,12 +124,7 @@ export function AwardItemSection({ campaignId, participants, showHeading = true 
                     className="authoring-form"
                     onSubmit={(event) => {
                         event.preventDefault()
-                        if (itemId === "" || holderId === "") {
-                            setProblem("Choose an item and who receives it.")
-                            return
-                        }
-                        setProblem(null)
-                        mutation.submit({ itemId, holderId })
+                        if (!preparing) void submitAward()
                     }}
                 >
                     <SelectField
@@ -120,7 +150,7 @@ export function AwardItemSection({ campaignId, participants, showHeading = true 
                     <button
                         type="submit"
                         className="authoring-button"
-                        disabled={mutation.status.kind === "pending"}
+                        disabled={mutation.status.kind === "pending" || preparing}
                     >
                         Award item
                     </button>

@@ -1195,3 +1195,76 @@ describe("travel in the session", () => {
     expect(screen.getByLabelText(/What happened/)).toHaveValue("Half written")
   })
 })
+
+describe("unresolved writes and retained session data", () => {
+  const ENTRY = { event_id: "ev1", name: "Original entry", summary: null, event_type_code: "session_narrative", event_status_code: "recorded", world_time_id: "t1", details: null }
+
+  it("confirms a log entry whose answer was lost before edited text can become a second entry", async () => {
+    // The server committed the entry, then the answer was lost.
+    let state = playing()
+    let posts = 0
+    server.on("GET", S, () => ({ body: state }))
+    server.on("POST", `${S}/log`, () => {
+      posts += 1
+      if (posts === 1) {
+        state = playing({ events: [ENTRY] })
+        return { networkError: true }
+      }
+      // The same key replays the original receipt; no second event exists.
+      return { status: 201, body: { session_id: "s1", row_version: 3, changed: true, event_id: "ev1" } }
+    })
+    openApp(RUN)
+    fireEvent.change(await screen.findByLabelText(/What happened/), { target: { value: "Original entry" } })
+    fireEvent.click(screen.getByRole("button", { name: "Record entry" }))
+    expect(await screen.findByRole("alert")).toHaveTextContent("cannot tell whether this was saved")
+
+    // The person edits the text and presses the ordinary button instead of Retry.
+    fireEvent.change(screen.getByLabelText(/What happened/), { target: { value: "Edited entry" } })
+    fireEvent.click(screen.getByRole("button", { name: "Record entry" }))
+    await waitFor(() => expect(server.callsTo("POST", `${S}/log`)).toHaveLength(2))
+    const [first, second] = server.callsTo("POST", `${S}/log`)
+    expect(second!.body).toEqual(first!.body)
+    expect(second!.body).toMatchObject({ entry: "Original entry" })
+    expect(second!.headers["Idempotency-Key"]).toBe(first!.headers["Idempotency-Key"])
+    // Confirmation of the original did not erase the later edit, and the person is told.
+    expect(await screen.findByText(/Your earlier entry was recorded/)).toBeInTheDocument()
+    expect(screen.getByLabelText(/What happened/)).toHaveValue("Edited entry")
+    const log = await screen.findByRole("list", { name: "Session log" })
+    expect(within(log).getAllByRole("listitem")).toHaveLength(1)
+
+    // Only a deliberate second press records the edited text, under its own key.
+    fireEvent.click(screen.getByRole("button", { name: "Record entry" }))
+    await waitFor(() => expect(server.callsTo("POST", `${S}/log`)).toHaveLength(3))
+    expect(server.callsTo("POST", `${S}/log`)[2]!.body).toMatchObject({ entry: "Edited entry" })
+    expect(server.callsTo("POST", `${S}/log`)[2]!.headers["Idempotency-Key"]).not.toBe(first!.headers["Idempotency-Key"])
+  })
+
+  it("does not show one session beneath another after a history jump and a failed read", async () => {
+    server.on("GET", S, { body: session({ title: "Session One" }) })
+    server.on("GET", "/campaigns/mundivita/sessions/s2", { status: 500, body: {} })
+    const { router } = openApp(RUN)
+    expect(await screen.findByRole("heading", { level: 1, name: "Run: Session One" })).toBeInTheDocument()
+    await act(async () => {
+      await router.navigate("/app/mundivita/sessions/s2/run")
+    })
+    expect(await screen.findByRole("alert")).toHaveTextContent("does not exist, or you do not have access")
+    expect(screen.queryByText(/Session One/)).toBeNull()
+    expect(screen.queryByRole("button", { name: "Add participant" })).toBeNull()
+  })
+
+  it("drops the session when a later read says access is gone", async () => {
+    let status = 200
+    server.on("GET", S, () => (status === 200 ? { body: session() } : { status, body: {} }))
+    server.on("POST", `${S}/participants`, { status: 409, body: { error: { code: "session_participant_exists", message: "m", correlation_id: "c" } } })
+    openApp(`${RUN}?section=participants`)
+    await screen.findByRole("heading", { level: 1, name: "Run: The Hollow Road" })
+    // The next read (after a refused add reloads the roster) is denied.
+    status = 403
+    fireEvent.focus(screen.getByRole("combobox", { name: "Character" }))
+    fireEvent.click(await screen.findByRole("option", { name: /Cael/ }))
+    fireEvent.click(screen.getByRole("button", { name: "Add participant" }))
+    expect(await screen.findByText(/does not exist, or you do not have access/)).toBeInTheDocument()
+    expect(screen.queryByText(/The Hollow Road/)).toBeNull()
+    expect(screen.queryByRole("button", { name: "Add participant" })).toBeNull()
+  })
+})
