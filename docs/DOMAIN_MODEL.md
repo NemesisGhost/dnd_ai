@@ -321,6 +321,8 @@ A session records:
 
 A session is organizational context; timeline events remain the authority for world changes.
 
+**Participation role (Phase 15 CP-1).** A session participant is a character, and its *participation role* says how it takes part; the role is not the character's identity (the entity subtype `player_character` or `npc`). A character may take the role matching its own kind, or `guest`: a player character takes `player_character` or `guest`, an NPC takes `npc` or `guest`, and any other or unusable character (unpublished, inactive, another world) takes none. The policy lives in `domain/session_participation.py`; the add command enforces it and the session read model publishes it to editors as `participant_role_options` (character kind to roles, matching role first), so the Run Session form offers nothing the server would refuse. Observer, controller and GM are account roles in the access model and are never participation roles. A usable character with an incompatible role is refused with `session_participant_role_mismatch`; an unknown, unpublished, inactive or foreign character with `session_participant_invalid` (which never says which). Neither changes participant rows or the session version.
+
 ---
 
 ## 6. Time domain

@@ -86,4 +86,7 @@ export interface CampaignSessionDetail
     travel?: SessionTravelEntry[]
     // Editors only.
     participants?: SessionParticipant[] | null
+    // Editors only: the roles each kind of character may take (matching role first). Absent
+    // from older servers, in which case no role is offered.
+    participant_role_options?: Record<string, string[]> | null
 }

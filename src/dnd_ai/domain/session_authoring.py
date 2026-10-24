@@ -116,6 +116,14 @@ class ParticipantInvalidError(SafeMessageError):
     safe_message = "The selected character cannot take part in this session."
 
 
+class ParticipantRoleMismatchError(SafeMessageError):
+    """The character is usable, but the chosen role does not fit what kind of character it is."""
+
+    safe_status_code = 400
+    safe_error_code = "session_participant_role_mismatch"
+    safe_message = "That role does not fit this character. Choose the matching role, or Guest."
+
+
 class ParticipantExistsError(SafeMessageError):
     """The character is already present in this session."""
 
@@ -175,6 +183,7 @@ __all__ = [
     "AnotherSessionInProgressError",
     "ParticipantExistsError",
     "ParticipantInvalidError",
+    "ParticipantRoleMismatchError",
     "ParticipantRemovedError",
     "SessionAlreadyStartedError",
     "SessionEndNotAfterStartError",

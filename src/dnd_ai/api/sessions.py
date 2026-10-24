@@ -42,6 +42,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import Connection
 
 from dnd_ai.domain.access import AccessContext
+from dnd_ai.domain.session_participation import participant_role_options
 from dnd_ai.queries.session import (
     get_session_view,
     list_campaign_sessions,
@@ -164,6 +165,9 @@ class SessionDetailResponse(BaseModel):
     available_actions: list[str] | None = None
     # Editors only: who is (or was) present.
     participants: list[SessionParticipantResponse] | None = None
+    # Editors only: the roles each kind of character may take, from the same policy the add
+    # command enforces (character kind -> roles, matching role first). Additive.
+    participant_role_options: dict[str, list[str]] | None = None
 
 
 def _actions(lifecycle_status: str, play_status: str) -> list[str]:
@@ -306,6 +310,9 @@ def get_session_endpoint(
             ]
             if access.has_capability(_CANON_EDIT_CAPABILITY)
             else None
+        ),
+        participant_role_options=(
+            participant_role_options() if access.has_capability(_CANON_EDIT_CAPABILITY) else None
         ),
         events=[
             SessionEventResponse(

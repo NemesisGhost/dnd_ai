@@ -37,6 +37,7 @@ from dnd_ai.domain.session_authoring import (
     ParticipantExistsError,
     ParticipantInvalidError,
     ParticipantRemovedError,
+    ParticipantRoleMismatchError,
     SessionAlreadyStartedError,
     SessionEndNotAfterStartError,
     SessionNotActiveError,
@@ -47,6 +48,7 @@ from dnd_ai.domain.session_authoring import (
     normalize_log_details,
     normalize_log_entry,
 )
+from dnd_ai.domain.session_participation import PARTICIPANT_KINDS, participant_roles_for_kind
 from dnd_ai.domain.world_time import WorldTimeReferenceInvalidError
 from dnd_ai.queries.campaign_clock import resolve_effective_clock
 
@@ -56,7 +58,6 @@ from .events import EventParticipant, _insert_event_row
 from .session_authoring import LockedSession, lock_campaign_session
 from .sessions import SessionNotFoundError
 
-_PARTICIPANT_KINDS = frozenset({"npc", "player_character"})
 _UNIQUE_VIOLATION = "23505"
 
 
@@ -179,7 +180,7 @@ def _lock_participant_character(
     character = locked.get(character_id)
     if (
         character is None
-        or character.entity_type_code not in _PARTICIPANT_KINDS
+        or character.entity_type_code not in PARTICIPANT_KINDS
         or character.canon_status != "canon"
         or character.lifecycle_status != "active"
     ):
@@ -207,8 +208,10 @@ def add_session_participant(
     if current.ended_at is not None:
         raise SessionNotOpenError(f"session {session_id} has ended")
     kind = _lock_participant_character(connection, scope, character_id)
-    if participation_role != "guest" and participation_role != kind:
-        raise ParticipantInvalidError(f"{character_id} is a {kind}, not a {participation_role}")
+    if participation_role not in participant_roles_for_kind(kind):
+        raise ParticipantRoleMismatchError(
+            f"{character_id} is a {kind}, not a {participation_role}"
+        )
     try:
         participant_id = connection.execute(
             text("""

@@ -41,6 +41,10 @@ function session(extra: Record<string, unknown> = {}) {
     row_version: 3,
     available_actions: ["update", "start", "manage_participants", "archive"],
     participants: [],
+    participant_role_options: {
+      player_character: ["player_character", "guest"],
+      npc: ["npc", "guest"],
+    },
     events: [],
     ...extra,
   }
@@ -70,6 +74,8 @@ beforeEach(() => {
     body: {
       items: [
         { entity_id: "c1", category: "character", entity_type_code: "player_character", name: "Cael", summary: null },
+        { entity_id: "c2", category: "character", entity_type_code: "npc", name: "Doran", summary: null },
+        { entity_id: "c3", category: "character", entity_type_code: "character", name: "Bare", summary: null },
       ],
       next_cursor: null,
     },
@@ -237,6 +243,100 @@ describe("session run page", () => {
       fireEvent.focus(await screen.findByRole("combobox", { name: "Character" }))
       fireEvent.click(await screen.findByRole("option", { name: /Cael/ }))
     }
+
+    async function pick(name: RegExp) {
+      fireEvent.focus(await screen.findByRole("combobox", { name: "Character" }))
+      fireEvent.click(await screen.findByRole("option", { name }))
+    }
+    const roleOptions = () =>
+      within(screen.getByRole("combobox", { name: "Role" }))
+        .queryAllByRole("option")
+        .map((o) => o.textContent)
+
+    it("offers only the roles that fit the chosen character and repairs the choice when it changes", async () => {
+      server.on("GET", S, { body: session() })
+      openApp("/app/mundivita/sessions/s1/run?section=participants")
+      await pick(/Cael/)
+      expect(roleOptions()).toEqual(["Player character", "Guest"])
+      expect(screen.getByRole("combobox", { name: "Role" })).toHaveValue("player_character")
+      // Choosing the other kind swaps the options and the default.
+      await pick(/Doran/)
+      expect(roleOptions()).toEqual(["NPC", "Guest"])
+      expect(screen.getByRole("combobox", { name: "Role" })).toHaveValue("npc")
+    })
+
+    it("keeps an explicitly chosen Guest across characters and submits it", async () => {
+      server.on("GET", S, { body: session() })
+      server.on("POST", `${S}/participants`, {
+        status: 201,
+        body: { session_id: "s1", row_version: 4, changed: true, session_participant_id: "p9" },
+      })
+      openApp("/app/mundivita/sessions/s1/run?section=participants")
+      await pick(/Cael/)
+      fireEvent.change(screen.getByRole("combobox", { name: "Role" }), { target: { value: "guest" } })
+      await pick(/Doran/)
+      expect(screen.getByRole("combobox", { name: "Role" })).toHaveValue("guest")
+      fireEvent.click(screen.getByRole("button", { name: "Add participant" }))
+      await waitFor(() => expect(server.callsTo("POST", `${S}/participants`)).toHaveLength(1))
+      expect(server.callsTo("POST", `${S}/participants`)[0]!.body).toEqual({
+        expected_row_version: 3,
+        character_id: "c2",
+        participation_role: "guest",
+      })
+    })
+
+    it("offers no role for a character that cannot take part, and sends nothing", async () => {
+      server.on("GET", S, { body: session() })
+      openApp("/app/mundivita/sessions/s1/run?section=participants")
+      await pick(/Bare/)
+      expect(roleOptions()).toEqual([])
+      expect(screen.getByRole("combobox", { name: "Role" })).toBeDisabled()
+      fireEvent.click(screen.getByRole("button", { name: "Add participant" }))
+      expect((await screen.findAllByText("This character cannot take part in a session.")).length).toBeGreaterThan(0)
+      expect(server.callsTo("POST", /./)).toHaveLength(0)
+    })
+
+    it("explains a role mismatch and an unusable character differently, keeping the choice", async () => {
+      server.on("GET", S, { body: session() })
+      let code = "session_participant_role_mismatch"
+      server.on("POST", `${S}/participants`, () => ({
+        status: 400,
+        body: { error: { code, message: "m", correlation_id: "c" } },
+      }))
+      openApp("/app/mundivita/sessions/s1/run?section=participants")
+      await pickCael()
+      fireEvent.click(screen.getByRole("button", { name: "Add participant" }))
+      expect(await screen.findByRole("alert")).toHaveTextContent("That role does not fit this character")
+      expect(screen.getByRole("combobox", { name: "Character" })).toHaveValue("Cael")
+      code = "session_participant_invalid"
+      fireEvent.click(screen.getByRole("button", { name: "Add participant" }))
+      expect(await screen.findByText(/only published, active characters of this world can/)).toBeInTheDocument()
+      expect(screen.queryByText(/does not fit this character/)).toBeNull()
+      expect(screen.getByRole("combobox", { name: "Character" })).toHaveValue("Cael")
+    })
+
+    it("does not send a second add while the first is pending", async () => {
+      server.on("GET", S, { body: session() })
+      let release: () => void = () => undefined
+      server.on(
+        "POST",
+        `${S}/participants`,
+        () =>
+          new Promise((resolve) => {
+            release = () =>
+              resolve({ status: 201, body: { session_id: "s1", row_version: 4, changed: true, session_participant_id: "p9" } })
+          }),
+      )
+      openApp("/app/mundivita/sessions/s1/run?section=participants")
+      await pickCael()
+      fireEvent.click(screen.getByRole("button", { name: "Add participant" }))
+      await waitFor(() => expect(server.callsTo("POST", `${S}/participants`)).toHaveLength(1))
+      const saving = screen.getByRole("button", { name: "Saving…" })
+      expect(saving).toBeDisabled()
+      fireEvent.click(saving)
+      expect(server.callsTo("POST", `${S}/participants`)).toHaveLength(1)
+      release()
+    })
 
     it("lists active participants with roles on load and the removed ones separately", async () => {
       server.on("GET", S, {
@@ -510,11 +610,11 @@ describe("stages and sections", () => {
     openApp(`${RUN}?section=participants`)
     fireEvent.focus(await screen.findByRole("combobox", { name: "Character" }))
     fireEvent.click(await screen.findByRole("option", { name: /Cael/ }))
-    fireEvent.change(screen.getByRole("combobox", { name: "Role" }), { target: { value: "npc" } })
+    fireEvent.change(screen.getByRole("combobox", { name: "Role" }), { target: { value: "guest" } })
     fireEvent.click(screen.getByRole("link", { name: "3. Wrap up" }))
     fireEvent.click(screen.getByRole("link", { name: "1. Prepare" }))
     expect(screen.getByRole("combobox", { name: "Character" })).toHaveValue("Cael")
-    expect(screen.getByRole("combobox", { name: "Role" })).toHaveValue("npc")
+    expect(screen.getByRole("combobox", { name: "Role" })).toHaveValue("guest")
   })
 
   it("offers Advance and Correct time only in the Run stage and keeps a half-entered time", async () => {

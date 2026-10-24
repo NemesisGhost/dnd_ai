@@ -186,16 +186,29 @@ def test_participants_are_published_characters_with_a_matching_role(s: ContentSe
         == 201
     )
 
-    mismatch = post(
-        s,
-        sid,
-        "/participants",
-        {"character_id": published_pc(s, "Bryn"), "participation_role": "npc"},
-    )
-    assert (
-        mismatch.status_code == 400
-        and mismatch.json()["error"]["code"] == "session_participant_invalid"
-    )
+    before = detail(s, sid)
+    assert before["participant_role_options"] == {
+        "player_character": ["player_character", "guest"],
+        "npc": ["npc", "guest"],
+    }
+    # A usable character with the wrong role is refused with its own code; nothing changes.
+    for character, wrong_role in (
+        (published_pc(s, "Bryn"), "npc"),
+        (published_npc(s, "Corin"), "player_character"),
+    ):
+        mismatch = post(
+            s,
+            sid,
+            "/participants",
+            {"character_id": character, "participation_role": wrong_role},
+        )
+        assert mismatch.status_code == 400, mismatch.text
+        assert mismatch.json()["error"]["code"] == "session_participant_role_mismatch"
+        after = detail(s, sid)
+        assert after["participants"] == before["participants"]
+        assert after["row_version"] == before["row_version"]
+    # The member view carries neither the roster nor the catalog.
+    assert detail(s, sid, "player")["participant_role_options"] is None
     bad_role = post(
         s, sid, "/participants", {"character_id": pc, "participation_role": "spectator"}
     )

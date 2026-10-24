@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react"
 import type { ReactNode } from "react"
 import { Link, useParams } from "react-router"
 import {
-    addSessionParticipant,
     endSession,
     logSessionEntry,
     removeSessionParticipant,
@@ -10,11 +9,10 @@ import {
     startSession,
 } from "../api/sessionAuthoring"
 import { sessionEncountersPath } from "../api/encounters"
-import { fetchWorldEntities } from "../api/world"
 import { CampaignClockCard } from "../components/CampaignClockCard"
 import { ConfirmDialog } from "../components/authoring/ConfirmDialog"
 import { useAnnounce } from "../components/authoring/announcer"
-import { SelectField, TextAreaField, TextField } from "../components/authoring/fields"
+import { TextAreaField, TextField } from "../components/authoring/fields"
 import {
     AuthoringForm,
     ErrorSummary,
@@ -23,8 +21,6 @@ import {
     StaleWriteNotice,
 } from "../components/authoring/feedback"
 import type { FieldError } from "../components/authoring/feedback"
-import { ReferenceCombobox } from "../components/authoring/ReferenceCombobox"
-import type { ReferenceOption } from "../components/authoring/ReferenceCombobox"
 import { WorldTimePicker } from "../components/authoring/WorldTimePicker"
 import { useSession } from "../context/SessionContext"
 import { AwardItemSection } from "../components/AwardItemSection"
@@ -32,6 +28,8 @@ import { EncounterList } from "../components/EncounterList"
 import { TravelSection } from "../components/TravelSection"
 import { SessionEventList } from "../components/sessionRun/SessionActivity"
 import { RunBreadcrumb, RunSectionNav, RunSectionPanel, RunStageNav } from "../components/sessionRun/RunNav"
+import { CODE_MESSAGE } from "../components/sessionRun/runMessages"
+import { ParticipantForm } from "../components/sessionRun/ParticipantForm"
 import { RealWorldTime, SessionReview } from "../components/sessionRun/SessionReview"
 import { SECTIONS, panelHeadingId } from "../components/sessionRun/runStages"
 import type { SectionKey } from "../components/sessionRun/runStages"
@@ -51,21 +49,6 @@ import "../components/authoring/authoring.css"
 const base = (campaignId: string): string => `/app/${encodeURIComponent(campaignId)}`
 const ENTRY_MAX = 500
 const DETAILS_MAX = 4000
-
-const CODE_MESSAGE: Readonly<Record<string, string>> = {
-    clock_required: "Set the campaign time first (the card on this page), or choose a time.",
-    another_session_in_progress: "Another session of this campaign is already in progress.",
-    session_already_started: "This session has already started.",
-    session_not_in_progress: "This session is not in progress.",
-    session_not_open: "This session has ended.",
-    session_not_active:
-        "This session is not active, so it cannot be changed. An archived session must be restored first.",
-    session_end_not_after_start: "The end time must be later than when the session began.",
-    session_participant_invalid: "That character cannot take part: only published characters can.",
-    session_participant_exists: "That character is already in this session.",
-    session_participant_removed: "That participant has already been removed.",
-    world_time_id_invalid: "That time is not available. Choose another.",
-}
 
 const STATUS_LABEL: Readonly<Record<string, string>> = {
     unscheduled: "Not scheduled",
@@ -438,34 +421,10 @@ function Participants({
 }) {
     const { reload } = useSession()
     const announce = useAnnounce()
-    const [character, setCharacter] = useState<ReferenceOption | null>(null)
-    const [role, setRole] = useState("guest")
-    const [errors, setErrors] = useState<FieldError[]>([])
-    const [attempt, setAttempt] = useState(0)
     const participants = session.participants ?? []
     const present = participants.filter((p) => p.removed_at === null)
     const gone = participants.filter((p) => p.removed_at !== null)
 
-    const add = useAuthoringMutation<{ characterId: string; role: string }, PlayReceipt>({
-        scopeKey: `add-participant:${session.session_id}`,
-        request: (body, ctx) =>
-            addSessionParticipant(
-                campaignId,
-                session.session_id,
-                {
-                    expected_row_version: session.row_version ?? 1,
-                    character_id: body.characterId,
-                    participation_role: body.role,
-                },
-                ctx,
-            ),
-        onSuccess: async () => {
-            setCharacter(null)
-            setErrors([])
-            await refetch()
-            announce("Participant added")
-        },
-    })
     const remove = useAuthoringMutation<SessionParticipant, PlayReceipt>({
         scopeKey: `remove-participant:${session.session_id}`,
         request: (participant, ctx) =>
@@ -481,49 +440,9 @@ function Participants({
             announce("Participant removed")
         },
     })
-    const addError = add.status.kind === "error" ? add.status.error : null
     const removeError = remove.status.kind === "error" ? remove.status.error : null
-    const addMessage = useMessage(addError)
     const removeMessage = useMessage(removeError)
     const presentIds = new Set(present.map((p) => p.character_id))
-
-    // A duplicate means the roster this page shows is out of date: reload it. The
-    // failure stays on screen (the mutation scope does not follow the row version).
-    useEffect(() => {
-        if (addError?.code === "session_participant_exists") {
-            void refetch()
-        }
-    }, [addError, refetch])
-
-    async function searchCharacters(query: string, signal: AbortSignal): Promise<ReferenceOption[]> {
-        const page = await fetchWorldEntities(
-            campaignId,
-            { category: "character", query, limit: 20 },
-            signal,
-        )
-        return page.items
-            .filter((item) => !presentIds.has(item.entity_id))
-            .map((item) => ({
-                id: item.entity_id,
-                label: item.name,
-                detail: item.entity_type_code === "player_character" ? "Player character" : "NPC",
-            }))
-    }
-
-    function submit() {
-        if (character === null) {
-            setErrors([{ fieldId: "participant-character", message: "Choose a character." }])
-            setAttempt((n) => n + 1)
-            return
-        }
-        if (presentIds.has(character.id)) {
-            setErrors([{ fieldId: "participant-character", message: CODE_MESSAGE.session_participant_exists! }])
-            setAttempt((n) => n + 1)
-            return
-        }
-        setErrors([])
-        add.submit({ characterId: character.id, role })
-    }
 
     return (
         <>
@@ -572,48 +491,12 @@ function Participants({
                 </p>
             ) : null}
             {canManage ? (
-                <AuthoringForm label="Add a participant" onSubmit={submit}>
-                    <ErrorSummary errors={errors} attempt={attempt} />
-                    {addError?.kind === "stale" ? (
-                        <StaleWriteNotice
-                            onLoadLatest={() => {
-                                // Clear the notice only once the new version is in, so a resubmit can't reuse the old one.
-                                void refetch().then(() => add.reset())
-                            }}
-                        />
-                    ) : addMessage !== null ? (
-                        <p role="alert">{addMessage}</p>
-                    ) : addError !== null ? (
-                        <MutationStatusMessage error={addError} onRetry={add.retry} onCheckSession={reload} />
-                    ) : null}
-                    <ReferenceCombobox
-                        id="participant-character"
-                        label="Character"
-                        hint="Only published characters can take part."
-                        value={character}
-                        onChange={setCharacter}
-                        search={searchCharacters}
-                        error={errors.find((e) => e.fieldId === "participant-character")?.message ?? null}
-                        placeholder="Search characters"
-                    />
-                    <SelectField
-                        id="participant-role"
-                        label="Role"
-                        value={role}
-                        options={[
-                            { value: "player_character", label: "Player character" },
-                            { value: "npc", label: "NPC" },
-                            { value: "guest", label: "Guest" },
-                        ]}
-                        onChange={setRole}
-                    />
-                    <FormActions
-                        pending={add.status.kind === "pending"}
-                        saveLabel="Add participant"
-                        onCancel={() => setCharacter(null)}
-                        cancelLabel="Clear"
-                    />
-                </AuthoringForm>
+                <ParticipantForm
+                    campaignId={campaignId}
+                    session={session}
+                    presentCharacterIds={presentIds}
+                    refetch={refetch}
+                />
             ) : (
                 <p className="authoring-note">
                     {session.status_code !== "active"
