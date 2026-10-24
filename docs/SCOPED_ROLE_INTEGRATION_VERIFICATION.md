@@ -1,6 +1,6 @@
 # Scoped-role integration: verification record (CP-4)
 
-Branch `integration/scoped-roles`. The feature (`origin/feature/scoped-role-model` @ `07dcece1df199778b9971aec4ce9b2af3cf1d31b`) is merged **on this branch** (merge commit `16a8aff287a02db457bc30ba72d85b67663d1fe2`, parents `67bd15a…` and `07dcece…`); `phase15/completion` is unchanged at `67bd15ae93a906ca11f40efbd105d175aab79120` and does not contain the feature (`git merge-base --is-ancestor 07dcece 67bd15a` is false). Nothing here is merged into `phase15/completion`, deployed to any database, or CI-verified. Phase 15 remains implemented with acceptance pending.
+Branch `integration/scoped-roles`. The feature (`origin/feature/scoped-role-model` @ `07dcece1df199778b9971aec4ce9b2af3cf1d31b`) is merged **on this branch** (merge commit `16a8aff287a02db457bc30ba72d85b67663d1fe2`, parents `67bd15a…` and `07dcece…`); `phase15/completion` is unchanged at `67bd15ae93a906ca11f40efbd105d175aab79120` and does not contain the feature (`git merge-base --is-ancestor 07dcece 67bd15a` is false). Nothing here is merged into `phase15/completion` or deployed to the owner's database; CI evidence, when any exists, is recorded under the draft PR for this branch, not here. Phase 15 remains implemented with acceptance pending.
 
 ## What was run on the final source tree
 
@@ -31,7 +31,7 @@ No browser automation was available. Nothing was checked in a real browser, with
 
 ## Migration rehearsals (disposable `dnd_ai_m1415_cp4_*` databases; never `dnd_ai`)
 
-Unchanged by this follow-up (no migration changed). Clean to 138 with `alembic check` clean; a populated 136→137→138 fixture verified by `scripts/operations/verify_scoped_role_upgrade.py`; lossy downgrade and re-upgrade (the revision 138 downgrade defect was found and fixed here); grants, default privileges, documentation and data-classification tests (602) green on the upgraded copy and the clean database. These are **representative fixtures, not verification of the owner's snapshot**: CP-0's dump and restore of `dnd_ai` was not authorised or run, and that verification is pending. Interrupted test runs earlier left `dnd_ai_test_*` databases on the local server; they were not dropped.
+Unchanged by this follow-up (no migration changed). Clean to 138 with `alembic check` clean; a populated 136→137→138 fixture verified by `scripts/operations/verify_scoped_role_upgrade.py`; lossy downgrade and re-upgrade (the revision 138 downgrade defect was found and fixed here); grants, default privileges, documentation and data-classification tests (602) green on the upgraded copy and the clean database. These are **representative fixtures, not verification of the owner's snapshot**: the exact snapshot of `dnd_ai` was dumped, restored and upgraded afterwards (next section). Interrupted test runs earlier left `dnd_ai_test_*` databases on the local server; they were not dropped.
 
 ## Integrated authority and exceptions, as tested
 
@@ -60,5 +60,15 @@ Behavior now (`components/authoring/permissionLoss.ts`, `useDungeonCommand`, `Wo
 - **Session travel and party directory:** reviewed (shared visibility resolution, no world role needed); no scoped-role-specific test beyond the existing suites.
 - **Seed line endings** are not fixed in the repository (see above). Low, development-only on Windows.
 - **The three owner-modified verification documents** are untouched on this branch.
-- **Defaults awaiting confirmation (DR-7):** Q2, Q5, Q8, Q11, Q12, Q13, lifecycle of the campaign-originated records, Viewer/Reader coexistence, the Q4 interpretation. Implemented as defaults; reconciling them here is not approval to deploy them.
-- **Pending evidence:** CI on the final head, real-browser/AT/responsive checks, SR-M1..SR-M14, the exact CP-0 snapshot restore and verification.
+- **Defaults approved (DR-7):** Q2, Q5, Q8, Q11, Q12, Q13, lifecycle of the campaign-originated records, Viewer/Reader coexistence, the Q4 interpretation. The owner approved the implemented defaults as a set on 2026-10-24 ("For now I accept the defaults."). Nothing was added to them. This is not approval to land or deploy.
+- **Pending evidence:** CI on the draft PR (see below), real-browser/AT/responsive checks and SR-M1..SR-M14. The exact-snapshot restore and upgrade rehearsal is now done (next section).
+
+## Exact-snapshot restore and upgrade rehearsal (2026-10-24)
+
+Performed against reviewed code `fef5431a72930f77c40bee9c26c467d50292c3e8` (the code reviewed at CP-4 sign-off; later commits on this branch are documentation only). Source: the owner's `dnd_ai` at revision 136, dumped with `pg_dump -Fc` (SHA-256 `034b7976f908809b4229cf32b8602b70f73ab39762a5217edabeeccd464f8783`) with no writers running; the dump and its evidence are kept outside every repository.
+
+- A restored baseline copy was identical to the source across all 215 tables (row counts and content hashes) at revision 136, and stayed unchanged.
+- A separate restored copy upgraded `136_world_viewer_role` -> `137_system_roles` -> `138_world_roles_and_use_grants` with no error.
+- Domain data and the required identities were preserved: every recorded user, membership, invitation, character link and grant id is present with identical key columns, and the domain schemas are row-for-row identical. Administrator holds `admin`+`gm`; the other 11 accounts hold `player`; the campaign-only GM was not promoted.
+- `scripts/operations/verify_scoped_role_upgrade.py verify` passed (`failures: []`); `alembic check` found no drift; grants, owners, defaults and comments equal a clean install of the same code; `tests/database/test_role_grants.py` 596 passed.
+- **Limits:** the real data held no `world_viewer` assignments and no deny grants (six `allow`), so Viewer treatment and deny preservation on the upgrade are covered by repository tests, not by this data. The dump is a point-in-time copy: the real `dnd_ai` has not been migrated and a fresh dump is required immediately before upgrading it.
