@@ -11,6 +11,7 @@ const participant = (id: string, name: string, removed: string | null = null): S
     session_participant_id: `p-${id}`,
     character_id: id,
     character_name: name,
+    character_kind: "player_character",
     participation_role: "player_character",
     added_at: "2026-01-01T00:00:00Z",
     removed_at: removed,

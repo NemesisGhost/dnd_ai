@@ -4,7 +4,7 @@ import { apiRequest } from "../api/http"
 import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
-import type { SessionParticipant } from "../types/campaignSession"
+import type { SessionParticipantPick } from "../types/campaignSession"
 import type { ItemList, ItemView } from "../types/items"
 import { useAnnounce } from "./authoring/announcer"
 import { SelectField } from "./authoring/fields"
@@ -13,7 +13,7 @@ import "./authoring/authoring.css"
 
 interface Props {
     campaignId: string
-    participants: SessionParticipant[]
+    participants: SessionParticipantPick[]
     // False when a surrounding panel supplies the section heading.
     showHeading?: boolean
 }

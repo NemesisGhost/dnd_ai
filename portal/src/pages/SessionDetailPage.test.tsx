@@ -228,3 +228,62 @@ describe("SessionDetailPage", () => {
         expect(within(table).queryByText(/GM notes/)).toBeNull()
     })
 })
+
+describe("SessionDetailPage participants", () => {
+    const stint = (id: string, name: string, kind: "npc" | "player_character", role: string, removed: string | null = null) => ({
+        session_participant_id: id,
+        character_id: `c-${name}`,
+        character_name: name,
+        character_kind: kind,
+        participation_role: role as "player_character" | "npc" | "guest",
+        added_at: "2026-10-12T19:00:00Z",
+        removed_at: removed,
+    })
+    const withRoster = (extra: Partial<CampaignSessionDetail>): CampaignSessionDetail => ({
+        ...editable,
+        participants: [
+            stint("p1", "Aldric", "player_character", "player_character"),
+            stint("p2", "Mira", "npc", "npc", "2026-10-12T20:00:00Z"),
+            stint("p3", "Mira", "npc", "guest"),
+        ],
+        ...extra,
+    })
+    const runLink = () => screen.queryByRole("link", { name: "Change participants in Run session" })
+
+    it("shows the shared read-only roster, with the same row details as Run, and no controls", () => {
+        renderSessionDetail(withRoster({ play_status: "scheduled", available_actions: ["update", "start", "manage_participants", "archive"] }), ["canon.edit"])
+        const section = screen.getByRole("region", { name: "Participants" })
+        const rows = within(section).getAllByRole("listitem")
+        expect(rows).toHaveLength(3)
+        expect(rows[0]).toHaveTextContent("Aldric (Player character; role: Player character). Present.")
+        expect(rows[1]).toHaveTextContent("Mira (NPC; role: Guest). Present.")
+        expect(rows[2]).toHaveTextContent("Mira (NPC; role: NPC). Left.")
+        expect(within(section).queryByRole("button")).toBeNull()
+        expect(within(section).queryByRole("combobox")).toBeNull()
+    })
+
+    it("links to Run only where the server offers a play action, and for running sessions too", () => {
+        const { unmount } = renderSessionDetail(
+            withRoster({ play_status: "scheduled", available_actions: ["update", "start", "manage_participants", "archive"] }),
+            ["canon.edit"],
+        )
+        expect(runLink()).toHaveAttribute("href", "/app/mundivita/sessions/session-12/run?section=participants")
+        unmount()
+        const running = renderSessionDetail(
+            withRoster({ play_status: "in_progress", available_actions: ["update", "manage_participants", "log", "end"] }),
+            ["canon.edit"],
+        )
+        expect(runLink()).toBeInTheDocument()
+        running.unmount()
+        // A completed session keeps its roster but offers no Run link.
+        renderSessionDetail(withRoster({ play_status: "completed", available_actions: ["update", "archive"] }), ["canon.edit"])
+        expect(within(screen.getByRole("region", { name: "Participants" })).getAllByRole("listitem")).toHaveLength(3)
+        expect(runLink()).toBeNull()
+    })
+
+    it("shows no roster to a member, whose response carries none", () => {
+        renderSessionDetail({ ...sessionFixture, participants: null })
+        expect(screen.queryByRole("region", { name: "Participants" })).toBeNull()
+        expect(runLink()).toBeNull()
+    })
+})

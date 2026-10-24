@@ -133,7 +133,7 @@ describe("session run page", () => {
     server.on("GET", S, {
       body: session({
         participants: [
-          { session_participant_id: "p1", character_id: "c9", character_name: "Mira", participation_role: "npc", added_at: "2026-10-12T19:00:00Z", removed_at: null },
+          { session_participant_id: "p1", character_id: "c9", character_name: "Mira", character_kind: "npc", participation_role: "npc", added_at: "2026-10-12T19:00:00Z", removed_at: null },
         ],
       }),
     })
@@ -145,7 +145,7 @@ describe("session run page", () => {
       body: { session_id: "s1", row_version: 4, changed: true, session_participant_id: "p1" },
     })
     openApp("/app/mundivita/sessions/s1/run")
-    expect(await screen.findByText(/Mira \(npc\)/)).toBeInTheDocument()
+    expect(await rosterRow("Mira")).toHaveTextContent("Mira (NPC; role: NPC). Present.")
     fireEvent.click(screen.getByRole("button", { name: "Add participant" }))
     expect((await screen.findAllByText("Choose a character.")).length).toBeGreaterThan(0)
     expect(server.callsTo("POST", /./)).toHaveLength(0)
@@ -225,10 +225,18 @@ describe("session run page", () => {
   })
 
   describe("participants", () => {
-    const person = (id: string, characterId: string, name: string, role: string, removedAt: string | null = null) => ({
+    const person = (
+      id: string,
+      characterId: string,
+      name: string,
+      role: string,
+      removedAt: string | null = null,
+      kind: string = role === "guest" ? "npc" : role,
+    ) => ({
       session_participant_id: id,
       character_id: characterId,
       character_name: name,
+      character_kind: kind,
       participation_role: role,
       added_at: "2026-10-12T19:00:00Z",
       removed_at: removedAt,
@@ -359,7 +367,7 @@ describe("session run page", () => {
 
       failRead = false
       fireEvent.click(screen.getByRole("button", { name: "Try again" }))
-      expect(await screen.findByText(/Cael \(player character\)/)).toBeInTheDocument()
+      expect(await rosterRow("Cael")).toHaveTextContent("Cael (Player character; role: Player character). Present.")
       expect(screen.queryByText(/Saved\. The latest participant list/)).toBeNull()
       expect(screen.getByRole("button", { name: "Add participant" })).toBeEnabled()
       expect(server.callsTo("POST", `${S}/participants`)).toHaveLength(1)
@@ -400,8 +408,10 @@ describe("session run page", () => {
         }),
       })
       openApp("/app/mundivita/sessions/s1/run")
-      expect(await screen.findByText(/Mira \(npc\)/)).toBeInTheDocument()
-      expect(screen.getByText("Left: Borin")).toBeInTheDocument()
+      expect(await rosterRow("Mira")).toHaveTextContent("Mira (NPC; role: NPC). Present.")
+      const borin = await rosterRow("Borin")
+      expect(borin).toHaveTextContent("Borin (NPC; role: Guest). Left.")
+      expect(borin).toHaveTextContent("Removed:")
       expect(screen.queryByRole("button", { name: "Remove Borin" })).toBeNull()
     })
 
@@ -415,7 +425,7 @@ describe("session run page", () => {
         }),
       })
       openApp("/app/mundivita/sessions/s1/run")
-      expect(await screen.findByText(/Mira \(npc\)/)).toBeInTheDocument()
+      expect(await rosterRow("Mira")).toHaveTextContent("Mira (NPC; role: NPC). Present.")
       expect(screen.queryByRole("button", { name: "Remove Mira" })).toBeNull()
       expect(screen.queryByRole("button", { name: "Add participant" })).toBeNull()
     })
@@ -444,7 +454,7 @@ describe("session run page", () => {
       openApp("/app/mundivita/sessions/s1/run")
       await pickCael()
       fireEvent.click(screen.getByRole("button", { name: "Add participant" }))
-      expect(await screen.findByText(/Cael \(player character\)/)).toBeInTheDocument()
+      expect(await rosterRow("Cael")).toHaveTextContent("Cael (Player character; role: Player character). Present.")
       expect(server.callsTo("GET", S).length).toBeGreaterThanOrEqual(2)
       expect(screen.getByText("That character is already in this session.")).toBeInTheDocument()
     })
@@ -452,7 +462,7 @@ describe("session run page", () => {
     it("stops a duplicate before it is sent and does not offer present characters", async () => {
       server.on("GET", S, { body: session({ participants: [CAEL] }) })
       openApp("/app/mundivita/sessions/s1/run")
-      await screen.findByText(/Cael \(player character\)/)
+      await rosterRow("Cael")
       fireEvent.focus(screen.getByRole("combobox", { name: "Character" }))
       await waitFor(() => expect(server.callsTo("GET", /world\/search/).length).toBeGreaterThan(0))
       expect(screen.queryByRole("option", { name: /Cael/ })).toBeNull()
@@ -486,7 +496,7 @@ describe("session run page", () => {
         character_id: "c1",
         participation_role: "player_character",
       })
-      expect(await screen.findByText(/Cael \(player character\)/)).toBeInTheDocument()
+      expect(await rosterRow("Cael")).toHaveTextContent("Cael (Player character; role: Player character). Present.")
     })
 
     it("falls back to a visible message for an unrecognised or non-JSON conflict", async () => {
@@ -518,12 +528,16 @@ describe("session run page", () => {
       })
       openApp("/app/mundivita/sessions/s1/run")
       fireEvent.click(await screen.findByRole("button", { name: "Remove Cael" }))
-      expect(await screen.findByText("Left: Cael")).toBeInTheDocument()
-      expect(screen.getByText("No one is in this session yet.")).toBeInTheDocument()
+      await waitFor(() => expect(screen.queryByRole("button", { name: "Remove Cael" })).toBeNull())
+      expect(await rosterRow("Cael")).toHaveTextContent("Cael (Player character; role: Player character). Left.")
 
       await pickCael() // the removed character is offered again
       fireEvent.click(screen.getByRole("button", { name: "Add participant" }))
-      expect(await screen.findByText(/Cael \(guest\)/)).toBeInTheDocument()
+      // Two stints of the same character are two rows: the earlier one has left, the new one is present.
+      await waitFor(async () => expect(await screen.findAllByRole("link", { name: "Cael" })).toHaveLength(2))
+      const stints = (await screen.findAllByRole("link", { name: "Cael" })).map((l) => l.closest("li")!.textContent)
+      expect(stints[0]).toContain("role: Guest). Present.")
+      expect(stints[1]).toContain("role: Player character). Left.")
       expect(server.callsTo("POST", `${S}/participants`)[0]!.body).toMatchObject({ expected_row_version: 4 })
     })
   })
@@ -538,11 +552,15 @@ const MIRA = {
   session_participant_id: "p1",
   character_id: "c9",
   character_name: "Mira",
+  character_kind: "npc",
   participation_role: "npc",
   added_at: "2026-10-12T19:00:00Z",
   removed_at: null,
 }
 const ENCOUNTERS = "/campaigns/mundivita/authoring/encounters?session_id=s1"
+
+const rosterRow = async (name: string): Promise<HTMLElement> =>
+  (await screen.findAllByRole("link", { name }))[0]!.closest("li")!
 
 const navLinks = (name: string) =>
   within(screen.getByRole("navigation", { name })).getAllByRole("link").map((l) => l.textContent)
@@ -993,7 +1011,10 @@ describe("stages and sections", () => {
       openApp(`${RUN}?section=review`)
       const review = await screen.findByRole("region", { name: "Session review" })
       expect(within(review).getByText("Recap: Into the hollow.")).toBeVisible()
-      expect(within(review).getByText("Mira: NPC")).toBeVisible()
+      const mira = within(review).getByRole("link", { name: "Mira" }).closest("li")!
+      expect(mira).toHaveTextContent("Mira (NPC; role: NPC). Present.")
+      expect(within(mira).getByRole("link", { name: "Mira" })).toHaveAttribute("href", "/app/mundivita/characters/c9")
+      expect(within(review).queryByRole("button", { name: "Remove Mira" })).toBeNull()
       expect(within(review).getByRole("link", { name: "The party enters the crypt." })).toHaveAttribute(
         "href",
         "/app/mundivita/events/ev1",
@@ -1266,5 +1287,64 @@ describe("unresolved writes and retained session data", () => {
     expect(await screen.findByText(/does not exist, or you do not have access/)).toBeInTheDocument()
     expect(screen.queryByText(/The Hollow Road/)).toBeNull()
     expect(screen.queryByRole("button", { name: "Add participant" })).toBeNull()
+  })
+})
+
+describe("shared roster on the run page", () => {
+  const BORIN = { ...MIRA, session_participant_id: "p5", character_id: "c5", character_name: "Borin", character_kind: "npc" }
+
+  it("offers Remove on the Prepare roster of a running session, and not on the review roster", async () => {
+    server.on("GET", S, { body: playing({ participants: [MIRA] }) })
+    openApp(`${RUN}?section=participants`)
+    expect(await screen.findByRole("button", { name: "Remove Mira" })).toBeEnabled()
+    expect(await rosterRow("Mira")).toHaveTextContent("Mira (NPC; role: NPC). Present.")
+  })
+
+  it("shows the same roster, read-only, in the wrap-up review of a running session", async () => {
+    server.on("GET", S, { body: playing({ participants: [MIRA] }) })
+    openApp(`${RUN}?section=review`)
+    const review = await screen.findByRole("region", { name: "Session review" })
+    expect(within(review).getByRole("link", { name: "Mira" }).closest("li")).toHaveTextContent(
+      "Mira (NPC; role: NPC). Present.",
+    )
+    expect(within(review).queryByRole("button", { name: /Remove/ })).toBeNull()
+  })
+
+  it("keeps the roster controls held while the roster read has failed, and never repeats a confirmed remove", async () => {
+    let failRead = false
+    let state = playing({ participants: [MIRA, BORIN] })
+    server.on("GET", S, () => (failRead ? { status: 500, body: {} } : { body: state }))
+    server.on("POST", `${S}/participants/p1/remove`, () => {
+      state = playing({ row_version: 4, participants: [{ ...MIRA, removed_at: "2026-10-12T20:00:00Z" }, BORIN] })
+      failRead = true
+      return { body: { session_id: "s1", row_version: 4, changed: true, session_participant_id: "p1" } }
+    })
+    openApp(`${RUN}?section=participants`)
+    fireEvent.click(await screen.findByRole("button", { name: "Remove Mira" }))
+    expect(await screen.findByText(/The latest session data could not be loaded/)).toBeInTheDocument()
+    // The stale roster still lists Mira as present, but no control may act on it.
+    expect(screen.getByRole("button", { name: "Remove Mira" })).toBeDisabled()
+    expect(screen.getByRole("button", { name: "Remove Borin" })).toBeDisabled()
+    expect(server.callsTo("POST", `${S}/participants/p1/remove`)).toHaveLength(1)
+
+    failRead = false
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Remove Mira" })).toBeNull())
+    expect(screen.getByRole("button", { name: "Remove Borin" })).toBeEnabled()
+    expect(await rosterRow("Mira")).toHaveTextContent("Mira (NPC; role: NPC). Left.")
+    expect(server.callsTo("POST", `${S}/participants/p1/remove`)).toHaveLength(1)
+  })
+
+  it("never shows one session's roster on another session after navigation", async () => {
+    server.on("GET", S, { body: playing({ participants: [MIRA] }) })
+    server.on("GET", "/campaigns/mundivita/sessions/s2", { status: 500, body: {} })
+    const { router } = openApp(`${RUN}?section=participants`)
+    await rosterRow("Mira")
+    await act(async () => {
+      await router.navigate("/app/mundivita/sessions/s2/run?section=participants")
+    })
+    expect(await screen.findByRole("alert")).toHaveTextContent("does not exist, or you do not have access")
+    expect(screen.queryByRole("link", { name: "Mira", hidden: true })).toBeNull()
+    expect(screen.queryByRole("button", { name: /Remove/ })).toBeNull()
   })
 })

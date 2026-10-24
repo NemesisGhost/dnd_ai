@@ -53,6 +53,7 @@ from dnd_ai.domain.errors import DomainAuthorizationError
 from dnd_ai.domain.session_authoring import derive_play_status
 
 from .campaign_clock import clock_display
+from .character import character_kind_for_type_code
 
 
 class SessionNotFoundError(DomainAuthorizationError):
@@ -284,6 +285,8 @@ class SessionParticipantView:
     session_participant_id: uuid.UUID
     character_id: uuid.UUID
     character_name: str
+    # `npc`, `player_character` or `character`, from the entity type (never from the role).
+    character_kind: str
     participation_role: str
     added_at: datetime
     removed_at: datetime | None
@@ -298,9 +301,11 @@ def list_session_participants(
     rows = connection.execute(
         text("""
             SELECT sp.session_participant_id, sp.character_id, e.canonical_name,
+                   et.code AS entity_type_code,
                    sp.participation_role, sp.added_at, sp.removed_at
             FROM campaign.session_participants sp
             JOIN core.entities e ON e.entity_id = sp.character_id
+            JOIN core.entity_types et ON et.entity_type_id = e.entity_type_id
             WHERE sp.session_id = :s
             ORDER BY (sp.removed_at IS NOT NULL), lower(e.canonical_name), sp.added_at
         """),
@@ -311,6 +316,7 @@ def list_session_participants(
             session_participant_id=row.session_participant_id,
             character_id=row.character_id,
             character_name=str(row.canonical_name),
+            character_kind=character_kind_for_type_code(str(row.entity_type_code)),
             participation_role=str(row.participation_role),
             added_at=row.added_at,
             removed_at=row.removed_at,

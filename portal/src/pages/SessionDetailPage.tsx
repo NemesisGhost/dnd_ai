@@ -13,6 +13,8 @@ import {
 import type { FieldError } from "../components/authoring/feedback"
 import { SessionLifecycleControls } from "../components/SessionLifecycleControls"
 import { TravelSummary } from "../components/sessionRun/SessionActivity"
+import { SessionRoster } from "../components/sessionRun/SessionRoster"
+import { canRunSession } from "../components/sessionRun/runAccess"
 import { SortableTable } from "../components/SortableTable"
 import type { SortableTableColumn } from "../components/SortableTable"
 import { useSession } from "../context/SessionContext"
@@ -486,6 +488,21 @@ export function SessionDetailPage({
                 refresh={refresh}
                 blockedReason={dirty ? "Save or discard your changes before archiving." : null}
             />
+            {session.participants != null ? (
+                <section aria-labelledby="session-participants-heading">
+                    <h2 id="session-participants-heading">Participants</h2>
+                    <SessionRoster campaignId={campaignId} participants={session.participants} />
+                    {canRunSession(session.available_actions) ? (
+                        <p>
+                            <Link
+                                to={`/app/${encodeURIComponent(campaignId)}/sessions/${encodeURIComponent(session.session_id)}/run?section=participants`}
+                            >
+                                Change participants in Run session
+                            </Link>
+                        </p>
+                    ) : null}
+                </section>
+            ) : null}
             <section aria-labelledby="session-events-heading">
                 <h2 id="session-events-heading">Events</h2>
                 {events.length > 0 ? (

@@ -2,29 +2,11 @@ import { Link } from "react-router"
 import type { CampaignSessionDetail } from "../../types/campaignSession"
 import type { EncounterSummary } from "../../types/encounters"
 import type { SectionKey } from "./runStages"
+import { RealWorldTime } from "./RealWorldTime"
 import { SessionEventList, TravelHistory } from "./SessionActivity"
+import { SessionRoster } from "./SessionRoster"
 
 const enc = encodeURIComponent
-
-function formatRealWorld(value: string): string {
-    const date = new Date(value)
-    return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
-}
-
-// A real-world timestamp, labelled as such so it is never read as in-world time.
-export function RealWorldTime({ label, value }: { label: string; value: string }) {
-    return (
-        <>
-            {label}: <time dateTime={value}>{formatRealWorld(value)}</time>
-        </>
-    )
-}
-
-const ROLE_LABEL: Readonly<Record<string, string>> = {
-    player_character: "player character",
-    npc: "NPC",
-    guest: "guest",
-}
 
 // Read-only recap of what the page already knows about the session. It changes nothing; each
 // "go to" is a link to the section that does, or a reason when that section offers nothing now.
@@ -49,7 +31,6 @@ export function SessionReview({
     const actions = session.available_actions ?? []
     const participants = session.participants ?? []
     const present = participants.filter((p) => p.removed_at === null)
-    const gone = participants.filter((p) => p.removed_at !== null)
     const pending = (encounters ?? []).filter((e) => e.status === "pending")
     const started = (encounters ?? []).filter((e) => e.status !== "pending")
     const campaign = `/app/${enc(campaignId)}`
@@ -84,17 +65,11 @@ export function SessionReview({
 
             <section aria-labelledby="review-participants-heading">
                 <h3 id="review-participants-heading">Participants ({present.length})</h3>
-                {present.length === 0 ? <p>No one is in this session.</p> : null}
-                <ul className="record-list">
-                    {present.map((p) => (
-                        <li key={p.session_participant_id}>
-                            {p.character_name}: {ROLE_LABEL[p.participation_role] ?? p.participation_role}
-                        </li>
-                    ))}
-                </ul>
-                {gone.length > 0 ? (
-                    <p className="authoring-note">Departed: {gone.map((p) => p.character_name).join(", ")}</p>
-                ) : null}
+                <SessionRoster
+                    campaignId={campaignId}
+                    participants={participants}
+                    emptyText="No one is in this session."
+                />
                 {actions.includes("manage_participants") ? (
                     <p>
                         <Link to={sectionHref("participants")}>Change participants</Link>

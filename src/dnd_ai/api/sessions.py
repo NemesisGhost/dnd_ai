@@ -35,7 +35,7 @@ reasons every other query router in this package has neither.
 
 import uuid
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field
@@ -141,6 +141,7 @@ class SessionParticipantResponse(BaseModel):
     session_participant_id: uuid.UUID
     character_id: uuid.UUID
     character_name: str
+    character_kind: Literal["npc", "player_character", "character"]
     participation_role: str
     added_at: datetime
     removed_at: datetime | None
@@ -302,6 +303,7 @@ def get_session_endpoint(
                     session_participant_id=p.session_participant_id,
                     character_id=p.character_id,
                     character_name=p.character_name,
+                    character_kind=p.character_kind,  # type: ignore[arg-type]
                     participation_role=p.participation_role,
                     added_at=p.added_at,
                     removed_at=p.removed_at,

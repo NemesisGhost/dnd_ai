@@ -30,7 +30,9 @@ import { SessionEventList } from "../components/sessionRun/SessionActivity"
 import { RunBreadcrumb, RunSectionNav, RunSectionPanel, RunStageNav } from "../components/sessionRun/RunNav"
 import { CODE_MESSAGE } from "../components/sessionRun/runMessages"
 import { ParticipantForm } from "../components/sessionRun/ParticipantForm"
-import { RealWorldTime, SessionReview } from "../components/sessionRun/SessionReview"
+import { RealWorldTime } from "../components/sessionRun/RealWorldTime"
+import { SessionReview } from "../components/sessionRun/SessionReview"
+import { SessionRoster } from "../components/sessionRun/SessionRoster"
 import { SECTIONS, panelHeadingId } from "../components/sessionRun/runStages"
 import type { SectionKey } from "../components/sessionRun/runStages"
 import { useRunNavigation } from "../components/sessionRun/useRunNavigation"
@@ -429,8 +431,9 @@ function Participants({
     const { reload } = useSession()
     const announce = useAnnounce()
     const participants = session.participants ?? []
-    const present = participants.filter((p) => p.removed_at === null)
-    const gone = participants.filter((p) => p.removed_at !== null)
+    const presentIds = new Set(
+        participants.filter((p) => p.removed_at === null).map((p) => p.character_id),
+    )
 
     const remove = useAuthoringMutation<SessionParticipant, PlayReceipt>({
         scopeKey: `remove-participant:${session.session_id}`,
@@ -451,34 +454,30 @@ function Participants({
     })
     const removeError = remove.status.kind === "error" ? remove.status.error : null
     const removeMessage = useMessage(removeError)
-    const presentIds = new Set(present.map((p) => p.character_id))
 
     return (
         <>
-            {present.length === 0 ? (
-                <p>No one is in this session yet.</p>
-            ) : (
-                <ul className="op-list">
-                    {present.map((p) => (
-                        <li key={p.session_participant_id}>
-                            {p.character_name} ({p.participation_role.replace("_", " ")}){" "}
-                            {canManage ? (
-                                <button
-                                    type="button"
-                                    className="authoring-button"
-                                    disabled={refreshFailed}
-                                    onClick={() => {
-                                        remove.reset()
-                                        remove.submit(p)
-                                    }}
-                                >
-                                    Remove {p.character_name}
-                                </button>
-                            ) : null}
-                        </li>
-                    ))}
-                </ul>
-            )}
+            <SessionRoster
+                campaignId={campaignId}
+                participants={participants}
+                controls={
+                    canManage
+                        ? (p) => (
+                              <button
+                                  type="button"
+                                  className="authoring-button"
+                                  disabled={refreshFailed}
+                                  onClick={() => {
+                                      remove.reset()
+                                      remove.submit(p)
+                                  }}
+                              >
+                                  Remove {p.character_name}
+                              </button>
+                          )
+                        : undefined
+                }
+            />
             {removeError?.kind === "stale" ? (
                 <StaleWriteNotice
                     onLoadLatest={() => {
@@ -494,11 +493,6 @@ function Participants({
                     onRetry={remove.retry}
                     onCheckSession={reload}
                 />
-            ) : null}
-            {gone.length > 0 ? (
-                <p className="authoring-note">
-                    Left: {gone.map((p) => p.character_name).join(", ")}
-                </p>
             ) : null}
             {canManage ? (
                 <ParticipantForm

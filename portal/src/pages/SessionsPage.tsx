@@ -1,5 +1,6 @@
 import { Link } from "react-router"
 import { SortableTable } from "../components/SortableTable"
+import { canRunSession } from "../components/sessionRun/runAccess"
 import type { SortableTableColumn } from "../components/SortableTable"
 import type {
     CampaignSessionListItem,
@@ -111,8 +112,7 @@ const editColumn: SortableTableColumn<CampaignSessionListItem> = {
     render: (session) => {
         const actions = session.available_actions ?? []
         const name = session.title ?? `session ${session.session_number}`
-        const runnable = actions.some((a) => a === "start" || a === "log" || a === "end")
-        if (!runnable) return null
+        if (!canRunSession(actions)) return null
         return <Link to={`${encodeURIComponent(session.session_id)}/run`}>Run {name}</Link>
     },
 }

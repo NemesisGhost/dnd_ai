@@ -237,6 +237,12 @@ def test_participants_are_published_characters_with_a_matching_role(s: ContentSe
         ("Mira", "npc"),
         ("Visitor", "guest"),
     ]
+    # The structured kind comes from the character, not the role: a guest NPC is still an NPC.
+    assert [(p["character_name"], p["character_kind"]) for p in view["participants"]] == [
+        ("Aldric", "player_character"),
+        ("Mira", "npc"),
+        ("Visitor", "npc"),
+    ]
     assert detail(s, sid, who="player")["participants"] is None
     (audit, *_) = s.audit("add_session_participant")
     assert audit.changed_fields["participation_role"] == "player_character"
@@ -261,6 +267,15 @@ def test_a_participant_can_be_removed_once_and_added_again(s: ContentSetup) -> N
     assert post(s, sid, "/participants", body).status_code == 201
     participants = detail(s, sid)["participants"]
     assert [p["removed_at"] is None for p in participants] == [True, False]
+    # The earlier stint is retained beside the new one, each under its own record id.
+    assert {p["character_id"] for p in participants} == {pc}
+    assert {p["character_kind"] for p in participants} == {"player_character"}
+    assert len({p["session_participant_id"] for p in participants}) == 2
+    assert participants[1]["session_participant_id"] == first["session_participant_id"]
+    assert participants[1]["removed_at"] is not None
+    # A member sees neither stint: the roster stays editor-only.
+    member = detail(s, sid, "player")
+    assert member["participants"] is None and member["participant_role_options"] is None
     missing = post(s, sid, f"/participants/{uuid.uuid4()}/remove", {})
     assert missing.status_code == 404
 

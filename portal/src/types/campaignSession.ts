@@ -1,3 +1,5 @@
+import type { CharacterKind } from "./character"
+
 export interface CampaignSessionListItem {
     session_id: string
     session_number: number
@@ -63,10 +65,14 @@ export interface SessionParticipant {
     session_participant_id: string
     character_id: string
     character_name: string
+    character_kind: CharacterKind
     participation_role: "player_character" | "npc" | "guest"
     added_at: string
     removed_at: string | null
 }
+
+// What the item and travel pickers need of a participant: who, and whether they are still present.
+export type SessionParticipantPick = Omit<SessionParticipant, "character_kind">
 
 export interface PlayReceipt {
     session_id: string

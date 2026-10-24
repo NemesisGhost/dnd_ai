@@ -9,7 +9,7 @@ import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import type { ClockState } from "../types/campaignClock"
 import type { PartyList, PartyMembers } from "../types/parties"
-import type { SessionParticipant, SessionTravelEntry } from "../types/campaignSession"
+import type { SessionParticipantPick, SessionTravelEntry } from "../types/campaignSession"
 import { useAnnounce } from "./authoring/announcer"
 import { SelectField, TextAreaField } from "./authoring/fields"
 import { MutationStatusMessage } from "./authoring/feedback"
@@ -24,7 +24,7 @@ const NOTE_MAX = 4000
 interface Props {
     campaignId: string
     sessionId: string
-    participants: SessionParticipant[]
+    participants: SessionParticipantPick[]
     // The session's travel, already filtered for the caller, shown beneath the form.
     travel: SessionTravelEntry[]
     // Re-reads the session (and so its travel). Resolves whether or not the read succeeded.
