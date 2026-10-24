@@ -37,6 +37,11 @@ vi.mock("../hooks/useWorldEntities", () => ({
     useWorldEntities: vi.fn(),
 }))
 
+// The organization page's members section reads its own route; these tests cover only the links.
+vi.mock("../components/OrganizationMembersReader", () => ({
+    OrganizationMembersReader: () => null,
+}))
+
 const useWorldEntitiesMock = vi.mocked(useWorldEntities)
 const useCountsMock = vi.mocked(useWorldCategoryCounts)
 

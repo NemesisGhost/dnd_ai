@@ -10,7 +10,6 @@ import {
 import { CharacterBoundary } from "../components/CharacterBoundary"
 import { CharacterInventoryPanel } from "../components/InventoryPanels"
 import { ItemWorkspace } from "../components/items/ItemWorkspace"
-import { OrganizationMembers } from "../components/OrganizationMembers"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { WorldRecordWorkspace } from "../components/world/WorldRecordWorkspace"
 import { WorldEntityDetailBoundary } from "../components/WorldEntityDetailBoundary"
@@ -87,13 +86,10 @@ export function CampaignWorldDetailPage() {
                 resourceLabel="organization"
             >
                 {(organization) => (
-                    <>
-                        <WorldOrganizationDetailPage
-                            campaignId={campaignId}
-                            organization={organization}
-                        />
-                        <OrganizationMembers campaignId={campaignId} organizationId={entityId} />
-                    </>
+                    <WorldOrganizationDetailPage
+                        campaignId={campaignId}
+                        organization={organization}
+                    />
                 )}
             </WorldEntityDetailBoundary>
         )

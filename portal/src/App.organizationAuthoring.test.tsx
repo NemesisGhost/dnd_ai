@@ -145,6 +145,86 @@ describe("organization and religion authoring routes", () => {
     expect(server.calls.some((c) => c.path.includes("/authoring/"))).toBe(false)
   })
 
+  it("gives a player the read-only Members and offices section from the reader roster only", async () => {
+    server.on("GET", "/campaigns/mundivita/organizations/o1/members", {
+      body: {
+        organization_id: "o1",
+        status: null,
+        can_edit: false,
+        as_of: "Year 1491",
+        status_choices: [],
+        members: [
+          {
+            relationship_id: "m1",
+            member_entity_id: "hero",
+            member_name: "Hero A",
+            member_type_code: "player_character",
+            role: "Speaker",
+            rank: null,
+            is_public: true,
+            started: "Year 1490",
+            ended: null,
+            current: true,
+            lifecycle_status: "active",
+            row_version: 1,
+            period_status: "in_effect",
+            category: "character",
+            can_open: true,
+          },
+        ],
+      },
+    })
+    openApp("/app/mundivita/world/organization/o1", ["campaign.view"])
+    const heading = await screen.findByRole("heading", { level: 2, name: "Members and offices" })
+    const section = heading.closest("section")!
+    expect(await screen.findByRole("link", { name: "Hero A" })).toHaveAttribute(
+      "href",
+      "/app/mundivita/characters/hero",
+    )
+    expect(screen.getAllByRole("heading", { name: "Members and offices" })).toHaveLength(1)
+    expect(section.querySelector("button, input, select, textarea, form")).toBeNull()
+    expect(screen.queryByRole("button", { name: "Add a member" })).toBeNull()
+    expect(server.callsTo("GET", "/campaigns/mundivita/organizations/o1/members")).toHaveLength(1)
+    expect(server.calls.some((c) => c.method !== "GET")).toBe(false)
+    expect(server.calls.some((c) => c.path.includes("/authoring/") || c.path.includes("/relationships"))).toBe(false)
+  })
+
+  it("keeps the editors' workspace roster and never mounts the reader section beside it", async () => {
+    server.on("GET", "/campaigns/mundivita/organizations/o1/members", {
+      body: {
+        organization_id: "o1",
+        status: null,
+        can_edit: true,
+        as_of: null,
+        status_choices: [{ value: "active", label: "Active" }],
+        members: [
+          {
+            relationship_id: "m2",
+            member_entity_id: "spy",
+            member_name: "The Spy",
+            member_type_code: "npc",
+            role: "Spy",
+            rank: null,
+            is_public: false,
+            started: "Year 1490",
+            ended: null,
+            current: true,
+            lifecycle_status: "active",
+            row_version: 1,
+            period_status: "in_effect",
+            category: "character",
+            can_open: true,
+          },
+        ],
+      },
+    })
+    openApp("/app/mundivita/world/organization/o1?section=members")
+    // The editor roster: its visibility column marks a private stint for editors.
+    expect(await screen.findByText("Editors only")).toBeInTheDocument()
+    expect(screen.getAllByText("The Spy")).toHaveLength(1)
+    expect(document.querySelectorAll(".organization-members")).toHaveLength(0)
+  })
+
   it("offers every creation entry point to editors only", async () => {
     const editor = openApp("/app/mundivita/world")
     for (const name of ["New location", "New organization", "New religion"]) {

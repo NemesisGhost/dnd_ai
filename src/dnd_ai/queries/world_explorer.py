@@ -99,6 +99,8 @@ from sqlalchemy import Connection, text
 
 from dnd_ai.domain.errors import DomainAuthorizationError
 
+from .campaign_clock import world_time_point
+
 # ---------------------------------------------------------------------------
 # Category vocabulary
 # ---------------------------------------------------------------------------
@@ -950,6 +952,13 @@ class OrganizationDetailView:
     status_code: str | None
     """The organization's current operational status on the caller's
     timeline (`campaign.organization_state`), if one is recorded."""
+    founded: str | None = None
+    dissolved: str | None = None
+    """Founding and dissolution as display text (never a world-time id)."""
+    government_form: str | None = None
+    ideology: str | None = None
+    """The `PUBLIC_WORLD` subtype text of a government or a political faction.
+    The `STRUCTURAL` business and military-unit columns are not projected."""
 
 
 def _visible_link(
@@ -985,6 +994,8 @@ def get_organization_detail_view(
                 SELECT e.world_id, e.canonical_name, e.summary, et.code AS kind_code,
                        ot.code AS organization_type_code, o.public_description,
                        o.parent_organization_id, o.headquarters_location_id,
+                       o.founded_world_time_id, o.dissolved_world_time_id,
+                       g.government_form, pf.ideology,
                        ro.religion_id, os.code AS status_code
                 FROM world.organizations o
                 JOIN core.entities e ON e.entity_id = o.organization_id
@@ -993,6 +1004,9 @@ def get_organization_detail_view(
                   ON ot.organization_type_id = o.organization_type_id
                 LEFT JOIN world.religious_organizations ro
                   ON ro.religious_organization_id = o.organization_id
+                LEFT JOIN world.governments g ON g.government_id = o.organization_id
+                LEFT JOIN world.political_factions pf
+                  ON pf.political_faction_id = o.organization_id
                 LEFT JOIN campaign.organization_state ost
                   ON ost.timeline_id = :timeline AND ost.organization_id = o.organization_id
                 LEFT JOIN campaign.organization_statuses os
@@ -1019,7 +1033,17 @@ def get_organization_detail_view(
         headquarters=_visible_link(connection, row["headquarters_location_id"], denied_entity_ids),
         religion=_visible_link(connection, row["religion_id"], denied_entity_ids),
         status_code=row["status_code"],
+        founded=_time_text(connection, row["founded_world_time_id"]),
+        dissolved=_time_text(connection, row["dissolved_world_time_id"]),
+        government_form=row["government_form"],
+        ideology=row["ideology"],
     )
+
+
+def _time_text(connection: Connection, world_time_id: uuid.UUID | None) -> str | None:
+    if world_time_id is None:
+        return None
+    return world_time_point(connection, world_time_id)[1]
 
 
 # ---------------------------------------------------------------------------

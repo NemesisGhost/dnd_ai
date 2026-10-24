@@ -4,8 +4,11 @@
 
 `campaign.view`. An editor (`canon.edit`) sees every stint, private and archived ones included,
 and the choices for the organization's operational status; everyone else sees the active, public
-members they can independently discover. Memberships are authored through the relationship
-endpoints (kind `membership`) and the status through the existing organization status route.
+members they can independently discover, current and ended. Every row carries `period_status`
+against the caller's timeline clock (also returned as `as_of`) and `can_open`, which says whether
+the member's own page opens for this caller (the rule the character reader uses). Memberships are
+authored through the relationship endpoints (kind `membership`) and the status through the existing
+organization status route.
 """
 
 import uuid
@@ -19,7 +22,7 @@ from dnd_ai.queries.entity_lifecycle import lifecycle_hidden_entity_ids
 from dnd_ai.queries.organization_members import list_organization_members
 
 from ._shared import timeline_world_id
-from .access import require_campaign_capability
+from .access import can_open_participant, require_campaign_capability
 from .deps import get_connection
 from .errors import NotFoundError
 from .world_explorer import resolve_world_entity_visibility
@@ -58,6 +61,7 @@ def list_members_endpoint(
         "organization_id": str(result.organization_id),
         "status": result.status,
         "can_edit": editor,
+        "as_of": result.as_of,
         "status_choices": [{"value": v, "label": label} for v, label in result.status_choices],
         "members": [
             {
@@ -73,6 +77,9 @@ def list_members_endpoint(
                 "current": m.current,
                 "lifecycle_status": m.lifecycle_status,
                 "row_version": m.row_version,
+                "period_status": m.period_status,
+                "category": m.category,
+                "can_open": can_open_participant(access, m.category, m.member_entity_id),
             }
             for m in result.members
         ],

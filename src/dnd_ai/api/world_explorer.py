@@ -281,6 +281,10 @@ class OrganizationDetailResponse(BaseModel):
     headquarters: OrganizationLinkResponse | None
     religion: OrganizationLinkResponse | None
     status_code: str | None
+    founded: str | None = None
+    dissolved: str | None = None
+    government_form: str | None = None
+    ideology: str | None = None
     canon_status: str
     lifecycle_status: str
     superseded_by: "SupersededByResponse | None" = None
@@ -673,6 +677,10 @@ def get_organization_detail_endpoint(
         headquarters=link(view.headquarters),
         religion=link(view.religion),
         status_code=view.status_code,
+        founded=view.founded,
+        dissolved=view.dissolved,
+        government_form=view.government_form,
+        ideology=view.ideology,
         **_status_fields(
             get_entity_status_summary(
                 connection, entity_id=organization_id, hidden_entity_ids=denied

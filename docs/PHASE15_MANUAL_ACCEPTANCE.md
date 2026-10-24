@@ -142,6 +142,20 @@ Use a throwaway database and your own ports. GM fixture: a player character Aria
 | As the GM, Aria's page has no Relationships section and a **Relationships** link in Manage that opens the World workspace section unchanged | | |
 | Desktop and 390px widths, each supported theme, keyboard-only use of the **Details** toggle (`aria-expanded` announced) | | |
 
+## Organization view (player-facing, read-only)
+
+Use a throwaway database and your own ports. GM fixture: a published government R Council with a form of government and a founding time, and the timeline clock set; public memberships for the player's character (office and rank), a published organization (no office), an NPC the player cannot discover, an ended stint and one starting after the clock; a private stint. Sign in as the player, then as the GM.
+
+| Check | Result | Notes |
+|---|---|---|
+| The player opens R Council from World: Overview shows Type, Form of government, Current status and Founded; no GM notes and no identifiers | | |
+| **Members and offices** is a heading inside the page; the player's character (linked) shows its office and rank, the organization (linked) shows "No office recorded"; the ended stint says **Ended** and the future one **Not started**; *As of* names the clock | | |
+| The undiscoverable NPC, the private stint, any "Vacant" text and any count of hidden members are absent, also from the members response in the network panel; only the detail, lifecycle and members GETs are sent | | |
+| With the members request blocked, the section says "Members could not be loaded." with **Try again** and the rest of the page stays | | |
+| A second player with no relationship to the character does not see it; after the GM gives them a viewer relationship to the NPC, the NPC appears | | |
+| As the GM, the workspace's Members and offices still lists every stint with the visibility column, **Add a member**, **Edit** and **Set status**, and saving works; no second roster appears | | |
+| Desktop and 390px widths, each supported theme, keyboard order of the member links, badges read as text, loading announced (`status`) and failure announced (`alert`) | | |
+
 | | |
 |---|---|
 | Date and tester | |

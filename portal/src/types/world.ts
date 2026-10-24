@@ -111,6 +111,12 @@ export interface OrganizationDetail {
     headquarters: OrganizationLink | null
     religion: OrganizationLink | null
     status_code: string | null
+    // Display text only, never a world-time id. Absent from an older server.
+    founded?: string | null
+    dissolved?: string | null
+    // The public subtype text of a government or a political faction.
+    government_form?: string | null
+    ideology?: string | null
     canon_status?: string
     lifecycle_status?: string
 }

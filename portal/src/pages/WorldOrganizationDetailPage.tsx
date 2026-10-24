@@ -4,6 +4,7 @@ import { organizationAuthoringPath } from "../api/organizationAuthoring"
 import { AuthoringEditLink } from "../components/AuthoringEditLink"
 import { DetailPanel } from "../components/DetailPanel"
 import { FactGrid } from "../components/FactGrid"
+import { OrganizationMembersReader } from "../components/OrganizationMembersReader"
 import { usePageArrival } from "../hooks/usePageArrival"
 import type { OrganizationDetail } from "../types/world"
 import { humanizeCode } from "../utils/humanize"
@@ -15,8 +16,8 @@ interface WorldOrganizationDetailPageProps {
 
 // The reading panels of an organization. Audience-safe: the server omits the GM-only notes, and a
 // parent, headquarters, or religion it names is present only if the caller may see it. Related
-// records are shown by name and linked, never by identifier. Shared by the reader and the editors'
-// workspace.
+// records are shown by name and linked, never by identifier; times are display text. A fact the
+// server did not return is left out. Shared by the reader and the editors' workspace.
 export function OrganizationPanels({
     campaignId,
     organization,
@@ -33,6 +34,9 @@ export function OrganizationPanels({
                             label: "Type",
                             value: humanizeCode(organization.organization_type_code),
                         },
+                        ...(organization.government_form
+                            ? [{ key: "government-form", label: "Form of government", value: organization.government_form }]
+                            : []),
                         {
                             key: "status",
                             label: "Current status",
@@ -41,9 +45,19 @@ export function OrganizationPanels({
                                     ? humanizeCode(organization.status_code)
                                     : "Not recorded",
                         },
+                        ...(organization.founded ? [{ key: "founded", label: "Founded", value: organization.founded }] : []),
+                        ...(organization.dissolved
+                            ? [{ key: "dissolved", label: "Dissolved", value: organization.dissolved }]
+                            : []),
                     ]}
                 />
             </DetailPanel>
+
+            {organization.ideology ? (
+                <DetailPanel title="Ideology">
+                    <p>{organization.ideology}</p>
+                </DetailPanel>
+            ) : null}
 
             <DetailPanel
                 title="Description"
@@ -93,8 +107,9 @@ export function OrganizationPanels({
     )
 }
 
-// Organization detail (UI_STYLE_GUIDE.md §10.2). The reader everyone sees; editors get the
-// workspace instead, which reuses the panels.
+// Organization detail (UI_STYLE_GUIDE.md §10.2). The reader everyone without `canon.edit` sees,
+// with the read-only Members and offices section; editors get the workspace instead, which reuses
+// the panels and embeds the editor roster.
 export function WorldOrganizationDetailPage({
     campaignId,
     organization,
@@ -126,6 +141,8 @@ export function WorldOrganizationDetailPage({
             )}
 
             <OrganizationPanels campaignId={campaignId} organization={organization} />
+
+            <OrganizationMembersReader campaignId={campaignId} organizationId={organization.organization_id} />
         </section>
     )
 }

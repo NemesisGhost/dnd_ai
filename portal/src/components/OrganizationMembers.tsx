@@ -6,7 +6,7 @@ import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import type { CreateRelationshipBody, RelationshipView } from "../types/relationshipAuthoring"
-import type { MemberRow, OrganizationMembers as Roster, StatusReceipt } from "../types/organizationMembers"
+import type { OrganizationMembers as Roster, StatusReceipt } from "../types/organizationMembers"
 import { useAnnounce } from "./authoring/announcer"
 import { SelectField, TextField } from "./authoring/fields"
 import { MutationStatusMessage, StaleWriteNotice } from "./authoring/feedback"
@@ -18,6 +18,8 @@ import { PanelFrame } from "./DetailPanel"
 import { StaleReadNotice } from "./StaleReadNotice"
 import { useKeptData, useRefetchOnChange } from "../hooks/useKeptData"
 import { humanizeCode } from "../utils/humanize"
+import { memberPeriodText } from "../utils/organizationRoster"
+import { MemberOffice } from "./MemberOffice"
 import { OrganizationMemberEditor } from "./OrganizationMemberEditor"
 
 interface Props {
@@ -46,8 +48,8 @@ const CODE_MESSAGE: Readonly<Record<string, string>> = {
 const humanize = (code: string): string => code.replace(/_/g, " ")
 
 // The people and organizations that belong to an organization, with their offices, as a compact
-// roster. Everyone who can view the organization sees the public, current roster they can discover.
-// An editor also sees private, ended and archived stints, can add a member, can correct, change the
+// roster, for the editors' World workspace (readers get OrganizationMembersReader on the page). An
+// editor sees private, ended and archived stints, can add a member, can correct, change the
 // office of, or end a membership from its row, and can set the organization's operational status.
 // The membership forms and the status form save independently and never reset each other.
 export function OrganizationMembers({
@@ -98,13 +100,6 @@ export function OrganizationMembers({
             ) : null}
         </PanelFrame>
     )
-}
-
-function periodText(m: MemberRow): string {
-    if (m.lifecycle_status !== "active") {
-        return `Archived (${m.started}${m.ended !== null ? ` to ${m.ended}` : ""})`
-    }
-    return m.ended !== null ? `${m.started} to ${m.ended}` : `Since ${m.started}`
 }
 
 function MemberRoster({
@@ -195,17 +190,7 @@ function MemberRoster({
                                     <span className="member-roster__type">{humanizeCode(m.member_type_code)}</span>
                                 </span>
                                 <span className="member-roster__office">
-                                    {m.role === null && m.rank === null ? (
-                                        <span className="member-roster__none">No office recorded</span>
-                                    ) : (
-                                        <>
-                                            {m.role ?? ""}
-                                            {m.role !== null && m.rank !== null ? " " : ""}
-                                            {m.rank !== null ? (
-                                                <span className="member-roster__rank">({m.rank})</span>
-                                            ) : null}
-                                        </>
-                                    )}
+                                    <MemberOffice member={m} />
                                 </span>
                                 {roster.can_edit ? (
                                     <span className="member-roster__visibility">
@@ -213,7 +198,7 @@ function MemberRoster({
                                     </span>
                                 ) : null}
                                 <span className="member-roster__period">
-                                    {periodText(m)}
+                                    {memberPeriodText(m)}
                                     {m.ended === null && m.lifecycle_status === "active" ? (
                                         <span className="member-roster__state"> (current)</span>
                                     ) : null}

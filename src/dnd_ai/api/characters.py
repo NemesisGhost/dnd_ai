@@ -129,6 +129,7 @@ from dnd_ai.queries.parties import list_character_parties
 from ._shared import timeline_world_id
 from .access import (
     CharacterViewNotAuthorizedError,
+    can_open_participant,
     require_campaign_capability,
     resolve_character_view_tier,
 )
@@ -589,24 +590,6 @@ class CharacterRelationshipsResponse(BaseModel):
     items: list[CharacterRelationshipResponse]
 
 
-# Categories whose records the World reader detail routes open for anyone who can discover them.
-_OPENABLE_WORLD_CATEGORIES = frozenset({"location", "organization", "religion"})
-
-
-def _can_open_participant(
-    access: AccessContext, category: str | None, entity_id: uuid.UUID
-) -> bool:
-    if category in _OPENABLE_WORLD_CATEGORIES:
-        return True
-    if category == "character":
-        try:
-            resolve_character_view_tier(access, character_id=entity_id)
-        except CharacterViewNotAuthorizedError:
-            return False
-        return True
-    return False
-
-
 @router.get(
     "/campaigns/{campaign_id}/characters/{character_id}/relationships",
     response_model=CharacterRelationshipsResponse,
@@ -664,7 +647,7 @@ def list_character_relationships_endpoint(
                         role_label=p.role_label,
                         is_self=p.is_self,
                         can_open=not p.is_self
-                        and _can_open_participant(access, p.category, p.entity_id),
+                        and can_open_participant(access, p.category, p.entity_id),
                     )
                     for p in item.participants
                 ],

@@ -2146,6 +2146,7 @@ Implement in independently verifiable increments. Each increment includes comman
 - Keep identity/build/state/portrayal as separate write boundaries.
 - Do not require Foundry synchronization.
 - Player-facing, read-only character Relationships section on `/characters/:characterId` (reader projection `GET …/characters/{id}/relationships`: active, public, fully discoverable relationships with names, role labels and campaign-visible fields only; editors keep the World workspace roster). Evidence in [PHASE15_VERIFICATION.md](PHASE15_VERIFICATION.md); the Phase 15 exit criteria and its not-complete status are unchanged.
+- Player-facing organization page: founding, dissolution, form of government and ideology on the reader detail, and a read-only **Members and offices** section from the existing roster read (now with `period_status`, `as_of` and `can_open`); no visibility rule changes. Evidence in [PHASE15_VERIFICATION.md](PHASE15_VERIFICATION.md); the Phase 15 exit criteria and its not-complete status are unchanged.
 
 #### 15D. Quests and narrative planning
 
