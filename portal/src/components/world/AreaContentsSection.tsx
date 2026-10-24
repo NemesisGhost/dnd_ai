@@ -6,6 +6,7 @@ import type { ChildDraft } from "../authoring/childDraft"
 import { ChildEditor, ChildFormFields } from "../authoring/childEditors"
 import { ConfirmDialog } from "../authoring/ConfirmDialog"
 import { focusSoon } from "../authoring/focusSoon"
+import { changedFields, useRetainedInput } from "../authoring/permissionLoss"
 import { useDungeonCommand } from "../authoring/useDungeonCommand"
 import type { DungeonCommandHandle } from "../authoring/useDungeonCommand"
 import { useUnsavedReport } from "../quests/useUnsavedReport"
@@ -104,6 +105,13 @@ export function AreaContentsSection({ campaignId, areaId, read, refresh, connect
         "new-contents",
         CHILD_KINDS.filter(({ kind }) => JSON.stringify(drafts[kind]) !== JSON.stringify(EMPTY_CHILD)).map(
             ({ singular }) => `a new ${singular}`,
+        ),
+    )
+    useRetainedInput(
+        "new-contents",
+        "New contents",
+        CHILD_KINDS.flatMap(({ kind, singular }) =>
+            changedFields(EMPTY_CHILD, drafts[kind]).map((c) => ({ ...c, label: `${singular} · ${c.label}` })),
         ),
     )
     const report = useCallback<ReportUnsaved>(

@@ -7,6 +7,7 @@ import { EMPTY_CONNECTION, connectionFields, connectionProblem } from "../author
 import type { ConnectionDraft } from "../authoring/connectionDraft"
 import { ConnectionEditor, ConnectionFormFields } from "../authoring/dungeonEditors"
 import { focusSoon } from "../authoring/focusSoon"
+import { changedFields, useRetainedInput } from "../authoring/permissionLoss"
 import { useDungeonCommand } from "../authoring/useDungeonCommand"
 import type { DungeonCommandHandle } from "../authoring/useDungeonCommand"
 import { SelectField } from "../authoring/fields"
@@ -75,6 +76,12 @@ export function DungeonConnectionsSection({ campaignId, dungeonId, read, refresh
         to !== "" ||
         Object.keys(EMPTY_CONNECTION).some((key) => draft[key]!.trim() !== EMPTY_CONNECTION[key]!)
     useUnsavedReport(onUnsaved, "new-connection", dirtyNew ? ["a connection"] : [])
+    const areaName = (id: string): string => read.view?.areas.find((a) => a.dungeon_area_id === id)?.name ?? ""
+    useRetainedInput("new-connection", "New connection", [
+        ...(from === "" ? [] : [{ label: "From area", value: areaName(from) }]),
+        ...(to === "" ? [] : [{ label: "To area", value: areaName(to) }]),
+        ...changedFields(EMPTY_CONNECTION, draft),
+    ])
     // The open editor reports its own unsent edits; remember whether it holds any, so opening a
     // second editor over them is refused rather than discarding them.
     const report = useCallback<ReportUnsaved>(

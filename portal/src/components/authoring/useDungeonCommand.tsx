@@ -1,4 +1,4 @@
-import { useRef } from "react"
+import { useContext, useEffect, useRef } from "react"
 import type { ReactNode } from "react"
 import { runDungeonCommand } from "../../api/dungeonAuthoring"
 import { useSession } from "../../context/SessionContext"
@@ -7,6 +7,7 @@ import type { DungeonCommand } from "../../types/dungeonAuthoring"
 import { DUNGEON_CODE_MESSAGE } from "../../utils/dungeonForm"
 import { useAnnounce } from "./announcer"
 import { MutationStatusMessage, StaleWriteNotice } from "./feedback"
+import { PermissionLossContext, isWorldAuthorityLoss } from "./permissionLoss"
 
 // What one section's dungeon commands need: its own pending and error state (so a failure appears
 // where it was sent), one idempotent mutation at a time, and the authoritative read after every
@@ -52,6 +53,13 @@ export function useDungeonCommand({
         },
     })
     const error = mutation.status.kind === "error" ? mutation.status.error : null
+    // A refusal for lack of the world authority is a confirmed loss, not a failure to retry: tell the
+    // workspace, which withdraws the private views and controls and keeps only the unsent input.
+    const loss = useContext(PermissionLossContext)
+    const lost = isWorldAuthorityLoss(error)
+    useEffect(() => {
+        if (lost) loss?.reportLoss()
+    }, [lost, loss])
     const text = error?.code ? (DUNGEON_CODE_MESSAGE[error.code] ?? null) : null
     const notice =
         error === null ? null : error.kind === "stale" ? (

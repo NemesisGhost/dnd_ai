@@ -15,6 +15,12 @@ function show(value: unknown): string {
 
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
 
+// A field name as a label: snake_case and camelCase both become words ("childType" -> "Child type").
+const labelOf = (key: string): string => {
+    const words = humanizeCode(key.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase())
+    return words.charAt(0) + words.slice(1).toLowerCase()
+}
+
 // When someone loses the right to read or edit a record while an edit form is open, the form holds
 // the whole record: every field was filled from the server's private read. Keeping all of it would
 // preserve a private document merely by calling it an unsaved draft, so only what the person
@@ -35,7 +41,7 @@ export function retainedChanges(loaded: unknown, current: unknown, changeNote: s
         const before = loaded as Record<string, unknown>
         const after = current as Record<string, unknown>
         for (const key of Object.keys(after)) {
-            if (!same(before[key], after[key])) out.push({ label: humanizeCode(key), value: show(after[key]) })
+            if (!same(before[key], after[key])) out.push({ label: labelOf(key), value: show(after[key]) })
         }
     }
     if (changeNote.trim() !== "") out.push({ label: "Change note", value: changeNote.trim() })

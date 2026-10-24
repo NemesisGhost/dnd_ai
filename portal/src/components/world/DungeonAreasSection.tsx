@@ -3,6 +3,7 @@ import { Link } from "react-router"
 import type { DungeonAuthoringView } from "../../types/dungeonAuthoring"
 import { describeBlockedReason } from "../../utils/blockedReason"
 import { focusSoon } from "../authoring/focusSoon"
+import { useRetainedInput } from "../authoring/permissionLoss"
 import { useDungeonCommand } from "../authoring/useDungeonCommand"
 import { contentsText, plural } from "./areaText"
 import { TextField } from "../authoring/fields"
@@ -41,6 +42,14 @@ export function DungeonAreasSection({ campaignId, dungeonId, read, refresh, link
     const [problem, setProblem] = useState<string | null>(null)
     const command = useDungeonCommand({ campaignId, dungeonId, areaId: null, scope: "areas", refetch: refresh })
     useUnsavedReport(onUnsaved, "new-area", name.trim() !== "" || kind.trim() !== "" ? ["a new area"] : [])
+    useRetainedInput(
+        "new-area",
+        "New area",
+        [
+            { label: "Name", value: name.trim() },
+            { label: "Kind", value: kind.trim() },
+        ].filter((c) => c.value !== ""),
+    )
 
     const { view, options } = read
     if (read.status === "loading") return <p role="status">Loading the dungeon&apos;s areas…</p>

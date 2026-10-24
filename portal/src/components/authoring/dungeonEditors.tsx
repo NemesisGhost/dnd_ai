@@ -9,6 +9,7 @@ import type { ConnectionDraft } from "./connectionDraft"
 import type { DungeonCommandHandle } from "./useDungeonCommand"
 import { focusSoon } from "./focusSoon"
 import { SelectField, TextAreaField } from "./fields"
+import { changedFields, useRetainedInput } from "./permissionLoss"
 import { useRowDraft } from "./useRowDraft"
 import "./authoring.css"
 
@@ -103,6 +104,7 @@ export function ConnectionEditor({
     const [problem, setProblem] = useState<string | null>(null)
     const prefix = `conn-${connection.area_connection_id}`
     useUnsavedReport(onUnsaved, prefix, draft.dirty ? ["a connection"] : [])
+    useRetainedInput(prefix, `Connection ${label}`, draft.dirty ? changedFields(draft.agreed, draft.values) : [])
     useEffect(() => focusSoon(`${prefix}-type`), [prefix])
     return (
         <form

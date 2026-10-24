@@ -8,10 +8,14 @@ export function PermissionLost({
     noun,
     retained,
     back,
+    recheck,
 }: {
     noun: string
     retained: readonly RetainedChange[]
-    back: { to: string; state?: object }
+    back: { to: string; state?: object; label?: string }
+    // Asks the server again what the person may do (their role may have been restored); the
+    // answer, not this panel, decides.
+    recheck?: () => void
 }) {
     return (
         <section className="authoring-message authoring-message--warning" aria-label="Permission lost" role="alert">
@@ -26,7 +30,7 @@ export function PermissionLost({
                         <p>What you had changed is shown below so you can copy it if you need it:</p>
                         <dl className="authoring-fact-list">
                             {retained.map((change) => (
-                                <div key={change.label}>
+                                <div key={`${change.label}:${change.value}`}>
                                     <dt>{change.label}</dt>
                                     <dd>{change.value}</dd>
                                 </div>
@@ -36,8 +40,13 @@ export function PermissionLost({
                 ) : null}
                 <p>
                     <Link to={back.to} state={back.state}>
-                        Back to the {noun}
-                    </Link>
+                        {back.label ?? `Back to the ${noun}`}
+                    </Link>{" "}
+                    {recheck === undefined ? null : (
+                        <button type="button" className="authoring-button" onClick={recheck}>
+                            Check my access again
+                        </button>
+                    )}
                 </p>
             </div>
         </section>

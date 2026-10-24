@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { ReactNode, RefObject } from "react"
 import { Link, useLocation } from "react-router"
 import { entityLifecyclePath } from "../../api/entityLifecycle"
@@ -24,8 +24,13 @@ import type { Provenance } from "../../types/provenance"
 import type { RevisionHistory } from "../../types/review"
 import type { LocationDetail, OrganizationDetail, ReligionDetail } from "../../types/world"
 import { humanizeCode } from "../../utils/humanize"
-import { authoringOf } from "../../utils/recordAuthoring"
+import { NO_RECORD_AUTHORING, authoringOf } from "../../utils/recordAuthoring"
 import type { RecordAuthoring } from "../../utils/recordAuthoring"
+import type { RetainedChange } from "../../utils/retainedChanges"
+import { useSession } from "../../context/SessionContext"
+import { PermissionLost } from "../authoring/PermissionLost"
+import { PermissionLossContext } from "../authoring/permissionLoss"
+import type { PermissionLossHandle } from "../authoring/permissionLoss"
 import { AuthoringEditLink } from "../AuthoringEditLink"
 import { LifecycleActionsProvider } from "../EntityLifecyclePanel"
 import { EntitySourcesSection } from "../EntitySourcesSection"
@@ -120,8 +125,34 @@ function Loaded({ campaignId, category, entityId }: Props) {
     // (its lifecycle, sources, revisions and preparation) is requested only once it says so, and
     // not at all otherwise: a runtime GM with no world role reads and runs the published record
     // without a single refused request.
-    const authoring = authoringOf(detail.state.kind === "ready" ? detail.state.data : kept)
-    const canReadWorldPrivate = useHeldWorldCapability(campaignId, WORLD_CANON_READ_PRIVATE)
+    // A private-authoring command refused because the world authority is gone (the confirmed loss):
+    // the unsent input worth showing back, or null while nothing was lost. From then on the private
+    // reads are not held and the private controls are not offered; the server's own later answers
+    // (the record read again, the bootstrap refreshed) decide whether access is restored.
+    const [lost, setLost] = useState<RetainedChange[] | null>(null)
+    const retained = useRef(new Map<string, RetainedChange[]>())
+    const { refresh } = useSession()
+    const loss = useMemo<PermissionLossHandle>(
+        () => ({
+            reportLoss: () => {
+                setLost((current) => current ?? [...retained.current.values()].flat())
+                // Bring the bootstrap's world-capability snapshot up to date without unmounting the page.
+                void Promise.resolve(refresh?.()).catch(() => undefined)
+            },
+            retain: (source, changes) => {
+                if (changes.length === 0) retained.current.delete(source)
+                else retained.current.set(source, changes)
+            },
+        }),
+        [refresh],
+    )
+    const authoring =
+        lost !== null ? NO_RECORD_AUTHORING : authoringOf(detail.state.kind === "ready" ? detail.state.data : kept)
+    const canReadWorldPrivate = useHeldWorldCapability(campaignId, WORLD_CANON_READ_PRIVATE) && lost === null
+    // Once lost, the record keeps its audience-safe fields but no longer claims any authoring right,
+    // so every edit entry point built from it fails closed.
+    const loaded = detail.state.kind === "ready" ? detail.state.data : (kept as WorkspaceDetail)
+    const shown = lost !== null && loaded !== null ? ({ ...loaded, authoring: NO_RECORD_AUTHORING } as WorkspaceDetail) : loaded
     const lifecycle = useGatedAuthoringResource<EntityLifecycleView>(
         entityLifecyclePath(campaignId, entityId),
         authoring.can_read_private,
@@ -171,20 +202,29 @@ function Loaded({ campaignId, category, entityId }: Props) {
         )
     }
     return (
-        <Workspace
-            campaignId={campaignId}
-            category={category}
-            entityId={entityId}
-            data={detail.state.kind === "ready" ? detail.state.data : (kept as WorkspaceDetail)}
-            refreshFailed={stale}
-            refetchDetail={detail.refetch}
-            lifecycle={lifecycle}
-            provenance={provenance}
-            revisions={revisions}
-            authoring={authoring}
-            canReadWorldPrivate={canReadWorldPrivate}
-            headingRef={headingRef}
-        />
+        <PermissionLossContext.Provider value={loss}>
+            <Workspace
+                campaignId={campaignId}
+                category={category}
+                entityId={entityId}
+                data={shown}
+                refreshFailed={stale}
+                refetchDetail={detail.refetch}
+                lifecycle={lifecycle}
+                provenance={provenance}
+                revisions={revisions}
+                authoring={authoring}
+                canReadWorldPrivate={canReadWorldPrivate}
+                lost={lost}
+                onRecheck={() => {
+                    retained.current.clear()
+                    setLost(null)
+                    void Promise.resolve(refresh?.()).catch(() => undefined)
+                    void detail.refetch()
+                }}
+                headingRef={headingRef}
+            />
+        </PermissionLossContext.Provider>
     )
 }
 
@@ -248,6 +288,8 @@ function Workspace({
     revisions,
     authoring,
     canReadWorldPrivate,
+    lost,
+    onRecheck,
     headingRef,
 }: Props & {
     data: WorkspaceDetail
@@ -261,6 +303,9 @@ function Workspace({
     // is theirs to read (it decides the preparation sections; see worldStages.sectionWithheldReason).
     authoring: RecordAuthoring
     canReadWorldPrivate: boolean
+    // Set once a private-authoring command was refused for lack of the world authority.
+    lost: RetainedChange[] | null
+    onRecheck: () => void
     headingRef: RefObject<HTMLHeadingElement | null>
 }) {
     const location = useLocation()
@@ -596,6 +641,9 @@ function Workspace({
                 linkState={linkState}
                 context={context}
             />
+            {lost !== null ? (
+                <PermissionLost noun="record" retained={lost} back={{ to: back.href, label: back.label }} recheck={onRecheck} />
+            ) : null}
             {withheldNote && !authoring.campaign_originated ? (
                 <p className="authoring-note">
                     You can read and use this {playNoun} in this campaign. Preparing, reviewing and publishing

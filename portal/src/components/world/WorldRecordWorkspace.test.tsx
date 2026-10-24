@@ -1065,6 +1065,118 @@ describe("World record workspace: a dungeon", () => {
             "/app/c1/world/dungeon/l1/edit",
         )
     })
+
+    // --- losing the world authority while editing (CP-4 permission-loss contract) ---------------
+    const REVOKED = {
+        status: 403,
+        body: { error: { code: "world_authority_required", message: "m", correlation_id: "c" } },
+    }
+    const authoringReads = (server: MockServer) =>
+        server.calls.filter((c) => c.method === "GET" && /\/authoring\//.test(c.path)).length
+    const alertPanel = () => screen.findByRole("alert", { name: "Permission lost" })
+
+    it("on a refused add-area, withdraws the private views and controls and keeps only what was typed", async () => {
+        const { server } = dungeon()
+        await openSection("Areas")
+        fireEvent.click(screen.getByRole("button", { name: "Add area" }))
+        const form = await screen.findByRole("form", { name: "Add an area" })
+        fireEvent.change(within(form).getByRole("textbox", { name: /Area name/ }), { target: { value: "Shrine of Ash" } })
+        fireEvent.change(within(form).getByRole("textbox", { name: "Kind of area" }), { target: { value: "chamber" } })
+        server.on("POST", `/campaigns/${C}/authoring/dungeons/l1/areas`, REVOKED)
+        fireEvent.click(within(form).getByRole("button", { name: "Add area" }))
+
+        const panel = await alertPanel()
+        expect(panel).toHaveTextContent("You no longer have permission to edit this record")
+        // Only the person's own unsent values come back, read-only.
+        expect(panel).toHaveTextContent("Shrine of Ash")
+        expect(panel).toHaveTextContent("chamber")
+        // What the private read had loaded is gone, and so are the controls built on it.
+        expect(screen.queryByRole("list", { name: "Areas" })).not.toBeInTheDocument()
+        expect(screen.queryByText(/hall of broken pillars/)).not.toBeInTheDocument()
+        expect(screen.queryByText("Collapsed Stair")).not.toBeInTheDocument()
+        expect(screen.queryByRole("form", { name: "Add an area" })).not.toBeInTheDocument()
+        expect(screen.queryByRole("button", { name: "Add area" })).not.toBeInTheDocument()
+        expect(screen.queryByRole("link", { name: /^Edit/ })).not.toBeInTheDocument()
+        // The preparation and review sections are listed as unavailable, not as links, and nothing
+        // more is sent for the private side.
+        const prepare = screen.getByRole("navigation", { name: "Prepare sections" })
+        expect(within(prepare).queryByRole("link", { name: "Areas" })).not.toBeInTheDocument()
+        expect(within(prepare).queryByRole("link", { name: "Sources" })).not.toBeInTheDocument()
+        const reads = authoringReads(server)
+        await new Promise((resolve) => setTimeout(resolve, 150))
+        expect(authoringReads(server)).toBe(reads)
+        expect(server.callsTo("POST", `/campaigns/${C}/authoring/dungeons/l1/areas`)).toHaveLength(1)
+    })
+
+    it("on a refused add-connection, shows back the chosen areas and typed fields only", async () => {
+        const { server } = dungeon()
+        await openSection("Connections")
+        fireEvent.click(await screen.findByRole("button", { name: "Add connection" }))
+        const form = await screen.findByRole("form", { name: "Add a connection" })
+        const [from, to, kind] = within(form).getAllByRole("combobox")
+        fireEvent.change(from!, { target: { value: "a1" } })
+        fireEvent.change(to!, { target: { value: "a3" } })
+        fireEvent.change(kind!, { target: { value: "door" } })
+        fireEvent.change(within(form).getByRole("textbox", { name: /Description/ }), { target: { value: "Rubble hides it" } })
+        server.on("POST", `/campaigns/${C}/authoring/dungeons/l1/connections`, REVOKED)
+        fireEvent.click(within(form).getByRole("button", { name: "Add connection" }))
+
+        const panel = await alertPanel()
+        expect(panel).toHaveTextContent("Entry Hall")
+        expect(panel).toHaveTextContent("Old Vault")
+        expect(panel).toHaveTextContent("Rubble hides it")
+        // The saved connections the server had loaded are not shown back.
+        expect(screen.queryByRole("list", { name: "Connections" })).not.toBeInTheDocument()
+        expect(screen.queryByText("Collapsed Stair")).not.toBeInTheDocument()
+        expect(screen.queryByRole("button", { name: "Add connection" })).not.toBeInTheDocument()
+    })
+
+    it("on a refused edit of a connection, keeps only the changed field, not the saved row", async () => {
+        const { server } = dungeon()
+        await openSection("Connections")
+        fireEvent.click(await screen.findByRole("button", { name: "Edit connection Entry Hall and Collapsed Stair" }))
+        const form = await screen.findByRole("form", { name: "Edit connection Entry Hall and Collapsed Stair" })
+        fireEvent.change(within(form).getByRole("textbox", { name: /Description/ }), { target: { value: "Behind the pillar" } })
+        server.on("POST", /\/authoring\/dungeons\/l1\/connections\/x1\/update$/, REVOKED)
+        fireEvent.click(within(form).getByRole("button", { name: "Save connection" }))
+        const panel = await alertPanel()
+        expect(panel).toHaveTextContent("Behind the pillar")
+        // The kind, and the other flags, were loaded and not changed: they are not shown back.
+        expect(panel).not.toHaveTextContent("Door")
+        expect(panel).not.toHaveTextContent("Secret door")
+    })
+
+    it("treats a bare 403 as the session check it has always been, not as lost authority", async () => {
+        const { server } = dungeon()
+        await openSection("Areas")
+        fireEvent.click(screen.getByRole("button", { name: "Add area" }))
+        const form = await screen.findByRole("form", { name: "Add an area" })
+        fireEvent.change(within(form).getByRole("textbox", { name: /Area name/ }), { target: { value: "Shrine" } })
+        server.on("POST", `/campaigns/${C}/authoring/dungeons/l1/areas`, { status: 403, body: { error: { code: "forbidden", message: "m", correlation_id: "c" } } })
+        fireEvent.click(within(form).getByRole("button", { name: "Add area" }))
+        await screen.findByRole("button", { name: "Check my session" })
+        expect(screen.queryByRole("alert", { name: "Permission lost" })).not.toBeInTheDocument()
+        expect(screen.getByRole("list", { name: "Areas" })).toBeVisible()
+        expect(within(form).getByRole("textbox", { name: /Area name/ })).toHaveValue("Shrine")
+    })
+
+    it("asks the server again on request, and shows the private views only if it now answers", async () => {
+        const { server } = dungeon()
+        await openSection("Areas")
+        fireEvent.click(screen.getByRole("button", { name: "Add area" }))
+        const form = await screen.findByRole("form", { name: "Add an area" })
+        fireEvent.change(within(form).getByRole("textbox", { name: /Area name/ }), { target: { value: "Shrine" } })
+        server.on("POST", `/campaigns/${C}/authoring/dungeons/l1/areas`, REVOKED)
+        fireEvent.click(within(form).getByRole("button", { name: "Add area" }))
+        await alertPanel()
+        const detailReads = server.callsTo("GET", `/campaigns/${C}/world/locations/l1`).length
+        fireEvent.click(screen.getByRole("button", { name: "Check my access again" }))
+        await waitFor(() => expect(server.callsTo("GET", `/campaigns/${C}/world/locations/l1`).length).toBeGreaterThan(detailReads))
+        await waitFor(() => expect(screen.queryByRole("alert", { name: "Permission lost" })).not.toBeInTheDocument())
+        // The section the person was in was withdrawn with the loss; it is offered again, not forced back.
+        await openSection("Areas")
+        expect(await screen.findByRole("list", { name: "Areas" })).toBeVisible()
+    })
 })
 
 describe("World record workspace: a dungeon area", () => {
@@ -1538,6 +1650,33 @@ describe("World record workspace: a dungeon area", () => {
         expect(await screen.findByRole("heading", { level: 1, name: "Entry hall" })).toBeVisible()
         expect(screen.queryByRole("navigation", { name: "Record stages" })).not.toBeInTheDocument()
         expect(server.calls.some((c) => /authoring|lifecycle|provenance|revisions/.test(c.path))).toBe(false)
+    })
+
+    // --- losing the world authority while editing an area's contents ----------------------------
+    it("on a refused add-hazard, withdraws the area's private contents and keeps only what was typed", async () => {
+        const { server } = area()
+        await contents()
+        fireEvent.click(screen.getByRole("button", { name: "Add hazard" }))
+        const form = await screen.findByRole("form", { name: "Add a hazard" })
+        fireEvent.change(within(form).getByRole("textbox", { name: /Kind of hazard/ }), { target: { value: "Pit" } })
+        fireEvent.change(within(form).getByRole("textbox", { name: /Severity/ }), { target: { value: "5" } })
+        server.on("POST", `/campaigns/${C}/authoring/dungeons/d1/hazards`, {
+            status: 403,
+            body: { error: { code: "world_authority_required", message: "m", correlation_id: "c" } },
+        })
+        fireEvent.click(within(form).getByRole("button", { name: "Add hazard" }))
+
+        const panel = await screen.findByRole("alert", { name: "Permission lost" })
+        expect(panel).toHaveTextContent("Pit")
+        expect(panel).toHaveTextContent("5")
+        // The structure the authoring read had loaded (a hidden hazard, a mural, a connection) is gone.
+        expect(screen.queryByText("Spike trap")).not.toBeInTheDocument()
+        expect(screen.queryByText("A faded mural.")).not.toBeInTheDocument()
+        expect(screen.queryByRole("button", { name: "Add hazard" })).not.toBeInTheDocument()
+        expect(screen.queryByRole("heading", { level: 3, name: /^Hazards/ })).not.toBeInTheDocument()
+        const reads = server.calls.filter((c) => c.method === "GET" && /\/authoring\//.test(c.path)).length
+        await new Promise((resolve) => setTimeout(resolve, 150))
+        expect(server.calls.filter((c) => c.method === "GET" && /\/authoring\//.test(c.path)).length).toBe(reads)
     })
 })
 

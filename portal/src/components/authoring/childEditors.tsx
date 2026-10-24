@@ -9,6 +9,7 @@ import type { ChildDraft } from "./childDraft"
 import { SelectField, TextAreaField, TextField } from "./fields"
 import { focusSoon } from "./focusSoon"
 import type { DungeonCommandHandle } from "./useDungeonCommand"
+import { changedFields, useRetainedInput } from "./permissionLoss"
 import { useRowDraft } from "./useRowDraft"
 import "./authoring.css"
 
@@ -97,6 +98,7 @@ export function ChildEditor({
     const [problem, setProblem] = useState<string | null>(null)
     const prefix = `child-${child.child_id}`
     useUnsavedReport(onUnsaved, prefix, draft.dirty ? [`a ${singular}`] : [])
+    useRetainedInput(prefix, `${singular.charAt(0).toUpperCase()}${singular.slice(1)} ${name}`, draft.dirty ? changedFields(draft.agreed, draft.values) : [])
     useEffect(() => focusSoon(`${prefix}-type`), [prefix])
     return (
         <form
