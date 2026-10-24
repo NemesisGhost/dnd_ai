@@ -35,7 +35,7 @@ export function useDungeonCommand({
     areaId: string | null
     scope: string
     // Reads the record again, and whatever depends on its version (the lifecycle, the revisions).
-    refetch: () => Promise<void>
+    refetch: () => Promise<unknown>
 }): DungeonCommandHandle {
     const { reload } = useSession()
     const announce = useAnnounce()

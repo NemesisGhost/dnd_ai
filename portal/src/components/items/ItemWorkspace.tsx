@@ -144,7 +144,7 @@ function Workspace({
     data: ItemView
     // The last refresh failed; `data` is the last read that succeeded.
     refreshFailed: boolean
-    refetchItem: () => Promise<void>
+    refetchItem: () => Promise<unknown>
     lifecycle: UseAuthoringResourceResult<EntityLifecycleView>
     provenance: UseAuthoringResourceResult<Provenance>
     headingRef: RefObject<HTMLHeadingElement | null>

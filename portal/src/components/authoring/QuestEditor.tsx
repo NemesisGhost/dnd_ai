@@ -183,7 +183,7 @@ interface QuestStructureEditorProps {
     view: QuestAuthoringView
     options: QuestOptions
     refreshing: boolean
-    refetch: () => Promise<void>
+    refetch: () => Promise<unknown>
     // Reports an open stage or objective form that has unsent changes, to the page's one guard.
     onUnsaved: ReportUnsaved
 }

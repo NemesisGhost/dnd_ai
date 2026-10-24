@@ -20,8 +20,8 @@ export interface PairedRead<T, O> {
 export function usePairedRead<T, O>(path: string | null, optionsPath: string | null): PairedRead<T, O> {
     const record = useAuthoringResource<T>(path)
     const options = useAuthoringResource<O>(optionsPath)
-    const view = useKept(record.state)
-    const choices = useKept(options.state)
+    const view = useKept(record.state, path ?? "")
+    const choices = useKept(options.state, optionsPath ?? "")
     const closed =
         record.state.kind === "denied" ||
         record.state.kind === "unavailable" ||

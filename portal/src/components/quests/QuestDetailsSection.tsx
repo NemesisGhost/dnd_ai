@@ -31,7 +31,7 @@ interface Props {
     options: QuestOptions
     refreshing: boolean
     // Reads the quest again (and whatever else depends on its version).
-    refetch: () => Promise<void>
+    refetch: () => Promise<unknown>
     onUnsaved: ReportUnsaved
     // The Publication section and the router state to carry, for the line that explains why the
     // quest cannot be edited.

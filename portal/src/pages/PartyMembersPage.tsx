@@ -101,7 +101,7 @@ function MemberTable({
 }: {
     campaignId: string
     data: PartyMembers
-    refetch: () => Promise<void>
+    refetch: () => Promise<unknown>
     current: boolean
 }) {
     const { reload } = useSession()
@@ -259,7 +259,7 @@ function AddMemberForm({
 }: {
     campaignId: string
     data: PartyMembers
-    refetch: () => Promise<void>
+    refetch: () => Promise<unknown>
 }) {
     const { reload } = useSession()
     const announce = useAnnounce()

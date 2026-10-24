@@ -91,12 +91,72 @@ describe("useAuthoringResource", () => {
         })
         await waitFor(() => expect(result.current.state.kind).toBe("ready"))
 
-        let pending!: Promise<void>
+        let pending!: Promise<"ok" | "failed" | "superseded">
         act(() => {
             pending = result.current.refetch()
         })
         expect(result.current.state).toMatchObject({ kind: "ready", data: { version: 1 }, refreshing: true })
         await act(async () => pending)
         expect(result.current.state).toMatchObject({ data: { version: 2 }, refreshing: false })
+    })
+
+    describe("refetch outcome", () => {
+        it("says ok when the record was read again and failed when it was not, without rejecting", async () => {
+            const server = installMockServer()
+            let status = 200
+            server.on("GET", "/worlds/1", () => ({ status, body: { name: "One" } }))
+            const { result } = renderHook(() => useAuthoringResource<{ name: string }>("/worlds/1"), {
+                wrapper: wrapperWith(),
+            })
+            await waitFor(() => expect(result.current.state.kind).toBe("ready"))
+            let outcome: string | undefined
+            await act(async () => {
+                outcome = await result.current.refetch()
+            })
+            expect(outcome).toBe("ok")
+            status = 500
+            await act(async () => {
+                outcome = await result.current.refetch()
+            })
+            expect(outcome).toBe("failed")
+            expect(result.current.state.kind).toBe("error")
+            expect(result.current.refreshOk.current).toBe(false)
+            status = 403
+            await act(async () => {
+                outcome = await result.current.refetch()
+            })
+            expect(outcome).toBe("failed")
+            expect(result.current.state.kind).toBe("denied")
+        })
+
+        it("says superseded when a newer read replaced it", async () => {
+            const server = installMockServer()
+            server.on("GET", "/worlds/1", { body: { name: "One" } })
+            const { result } = renderHook(() => useAuthoringResource<{ name: string }>("/worlds/1"), {
+                wrapper: wrapperWith(),
+            })
+            await waitFor(() => expect(result.current.state.kind).toBe("ready"))
+            const outcomes: string[] = []
+            await act(async () => {
+                const first = result.current.refetch().then((o) => outcomes.push(o))
+                const second = result.current.refetch().then((o) => outcomes.push(o))
+                await Promise.all([first, second])
+            })
+            expect(outcomes.sort()).toEqual(["ok", "superseded"])
+        })
+
+        it("ignores a late answer for the previous record after the path changes", async () => {
+            const server = installMockServer()
+            server.on("GET", "/worlds/1", { body: { name: "One" } })
+            server.on("GET", "/worlds/2", { status: 500 })
+            const { result, rerender } = renderHook(
+                ({ path }: { path: string }) => useAuthoringResource<{ name: string }>(path),
+                { wrapper: wrapperWith(), initialProps: { path: "/worlds/1" } },
+            )
+            await waitFor(() => expect(result.current.state.kind).toBe("ready"))
+            rerender({ path: "/worlds/2" })
+            expect(result.current.state.kind).toBe("loading")
+            await waitFor(() => expect(result.current.state.kind).toBe("error"))
+        })
     })
 })

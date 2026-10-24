@@ -4,6 +4,7 @@ import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { useWorldReturnState } from "../hooks/useWorldBackPath"
 import type { CharacterInventoryItem, PartyInventory } from "../types/items"
 import "./authoring/authoring.css"
+import { ReadClosedNotice, ReadFailedNotice } from "./authoring/ReadState"
 import { PanelFrame } from "./DetailPanel"
 
 const itemPath = (campaignId: string, itemId: string): string =>
@@ -42,7 +43,13 @@ function ItemList({ campaignId, items }: { campaignId: string; items: Row[] }) {
 }
 
 // What a character carries, from the inventory read the server allows this caller (the full
-// character view). Shows nothing when that read is refused, so no player sees a broken panel.
+// character view). The read can end four ways and each reads differently:
+//   loading      embedded: a status line. On a page that is complete without it: nothing yet.
+//   empty        "Nothing carried."
+//   refused      403/404. Embedded in a staged section: said plainly. Otherwise absent, because the
+//                server only gives the inventory to the full view and everyone else is not meant
+//                to see a panel for it. Anything loaded earlier is dropped.
+//   failed       a network or server failure: said so, with a retry that only reads again.
 export function CharacterInventoryPanel({
     campaignId,
     characterId,
@@ -53,17 +60,17 @@ export function CharacterInventoryPanel({
     // A staged section already supplies the surface and the heading: render the content only.
     embedded?: boolean
 }) {
-    const { state } = useAuthoringResource<CharacterInventoryItem[]>(
+    const { state, refetch } = useAuthoringResource<CharacterInventoryItem[]>(
         characterInventoryPath(campaignId, characterId),
     )
     if (state.kind !== "ready") {
-        // Inside a staged section a missing body would read as "nothing carried", so say why.
-        if (embedded !== true) return null
-        return state.kind === "loading" ? (
-            <p role="status">Loading inventory…</p>
-        ) : (
-            <p role="alert">The inventory could not be loaded.</p>
-        )
+        if (state.kind === "loading") {
+            return embedded === true ? <p role="status">Loading inventory…</p> : null
+        }
+        if (state.kind === "denied" || state.kind === "unavailable") {
+            return embedded === true ? <ReadClosedNotice what="inventory" denied={state.kind === "denied"} /> : null
+        }
+        return <ReadFailedNotice what="inventory" onRetry={() => void refetch()} />
     }
     return (
         <PanelFrame embedded={embedded} title="Inventory" headingId={`inventory-${characterId}`}>
@@ -73,7 +80,7 @@ export function CharacterInventoryPanel({
 }
 
 // The items each current member of a party carries (editors only; the read is refused to anyone
-// else and the panel then shows nothing).
+// else and the panel is then absent). A failed read says so and can be retried.
 export function PartyInventoryPanel({
     campaignId,
     partyId,
@@ -81,8 +88,12 @@ export function PartyInventoryPanel({
     campaignId: string
     partyId: string
 }) {
-    const { state } = useAuthoringResource<PartyInventory>(partyInventoryPath(campaignId, partyId))
-    if (state.kind !== "ready") return null
+    const { state, refetch } = useAuthoringResource<PartyInventory>(partyInventoryPath(campaignId, partyId))
+    if (state.kind !== "ready") {
+        return state.kind === "error" ? (
+            <ReadFailedNotice what="party inventory" onRetry={() => void refetch()} />
+        ) : null
+    }
     return (
         <section aria-labelledby="party-inventory-heading">
             <h2 id="party-inventory-heading">Party inventory</h2>

@@ -172,7 +172,7 @@ function LoadedPanel({ campaignId, entityId, category, onChanged }: EntityLifecy
 interface PanelProps {
     campaignId: string
     view: EntityLifecycleView
-    refetch: () => Promise<void>
+    refetch: () => Promise<unknown>
     onChanged?: () => void
     // Set while the page holds unsaved edits to the record: every action then asks first, and says
     // the edits are not part of the change.

@@ -19,7 +19,7 @@ export function useKeptData<T>(state: AuthoringResourceState<T>): { data: T | nu
 
 // Reads a resource again when `token` changes (not on the first render), so a panel with its own read
 // agrees with a change made elsewhere on the page without being remounted.
-export function useRefetchOnChange(token: unknown, refetch: () => Promise<void>): void {
+export function useRefetchOnChange(token: unknown, refetch: () => Promise<unknown>): void {
     const first = useRef(true)
     useEffect(() => {
         if (first.current) {

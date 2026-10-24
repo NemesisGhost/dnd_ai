@@ -139,7 +139,7 @@ function Panel({
     refetch,
     embedded,
     onChanged,
-}: Props & { options: RuntimeOptions; detail: CharacterDetail; refetch: () => Promise<void> }) {
+}: Props & { options: RuntimeOptions; detail: CharacterDetail; refetch: () => Promise<unknown> }) {
     const { reload } = useSession()
     const announce = useAnnounce()
     const base = `/campaigns/${encodeURIComponent(campaignId)}/characters/${encodeURIComponent(characterId)}`

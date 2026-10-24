@@ -108,7 +108,7 @@ function ReadOnlyWorldOverview({ world, headingRef }: ReadOnlyWorldOverviewProps
 interface WorldOverviewProps {
     world: WorldDetail
     headingRef: RefObject<HTMLHeadingElement | null>
-    refetch: () => Promise<void>
+    refetch: () => Promise<unknown>
 }
 
 function WorldOverview({ world, headingRef, refetch }: WorldOverviewProps) {

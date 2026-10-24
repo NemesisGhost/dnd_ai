@@ -107,7 +107,7 @@ function PartyRow({
 }: {
     campaignId: string
     party: PartyItem
-    refetch: () => Promise<void>
+    refetch: () => Promise<unknown>
 }) {
     const { reload } = useSession()
     const announce = useAnnounce()

@@ -28,7 +28,7 @@ interface Props {
     // The session's travel, already filtered for the caller, shown beneath the form.
     travel: SessionTravelEntry[]
     // Re-reads the session (and so its travel). Resolves whether or not the read succeeded.
-    refetch: () => Promise<void>
+    refetch: () => Promise<unknown>
     // True while the page's latest read of the session failed and it is showing older data.
     refreshFailed?: boolean
     // False when recording is not offered (the session is not in progress); the reason is shown

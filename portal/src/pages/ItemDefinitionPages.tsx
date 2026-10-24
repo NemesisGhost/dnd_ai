@@ -200,7 +200,7 @@ function DefinitionForm({
     campaignId: string
     options: ItemDefinitionOptions
     existing: ItemDefinition | null
-    refetch: () => Promise<void>
+    refetch: () => Promise<unknown>
     // The list the person came from, with its filters.
     listPath: string
 }) {

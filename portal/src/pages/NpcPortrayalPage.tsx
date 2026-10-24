@@ -63,7 +63,7 @@ function Loaded({
 }: {
     campaignId: string
     view: NpcPortrayalView
-    refetch: () => Promise<void>
+    refetch: () => Promise<unknown>
 }) {
     const { reload } = useSession()
     const announce = useAnnounce()

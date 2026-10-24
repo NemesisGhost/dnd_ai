@@ -207,7 +207,7 @@ function Workspace({
     data: WorkspaceDetail
     // The last refresh failed; `data` is the last read that succeeded.
     refreshFailed: boolean
-    refetchDetail: () => Promise<void>
+    refetchDetail: () => Promise<unknown>
     lifecycle: UseAuthoringResourceResult<EntityLifecycleView>
     provenance: UseAuthoringResourceResult<Provenance>
     revisions: UseAuthoringResourceResult<RevisionHistory>

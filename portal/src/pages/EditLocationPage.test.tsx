@@ -295,3 +295,81 @@ describe("EditLocationPage", () => {
         expect(everything.join(" ")).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i)
     })
 })
+
+describe("EditLocationPage: read failures and unconfirmed saves", () => {
+    function mount(viewHandler: () => { status?: number; body?: object; networkError?: boolean }) {
+        const server = installMockServer()
+        server.on("GET", VIEW_PATH, viewHandler)
+        server.on("GET", "/campaigns/c1/authoring/locations/options", { body: OPTIONS })
+        server.on("GET", /parent-options/, { body: { items: [], next_cursor: null } })
+        return {
+            server,
+            render: () =>
+                renderAuthoringRoutes({
+                    initialEntry: "/app/c1/world/location/l1/edit",
+                    routes: [
+                        { path: "/app/:campaignId/world/location/:entityId/edit", element: <EditLocationPage /> },
+                        { path: "/app/:campaignId/world/location/:entityId", element: <p>Location detail page</p> },
+                    ],
+                }),
+        }
+    }
+
+    it("offers a read-only retry when the first load fails, not a denial", async () => {
+        let fail = true
+        const { server, render } = mount(() => (fail ? { status: 500, body: {} } : { body: view() }))
+        render()
+        expect(await screen.findByRole("alert")).toHaveTextContent("The location could not be loaded.")
+        expect(screen.queryByText(/does not exist, or you do not have access/)).toBeNull()
+        fail = false
+        fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+        expect(await screen.findByRole("textbox", { name: /Name/ })).toHaveValue("Hollow")
+        expect(server.callsTo("POST", /./)).toHaveLength(0)
+    })
+
+    it("keeps the form and holds Save when a re-read after Load latest fails, then recovers on retry", async () => {
+        let current: object = view()
+        let failRead = false
+        const { server, render } = mount(() => (failRead ? { status: 500, body: {} } : { body: current }))
+        server.on("POST", UPDATE_PATH, () => {
+            current = view({ name: "Changed elsewhere", row_version: 4 })
+            return { status: 409, body: { error: { code: "stale_write", message: "m", correlation_id: "c" } } }
+        })
+        render()
+        const name = await screen.findByRole("textbox", { name: /Name/ })
+        fireEvent.change(name, { target: { value: "My edit" } })
+        fireEvent.click(save())
+        failRead = true
+        fireEvent.click(await screen.findByRole("button", { name: "Load latest version" }))
+        // The latest could not be read: the typed value is still in the form, and Save is held.
+        expect(await screen.findByText(/latest location could not be loaded/)).toBeInTheDocument()
+        expect(screen.getByRole("textbox", { name: /Name/ })).toHaveValue("My edit")
+        expect(save()).toBeDisabled()
+
+        failRead = false
+        fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+        await waitFor(() => expect(screen.getByRole("textbox", { name: /Name/ })).toHaveValue("Changed elsewhere"))
+        expect(save()).toBeEnabled()
+        expect(screen.getByRole("button", { name: "Re-apply my changes" })).toBeInTheDocument()
+        expect(server.callsTo("POST", UPDATE_PATH)).toHaveLength(1)
+    })
+
+    it("retries an unconfirmed save with the same key and body, then leaves for the record", async () => {
+        const { server, render } = mount(() => ({ body: view() }))
+        let attempts = 0
+        server.on("POST", UPDATE_PATH, () => {
+            attempts += 1
+            return attempts === 1 ? { networkError: true } : { body: { row_version: 4 } }
+        })
+        render()
+        fireEvent.change(await screen.findByRole("textbox", { name: /Name/ }), { target: { value: "My edit" } })
+        fireEvent.click(save())
+        expect(await screen.findByRole("alert")).toHaveTextContent("cannot tell whether this was saved")
+        expect(screen.getByRole("textbox", { name: /Name/ })).toHaveValue("My edit")
+        fireEvent.click(screen.getByRole("button", { name: "Retry" }))
+        expect(await screen.findByText("Location detail page")).toBeInTheDocument()
+        const [first, second] = server.callsTo("POST", UPDATE_PATH)
+        expect(second!.body).toEqual(first!.body)
+        expect(second!.headers["Idempotency-Key"]).toBe(first!.headers["Idempotency-Key"])
+    })
+})

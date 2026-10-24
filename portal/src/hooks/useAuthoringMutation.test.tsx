@@ -200,4 +200,149 @@ describe("useAuthoringMutation", () => {
         await act(async () => gate.resolve("late"))
         expect(result.current.status.kind).toBe("idle")
     })
+
+    describe("confirmed writes and uncertain writes", () => {
+        const network = () => new ApiRequestError(0, null, null)
+
+        it("retries an unconfirmed write with the same body, the same key and the request as first sent", async () => {
+            const sent: { body: Body; key: string; version: number }[] = []
+            let version = 3
+            const request = vi
+                .fn<(b: Body, c: MutationRequestContext) => Promise<string>>()
+                .mockImplementation((body, ctx) => {
+                    sent.push({ body, key: ctx.idempotencyKey, version })
+                    return sent.length === 1 ? Promise.reject(network()) : Promise.resolve("done")
+                })
+            // The component re-renders with a newer row version between the failure and the retry.
+            const { result, rerender } = renderHook(
+                ({ v }: { v: number }) =>
+                    useAuthoringMutation<Body, string>({
+                        scopeKey: "a",
+                        request: (b, c) => {
+                            version = v
+                            return request(b, c)
+                        },
+                    }),
+                { wrapper: wrapperWith(), initialProps: { v: 3 } },
+            )
+            act(() => result.current.submit({ name: "x" }))
+            await waitFor(() => expect(result.current.status).toMatchObject({ kind: "error", error: { kind: "network" } }))
+            rerender({ v: 4 })
+            act(() => result.current.retry())
+            await waitFor(() => expect(result.current.status.kind).toBe("success"))
+            expect(sent).toHaveLength(2)
+            expect(sent[1]!.key).toBe(sent[0]!.key)
+            expect(sent[1]!.body).toEqual(sent[0]!.body)
+            // The retry went through the request closure captured at the first send.
+            expect(sent[1]!.version).toBe(3)
+        })
+
+        it("does not reuse the key for edited input", async () => {
+            const keys: string[] = []
+            const request = vi.fn((_b: Body, c: MutationRequestContext) => {
+                keys.push(c.idempotencyKey)
+                return Promise.reject(network())
+            })
+            const { result } = renderHook(() => useAuthoringMutation<Body, string>({ scopeKey: "a", request }), {
+                wrapper: wrapperWith(),
+            })
+            act(() => result.current.submit({ name: "x" }))
+            await waitFor(() => expect(result.current.status.kind).toBe("error"))
+            act(() => result.current.submit({ name: "edited" }))
+            await waitFor(() => expect(request).toHaveBeenCalledTimes(2))
+            expect(keys[1]).not.toBe(keys[0])
+        })
+
+        it("reports a confirmed write whose refresh returned failed as confirmed, never as an error, and cannot be retried", async () => {
+            const request = vi.fn().mockResolvedValue({ row_version: 5 })
+            const { result } = renderHook(
+                () =>
+                    useAuthoringMutation<Body, { row_version: number }>({
+                        scopeKey: "a",
+                        request,
+                        onSuccess: () => "failed",
+                    }),
+                { wrapper: wrapperWith() },
+            )
+            act(() => result.current.submit({ name: "x" }))
+            await waitFor(() => expect(result.current.status).toEqual({ kind: "confirmed", refresh: "failed" }))
+            expect(result.current.receipt).toEqual({ row_version: 5 })
+            // The key and body are spent: retry does nothing, so the write cannot be repeated.
+            act(() => result.current.retry())
+            expect(request).toHaveBeenCalledTimes(1)
+        })
+
+        it("treats a throwing onSuccess as a failed refresh of a confirmed write, not a failed write", async () => {
+            const request = vi.fn().mockResolvedValue("done")
+            const { result } = renderHook(
+                () =>
+                    useAuthoringMutation<Body, string>({
+                        scopeKey: "a",
+                        request,
+                        onSuccess: () => {
+                            throw new Error("secret detail")
+                        },
+                    }),
+                { wrapper: wrapperWith() },
+            )
+            act(() => result.current.submit({ name: "x" }))
+            await waitFor(() => expect(result.current.status.kind).toBe("confirmed"))
+            expect(JSON.stringify(result.current.status)).not.toContain("secret")
+            act(() => result.current.retry())
+            expect(request).toHaveBeenCalledTimes(1)
+        })
+
+        it("is a plain success when the refresh was superseded or returned nothing", async () => {
+            const { result } = renderHook(
+                () =>
+                    useAuthoringMutation<Body, string>({
+                        scopeKey: "a",
+                        request: vi.fn().mockResolvedValue("done"),
+                        onSuccess: () => "superseded",
+                    }),
+                { wrapper: wrapperWith() },
+            )
+            act(() => result.current.submit({ name: "x" }))
+            await waitFor(() => expect(result.current.status.kind).toBe("success"))
+        })
+
+        it("keeps a stale-version refusal as an error the caller resolves, with no receipt", async () => {
+            const stale = new ApiRequestError(409, "stale_write", "corr")
+            const { result } = renderHook(
+                () => useAuthoringMutation<Body, string>({ scopeKey: "a", request: vi.fn().mockRejectedValue(stale) }),
+                { wrapper: wrapperWith() },
+            )
+            act(() => result.current.submit({ name: "x" }))
+            await waitFor(() => expect(result.current.status).toMatchObject({ kind: "error", error: { kind: "stale" } }))
+            expect(result.current.receipt).toBeNull()
+        })
+
+        it("drops a confirmed receipt when the scope changes", async () => {
+            const { result, rerender } = renderHook(
+                ({ scope }: { scope: string }) =>
+                    useAuthoringMutation<Body, string>({
+                        scopeKey: scope,
+                        request: vi.fn().mockResolvedValue("done"),
+                    }),
+                { wrapper: wrapperWith(), initialProps: { scope: "a" } },
+            )
+            act(() => result.current.submit({ name: "x" }))
+            await waitFor(() => expect(result.current.receipt).toBe("done"))
+            rerender({ scope: "b" })
+            expect(result.current.receipt).toBeNull()
+            expect(result.current.status.kind).toBe("idle")
+        })
+
+        it("aborts a pending request on unmount and ignores its late failure", async () => {
+            const gate = deferred<string>()
+            const { result, unmount } = renderHook(
+                () => useAuthoringMutation<Body, string>({ scopeKey: "a", request: () => gate.promise }),
+                { wrapper: wrapperWith() },
+            )
+            act(() => result.current.submit({ name: "x" }))
+            expect(result.current.status.kind).toBe("pending")
+            unmount()
+            await act(async () => gate.reject(network()))
+        })
+    })
 })

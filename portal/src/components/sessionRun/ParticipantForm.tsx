@@ -3,12 +3,20 @@ import { addSessionParticipant } from "../../api/sessionAuthoring"
 import { fetchWorldEntities } from "../../api/world"
 import { useSession } from "../../context/SessionContext"
 import { useAuthoringMutation } from "../../hooks/useAuthoringMutation"
+import type { RefetchOutcome } from "../../hooks/useAuthoringResource"
 import type { CharacterKind } from "../../types/character"
 import type { CampaignSessionDetail, PlayReceipt } from "../../types/campaignSession"
 import { characterKindLabel, characterKindOfTypeCode } from "../../utils/characterKind"
 import { useAnnounce } from "../authoring/announcer"
 import { SelectField } from "../authoring/fields"
-import { AuthoringForm, ErrorSummary, FormActions, MutationStatusMessage, StaleWriteNotice } from "../authoring/feedback"
+import {
+    AuthoringForm,
+    ErrorSummary,
+    FormActions,
+    MutationStatusMessage,
+    SavedRefreshFailedNotice,
+    StaleWriteNotice,
+} from "../authoring/feedback"
 import type { FieldError } from "../authoring/feedback"
 import { ReferenceCombobox } from "../authoring/ReferenceCombobox"
 import type { ReferenceOption } from "../authoring/ReferenceCombobox"
@@ -35,11 +43,15 @@ export function ParticipantForm({
     session,
     presentCharacterIds,
     refetch,
+    refreshFailed,
 }: {
     campaignId: string
     session: CampaignSessionDetail
     presentCharacterIds: ReadonlySet<string>
-    refetch: () => Promise<void>
+    refetch: () => Promise<RefetchOutcome>
+    // The page is showing the last session that loaded because the latest read failed, so the
+    // version this form would send may be behind. It says so itself; the form only stops sending.
+    refreshFailed: boolean
 }) {
     const { reload } = useSession()
     const announce = useAnnounce()
@@ -71,11 +83,20 @@ export function ParticipantForm({
             setCharacter(null)
             setWantsGuest(false)
             setErrors([])
-            await refetch()
+            const outcome = await refetch()
+            if (outcome === "failed") {
+                // Saved, but the roster did not reload: no announcement of a roster we cannot show.
+                return "failed"
+            }
             announce("Participant added")
         },
     })
     const error = add.status.kind === "error" ? add.status.error : null
+    // The add is confirmed but the session this form holds has not caught up with the version the
+    // server returned: another save from it would send a version the server has already moved past.
+    const behind =
+        add.status.kind === "confirmed" && (session.row_version ?? 0) < (add.receipt?.row_version ?? 0)
+    const saveBlocked = refreshFailed || behind
     const message = error?.code ? (CODE_MESSAGE[error.code] ?? null) : null
 
     // A duplicate means the roster this page shows is out of date: reload it. The failure stays
@@ -103,7 +124,7 @@ export function ParticipantForm({
     }
 
     function submit() {
-        if (add.status.kind === "pending") {
+        if (add.status.kind === "pending" || saveBlocked) {
             return
         }
         if (character === null) {
@@ -139,6 +160,11 @@ export function ParticipantForm({
             ) : error !== null ? (
                 <MutationStatusMessage error={error} onRetry={add.retry} onCheckSession={reload} />
             ) : null}
+            {behind ? (
+                // The page notice carries the retry and the announcement; this only says the add was
+                // saved, so nobody adds the same character again.
+                <SavedRefreshFailedNotice what="participant list" quiet />
+            ) : null}
             <ReferenceCombobox
                 id={CHARACTER_FIELD}
                 label="Character"
@@ -171,6 +197,7 @@ export function ParticipantForm({
             <FormActions
                 pending={add.status.kind === "pending"}
                 saveLabel="Add participant"
+                saveDisabled={saveBlocked}
                 onCancel={() => {
                     setCharacter(null)
                     setWantsGuest(false)

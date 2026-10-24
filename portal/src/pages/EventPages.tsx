@@ -274,7 +274,7 @@ function EventBody({
     campaignId: string
     event: EventAuthoringView
     plan: CorrectionPreview | null
-    refetch: () => Promise<void>
+    refetch: () => Promise<unknown>
 }) {
     const link = (id: string) => `${base(campaignId)}/events/${encodeURIComponent(id)}`
     const blocked = plan !== null ? plan.effects.filter((e) => !e.reversible) : []
@@ -363,7 +363,7 @@ function Corrections({
     event: EventAuthoringView
     canCorrect: boolean
     blockedReasons: (string | null)[]
-    refetch: () => Promise<void>
+    refetch: () => Promise<unknown>
 }) {
     const { reload } = useSession()
     const announce = useAnnounce()

@@ -65,7 +65,7 @@ export function useItemOperations({
     when: string
     // Clears the chosen time once a command has used it, so the next one defaults to the campaign clock.
     consumeTime: () => void
-    refetch: () => Promise<void>
+    refetch: () => Promise<unknown>
 }): ItemOperations {
     const { reload } = useSession()
     const announce = useAnnounce()

@@ -30,7 +30,7 @@ interface SectionProps {
     view: QuestAuthoringView
     options: QuestOptions
     // Reads the quest again (and whatever else depends on its version).
-    refetch: () => Promise<void>
+    refetch: () => Promise<unknown>
     onUnsaved: ReportUnsaved
 }
 

@@ -166,7 +166,7 @@ function Workspace({
     refreshing: boolean
     // The last refresh failed; `view` is the last read that succeeded.
     refreshFailed: boolean
-    refetchQuest: () => Promise<void>
+    refetchQuest: () => Promise<unknown>
     lifecycle: UseAuthoringResourceResult<EntityLifecycleView>
     revisions: UseAuthoringResourceResult<RevisionHistory>
     headingRef: ReturnType<typeof usePageArrival>

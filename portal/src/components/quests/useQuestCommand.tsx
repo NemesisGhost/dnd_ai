@@ -41,7 +41,7 @@ export function useQuestCommand({
     campaignId: string
     questId: string
     scope: string
-    refetch: () => Promise<void>
+    refetch: () => Promise<unknown>
 }): QuestCommandHandle {
     const { reload } = useSession()
     const announce = useAnnounce()

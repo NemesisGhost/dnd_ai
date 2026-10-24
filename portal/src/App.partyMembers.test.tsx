@@ -53,6 +53,7 @@ let server: MockServer
 
 beforeEach(() => {
   server = installCampaignShellMocks()
+  server.on("GET", "/campaigns/mundivita/parties/p1/inventory", { body: { party_id: "p1", members: [] } })
   server.on("GET", /\/campaigns\/mundivita\/world-times/, {
     body: { items: [TIME("t2", "Year 2"), TIME("t1", "Year 1")], next_cursor: null },
   })

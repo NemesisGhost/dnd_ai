@@ -57,7 +57,7 @@ interface WorldTimesContentProps {
     campaignId: string
     page: WorldTimePage
     calendars: CalendarListResponse
-    refetch: () => Promise<void>
+    refetch: () => Promise<unknown>
 }
 
 function WorldTimesContent({ campaignId, page, calendars, refetch }: WorldTimesContentProps) {

@@ -122,7 +122,7 @@ function StateSection({
     campaignId: string
     characterId: string
     data: CharacterBuilds
-    refetch: () => Promise<void>
+    refetch: () => Promise<unknown>
 }) {
     const { reload } = useSession()
     const announce = useAnnounce()
@@ -238,7 +238,7 @@ function BuildList({
     campaignId: string
     characterId: string
     data: CharacterBuilds
-    refetch: () => Promise<void>
+    refetch: () => Promise<unknown>
 }) {
     const { reload } = useSession()
     const announce = useAnnounce()

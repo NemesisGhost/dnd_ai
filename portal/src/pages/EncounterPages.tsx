@@ -223,7 +223,7 @@ function Loaded({
     campaignId: string
     view: PreparedEncounter
     options: EncounterOptions
-    refetch: () => Promise<void>
+    refetch: () => Promise<unknown>
 }) {
     const { reload } = useSession()
     const announce = useAnnounce()

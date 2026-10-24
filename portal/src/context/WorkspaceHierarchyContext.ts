@@ -40,7 +40,7 @@ export interface WorkspaceHierarchy {
     // names no world.
     world: AuthoringResourceState<WorldDetail> | null
     // Re-reads the world after a write that changes its timelines.
-    refetchWorld: () => Promise<void>
+    refetchWorld: () => Promise<unknown>
 }
 
 export const WorkspaceHierarchyContext = createContext<WorkspaceHierarchy | undefined>(

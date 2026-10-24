@@ -862,7 +862,7 @@ function ClaimForm({
         view: KnowledgeAuthoringView
         options: KnowledgeOptions
         refreshing: boolean
-        refetch: () => Promise<void>
+        refetch: () => Promise<unknown>
     }) {
     const { reload } = useSession()
     const announce = useAnnounce()

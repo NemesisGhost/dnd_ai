@@ -338,6 +338,58 @@ describe("session run page", () => {
       release()
     })
 
+    it("says an add was saved when the roster re-read failed, holds a second add, and retries with a read only", async () => {
+      let state = session()
+      let failRead = false
+      server.on("GET", S, () => (failRead ? { status: 500, body: {} } : { body: state }))
+      server.on("POST", `${S}/participants`, () => {
+        state = session({ row_version: 4, participants: [CAEL] })
+        failRead = true
+        return { status: 201, body: { session_id: "s1", row_version: 4, changed: true, session_participant_id: "p2" } }
+      })
+      openApp(`${RUN}?section=participants`)
+      await pickCael()
+      fireEvent.click(screen.getByRole("button", { name: "Add participant" }))
+      expect(await screen.findByText(/The latest session data could not be loaded/)).toBeInTheDocument()
+      expect(screen.getByText(/Saved\. The latest participant list could not be loaded/)).toBeInTheDocument()
+      // The page offers the one read retry; the add form is held and the add is not repeated.
+      expect(screen.getByRole("button", { name: "Add participant" })).toBeDisabled()
+      expect(screen.getAllByRole("button", { name: "Try again" })).toHaveLength(1)
+      expect(server.callsTo("POST", `${S}/participants`)).toHaveLength(1)
+
+      failRead = false
+      fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+      expect(await screen.findByText(/Cael \(player character\)/)).toBeInTheDocument()
+      expect(screen.queryByText(/Saved\. The latest participant list/)).toBeNull()
+      expect(screen.getByRole("button", { name: "Add participant" })).toBeEnabled()
+      expect(server.callsTo("POST", `${S}/participants`)).toHaveLength(1)
+    })
+
+    it("retries an add whose answer was lost with the same key and the version it first sent", async () => {
+      let state = session()
+      server.on("GET", S, () => ({ body: state }))
+      let attempts = 0
+      server.on("POST", `${S}/participants`, () => {
+        attempts += 1
+        if (attempts === 1) {
+          // The server applied it, but the answer never arrived; the roster moved on meanwhile.
+          state = session({ row_version: 4, participants: [CAEL] })
+          return { networkError: true }
+        }
+        return { status: 201, body: { session_id: "s1", row_version: 4, changed: true, session_participant_id: "p2" } }
+      })
+      openApp(`${RUN}?section=participants`)
+      await pickCael()
+      fireEvent.click(screen.getByRole("button", { name: "Add participant" }))
+      expect(await screen.findByRole("alert")).toHaveTextContent("cannot tell whether this was saved")
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }))
+      await waitFor(() => expect(server.callsTo("POST", `${S}/participants`)).toHaveLength(2))
+      const [first, second] = server.callsTo("POST", `${S}/participants`)
+      expect(second!.body).toEqual(first!.body)
+      expect(first!.body).toMatchObject({ expected_row_version: 3 })
+      expect(second!.headers["Idempotency-Key"]).toBe(first!.headers["Idempotency-Key"])
+    })
+
     it("lists active participants with roles on load and the removed ones separately", async () => {
       server.on("GET", S, {
         body: session({
@@ -807,7 +859,7 @@ describe("stages and sections", () => {
       })
       server.on("GET", /authoring\/routes\?location_id=/, { body: { items: [] } })
       server.on("POST", `${S}/travel`, {
-        body: { changed: true, moved: [{}], event_id: "ev9" },
+        body: { destination_location_id: "c1", session_id: "s1", changed: true, moved: ["c9"], already_there: [], event_id: "ev9" },
       })
       openApp(`${RUN}?section=travel`)
       const form = await screen.findByRole("form", { name: "Record travel" })

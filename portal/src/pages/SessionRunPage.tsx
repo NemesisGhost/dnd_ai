@@ -36,6 +36,7 @@ import type { SectionKey } from "../components/sessionRun/runStages"
 import { useRunNavigation } from "../components/sessionRun/useRunNavigation"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
+import type { RefetchOutcome } from "../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { usePageArrival } from "../hooks/usePageArrival"
 import type { EncounterSummary } from "../types/encounters"
@@ -132,7 +133,7 @@ function RunBody({
 }: {
     campaignId: string
     session: CampaignSessionDetail
-    refetch: () => Promise<void>
+    refetch: () => Promise<RefetchOutcome>
     // True when the latest read failed and `session` is the last one that loaded.
     refreshFailed: boolean
 }) {
@@ -186,6 +187,7 @@ function RunBody({
                     campaignId={campaignId}
                     session={session}
                     refetch={refetch}
+                    refreshFailed={refreshFailed}
                     canManage={actions.includes("manage_participants")}
                 />
             </>
@@ -351,7 +353,7 @@ function StartControl({
 }: {
     campaignId: string
     session: CampaignSessionDetail
-    refetch: () => Promise<void>
+    refetch: () => Promise<unknown>
     onStarted: () => void
 }) {
     const { reload } = useSession()
@@ -412,11 +414,14 @@ function Participants({
     campaignId,
     session,
     refetch,
+    refreshFailed,
     canManage,
 }: {
     campaignId: string
     session: CampaignSessionDetail
-    refetch: () => Promise<void>
+    refetch: () => Promise<RefetchOutcome>
+    // The latest read failed and `session` is the last one that loaded: its version may be behind.
+    refreshFailed: boolean
     canManage: boolean
 }) {
     const { reload } = useSession()
@@ -436,7 +441,9 @@ function Participants({
                 ctx,
             ),
         onSuccess: async () => {
-            await refetch()
+            if ((await refetch()) === "failed") {
+                return "failed"
+            }
             announce("Participant removed")
         },
     })
@@ -457,6 +464,7 @@ function Participants({
                                 <button
                                     type="button"
                                     className="authoring-button"
+                                    disabled={refreshFailed}
                                     onClick={() => {
                                         remove.reset()
                                         remove.submit(p)
@@ -496,6 +504,7 @@ function Participants({
                     session={session}
                     presentCharacterIds={presentIds}
                     refetch={refetch}
+                    refreshFailed={refreshFailed}
                 />
             ) : (
                 <p className="authoring-note">
@@ -517,7 +526,7 @@ function LogSection({
 }: {
     campaignId: string
     session: CampaignSessionDetail
-    refetch: () => Promise<void>
+    refetch: () => Promise<unknown>
     canLog: boolean
     reason: string
 }) {
@@ -647,7 +656,7 @@ function EndControl({
 }: {
     campaignId: string
     session: CampaignSessionDetail
-    refetch: () => Promise<void>
+    refetch: () => Promise<unknown>
     onEnded: () => void
 }) {
     const { reload } = useSession()

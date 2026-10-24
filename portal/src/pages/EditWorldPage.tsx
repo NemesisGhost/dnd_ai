@@ -34,7 +34,7 @@ interface EditWorldPageProps {
     // page never mounts for a world the caller may not edit.
     world: WorldDetail
     refreshing: boolean
-    refetch: () => Promise<void>
+    refetch: () => Promise<unknown>
 }
 
 export function EditWorldPage({ world, refreshing, refetch }: EditWorldPageProps) {
@@ -75,7 +75,7 @@ interface EditWorldFormProps {
     refreshing: boolean
     keptChanges: { name: string; description: string } | null
     onKeepChanges: (changes: { name: string; description: string } | null) => void
-    refetch: () => Promise<void>
+    refetch: () => Promise<unknown>
 }
 
 function EditWorldForm({
