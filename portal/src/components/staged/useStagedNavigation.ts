@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useLayoutEffect, useState } from "react"
 import { useLocation, useSearchParams } from "react-router"
 
 export interface StagedSectionRef<S extends string, K extends string> {
@@ -41,7 +41,11 @@ export function useStagedNavigation<S extends string, K extends string>(
     const stage = stageOf(section)
     const [remembered, setRemembered] = useState<Partial<Record<S, K>>>({})
 
-    useEffect(() => {
+    // A layout effect, not a passive one: a passive effect can be flushed after a person has already
+    // followed a section link (React runs a pending one at the start of the render that link causes),
+    // and its closure still holds the address from before, so it would replace the section they just
+    // chose with the default. In a layout effect nothing can happen between the render and this.
+    useLayoutEffect(() => {
         if (ready && (parsed === null || parsed !== requested)) {
             const next = new URLSearchParams(params)
             next.set("section", section)

@@ -27,7 +27,8 @@ const FORBIDDEN = {
 const FULL = { details: true, sheet: true, relationships: true, inventory: true, parties: false }
 const SUMMARY = { details: true, sheet: false, relationships: true, inventory: false, parties: false }
 
-function character(sections: object) {
+// `null` leaves `sections` out of the answer, as a server that predates them does.
+function character(sections: object | null) {
     return {
         character_id: "pc-1",
         name: "Aldric",
@@ -44,7 +45,7 @@ function character(sections: object) {
         active_encounter_id: null,
         conditions: [],
         resources: [],
-        sections,
+        ...(sections === null ? {} : { sections }),
     }
 }
 const INVENTORY = [
@@ -62,7 +63,7 @@ const RELATIONSHIPS = { character_id: "pc-1", as_of: null, truncated: false, ite
 
 let server: MockServer
 
-function install(sections: object = FULL) {
+function install(sections: object | null = FULL) {
     server.on("GET", "/campaigns/mundivita/characters/pc-1", { body: character(sections) })
     server.on("GET", "/campaigns/mundivita/characters/pc-1/sheet", {
         body: { ...characterSheetFixture, character_id: "pc-1", name: "Aldric" },
@@ -340,5 +341,63 @@ describe("Character record: the perspective", () => {
         expect(selectCharacter).not.toHaveBeenCalled()
         expect(syncCharacterFromUrl).not.toHaveBeenCalled()
         expect(getSelectedCharacterId).not.toHaveBeenCalled()
+    })
+})
+
+describe("Character record: an answer without `sections` (a server that predates them)", () => {
+    it("keeps the summary and relationships usable, and offers no inventory it was never told it may", async () => {
+        install(null)
+        server.on("GET", "/campaigns/mundivita/characters/pc-1/sheet", NOT_FOUND)
+        server.on("GET", "/campaigns/mundivita/characters/pc-1/inventory", NOT_FOUND)
+        openApp(SHEET, ["campaign.view"], NO_PERSPECTIVE)
+        // The sheet is tried as it always was and its refusal falls back to the summary panels.
+        expect(await screen.findByText("The full sheet is not available to you.")).toBeInTheDocument()
+        await ready()
+        expect(rowNames()).not.toContain("Inventory")
+        expect(rowNames()).not.toContain("Parties")
+        expect(rowNames()).toContain("Relationships")
+        fireEvent.click(sectionLink("Relationships"))
+        expect(await screen.findByRole("heading", { name: /^Relationships/ })).toBeInTheDocument()
+        expect(calls("/inventory")).toHaveLength(0)
+    })
+
+    it("falls back from a direct ?section=inventory without sending an inventory request", async () => {
+        install(null)
+        server.on("GET", "/campaigns/mundivita/characters/pc-1/sheet", NOT_FOUND)
+        const { router } = openApp(`${SHEET}?section=inventory`, ["campaign.view"], NO_PERSPECTIVE)
+        expect(await screen.findByText("The full sheet is not available to you.")).toBeInTheDocument()
+        expect(screen.queryByRole("link", { name: "Inventory" })).not.toBeInTheDocument()
+        expect(screen.queryByRole("heading", { name: "Inventory" })).not.toBeInTheDocument()
+        await waitFor(() => expect(router.state.location.search).toBe("?section=sheet"))
+        expect(calls("/inventory")).toHaveLength(0)
+    })
+
+    it("offers no inventory on the World reader either, and reads none", async () => {
+        install(null)
+        openApp(`${WORLD}?section=inventory`, ["campaign.view"], NO_PERSPECTIVE)
+        await ready()
+        expect(rowNames()).not.toContain("Inventory")
+        expect(calls("/inventory")).toHaveLength(0)
+    })
+
+    it("is not the same as an explicit all-false answer, which also offers and reads nothing but the page", async () => {
+        install({ details: false, sheet: false, relationships: false, inventory: false, parties: false })
+        openApp(SHEET, ["campaign.view"], NO_PERSPECTIVE)
+        expect(await screen.findByText("The full sheet is not available to you.")).toBeInTheDocument()
+        await ready()
+        // Explicitly nothing: only the page's own Summary entry, and no sheet, relationships or inventory read.
+        expect(rowNames()).toEqual(["Summary"])
+        expect(calls("/sheet")).toHaveLength(0)
+        expect(calls("/relationships")).toHaveLength(0)
+        expect(calls("/inventory")).toHaveLength(0)
+    })
+
+    it("keeps matching-version full-tier inventory navigation working", async () => {
+        install({ ...FULL, inventory: true })
+        openApp(SHEET, ["campaign.view"], NO_PERSPECTIVE)
+        await ready()
+        fireEvent.click(sectionLink("Inventory"))
+        expect(await screen.findByRole("link", { name: "Longsword" })).toBeInTheDocument()
+        expect(calls("/inventory")).toHaveLength(1)
     })
 })
