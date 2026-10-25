@@ -125,14 +125,21 @@ function Probe() {
 interface Setup {
     current?: ReturnType<typeof view>
     capabilities?: string[]
+    worldCapabilities?: string[]
 }
 
-function setup(entry: string, { current = view(), capabilities = ["canon.edit"] }: Setup = {}) {
+function setup(
+    entry: string,
+    { current = view(), capabilities = ["canon.edit"], worldCapabilities }: Setup = {},
+) {
     const state = { current }
     const server = installMockServer()
     server.on("GET", VIEW_PATH, () => ({ body: state.current }))
     server.on("GET", "/campaigns/c1/entities/i1/lifecycle", () => ({ body: lifecycleOf(state.current) }))
     server.on("GET", "/campaigns/c1/entities/i1/provenance", { body: PROVENANCE })
+    server.on("GET", "/campaigns/c1/sources", {
+        body: { items: [], source_types: [{ value: "session", label: "Session" }], limits: { title_max_length: 200, reference_max_length: 500 } },
+    })
     server.on("GET", "/campaigns/c1/authoring/items", {
         body: {
             items: [
@@ -182,7 +189,14 @@ function setup(entry: string, { current = view(), capabilities = ["canon.edit"] 
     const rendered = renderAuthoringRoutes({
         initialEntry: entry,
         bootstrap: bootstrapWith({
-            campaigns: [{ ...sessionBootstrapFixture.campaigns[0]!, campaign_id: "c1", capabilities }],
+            campaigns: [
+                {
+                    ...sessionBootstrapFixture.campaigns[0]!,
+                    campaign_id: "c1",
+                    capabilities,
+                    ...(worldCapabilities === undefined ? {} : { world_capabilities: worldCapabilities }),
+                },
+            ],
         }),
         routes: [
             { path: "/app/:campaignId/items", element: <><ItemsPage /><Probe /></> },
@@ -875,5 +889,26 @@ describe("give versus place", () => {
             await screen.findByRole("heading", { name: "Item unavailable" })
             expect(screen.queryByDisplayValue("9")).not.toBeInTheDocument()
         })
+    })
+})
+
+describe("sources of an item instance (D-8)", () => {
+    it("tells a campaign GM with no world role that sources are the world's preparation, and requests none", async () => {
+        const { server } = setup("/app/c1/items/i1", { worldCapabilities: [] })
+        await waitReady()
+        expect(await within(panel("sources")).findByText(/need a world Editor or Reviewer role/)).toBeInTheDocument()
+        expect(server.calls.map((c) => c.path).filter((p) => /\/sources$|\/provenance$/.test(p))).toEqual([])
+        // Everything the campaign owns about the item still works.
+        expect(panel("details")).toBeInTheDocument()
+    })
+
+    it("reads the catalog and provenance for a world Editor or Reviewer", async () => {
+        const { server } = setup("/app/c1/items/i1", {
+            worldCapabilities: ["world.view", "world.canon.read", "world.canon.read_private"],
+        })
+        await waitReady()
+        await waitFor(() => expect(server.calls.some((c) => c.path.endsWith("/campaigns/c1/sources"))).toBe(true))
+        expect(server.calls.some((c) => c.path.endsWith("/entities/i1/provenance"))).toBe(true)
+        expect(within(panel("sources")).queryByText(/need a world Editor or Reviewer role/)).toBeNull()
     })
 })

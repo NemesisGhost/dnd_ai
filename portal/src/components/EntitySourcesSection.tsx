@@ -5,6 +5,7 @@ import { attachSource, createSource, detachSource, provenancePath, sourcesPath }
 import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
+import { useHeldWorldCapability, WORLD_CANON_READ_PRIVATE } from "../hooks/useWorldCapability"
 import type { UseAuthoringResourceResult } from "../hooks/useAuthoringResource"
 import type { Provenance, SourceList } from "../types/provenance"
 import { useAnnounce } from "./authoring/announcer"
@@ -50,7 +51,23 @@ const CODE_MESSAGE: Readonly<Record<string, string>> = {
 // Editor-only: the sources attached to a record, with a way to attach another (an existing one,
 // or a new one written here) or detach one, and a link to the full provenance. Detaching keeps
 // the history. Mounts nothing, and sends nothing, for anyone whose provenance read is refused.
-export function EntitySourcesSection({
+export function EntitySourcesSection(props: Props) {
+    // The world's source catalog and a record's provenance are the private side of shared world canon,
+    // whatever the record is (even a campaign-originated item or player character): they are read, and
+    // the section is mounted, only when the bootstrap says the caller holds `world.canon.read_private`.
+    // Otherwise the person is told why, and not a single refused request is sent.
+    if (!useHeldWorldCapability(props.campaignId, WORLD_CANON_READ_PRIVATE)) {
+        return (
+            <p className="authoring-note">
+                Sources belong to the world&apos;s preparation and need a world Editor or Reviewer role. Ask the world
+                owner.
+            </p>
+        )
+    }
+    return <LoadedSources {...props} />
+}
+
+function LoadedSources({
     campaignId,
     entityId,
     category,

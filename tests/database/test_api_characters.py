@@ -607,6 +607,22 @@ def test_character_kind_is_returned_on_both_tiers(
         assert client.get(_character_url(f)).json()["character_kind"] == "character"
 
 
+def test_the_record_status_is_returned_on_both_tiers_without_widening_the_summary_tier(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    """CP-4 smoke D-8: a runtime panel decides whether an NPC takes new events from the character's
+    own read, not from the world's private authoring view, so the read carries the two status
+    fields every World detail carries. The summary tier still withholds everything mechanical."""
+    for user_id in (f.summary_view_user_id, f.full_view_user_id):
+        with client_factory(user_id) as client:
+            body = client.get(_character_url(f)).json()
+        assert body["canon_status"] == "canon"
+        assert body["lifecycle_status"] == "active"
+    with client_factory(f.summary_view_user_id) as client:
+        summary = client.get(_character_url(f)).json()
+    assert summary["current_hit_points"] is None and summary["conditions"] is None
+
+
 @pytest.mark.parametrize("kind", ["npc", "player_character"])
 def test_character_kind_names_an_npc_or_a_player_character(
     client_factory: Callable[[uuid.UUID], TestClient],

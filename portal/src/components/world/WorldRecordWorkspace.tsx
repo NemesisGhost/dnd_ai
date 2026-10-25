@@ -612,7 +612,7 @@ function Workspace({
                         characterId={entityId}
                         refreshToken={changes}
                         onChanged={refreshDetail}
-                        blockedText={playBlockedText(playStatus, "NPC")}
+                        blockedText={playStatus === null ? undefined : playBlockedText(playStatus, "NPC")}
                     />
                 )
             case "player":
@@ -872,12 +872,16 @@ function DetailsSection({
                             linkState={editState}
                         />
                     ) : null}
-                    <PortrayalLink
-                        campaignId={campaignId}
-                        characterId={id}
-                        detail={changes}
-                        authoring={authoringOf(character)}
-                    />
+                    {/* How an NPC is played is an NPC's profile: a player character has none, and its read
+                        would be a request for a record of another kind. */}
+                    {character.character_kind === "npc" ? (
+                        <PortrayalLink
+                            campaignId={campaignId}
+                            characterId={id}
+                            detail={changes}
+                            authoring={authoringOf(character)}
+                        />
+                    ) : null}
                     <BuildsLink campaignId={campaignId} characterId={id} />
                 </>
             )

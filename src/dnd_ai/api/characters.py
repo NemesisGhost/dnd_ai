@@ -122,7 +122,10 @@ from dnd_ai.domain.access import AccessContext
 from dnd_ai.queries.character import get_character_view
 from dnd_ai.queries.character_relationships import list_character_relationships_for_reader
 from dnd_ai.queries.character_sheet import get_character_sheet_view
-from dnd_ai.queries.entity_lifecycle import lifecycle_hidden_entity_ids
+from dnd_ai.queries.entity_lifecycle import (
+    get_entity_status_summary,
+    lifecycle_hidden_entity_ids,
+)
 from dnd_ai.queries.inventory import get_inventory_view
 from dnd_ai.queries.parties import list_character_parties
 
@@ -183,6 +186,12 @@ class CharacterResponse(BaseModel):
     # disclosure: the World search card already returns the entity type to anyone
     # who may discover the character.
     character_kind: Literal["npc", "player_character", "character"]
+    # Where the record stands (the same two fields every World Explorer detail carries). It is
+    # what lets a runtime panel say whether this character takes new events without reading the
+    # world's private lifecycle view; the read is already limited to characters the caller may see
+    # (`_require_published_character`).
+    canon_status: str
+    lifecycle_status: str
     species_code: str
     size_category: str
     # None on every field below when the caller was authorized only for
@@ -448,6 +457,9 @@ def get_character_endpoint(
         include_full=include_full,
     )
 
+    status = get_entity_status_summary(
+        connection, entity_id=character_id, hidden_entity_ids=frozenset()
+    )
     return CharacterResponse(
         authoring=record_authoring_response(
             connection, access=access, entity_type_code=view.character_kind
@@ -455,6 +467,8 @@ def get_character_endpoint(
         character_id=view.character_id,
         name=view.name,
         character_kind=view.character_kind,  # type: ignore[arg-type]
+        canon_status=status.canon_status,
+        lifecycle_status=status.lifecycle_status,
         species_code=view.species_code,
         size_category=view.size_category,
         current_hit_points=view.current_hit_points,

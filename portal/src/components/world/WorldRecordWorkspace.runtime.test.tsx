@@ -81,6 +81,8 @@ function setupNpc(initial: Partial<State> = {}) {
             character_kind: "npc",
             character_id: "n1",
             name: "Mira",
+            canon_status: state.canon,
+            lifecycle_status: state.lifecycle,
             species_code: "human",
             size_category: "medium",
             current_hit_points: state.hp,
@@ -112,7 +114,7 @@ function setupNpc(initial: Partial<State> = {}) {
     )
     server.on("POST", `/campaigns/${C}/entities/n1/lifecycle/archive`, () => {
         state.lifecycle = "archived"
-        fails.npc = true
+        fails.character = true
         return { body: { entity_id: "n1", canon_status: state.canon, lifecycle_status: "archived", row_version: 4 } }
     })
     server.on("GET", /npc-runtime-options/, { body: { conditions: [], resources: [] } })
@@ -252,7 +254,7 @@ describe("an NPC's Run section agrees with the workspace", () => {
         expect(server.callsTo("POST", `/campaigns/${C}/characters/n1/hit-points`)).toHaveLength(1)
     })
 
-    it("withholds Run for an NPC the page knows is archived even when its own status read fails", async () => {
+    it("withholds Run for an NPC the page knows is archived even when the panel's own read fails", async () => {
         const { server } = setupNpc({ canon: "canon" })
         await opened("Mira")
         fireEvent.click(screen.getByRole("link", { name: "2. Review & publish" }))
@@ -273,7 +275,7 @@ describe("an NPC's Run section agrees with the workspace", () => {
         }
         // Reading again changes nothing about eligibility and sends nothing.
         const posts = server.calls.filter((c) => c.method === "POST").length
-        fails.npc = false
+        fails.character = false
         fireEvent.click(run.getByRole("button", { name: "Try again" }))
         await waitFor(() => expect(run.queryByText(/may be out of date/)).not.toBeInTheDocument())
         expect(screen.queryByRole("form", { name: "Adjust hit points" })).not.toBeInTheDocument()

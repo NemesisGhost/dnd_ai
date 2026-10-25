@@ -60,7 +60,9 @@ export function WorldReviewSection({
                     {state.kind === "loading"
                         ? "Loading…"
                         : list === null
-                          ? "The revision history could not be loaded."
+                          ? state.kind === "denied"
+                            ? "The revision history is part of the world's preparation and needs a world Editor or Reviewer role."
+                            : "The revision history could not be loaded."
                           : latest === undefined
                             ? "No revisions are recorded."
                             : describeRevision(latest, when)}

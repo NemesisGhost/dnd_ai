@@ -22,8 +22,11 @@ const TIME = {
 
 function setup(canon = "canon", capabilities = ["canon.edit"], lifecycle = "active") {
     const server = installMockServer()
+    // The NPC's authoring view is the world's private side: a campaign GM with no world role is refused
+    // it. The panel must never depend on it, so the mock refuses it for everyone.
     server.on("GET", /authoring\/npcs\/n1$/, {
-        body: { npc_id: "n1", canon_status: canon, lifecycle_status: lifecycle, row_version: 1 },
+        status: 403,
+        body: { error: { code: "world_authority_required", message: "m", correlation_id: "x" } },
     })
     server.on("GET", /npc-runtime-options/, {
         body: {
@@ -35,6 +38,8 @@ function setup(canon = "canon", capabilities = ["canon.edit"], lifecycle = "acti
         body: {
             character_id: "n1",
             name: "Mira",
+            canon_status: canon,
+            lifecycle_status: lifecycle,
             species_code: "human",
             size_category: "medium",
             current_hit_points: 12,
@@ -89,6 +94,19 @@ describe("NpcRuntimePanel", () => {
 
     it("asks to publish a draft NPC and shows no controls", async () => {
         setup("draft")
+        expect(await screen.findByText(/Publish this NPC/)).toBeInTheDocument()
+        expect(screen.queryByRole("form", { name: "Adjust hit points" })).not.toBeInTheDocument()
+    })
+
+    it("runs a published NPC without any read of its private authoring view, and a refusal of it cannot blank the panel", async () => {
+        const server = setup()
+        expect(await screen.findByRole("form", { name: "Adjust hit points" })).toBeInTheDocument()
+        expect(server.calls.filter((c) => /authoring\/npcs\//.test(c.path))).toHaveLength(0)
+        expect(screen.queryByText(/could not be loaded/)).not.toBeInTheDocument()
+    })
+
+    it("takes the status of the NPC from its own read, so a superseded NPC is not run either", async () => {
+        setup("superseded")
         expect(await screen.findByText(/Publish this NPC/)).toBeInTheDocument()
         expect(screen.queryByRole("form", { name: "Adjust hit points" })).not.toBeInTheDocument()
     })

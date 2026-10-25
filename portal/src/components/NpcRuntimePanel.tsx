@@ -1,5 +1,4 @@
 import { useState } from "react"
-import { npcAuthoringPath } from "../api/npcAuthoring"
 import { npcRuntimeOptionsPath } from "../api/npcPortrayal"
 import { apiRequest } from "../api/http"
 import { recordTravel } from "../api/travel"
@@ -9,7 +8,6 @@ import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import type { CharacterDetail } from "../types/character"
-import type { NpcAuthoringView } from "../types/npcAuthoring"
 import type { RuntimeOptions } from "../types/npcPortrayal"
 import { useAnnounce } from "./authoring/announcer"
 import { SelectField, TextField } from "./authoring/fields"
@@ -32,9 +30,10 @@ interface Props {
     refreshToken?: unknown
     // Called after a command took effect, so the page's own view of the character agrees.
     onChanged?: () => void
-    // Why the commands are not offered, when the page already knows from its own successful read of
-    // the record's status (not published, archived, replaced). It wins over this panel's own read,
-    // which may be a retained one after a failed refresh.
+    // What the page already knows, from its own successful read of the record's status: the reason
+    // the commands are not offered (not published, archived, replaced), or `null` when it knows the
+    // record takes them. It wins over this panel's own read, which may be a retained one after a
+    // failed refresh. Absent (`undefined`) when the page does not know, and the panel's read decides.
     blockedText?: string | null
 }
 
@@ -71,38 +70,39 @@ export function NpcRuntimePanel({ campaignId, characterId, embedded, refreshToke
 }
 
 function Loaded({ campaignId, characterId, embedded, refreshToken, onChanged, blockedText }: Props) {
-    const npc = useAuthoringResource<NpcAuthoringView>(npcAuthoringPath(campaignId, characterId))
+    // Nothing here reads the NPC's authoring view: that is the world's private side (a world role is
+    // needed), and a campaign GM with no world role runs the NPC. The character's own read carries
+    // its status, so the panel decides from that and from what the page already knows.
     const options = useAuthoringResource<RuntimeOptions>(npcRuntimeOptionsPath(campaignId))
     const character = useAuthoringResource<CharacterDetail>(
         `/campaigns/${encodeURIComponent(campaignId)}/characters/${encodeURIComponent(characterId)}`,
     )
-    useRefetchOnChange(refreshToken, npc.refetch)
     useRefetchOnChange(refreshToken, character.refetch)
-    const { data: npcView, stale: npcStale } = useKeptData(npc.state)
     const { data: optionsView, stale: optionsStale } = useKeptData(options.state)
     const { data: characterView, stale: characterStale } = useKeptData(character.state)
-    if (npcView === null || optionsView === null || characterView === null) {
+    if (optionsView === null || characterView === null) {
         return null
     }
     // Reads only: trying again never repeats a command.
     const notice =
-        npcStale || optionsStale || characterStale ? (
+        optionsStale || characterStale ? (
             <StaleReadNotice
                 what="NPC information"
                 onRetry={() => {
-                    void npc.refetch()
                     void options.refetch()
                     void character.refetch()
                 }}
             />
         ) : null
     // The server accepts these commands only for a published, active NPC. The page's own successful
-    // read of the status wins over a retained one.
+    // read of the status wins over the panel's; a status the answer does not carry is unknown, and
+    // the server stays the authority (it refuses a command it will not take).
     const blocked =
-        blockedText ??
-        (npcView.lifecycle_status !== "active"
+        blockedText !== undefined
+            ? blockedText
+            : (characterView.lifecycle_status !== undefined && characterView.lifecycle_status !== "active"
             ? "This NPC is archived. Restore it before changing their hit points, conditions, resources or location."
-            : npcView.canon_status !== "canon"
+            : characterView.canon_status !== undefined && characterView.canon_status !== "canon"
               ? "Publish this NPC to change their hit points, conditions, resources or location."
               : null)
     if (blocked !== null) {

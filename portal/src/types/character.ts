@@ -19,6 +19,11 @@ export interface CharacterDetail {
     name: string
     // "character" is a bare character row that is neither an NPC nor a player character.
     character_kind: CharacterKind
+    // Where the record stands (the server's own status fields, as on every World detail). They let
+    // a runtime panel explain why events are not taken yet without a read of the world's private
+    // lifecycle view. Optional so an older answer without them is treated as unknown, never blocking.
+    canon_status?: string
+    lifecycle_status?: string
     species_code: string
     size_category: string
 
