@@ -1,3 +1,4 @@
+import { TableScroll } from "../components/TableScroll"
 import { useState } from "react"
 import { Link, useParams } from "react-router"
 import {
@@ -183,6 +184,7 @@ function SharingContent({ worldId, view, refetch }: ContentProps) {
 
             <section className="authoring-section" aria-labelledby="sharing-roles-heading">
                 <h2 id="sharing-roles-heading">People with a role</h2>
+                <TableScroll label="World roles">
                 <table className="authoring-table">
                     <caption className="visually-hidden">World roles</caption>
                     <thead>
@@ -224,6 +226,7 @@ function SharingContent({ worldId, view, refetch }: ContentProps) {
                         ))}
                     </tbody>
                 </table>
+                </TableScroll>
 
                 <form
                     className="authoring-form"

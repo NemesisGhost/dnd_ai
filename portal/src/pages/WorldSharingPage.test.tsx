@@ -88,6 +88,17 @@ describe("WorldSharingPage", () => {
         expect(within(screen.getByRole("table")).getByText("Editor")).toBeInTheDocument()
     })
 
+    it("keeps the roles table in its own named, keyboard-scrollable region so the page never scrolls sideways", async () => {
+        setup()
+        await screen.findByText("Bob Editor")
+        const region = screen.getByRole("region", { name: "World roles" })
+        expect(region).toHaveClass("table-scroll")
+        expect(region).toHaveAttribute("tabindex", "0")
+        expect(within(region).getByRole("table")).toBeInTheDocument()
+        // Every action stays reachable inside the region.
+        expect(within(region).getAllByRole("button", { name: /^End role for / }).length).toBeGreaterThan(0)
+    })
+
     it("explains an unavailable page instead of showing controls", async () => {
         const server = installMockServer()
         server.on("GET", "/worlds/w1", { body: world })
