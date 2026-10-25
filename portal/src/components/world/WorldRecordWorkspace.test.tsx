@@ -1073,7 +1073,7 @@ describe("World record workspace: a dungeon", () => {
     }
     const authoringReads = (server: MockServer) =>
         server.calls.filter((c) => c.method === "GET" && /\/authoring\//.test(c.path)).length
-    const alertPanel = () => screen.findByRole("alert", { name: "Permission lost" })
+    const alertPanel = () => screen.findByRole("region", { name: "Permission lost" })
 
     it("on a refused add-area, withdraws the private views and controls and keeps only what was typed", async () => {
         const { server } = dungeon()
@@ -1159,7 +1159,7 @@ describe("World record workspace: a dungeon", () => {
         server.on("POST", `/campaigns/${C}/authoring/dungeons/l1/areas`, { status: 403, body: { error: { code: "forbidden", message: "m", correlation_id: "c" } } })
         fireEvent.click(within(form).getByRole("button", { name: "Add area" }))
         await screen.findByRole("button", { name: "Check my session" })
-        expect(screen.queryByRole("alert", { name: "Permission lost" })).not.toBeInTheDocument()
+        expect(screen.queryByRole("region", { name: "Permission lost" })).not.toBeInTheDocument()
         expect(screen.getByRole("list", { name: "Areas" })).toBeVisible()
         expect(within(form).getByRole("textbox", { name: /Area name/ })).toHaveValue("Shrine")
     })
@@ -1176,7 +1176,7 @@ describe("World record workspace: a dungeon", () => {
         const detailReads = server.callsTo("GET", `/campaigns/${C}/world/locations/l1`).length
         fireEvent.click(screen.getByRole("button", { name: "Check my access again" }))
         await waitFor(() => expect(server.callsTo("GET", `/campaigns/${C}/world/locations/l1`).length).toBeGreaterThan(detailReads))
-        await waitFor(() => expect(screen.queryByRole("alert", { name: "Permission lost" })).not.toBeInTheDocument())
+        await waitFor(() => expect(screen.queryByRole("region", { name: "Permission lost" })).not.toBeInTheDocument())
         // The section the person was in was withdrawn with the loss; it is offered again, not forced back.
         await openSection("Areas")
         expect(await screen.findByRole("list", { name: "Areas" })).toBeVisible()
@@ -1670,7 +1670,7 @@ describe("World record workspace: a dungeon area", () => {
         })
         fireEvent.click(within(form).getByRole("button", { name: "Add hazard" }))
 
-        const panel = await screen.findByRole("alert", { name: "Permission lost" })
+        const panel = await screen.findByRole("region", { name: "Permission lost" })
         expect(panel).toHaveTextContent("Pit")
         expect(panel).toHaveTextContent("5")
         // The structure the authoring read had loaded (a hidden hazard, a mural, a connection) is gone.

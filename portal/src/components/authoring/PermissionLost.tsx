@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react"
 import { Link } from "react-router"
 import type { RetainedChange } from "../../utils/retainedChanges"
 
@@ -17,10 +18,18 @@ export function PermissionLost({
     // answer, not this panel, decides.
     recheck?: () => void
 }) {
+    // The Save or Add button that had focus is gone with the form, so focus would fall to the page.
+    // Moving it to the heading once, when the panel appears, is what tells a keyboard or screen
+    // reader user; it is not a live region as well, which would announce the same text twice. A
+    // rerender does not move focus again, and the panel's own link and button follow in tab order.
+    const headingRef = useRef<HTMLHeadingElement>(null)
+    useEffect(() => {
+        headingRef.current?.focus()
+    }, [])
     return (
-        <section className="authoring-message authoring-message--warning" aria-label="Permission lost" role="alert">
+        <section className="authoring-message authoring-message--warning" aria-label="Permission lost">
             <div>
-                <h2>You no longer have permission to edit this {noun}</h2>
+                <h2 ref={headingRef} tabIndex={-1}>You no longer have permission to edit this {noun}</h2>
                 <p>
                     Your access changed while you were editing. Nothing you typed was saved, and it cannot be
                     saved from here.

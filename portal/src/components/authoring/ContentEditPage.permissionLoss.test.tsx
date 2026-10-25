@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react"
+import { fireEvent, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { bootstrapWith, installMockServer, renderAuthoringRoutes } from "../../test/authoringHarness"
 import { ContentEditPage } from "./ContentEditPage"
@@ -103,9 +103,11 @@ describe("ContentEditPage when the right to edit is lost", () => {
         fireEvent.change(name, { target: { value: "Founders' Hall" } })
         fireEvent.click(screen.getByRole("button", { name: "Save" }))
 
-        const panel = await screen.findByRole("alert", { name: "Permission lost" })
+        const panel = await screen.findByRole("region", { name: "Permission lost" })
         expect(panel).toHaveTextContent("You no longer have permission to edit this thing")
         expect(panel).toHaveTextContent("Founders' Hall")
+        // The Save button that had focus is gone: focus is on the explanation, not the page body.
+        expect(within(panel).getByRole("heading", { name: /no longer have permission/ })).toHaveFocus()
         // The record the server sent in its private read is not preserved as an "unsaved draft".
         expect(screen.queryByText(new RegExp(SECRET))).toBeNull()
         expect(screen.queryByDisplayValue(SECRET)).toBeNull()
@@ -119,7 +121,7 @@ describe("ContentEditPage when the right to edit is lost", () => {
         server.on("POST", "/campaigns/c1/authoring/things/t1/update", DENIED)
         await screen.findByLabelText("Name")
         fireEvent.click(screen.getByRole("button", { name: "Save" }))
-        const panel = await screen.findByRole("alert", { name: "Permission lost" })
+        const panel = await screen.findByRole("region", { name: "Permission lost" })
         expect(panel).not.toHaveTextContent(SECRET)
         expect(panel).not.toHaveTextContent("Founders Hall")
     })
@@ -138,7 +140,7 @@ describe("ContentEditPage when the right to edit is lost", () => {
         const loadLatest = await screen.findByRole("button", { name: /Load latest/ })
         server.on("GET", "/campaigns/c1/authoring/things/t1", DENIED)
         fireEvent.click(loadLatest)
-        const panel = await screen.findByRole("alert", { name: "Permission lost" })
+        const panel = await screen.findByRole("region", { name: "Permission lost" })
         expect(panel).toHaveTextContent("Renamed hall")
         expect(screen.queryByText(new RegExp(SECRET))).toBeNull()
         expect(screen.queryByDisplayValue(SECRET)).toBeNull()
@@ -154,6 +156,6 @@ describe("ContentEditPage when the right to edit is lost", () => {
             routes: [{ path: "/app/:campaignId/things/:thingId/edit", element: <ContentEditPage config={posting} /> }],
         })
         expect(await screen.findByText(/does not exist, or you do not have access to it/)).toBeInTheDocument()
-        expect(screen.queryByRole("alert", { name: "Permission lost" })).toBeNull()
+        expect(screen.queryByRole("region", { name: "Permission lost" })).toBeNull()
     })
 })
