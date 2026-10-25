@@ -83,7 +83,10 @@ function Loaded({ campaignId, characterId, embedded, refreshToken, onChanged, bl
     useRefetchOnChange(refreshToken, character.refetch)
     const { data: optionsView, stale: optionsStale } = useKeptData(options.state)
     const { data: characterView, stale: characterStale } = useKeptData(character.state)
-    if (optionsView === null || characterView === null) {
+    // Only the character's own read is the panel: the options just fill the condition and resource
+    // choices. A failed options read leaves the panel (status, hit points, location) up with those
+    // two controls withheld and a way to read them again; a read still loading shows nothing yet.
+    if (characterView === null || (optionsView === null && options.state.kind === "loading")) {
         return null
     }
     // Reads only: trying again never repeats a command.
@@ -126,6 +129,7 @@ function Loaded({ campaignId, characterId, embedded, refreshToken, onChanged, bl
             characterId={characterId}
             embedded={embedded}
             options={optionsView}
+            optionsRetry={options.state.kind === "error" ? () => void options.refetch() : null}
             detail={characterView}
             refetch={character.refetch}
             onChanged={onChanged}
@@ -138,11 +142,19 @@ function Panel({
     campaignId,
     characterId,
     options,
+    optionsRetry,
     detail,
     refetch,
     embedded,
     onChanged,
-}: Props & { options: RuntimeOptions; detail: CharacterDetail; refetch: () => Promise<unknown> }) {
+}: Props & {
+    // `null` when the choices could not be read; `optionsRetry` is then how to read them again
+    // (`null` too when a retry cannot help, such as a denied or missing answer).
+    options: RuntimeOptions | null
+    optionsRetry: (() => void) | null
+    detail: CharacterDetail
+    refetch: () => Promise<unknown>
+}) {
     const { reload } = useSession()
     const announce = useAnnounce()
     const base = `/campaigns/${encodeURIComponent(campaignId)}/characters/${encodeURIComponent(characterId)}`
@@ -233,7 +245,21 @@ function Panel({
         }))
     }
 
-    const conditionByCode = new Map(options.conditions.map((c) => [c.code, c]))
+    const conditionByCode = new Map((options?.conditions ?? []).map((c) => [c.code, c]))
+    const choicesMissing = (
+        <div className="authoring-form">
+            <p>
+                {options === null && optionsRetry !== null
+                    ? "The choices for this could not be loaded. Hit points and location still work."
+                    : "The choices for this are not available. Hit points and location still work."}
+            </p>
+            {optionsRetry !== null ? (
+                <button type="button" className="authoring-button" onClick={optionsRetry}>
+                    Try loading the choices again
+                </button>
+            ) : null}
+        </div>
+    )
     return (
         <PanelFrame embedded={embedded} title="Run this NPC" headingId="npc-runtime-heading">
             {explained !== null ? (
@@ -320,39 +346,43 @@ function Panel({
                     )
                 })}
             </ul>
-            <form
-                noValidate
-                aria-label="Add a condition"
-                className="authoring-form"
-                onSubmit={(event) => {
-                    event.preventDefault()
-                    if (condition === "") {
-                        setProblem("Choose a condition.")
-                        return
-                    }
-                    run(
-                        {
-                            op: "add_condition",
-                            conditionId: condition,
-                            source: source.trim() === "" ? null : source.trim(),
-                        },
-                        "Condition added",
-                    )
-                }}
-            >
-                <SelectField
-                    id="npc-condition"
-                    label="Condition"
-                    value={condition}
-                    placeholder="Choose a condition"
-                    options={options.conditions}
-                    onChange={setCondition}
-                />
-                <TextField id="npc-condition-source" label="Source (optional)" value={source} onChange={setSource} />
-                <button type="submit" className="authoring-button" disabled={busy}>
-                    Add condition
-                </button>
-            </form>
+            {options === null ? (
+                choicesMissing
+            ) : (
+                <form
+                    noValidate
+                    aria-label="Add a condition"
+                    className="authoring-form"
+                    onSubmit={(event) => {
+                        event.preventDefault()
+                        if (condition === "") {
+                            setProblem("Choose a condition.")
+                            return
+                        }
+                        run(
+                            {
+                                op: "add_condition",
+                                conditionId: condition,
+                                source: source.trim() === "" ? null : source.trim(),
+                            },
+                            "Condition added",
+                        )
+                    }}
+                >
+                    <SelectField
+                        id="npc-condition"
+                        label="Condition"
+                        value={condition}
+                        placeholder="Choose a condition"
+                        options={options?.conditions ?? []}
+                        onChange={setCondition}
+                    />
+                    <TextField id="npc-condition-source" label="Source (optional)" value={source} onChange={setSource} />
+                    <button type="submit" className="authoring-button" disabled={busy}>
+                        Add condition
+                    </button>
+                </form>
+            )}
 
             <h3>Resources</h3>
             {(detail.resources ?? []).length === 0 ? <p>None tracked.</p> : null}
@@ -363,38 +393,42 @@ function Panel({
                     </li>
                 ))}
             </ul>
-            <form
-                noValidate
-                aria-label="Adjust a resource"
-                className="authoring-form"
-                onSubmit={(event) => {
-                    event.preventDefault()
-                    const value = integer(resourceDelta)
-                    if (resource === "" || value === null) {
-                        setProblem("Choose a resource and a whole number other than zero.")
-                        return
-                    }
-                    run({ op: "resource", resourceId: resource, delta: value }, "Resource changed")
-                }}
-            >
-                <SelectField
-                    id="npc-resource"
-                    label="Resource"
-                    value={resource}
-                    placeholder="Choose a resource"
-                    options={options.resources}
-                    onChange={setResource}
-                />
-                <TextField
-                    id="npc-resource-delta"
-                    label="Change (negative to spend)"
-                    value={resourceDelta}
-                    onChange={setResourceDelta}
-                />
-                <button type="submit" className="authoring-button" disabled={busy}>
-                    Adjust resource
-                </button>
-            </form>
+            {options === null ? (
+                <p>Available once the choices load.</p>
+            ) : (
+                <form
+                    noValidate
+                    aria-label="Adjust a resource"
+                    className="authoring-form"
+                    onSubmit={(event) => {
+                        event.preventDefault()
+                        const value = integer(resourceDelta)
+                        if (resource === "" || value === null) {
+                            setProblem("Choose a resource and a whole number other than zero.")
+                            return
+                        }
+                        run({ op: "resource", resourceId: resource, delta: value }, "Resource changed")
+                    }}
+                >
+                    <SelectField
+                        id="npc-resource"
+                        label="Resource"
+                        value={resource}
+                        placeholder="Choose a resource"
+                        options={options?.resources ?? []}
+                        onChange={setResource}
+                    />
+                    <TextField
+                        id="npc-resource-delta"
+                        label="Change (negative to spend)"
+                        value={resourceDelta}
+                        onChange={setResourceDelta}
+                    />
+                    <button type="submit" className="authoring-button" disabled={busy}>
+                        Adjust resource
+                    </button>
+                </form>
+            )}
 
             <h3>Location</h3>
             <form

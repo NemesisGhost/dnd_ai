@@ -20,11 +20,19 @@ const TIME = {
     display: "Year 1",
 }
 
+const OPTIONS = {
+    body: {
+        conditions: [{ value: "c-poisoned", label: "Poisoned", code: "poisoned" }],
+        resources: [{ value: "r-ki", label: "Ki points", code: "ki_points" }],
+    },
+}
+
 function setup(
     canon = "canon",
     capabilities = ["canon.edit"],
     lifecycle = "active",
     hitPoints: { current: number | null; maximum: number | null } = { current: 12, maximum: 20 },
+    optionsFail = false,
 ) {
     const server = installMockServer()
     // The NPC's authoring view is the world's private side: a campaign GM with no world role is refused
@@ -33,12 +41,13 @@ function setup(
         status: 403,
         body: { error: { code: "world_authority_required", message: "m", correlation_id: "x" } },
     })
-    server.on("GET", /npc-runtime-options/, {
-        body: {
-            conditions: [{ value: "c-poisoned", label: "Poisoned", code: "poisoned" }],
-            resources: [{ value: "r-ki", label: "Ki points", code: "ki_points" }],
-        },
-    })
+    server.on(
+        "GET",
+        /npc-runtime-options/,
+        optionsFail
+            ? { status: 500, body: { error: { code: "internal_error", message: "m", correlation_id: "x" } } }
+            : OPTIONS,
+    )
     server.on("GET", BASE, {
         body: {
             character_id: "n1",
@@ -157,6 +166,30 @@ describe("NpcRuntimePanel", () => {
         fireEvent.change(within(form).getByRole("textbox", { name: /Change/ }), { target: { value: "-5" } })
         fireEvent.click(within(form).getByRole("button", { name: "Apply hit point change" }))
         expect(await screen.findByText(/no starting hit points yet/)).toBeInTheDocument()
+    })
+
+    it("keeps the panel and status up when only the runtime options fail, withholds their controls and retries", async () => {
+        const server = setup("canon", ["canon.edit"], "active", { current: 12, maximum: 20 }, true)
+        expect(await screen.findByText(/The choices for this could not be loaded/)).toBeInTheDocument()
+        // Core panel: status, hit points, location, and the current conditions and resources.
+        expect(screen.getByRole("heading", { name: "Run this NPC" })).toBeInTheDocument()
+        expect(screen.getByText("12 of 20")).toBeInTheDocument()
+        expect(screen.getByRole("form", { name: "Adjust hit points" })).toBeInTheDocument()
+        expect(screen.getByRole("form", { name: "Move this NPC" })).toBeInTheDocument()
+        expect(screen.getByText(/poisoned \(A dart\)/)).toBeInTheDocument()
+        // Controls that need the options are withheld, and no private authoring read was made.
+        expect(screen.queryByRole("form", { name: "Add a condition" })).not.toBeInTheDocument()
+        expect(screen.queryByRole("form", { name: "Adjust a resource" })).not.toBeInTheDocument()
+        expect(screen.queryByRole("button", { name: /Remove Poisoned/ })).not.toBeInTheDocument()
+        expect(server.calls.filter((c) => /authoring\/npcs\//.test(c.path))).toHaveLength(0)
+        expect(server.calls.filter((c) => c.method !== "GET")).toHaveLength(0)
+
+        // A visible retry reads the choices again and the controls come back.
+        server.on("GET", /npc-runtime-options/, OPTIONS)
+        fireEvent.click(screen.getByRole("button", { name: "Try loading the choices again" }))
+        expect(await screen.findByRole("form", { name: "Add a condition" })).toBeInTheDocument()
+        expect(screen.getByRole("form", { name: "Adjust a resource" })).toBeInTheDocument()
+        expect(screen.queryByText(/could not be loaded/)).not.toBeInTheDocument()
     })
 
     it("needs a time before anything is sent", async () => {
