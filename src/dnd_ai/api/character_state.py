@@ -31,6 +31,14 @@ was persisted at pairing time but never actually enforced). The legacy
 `dnd_ai.api.auth`'s own docstring — and is rejected before it can ever
 reach this module's own authorization at all.
 
+Missing starting state: `hit-points` on a character with no `campaign.
+character_state` row on the timeline answers 409 `character_state_not_
+initialized` (`CharacterStateNotInitializedError`). Hit points are never
+defaulted and the row is never created here — the GM sets it once with
+`POST .../authoring/characters/{id}/state/initialize`. The request rolls
+back whole, so the refusal leaves no event, audit row or idempotency
+reservation, and the same `Idempotency-Key` works after initialization.
+
 Idempotency: every route here wires the durable `security.
 idempotent_requests` mechanism (`dnd_ai.api.idempotency`) every other
 create/mutate endpoint uses, protecting a dropped-response retry from

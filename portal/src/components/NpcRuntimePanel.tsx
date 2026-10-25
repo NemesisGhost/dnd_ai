@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { Link } from "react-router"
 import { npcRuntimeOptionsPath } from "../api/npcPortrayal"
 import { apiRequest } from "../api/http"
 import { recordTravel } from "../api/travel"
@@ -48,6 +49,8 @@ const CODE_MESSAGE: Readonly<Record<string, string>> = {
     travel_invalid: "Choose a published destination.",
     travel_time_invalid: "Choose a time after this NPC arrived where they are.",
     clock_required: "Choose a time.",
+    character_state_not_initialized:
+        "This NPC has no starting hit points yet. Set their starting state first, then change their hit points.",
 }
 
 const humanize = (code: string): string => code.replace(/_/g, " ")
@@ -248,30 +251,49 @@ function Panel({
             />
 
             <h3>Hit points</h3>
-            <p>
-                {detail.current_hit_points === null
-                    ? "Not tracked yet."
-                    : `${detail.current_hit_points} of ${detail.maximum_hit_points ?? "?"}`}
-            </p>
-            <form
-                noValidate
-                aria-label="Adjust hit points"
-                className="authoring-form"
-                onSubmit={(event) => {
-                    event.preventDefault()
-                    const value = integer(delta)
-                    if (value === null) {
-                        setProblem("Enter a whole number other than zero, such as -5 for damage.")
-                        return
-                    }
-                    run({ op: "hp", delta: value }, "Hit points changed")
-                }}
-            >
-                <TextField id="npc-hp-delta" label="Change (negative for damage)" value={delta} onChange={setDelta} />
-                <button type="submit" className="authoring-button" disabled={busy}>
-                    Apply hit point change
-                </button>
-            </form>
+            {detail.current_hit_points === null ? (
+                // No starting state on this timeline: the server refuses a change (it never invents
+                // hit points or creates the state as a side effect), so none is offered.
+                <>
+                    <p>Not tracked yet. Set this NPC&apos;s starting hit points before changing them.</p>
+                    <p>
+                        <Link
+                            className="authoring-button"
+                            to={`/app/${encodeURIComponent(campaignId)}/characters/${encodeURIComponent(characterId)}/builds`}
+                        >
+                            Set starting state
+                        </Link>
+                    </p>
+                </>
+            ) : (
+                <>
+                    <p>{`${detail.current_hit_points} of ${detail.maximum_hit_points ?? "?"}`}</p>
+                    <form
+                        noValidate
+                        aria-label="Adjust hit points"
+                        className="authoring-form"
+                        onSubmit={(event) => {
+                            event.preventDefault()
+                            const value = integer(delta)
+                            if (value === null) {
+                                setProblem("Enter a whole number other than zero, such as -5 for damage.")
+                                return
+                            }
+                            run({ op: "hp", delta: value }, "Hit points changed")
+                        }}
+                    >
+                        <TextField
+                            id="npc-hp-delta"
+                            label="Change (negative for damage)"
+                            value={delta}
+                            onChange={setDelta}
+                        />
+                        <button type="submit" className="authoring-button" disabled={busy}>
+                            Apply hit point change
+                        </button>
+                    </form>
+                </>
+            )}
 
             <h3>Conditions</h3>
             {(detail.conditions ?? []).length === 0 ? <p>None.</p> : null}

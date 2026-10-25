@@ -20,7 +20,12 @@ const TIME = {
     display: "Year 1",
 }
 
-function setup(canon = "canon", capabilities = ["canon.edit"], lifecycle = "active") {
+function setup(
+    canon = "canon",
+    capabilities = ["canon.edit"],
+    lifecycle = "active",
+    hitPoints: { current: number | null; maximum: number | null } = { current: 12, maximum: 20 },
+) {
     const server = installMockServer()
     // The NPC's authoring view is the world's private side: a campaign GM with no world role is refused
     // it. The panel must never depend on it, so the mock refuses it for everyone.
@@ -42,8 +47,8 @@ function setup(canon = "canon", capabilities = ["canon.edit"], lifecycle = "acti
             lifecycle_status: lifecycle,
             species_code: "human",
             size_category: "medium",
-            current_hit_points: 12,
-            maximum_hit_points: 20,
+            current_hit_points: hitPoints.current,
+            maximum_hit_points: hitPoints.maximum,
             temporary_hit_points: null,
             exhaustion_level: null,
             death_save_successes: null,
@@ -124,6 +129,34 @@ describe("NpcRuntimePanel", () => {
         expect(screen.queryByRole("form", { name: "Adjust hit points" })).not.toBeInTheDocument()
         expect(screen.queryByRole("form", { name: "Move this NPC" })).not.toBeInTheDocument()
         expect(server.calls.filter((c) => c.method !== "GET")).toHaveLength(0)
+    })
+
+    it("offers no hit point change for an NPC with no starting state, and says how to set it", async () => {
+        const server = setup("canon", ["canon.edit"], "active", { current: null, maximum: null })
+        expect(await screen.findByText(/Set this NPC's starting hit points before changing them/)).toBeInTheDocument()
+        expect(screen.queryByRole("form", { name: "Adjust hit points" })).not.toBeInTheDocument()
+        expect(screen.getByRole("link", { name: "Set starting state" })).toHaveAttribute(
+            "href",
+            "/app/c1/characters/n1/builds",
+        )
+        // The rest of the panel still runs the NPC, and nothing was sent.
+        expect(screen.getByRole("form", { name: "Move this NPC" })).toBeInTheDocument()
+        expect(server.calls.filter((c) => c.method !== "GET")).toHaveLength(0)
+    })
+
+    it("explains a refusal for missing starting state if the server still gives one", async () => {
+        const server = setup()
+        server.on("POST", `${BASE}/hit-points`, {
+            status: 409,
+            body: {
+                error: { code: "character_state_not_initialized", message: "m", correlation_id: "x" },
+            },
+        })
+        await chooseTime()
+        const form = await screen.findByRole("form", { name: "Adjust hit points" })
+        fireEvent.change(within(form).getByRole("textbox", { name: /Change/ }), { target: { value: "-5" } })
+        fireEvent.click(within(form).getByRole("button", { name: "Apply hit point change" }))
+        expect(await screen.findByText(/no starting hit points yet/)).toBeInTheDocument()
     })
 
     it("needs a time before anything is sent", async () => {
