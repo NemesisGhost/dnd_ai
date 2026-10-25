@@ -89,7 +89,7 @@ describe("EditLocationPage", () => {
         expect(screen.queryByRole("combobox", { name: /^Category/ })).toBeNull()
         expect(screen.getByText("Settlement")).toBeInTheDocument()
         expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1)
-        expect(screen.getByRole("heading", { level: 1, name: "Edit location" })).toHaveFocus()
+        await waitFor(() => expect(screen.getByRole("heading", { level: 1, name: "Edit location" })).toHaveFocus())
     })
 
     it("shows the non-disclosing unavailable state for a 404 and for a denied read", async () => {
