@@ -208,3 +208,93 @@ describe("WorldSharingPage", () => {
         ).toBeInTheDocument()
     })
 })
+
+describe("WorldSharingPage: last owner, focus and the transfer control (CP-4 smoke D-7, O-1, O-2)", () => {
+    it("explains the last-owner refusal and what to do first, and changes nothing", async () => {
+        const { server } = setup()
+        server.on("POST", "/worlds/w1/roles/m1/end", {
+            status: 409,
+            body: { error: { code: "world_owner_required", message: "A world must keep at least one owner.", correlation_id: "x" } },
+        })
+        await screen.findByText("Bob Editor")
+        fireEvent.click(screen.getByRole("button", { name: /End role for Alice Owner/ }))
+        const dialog = await screen.findByRole("dialog")
+        fireEvent.click(within(dialog).getByRole("button", { name: "End role" }))
+        const message = await within(await screen.findByRole("dialog")).findByText(/A world must keep at least one owner/)
+        expect(message).toHaveTextContent(/Give the Owner role to someone else \(or transfer ownership\) first/)
+        expect(message).not.toHaveTextContent(/Try again/)
+        // The list is exactly what the server holds: still both holders.
+        expect(screen.getAllByRole("row")).toHaveLength(3)
+    })
+
+    it("keeps an unknown failure of ending a role on the safe fallback", async () => {
+        const { server } = setup()
+        server.on("POST", "/worlds/w1/roles/m2/end", { status: 500, body: {} })
+        await screen.findByText("Bob Editor")
+        fireEvent.click(screen.getByRole("button", { name: /End role for Bob Editor/ }))
+        fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "End role" }))
+        expect(await within(await screen.findByRole("dialog")).findByText(/cannot tell whether this was saved/)).toBeInTheDocument()
+    })
+
+    it("moves focus to the page heading when a transfer leaves the person without Sharing, not to the page", async () => {
+        const { server, setCurrent } = setup()
+        server.on("POST", "/worlds/w1/ownership-transfer", {
+            body: { world_id: "w1", previous_owner_user_id: "u1", new_owner_user_id: "u4", retained_role_code: "world_editor" },
+        })
+        await screen.findByText("Bob Editor")
+        fireEvent.change(screen.getByRole("textbox", { name: /New owner/ }), { target: { value: "erin" } })
+        fireEvent.click(screen.getByRole("button", { name: /Transfer ownership…/ }))
+        const dialog = await screen.findByRole("dialog")
+        // The transferred-away person is refused the access read from now on.
+        server.on("GET", "/worlds/w1/access", { status: 403, body: { error: { code: "forbidden", message: "m", correlation_id: "x" } } })
+        setCurrent(access())
+        fireEvent.click(within(dialog).getByRole("button", { name: "Transfer ownership" }))
+        expect(await screen.findByText(/Sharing is not available for this world with your account/)).toBeInTheDocument()
+        await waitFor(() => expect(screen.getByRole("heading", { level: 1, name: "Sharing" })).toHaveFocus())
+    })
+
+    it("opens the transfer dialog on one ordinary press-and-release of the button", async () => {
+        setup()
+        await screen.findByText("Bob Editor")
+        fireEvent.change(screen.getByRole("textbox", { name: /New owner/ }), { target: { value: "erin" } })
+        const button = screen.getByRole("button", { name: /Transfer ownership…/ })
+        fireEvent.pointerDown(button)
+        fireEvent.mouseDown(button)
+        fireEvent.pointerUp(button)
+        fireEvent.mouseUp(button)
+        fireEvent.click(button)
+        expect(await screen.findByRole("dialog")).toHaveAccessibleName("Transfer ownership?")
+    })
+
+    it("returns focus to the Transfer button when the dialog is cancelled, and opens by keyboard", async () => {
+        setup()
+        await screen.findByText("Bob Editor")
+        const field = screen.getByRole("textbox", { name: /New owner/ })
+        fireEvent.change(field, { target: { value: "erin" } })
+        const button = screen.getByRole("button", { name: /Transfer ownership…/ })
+        button.focus()
+        // Enter on a submit button submits its form: the keyboard path.
+        fireEvent.submit(field.closest("form")!)
+        const dialog = await screen.findByRole("dialog")
+        fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }))
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument())
+        await waitFor(() => expect(button).toHaveFocus())
+    })
+
+    it("lands on the roles heading, not the page, when the control that opened the dialog is gone", async () => {
+        const { server, setCurrent } = setup()
+        server.on("POST", "/worlds/w1/roles/m2/end", {
+            body: { world_id: "w1", user_id: "u2", record_id: "m2", role_code: "world_editor", changed: true },
+        })
+        await screen.findByText("Bob Editor")
+        const end = screen.getByRole("button", { name: /End role for Bob Editor/ })
+        end.focus()
+        fireEvent.click(end)
+        const dialog = await screen.findByRole("dialog")
+        // After the change the editor's row (and its End role button) no longer exists.
+        setCurrent(access({ assignments: access().assignments.slice(0, 1) }))
+        fireEvent.click(within(dialog).getByRole("button", { name: "End role" }))
+        await waitFor(() => expect(screen.queryByText("Bob Editor")).not.toBeInTheDocument())
+        await waitFor(() => expect(screen.getByRole("heading", { name: "People with a role" })).toHaveFocus())
+    })
+})

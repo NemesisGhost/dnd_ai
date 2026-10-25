@@ -480,6 +480,11 @@ a.app-header__title:focus-visible {
   display: flex;
   flex-direction: column;
   width: 15rem;
+  /* A group that closes on an outside press (the Access submenu is open on its own routes) shrinks the
+     sidebar. Without this, scroll anchoring treats a sidebar item as the page's anchor and scrolls the
+     page by the height that vanished, between the press and the release, so a click on a control far
+     down a long page lands somewhere else (CP-4 smoke D-7). Only the sidebar is excluded. */
+  overflow-anchor: none;
   color: var(--color-chrome-text);
   background-color: var(--color-chrome-secondary);
   border-right: 1px solid var(--color-chrome);

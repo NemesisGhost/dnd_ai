@@ -1,5 +1,5 @@
 import { TableScroll } from "../components/TableScroll"
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Link, useParams } from "react-router"
 import {
     assignWorldRole,
@@ -66,6 +66,18 @@ export function WorldSharingPage() {
     const access = useAuthoringResource<WorldAccessView>(worldAccessPath(worldId))
     const headingRef = usePageArrival(access.state.kind !== "loading")
     const worldName = world.state.kind === "ready" ? world.state.data.name : "World"
+    // Once the page has shown the controls, a read that no longer allows them (a transfer that ended the
+    // person's own Owner role) replaces the controls, the dialog and the button that had focus. Focus then
+    // goes to the page heading, which is followed by the explanation, instead of falling to the page.
+    const wasReady = useRef(false)
+    useEffect(() => {
+        if (access.state.kind === "ready") {
+            wasReady.current = true
+        } else if (wasReady.current && access.state.kind !== "loading") {
+            wasReady.current = false
+            headingRef.current?.focus()
+        }
+    }, [access.state.kind, headingRef])
 
     return (
         <div className="world-page">
@@ -123,6 +135,19 @@ function SharingContent({ worldId, view, refetch }: ContentProps) {
             announce(lastAnnounce)
         },
     })
+    // When the dialog closes, the dialog returns focus to the control that opened it. If that control is
+    // gone (the ended role's row), nothing holds focus: land on the roles heading, not on the page. The
+    // dialog is a child, so its own return of focus has already run when this effect does.
+    const dialogWasOpen = useRef(false)
+    useEffect(() => {
+        if (pending !== null) {
+            dialogWasOpen.current = true
+        } else if (dialogWasOpen.current) {
+            dialogWasOpen.current = false
+            const active = document.activeElement
+            if (active === null || active === document.body) document.getElementById("sharing-roles-heading")?.focus()
+        }
+    }, [pending])
     const error = mutation.status.kind === "error" ? mutation.status.error : null
     const busy = mutation.status.kind === "pending"
 
@@ -183,7 +208,9 @@ function SharingContent({ worldId, view, refetch }: ContentProps) {
             ) : null}
 
             <section className="authoring-section" aria-labelledby="sharing-roles-heading">
-                <h2 id="sharing-roles-heading">People with a role</h2>
+                <h2 id="sharing-roles-heading" tabIndex={-1}>
+                    People with a role
+                </h2>
                 <TableScroll label="World roles">
                 <table className="authoring-table">
                     <caption className="visually-hidden">World roles</caption>

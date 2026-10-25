@@ -97,7 +97,8 @@ export const ERROR_CODE_MESSAGE: Readonly<Record<string, string>> = {
     system_gm_required: "Creating a campaign requires the game master system role.",
     world_role_target_ineligible: "That account cannot be given this access.",
     target_requires_system_gm: "A world owner must hold the game master system role.",
-    world_owner_required: "A world must keep at least one owner.",
+    world_owner_required:
+        "A world must keep at least one owner. Give the Owner role to someone else (or transfer ownership) first, then end this one.",
     invalid_ownership_transfer: "Ownership cannot be transferred to the current owner.",
     branch_point_invalid: "That branch point is not valid for this timeline.",
     supersession_target_invalid: "That replacement is not valid for this record.",
