@@ -14,7 +14,7 @@ import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
-import { useHeldWorldCapability, WORLD_CANON_READ_PRIVATE } from "../hooks/useWorldCapability"
+import { useHeldWorldCapability, WORLD_CANON_EDIT, WORLD_CANON_READ_PRIVATE } from "../hooks/useWorldCapability"
 import { useDefinitionsBackPath } from "../hooks/useItemsBackPath"
 import { usePageArrival } from "../hooks/usePageArrival"
 import type {
@@ -40,6 +40,11 @@ function parseAmount(value: string): number | null | undefined {
 const WORLD_ROLE_NEEDED =
     "Item definitions are the shared world's authoring catalog, including drafts, and need a world role to read. You can still choose a published definition when you create an item; ask the world owner for a world role to manage definitions."
 
+// Creating and changing a definition needs the world's edit authority (the commands check
+// `world.canon.edit`); a Reviewer reads the catalog but is not offered either.
+const EDIT_AUTHORITY_NEEDED =
+    "Creating and editing item definitions needs the world Editor role. You can read the catalog; ask the world owner for the Editor role to change it."
+
 const campaignBase = (campaignId: string): string => `/app/${encodeURIComponent(campaignId)}/item-definitions`
 
 // /app/:campaignId/item-definitions — the generic definitions of the ruleset and this world's
@@ -49,6 +54,7 @@ export function ItemDefinitionsPage() {
     const canEdit = useCampaignCapability(campaignId, "canon.edit")
     const canReadPrivate = useHeldWorldCapability(campaignId, WORLD_CANON_READ_PRIVATE)
     const allowed = canEdit && canReadPrivate
+    const canChange = useHeldWorldCapability(campaignId, WORLD_CANON_EDIT)
     // The filters live in the address (`?category=&homebrew=1`), so Back, a reload and a shared
     // link restore them.
     const [params, setParams] = useSearchParams()
@@ -91,15 +97,19 @@ export function ItemDefinitionsPage() {
                         Generic definitions come with the ruleset and cannot be changed. Definitions you create
                         belong to this world only.
                     </p>
-                    <p>
-                        <Link
-                            className="authoring-button"
-                            to={`${campaignBase(campaignId)}/new`}
-                            state={{ definitionsSearch: location.search }}
-                        >
-                            New item definition
-                        </Link>
-                    </p>
+                    {canChange ? (
+                        <p>
+                            <Link
+                                className="authoring-button"
+                                to={`${campaignBase(campaignId)}/new`}
+                                state={{ definitionsSearch: location.search }}
+                            >
+                                New item definition
+                            </Link>
+                        </p>
+                    ) : (
+                        <p className="authoring-note">{EDIT_AUTHORITY_NEEDED}</p>
+                    )}
                     <form noValidate aria-label="Filter item definitions" className="authoring-form">
                         <SelectField
                             id="item-filter-category"
@@ -126,7 +136,7 @@ export function ItemDefinitionsPage() {
                                 <li key={item.item_definition_id}>
                                     {item.name} ({item.category_label}, {item.rarity.replace(/_/g, " ")})
                                     {item.canon_status !== "canon" ? " (draft)" : ""}
-                                    {item.is_homebrew ? (
+                                    {item.is_homebrew && canChange ? (
                                         <>
                                             {" "}
                                             <Link
@@ -136,6 +146,8 @@ export function ItemDefinitionsPage() {
                                                 Edit {item.name}
                                             </Link>
                                         </>
+                                    ) : item.is_homebrew ? (
+                                        " (this world's)"
                                     ) : (
                                         " (generic)"
                                     )}
@@ -155,7 +167,8 @@ export function ItemDefinitionFormPage() {
     const listPath = useDefinitionsBackPath(campaignId)
     const canEdit = useCampaignCapability(campaignId, "canon.edit")
     const canReadPrivate = useHeldWorldCapability(campaignId, WORLD_CANON_READ_PRIVATE)
-    const allowed = canEdit && canReadPrivate
+    const canChange = useHeldWorldCapability(campaignId, WORLD_CANON_EDIT)
+    const allowed = canEdit && canReadPrivate && canChange
     const options = useAuthoringResource<ItemDefinitionOptions>(
         allowed ? itemDefinitionOptionsPath(campaignId) : null,
     )
@@ -188,6 +201,8 @@ export function ItemDefinitionFormPage() {
                 <p role="alert">You do not have permission to edit item definitions.</p>
             ) : !canReadPrivate ? (
                 <p role="alert">{WORLD_ROLE_NEEDED}</p>
+            ) : !canChange ? (
+                <p role="alert">{EDIT_AUTHORITY_NEEDED}</p>
             ) : options.state.kind === "loading" || (definitionId !== undefined && existing.state.kind === "loading") ? (
                 <p role="status">Loading…</p>
             ) : options.state.kind !== "ready" ||

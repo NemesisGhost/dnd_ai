@@ -235,7 +235,29 @@ describe("Item definitions without the world's private-read authority", () => {
         expect(server.calls).toEqual([])
     })
 
-    it("still loads the catalog for a holder of the private-read authority", async () => {
+    it("still loads the catalog and its actions for an Editor", async () => {
+        const server = installMockServer()
+        server.on("GET", `${BASE}/options`, { body: OPTIONS })
+        server.on("GET", BASE, { body: { items: [GENERIC, definition()] } })
+        renderAuthoringRoutes({
+            initialEntry: "/app/c1/item-definitions",
+            bootstrap: bootstrapWith({
+                campaigns: [
+                    {
+                        ...sessionBootstrapFixture.campaigns[0]!,
+                        campaign_id: "c1",
+                        capabilities: ["canon.edit"],
+                        world_capabilities: ["world.view", "world.canon.read", "world.canon.read_private", "world.canon.edit"],
+                    },
+                ],
+            }),
+            routes: [{ path: "/app/:campaignId/item-definitions", element: <ItemDefinitionsPage /> }],
+        })
+        expect(await screen.findByRole("link", { name: "Edit Moonblade" })).toBeInTheDocument()
+        expect(server.callsTo("GET", BASE)).toHaveLength(1)
+    })
+
+    it("lets a Reviewer read the catalog without create or edit actions", async () => {
         const server = installMockServer()
         server.on("GET", `${BASE}/options`, { body: OPTIONS })
         server.on("GET", BASE, { body: { items: [GENERIC, definition()] } })
@@ -253,7 +275,41 @@ describe("Item definitions without the world's private-read authority", () => {
             }),
             routes: [{ path: "/app/:campaignId/item-definitions", element: <ItemDefinitionsPage /> }],
         })
-        expect(await screen.findByRole("link", { name: "Edit Moonblade" })).toBeInTheDocument()
+        // A Reviewer reads the catalog, including the world's own draft, but is offered no change:
+        // creating and editing need `world.canon.edit`.
+        expect(await screen.findByText(/Moonblade/)).toBeInTheDocument()
+        expect(screen.getByText(/Longsword/)).toBeInTheDocument()
+        expect(screen.queryByRole("link", { name: "New item definition" })).toBeNull()
+        expect(screen.queryByRole("link", { name: /^Edit / })).toBeNull()
+        expect(screen.getByText(/needs the world Editor role/)).toBeInTheDocument()
         expect(server.callsTo("GET", BASE)).toHaveLength(1)
     })
+
+    it.each(["/app/c1/item-definitions/new", "/app/c1/item-definitions/d1"])(
+        "explains the form %s to a Reviewer and requests nothing",
+        async (entry) => {
+            const server = installMockServer()
+            renderAuthoringRoutes({
+                initialEntry: entry,
+                bootstrap: bootstrapWith({
+                    campaigns: [
+                        {
+                            ...sessionBootstrapFixture.campaigns[0]!,
+                            campaign_id: "c1",
+                            capabilities: ["canon.edit"],
+                            world_capabilities: ["world.view", "world.canon.read", "world.canon.read_private", "world.canon.review"],
+                        },
+                    ],
+                }),
+                routes: [
+                    { path: "/app/:campaignId/item-definitions/new", element: <ItemDefinitionFormPage /> },
+                    { path: "/app/:campaignId/item-definitions/:definitionId", element: <ItemDefinitionFormPage /> },
+                ],
+            })
+            expect(await screen.findByRole("alert")).toHaveTextContent(/needs the world Editor role/)
+            expect(screen.queryByRole("button", { name: /Create|Save/ })).toBeNull()
+            await new Promise((resolve) => setTimeout(resolve, 50))
+            expect(server.calls).toEqual([])
+        },
+    )
 })
