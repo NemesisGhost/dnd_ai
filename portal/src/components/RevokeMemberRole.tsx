@@ -11,7 +11,7 @@ interface RevokeMemberRoleProps {
 }
 
 function statusMessage(
-    kind: "pending" | "success" | "denied" | "conflict" | "error",
+    kind: "pending" | "success" | "denied" | "last_manager" | "conflict" | "error",
 ): string {
     switch (kind) {
         case "pending":
@@ -20,6 +20,8 @@ function statusMessage(
             return "Role removed."
         case "denied":
             return "You do not have permission to make this change."
+        case "last_manager":
+            return "This role cannot be removed: the campaign must always keep at least one access manager. Give the Campaign Owner role to another member first, then remove this one."
         case "conflict":
             return "This role assignment changed elsewhere. Reload the page to see the current state."
         case "error":
@@ -105,6 +107,7 @@ export function RevokeMemberRole({
                 id={statusId}
                 className={
                     status.kind === "denied" ||
+                    status.kind === "last_manager" ||
                     status.kind === "conflict" ||
                     status.kind === "error"
                         ? "access-role-editor__status access-role-editor__status--error"

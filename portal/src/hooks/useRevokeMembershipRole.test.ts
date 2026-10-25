@@ -318,4 +318,33 @@ describe("useRevokeMembershipRole", () => {
 
         expect(signal.aborted).toBe(true)
     })
+
+    it("reports the retention rule for a 400 (the only refusal a revoke gets as one), not a generic error", async () => {
+        revokeMembershipRoleMock.mockRejectedValue(new RevokeMembershipRoleRequestError(400))
+
+        const { result } = renderHook(() => useRevokeMembershipRole("campaign-a", vi.fn()))
+
+        act(() => {
+            result.current.submit("membership-role-a")
+        })
+
+        await waitFor(() => {
+            expect(result.current.status).toEqual({ kind: "last_manager" })
+        })
+        expect(reloadMock).not.toHaveBeenCalled()
+    })
+
+    it("keeps an unknown failure on the generic retryable error", async () => {
+        revokeMembershipRoleMock.mockRejectedValue(new RevokeMembershipRoleRequestError(500))
+
+        const { result } = renderHook(() => useRevokeMembershipRole("campaign-a", vi.fn()))
+
+        act(() => {
+            result.current.submit("membership-role-a")
+        })
+
+        await waitFor(() => {
+            expect(result.current.status).toEqual({ kind: "error" })
+        })
+    })
 })
