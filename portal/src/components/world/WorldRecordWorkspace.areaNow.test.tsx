@@ -256,4 +256,22 @@ describe("A dungeon for a campaign GM with no world role", () => {
         await new Promise((resolve) => setTimeout(resolve, 200))
         expect(server.calls.map((c) => c.path).filter((p) => PRIVATE.test(p))).toEqual([])
     })
+
+    it.each([
+        ["dungeon", "Crypt", "this dungeon"],
+        ["building", "Guildhall", "this place"],
+    ])("calls a %s by its own kind, never 'character'", async (typeCode, name, noun) => {
+        setup({
+            authoring: CAMPAIGN_ONLY_RECORD_AUTHORING,
+            worldCapabilities: NO_WORLD_CAPABILITIES,
+            extra: (srv) =>
+                srv.on("GET", `/campaigns/${C}/world/locations/l1`, {
+                    body: { ...detail(CAMPAIGN_ONLY_RECORD_AUTHORING), name, location_type_code: typeCode, parent_location_id: null, breadcrumbs: [] },
+                }),
+        })
+        await screen.findByRole("heading", { level: 1, name })
+        const note = await screen.findByText(/You can read and use this/)
+        expect(note).toHaveTextContent(`You can read and use ${noun} in this campaign.`)
+        expect(note).not.toHaveTextContent("character")
+    })
 })

@@ -83,6 +83,18 @@ const NOUN: Readonly<Record<WorkspaceCategory, string>> = {
     character: "character",
 }
 
+// What the header calls the record in "You can read and use this ...", by its kind.
+const KIND_NOUN: Readonly<Record<WorldKind, string>> = {
+    place: "place",
+    dungeon: "dungeon",
+    area: "area",
+    organization: "organization",
+    religion: "religion",
+    npc: "NPC",
+    pc: "player character",
+    character: "character",
+}
+
 // Stands in for the lifecycle read while it is unavailable, so the one set of lifecycle actions
 // stays mounted whether or not the read succeeded. It offers nothing.
 const NO_LIFECYCLE = (entityId: string): EntityLifecycleView => ({
@@ -646,7 +658,7 @@ function Workspace({
             ) : null}
             {withheldNote && !authoring.campaign_originated ? (
                 <p className="authoring-note">
-                    You can read and use this {playNoun} in this campaign. Preparing, reviewing and publishing
+                    You can read and use this {KIND_NOUN[kind]} in this campaign. Preparing, reviewing and publishing
                     it belong to the shared world and need a world role; ask the world owner.
                 </p>
             ) : null}
