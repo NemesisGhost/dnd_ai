@@ -2,8 +2,9 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { sessionBootstrapFixture } from "../../fixtures/sessionBootstrap"
 import { bootstrapWith, installMockServer, renderAuthoringRoutes } from "../../test/authoringHarness"
+import type { SessionBootstrap } from "../../types/bootstrap"
 import type { MockServer } from "../../test/authoringHarness"
-import { FULL_RECORD_AUTHORING } from "../../test/recordAuthoring"
+import { CAMPAIGN_ONLY_RECORD_AUTHORING, FULL_RECORD_AUTHORING } from "../../test/recordAuthoring"
 import { installRecordReads } from "../../test/worldWorkspaceMocks"
 import type { RevisionFixture } from "../../test/worldWorkspaceMocks"
 import { CampaignWorldDetailPage } from "../../pages/CampaignWorldDetailPage"
@@ -91,6 +92,7 @@ interface Options {
     revisions?: RevisionFixture[]
     editView?: object
     extra?: (server: MockServer) => void
+    onRefresh?: () => Promise<SessionBootstrap>
 }
 
 const resolve = (value: Handler) => () => ({ body: typeof value === "function" ? value() : value })
@@ -117,6 +119,7 @@ function setup(options: Options = {}) {
     )
     options.extra?.(server)
     const rendered = renderAuthoringRoutes({
+        onRefresh: options.onRefresh,
         initialEntry: options.entry ?? `/app/${C}/world/${category}/${entityId}`,
         bootstrap: bootstrapWith({
             campaigns: [
@@ -1180,6 +1183,128 @@ describe("World record workspace: a dungeon", () => {
         // The section the person was in was withdrawn with the loss; it is offered again, not forced back.
         await openSection("Areas")
         expect(await screen.findByRole("list", { name: "Areas" })).toBeVisible()
+    })
+})
+
+describe("World record workspace: Check my access again", () => {
+    const REVOKED = {
+        status: 403,
+        body: { error: { code: "world_authority_required", message: "m", correlation_id: "c" } },
+    }
+    const DETAIL = `/campaigns/${C}/world/locations/l1`
+    const crypt = (authoring: object) => locationDetail({ name: "Crypt", location_type_code: "dungeon", authoring })
+
+    // Opens the dungeon, types an area name, and has the add refused: the Permission lost panel.
+    async function lose(options: Partial<Options> = {}) {
+        const rendered = setup({
+            typeCode: "dungeon",
+            detail: crypt(FULL_RECORD_AUTHORING),
+            lifecycle: () => lifecycle({ entity_type_code: "dungeon", canonical_name: "Crypt" }),
+            ...options,
+            extra: (server) => {
+                server.on("GET", `/campaigns/${C}/authoring/dungeons/options`, { body: { can_create: true, connection_types: [], limits: {} } })
+                server.on("GET", `/campaigns/${C}/authoring/dungeons/l1`, { body: { available_actions: ["add_area"], blocked_actions: [], areas: [], connections: [], structure_actions: ["add_area"], row_version: 1 } })
+                server.on("POST", `/campaigns/${C}/authoring/dungeons/l1/areas`, REVOKED)
+            },
+        })
+        await screen.findByRole("heading", { level: 1, name: "Crypt" })
+        await screen.findByRole("navigation", { name: "Record stages" })
+        fireEvent.click(await screen.findByRole("link", { name: "Areas" }))
+        fireEvent.click(await screen.findByRole("button", { name: "Add area" }))
+        const form = await screen.findByRole("form", { name: "Add an area" })
+        fireEvent.change(within(form).getByRole("textbox", { name: /Area name/ }), { target: { value: "Shrine of Ash" } })
+        fireEvent.click(within(form).getByRole("button", { name: "Add area" }))
+        const panel = await screen.findByRole("region", { name: "Permission lost" })
+        expect(panel).toHaveTextContent("Shrine of Ash")
+        return { ...rendered, panel }
+    }
+    const recheckButton = () => screen.getByRole("button", { name: "Check my access again" })
+    const gated = (server: MockServer) => {
+        let release: () => void = () => undefined
+        const gate = new Promise<void>((resolve) => {
+            release = resolve
+        })
+        server.on("GET", DETAIL, async () => {
+            await gate
+            return { body: crypt(FULL_RECORD_AUTHORING) }
+        })
+        return release
+    }
+
+    it("keeps the panel and the typed values until the fresh check answers, then restores and focuses the heading", async () => {
+        const { server } = await lose()
+        const release = gated(server)
+        recheckButton().focus()
+        fireEvent.click(recheckButton())
+        expect(await screen.findByText("Checking your access…")).toBeInTheDocument()
+        // Nothing is cleared while the check is out; the focused button is still there.
+        expect(screen.getByRole("region", { name: "Permission lost" })).toHaveTextContent("Shrine of Ash")
+        expect(recheckButton()).toHaveFocus()
+        release()
+        await waitFor(() => expect(screen.queryByRole("region", { name: "Permission lost" })).not.toBeInTheDocument())
+        expect(screen.getByRole("heading", { level: 1, name: "Crypt" })).toHaveFocus()
+        expect(document.activeElement).not.toBe(document.body)
+    })
+
+    it("when access is still denied, keeps the panel, the values and the button, and says so", async () => {
+        const { server } = await lose()
+        server.on("GET", DETAIL, { body: crypt(CAMPAIGN_ONLY_RECORD_AUTHORING) })
+        recheckButton().focus()
+        fireEvent.click(recheckButton())
+        expect(await screen.findByText(/Your access has not been restored/)).toBeInTheDocument()
+        expect(screen.getByRole("region", { name: "Permission lost" })).toHaveTextContent("Shrine of Ash")
+        expect(recheckButton()).toHaveFocus()
+        // It is retryable: once the server says access is back, the same button restores.
+        server.on("GET", DETAIL, { body: crypt(FULL_RECORD_AUTHORING) })
+        fireEvent.click(recheckButton())
+        await waitFor(() => expect(screen.queryByRole("region", { name: "Permission lost" })).not.toBeInTheDocument())
+        expect(screen.getByRole("heading", { level: 1, name: "Crypt" })).toHaveFocus()
+    })
+
+    it("when the session refresh fails, keeps everything and offers a retry", async () => {
+        let fail = false
+        const { server } = await lose({
+            onRefresh: async () => {
+                if (fail) throw new Error("offline")
+                return bootstrapWith({
+                    campaigns: [
+                        { ...sessionBootstrapFixture.campaigns[0]!, campaign_id: C, capabilities: ["canon.edit", "campaign.view"] },
+                    ],
+                })
+            },
+        })
+        fail = true
+        server.on("GET", DETAIL, { body: crypt(FULL_RECORD_AUTHORING) })
+        recheckButton().focus()
+        fireEvent.click(recheckButton())
+        expect(await screen.findByText(/could not be checked just now/)).toBeInTheDocument()
+        expect(screen.getByRole("region", { name: "Permission lost" })).toHaveTextContent("Shrine of Ash")
+        expect(recheckButton()).toHaveFocus()
+        fail = false
+        fireEvent.click(recheckButton())
+        await waitFor(() => expect(screen.queryByRole("region", { name: "Permission lost" })).not.toBeInTheDocument())
+    })
+
+    it("when the record read fails, keeps everything and offers a retry", async () => {
+        const { server } = await lose()
+        server.on("GET", DETAIL, { status: 500, body: { error: { code: "internal_error", message: "m", correlation_id: "c" } } })
+        fireEvent.click(recheckButton())
+        expect(await screen.findByText(/could not be checked just now/)).toBeInTheDocument()
+        expect(screen.getByRole("region", { name: "Permission lost" })).toHaveTextContent("Shrine of Ash")
+    })
+
+    it("does not start a second check while one is out", async () => {
+        const { server } = await lose()
+        const release = gated(server)
+        const before = server.callsTo("GET", DETAIL).length
+        fireEvent.click(recheckButton())
+        await screen.findByText("Checking your access…")
+        fireEvent.click(recheckButton())
+        fireEvent.click(recheckButton())
+        release()
+        await waitFor(() => expect(screen.queryByRole("region", { name: "Permission lost" })).not.toBeInTheDocument())
+        // One fresh check, plus the page's own re-read after the restoration.
+        expect(server.callsTo("GET", DETAIL).length - before).toBeLessThanOrEqual(2)
     })
 })
 

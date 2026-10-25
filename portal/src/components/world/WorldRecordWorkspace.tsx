@@ -7,6 +7,7 @@ import { organizationAuthoringPath, religionAuthoringPath } from "../../api/orga
 import { playerCharacterAuthoringPath } from "../../api/playerCharacterAuthoring"
 import { provenancePath } from "../../api/sources"
 import { revisionsPath } from "../../api/review"
+import { apiRequest } from "../../api/http"
 import { useAuthoringResource } from "../../hooks/useAuthoringResource"
 import { useGatedAuthoringResource } from "../../hooks/useGatedAuthoringResource"
 import type { UseAuthoringResourceResult } from "../../hooks/useAuthoringResource"
@@ -29,6 +30,7 @@ import type { RecordAuthoring } from "../../utils/recordAuthoring"
 import type { RetainedChange } from "../../utils/retainedChanges"
 import { useSession } from "../../context/SessionContext"
 import { PermissionLost } from "../authoring/PermissionLost"
+import type { RecheckResult } from "../authoring/PermissionLost"
 import { PermissionLossContext } from "../authoring/permissionLoss"
 import type { PermissionLossHandle } from "../authoring/permissionLoss"
 import { AuthoringEditLink } from "../AuthoringEditLink"
@@ -158,6 +160,45 @@ function Loaded({ campaignId, category, entityId }: Props) {
         }),
         [refresh],
     )
+    // "Check my access again": the panel, and what it retains, stay until a fresh check has finished
+    // and the server's own answers (the session and this record's `authoring`) say access is back.
+    // Anything else leaves the values in place with a retryable result.
+    const [recheck, setRecheck] = useState<RecheckResult>("idle")
+    const checking = useRef(false)
+    const headingRef = usePageArrival(detail.state.kind === "ready", "path")
+    const startRecheck = useCallback(async () => {
+        if (checking.current) return
+        checking.current = true
+        setRecheck("checking")
+        try {
+            // A request of its own, so the answer is the server's now and not whatever the page last held.
+            const [refreshed, fresh] = await Promise.all([
+                Promise.resolve(refresh?.()).then(
+                    (ok) => ok !== false,
+                    () => false,
+                ),
+                apiRequest<WorkspaceDetail>("GET", worldDetailPath(campaignId, category, entityId)).then(
+                    (data) => ({ data }),
+                    () => null,
+                ),
+            ])
+            if (!refreshed || fresh === null) {
+                setRecheck("failed")
+            } else if (!authoringOf(fresh.data).can_read_private) {
+                setRecheck("denied")
+            } else {
+                // Restored: only now do the retained values go. The button that had focus unmounts with
+                // the panel, so focus moves to the record's heading rather than falling to the page.
+                retained.current.clear()
+                setLost(null)
+                setRecheck("idle")
+                void detail.refetch()
+                headingRef.current?.focus()
+            }
+        } finally {
+            checking.current = false
+        }
+    }, [refresh, campaignId, category, entityId, detail, headingRef])
     const authoring =
         lost !== null ? NO_RECORD_AUTHORING : authoringOf(detail.state.kind === "ready" ? detail.state.data : kept)
     const canReadWorldPrivate = useHeldWorldCapability(campaignId, WORLD_CANON_READ_PRIVATE) && lost === null
@@ -178,7 +219,6 @@ function Loaded({ campaignId, category, entityId }: Props) {
         canReadWorldPrivate,
     )
     const worldBack = useWorldBackPath(campaignId)
-    const headingRef = usePageArrival(detail.state.kind === "ready", "path")
     const stale = detail.state.kind === "error" && kept !== null
     const noun = NOUN[category]
     const title = `${noun.charAt(0).toUpperCase()}${noun.slice(1)}`
@@ -228,12 +268,8 @@ function Loaded({ campaignId, category, entityId }: Props) {
                 authoring={authoring}
                 canReadWorldPrivate={canReadWorldPrivate}
                 lost={lost}
-                onRecheck={() => {
-                    retained.current.clear()
-                    setLost(null)
-                    void Promise.resolve(refresh?.()).catch(() => undefined)
-                    void detail.refetch()
-                }}
+                onRecheck={() => void startRecheck()}
+                recheck={recheck}
                 headingRef={headingRef}
             />
         </PermissionLossContext.Provider>
@@ -302,6 +338,7 @@ function Workspace({
     canReadWorldPrivate,
     lost,
     onRecheck,
+    recheck,
     headingRef,
 }: Props & {
     data: WorkspaceDetail
@@ -318,6 +355,7 @@ function Workspace({
     // Set once a private-authoring command was refused for lack of the world authority.
     lost: RetainedChange[] | null
     onRecheck: () => void
+    recheck: RecheckResult
     headingRef: RefObject<HTMLHeadingElement | null>
 }) {
     const location = useLocation()
@@ -654,7 +692,7 @@ function Workspace({
                 context={context}
             />
             {lost !== null ? (
-                <PermissionLost noun="record" retained={lost} back={{ to: back.href, label: back.label }} recheck={onRecheck} />
+                <PermissionLost noun="record" retained={lost} back={{ to: back.href, label: back.label }} recheck={onRecheck} result={recheck} />
             ) : null}
             {withheldNote && !authoring.campaign_originated ? (
                 <p className="authoring-note">
