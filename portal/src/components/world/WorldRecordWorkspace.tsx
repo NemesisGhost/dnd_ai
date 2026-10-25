@@ -184,7 +184,7 @@ function Loaded({ campaignId, category, entityId }: Props) {
             ])
             if (!refreshed || fresh === null) {
                 setRecheck("failed")
-            } else if (!authoringOf(fresh.data).can_read_private) {
+            } else if (!authoringOf(fresh.data).can_edit) {
                 setRecheck("denied")
             } else {
                 // Restored: only now do the retained values go. The button that had focus unmounts with

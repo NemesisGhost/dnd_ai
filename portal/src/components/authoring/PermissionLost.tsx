@@ -71,7 +71,7 @@ export function PermissionLost({
                 {result === "checking" ? <p role="status">Checking your access…</p> : null}
                 {result === "denied" ? (
                     <p role="status">
-                        Your access has not been restored, so nothing was changed and what you typed is still
+                        Your editing access has not been restored, so nothing was changed and what you typed is still
                         shown above. You can check again.
                     </p>
                 ) : null}

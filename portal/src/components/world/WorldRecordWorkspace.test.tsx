@@ -4,7 +4,7 @@ import { sessionBootstrapFixture } from "../../fixtures/sessionBootstrap"
 import { bootstrapWith, installMockServer, renderAuthoringRoutes } from "../../test/authoringHarness"
 import type { SessionBootstrap } from "../../types/bootstrap"
 import type { MockServer } from "../../test/authoringHarness"
-import { CAMPAIGN_ONLY_RECORD_AUTHORING, FULL_RECORD_AUTHORING } from "../../test/recordAuthoring"
+import { CAMPAIGN_ONLY_RECORD_AUTHORING, FULL_RECORD_AUTHORING, REVIEWER_RECORD_AUTHORING } from "../../test/recordAuthoring"
 import { installRecordReads } from "../../test/worldWorkspaceMocks"
 import type { RevisionFixture } from "../../test/worldWorkspaceMocks"
 import { CampaignWorldDetailPage } from "../../pages/CampaignWorldDetailPage"
@@ -1251,7 +1251,7 @@ describe("World record workspace: Check my access again", () => {
         server.on("GET", DETAIL, { body: crypt(CAMPAIGN_ONLY_RECORD_AUTHORING) })
         recheckButton().focus()
         fireEvent.click(recheckButton())
-        expect(await screen.findByText(/Your access has not been restored/)).toBeInTheDocument()
+        expect(await screen.findByText(/Your editing access has not been restored/)).toBeInTheDocument()
         expect(screen.getByRole("region", { name: "Permission lost" })).toHaveTextContent("Shrine of Ash")
         expect(recheckButton()).toHaveFocus()
         // It is retryable: once the server says access is back, the same button restores.
@@ -1259,6 +1259,20 @@ describe("World record workspace: Check my access again", () => {
         fireEvent.click(recheckButton())
         await waitFor(() => expect(screen.queryByRole("region", { name: "Permission lost" })).not.toBeInTheDocument())
         expect(screen.getByRole("heading", { level: 1, name: "Crypt" })).toHaveFocus()
+    })
+
+    it("when the record is readable but not editable, keeps the panel and values and allows another check", async () => {
+        const { server } = await lose()
+        // can_read_private is true, can_edit is false: private read is back, editing is not.
+        server.on("GET", DETAIL, { body: crypt(REVIEWER_RECORD_AUTHORING) })
+        recheckButton().focus()
+        fireEvent.click(recheckButton())
+        expect(await screen.findByText(/Your editing access has not been restored/)).toBeInTheDocument()
+        expect(screen.getByRole("region", { name: "Permission lost" })).toHaveTextContent("Shrine of Ash")
+        expect(recheckButton()).toHaveFocus()
+        server.on("GET", DETAIL, { body: crypt(FULL_RECORD_AUTHORING) })
+        fireEvent.click(recheckButton())
+        await waitFor(() => expect(screen.queryByRole("region", { name: "Permission lost" })).not.toBeInTheDocument())
     })
 
     it("when the session refresh fails, keeps everything and offers a retry", async () => {
