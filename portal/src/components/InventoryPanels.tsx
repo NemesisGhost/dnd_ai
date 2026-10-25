@@ -15,7 +15,8 @@ interface Row {
     name: string
     display_name: string
     quantity: number
-    condition_percentage: number | null
+    // Absent (not null) on the inventory-only read (CP-6), which does not carry condition.
+    condition_percentage?: number | null
     is_equipped: boolean
     is_destroyed: boolean
 }
@@ -33,7 +34,7 @@ function ItemList({ campaignId, items }: { campaignId: string; items: Row[] }) {
                     </Link>
                     {item.name !== item.display_name ? ` (${item.display_name})` : ""}
                     {item.quantity !== 1 ? `, ×${item.quantity}` : ""}
-                    {item.condition_percentage !== null ? `, ${item.condition_percentage}% condition` : ""}
+                    {item.condition_percentage !== null && item.condition_percentage !== undefined ? `, ${item.condition_percentage}% condition` : ""}
                     {item.is_equipped ? ", equipped" : ""}
                     {item.is_destroyed ? ", destroyed" : ""}
                 </li>

@@ -1102,6 +1102,7 @@ Maps a relationship type to default character-scoped capabilities, including:
 - `discover`
 - `view_summary`
 - `view_full`
+- `view_inventory`
 - `view_private`
 - `view_character_knowledge`
 - `edit_narrative`
@@ -1116,11 +1117,13 @@ The relationship records semantic meaning; this mapping supplies defaults. A dir
 
 | Type | Capabilities | Perspective selectable |
 |---|---|---|
-| `owner`, `primary_controller` | `discover`, `view_summary`, `view_full`, `view_knowledge`, `view_private` | Yes |
-| `co_controller`, `portrayer` | `discover`, `view_summary`, `view_full`, `view_knowledge` | Yes |
-| `viewer`, `observer_approved_viewer` | `discover`, `view_summary` | No |
+| `owner`, `primary_controller` | `discover`, `view_summary`, `view_full`, `view_inventory`, `view_knowledge`, `view_private` | Yes |
+| `co_controller`, `portrayer` | `discover`, `view_summary`, `view_full`, `view_inventory`, `view_knowledge` | Yes |
+| `viewer`, `observer_approved_viewer` | `discover`, `view_summary`, `view_inventory` | No |
 | `former_controller` | none (continued access needs a separate active relationship) | No |
 | any other type | none until server policy admits it | No |
+
+**`view_inventory` (CP-6 / DR-2, migration `139_inventory_capability`).** A narrow, read-only capability: its holder reads the character's inventory through a restricted projection (`inventory_only`) without `view_full`, the sheet, any mutation or any control. It is a seeded `security.capabilities` row (display name "View inventory", inserted explicitly because the seed file is frozen) and a character-target resource-grant capability, so it can be granted to or denied for one membership on one character. An explicit deny of it wins over `view_full` and over every relationship source; `canon.edit` (a GM) is unaffected. The built-in `former_controller` never holds it, and nothing in a command, mutation route, perspective or control check names it. Downgrading `139` is lossy: the capability's mapping rows, role-capability rows and every resource grant or deny naming it are deleted.
 
 `edit_narrative`, `edit_mechanical_state`, `control`, and `interact` are deliberately withheld from every type until Phase 16 (no route consumes them today). A character is listed as a perspective in the session bootstrap only when the user holds `character.view_knowledge` for it. The upgrade migration reconciles the seven built-in types to this matrix (adds missing pairs, removes unsupported pairs and records the removals in a NOTICE and one maintenance `audit.change_log` row); custom-type rows are left in place.
 

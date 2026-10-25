@@ -121,7 +121,9 @@ export interface CharacterInventoryItem {
     item_category_code: string
     rarity: string
     quantity: number
-    condition_percentage: number | null
+    // Absent on the inventory-only read (a reader holding `character.view_inventory` without the
+    // full character view): an explicit allowlist with no condition or charges.
+    condition_percentage?: number | null
     is_equipped: boolean
     is_destroyed: boolean
 }

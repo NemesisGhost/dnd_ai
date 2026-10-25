@@ -130,6 +130,7 @@ CHARACTER_TARGET_CAPABILITY_CODES = frozenset(
     {
         "character.view_summary",
         "character.view_full",
+        "character.view_inventory",
         "character.view_private",
         "character.view_knowledge",
         "character.edit_narrative",
@@ -166,6 +167,7 @@ BUILTIN_RELATIONSHIP_CAPABILITIES: dict[str, frozenset[str]] = {
             "character.discover",
             "character.view_summary",
             "character.view_full",
+            "character.view_inventory",
             "character.view_knowledge",
             "character.view_private",
         }
@@ -175,6 +177,7 @@ BUILTIN_RELATIONSHIP_CAPABILITIES: dict[str, frozenset[str]] = {
             "character.discover",
             "character.view_summary",
             "character.view_full",
+            "character.view_inventory",
             "character.view_knowledge",
             "character.view_private",
         }
@@ -184,6 +187,7 @@ BUILTIN_RELATIONSHIP_CAPABILITIES: dict[str, frozenset[str]] = {
             "character.discover",
             "character.view_summary",
             "character.view_full",
+            "character.view_inventory",
             "character.view_knowledge",
         }
     ),
@@ -192,11 +196,18 @@ BUILTIN_RELATIONSHIP_CAPABILITIES: dict[str, frozenset[str]] = {
             "character.discover",
             "character.view_summary",
             "character.view_full",
+            "character.view_inventory",
             "character.view_knowledge",
         }
     ),
-    "viewer": frozenset({"character.discover", "character.view_summary"}),
-    "observer_approved_viewer": frozenset({"character.discover", "character.view_summary"}),
+    # CP-6 / DR-2: a viewer reads the character's inventory through the restricted projection
+    # (`dnd_ai.queries.inventory.restrict_inventory_view`) without `character.view_full`.
+    "viewer": frozenset(
+        {"character.discover", "character.view_summary", "character.view_inventory"}
+    ),
+    "observer_approved_viewer": frozenset(
+        {"character.discover", "character.view_summary", "character.view_inventory"}
+    ),
     "former_controller": frozenset(),
 }
 

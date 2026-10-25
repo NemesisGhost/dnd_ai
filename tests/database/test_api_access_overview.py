@@ -542,6 +542,19 @@ def test_authorized_gm_sees_the_full_overview(
         grantable_by_target.setdefault(capability["target_type"], set()).add(capability["code"])
     assert "character.view_full" in grantable_by_target["character"]
     assert "character.control" in grantable_by_target["character"]
+    # CP-6: the inventory-only capability is grantable and deniable on a character, with the
+    # label the portal's grant editor shows, and on nothing else.
+    assert "character.view_inventory" in grantable_by_target["character"]
+    assert {
+        c["display_name"]
+        for c in payload["grantable_resource_capabilities"]
+        if c["code"] == "character.view_inventory"
+    } == {"View inventory"}
+    assert all(
+        "character.view_inventory" not in codes
+        for target, codes in grantable_by_target.items()
+        if target != "character"
+    )
     assert "campaign.view" in grantable_by_target["entity"]
     assert "canon.edit" in grantable_by_target["quest"]
     all_grantable_codes = {code for codes in grantable_by_target.values() for code in codes}

@@ -1065,6 +1065,20 @@ locally. Campaign navigation always remounts the section (keyed by
 `campaignId`), clearing any selected member/resource from a previous
 campaign rather than carrying it forward.
 
+## 3s. `character.view_inventory` and the inventory-only projection (CP-6)
+
+`character.view_inventory` joins the character-target grant/deny catalog (`CHARACTER_TARGET_CAPABILITY_CODES`, label **View inventory**, so `grantable_resource_capabilities` lists it for target type `character` and no other). It adds no endpoint and no mutation.
+
+**Relationship matrix.** Held by `owner`, `primary_controller`, `co_controller`, `portrayer` (who already hold `view_full`), `viewer` and `observer_approved_viewer`; not by `former_controller`. A relationship-derived grant is effective only with a database row, code-matrix permission and an active type, as for every capability.
+
+**Resolution** (`dnd_ai.api.access.resolve_character_inventory_access`, shared by `GET …/characters/{id}/inventory` and `sections.inventory`): entity-level `campaign.view` deny → `none`; `canon.edit` → `full`; explicit deny of `character.view_inventory` → `none` (it wins over `view_full`, relationships and allow grants); `character.view_full` → `full`; `character.view_inventory` → `inventory_only`; otherwise `none` (the same fixed 404 as before). The campaign's primary-timeline, world, draft/archived and foreign-character boundaries are unchanged.
+
+**Restricted projection** (`RestrictedInventoryItemResponse`, built by an explicit allowlist, never by trimming the full row): `item_instance_id`, `name`, `display_name`, `item_category_code`, `rarity`, `quantity`, `is_equipped`, `is_destroyed`, `ownership` (`holder` when the character owns it, `other` when it is carried but owned by someone else, `none`), `identification_level` and `properties` (identification-filtered exactly as for the full row, never revealed in full). Withheld: `condition_percentage`, `charges_current`/`charges_maximum`, `last_event_id`, `owner_entity_id` (so another owner's id is not disclosed), publication state, and every GM-only instance field (`origin_notes`). Draft and archived instances never appear. The inventory read does not carry attunement, so none is shown.
+
+**Not granted:** the sheet (`/sheet` stays 404), the parties section, party inventory, item transfer/identify or any item command (all `canon.edit`), perspective selection and control.
+
+**Limitation.** The portal reaches the inventory through the character read, which still needs the summary or full tier; a plain player holding only a direct `character.view_inventory` grant can call the inventory endpoint but is not offered the Inventory link.
+
 ## 4. Principal/boundary summary
 
 > **Amended by [ADR 0020](adr/0020-scoped-system-world-and-campaign-roles.md).** `security.users.is_platform_administrator` and `SessionBootstrap.is_platform_administrator` no longer exist: platform authority is the system `admin` role, and the bootstrap reports `system_roles` and `global_capabilities`. `POST /admin/accounts` accepts `system_role_codes` (default `["player"]`; `admin` only while `DND_AI_ALLOW_IN_APP_ADMIN_GRANT` is true, otherwise 403 `admin_grant_disabled`). New routes: `POST /admin/accounts/{user_id}/system-roles` (201 new, 200 already held) and `POST /admin/accounts/{user_id}/system-roles/{code}/revoke` (409 `last_active_platform_administrator`); `GET /admin/accounts` adds `system_roles`, `stranded_world_count` and a `system_role` filter; the disable and GM-revoke responses report stranded world/campaign IDs. D-10 stands: the operator script remains the default way to grant Admin.

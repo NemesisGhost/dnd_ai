@@ -55,12 +55,12 @@ mutation of any kind.
 Phase 10 workstream 16 added a sub-resource:
 `GET /campaigns/{campaign_id}/characters/{character_id}/inventory`
 (`dnd_ai.queries.inventory.get_inventory_view`). It requires the *full*
-character-view tier for `character_id` — `resolve_character_view_tier`
-returning `False` (summary-only) is treated as unauthorized here too,
-since inventory contents are full-detail data with no separate summary
-form; the same `CharacterViewNotAuthorizedError` fixed 404 that route
-already raises for "neither capability held" now also covers "only the
-summary tier applies." A caller holding `canon.edit` for this exact
+character-view tier for `character_id`, or (CP-6 / DR-2) the narrower
+`character.view_inventory`, which reads the same list through the restricted
+`inventory_only` projection (`RestrictedInventoryItemResponse`). Both are decided by
+`dnd_ai.api.access.resolve_character_inventory_access`, which `sections.inventory` also uses. The
+summary tier alone is unauthorized here, with the same
+`CharacterViewNotAuthorizedError` fixed 404 as "neither capability held". A caller holding `canon.edit` for this exact
 `character_id` (`access.has_capability(..., character_id=character_id)` —
 never checked without a target, which would skip any character-scoped
 `security.resource_grants` deny and let a role-derived GM bypass an
@@ -126,7 +126,7 @@ from dnd_ai.queries.entity_lifecycle import (
     get_entity_status_summary,
     lifecycle_hidden_entity_ids,
 )
-from dnd_ai.queries.inventory import get_inventory_view
+from dnd_ai.queries.inventory import get_inventory_view, restrict_inventory_view
 from dnd_ai.queries.parties import list_character_parties
 
 from ._shared import timeline_world_id
@@ -136,6 +136,7 @@ from .access import (
     can_open_participant,
     record_authoring_response,
     require_campaign_capability,
+    resolve_character_inventory_access,
     resolve_character_view_tier,
 )
 from .deps import get_connection
@@ -243,6 +244,25 @@ class InventoryItemResponse(BaseModel):
     # The instance's own name, and the item's optimistic token (the last event seen).
     name: str = ""
     last_event_id: uuid.UUID | None = None
+
+
+class RestrictedInventoryItemResponse(BaseModel):
+    """The `inventory_only` row (CP-6 / DR-2): an explicit allowlist, deliberately not a subclass or
+    reuse of `InventoryItemResponse`, so a field added there is never inherited here. Withheld:
+    condition, charges, the optimistic token, publication state and the owner's entity id."""
+
+    item_instance_id: uuid.UUID
+    name: str
+    display_name: str
+    item_category_code: str
+    rarity: str
+    quantity: int
+    is_equipped: bool
+    is_destroyed: bool
+    # `holder` (the character owns it), `other` (carried but owned by someone else), or `none`.
+    ownership: Literal["holder", "other", "none"]
+    identification_level: str
+    properties: dict[str, Any] | None
 
 
 class CharacterSheetClassLevelResponse(BaseModel):
@@ -420,13 +440,15 @@ def character_sections(
     `include_full` is `resolve_character_view_tier`'s answer). Each flag repeats the test its own
     endpoint applies after those shared checks: the sheet and the inventory need the full tier
     (the summary tier alone is refused), the relationships need either tier (the page itself),
-    and the parties need `character.view_knowledge` for this character. The agreement tests hold
-    these to the endpoints."""
+    and the parties need `character.view_knowledge` for this character. The inventory opens for
+    either inventory tier (`resolve_character_inventory_access`, the endpoint's own decision), so a
+    reader holding only `character.view_inventory` is offered the inventory and nothing else full.
+    The agreement tests hold these to the endpoints."""
     return CharacterSectionsResponse(
         details=True,
         sheet=include_full,
         relationships=True,
-        inventory=include_full,
+        inventory=resolve_character_inventory_access(access, character_id=character_id) != "none",
         parties=access.has_capability("character.view_knowledge", character_id=character_id),
     )
 
@@ -721,7 +743,7 @@ def list_character_relationships_endpoint(
 
 @router.get(
     "/campaigns/{campaign_id}/characters/{character_id}/inventory",
-    response_model=list[InventoryItemResponse],
+    response_model=list[InventoryItemResponse] | list[RestrictedInventoryItemResponse],
     status_code=200,
 )
 def get_character_inventory_endpoint(
@@ -730,22 +752,23 @@ def get_character_inventory_endpoint(
         AccessContext, Depends(require_campaign_capability(_CHARACTER_VIEW_CAPABILITY))
     ],
     connection: Annotated[Connection, Depends(get_connection)],
-) -> list[InventoryItemResponse]:
-    if not access.has_capability(_CHARACTER_VIEW_CAPABILITY, entity_id=character_id):
+) -> list[InventoryItemResponse] | list[RestrictedInventoryItemResponse]:
+    inventory_access = resolve_character_inventory_access(access, character_id=character_id)
+    if inventory_access == "none" and not access.has_capability(
+        _CHARACTER_VIEW_CAPABILITY, entity_id=character_id
+    ):
         # The same entity-targeted `campaign.view` deny the character
         # detail route honors — a subresource of a character the caller may
         # not see must itself be indistinguishable from nonexistent.
         raise NotFoundError()
     _require_published_character(connection, access, character_id)
 
-    if not resolve_character_view_tier(access, character_id=character_id):
-        # The summary tier alone is not enough to see inventory contents —
-        # see this module's docstring. Raised identically to "neither
-        # capability held," which resolve_character_view_tier itself
-        # already raises for that case.
+    if inventory_access == "none":
+        # Neither inventory tier: the summary tier alone is not enough to see inventory contents
+        # (see this module's docstring), and an explicit `character.view_inventory` deny lands
+        # here too. Raised identically to "neither capability held".
         raise CharacterViewNotAuthorizedError(
-            f"user {access.user_id} holds only the summary tier for character {character_id}, "
-            "insufficient for inventory"
+            f"user {access.user_id} holds no inventory access for character {character_id}"
         )
 
     items = get_inventory_view(
@@ -753,10 +776,31 @@ def get_character_inventory_endpoint(
         holder_entity_id=character_id,
         timeline_id=access.timeline_id,
         expected_world_id=timeline_world_id(connection, access.timeline_id),
-        reveal_all_properties=access.has_capability(
-            _CHARACTER_MANAGE_CAPABILITY, character_id=character_id
+        # Only the full tier reveals GM properties and unpublished instances; `inventory_only`
+        # never does, whatever else the caller holds.
+        reveal_all_properties=(
+            inventory_access == "full"
+            and access.has_capability(_CHARACTER_MANAGE_CAPABILITY, character_id=character_id)
         ),
     )
+
+    if inventory_access == "inventory_only":
+        return [
+            RestrictedInventoryItemResponse(
+                item_instance_id=item.item_instance_id,
+                name=item.name,
+                display_name=item.display_name,
+                item_category_code=item.item_category_code,
+                rarity=item.rarity,
+                quantity=item.quantity,
+                is_equipped=item.is_equipped,
+                is_destroyed=item.is_destroyed,
+                ownership=item.ownership,  # type: ignore[arg-type]
+                identification_level=item.identification_level,
+                properties=item.properties,
+            )
+            for item in restrict_inventory_view(items, holder_entity_id=character_id)
+        ]
 
     return [
         InventoryItemResponse(

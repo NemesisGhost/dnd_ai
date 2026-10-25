@@ -55,6 +55,13 @@ _MIGRATION = (
     / "114_relationship_defaults.py"
 )
 
+# Revision 139 (CP-6) layers `character.view_inventory` on top of revision 114's matrix.
+_INVENTORY = "character.view_inventory"
+_AT_REVISION_114 = {
+    t: frozenset(c for c in caps if c != _INVENTORY)
+    for t, caps in BUILTIN_RELATIONSHIP_CAPABILITIES.items()
+}
+
 _PERSPECTIVE_TYPES = ("owner", "primary_controller", "co_controller", "portrayer")
 _VIEW_ONLY_TYPES = ("viewer", "observer_approved_viewer")
 _WITHHELD = (
@@ -137,7 +144,21 @@ def test_the_migration_matrix_and_the_code_matrix_agree() -> None:
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    assert {k: frozenset(v) for k, v in module._MATRIX.items()} == BUILTIN_RELATIONSHIP_CAPABILITIES
+    # Revision 114 plus revision 139's additions is the code matrix.
+    assert {k: frozenset(v) for k, v in module._MATRIX.items()} == _AT_REVISION_114
+
+
+def test_the_inventory_revision_and_the_code_matrix_agree() -> None:
+    path = _MIGRATION.with_name("139_inventory_capability.py")
+    spec = importlib.util.spec_from_file_location("inventory_capability_migration", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert set(module._TYPES_WITH_CAPABILITY) == {
+        t for t, caps in BUILTIN_RELATIONSHIP_CAPABILITIES.items() if _INVENTORY in caps
+    }
+    assert set(module._BUILTIN_TYPES) == set(BUILTIN_RELATIONSHIP_CAPABILITIES)
+    assert _INVENTORY not in BUILTIN_RELATIONSHIP_CAPABILITIES["former_controller"]
 
 
 def test_every_seeded_relationship_type_is_admitted_and_phase16_capabilities_are_withheld(
@@ -206,7 +227,7 @@ def test_view_only_types_hold_the_summary_tier_and_no_perspective(
     setup = Setup(db_connection)
     setup.relate(_type_id(db_connection, type_code))
     capabilities = setup.capabilities()
-    assert capabilities == {"character.discover", "character.view_summary"}
+    assert capabilities == {"character.discover", "character.view_summary", _INVENTORY}
     assert "character.view_full" not in capabilities
     assert "character.view_knowledge" not in capabilities
 
@@ -399,9 +420,7 @@ def test_upgrade_reconciles_a_database_holding_development_rows_and_round_trips(
         with engine.connect() as connection:
             pairs = _mapping_pairs(connection)
             builtin_pairs = {p for p in pairs if p[0] in BUILTIN_RELATIONSHIP_CAPABILITIES}
-            assert builtin_pairs == {
-                (t, c) for t, caps in BUILTIN_RELATIONSHIP_CAPABILITIES.items() for c in caps
-            }
+            assert builtin_pairs == {(t, c) for t, caps in _AT_REVISION_114.items() for c in caps}
             # The custom-type row is left in place (ineffective, not deleted).
             assert ("guild_mentor", "character.view_full") in pairs
             audit = connection.execute(

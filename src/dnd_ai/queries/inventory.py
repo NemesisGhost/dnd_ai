@@ -187,3 +187,64 @@ def get_inventory_view(
         )
 
     return tuple(items)
+
+
+@dataclass(frozen=True)
+class RestrictedInventoryItemView:
+    """The `inventory_only` projection of `InventoryItemView` (CP-6 / DR-2): what a reader holding
+    `character.view_inventory` without the full character view may see. This is an allowlist, so a
+    field added to `InventoryItemView` is withheld from this view until it is added here on purpose.
+
+    Withheld: `condition_percentage`, `charges_current`/`charges_maximum` (item-instance mechanical
+    state), `last_event_id` (the mutation token), `is_published` (a restricted reader never sees an
+    unpublished instance), and `owner_entity_id` (replaced by `ownership`, so the id of an
+    entity the reader may not be able to discover is not disclosed). GM-only instance fields such
+    as `origin_notes` are not part of `InventoryItemView` at all.
+    """
+
+    item_instance_id: uuid.UUID
+    name: str
+    display_name: str
+    item_category_code: str
+    rarity: str
+    quantity: int
+    is_equipped: bool
+    is_destroyed: bool
+    ownership: str
+    """`holder` when the legal owner is the character carrying the item, `other` when someone else
+    owns what the character carries (custody without ownership), `none` when it has no owner."""
+    identification_level: str
+    properties: dict[str, Any] | None
+    """Already identification-filtered by `get_inventory_view` (called with
+    `reveal_all_properties=False`)."""
+
+
+def restrict_inventory_view(
+    items: tuple[InventoryItemView, ...], *, holder_entity_id: uuid.UUID
+) -> tuple[RestrictedInventoryItemView, ...]:
+    """Project `items` (read with `reveal_all_properties=False`, so draft/archived instances and
+    unrevealed properties are already absent) onto the `inventory_only` allowlist."""
+    restricted = []
+    for item in items:
+        if item.owner_entity_id is None:
+            ownership = "none"
+        elif item.owner_entity_id == holder_entity_id:
+            ownership = "holder"
+        else:
+            ownership = "other"
+        restricted.append(
+            RestrictedInventoryItemView(
+                item_instance_id=item.item_instance_id,
+                name=item.name,
+                display_name=item.display_name,
+                item_category_code=item.item_category_code,
+                rarity=item.rarity,
+                quantity=item.quantity,
+                is_equipped=item.is_equipped,
+                is_destroyed=item.is_destroyed,
+                ownership=ownership,
+                identification_level=item.identification_level,
+                properties=item.properties,
+            )
+        )
+    return tuple(restricted)

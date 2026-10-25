@@ -94,7 +94,7 @@ and capability for the requested perspective").
 import dataclasses
 import uuid
 from collections.abc import Callable
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import Depends
 from pydantic import BaseModel
@@ -474,6 +474,42 @@ def resolve_character_view_tier(access: AccessContext, *, character_id: uuid.UUI
     raise CharacterViewNotAuthorizedError(
         f"user {access.user_id} holds no character-view capability for character {character_id}"
     )
+
+
+InventoryAccess = Literal["full", "inventory_only", "none"]
+
+
+def resolve_character_inventory_access(
+    access: AccessContext, *, character_id: uuid.UUID
+) -> InventoryAccess:
+    """How much of a character's inventory the caller may read (CP-6 / DR-2). The one decision the
+    inventory endpoint and `sections.inventory` share.
+
+    - An entity-level `campaign.view` deny for the character removes the resource: `none`.
+    - `canon.edit` for this character (a GM): `full`.
+    - An explicit resource-grant deny of `character.view_inventory` wins over both relationship and
+      grant sources of the two tiers below: `none`. It does not reach `canon.edit` above, which has
+      its own deny.
+    - `character.view_full`: `full` (the existing behaviour, unchanged).
+    - `character.view_inventory`: `inventory_only` (the restricted projection; no sheet, no
+      mutation, no control).
+    - Otherwise `none`. `character.view_summary` alone grants no inventory.
+
+    Pure, like `resolve_character_view_tier`: resolved from the loaded `AccessContext`."""
+    if not access.has_capability("campaign.view", entity_id=character_id):
+        return "none"
+    if access.has_capability("canon.edit", character_id=character_id):
+        return "full"
+    if (
+        access.grant_effects.get(("character_id", character_id), {}).get("character.view_inventory")
+        == "deny"
+    ):
+        return "none"
+    if access.has_capability("character.view_full", character_id=character_id):
+        return "full"
+    if access.has_capability("character.view_inventory", character_id=character_id):
+        return "inventory_only"
+    return "none"
 
 
 # Categories whose records the World reader detail routes open for anyone who can discover them.

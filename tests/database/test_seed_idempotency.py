@@ -68,6 +68,10 @@ MIGRATIONS_DIR = REPO_ROOT / "database" / "migrations" / "versions"
 # `world_viewer` by explicit INSERT, leaving `database/seeds/security.world_roles.yaml` as
 # revision 110's frozen input. `tests/database/test_world_viewer_role_migration.py` covers the
 # added row against the migration that owns it.
+# `("security", "capabilities", "capability_id")` was here until migration 139 (CP-6): it adds
+# `character.view_inventory` by explicit INSERT, leaving `database/seeds/security.capabilities.yaml`
+# as revision 080's frozen input. `tests/database/test_inventory_capability_migration.py` covers the
+# added row against the migration that owns it.
 SEEDED_LOOKUPS = [
     ("core", "canon_statuses", "canon_status_id"),
     ("core", "lifecycle_statuses", "lifecycle_status_id"),
@@ -75,7 +79,6 @@ SEEDED_LOOKUPS = [
     ("core", "world_time_precisions", "world_time_precision_id"),
     ("security", "membership_statuses", "membership_status_id"),
     ("security", "character_relationship_types", "character_relationship_type_id"),
-    ("security", "capabilities", "capability_id"),
 ]
 
 

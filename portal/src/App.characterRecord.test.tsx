@@ -254,6 +254,70 @@ describe("Character record: what is withheld is absent, not broken", () => {
     })
 })
 
+// CP-6: a reader holding only `character.view_inventory` is offered the inventory and nothing else
+// that is full: the server says so through `sections`, and the row carries no condition.
+const INVENTORY_ONLY = { details: true, sheet: false, relationships: true, inventory: true, parties: false }
+const RESTRICTED_INVENTORY = [
+    {
+        item_instance_id: "i1",
+        name: "Longsword",
+        display_name: "Longsword",
+        item_category_code: "weapon",
+        rarity: "common",
+        quantity: 2,
+        is_equipped: true,
+        is_destroyed: false,
+        ownership: "holder",
+        identification_level: "unidentified",
+        properties: null,
+    },
+]
+
+describe("Character record: inventory-only reader", () => {
+    const installInventoryOnly = () => {
+        install(INVENTORY_ONLY)
+        server.on("GET", "/campaigns/mundivita/characters/pc-1/sheet", NOT_FOUND)
+        server.on("GET", "/campaigns/mundivita/characters/pc-1/inventory", { body: RESTRICTED_INVENTORY })
+    }
+
+    it("reaches the inventory from the row, with no sheet, no controls and no mutation", async () => {
+        installInventoryOnly()
+        openApp(SHEET, ["campaign.view"], NO_PERSPECTIVE)
+        await ready()
+        expect(rowNames()).toEqual(["Details", "Summary", "Relationships", "Inventory"])
+        fireEvent.click(sectionLink("Inventory"))
+        expect(await screen.findByText(/Longsword/)).toBeVisible()
+        expect(screen.getByText(/×2/)).toBeVisible()
+        expect(screen.getByText(/equipped/)).toBeVisible()
+        // A row without condition does not render "undefined% condition".
+        expect(screen.queryByText(/condition/)).not.toBeInTheDocument()
+        expect(screen.queryByRole("navigation", { name: "Manage character" })).not.toBeInTheDocument()
+        expect(calls("/sheet")).toHaveLength(0)
+        expect(server.calls.some((c) => c.method !== "GET")).toBe(false)
+    })
+
+    it("opens the inventory from a deep link and after a reload, never reading the sheet", async () => {
+        installInventoryOnly()
+        const first = openApp(`${SHEET}?section=inventory`, ["campaign.view"], NO_PERSPECTIVE)
+        await ready()
+        expect(await screen.findByText(/Longsword/)).toBeVisible()
+        expect(sectionLink("Inventory")).toHaveAttribute("aria-current", "page")
+        first.unmount()
+        openApp(`${SHEET}?section=inventory`, ["campaign.view"], NO_PERSPECTIVE)
+        await ready()
+        expect(await screen.findByText(/Longsword/)).toBeVisible()
+        expect(calls("/sheet")).toHaveLength(0)
+        expect(server.calls.some((c) => c.method !== "GET")).toBe(false)
+    })
+
+    it("offers Inventory on World", async () => {
+        installInventoryOnly()
+        openApp(WORLD, ["campaign.view"], NO_PERSPECTIVE)
+        await ready()
+        expect(rowNames()).toEqual(["Details", "Relationships", "Inventory"])
+    })
+})
+
 describe("Character record: inventory states stay distinct", () => {
     const open = async () => {
         openApp(`${SHEET}?section=inventory`, ["campaign.view"], NO_PERSPECTIVE)
