@@ -14,6 +14,7 @@ import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
+import { useHeldWorldCapability, WORLD_CANON_READ_PRIVATE } from "../hooks/useWorldCapability"
 import { useDefinitionsBackPath } from "../hooks/useItemsBackPath"
 import { usePageArrival } from "../hooks/usePageArrival"
 import type {
@@ -33,6 +34,12 @@ function parseAmount(value: string): number | null | undefined {
     return AMOUNT.test(trimmed) ? Number(trimmed) : undefined
 }
 
+// The catalog is the world's authoring side (drafts and homebrew in preparation), read only with the
+// world's private-read authority. A campaign-only GM still picks published definitions when creating
+// an item (the item options), which this page does not touch.
+const WORLD_ROLE_NEEDED =
+    "Item definitions are the shared world's authoring catalog, including drafts, and need a world role to read. You can still choose a published definition when you create an item; ask the world owner for a world role to manage definitions."
+
 const campaignBase = (campaignId: string): string => `/app/${encodeURIComponent(campaignId)}/item-definitions`
 
 // /app/:campaignId/item-definitions — the generic definitions of the ruleset and this world's
@@ -40,6 +47,8 @@ const campaignBase = (campaignId: string): string => `/app/${encodeURIComponent(
 export function ItemDefinitionsPage() {
     const { campaignId = "" } = useParams()
     const canEdit = useCampaignCapability(campaignId, "canon.edit")
+    const canReadPrivate = useHeldWorldCapability(campaignId, WORLD_CANON_READ_PRIVATE)
+    const allowed = canEdit && canReadPrivate
     // The filters live in the address (`?category=&homebrew=1`), so Back, a reload and a shared
     // link restore them.
     const [params, setParams] = useSearchParams()
@@ -52,8 +61,10 @@ export function ItemDefinitionsPage() {
         else next.set(key, value)
         setParams(next, { replace: true })
     }
-    const options = useAuthoringResource<ItemDefinitionOptions>(itemDefinitionOptionsPath(campaignId))
-    const list = useAuthoringResource<ItemDefinitionList>(itemDefinitionsPath(campaignId))
+    const options = useAuthoringResource<ItemDefinitionOptions>(
+        allowed ? itemDefinitionOptionsPath(campaignId) : null,
+    )
+    const list = useAuthoringResource<ItemDefinitionList>(allowed ? itemDefinitionsPath(campaignId) : null)
     const headingRef = usePageArrival(list.state.kind === "ready")
     const items =
         list.state.kind === "ready"
@@ -68,6 +79,8 @@ export function ItemDefinitionsPage() {
             </h1>
             {!canEdit ? (
                 <p role="alert">You do not have permission to edit item definitions.</p>
+            ) : !canReadPrivate ? (
+                <p role="alert">{WORLD_ROLE_NEEDED}</p>
             ) : list.state.kind === "loading" ? (
                 <p role="status">Loading…</p>
             ) : list.state.kind !== "ready" ? (
@@ -141,9 +154,13 @@ export function ItemDefinitionFormPage() {
     const { campaignId = "", definitionId } = useParams()
     const listPath = useDefinitionsBackPath(campaignId)
     const canEdit = useCampaignCapability(campaignId, "canon.edit")
-    const options = useAuthoringResource<ItemDefinitionOptions>(itemDefinitionOptionsPath(campaignId))
+    const canReadPrivate = useHeldWorldCapability(campaignId, WORLD_CANON_READ_PRIVATE)
+    const allowed = canEdit && canReadPrivate
+    const options = useAuthoringResource<ItemDefinitionOptions>(
+        allowed ? itemDefinitionOptionsPath(campaignId) : null,
+    )
     const existing = useAuthoringResource<ItemDefinition>(
-        definitionId === undefined ? null : itemDefinitionPath(campaignId, definitionId),
+        !allowed || definitionId === undefined ? null : itemDefinitionPath(campaignId, definitionId),
     )
     const ready =
         options.state.kind === "ready" && (definitionId === undefined || existing.state.kind === "ready")
@@ -169,6 +186,8 @@ export function ItemDefinitionFormPage() {
             </h1>
             {!canEdit ? (
                 <p role="alert">You do not have permission to edit item definitions.</p>
+            ) : !canReadPrivate ? (
+                <p role="alert">{WORLD_ROLE_NEEDED}</p>
             ) : options.state.kind === "loading" || (definitionId !== undefined && existing.state.kind === "loading") ? (
                 <p role="status">Loading…</p>
             ) : options.state.kind !== "ready" ||

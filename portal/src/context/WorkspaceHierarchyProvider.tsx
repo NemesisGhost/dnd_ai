@@ -45,8 +45,18 @@ export function WorkspaceHierarchyProvider({ children }: { children: ReactNode }
                 ? routeWorldId
                 : (routeCampaign?.world_id ?? null)
 
+    // GET /worlds/{id} answers only a caller with `world.view` on that world (a non-disclosing 404
+    // otherwise). A campaign route whose bootstrap already lists the caller's world capabilities
+    // without it (a campaign-only GM) would only be refused, so the read is not sent; the campaign's
+    // own context still comes from the bootstrap. A world route, and a bootstrap with no list,
+    // still ask the server.
+    const worldReadable =
+        worldMatch !== null ||
+        routeCampaign?.world_capabilities === undefined ||
+        routeCampaign.world_capabilities.includes("world.view")
+    const fetchedWorldId = worldReadable ? requestedWorldId : null
     const { state: worldState, refetch } = useAuthoringResource<WorldDetail>(
-        requestedWorldId === null ? null : worldPath(requestedWorldId),
+        fetchedWorldId === null ? null : worldPath(fetchedWorldId),
     )
 
     // Timeline options change when a page writes (for example creating a
@@ -117,7 +127,7 @@ export function WorkspaceHierarchyProvider({ children }: { children: ReactNode }
             routeNamesWorld: worldMatch !== null && routeWorldId !== null,
             routeNamesTimeline:
                 worldMatch !== null && timelineMatch !== null && routeTimelineId !== null,
-            world: requestedWorldId === null ? null : worldState,
+            world: fetchedWorldId === null ? null : worldState,
             refetchWorld: refetch,
         }
     }, [
@@ -127,6 +137,7 @@ export function WorkspaceHierarchyProvider({ children }: { children: ReactNode }
         routeCampaign,
         worldState,
         requestedWorldId,
+        fetchedWorldId,
         routeTimelineId,
         refetch,
     ])

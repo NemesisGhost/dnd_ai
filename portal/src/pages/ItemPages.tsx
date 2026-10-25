@@ -11,6 +11,7 @@ import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { pickReturnState } from "../hooks/useItemsBackPath"
 import { usePageArrival } from "../hooks/usePageArrival"
+import { useHeldWorldCapability, WORLD_CANON_READ_PRIVATE } from "../hooks/useWorldCapability"
 import type { CreateItemBody, ItemList, ItemOptions, ItemView, UpdateItemBody } from "../types/items"
 import { validateName } from "../utils/authoringValidation"
 import "../components/authoring/authoring.css"
@@ -269,6 +270,8 @@ export function ItemsPage() {
     // but any query it gains is carried).
     const here = { itemsSearch: location.search }
     const canEdit = useCampaignCapability(campaignId, "canon.edit")
+    // The definitions catalog is the world's authoring side; the link is offered only to a holder.
+    const canOpenDefinitions = useHeldWorldCapability(campaignId, WORLD_CANON_READ_PRIVATE)
     const list = useAuthoringResource<ItemList>(itemsPath(campaignId))
     const headingRef = usePageArrival(list.state.kind === "ready")
     return (
@@ -287,8 +290,13 @@ export function ItemsPage() {
                     <p>
                         <Link className="authoring-button" to={`${itemsListPath(campaignId)}/new`} state={here}>
                             New item
-                        </Link>{" "}
-                        <Link to={`/app/${encodeURIComponent(campaignId)}/item-definitions`}>Item definitions</Link>
+                        </Link>
+                        {canOpenDefinitions ? (
+                            <>
+                                {" "}
+                                <Link to={`/app/${encodeURIComponent(campaignId)}/item-definitions`}>Item definitions</Link>
+                            </>
+                        ) : null}
                     </p>
                     {list.state.data.items.length === 0 ? (
                         <p>No items yet.</p>

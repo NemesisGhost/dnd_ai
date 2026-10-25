@@ -5,6 +5,7 @@ import type {
 } from "react"
 import { Link, NavLink, useLocation } from "react-router"
 import { ChevronDown } from "lucide-react"
+import { DisabledNavItem } from "./DisabledNavItem"
 import type { LucideIcon } from "lucide-react"
 
 export interface ExpandableNavItem {
@@ -15,6 +16,9 @@ export interface ExpandableNavItem {
   // Overrides the route match, for a child whose section excludes a sibling's
   // sub-routes (Knowledge "Claims" must not stay active under Member preview).
   isActive?: (pathname: string) => boolean
+  // When set, the child is shown as the disabled-navigation entry with this neutral
+  // reason instead of a link (see DisabledNavItem).
+  unavailableReason?: string
 }
 
 interface ExpandableNavGroupProps {
@@ -168,7 +172,13 @@ export function ExpandableNavGroup({
           const active = item.isActive?.(location.pathname)
           return (
             <li key={item.to}>
-              {active !== undefined ? (
+              {item.unavailableReason !== undefined ? (
+                <DisabledNavItem
+                  label={item.label}
+                  reason={item.unavailableReason}
+                  collapsed={collapsed}
+                />
+              ) : active !== undefined ? (
                 <Link
                   ref={index === 0 ? firstItemRef : undefined}
                   className={

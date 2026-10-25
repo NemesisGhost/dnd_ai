@@ -1343,3 +1343,99 @@ describe("PortalSidebar World authoring navigation on a campaign route", () => {
         expect(nav().innerHTML).not.toContain("timeline-a")
     })
 })
+
+describe("PortalSidebar for a campaign-only GM (campaign canon.edit, no world role)", () => {
+    const WORLD = `/worlds/${first.world_id}`
+    const gm: CampaignContext = { ...first, capabilities: ["canon.edit"], world_capabilities: [] }
+    const editor: CampaignContext = {
+        ...first,
+        capabilities: ["canon.edit"],
+        world_capabilities: ["world.view", "world.canon.read", "world.canon.read_private", "world.canon.edit"],
+    }
+    const reviewer: CampaignContext = {
+        ...first,
+        capabilities: ["canon.edit"],
+        world_capabilities: ["world.view", "world.canon.read", "world.canon.read_private", "world.canon.review"],
+    }
+    const renderFor = (campaign: CampaignContext, path = "/app/campaign-a/characters") => {
+        server.on("GET", WORLD, { body: { ...worldDetail, world_id: first.world_id } })
+        return renderSidebar(path, authenticated(makeBootstrap({ campaigns: [campaign] })))
+    }
+
+    it("shows Review queue as unavailable text with its reason, not a link", () => {
+        renderFor(gm)
+        expect(within(nav()).queryByRole("link", { name: "Review queue" })).toBeNull()
+        const unavailable = within(nav()).getByText("Review queue").closest("[aria-disabled]")
+        expect(unavailable).toHaveAttribute("aria-disabled", "true")
+        expect(unavailable).toHaveAccessibleDescription("Needs a world role")
+    })
+
+    it("keeps Inventory a link and shows Definitions as unavailable", () => {
+        renderFor(gm)
+        fireEvent.click(within(nav()).getByRole("button", { name: "Items" }))
+        expect(within(nav()).getByRole("link", { name: "Inventory" })).toHaveAttribute("href", "/app/campaign-a/items")
+        expect(within(nav()).queryByRole("link", { name: "Definitions" })).toBeNull()
+        expect(within(nav()).getByText("Definitions").closest("[aria-disabled]")).toHaveAccessibleDescription(
+            "Needs a world role",
+        )
+    })
+
+    it.each([
+        ["an Editor", editor],
+        ["a Reviewer", reviewer],
+    ])("offers Review queue and Definitions as links to %s", (_name, campaign) => {
+        renderFor(campaign)
+        expect(within(nav()).getByRole("link", { name: "Review queue" })).toHaveAttribute(
+            "href",
+            "/app/campaign-a/review",
+        )
+        fireEvent.click(within(nav()).getByRole("button", { name: "Items" }))
+        expect(within(nav()).getByRole("link", { name: "Definitions" })).toHaveAttribute(
+            "href",
+            "/app/campaign-a/item-definitions",
+        )
+    })
+
+    it("does not read the world on a campaign route when the caller cannot view it", async () => {
+        renderFor(gm)
+        await new Promise((resolve) => setTimeout(resolve, 50))
+        expect(server.callsTo("GET", WORLD)).toHaveLength(0)
+        // The campaign's own context still comes from the bootstrap.
+        openWorlds()
+        expect(within(nav()).getByRole("link", { name: "Campaign world" })).toBeInTheDocument()
+    })
+
+    it("still reads the world when the caller can view it", async () => {
+        renderFor(editor)
+        await waitFor(() => expect(server.callsTo("GET", WORLD)).toHaveLength(1))
+    })
+
+    it("still asks the server on a world route, and when the bootstrap carries no list", async () => {
+        const noList: CampaignContext = { ...first, capabilities: ["canon.edit"] }
+        delete (noList as { world_capabilities?: unknown }).world_capabilities
+        renderFor(noList)
+        await waitFor(() => expect(server.callsTo("GET", WORLD)).toHaveLength(1))
+    })
+
+    it("reads the world on an explicit world route even for a campaign-only GM", async () => {
+        server.on("GET", "/worlds/world-a", { body: worldDetail })
+        renderSidebar(
+            "/worlds/world-a",
+            authenticated(makeBootstrap({ campaigns: [{ ...gm, world_id: "world-a" }] })),
+        )
+        await waitFor(() => expect(server.callsTo("GET", "/worlds/world-a")).toHaveLength(1))
+    })
+
+    it("follows a change of campaign: the other campaign's world is read only when viewable", async () => {
+        const other: CampaignContext = { ...editor, campaign_id: "campaign-b", world_id: "world-b" }
+        server.on("GET", "/worlds/world-b", { body: { ...worldDetail, world_id: "world-b" } })
+        const view = renderSidebar("/app/campaign-a/characters", authenticated(makeBootstrap({ campaigns: [gm, other] })))
+        await new Promise((resolve) => setTimeout(resolve, 50))
+        expect(server.callsTo("GET", WORLD)).toHaveLength(0)
+        view.unmount()
+        renderSidebar("/app/campaign-b/characters", authenticated(makeBootstrap({ campaigns: [gm, other] })))
+        await waitFor(() => expect(server.callsTo("GET", "/worlds/world-b")).toHaveLength(1))
+        expect(server.callsTo("GET", WORLD)).toHaveLength(0)
+    })
+})
+

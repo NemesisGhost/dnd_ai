@@ -415,3 +415,67 @@ describe("RevisionHistoryPage", () => {
         expect(server.calls).toHaveLength(0)
     })
 })
+
+describe("The review queue and history without the world's private-read authority", () => {
+    // A campaign-only GM: canon.edit on the campaign, no role on the world.
+    function setupWithWorld(worldCapabilities: string[], entry: string) {
+        const server = installMockServer()
+        server.on("GET", /.*/, { status: 403, body: { error: { code: "world_authority_required", message: "m", correlation_id: "x" } } })
+        server.on("GET", `${QUEUE}?status=in_review`, { body: page([row("e1", "Stonebridge")]) })
+        const view = renderAuthoringRoutes({
+            initialEntry: entry,
+            bootstrap: bootstrapWith({
+                campaigns: [
+                    {
+                        ...sessionBootstrapFixture.campaigns[0]!,
+                        campaign_id: "c1",
+                        capabilities: ["canon.edit"],
+                        world_capabilities: worldCapabilities,
+                    },
+                ],
+            }),
+            routes: [
+                { path: "/app/:campaignId/review", element: <ReviewQueuePage /> },
+                { path: "/app/:campaignId/world/:category/:entityId/history", element: <RevisionHistoryPage /> },
+            ],
+        })
+        return { server, ...view }
+    }
+
+    it("explains why on a direct visit, offers no retry and sends no request", async () => {
+        const { server } = setupWithWorld(["world.canon.read"], "/app/c1/review")
+        expect(await screen.findByRole("heading", { level: 1, name: "Review queue" })).toBeInTheDocument()
+        expect(screen.getByRole("alert")).toHaveTextContent(/need a world role to read/)
+        expect(screen.queryByRole("button", { name: "Try again" })).toBeNull()
+        expect(screen.queryByText(/could not be loaded/)).toBeNull()
+        await new Promise((resolve) => setTimeout(resolve, 50))
+        expect(server.calls).toEqual([])
+    })
+
+    it("explains the history of a record the same way, without a request", async () => {
+        const { server } = setupWithWorld([], "/app/c1/world/location/e1/history")
+        expect(await screen.findByRole("heading", { level: 1, name: "Revision history" })).toBeInTheDocument()
+        expect(screen.getByRole("alert")).toHaveTextContent(/needs a world role/)
+        await new Promise((resolve) => setTimeout(resolve, 50))
+        expect(server.calls).toEqual([])
+    })
+
+    it("still opens the queue for a Reviewer, who reads the private side but cannot edit", async () => {
+        const { server } = setupWithWorld(["world.view", "world.canon.read", "world.canon.read_private", "world.canon.review"], "/app/c1/review")
+        expect(await screen.findByRole("link", { name: "Stonebridge" })).toBeInTheDocument()
+        expect(server.callsTo("GET", `${QUEUE}?status=in_review`)).toHaveLength(1)
+    })
+
+    it("says plainly that someone without canon.edit may not review", async () => {
+        const server = installMockServer()
+        renderAuthoringRoutes({
+            initialEntry: "/app/c1/review",
+            bootstrap: bootstrapWith({
+                campaigns: [{ ...sessionBootstrapFixture.campaigns[0]!, campaign_id: "c1", capabilities: [] }],
+            }),
+            routes: [{ path: "/app/:campaignId/review", element: <ReviewQueuePage /> }],
+        })
+        expect(await screen.findByRole("alert")).toHaveTextContent("You do not have permission to review records.")
+        expect(server.calls).toEqual([])
+    })
+})

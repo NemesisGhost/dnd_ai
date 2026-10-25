@@ -28,7 +28,7 @@ import { CampaignHomeNavGroup } from "./CampaignHomeNavGroup"
 import { DisabledNavItem } from "./DisabledNavItem"
 import { ItemsNavGroup } from "./ItemsNavGroup"
 import { KnowledgeNavGroup } from "./KnowledgeNavGroup"
-import { SELECT_CAMPAIGN_FIRST } from "./navigationReasons"
+import { NEEDS_WORLD_ROLE, SELECT_CAMPAIGN_FIRST } from "./navigationReasons"
 import { WorldsNavGroup } from "./WorldsNavGroup"
 
 interface NavigationItem {
@@ -37,6 +37,9 @@ interface NavigationItem {
   icon: LucideIcon
   // Shown only on a campaign that grants this capability.
   capability?: string
+  // Offered as a link only where the caller also holds this capability on the campaign's world
+  // (the bootstrap's server-computed list); otherwise shown as unavailable, never requested.
+  worldCapability?: string
 }
 
 // Campaign Home is rendered by CampaignHomeNavGroup; the campaign world page
@@ -52,6 +55,7 @@ const campaignNavigationItems: NavigationItem[] = [
     label: "Review queue",
     icon: ClipboardCheck,
     capability: "canon.edit",
+    worldCapability: "world.canon.read_private",
   },
   {
     path: "items",
@@ -195,6 +199,11 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
   const campaignPath =
     resolvedCampaign === null ? null : `/app/${resolvedCampaign.campaign_id}`
 
+  // The caller's world capabilities for the campaign the links point at, from the bootstrap
+  // (server-computed). Fails closed: no list, no link to a page that would only be refused.
+  const worldRoleHas = (capability: string): boolean =>
+    resolvedCampaign?.world_capabilities?.includes(capability) === true
+
   const toggleLabel = collapsed ? "Expand navigation" : "Collapse navigation"
   const CollapseIcon = collapsed ? PanelLeftOpen : PanelLeftClose
 
@@ -306,6 +315,7 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
                       key={item.path}
                       campaignPath={campaignPath}
                       collapsed={collapsed}
+                      canOpenDefinitions={worldRoleHas("world.canon.read_private")}
                       onNavigate={close}
                     />
                   )
@@ -317,6 +327,14 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
                         icon={Icon}
                         label={item.label}
                         reason={SELECT_CAMPAIGN_FIRST}
+                        collapsed={collapsed}
+                      />
+                    ) : item.worldCapability !== undefined &&
+                      !worldRoleHas(item.worldCapability) ? (
+                      <DisabledNavItem
+                        icon={Icon}
+                        label={item.label}
+                        reason={NEEDS_WORLD_ROLE}
                         collapsed={collapsed}
                       />
                     ) : (

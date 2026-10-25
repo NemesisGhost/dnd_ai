@@ -1,10 +1,14 @@
 import { Package } from "lucide-react"
 import { useLocation } from "react-router"
 import { ExpandableNavGroup } from "./ExpandableNavGroup"
+import { NEEDS_WORLD_ROLE } from "./navigationReasons"
 
 interface ItemsNavGroupProps {
   campaignPath: string
   collapsed: boolean
+  // Whether the caller may read the world's private authoring catalog (the definitions list holds
+  // drafts); Inventory is the campaign's own and stays available.
+  canOpenDefinitions: boolean
   onNavigate: () => void
 }
 
@@ -15,7 +19,7 @@ const under = (pathname: string, base: string): boolean =>
 // workspace) and "Definitions" (the reusable kinds of item). Shown only where the person can edit
 // canon (the capability the server checks). The selection follows the address alone: an item
 // opened from the World page lies under the Worlds group, never here.
-export function ItemsNavGroup({ campaignPath, collapsed, onNavigate }: ItemsNavGroupProps) {
+export function ItemsNavGroup({ campaignPath, collapsed, canOpenDefinitions, onNavigate }: ItemsNavGroupProps) {
   const { pathname } = useLocation()
   const inventory = `${campaignPath}/items`
   const definitions = `${campaignPath}/item-definitions`
@@ -31,7 +35,12 @@ export function ItemsNavGroup({ campaignPath, collapsed, onNavigate }: ItemsNavG
       onNavigate={onNavigate}
       items={[
         { to: inventory, label: "Inventory", isActive: () => inInventory },
-        { to: definitions, label: "Definitions", isActive: () => inDefinitions },
+        {
+          to: definitions,
+          label: "Definitions",
+          isActive: () => inDefinitions,
+          unavailableReason: canOpenDefinitions ? undefined : NEEDS_WORLD_ROLE,
+        },
       ]}
     />
   )

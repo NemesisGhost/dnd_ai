@@ -56,7 +56,7 @@ afterEach(() => {
     vi.unstubAllGlobals()
 })
 
-function render(entry: string, capabilities = ["canon.edit"]) {
+function render(entry: string, capabilities = ["canon.edit"], worldCapabilities?: string[]) {
     const server = installMockServer()
     server.on("GET", `${BASE}/options`, { body: OPTIONS })
     server.on("GET", BASE, {
@@ -91,7 +91,14 @@ function render(entry: string, capabilities = ["canon.edit"]) {
     renderAuthoringRoutes({
         initialEntry: entry,
         bootstrap: bootstrapWith({
-            campaigns: [{ ...sessionBootstrapFixture.campaigns[0]!, campaign_id: "c1", capabilities }],
+            campaigns: [
+                {
+                    ...sessionBootstrapFixture.campaigns[0]!,
+                    campaign_id: "c1",
+                    capabilities,
+                    ...(worldCapabilities === undefined ? {} : { world_capabilities: worldCapabilities }),
+                },
+            ],
         }),
         routes: [
             { path: "/app/:campaignId/items", element: <ItemsPage /> },
@@ -120,6 +127,14 @@ describe("ItemsPage", () => {
         expect(screen.getByRole("link", { name: "New item" })).toHaveAttribute("href", "/app/c1/items/new")
     })
 
+    it("for a campaign-only GM keeps the inventory but does not offer the authoring catalog", async () => {
+        const server = render("/app/c1/items", ["canon.edit"], ["world.view", "world.canon.read"])
+        expect(await screen.findByRole("link", { name: "Moonblade" })).toBeInTheDocument()
+        expect(screen.getByRole("link", { name: "New item" })).toBeInTheDocument()
+        expect(screen.queryByRole("link", { name: "Item definitions" })).toBeNull()
+        expect(server.calls.filter((c) => c.path.includes("item-definitions"))).toEqual([])
+    })
+
     it("refuses people without canon.edit", async () => {
         render("/app/c1/items", [])
         expect(await screen.findByRole("alert")).toHaveTextContent(/do not have permission/)
@@ -143,6 +158,16 @@ describe("CreateItemPage", () => {
         })
         // The new draft opens in the item workspace, on its details.
         expect(await screen.findByText("Item workspace")).toBeInTheDocument()
+    })
+
+    it("lets a campaign-only GM pick a published definition without reading the authoring catalog", async () => {
+        const server = render("/app/c1/items/new", ["canon.edit"], ["world.view", "world.canon.read"])
+        fireEvent.change(await screen.findByRole("textbox", { name: /Name/ }), { target: { value: "Sunblade" } })
+        expect(screen.getByRole("combobox", { name: /Kind of item/ })).toHaveTextContent("Longsword (Weapon)")
+        fireEvent.change(screen.getByRole("combobox", { name: /Kind of item/ }), { target: { value: "d1" } })
+        fireEvent.click(screen.getByRole("button", { name: "Create item" }))
+        await vi.waitFor(() => expect(server.callsTo("POST", BASE)).toHaveLength(1))
+        expect(server.calls.filter((c) => c.path.includes("item-definitions"))).toEqual([])
     })
 
     it("needs a name and a kind of item", async () => {

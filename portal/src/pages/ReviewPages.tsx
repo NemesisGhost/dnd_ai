@@ -6,6 +6,7 @@ import { LifecycleBadge } from "../components/authoring/feedback"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { usePageArrival } from "../hooks/usePageArrival"
+import { useHeldWorldCapability, WORLD_CANON_READ_PRIVATE } from "../hooks/useWorldCapability"
 import type {
     ReviewQueue,
     ReviewRow,
@@ -62,16 +63,23 @@ const EMPTY_COPY: Record<string, string> = {
 export function ReviewQueuePage() {
     const { campaignId = "" } = useParams()
     const canEdit = useCampaignCapability(campaignId, "canon.edit")
+    // The queue is the shared world's drafts and work in progress, which the server reads only for
+    // a holder of the world's private-read authority. Without it nothing is requested.
+    const canReadPrivate = useHeldWorldCapability(campaignId, WORLD_CANON_READ_PRIVATE)
     return (
         <section className="authoring-page" aria-labelledby="review-heading">
-            {canEdit ? (
+            {canEdit && canReadPrivate ? (
                 <Queue campaignId={campaignId} />
             ) : (
                 <>
                     <h1 id="review-heading" tabIndex={-1}>
                         Review queue
                     </h1>
-                    <p role="alert">You do not have permission to review records.</p>
+                    <p role="alert">
+                        {canEdit
+                            ? "The review queue lists the shared world's drafts and work in progress, which need a world role to read. You can still use the published records in this campaign; ask the world owner for a world role to review."
+                            : "You do not have permission to review records."}
+                    </p>
                 </>
             )}
         </section>
@@ -308,16 +316,21 @@ function QueueList({
 export function RevisionHistoryPage() {
     const { campaignId = "" } = useParams()
     const canEdit = useCampaignCapability(campaignId, "canon.edit")
+    const canReadPrivate = useHeldWorldCapability(campaignId, WORLD_CANON_READ_PRIVATE)
     return (
         <section className="authoring-page" aria-labelledby="history-heading">
-            {canEdit ? (
+            {canEdit && canReadPrivate ? (
                 <LoadedHistory />
             ) : (
                 <>
                     <h1 id="history-heading" tabIndex={-1}>
                         Revision history
                     </h1>
-                    <p role="alert">You do not have permission to see the history of this record.</p>
+                    <p role="alert">
+                        {canEdit
+                            ? "A record's revision history is part of the shared world's private side and needs a world role to read. Ask the world owner for a world role."
+                            : "You do not have permission to see the history of this record."}
+                    </p>
                 </>
             )}
         </section>

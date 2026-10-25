@@ -194,3 +194,66 @@ describe("ItemDefinitionFormPage", () => {
         expect(screen.queryByRole("form", { name: "Item definition" })).not.toBeInTheDocument()
     })
 })
+
+describe("Item definitions without the world's private-read authority", () => {
+    function renderWithout(entry: string, worldCapabilities: string[]) {
+        const server = installMockServer()
+        server.on("GET", /.*/, { status: 403, body: { error: { code: "world_authority_required", message: "m", correlation_id: "x" } } })
+        renderAuthoringRoutes({
+            initialEntry: entry,
+            bootstrap: bootstrapWith({
+                campaigns: [
+                    {
+                        ...sessionBootstrapFixture.campaigns[0]!,
+                        campaign_id: "c1",
+                        capabilities: ["canon.edit"],
+                        world_capabilities: worldCapabilities,
+                    },
+                ],
+            }),
+            routes: [
+                { path: "/app/:campaignId/item-definitions", element: <ItemDefinitionsPage /> },
+                { path: "/app/:campaignId/item-definitions/new", element: <ItemDefinitionFormPage /> },
+                { path: "/app/:campaignId/item-definitions/:definitionId", element: <ItemDefinitionFormPage /> },
+            ],
+        })
+        return server
+    }
+
+    it.each([
+        ["the catalog", "/app/c1/item-definitions"],
+        ["a new definition", "/app/c1/item-definitions/new"],
+        ["an existing definition", "/app/c1/item-definitions/d1"],
+    ])("explains %s is for world-role holders and requests nothing", async (_name, entry) => {
+        const server = renderWithout(entry, ["world.view", "world.canon.read"])
+        const alert = await screen.findByRole("alert")
+        expect(alert).toHaveTextContent(/authoring catalog, including drafts, and need a world role/)
+        expect(alert).toHaveTextContent(/choose a published definition when you create an item/)
+        expect(screen.queryByText(/could not be loaded/)).toBeNull()
+        expect(screen.queryByRole("link", { name: "New item definition" })).toBeNull()
+        await new Promise((resolve) => setTimeout(resolve, 50))
+        expect(server.calls).toEqual([])
+    })
+
+    it("still loads the catalog for a holder of the private-read authority", async () => {
+        const server = installMockServer()
+        server.on("GET", `${BASE}/options`, { body: OPTIONS })
+        server.on("GET", BASE, { body: { items: [GENERIC, definition()] } })
+        renderAuthoringRoutes({
+            initialEntry: "/app/c1/item-definitions",
+            bootstrap: bootstrapWith({
+                campaigns: [
+                    {
+                        ...sessionBootstrapFixture.campaigns[0]!,
+                        campaign_id: "c1",
+                        capabilities: ["canon.edit"],
+                        world_capabilities: ["world.view", "world.canon.read", "world.canon.read_private", "world.canon.review"],
+                    },
+                ],
+            }),
+            routes: [{ path: "/app/:campaignId/item-definitions", element: <ItemDefinitionsPage /> }],
+        })
+        expect(await screen.findByRole("link", { name: "Edit Moonblade" })).toBeInTheDocument()
+        expect(server.callsTo("GET", BASE)).toHaveLength(1)
+    })
+})
