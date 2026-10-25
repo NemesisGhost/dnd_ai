@@ -28,6 +28,9 @@ const WORLD = (actions: string[], id = "w1") => ({
 
 const RECEIPT = { status: 201, body: { calendar_id: "cal-1", created: true, changed: true } }
 
+// The router of the page under test, so `ready()` can wait for the address to settle.
+let routerInUse: { state: { location: { search: string } } } | null = null
+
 function setup(actions: string[] = ["update", "create_calendar"], entry = "/worlds/w1/calendars/new") {
     const server = installMockServer()
     server.on("GET", WORLD_PATH, { body: WORLD(actions) })
@@ -39,6 +42,7 @@ function setup(actions: string[] = ["update", "create_calendar"], entry = "/worl
             { path: "/worlds/:worldId", element: <p>World overview page</p> },
         ],
     })
+    routerInUse = rendered.router
     return { server, ...rendered }
 }
 
@@ -50,6 +54,10 @@ afterEach(() => {
 
 async function ready() {
     await screen.findByRole("navigation", { name: "New calendar workflow" })
+    // The page rewrites a bare address to its step with a replace navigation. A step link clicked
+    // before that has settled is not what the person does (the address is there before they can
+    // click), so wait for it rather than race it.
+    await waitFor(() => expect(routerInUse?.state.location.search).toMatch(/section=(basics|months|review)/))
 }
 // Router navigation resolves asynchronously, so a step is reached once its heading shows.
 async function go(label: string, heading: string) {

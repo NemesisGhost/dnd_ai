@@ -107,7 +107,10 @@ describe("ContentEditPage when the right to edit is lost", () => {
         expect(panel).toHaveTextContent("You no longer have permission to edit this thing")
         expect(panel).toHaveTextContent("Founders' Hall")
         // The Save button that had focus is gone: focus is on the explanation, not the page body.
-        expect(within(panel).getByRole("heading", { name: /no longer have permission/ })).toHaveFocus()
+        // (Focus is moved by the panel's own effect after it appears, so wait for it.)
+        await waitFor(() =>
+            expect(within(panel).getByRole("heading", { name: /no longer have permission/ })).toHaveFocus(),
+        )
         // The record the server sent in its private read is not preserved as an "unsaved draft".
         expect(screen.queryByText(new RegExp(SECRET))).toBeNull()
         expect(screen.queryByDisplayValue(SECRET)).toBeNull()

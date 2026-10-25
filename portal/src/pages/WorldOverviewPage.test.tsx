@@ -167,7 +167,8 @@ describe("WorldOverviewPage", () => {
         expect(post!.headers["X-CSRF-Token"]).toBe(TEST_CSRF)
         expect(post!.body).toEqual({ expected_row_version: 3, reason: "season over" })
         expect(screen.getByTestId("authoring-announcer")).toHaveTextContent("World archived")
-        expect(screen.queryByRole("dialog", { hidden: false })).not.toBeInTheDocument()
+        // The dialog closes after the confirmed change is shown, not at the same instant.
+        await waitFor(() => expect(screen.queryByRole("dialog", { hidden: false })).not.toBeInTheDocument())
     })
 
     it("keeps a failed archive inside the dialog with a recoverable message", async () => {
