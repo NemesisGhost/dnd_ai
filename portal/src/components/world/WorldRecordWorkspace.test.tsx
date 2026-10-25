@@ -1216,6 +1216,11 @@ describe("World record workspace: Check my access again", () => {
         fireEvent.click(within(form).getByRole("button", { name: "Add area" }))
         const panel = await screen.findByRole("region", { name: "Permission lost" })
         expect(panel).toHaveTextContent("Shrine of Ash")
+        // The panel takes focus on its heading in an effect after it appears; let that happen before
+        // a test moves focus itself, or it can land on the heading afterwards.
+        await waitFor(() => expect(within(panel).getByRole("heading", { level: 2, name: /no longer have permission/ })).toHaveFocus())
+        // The section that fell back to Details because Areas was withdrawn did not pull focus away.
+        expect(document.getElementById("world-section-details-heading")).not.toHaveFocus()
         return { ...rendered, panel }
     }
     const recheckButton = () => screen.getByRole("button", { name: "Check my access again" })

@@ -431,13 +431,19 @@ function Workspace({
 
     // Move focus to the section heading when the section changes after arrival (a link, Back or
     // Forward), so a keyboard or screen reader user lands on the new content.
+    // A section that stops being the caller's (a refused private command withdraws it) falls back to
+    // another without the person asking; focus stays where they are, as the panel that explains the
+    // loss and its button take it themselves.
     const lastSection = useRef(nav.section)
     useEffect(() => {
         if (lastSection.current !== nav.section) {
+            const previous = lastSection.current
             lastSection.current = nav.section
-            document.getElementById(worldHeadingId(nav.section))?.focus()
+            if (sections.some((section) => section.key === previous)) {
+                document.getElementById(worldHeadingId(nav.section))?.focus()
+            }
         }
-    }, [nav.section])
+    }, [nav.section, sections])
 
     // What is typed and not sent, by reporter, for the page's one guard.
     const [unsentBy, setUnsentBy] = useState<Record<string, string[]>>({})
