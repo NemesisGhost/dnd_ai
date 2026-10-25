@@ -836,6 +836,8 @@ Clergy office and organizational rank remain organization memberships.
 - **Organization membership** (§10.2) is a specialized relationship (a Membership) between an entity and an organization; the portal manages it in the organization's *Members and offices*.
 - **Party membership** is timeline state with events, not a relationship: a party is not an entity.
 
+**Character access tiers and sections.** Character access resolves to two reading tiers for one character: the *summary* tier (`character.view_summary`: the audience-safe record and its relationships) and the *full* tier (`canon.edit`, or `character.view_full` from a role, a character relationship or a resource grant; the owner, a controller, a portrayer or a direct grantee all reach it this way). An explicit deny of a capability for that character, a revoked or ended relationship, and an entity-level `campaign.view` deny remove what they cover; a character of another world or timeline does not exist for the caller. The character read reports which reader **sections** the caller may open (`sections`: details, sheet, relationships, inventory, parties), computed with the same checks as the endpoint behind each one: the sheet and the inventory need the full tier, the details and relationships either tier, and the parties `character.view_knowledge` for that character. The flags only decide which links a client offers; every section endpoint still authorizes its own request. Reading a character never selects it as a perspective and grants nothing.
+
 ### 11.1 Relationship
 
 A **Relationship** connects two or more entities through a meaningful association.

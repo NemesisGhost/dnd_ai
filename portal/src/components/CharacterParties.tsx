@@ -6,6 +6,8 @@ import type { CharacterParties as CharacterPartiesData } from "../types/parties"
 interface CharacterPartiesProps {
   campaignId: string
   characterId: string
+  // Show the list expanded, for a page that supplies its own Parties heading.
+  open?: boolean
 }
 
 // The selected character's party memberships, as a collapsed "Parties (N)" disclosure under the
@@ -19,7 +21,7 @@ interface CharacterPartiesProps {
 // the disclosure starts collapsed for each character.
 // Loading, a failed load and a loaded empty list are three different things, and an unavailable
 // list (not found or not permitted, indistinguishable by design) says nothing about parties.
-export function CharacterParties({ campaignId, characterId }: CharacterPartiesProps) {
+export function CharacterParties({ campaignId, characterId, open }: CharacterPartiesProps) {
   const { state, refetch } = useAuthoringResource<CharacterPartiesData>(
     characterPartiesPath(campaignId, characterId),
   )
@@ -49,7 +51,7 @@ export function CharacterParties({ campaignId, characterId }: CharacterPartiesPr
 
   const { items, can_open: canOpen } = state.data
   return (
-    <details className="campaign-context-panel__parties">
+    <details className="campaign-context-panel__parties" open={open}>
       <summary>Parties ({items.length})</summary>
       {items.length === 0 ? (
         <p className="campaign-context-panel__note">No party memberships.</p>

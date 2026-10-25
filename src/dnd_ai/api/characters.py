@@ -176,10 +176,24 @@ class CharacterResourceResponse(BaseModel):
     maximum_amount: int
 
 
+class CharacterSectionsResponse(BaseModel):
+    """Which of the character's reader sections the caller may open, decided by the server with the
+    same checks as the endpoint behind each one. They only decide which links the portal offers:
+    every section endpoint still authorizes its own request, and a section reported `False` here
+    answers the same fixed 404/403 it always did."""
+
+    details: bool
+    sheet: bool
+    relationships: bool
+    inventory: bool
+    parties: bool
+
+
 class CharacterResponse(BaseModel):
     # What the caller may do to this character's definition, resolved by the server (an NPC is
     # shared world canon; player-character identity is campaign-originated).
     authoring: RecordAuthoringResponse
+    sections: CharacterSectionsResponse
     character_id: uuid.UUID
     name: str
     # `npc`, `player_character`, or `character` (a bare character row). Not new
@@ -398,6 +412,25 @@ def _require_published_character(
         raise NotFoundError()
 
 
+def character_sections(
+    access: AccessContext, *, character_id: uuid.UUID, include_full: bool
+) -> CharacterSectionsResponse:
+    """The section eligibility of a character the caller has already been allowed to read (the
+    entity-level `campaign.view` deny and the published-character check have passed, and
+    `include_full` is `resolve_character_view_tier`'s answer). Each flag repeats the test its own
+    endpoint applies after those shared checks: the sheet and the inventory need the full tier
+    (the summary tier alone is refused), the relationships need either tier (the page itself),
+    and the parties need `character.view_knowledge` for this character. The agreement tests hold
+    these to the endpoints."""
+    return CharacterSectionsResponse(
+        details=True,
+        sheet=include_full,
+        relationships=True,
+        inventory=include_full,
+        parties=access.has_capability("character.view_knowledge", character_id=character_id),
+    )
+
+
 @router.get(
     "/campaigns/{campaign_id}/characters/{character_id}",
     response_model=CharacterResponse,
@@ -464,6 +497,7 @@ def get_character_endpoint(
         authoring=record_authoring_response(
             connection, access=access, entity_type_code=view.character_kind
         ),
+        sections=character_sections(access, character_id=character_id, include_full=include_full),
         character_id=view.character_id,
         name=view.name,
         character_kind=view.character_kind,  # type: ignore[arg-type]

@@ -8,7 +8,7 @@ import {
     fetchReligionDetail,
 } from "../api/world"
 import { CharacterBoundary } from "../components/CharacterBoundary"
-import { CharacterInventoryPanel } from "../components/InventoryPanels"
+import { CharacterRecordSections } from "../components/characters/CharacterRecordNav"
 import { ItemWorkspace } from "../components/items/ItemWorkspace"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { WorldRecordWorkspace } from "../components/world/WorldRecordWorkspace"
@@ -147,7 +147,9 @@ export function CampaignWorldDetailPage() {
 
     // category === "character": the audience-safe Character Detail
     // response, never the full Character Sheet — a World card is not the
-    // selected player-character perspective (UI_STYLE_GUIDE.md §10.2).
+    // selected player-character perspective (UI_STYLE_GUIDE.md §10.2). The same record navigation
+    // as the Characters page offers the sheet, relationships, inventory and parties this caller may
+    // open.
     return (
         <CharacterBoundary campaignId={campaignId} characterId={entityId}>
             {(character) => (
@@ -155,8 +157,13 @@ export function CampaignWorldDetailPage() {
                     <p>
                         <Link to={worldBackPath}>Back to World</Link>
                     </p>
-                    <CharacterDetailPage character={character} />
-                    <CharacterInventoryPanel campaignId={campaignId} characterId={entityId} />
+                    <CharacterRecordSections
+                        campaignId={campaignId}
+                        characterId={entityId}
+                        character={character}
+                        route="world"
+                        main={<CharacterDetailPage character={character} />}
+                    />
                 </div>
             )}
         </CharacterBoundary>
