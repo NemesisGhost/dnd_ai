@@ -1,5 +1,7 @@
 # Phase 15 Manual Acceptance
 
+Detailed, account-specific GIVEN/WHEN/THEN steps are in [Phase 14 and 15 manual testing guide](PHASE14_15_MANUAL_TESTING.md). That guide records the inspected dev dataset, isolated test setup, fresh fixture dependencies, recent branch regressions, and the separate clean-deployment exit walkthrough. Use it to execute this matrix; its creation does not sign off any result below.
+
 This is the manual acceptance matrix for Phase 15 (checkpoint 15.4, plan item 20). **It is blank on purpose: every result below must be recorded by the owner (or a person the owner names) using a real browser and assistive technology.** Automated tests cannot stand in for it. The implementation notes in [PHASE15_VERIFICATION.md](PHASE15_VERIFICATION.md) list, checkpoint by checkpoint, what each page needs checked; this file turns those into one pass.
 
 **Phase 15 is not complete until this matrix is filled in, each failure is fixed or accepted by the owner in writing, and a CI run on the final head is green.**
@@ -125,8 +127,6 @@ Use a throwaway database and the 8001/5174 servers. Not run yet; every result is
 | Standalone: the NPC "Run this NPC" move still records an unlinked event and does not appear in any session | | |
 | Desktop and 390px widths, each supported theme, keyboard-only use of the new fields (time, notes, party, preview), screen-reader announcement of the saved journey | | |
 
-## Summary (fill in last)
-
 ## Character Relationships (player-facing, read-only)
 
 Use a throwaway database and your own ports. GM fixture: a player character Aria linked to a player; relationships with Ser Bran (family, Parent/Child), a guild membership (office and rank), an ended employment, a not-yet-started worship, a private ownership and an archived alliance; a second NPC with no player path. Give the player a view-summary path to Ser Bran in Access and set the campaign clock.
@@ -155,6 +155,8 @@ Use a throwaway database and your own ports. GM fixture: a published government 
 | A second player with no relationship to the character does not see it; after the GM gives them a viewer relationship to the NPC, the NPC appears | | |
 | As the GM, the workspace's Members and offices still lists every stint with the visibility column, **Add a member**, **Edit** and **Set status**, and saving works; no second roster appears | | |
 | Desktop and 390px widths, each supported theme, keyboard order of the member links, badges read as text, loading announced (`status`) and failure announced (`alert`) | | |
+
+## Summary (fill in last)
 
 | | |
 |---|---|

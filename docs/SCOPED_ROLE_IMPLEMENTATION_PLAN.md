@@ -100,7 +100,7 @@ No production deployment exists: [ADR 0013](adr/0013-locally-host-production-on-
 
 ### 2.9 Findings motivating this work (graded)
 
-These are graded with the owner's production issue grading rubric (`.tmp/issue-grading-rubric(2).md`, not committed). The factors are production exposure 0–3, impact 0–3, triggerability 0–2, detection/recovery 0–1 and blast radius 0–1. The bands are 9–10 Critical, 7–8 High, 4–6 Medium, 1–3 Low and 0 Informational.
+These are graded with the owner's production issue grading rubric ([ISSUE_GRADING_RUBRIC.md](ISSUE_GRADING_RUBRIC.md)). The factors are production exposure 0–3, impact 0–3, triggerability 0–2, detection/recovery 0–1 and blast radius 0–1. The bands are 9–10 Critical, 7–8 High, 4–6 Medium, 1–3 Low and 0 Informational.
 
 **Environment and deployment-path basis (applies to every finding).** No production deployment exists today (§2.8). The rubric scores a future path only with evidence that the code will run in production. That evidence exists here: the affected code is the shipping authorization path of the API and portal, ADR 0013 (accepted) designates the self-hosted mini-PC as the production target, and Phase 17 packages exactly these services for it. Each finding is therefore scored for that planned self-hosted, single-instance deployment, with no assumed concurrency or scale. These are application authorization paths, not migrations, so no upgrade path is crossed. The rubric's rule against lowering a score for code that "establishes a production security boundary" applies to F1, F2 and F4. No severity is elevated beyond its numeric band.
 
@@ -625,7 +625,7 @@ No new harness or fault-injection work is planned (PLAN §24.1 proportionality).
 | Q7 | Reader browse surface now or later? | Now | SR-7 |
 | Q9 | Accept exceptions E1–E3? | Yes | D8 |
 | Q10 | Land between the Phase 15 merge and the start of Phase 16? | Yes | §12.6 |
-| Q14 | Severity bands for §2.9 | Use the owner's rubric (`.tmp/issue-grading-rubric(2).md`) | §2.9 |
+| Q14 | Severity bands for §2.9 | Use the owner's rubric ([ISSUE_GRADING_RUBRIC.md](ISSUE_GRADING_RUBRIC.md)) | §2.9 |
 
 Q3 (assignment-time vs continuous GM checks) no longer applies to campaign roles. For world management, the Q4 decision makes the check continuous (D11).
 

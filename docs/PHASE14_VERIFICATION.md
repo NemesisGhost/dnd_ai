@@ -1,5 +1,7 @@
 # Phase 14 Verification
 
+The outstanding navigation/hierarchy manual pass now has detailed steps in [Phase 14 and 15 manual testing guide](PHASE14_15_MANUAL_TESTING.md) (especially TC-01–04 and TC-55). Manual results remain pending until executed and recorded.
+
 Evidence for Phase 14 (shared authoring kernel and campaign setup) on branch `phase14/authoring-kernel`, recorded against [PLAN.md Phase 14](PLAN.md) and [ADR 0014](adr/0014-world-authoring-authority.md). **Status: complete.** Merged as PR #64 (`3046714`); final-head CI run `37227612984` was green. Manual browser verification of the navigation/hierarchy correction is still pending and is carried into the Phase 15 manual matrix (not a Phase 15 gate).
 
 ## What was delivered
