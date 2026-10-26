@@ -5,6 +5,7 @@ import { entityLifecyclePath, runEntityAction } from "../api/entityLifecycle"
 import { useSession } from "../context/SessionContext"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
+import type { RefreshOutcome } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import type {
     EntityLifecycleView,
@@ -173,7 +174,10 @@ interface PanelProps {
     campaignId: string
     view: EntityLifecycleView
     refetch: () => Promise<unknown>
-    onChanged?: () => void
+    // Called after a transition, once the record is read again. A caller that reads more than the
+    // record (a claim's detail) may return what those reads did: anything but "ok" means the
+    // change is confirmed but the page is behind, so the transition is not announced as done.
+    onChanged?: () => void | Promise<RefreshOutcome>
     // Set while the page holds unsaved edits to the record: every action then asks first, and says
     // the edits are not part of the change.
     unsavedEdits?: boolean
@@ -244,8 +248,9 @@ function useLifecycleActions({
                 return
             }
             await refetch()
-            onChanged?.()
-            announce(message)
+            const read = await onChanged?.()
+            if (read === undefined || read === "ok") announce(message)
+            return read
         },
     })
 
@@ -297,7 +302,7 @@ function useLifecycleActions({
                         onClick={() => {
                             mutation.reset()
                             setAction(null)
-                            void refetch().then(() => onChanged?.())
+                            void refetch().then(() => void onChanged?.())
                         }}
                     >
                         Load latest version

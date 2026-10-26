@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useRef, useState } from "react"
 import type { ReactNode } from "react"
 import { Link, useLocation } from "react-router"
 import {
@@ -127,6 +127,17 @@ export function KnowledgeClaimPage({
         canPrepare,
     )
     const provenance = useGatedAuthoringResource<Provenance>(provenancePath(campaignId, knowledgeItemId), canPrepare)
+    // A lifecycle step was confirmed, but the claim, its lifecycle or its audience-safe detail could
+    // not be read back: what is shown may be out of date. Kept here because the step's own status
+    // resets when the record's version changes. "Load latest" only reads; the step is never repeated.
+    const [lifecycleBehind, setLifecycleBehind] = useState(false)
+    const [rereading, setRereading] = useState(false)
+    const lifecycleRead = useRef<RefetchOutcome>("ok")
+    const readBack = async (): Promise<RefreshOutcome> => {
+        const outcome = combineRefetchOutcomes([lifecycleRead.current, await view.refetch(), await refreshDetail()])
+        setLifecycleBehind(outcome !== "ok")
+        return outcome
+    }
     // The unsaved claim edits live here, above the claim form, so the lifecycle controls can say
     // plainly that they are not part of a submit, approve or publish, and so they survive the form
     // being replaced by a read-only presentation.
@@ -364,19 +375,36 @@ export function KnowledgeClaimPage({
     return (
         <section className="authoring-page knowledge-claim" aria-labelledby="knowledge-claim-heading">
             {header}
+            {lifecycleBehind ? (
+                <SavedRefreshFailedNotice
+                    what="claim"
+                    quiet
+                    retrying={rereading}
+                    onRetry={() => {
+                        setRereading(true)
+                        void (async () => {
+                            try {
+                                lifecycleRead.current = await lifecycle.refetch()
+                                await readBack()
+                            } finally {
+                                setRereading(false)
+                            }
+                        })()
+                    }}
+                />
+            ) : null}
             {!settled ? (
                 <p role="status">Loading the claim…</p>
             ) : (
                 <LifecycleActionsProvider
                     campaignId={campaignId}
                     view={lifecycleView ?? NO_LIFECYCLE(knowledgeItemId)}
-                    refetch={lifecycle.refetch}
+                    refetch={async () => {
+                        lifecycleRead.current = await lifecycle.refetch()
+                    }}
                     unsavedEdits={claimDirty}
                     afterDeletePath={listHref}
-                    onChanged={() => {
-                        void view.refetch()
-                        void refreshDetail()
-                    }}
+                    onChanged={readBack}
                 >
                     <StageNav
                         ariaLabel="Claim stages"

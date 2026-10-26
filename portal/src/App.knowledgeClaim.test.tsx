@@ -894,6 +894,42 @@ describe("unified knowledge claim page", () => {
       expect(server.callsTo("POST", /./)).toHaveLength(0)
     })
 
+    it("says a confirmed lifecycle step is saved but behind when the detail read fails, and retries only the reads", async () => {
+      let submitted = false
+      server.on("GET", LIFECYCLE, () => ({
+        body: submitted
+          ? lifecycle({ canon_status: "proposed", row_version: 3, available_actions: ["approve", "return_to_draft", "reject"] })
+          : lifecycle(),
+      }))
+      server.on("POST", `${LIFECYCLE}/submit-for-review`, () => {
+        submitted = true
+        current = {
+          detail: current.detail,
+          view: view({ canon_status: "proposed", row_version: 3, available_actions: [], blocked_actions: [] }),
+        }
+        // The authoring and lifecycle reads work; the audience-safe detail read does not.
+        server.on("GET", DETAIL, { status: 500, body: { error: { code: "internal_error", message: "m", correlation_id: "c" } } })
+        return { body: { entity_id: "k1", canon_status: "proposed", row_version: 3, changed: true } }
+      })
+      setup()
+      await claimBox()
+      fireEvent.click(stageLink(2))
+      fireEvent.click(screen.getByRole("link", { name: "Publication" }))
+      fireEvent.click(await screen.findByRole("button", { name: "Submit for review" }))
+      expect(await screen.findByText(/Saved\. The latest claim could not be loaded/)).toBeInTheDocument()
+      const live = screen.getByTestId("authoring-announcer")
+      expect(live).toHaveTextContent("Saved, but the latest data could not be loaded.")
+      expect(live).not.toHaveTextContent("Submitted for review")
+      // Load latest reads again once the detail is back, and never sends the step again.
+      server.on("GET", DETAIL, () => ({ body: current.detail }))
+      const reads = server.callsTo("GET", /./).length
+      fireEvent.click(screen.getByRole("button", { name: "Load latest" }))
+      await waitFor(() => expect(screen.queryByText(/The latest claim could not be loaded/)).toBeNull())
+      expect(server.callsTo("GET", /./).length).toBeGreaterThan(reads)
+      expect(server.callsTo("POST", `${LIFECYCLE}/submit-for-review`)).toHaveLength(1)
+      expect(server.callsTo("POST", /./)).toHaveLength(1)
+    })
+
     it("keeps the claim draft when a lifecycle step fails", async () => {
       withLifecycle(lifecycle())
       server.on("POST", `${LIFECYCLE}/submit-for-review`, { status: 500 })
