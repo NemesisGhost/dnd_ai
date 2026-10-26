@@ -39,6 +39,7 @@ from .access import require_campaign_capability
 from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
+from .world_explorer import resolve_world_entity_visibility
 
 router = APIRouter(tags=["campaign-clock"])
 
@@ -103,6 +104,9 @@ def clock_cause_choices_endpoint(
         timeline_id=access.timeline_id,
         world_id=timeline_world_id(connection, access.timeline_id),
         campaign_id=access.campaign_id,
+        denied_event_ids=resolve_world_entity_visibility(
+            access, connection
+        ).campaign_view_denied_entity_ids,
         not_after_world_time_id=world_time_id,
         search=(q or "").strip() or None,
     )
@@ -186,6 +190,11 @@ def advance_clock_endpoint(
             expected_row_version=body.expected_row_version,
             cause_event_id=body.cause_event_id,
             explanation=body.explanation,
+            # The editor's own event-read denies, resolved by the same visibility the event
+            # pages use, so the picker and this check cannot disagree.
+            denied_event_ids=resolve_world_entity_visibility(
+                access, connection
+            ).campaign_view_denied_entity_ids,
         ),
     )
 

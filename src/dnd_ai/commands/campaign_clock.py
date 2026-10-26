@@ -94,10 +94,13 @@ def _check_gameplay_cause(
     scope: OperationScope,
     cause_event_id: uuid.UUID,
     target_key: int,
+    denied_event_ids: frozenset[uuid.UUID],
 ) -> None:
     """The cause must be a recorded gameplay event of this campaign's own timeline (never an
     ancestor's, a sibling's or another campaign's), not part of the clock's chain, and take effect
-    no later than the new time. Locked `FOR SHARE` so a concurrent void waits for this commit."""
+    no later than the new time, and the acting editor must be able to read it. Readability is
+    part of eligibility, so a denied event is indistinguishable from a missing one and is refused
+    before the timing is compared. Locked `FOR SHARE` so a concurrent void waits for this commit."""
     row = connection.execute(
         text(f"""
             SELECT wt.sort_key {ELIGIBLE_CAUSE_FROM_SQL}
@@ -109,6 +112,7 @@ def _check_gameplay_cause(
             "w": scope.world_id,
             "c": scope.campaign_id,
             "event": cause_event_id,
+            "denied": list(denied_event_ids),
         },
     ).one_or_none()
     if row is None:
@@ -223,6 +227,7 @@ def advance_campaign_clock(
     expected_row_version: int,
     cause_event_id: uuid.UUID | None = None,
     explanation: str | None = None,
+    denied_event_ids: frozenset[uuid.UUID] = frozenset(),
 ) -> ClockResult:
     if explanation is not None:
         explanation = explanation.strip() or None
@@ -239,7 +244,11 @@ def advance_campaign_clock(
         raise ClockNotAdvancedError(f"{target_key} <= {effective.sort_key}")
     if cause_event_id is not None:
         _check_gameplay_cause(
-            connection, scope=scope, cause_event_id=cause_event_id, target_key=target_key
+            connection,
+            scope=scope,
+            cause_event_id=cause_event_id,
+            target_key=target_key,
+            denied_event_ids=denied_event_ids,
         )
     return _record(
         connection,

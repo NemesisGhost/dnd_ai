@@ -37,7 +37,9 @@ _FULL_ROW_SQL = """
 
 # Events a clock advance may name as its gameplay cause (CP-9b): recorded events of the
 # campaign's own timeline (an ancestor's history is never offered), in its world, that are not
-# the clock's own chain and not the bookkeeping event of a correction. Binds :t timeline, :w world, :c campaign.
+# the clock's own chain and not the bookkeeping event of a correction, and not one the acting
+# editor may not read (`:denied`: the caller's `campaign.view` denies, entity or event targeted,
+# from `resolve_world_entity_visibility`). Binds :t timeline, :w world, :c campaign, :denied.
 ELIGIBLE_CAUSE_FROM_SQL = """
     FROM narrative.events ev
     JOIN core.entities ce ON ce.entity_id = ev.event_id
@@ -47,6 +49,7 @@ ELIGIBLE_CAUSE_FROM_SQL = """
     WHERE ev.timeline_id = :t AND ce.world_id = :w
       AND (ev.campaign_id = :c OR ev.campaign_id IS NULL)
       AND es.code = 'recorded'
+      AND NOT (ev.event_id = ANY(CAST(:denied AS uuid[])))
       AND et.code NOT IN ('time_advanced', 'time_corrected')
       AND NOT EXISTS (
           SELECT 1 FROM narrative.event_corrections corr
@@ -70,6 +73,7 @@ def list_clock_cause_choices(
     timeline_id: uuid.UUID,
     world_id: uuid.UUID,
     campaign_id: uuid.UUID,
+    denied_event_ids: frozenset[uuid.UUID] = frozenset(),
     not_after_world_time_id: uuid.UUID | None = None,
     search: str | None = None,
 ) -> list[ClockCauseChoice]:
@@ -79,6 +83,7 @@ def list_clock_cause_choices(
         "t": timeline_id,
         "w": world_id,
         "c": campaign_id,
+        "denied": list(denied_event_ids),
         "limit": CAUSE_CHOICE_LIMIT,
     }
     extra = ""

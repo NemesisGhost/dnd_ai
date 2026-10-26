@@ -510,3 +510,73 @@ def test_the_details_table_accepts_only_advance_events_and_is_append_only(
             ),
             {"e": advanced},
         )
+
+
+# --- the editor's own event-read denies (CP-9b review) ---------------------------------------
+
+
+def deny_for_editor(
+    s: ContentSetup, *, entity: str | None = None, event: str | None = None
+) -> None:
+    from tests.factories import lookup_id, make_resource_grant
+
+    membership = s.connection.execute(
+        text(
+            "SELECT campaign_membership_id FROM security.campaign_memberships "
+            "WHERE campaign_id = :c AND user_id = :u"
+        ),
+        {"c": s.cid, "u": s.gm.user_id},
+    ).scalar()
+    make_resource_grant(
+        s.connection,
+        uuid.UUID(s.cid),
+        lookup_id(s.connection, "security", "capabilities", "capability_id", "campaign.view"),
+        grantee_campaign_membership_id=membership,
+        entity_id=None if entity is None else uuid.UUID(entity),
+        event_id=None if event is None else uuid.UUID(event),
+        effect="deny",
+    )
+
+
+@pytest.mark.parametrize("target", ["entity", "event"])
+def test_an_editor_denied_an_event_can_neither_pick_nor_guess_it_as_a_cause(
+    s: ContentSetup, target: str
+) -> None:
+    times = Times(s)
+    start_clock(s, times, 1)
+    target_time = times.at(5)
+    visible = record_event(s, times.at(2), "Visible cause")
+    denied_early = record_event(s, times.at(2), "Denied early", details=PRIVATE)
+    denied_late = record_event(s, times.at(9), "Denied late")
+    visible_late = record_event(s, times.at(9), "Visible late")
+    for denied in (denied_early, denied_late):
+        deny_for_editor(s, **{target: denied})  # type: ignore[arg-type]
+    listed = {c["event_id"] for c in choices(s).json()["choices"]}
+    assert listed == {visible, visible_late}
+    assert denied_early not in choices(s).text and "Denied" not in choices(s).text
+    before = counts(s)
+    # A guessed id of a denied event is refused exactly like a missing one, whether it would
+    # have been in time or not: the answer never reveals eligibility or timing.
+    missing = advance(s, target_time, 1, cause_event_id=str(uuid.uuid4()))
+    for denied in (denied_early, denied_late):
+        refused = advance(s, target_time, 1, cause_event_id=denied, explanation=SAFE)
+        assert refused.status_code == missing.status_code == 422
+        assert refused.json()["error"]["code"] == "clock_cause_invalid"
+        assert refused.json()["error"]["message"] == missing.json()["error"]["message"]
+        assert denied not in refused.text and "Denied" not in refused.text
+    assert counts(s) == before
+    # Visible events keep their ordinary outcomes, including the distinct timing error.
+    late = advance(s, target_time, 1, cause_event_id=visible_late)
+    assert late.status_code == 422 and late.json()["error"]["code"] == "clock_cause_after_target"
+    assert advance(s, target_time, 1, cause_event_id=visible).status_code == 200
+
+
+def test_denies_of_other_members_do_not_hide_causes_from_the_editor(s: ContentSetup) -> None:
+    from tests.database.test_api_event_explanations import deny_entity
+
+    times = Times(s)
+    start_clock(s, times, 1)
+    event = record_event(s, times.at(2), "Hidden from players only")
+    deny_entity(s, event)  # the player's deny, not the editor's
+    assert {c["event_id"] for c in choices(s).json()["choices"]} == {event}
+    assert advance(s, times.at(5), 1, cause_event_id=event).status_code == 200
