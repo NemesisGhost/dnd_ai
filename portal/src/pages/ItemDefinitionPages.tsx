@@ -12,6 +12,7 @@ import { MutationStatusMessage, StaleWriteNotice } from "../components/authoring
 import { SelectField, TextAreaField, TextField } from "../components/authoring/fields"
 import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
+import type { RefreshOutcome } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { useHeldWorldCapability, WORLD_CANON_EDIT, WORLD_CANON_READ_PRIVATE } from "../hooks/useWorldCapability"
@@ -234,7 +235,7 @@ function DefinitionForm({
     campaignId: string
     options: ItemDefinitionOptions
     existing: ItemDefinition | null
-    refetch: () => Promise<unknown>
+    refetch: () => Promise<RefreshOutcome>
     // The list the person came from, with its filters.
     listPath: string
 }) {
@@ -270,8 +271,9 @@ function DefinitionForm({
                 void navigate(listPath)
                 return
             }
-            await refetch()
-            announce("Item definition saved")
+            const outcome = await refetch()
+            if (outcome === "ok") announce("Item definition saved")
+            return outcome
         },
     })
     const error = mutation.status.kind === "error" ? mutation.status.error : null

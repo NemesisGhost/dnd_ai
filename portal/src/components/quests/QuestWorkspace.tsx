@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useState } from "react"
 import type { ReactNode } from "react"
 import { Link, useLocation, useSearchParams } from "react-router"
 import { entityLifecyclePath } from "../../api/entityLifecycle"
 import { questAuthoringPath, questOptionsPath } from "../../api/questAuthoring"
 import { revisionsPath } from "../../api/review"
 import { useAuthoringResource } from "../../hooks/useAuthoringResource"
-import type { UseAuthoringResourceResult } from "../../hooks/useAuthoringResource"
+import type { RefetchOutcome, UseAuthoringResourceResult } from "../../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../../hooks/useCampaignCapability"
 import { usePageArrival } from "../../hooks/usePageArrival"
 import { pickWorldReturnState, useReviewBackPath } from "../../hooks/useWorldBackPath"
@@ -13,12 +13,14 @@ import type { EntityLifecycleView } from "../../types/entityLifecycle"
 import type { QuestAuthoringView, QuestOptions } from "../../types/questAuthoring"
 import type { RevisionHistory } from "../../types/review"
 import { questPerspectiveSearch } from "../../utils/questPerspectiveSearch"
+import { combineRefetchOutcomes } from "../../utils/refreshOutcome"
 import { QuestStructureEditor } from "../authoring/QuestEditor"
 import { AudiencePreviewSection } from "../AudiencePreviewSection"
 import { LifecycleActionsProvider } from "../EntityLifecyclePanel"
 import { EntitySourcesSection } from "../EntitySourcesSection"
 import { SectionNav, SectionPanel, StageNav } from "../staged/StagedNav"
 import { UnsavedInputGuard } from "../staged/UnsavedInputGuard"
+import { useFocusOnSectionChange } from "../staged/useFocusOnSectionChange"
 import { useStagedNavigation } from "../staged/useStagedNavigation"
 import { WorldPublicationSection } from "../world/WorldPublication"
 import { WorldRecordHeader } from "../world/WorldRecordHeader"
@@ -166,7 +168,7 @@ function Workspace({
     refreshing: boolean
     // The last refresh failed; `view` is the last read that succeeded.
     refreshFailed: boolean
-    refetchQuest: () => Promise<unknown>
+    refetchQuest: () => Promise<RefetchOutcome>
     lifecycle: UseAuthoringResourceResult<EntityLifecycleView>
     revisions: UseAuthoringResourceResult<RevisionHistory>
     headingRef: ReturnType<typeof usePageArrival>
@@ -207,13 +209,16 @@ function Workspace({
     const [changes, setChanges] = useState(0)
     // Every command reads the quest, its lifecycle (the next lifecycle step carries the version it
     // saw) and its revisions again. Nothing is remounted, so nothing typed elsewhere is lost.
+    // The outcome is the three reads together, so a command that was confirmed but not read back is
+    // reported as such by the section that sent it.
     const refreshRecord = useCallback(
-        async () => void (await Promise.all([refetchQuest(), lifecycle.refetch(), revisions.refetch()])),
+        async () =>
+            combineRefetchOutcomes(await Promise.all([refetchQuest(), lifecycle.refetch(), revisions.refetch()])),
         [refetchQuest, lifecycle, revisions],
     )
     const refreshAll = useCallback(async () => {
         setChanges((n) => n + 1)
-        await refreshRecord()
+        return refreshRecord()
     }, [refreshRecord])
 
     // What is typed and not sent, by reporter, for the page's one guard.
@@ -240,16 +245,9 @@ function Workspace({
     // Forward), so a keyboard or screen reader user lands on the new content.
     // The section the page settled on is the arrival (focus stays on the page heading); only a
     // later change moves focus.
-    const lastSection = useRef<QuestSection | null>(null)
-    useEffect(() => {
-        if (!settled) return
-        if (lastSection.current === null) {
-            lastSection.current = nav.section
-        } else if (lastSection.current !== nav.section) {
-            lastSection.current = nav.section
-            document.getElementById(questHeadingId(nav.section))?.focus()
-        }
-    }, [settled, nav.section])
+    useFocusOnSectionChange(nav.section, (section) => document.getElementById(questHeadingId(section))?.focus(), {
+        ready: settled,
+    })
 
     const here = location.pathname
     const sectionHref = (key: QuestSection): string => nav.sectionHref(key)

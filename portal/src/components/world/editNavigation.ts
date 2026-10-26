@@ -1,3 +1,4 @@
+import { resolveReturnTo } from "../../hooks/returnState"
 import { pickWorldReturnState } from "../../hooks/useWorldBackPath"
 import type { EditNavigation } from "../authoring/ContentEditPage"
 import { worldRecordPath } from "./worldPaths"
@@ -28,16 +29,10 @@ export function worldEditNavigation(
     }): EditNavigation => {
         const carried = pickWorldReturnState(state)
         const own = worldRecordPath(campaignId, category, entityId)
-        const requested = (state as { returnTo?: { pathname?: unknown; search?: unknown } } | null | undefined)?.returnTo
-        const pathname = typeof requested?.pathname === "string" ? requested.pathname : null
-        const search = typeof requested?.search === "string" && requested.search.startsWith("?") ? requested.search : ""
         return {
             listPath: `/app/${encodeURIComponent(campaignId)}/world${carried?.worldSearch ?? ""}`,
             detail: {
-                to:
-                    pathname !== null && (pathname === own || (alsoReturnTo?.({ campaignId, params }) ?? []).includes(pathname))
-                        ? `${pathname}${search}`
-                        : own,
+                to: resolveReturnTo(state, [own, ...(alsoReturnTo?.({ campaignId, params }) ?? [])], own),
                 state: carried,
             },
         }

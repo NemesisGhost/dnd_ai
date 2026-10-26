@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useState } from "react"
 import type { ReactNode } from "react"
 import { Link, useLocation } from "react-router"
 import {
@@ -39,8 +39,10 @@ import type { Restriction } from "../components/knowledge/KnowledgeRoster"
 import { useClaimNavigation } from "../components/knowledge/useClaimNavigation"
 import { KnowledgeSubjectLink } from "../components/KnowledgeSubjectLink"
 import { SectionNav, SectionPanel, StageNav } from "../components/staged/StagedNav"
+import { useFocusOnSectionChange } from "../components/staged/useFocusOnSectionChange"
 import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
+import type { RefreshOutcome } from "../hooks/useAuthoringMutation"
 import { useGatedAuthoringResource } from "../hooks/useGatedAuthoringResource"
 import type { UseAuthoringResourceResult } from "../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
@@ -161,13 +163,7 @@ export function KnowledgeClaimPage({
 
     // Move focus to the section heading when the section changes after arrival (a link, Back or
     // Forward), so a keyboard or screen reader user lands on the new content.
-    const lastSection = useRef(nav.section)
-    useEffect(() => {
-        if (lastSection.current !== nav.section) {
-            lastSection.current = nav.section
-            document.getElementById(claimHeadingId(nav.section))?.focus()
-        }
-    }, [nav.section])
+    useFocusOnSectionChange(nav.section, (section) => document.getElementById(claimHeadingId(section))?.focus())
 
     const base0 = `/app/${encodeURIComponent(campaignId)}/knowledge`
     const perspective = new URLSearchParams()
@@ -887,7 +883,7 @@ function ClaimForm({
         view: KnowledgeAuthoringView
         options: KnowledgeOptions
         refreshing: boolean
-        refetch: () => Promise<unknown>
+        refetch: () => Promise<RefreshOutcome>
     }) {
     const { reload } = useSession()
     const announce = useAnnounce()
@@ -912,13 +908,14 @@ function ClaimForm({
         request: (body, ctx) => updateKnowledgeItem(campaignId, knowledgeItemId, body, ctx),
         onSuccess: async () => {
             setConfirming(false)
-            await refetch()
+            const outcome = await refetch()
             refreshDetail()
             setChanges({})
             setChangeNote("")
             setErrors([])
             setSaved(true)
-            announce("Knowledge claim saved")
+            if (outcome === "ok") announce("Knowledge claim saved")
+            return outcome
         },
     })
     const pending = mutation.status.kind === "pending"

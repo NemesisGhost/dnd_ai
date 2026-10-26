@@ -3,6 +3,7 @@ import type { ReactNode } from "react"
 import { runItemOperation } from "../../api/items"
 import { useSession } from "../../context/SessionContext"
 import { useAuthoringMutation } from "../../hooks/useAuthoringMutation"
+import type { RefreshOutcome } from "../../hooks/useAuthoringMutation"
 import type { ItemView, OperationBody } from "../../types/items"
 import { useAnnounce } from "../authoring/announcer"
 import { MutationStatusMessage, StaleWriteNotice } from "../authoring/feedback"
@@ -65,7 +66,7 @@ export function useItemOperations({
     when: string
     // Clears the chosen time once a command has used it, so the next one defaults to the campaign clock.
     consumeTime: () => void
-    refetch: () => Promise<unknown>
+    refetch: () => Promise<RefreshOutcome>
 }): ItemOperations {
     const { reload } = useSession()
     const announce = useAnnounce()
@@ -84,8 +85,9 @@ export function useItemOperations({
             command?.after?.()
             // A refused or failed command keeps its time; only a confirmed one consumes it.
             consumeTime()
-            await refetch()
-            if (command !== null && command !== undefined) announce(command.done)
+            const outcome = await refetch()
+            if (outcome === "ok" && command !== null && command !== undefined) announce(command.done)
+            return outcome
         },
     })
     const error = mutation.status.kind === "error" ? mutation.status.error : null

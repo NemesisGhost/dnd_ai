@@ -1,7 +1,7 @@
 import { Link } from "react-router"
 import type { RefObject } from "react"
 import type { EntityLifecycleView } from "../../types/entityLifecycle"
-import { LifecycleBadge } from "../authoring/feedback"
+import { RecordHeader, RecordStatus } from "../records/RecordHeader"
 
 interface Props {
     name: string
@@ -25,9 +25,9 @@ interface Props {
     headingId?: string
 }
 
-// The always-visible top of the World record page: where it is, what the record is, and its real
-// status. Everything here is information or navigation; no lifecycle command lives in it. It uses
-// the item header's styling so the guided workspaces look alike.
+// The always-visible top of the World record page, in the frame the item page shares
+// (`RecordHeader`) so the guided workspaces look alike. This is the World and quest wording of it:
+// a plain back link and a status that may not be known yet.
 export function WorldRecordHeader({
     name,
     eyebrow,
@@ -42,45 +42,20 @@ export function WorldRecordHeader({
     headingId = "world-workspace-heading",
 }: Props) {
     return (
-        <header className="item-header">
-            <p>
-                <Link to={back.href}>{back.label}</Link>
-            </p>
-            <p className="world-detail__eyebrow">{eyebrow}</p>
-            {context !== null ? (
-                <p className="world-detail__context">
-                    In{" "}
-                    <Link to={context.href} state={context.state}>
-                        {context.label}
-                    </Link>
+        <RecordHeader
+            back={
+                <p>
+                    <Link to={back.href}>{back.label}</Link>
                 </p>
-            ) : null}
-            <div className="item-header__headline">
-                <h1 id={headingId} ref={headingRef} tabIndex={-1} className="item-header__title">
-                    {name}
-                </h1>
-                {status !== null ? (
-                    <span className="item-header__status" role="group" aria-label="Record status">
-                        <LifecycleBadge status={status.canon_status} />
-                        {status.lifecycle_status === "archived" ? <LifecycleBadge status="archived" /> : null}
-                    </span>
-                ) : null}
-            </div>
-            {summary !== null ? <p className="world-detail__summary">{summary}</p> : null}
-            {guidance !== null ? (
-                <div className="item-header__meta">
-                    <span className="item-header__next">
-                        Next:{" "}
-                        {guidanceHref !== null ? (
-                            <Link to={guidanceHref} state={linkState}>
-                                {guidance.text} ›
-                            </Link>
-                        ) : (
-                            guidance.text
-                        )}
-                    </span>
-                </div>
-            ) : null}
-        </header>
+            }
+            eyebrow={eyebrow}
+            context={context}
+            name={name}
+            headingId={headingId}
+            headingRef={headingRef}
+            status={status !== null ? <RecordStatus status={status} /> : null}
+            summary={summary}
+            next={guidance === null ? null : { text: guidance.text, href: guidanceHref, state: linkState }}
+        />
     )
 }

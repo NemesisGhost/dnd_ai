@@ -2,6 +2,7 @@ import { useRef, useState } from "react"
 import { fetchQuestTargetOptions, runQuestCommand } from "../../api/questAuthoring"
 import { useSession } from "../../context/SessionContext"
 import { useAuthoringMutation } from "../../hooks/useAuthoringMutation"
+import type { RefreshOutcome } from "../../hooks/useAuthoringMutation"
 import type {
     ObjectiveBody,
     QuestAuthoringView,
@@ -183,7 +184,7 @@ interface QuestStructureEditorProps {
     view: QuestAuthoringView
     options: QuestOptions
     refreshing: boolean
-    refetch: () => Promise<unknown>
+    refetch: () => Promise<RefreshOutcome>
     // Reports an open stage or objective form that has unsent changes, to the page's one guard.
     onUnsaved: ReportUnsaved
 }
@@ -225,13 +226,14 @@ export function QuestStructureEditor({ campaignId, view, options, refreshing, re
         onSuccess: async () => {
             const done = pending.current
             pending.current = null
-            await refetch()
+            const outcome = await refetch()
             done?.after()
-            if (done?.message) announce(done.message)
+            if (outcome === "ok" && done?.message) announce(done.message)
             if (done?.focusId) {
                 const id = done.focusId
                 window.setTimeout(() => document.getElementById(id)?.focus(), 0)
             }
+            return outcome
         },
     })
     const busy = mutation.status.kind === "pending"

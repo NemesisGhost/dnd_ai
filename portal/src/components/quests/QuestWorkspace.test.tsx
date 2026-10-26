@@ -388,6 +388,20 @@ describe("Quest workspace: loading and failure", () => {
         expect(screen.getByRole("textbox", { name: /^Name/ })).toHaveValue("Renamed")
         expect(screen.getByRole("heading", { level: 1, name: "The Lost Amulet" })).toBeInTheDocument()
     })
+
+    it("reports a confirmed command whose re-read failed as saved but behind, never as done, and never sends it again", async () => {
+        const { server } = setupQuestWorkspace({ section: "details" })
+        server.on("GET", `${AUTHORING}/q1`, {
+            status: 500,
+            body: { error: { code: "internal_error", message: "m", correlation_id: "c" } },
+        })
+        fireEvent.change(await screen.findByRole("textbox", { name: /Planning notes/ }), { target: { value: "n" } })
+        fireEvent.click(screen.getByRole("button", { name: "Save notes" }))
+        const live = screen.getByTestId("authoring-announcer")
+        await waitFor(() => expect(live).toHaveTextContent("Saved, but the latest data could not be loaded."))
+        expect(live).not.toHaveTextContent("GM notes saved")
+        expect(writes(server)).toHaveLength(1)
+    })
 })
 
 // A player has a perspective provider but no selected character.

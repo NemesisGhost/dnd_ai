@@ -3,6 +3,7 @@ import { Link } from "react-router"
 import { runQuestCommand } from "../../api/questAuthoring"
 import { useSession } from "../../context/SessionContext"
 import { useAuthoringMutation } from "../../hooks/useAuthoringMutation"
+import type { RefreshOutcome } from "../../hooks/useAuthoringMutation"
 import type { QuestReceipt } from "../../types/contentAuthoring"
 import type { QuestAuthoringView, QuestCommand, QuestOptions } from "../../types/questAuthoring"
 import {
@@ -31,7 +32,7 @@ interface Props {
     options: QuestOptions
     refreshing: boolean
     // Reads the quest again (and whatever else depends on its version).
-    refetch: () => Promise<unknown>
+    refetch: () => Promise<RefreshOutcome>
     onUnsaved: ReportUnsaved
     // The Publication section and the router state to carry, for the line that explains why the
     // quest cannot be edited.
@@ -102,11 +103,12 @@ function DetailsForm({
         scopeKey: `quest-details:${view.quest_id}`,
         request: (command, ctx) => runQuestCommand(campaignId, view.quest_id, command, ctx),
         onSuccess: async () => {
-            await refetch()
+            const outcome = await refetch()
             const saved = submitted.current
             submitted.current = null
             if (saved !== null) setSync((current) => ({ ...saved, version: current.version }))
-            announce("Quest details saved")
+            if (outcome === "ok") announce("Quest details saved")
+            return outcome
         },
     })
     const busy = mutation.status.kind === "pending"

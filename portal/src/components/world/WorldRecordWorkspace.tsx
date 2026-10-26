@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useMemo, useRef, useState } from "react"
 import type { ReactNode, RefObject } from "react"
 import { Link, useLocation } from "react-router"
 import { entityLifecyclePath } from "../../api/entityLifecycle"
@@ -43,6 +43,7 @@ import { OrganizationMembers } from "../OrganizationMembers"
 import { RelationshipsPanel } from "../RelationshipsPanel"
 import { SectionNav, SectionPanel, StageNav } from "../staged/StagedNav"
 import { UnsavedInputGuard } from "../staged/UnsavedInputGuard"
+import { useFocusOnSectionChange } from "../staged/useFocusOnSectionChange"
 import { useStagedNavigation } from "../staged/useStagedNavigation"
 import { AreaContentsSection } from "./AreaContentsSection"
 import { AreaNowSection } from "./AreaNowSection"
@@ -434,16 +435,9 @@ function Workspace({
     // A section that stops being the caller's (a refused private command withdraws it) falls back to
     // another without the person asking; focus stays where they are, as the panel that explains the
     // loss and its button take it themselves.
-    const lastSection = useRef(nav.section)
-    useEffect(() => {
-        if (lastSection.current !== nav.section) {
-            const previous = lastSection.current
-            lastSection.current = nav.section
-            if (sections.some((section) => section.key === previous)) {
-                document.getElementById(worldHeadingId(nav.section))?.focus()
-            }
-        }
-    }, [nav.section, sections])
+    useFocusOnSectionChange(nav.section, (section) => document.getElementById(worldHeadingId(section))?.focus(), {
+        keep: (previous) => sections.some((section) => section.key === previous),
+    })
 
     // What is typed and not sent, by reporter, for the page's one guard.
     const [unsentBy, setUnsentBy] = useState<Record<string, string[]>>({})

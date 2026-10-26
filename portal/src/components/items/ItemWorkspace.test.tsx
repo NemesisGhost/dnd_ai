@@ -832,11 +832,17 @@ describe("give versus place", () => {
             })
             fireEvent.click(await screen.findByRole("button", { name: "Equip" }))
             expect(await screen.findByText(/may be out of date/)).toBeInTheDocument()
+            // The command was confirmed: the re-read is behind, the command is not done, and the
+            // write was sent once and is not repeated by the retry of the read.
+            const live = screen.getByTestId("authoring-announcer")
+            expect(live).toHaveTextContent("Saved, but the latest data could not be loaded.")
+            expect(server.calls.filter((c) => c.method === "POST" && c.path.endsWith("/equip"))).toHaveLength(1)
             expect(within(form).getByRole("textbox", { name: /Amount/, hidden: true })).toHaveValue("17")
             expect(screen.getByRole("combobox", { name: "Place at", hidden: true })).toHaveValue("Stonebridge")
             server.on("GET", VIEW_PATH, () => ({ body: state.current }))
             fireEvent.click(screen.getByRole("button", { name: "Try again" }))
             await waitFor(() => expect(screen.queryByText(/may be out of date/)).not.toBeInTheDocument())
+            expect(server.calls.filter((c) => c.method === "POST" && c.path.endsWith("/equip"))).toHaveLength(1)
             expect(within(form).getByRole("textbox", { name: /Amount/, hidden: true })).toHaveValue("17")
             expect(screen.getByRole("combobox", { name: "Place at", hidden: true })).toHaveValue("Stonebridge")
         })

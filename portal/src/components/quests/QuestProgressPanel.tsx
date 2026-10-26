@@ -2,8 +2,10 @@ import { useEffect, useRef, useState } from "react"
 import { questProgressPath, runQuestRuntimeCommand } from "../../api/questRuntime"
 import { useSession } from "../../context/SessionContext"
 import { useAuthoringMutation } from "../../hooks/useAuthoringMutation"
+import type { RefreshOutcome } from "../../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../../hooks/useAuthoringResource"
 import type { QuestAction, QuestProgress, RuntimeCommand, RuntimeReceipt, ScopeProgress } from "../../types/questRuntime"
+import { combineRefetchOutcomes } from "../../utils/refreshOutcome"
 import { useAnnounce } from "../authoring/announcer"
 import { ConfirmDialog } from "../authoring/ConfirmDialog"
 import { MutationStatusMessage, StaleWriteNotice } from "../authoring/feedback"
@@ -66,7 +68,7 @@ interface Props {
     onUnsaved: ReportUnsaved
     // Called after a command succeeded and progress was read again, so the page reads what progress
     // decides (whether the structure is now locked) again too.
-    onChanged?: () => Promise<void> | void
+    onChanged?: () => Promise<RefreshOutcome> | void
 }
 
 // How far the campaign and each party have got, and the explicit moves the GM can make. This is
@@ -108,9 +110,11 @@ export function QuestProgressPanel({ campaignId, questId, blockedText, refreshTo
             setDone(null)
             setConfirm(null)
             setNote("")
-            await refetch()
-            await onChanged?.()
-            if (message !== null) announce(message)
+            // The panel's own progress read and the quest read the page does after it: both must
+            // have been applied for the command to be shown as done.
+            const outcome = combineRefetchOutcomes([await refetch(), (await onChanged?.()) ?? "ok"])
+            if (outcome === "ok" && message !== null) announce(message)
+            return outcome
         },
     })
     const error = mutation.status.kind === "error" ? mutation.status.error : null

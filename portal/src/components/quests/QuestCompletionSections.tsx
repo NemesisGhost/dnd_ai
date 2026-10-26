@@ -1,4 +1,5 @@
 import { useState } from "react"
+import type { RefreshOutcome } from "../../hooks/useAuthoringMutation"
 import { fetchQuestTargetOptions } from "../../api/questAuthoring"
 import { fetchWorldEntities } from "../../api/world"
 import type { QuestAuthoringView, QuestOptions, QuestOutcomeView } from "../../types/questAuthoring"
@@ -30,7 +31,7 @@ interface SectionProps {
     view: QuestAuthoringView
     options: QuestOptions
     // Reads the quest again (and whatever else depends on its version).
-    refetch: () => Promise<unknown>
+    refetch: () => Promise<RefreshOutcome>
     onUnsaved: ReportUnsaved
 }
 

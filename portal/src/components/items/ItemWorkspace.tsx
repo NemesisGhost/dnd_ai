@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from "react"
+import { useState } from "react"
 import type { ReactNode, RefObject } from "react"
 import { Link, useLocation } from "react-router"
 import { entityLifecyclePath } from "../../api/entityLifecycle"
 import { itemAuthoringPath } from "../../api/items"
 import { provenancePath } from "../../api/sources"
 import { useAuthoringResource } from "../../hooks/useAuthoringResource"
+import type { RefetchOutcome } from "../../hooks/useAuthoringResource"
 import type { UseAuthoringResourceResult } from "../../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../../hooks/useCampaignCapability"
 import { useGatedAuthoringResource } from "../../hooks/useGatedAuthoringResource"
@@ -23,6 +24,7 @@ import { LifecycleActionList, LifecycleActionsProvider, LifecycleBlockedReasons 
 import { EntitySourcesSection } from "../EntitySourcesSection"
 import { SectionNav, SectionPanel, StageNav } from "../staged/StagedNav"
 import { UnsavedInputGuard } from "../staged/UnsavedInputGuard"
+import { useFocusOnSectionChange } from "../staged/useFocusOnSectionChange"
 import { ItemHeader } from "./ItemHeader"
 import type { ItemOrigin } from "./ItemHeader"
 import { ItemConditionSection, ItemEquipmentSection, ItemMoveSection } from "./ItemPlaySections"
@@ -151,7 +153,7 @@ function Workspace({
     data: ItemView
     // The last refresh failed; `data` is the last read that succeeded.
     refreshFailed: boolean
-    refetchItem: () => Promise<unknown>
+    refetchItem: () => Promise<RefetchOutcome>
     lifecycle: UseAuthoringResourceResult<EntityLifecycleView>
     provenance: UseAuthoringResourceResult<Provenance>
     headingRef: RefObject<HTMLHeadingElement | null>
@@ -181,13 +183,7 @@ function Workspace({
 
     // Move focus to the section heading when the section changes after arrival (a link, Back or
     // Forward), so a keyboard or screen reader user lands on the new content.
-    const lastSection = useRef(nav.section)
-    useEffect(() => {
-        if (lastSection.current !== nav.section) {
-            lastSection.current = nav.section
-            document.getElementById(itemHeadingId(nav.section))?.focus()
-        }
-    }, [nav.section])
+    useFocusOnSectionChange(nav.section, (section) => document.getElementById(itemHeadingId(section))?.focus())
 
     const unsaved = [...drafts.unsaved, sourcesDirty ? "a source" : null].filter((part) => part !== null)
     const sectionProps = {

@@ -167,8 +167,9 @@ function RosterBody({
             setInflight(null)
             if (finished?.kind === "belief") setOpenKnower(null)
             else setOpen(null)
-            await refetch()
-            announce(receipt.changed ? (finished?.message ?? "Saved") : "Nothing changed")
+            const outcome = await refetch()
+            if (outcome === "ok") announce(receipt.changed ? (finished?.message ?? "Saved") : "Nothing changed")
+            return outcome
         },
     })
     const error = mutation.status.kind === "error" ? mutation.status.error : null

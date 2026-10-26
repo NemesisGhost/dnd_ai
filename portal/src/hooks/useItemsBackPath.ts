@@ -1,4 +1,5 @@
 import { useLocation } from "react-router"
+import { pickQueryStates, readQueryState } from "./returnState"
 
 // Router state that restores the collection an item (or definition) was opened from, the way
 // `worldSearch` restores the World browser. Only a query string rides along, and only when it is
@@ -11,19 +12,9 @@ export interface ItemsReturnState {
 
 const KEYS = ["itemsSearch", "definitionsSearch", "worldSearch"] as const
 
-function readSearch(state: unknown, key: (typeof KEYS)[number]): string | undefined {
-    const value = (state as ItemsReturnState | null | undefined)?.[key]
-    return typeof value === "string" && value.startsWith("?") ? value : undefined
-}
-
 // The valid return keys of a location state, for forwarding through in-page links.
 export function pickReturnState(state: unknown): ItemsReturnState | undefined {
-    const picked: ItemsReturnState = {}
-    for (const key of KEYS) {
-        const value = readSearch(state, key)
-        if (value !== undefined) picked[key] = value
-    }
-    return Object.keys(picked).length === 0 ? undefined : picked
+    return pickQueryStates(state, KEYS)
 }
 
 export function useItemsReturnState(): ItemsReturnState | undefined {
@@ -36,10 +27,10 @@ const definitionsBase = (campaignId: string): string =>
 
 // The item inventory, with the query it was left on (none for a direct link).
 export function useItemsBackPath(campaignId: string): string {
-    return `${itemsBase(campaignId)}${readSearch(useLocation().state, "itemsSearch") ?? ""}`
+    return `${itemsBase(campaignId)}${readQueryState(useLocation().state, "itemsSearch") ?? ""}`
 }
 
 // The item definitions list, with its filters.
 export function useDefinitionsBackPath(campaignId: string): string {
-    return `${definitionsBase(campaignId)}${readSearch(useLocation().state, "definitionsSearch") ?? ""}`
+    return `${definitionsBase(campaignId)}${readQueryState(useLocation().state, "definitionsSearch") ?? ""}`
 }

@@ -9,6 +9,7 @@ import { SelectField, TextAreaField, TextField } from "../components/authoring/f
 import { LifecycleBadge } from "../components/authoring/feedback"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
+import { readQueryState, resolveReturnTo } from "../hooks/returnState"
 import { pickReturnState } from "../hooks/useItemsBackPath"
 import { usePageArrival } from "../hooks/usePageArrival"
 import { useHeldWorldCapability, WORLD_CANON_READ_PRIVATE } from "../hooks/useWorldCapability"
@@ -23,11 +24,6 @@ const worldItemPath = (campaignId: string, itemId: string): string =>
 const itemPath = (campaignId: string, itemId: string): string =>
     `/app/${encodeURIComponent(campaignId)}/items/${encodeURIComponent(itemId)}`
 
-const searchOf = (state: unknown, key: "itemsSearch"): string => {
-    const value = (state as { itemsSearch?: unknown } | null | undefined)?.[key]
-    return typeof value === "string" && value.startsWith("?") ? value : ""
-}
-
 // Where the edit page's links lead. The item page it came from (the inventory's or the World's)
 // is named by `returnTo` in the router state, and only an address of this very item is honoured,
 // so a crafted state cannot send the person anywhere else. Anything else returns to the inventory.
@@ -41,14 +37,11 @@ function editNavigation({
     state: unknown
 }): EditNavigation {
     const carried = pickReturnState(state)
-    const requested = (state as { returnTo?: { pathname?: unknown; search?: unknown } } | null | undefined)?.returnTo
-    const allowed = [itemPath(campaignId, entityId), worldItemPath(campaignId, entityId)]
-    const pathname = typeof requested?.pathname === "string" ? requested.pathname : null
-    const search = typeof requested?.search === "string" && requested.search.startsWith("?") ? requested.search : ""
+    const own = itemPath(campaignId, entityId)
     return {
-        listPath: `${itemsListPath(campaignId)}${searchOf(state, "itemsSearch")}`,
+        listPath: `${itemsListPath(campaignId)}${readQueryState(state, "itemsSearch") ?? ""}`,
         detail: {
-            to: pathname !== null && allowed.includes(pathname) ? `${pathname}${search}` : itemPath(campaignId, entityId),
+            to: resolveReturnTo(state, [own, worldItemPath(campaignId, entityId)], own),
             state: carried,
         },
     }
@@ -171,7 +164,7 @@ const createConfig: ContentCreateConfig<ItemOptions, ItemFormValues, CreateItemB
     lead: "A new item is saved as a draft. It cannot be awarded or moved until it is published.",
     breadcrumbLabel: "Item inventory",
     worldPath: itemsListPath,
-    listPath: (campaignId, state) => `${itemsListPath(campaignId)}${searchOf(state, "itemsSearch")}`,
+    listPath: (campaignId, state) => `${itemsListPath(campaignId)}${readQueryState(state, "itemsSearch") ?? ""}`,
     resultState: (state) => pickReturnState(state),
     optionsPath: itemOptionsPath,
     canCreate: (options) => options.can_create,

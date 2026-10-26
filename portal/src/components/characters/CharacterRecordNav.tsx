@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react"
+import { useRef } from "react"
 import type { ReactNode } from "react"
 import { useLocation } from "react-router"
 import { useCampaignCapability } from "../../hooks/useCampaignCapability"
@@ -13,6 +13,7 @@ import { CharacterRelationshipsSection } from "../CharacterRelationshipsSection"
 import { SectionNav } from "../staged/StagedNav"
 import type { SectionDef } from "../staged/StagedNav"
 import { useStagedNavigation } from "../staged/useStagedNavigation"
+import { useFocusOnSectionChange } from "../staged/useFocusOnSectionChange"
 
 // Which page a character is being read on. Both show the same record with the same navigation:
 // the Characters route (`/characters/:id`) opens on the sheet, the World route
@@ -92,10 +93,7 @@ export function CharacterRecordSections({
 
     // Move focus to the content when the section changes after arrival (a link, Back or Forward).
     const content = useRef<HTMLDivElement>(null)
-    const lastSection = useRef(nav.section)
-    useEffect(() => {
-        if (lastSection.current === nav.section) return
-        lastSection.current = nav.section
+    useFocusOnSectionChange(nav.section, () => {
         const heading = content.current?.querySelector<HTMLElement>("h1")
         if (heading !== null && heading !== undefined) {
             if (!heading.hasAttribute("tabindex")) heading.setAttribute("tabindex", "-1")
@@ -103,7 +101,7 @@ export function CharacterRecordSections({
         } else {
             content.current?.focus()
         }
-    }, [nav.section])
+    })
 
     return (
         <div className="character-record">

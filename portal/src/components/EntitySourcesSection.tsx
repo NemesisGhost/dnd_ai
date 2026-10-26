@@ -4,6 +4,7 @@ import { Link } from "react-router"
 import { attachSource, createSource, detachSource, provenancePath, sourcesPath } from "../api/sources"
 import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
+import { combineRefetchOutcomes } from "../utils/refreshOutcome"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { useHeldWorldCapability, WORLD_CANON_READ_PRIVATE } from "../hooks/useWorldCapability"
 import type { UseAuthoringResourceResult } from "../hooks/useAuthoringResource"
@@ -117,8 +118,9 @@ function LoadedSources({
             setType("")
             setTitle("")
             setReference("")
-            await Promise.all([provenance.refetch(), sources.refetch()])
-            if (message !== null) announce(message)
+            const outcome = combineRefetchOutcomes(await Promise.all([provenance.refetch(), sources.refetch()]))
+            if (outcome === "ok" && message !== null) announce(message)
+            return outcome
         },
     })
     const error = mutation.status.kind === "error" ? mutation.status.error : null
