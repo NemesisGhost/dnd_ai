@@ -111,3 +111,48 @@ All on `9ab549d`; none marks any ledger row.
 ## 8. Completion gate
 
 CP-11 and Phase 15 are **not** complete because preparation finished or CI is green. Closure needs: required coverage executed with evidence; every defect fixed or explicitly accepted under the rubric; reviewed code with current-head green CI; accurate documentation; and your acceptance decision recorded in the ledger. Working `dnd_ai` was not migrated; no PR was merged; `main`, `integration/scoped-roles` and PR #67 were not touched.
+
+## 9. DEF-001 fix: effect on the evidence above (added 2026-10-26)
+
+The owner chose to **fix** DEF-001 (register §5). The candidate head is code commit `7990225af3305d7d7221d0daf068ae1c70199aee` (plus the docs commit(s) after it). **Nothing above was re-executed against it, no ledger row changed, and the manual-acceptance version is not frozen:** §1 and the ledger header still name `9ab549d` until the owner or Codex freezes a reviewed head. Everything in §1–§8 describes `9ab549d`; this section says what still applies to the candidate.
+
+### 9.1 Applicability of the §6 results
+
+| §6 item (at `9ab549d`) | Applies to the candidate? | Why |
+|---|---|---|
+| `ruff`, `mypy`, `node --test foundry-module`, `pytest tests/unit` (1,204 + the DEF-003 test), `tests/database` (5,457), `tests/scenario` (117), `alembic upgrade head` / `alembic check` | **Yes, by diff.** Not rerun | `git diff 9ab549d..HEAD` touches only `portal/src` and `docs/`. CI reruns them on the pushed head |
+| Portal `eslint`, `tsc -b && vite build`, `vitest` (360 files / 3,485 tests) | **Superseded** | Rerun on the candidate: eslint PASS, tsc PASS, build PASS, vitest **363 files / 3,527 tests PASS** (register §5) |
+| Scripted signed-out real-browser check (16 assertions) | **Yes, conditionally** | It exercises the Sign In page, deep-link redirects, signed-out API refusals and Sign In layout. None of the 60 changed portal files is on that path (the only stylesheet change adds a rule scoped to a notice inside an action row). Rerun it if the frozen head differs further from `7990225` |
+| Scripted authenticated pass: sign-in ×5, A3, B1, B2 | **Yes, conditionally** | Sign-in, Platform accounts and the account list use unchanged pages |
+| Scripted authenticated pass: **C1 (create world), D1, D2 (World Sharing)** | **No — must be rerun** | They load the changed World overview (`WorldOverviewPage`, `TransitionControls`) and Sharing page (`WorldSharingPage`). The earlier pass says "world creation and Sharing work" for `9ab549d` only |
+| "Product text differences found" fixed in the guide | Yes | Unrelated to this change |
+
+### 9.2 What must be retested on the reviewed head (human / scripted browser)
+
+Because every ledger row is still `Unexecuted`, no earlier result is carried forward and nothing is discarded; the list says where DEF-001 changed observable behaviour, so these are the rows to run with the new expectations.
+
+| Area changed | Run (companion / task → cases) |
+|---|---|
+| The recovery contract itself | **RC-10 (rewritten for 26 operations)**, RC-03 (uncertain retry, shared hook untouched but re-confirm on the changed callers), **RC-04 … RC-08** (the shared lifecycle panel, Quest and Item workspaces and the Claim page changed), **RC-09**, K5 → TC-48 |
+| World / timeline archive and restore; world and timeline pages | K4 → TC-51; J4 → TC-03; C-series world and timeline pages |
+| Party pages and members | G4 → TC-06, TC-20, TC-21 (+ CP-9a explanations) |
+| NPC portrayal and Run this NPC | H9, I9 → TC-38 (the positive resource variant stays Blocked) |
+| Character starting state and build activation | G3 → TC-19 |
+| Event void and correct | I2 → TC-25 |
+| World Sharing and ownership transfer | D1, D2 → SR-M4, SR-M5, SR-M6, SR-M11, SR-M12, TC-53, K6 → TC-54 (world-role), TC-04 |
+| Run Session start, log, end, travel | I1 → TC-24; I11, J1 → TC-50; H6, I4 → TC-37; H2 → TC-23 |
+| Campaign clock | E7, I3 → TC-15, CP-9b |
+| Session details and archive/restore | H1 → TC-22; J1 → TC-50 |
+| Encounters | H10 → TC-42; I10 → TC-43, TC-44 |
+| Dungeon, area and Area now | H5 → TC-33; I7 → TC-34 |
+| Lifecycle steps on World records, items, quests and claims | F1–F4 → TC-16, TC-17, TC-18; G1, G2; H3 → TC-26; H4 → TC-28, TC-29, TC-32; H7, H8 → TC-39, TC-40; J7 → TC-47; K1 → TC-10; K2 → TC-31; SR-M13; NV-07, NV-08 |
+| Relationships; organization members | G6 → TC-35; G7 → TC-36 |
+| World-time recording (World times page and the inline picker used by party, session, clock, event and organization forms) | C3, E6 → TC-14; E7, G4, I1, I2, I3, G7 wherever a time is recorded inline |
+| New notices and live-region announcements | TC-55 (assistive technology must hear "Saved, but the latest data could not be loaded." once, and the write once it is read) |
+| Clean installation | TC-56 passes through the changed World pages |
+
+Not affected by file list (still `Unexecuted`, not carried forward): TC-01/02 login and account lists, TC-12 setup cancellation, TC-13 invitations and access, TC-49 route manifest, TC-52 branch creation form, TC-57/58 privacy and grants.
+
+### 9.3 Decisions this changes
+
+DEF-001: the fix is implemented but **not closed** (needs Codex review, current-head CI and the retests above). CP-11 and Phase 15 remain incomplete. DEF-002 and DEF-003 are unchanged.

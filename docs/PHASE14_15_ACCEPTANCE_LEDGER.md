@@ -16,7 +16,7 @@
 | Viewports used | |
 | Owner decision — Phase 14 hierarchy manual acceptance | **Pending** |
 | Owner decision — Phase 15 manual acceptance | **Pending** (CP-11 and Phase 15 are not complete until the owner records it) |
-| Final-head CI (PR #66) run id and SHA | to be recorded after any code change; at preparation: all 10 jobs green on `9ab549ddbc78cb9b5c1aac9c99f3a967112edc62` |
+| Final-head CI (PR #66) run id and SHA | to be recorded for the frozen head; at preparation: all 10 jobs green on `9ab549ddbc78cb9b5c1aac9c99f3a967112edc62`. The DEF-001 candidate `7990225…` has its own run (see the delivery report); it is not the frozen head |
 
 ## Result states and evidence rules
 
@@ -39,6 +39,7 @@ Each row has **five separate evidence fields**; none may be used to fill another
 | Date | New SHA | Revision | Rows that still apply | Rows that must be rerun |
 |---|---|---|---|---|
 | 2026-10-26 | `9ab549ddbc78cb9b5c1aac9c99f3a967112edc62` | `140_clock_advance_details` | (baseline — nothing executed yet) | all |
+| 2026-10-26 | **Candidate, not frozen:** `7990225af3305d7d7221d0daf068ae1c70199aee` (DEF-001 fix; portal and docs only) | `140_clock_advance_details` (unchanged) | Nothing in this ledger was executed, so there is no result to carry forward or discard. Scripted/automated evidence taken at `9ab549d` is assessed in the environment document §9.1 (backend checks and the signed-out and sign-in scripts apply by diff; portal checks are superseded) | RC-10 (rewritten), RC-03 … RC-09, and the rows listed in the environment document §9.2 — in particular TC-14, 15, 19, 20, 21, 24, 25, 33, 34, 35, 36, 37, 38, 42, 43, 44, 50, 51, 53, SR-M4/5/6/11/12/13, the lifecycle-step rows (TC-10, 16, 17, 18, 26, 28, 29, 31, 32, 39, 40, 47) and TC-55's new-notice announcements. The "Code SHA under test" above is **not** changed until the owner or Codex freezes a reviewed head |
 
 ## Record register (copy IDs from the address bar; never record links, tokens or passwords)
 
@@ -245,7 +246,7 @@ These were executed during CP-11 preparation on `9ab549ddbc78cb9b5c1aac9c99f3a96
 | RC-07 | Claim lifecycle step, read-back fails | Companion §2 | gm / admin | Unexecuted | — | — | — | — | — | — | — | — | |
 | RC-08 | Receipt-version gating, read-only recovery | Companion §2 | gm / admin | Unexecuted | — | — | — | — | — | — | — | — | |
 | RC-09 | Independent drafts, record changes, late responses | Companion §2 | gm / admin | Unexecuted | — | — | — | — | — | — | — | — | |
-| RC-10 | Deferred refresh-result callers (DEF-001) | Companion §2 | gm / admin | Unexecuted | — | — | — | — | — | — | — | — | |
+| RC-10 | Callers fixed for DEF-001 (26 operations; retest on the reviewed head) | Companion §2 | gm / admin | Unexecuted | — | — | — | — | — | — | — | — | |
 | NV-01 | Deep links | Companion §3 | gm, players | Unexecuted | — | — | — | — | — | — | — | — | |
 | NV-02 | Section links | Companion §3 | gm, players | Unexecuted | — | — | — | — | — | — | — | — | |
 | NV-03 | Breadcrumbs | Companion §3 | gm, players | Unexecuted | — | — | — | — | — | — | — | — | |

@@ -20,7 +20,8 @@ Started 2026-10-26 for code `9ab549ddbc78cb9b5c1aac9c99f3a967112edc62`. Acceptan
 | Proposed rubric score | Exposure **1** (needs a failed second request immediately after a success; rare) + Impact **1** (minor degradation, no loss) + Triggerability **1** (transient failure/special timing) + Detection **1** (silent and misleading) + Blast **0** (one user/record) = **4 — Medium**. |
 | Evidence | Code inspection; CP-10 handoff §"Not changed". Browser reproduction: pending RC-10 (block the re-read GET, perform the write). |
 | Affected coverage | RC-10 (and RC-04…RC-08 for the already-fixed callers), tasks D2, G3, G4, H5, H9, I1, I2, I3, I4, I9, I10, J1, K4; TC-11/14/15/19/21/25/34/37/38/42–44/50/51 error-recovery assertions. |
-| Disposition | **Open — owner decision required (DR-9).** Either (a) fix, or (b) record an explicit risk acceptance. |
+| Original disposition (historical, as of `9ab549d`) | **Open — owner decision required (DR-9).** Either (a) fix, or (b) record an explicit risk acceptance. |
+| Disposition (updated 2026-10-26) | **Owner decision: (a) fix, across all affected operations (not a partial fix).** Implemented in the portal at code commit `7990225af3305d7d7221d0daf068ae1c70199aee` (portal and docs only; no backend change). **NOT closed:** it needs Codex review, current-head CI on PR #66, and the RC-10 / affected-task retest on the reviewed head before the owner or Codex can close it. See §5 and [PHASE15_DEF001_INVENTORY.md](PHASE15_DEF001_INVENTORY.md). |
 | Bounded fix handoff (if the owner chooses to fix) | Return the refresh outcome from each call site and join multiple reads with `combineRefetchOutcomes`; report `confirmed` to `useAuthoringMutation`; announce "done" only on `ok`; otherwise render `SavedRefreshFailedNotice` with a read-only **Load latest** (never re-sending the write). One focused test per site modelled on `App.knowledgeClaim.test.tsx` ("write once, read fails, retry reads only"). Gate: ruff/mypy unchanged (portal-only), portal `tsc`/`eslint`/focused `vitest`/`vite build`, current-head CI on PR #66, Codex review. Retest: RC-10 plus the affected tasks listed above. No backend change. |
 
 ### DEF-002 — Duplicate route decorator on the access-group member endpoint
@@ -79,3 +80,27 @@ Copy one block per defect. Number DEF-0nn (product) or DEF-DOC-nn (this guide's 
 | Disposition (fix / owner-accepted exception with written reason) and code SHA of the fix | |
 
 **Change control.** An acceptance-blocking defect (High or above, or a Medium the owner will not accept) gets a *bounded fix handoff*: files and behaviour only, tests, Codex review, current-head CI on PR #66, and a list of rows to rerun. If the code SHA changes, update the ledger's "Code change log" naming which prior results still apply and which must be rerun. CP-11 does not expand into broad product work.
+
+## 5. DEF-001 fix record (2026-10-26)
+
+Owner decision (DR-9): **fix**, across all affected operations. Starting HEAD `52fb3de891b3d7b4e61394edbab62a1f5b51dd2d` (CP-10 code `9ab549d` plus the acceptance-handoff docs commit). Code commit: **`7990225af3305d7d7221d0daf068ae1c70199aee`** — portal and docs only; `git diff 9ab549d..HEAD` touches nothing under `src/`, `database/`, `tests/`, `foundry-module/`, `scripts/`, `.github/`, `Dockerfile` or `compose.yaml`.
+
+**Scope found.** The register named 8 callers and listed 14 file locations "to be confirmed". The audit (56 `useAuthoringMutation` call sites plus the shared hooks) found **26 corrected operations** (inventory §4.1), covering every site in the register's list and further ones the list did not contain: encounters, the clock card, session details and archive/restore, dungeon/area commands (the shared `reload()` returned nothing), the lifecycle panel's own read (World, Item, Quest), relationship and organization roster writes, and world-time recording (page and the shared picker). Reference callers (CP-2/CP-10), navigate-away forms and the Phase 13 reload-through-loading family were assessed and not changed (inventory §4.2–4.4).
+
+**What changed.** Each corrected caller returns the outcome of all reads that show its write to `useAuthoringMutation` (`confirmed` unless every read was applied), announces "done" only on `"ok"`, keeps the last good read instead of an error screen, holds writes that would send the stale version/token, shows `SavedRefreshFailedNotice` with a read-only **Load latest**, and announces the write when a read completes. Shared piece: `hooks/useConfirmedRefresh`. `useAuthoringMutation`, `combineRefetchOutcomes` and the backend are unchanged.
+
+**Verification actually performed (portal only; nothing else was applicable).**
+
+| Check | Result |
+|---|---|
+| `tsc -b` | PASS |
+| `eslint .` | PASS |
+| `vitest run` (full portal) | **363 files, 3,527 tests passed** (`9ab549d` baseline: 360 files, 3,485 tests) |
+| `npm run build` (`tsc -b && vite build`) | PASS (the existing >500 kB chunk warning only) |
+| New or tightened regression tests against the **previous** source (non-test files stashed) | **33 fail**, the other 543 tests in the same 22 files pass; restored afterwards |
+| Backend (`ruff`, `mypy`, `pytest`) | **Not rerun**: no backend, migration or CI-configuration change since `9ab549d`; the `9ab549d` results in the environment document §6 apply to the backend unchanged. CI reruns them |
+| Browser / database | **Not performed.** No browser or database mutation was made in this work; `dnd_ai` and the acceptance databases were not touched |
+
+**Not fixed here (as instructed).** DEF-002 (duplicate route decorator) and DEF-003 (`.env`-dependent unit test) are untouched. Neither the fix nor its tests depend on them; DEF-003 still makes `scripts/verify.sh full` fail locally on a machine whose `.env` sets `DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS`.
+
+**Still required before DEF-001 can be called closed.** (1) Codex review of the diff and of inventory §4.4 (the reload-through-loading family was assessed as unaffected and left alone). (2) Current-head CI on PR #66. (3) Retest on the reviewed head: RC-10 (rewritten for the 26 operations) and RC-04 … RC-09, the tasks and cases listed in the register's "Affected coverage" plus the additions in the environment document §9, in a real browser. Until then DEF-001 stays **Open — fix implemented, unverified in a browser**, and no ledger row changes state.
