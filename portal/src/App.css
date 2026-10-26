@@ -3081,6 +3081,17 @@ a.app-header__title:focus-visible {
   margin: 0 0 0.25rem;
 }
 
+.event-explanation__origin {
+  margin: 0 0 0.25rem;
+  font-size: 0.875rem;
+  color: var(--color-text-muted);
+}
+
+.event-explanation__note {
+  margin: 0 0 0.25rem;
+  white-space: pre-wrap;
+}
+
 .event-explanation--detail .fact-grid {
   margin-block: 0.5rem;
 }

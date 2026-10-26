@@ -12,6 +12,10 @@ from .errors import SafeMessageError
 CLOCK_EVENT_ADVANCED = "time_advanced"
 CLOCK_EVENT_CORRECTED = "time_corrected"
 CLOCK_COMPONENT = "current_world_time_id"
+# Event types that make up the clock's own chain; never a gameplay cause (CP-9b).
+CLOCK_EVENT_TYPES = frozenset({CLOCK_EVENT_ADVANCED, CLOCK_EVENT_CORRECTED})
+# The explanation is shown to the members who may view the advance event.
+CLOCK_EXPLANATION_MAX_LENGTH = 500
 
 
 class ClockNotAdvancedError(SafeMessageError):
@@ -36,6 +40,26 @@ class ClockUnchangedError(SafeMessageError):
     safe_status_code = 409
     safe_error_code = "clock_unchanged"
     safe_message = "The clock already shows that time."
+
+
+class ClockCauseInvalidError(SafeMessageError):
+    """The named cause is not an eligible gameplay event of this campaign's own history. One
+    answer for every reason (missing, another campaign's or timeline's, a clock event, voided or
+    corrected, not recorded) so the reply never confirms an event the caller cannot use."""
+
+    safe_status_code = 422
+    safe_error_code = "clock_cause_invalid"
+    safe_message = "That event cannot be recorded as the cause of this clock advance."
+
+
+class ClockCauseAfterTargetError(SafeMessageError):
+    """An eligible cause that takes effect after the time the clock would move to."""
+
+    safe_status_code = 422
+    safe_error_code = "clock_cause_after_target"
+    safe_message = (
+        "The cause takes effect after the new time, so it cannot have caused this advance."
+    )
 
 
 def bounded_inherited_sort_key(parent_sort_key: int | None, branch_sort_key: int) -> int:

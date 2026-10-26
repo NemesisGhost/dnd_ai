@@ -75,6 +75,11 @@ export interface EventExplanation {
     new_build: ExplanationRef | null
     previous_time: ExplanationClockTime | null
     new_time: ExplanationClockTime | null
+    // Clock advances recorded after CP-9b: "manual" or "event_cause". Null for an earlier advance
+    // (never guessed) and for every other family.
+    advance_origin: "manual" | "event_cause" | null
+    // Written by the GM for the members who may view this event. Not the GM-only details.
+    member_explanation: string | null
     travel: { legs: ExplanationLeg[] } | null
     session: ExplanationSession | null
     relations: ExplanationRelation[]

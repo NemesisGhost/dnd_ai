@@ -201,6 +201,7 @@ COLUMN_CLASSES: dict[str, DataClass] = {
     **_table("knowledge.public_knowledge", {"awareness_level": _S}),
     **_table("narrative.encounter_participants", {"outcome": _S, "side": _S}),
     **_table("narrative.encounter_turns", {"notes": _G}),
+    **_table("narrative.clock_advance_details", {"member_explanation": _C}),
     **_table("narrative.encounters", {"status": _S, "summary": _G}),
     **_table("narrative.event_causes", {"cause_description": _G}),
     **_table("narrative.event_corrections", {"correction_kind": _S, "reason": _G}),

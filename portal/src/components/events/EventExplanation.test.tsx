@@ -35,6 +35,8 @@ const base: Data = {
     new_build: null,
     previous_time: null,
     new_time: null,
+    advance_origin: null,
+    member_explanation: null,
     travel: null,
     session: null,
     relations: [],
@@ -231,5 +233,66 @@ describe("EventExplanation", () => {
         expect(screen.getByText("In-world: Common Reckoning: Year 3")).toBeInTheDocument()
         expect(container.querySelector("time")).toBeNull()
         expect(screen.queryByText("Recorded")).toBeNull()
+    })
+    describe("clock advance cause and explanation (CP-9b)", () => {
+        const advance: Data = {
+            ...base,
+            family: "campaign_clock_advanced",
+            previous_time: { state: "named", text: "Year 1" },
+            new_time: { state: "named", text: "Year 3" },
+        }
+
+        it("labels a recorded manual advance, with the member explanation, in both densities", () => {
+            const manual = { ...advance, advance_origin: "manual" as const, member_explanation: "We rested a week." }
+            renderDetail(manual)
+            expect(screen.getByText("Manual advance")).toBeInTheDocument()
+            expect(screen.getByText("We rested a week.")).toBeInTheDocument()
+            expect(screen.getByText("Explanation")).toBeInTheDocument()
+        })
+
+        it("renders compact text for manual advances and never invents one for earlier advances", () => {
+            const { rerender } = render(
+                <MemoryRouter>
+                    <EventExplanation explanation={{ ...advance, advance_origin: "manual", member_explanation: "Note" }} />
+                </MemoryRouter>,
+            )
+            expect(screen.getByText("Manual advance")).toBeInTheDocument()
+            expect(screen.getByText("Note")).toBeInTheDocument()
+            rerender(
+                <MemoryRouter>
+                    <EventExplanation explanation={advance} />
+                </MemoryRouter>,
+            )
+            expect(screen.queryByText("Manual advance")).toBeNull()
+            renderDetail(advance)
+            expect(screen.queryByText("Cause")).toBeNull()
+            expect(screen.queryByText("Explanation")).toBeNull()
+        })
+
+        it("keeps the previous-clock chain, the gameplay cause and a correction under separate labels", () => {
+            renderDetail({
+                ...advance,
+                advance_origin: "event_cause",
+                relations: [
+                    { relation: "follows_previous_clock_change", event: named("event", "The campaign clock advanced"), reason: null },
+                    { relation: "caused_by", event: named("event", "The bridge falls"), reason: null },
+                    { relation: "corrected_by_clock_change", event: named("event", "The campaign clock was corrected"), reason: null },
+                ],
+            })
+            const list = screen.getByRole("list", { name: "Related events" })
+            const items = within(list).getAllByRole("listitem").map((li) => li.textContent)
+            expect(items).toEqual([
+                "Follows the previous clock change: The campaign clock advanced",
+                "Recorded cause: The bridge falls",
+                "Later corrected by the clock change: The campaign clock was corrected",
+            ])
+            expect(screen.getByText("A recorded event (linked below)")).toBeInTheDocument()
+        })
+
+        it("says a cause exists without naming a hidden one", () => {
+            const { container } = renderDetail({ ...advance, advance_origin: "event_cause", relations: [] })
+            expect(screen.getByText("A recorded event that is not available to you")).toBeInTheDocument()
+            expect(container.querySelector("a")).toBeNull()
+        })
     })
 })

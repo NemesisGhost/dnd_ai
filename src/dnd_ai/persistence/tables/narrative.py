@@ -916,3 +916,32 @@ Index(
     event_corrections.c.created_by_user_id,
     postgresql_where=event_corrections.c.created_by_user_id.isnot(None),
 )
+
+
+# Added by revision 140 (CP-9b). The 1-500 character check lives in the migration only, like the
+# other CHECK constraints of this module.
+clock_advance_details = Table(
+    "clock_advance_details",
+    metadata,
+    Column(
+        "event_id",
+        UUID(),
+        ForeignKey("narrative.events.event_id", ondelete="RESTRICT"),
+        primary_key=True,
+    ),
+    Column(
+        "member_explanation",
+        Text(),
+        comment=(
+            "Explanation the GM wrote for the members who may view the advance event. "
+            "Campaign-visible (shown with the event); never GM-only text. NULL when none was given."
+        ),
+    ),
+    Column("created_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    schema="narrative",
+    comment=(
+        "One row per campaign clock advance recorded under the CP-9b contract: marks the advance as "
+        "deliberately recorded (a manual advance when it has no gameplay cause row) and holds the "
+        "optional member-safe explanation. Append-only. Advances recorded earlier have no row."
+    ),
+)

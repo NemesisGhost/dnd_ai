@@ -124,6 +124,10 @@ class EventExplanationResponse(BaseModel):
     new_build: ExplanationRefResponse | None = None
     previous_time: ExplanationClockTimeResponse | None = None
     new_time: ExplanationClockTimeResponse | None = None
+    # Clock advances recorded after CP-9b: "manual" | "event_cause"; null for earlier advances.
+    advance_origin: str | None = None
+    # Written by the GM for members who may view this event; campaign-visible.
+    member_explanation: str | None = None
     travel: ExplanationTravelResponse | None = None
     session: ExplanationSessionResponse | None = None
     relations: list[ExplanationRelationResponse] = Field(default_factory=list)
@@ -163,6 +167,8 @@ def explanation_response(explanation: EventExplanation) -> EventExplanationRespo
         new_build=_optional_ref(explanation.new_build),
         previous_time=_time(explanation.previous_time),
         new_time=_time(explanation.new_time),
+        advance_origin=explanation.advance_origin,
+        member_explanation=explanation.member_explanation,
         travel=(
             None
             if explanation.travel is None

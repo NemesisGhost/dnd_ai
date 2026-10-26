@@ -35,6 +35,84 @@ _FULL_ROW_SQL = """
 """
 
 
+# Events a clock advance may name as its gameplay cause (CP-9b): recorded events of the
+# campaign's own timeline (an ancestor's history is never offered), in its world, that are not
+# the clock's own chain and not the bookkeeping event of a correction. Binds :t timeline, :w world, :c campaign.
+ELIGIBLE_CAUSE_FROM_SQL = """
+    FROM narrative.events ev
+    JOIN core.entities ce ON ce.entity_id = ev.event_id
+    JOIN narrative.event_types et ON et.event_type_id = ev.event_type_id
+    JOIN narrative.event_statuses es ON es.event_status_id = ev.event_status_id
+    JOIN core.world_times wt ON wt.world_time_id = ev.world_time_id
+    WHERE ev.timeline_id = :t AND ce.world_id = :w
+      AND (ev.campaign_id = :c OR ev.campaign_id IS NULL)
+      AND es.code = 'recorded'
+      AND et.code NOT IN ('time_advanced', 'time_corrected')
+      AND NOT EXISTS (
+          SELECT 1 FROM narrative.event_corrections corr
+          WHERE corr.correcting_event_id = ev.event_id
+      )
+"""
+
+CAUSE_CHOICE_LIMIT = 50
+
+
+@dataclass(frozen=True)
+class ClockCauseChoice:
+    event_id: uuid.UUID
+    name: str
+    in_world_time: str
+
+
+def list_clock_cause_choices(
+    connection: Connection,
+    *,
+    timeline_id: uuid.UUID,
+    world_id: uuid.UUID,
+    campaign_id: uuid.UUID,
+    not_after_world_time_id: uuid.UUID | None = None,
+    search: str | None = None,
+) -> list[ClockCauseChoice]:
+    """Eligible cause events, newest in-world time first, for the advance form's picker. A
+    `not_after_world_time_id` outside the world applies no time filter."""
+    params: dict[str, object] = {
+        "t": timeline_id,
+        "w": world_id,
+        "c": campaign_id,
+        "limit": CAUSE_CHOICE_LIMIT,
+    }
+    extra = ""
+    if not_after_world_time_id is not None:
+        limit_key = connection.execute(
+            text(
+                "SELECT sort_key FROM core.world_times WHERE world_time_id = :x AND world_id = :w"
+            ),
+            {"x": not_after_world_time_id, "w": world_id},
+        ).scalar()
+        if limit_key is not None:
+            params["limit_key"] = limit_key
+            extra += " AND wt.sort_key <= :limit_key"
+    if search:
+        escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        params["search"] = f"%{escaped}%"
+        extra += " AND ce.canonical_name ILIKE :search"
+    rows = connection.execute(
+        text(f"""
+            SELECT ev.event_id, ce.canonical_name, ev.world_time_id
+            {ELIGIBLE_CAUSE_FROM_SQL}{extra}
+            ORDER BY wt.sort_key DESC, ev.created_at DESC, ev.event_id
+            LIMIT :limit
+        """),
+        params,
+    ).all()
+    return [
+        ClockCauseChoice(
+            r.event_id, str(r.canonical_name), clock_display(connection, r.world_time_id)
+        )
+        for r in rows
+    ]
+
+
 @dataclass(frozen=True)
 class EffectiveClock:
     world_time_id: uuid.UUID

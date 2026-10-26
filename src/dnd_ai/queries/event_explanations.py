@@ -46,7 +46,11 @@ from typing import Any
 
 from sqlalchemy import Connection, text
 
-from dnd_ai.domain.campaign_clock import CLOCK_EVENT_ADVANCED, CLOCK_EVENT_CORRECTED
+from dnd_ai.domain.campaign_clock import (
+    CLOCK_EVENT_ADVANCED,
+    CLOCK_EVENT_CORRECTED,
+    CLOCK_EVENT_TYPES,
+)
 from dnd_ai.domain.character_builds import BUILD_COMPONENT, BUILD_EVENT_ACTIVATED
 from dnd_ai.domain.party_authoring import (
     PARTY_ACTIVE,
@@ -77,6 +81,11 @@ FAMILY_OTHER = "other"
 BUILD_DETAIL_FULL = "full"
 BUILD_DETAIL_GENERIC = "generic"
 
+# How an advance recorded under the CP-9b contract was caused. Advances recorded earlier have no
+# marker and so no origin: they are never guessed to have been manual.
+ORIGIN_MANUAL = "manual"
+ORIGIN_EVENT_CAUSE = "event_cause"
+
 REL_FOLLOWS_CLOCK = "follows_previous_clock_change"
 REL_CORRECTS_CLOCK = "corrects_clock_change"
 REL_CORRECTED_BY_CLOCK = "corrected_by_clock_change"
@@ -86,7 +95,22 @@ REL_REPLACED_BY = "replaced_by"
 REL_CORRECTS = "corrects"
 REL_REPLACES = "replaces"
 
-_CLOCK_TYPES = frozenset({CLOCK_EVENT_ADVANCED, CLOCK_EVENT_CORRECTED})
+_CLOCK_TYPES = CLOCK_EVENT_TYPES
+_RELATION_ORDER = {
+    relation: rank
+    for rank, relation in enumerate(
+        (
+            REL_FOLLOWS_CLOCK,
+            REL_CORRECTS_CLOCK,
+            REL_CAUSED_BY,
+            REL_CORRECTED_BY_CLOCK,
+            REL_CORRECTED_BY,
+            REL_REPLACED_BY,
+            REL_CORRECTS,
+            REL_REPLACES,
+        )
+    )
+}
 _LOCATION_COMPONENT = "current_location_id"
 
 
@@ -135,6 +159,11 @@ class EventExplanation:
     new_build: ExplanationRef | None = None
     previous_time: ExplanationClockTime | None = None
     new_time: ExplanationClockTime | None = None
+    # Clock advances only (CP-9b): `manual`, `event_cause`, or None for an earlier advance.
+    advance_origin: str | None = None
+    # The GM's explanation for the members who may view this event (campaign-visible), never
+    # `events.details`.
+    member_explanation: str | None = None
     travel: SessionTravelEntry | None = None
     session: ExplanationSession | None = None
     relations: tuple[ExplanationRelation, ...] = field(default_factory=tuple)
@@ -265,6 +294,10 @@ def explain_events(
         connection, audience, [e for e in events if e.event_id in location_ids]
     )
     relations = _relations(connection, audience, events)
+    advances = [e.event_id for e in events if families[e.event_id] == FAMILY_CLOCK_ADVANCED]
+    advance_details = _advance_details(connection, advances)
+    # The member-safe text goes only where the event itself may be named, whichever surface asks.
+    explainable = set(_event_refs(connection, audience, advances))
 
     result: dict[uuid.UUID, EventExplanation] = {}
     for e in events:
@@ -285,6 +318,9 @@ def explain_events(
             base.update(resolver.build_fields(effects, parts))
         elif family in (FAMILY_CLOCK_ADVANCED, FAMILY_CLOCK_CORRECTED):
             base.update(resolver.clock_fields(effects))
+            origin, explanation = advance_details.get(e.event_id, (None, None))
+            base["advance_origin"] = origin
+            base["member_explanation"] = explanation if e.event_id in explainable else None
         elif family in (FAMILY_LOCATION, FAMILY_TRAVEL):
             base["travel"] = travel.get(e.event_id)
         result[e.event_id] = EventExplanation(**base)
@@ -525,6 +561,34 @@ def _travel_entries(
     return {entry.event_id: entry for entry in entries}
 
 
+def _advance_details(
+    connection: Connection, advance_ids: Sequence[uuid.UUID]
+) -> dict[uuid.UUID, tuple[str, str | None]]:
+    """Origin and member-safe explanation of advances recorded under the CP-9b contract. The
+    origin is read from the stored cause rows, not from what the caller may see, so a cause the
+    caller cannot open still reads as caused rather than manual."""
+    if not advance_ids:
+        return {}
+    rows = connection.execute(
+        text("""
+            SELECT d.event_id, d.member_explanation,
+                   EXISTS (
+                       SELECT 1 FROM narrative.event_causes ec
+                       JOIN narrative.events ce ON ce.event_id = ec.cause_event_id
+                       JOIN narrative.event_types ct ON ct.event_type_id = ce.event_type_id
+                       WHERE ec.event_id = d.event_id AND ct.code <> ALL(CAST(:clock AS text[]))
+                   ) AS has_cause
+            FROM narrative.clock_advance_details d
+            WHERE d.event_id = ANY(CAST(:ids AS uuid[]))
+        """),
+        {"ids": list(advance_ids), "clock": sorted(_CLOCK_TYPES)},
+    )
+    return {
+        r.event_id: (ORIGIN_EVENT_CAUSE if r.has_cause else ORIGIN_MANUAL, r.member_explanation)
+        for r in rows
+    }
+
+
 def _relations(
     connection: Connection, audience: ExplanationAudience, events: Sequence[Any]
 ) -> dict[uuid.UUID, tuple[ExplanationRelation, ...]]:
@@ -606,6 +670,8 @@ def _relations(
                     relations.append(ExplanationRelation(relation, _unavailable("event"), reason))
                 continue
             relations.append(ExplanationRelation(relation, ref[0], reason))
+        # Cause rows share a creation instant and have random ids, so order by meaning instead.
+        relations.sort(key=lambda r: _RELATION_ORDER.get(r.relation, len(_RELATION_ORDER)))
         out[event_id] = tuple(relations)
     return out
 

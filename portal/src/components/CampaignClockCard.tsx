@@ -1,13 +1,19 @@
 import { useState } from "react"
-import { advanceClock, clockPath, correctClock } from "../api/campaignClock"
+import { advanceClock, clockCauseChoicesPath, clockPath, correctClock } from "../api/campaignClock"
 import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
-import type { ClockReceipt, ClockState } from "../types/campaignClock"
+import {
+    CLOCK_EXPLANATION_MAX_LENGTH,
+    type ClockCauseChoices,
+    type ClockReceipt,
+    type ClockState,
+} from "../types/campaignClock"
 import { ConfirmDialog } from "./authoring/ConfirmDialog"
 import { useAnnounce } from "./authoring/announcer"
 import { MutationStatusMessage, StaleWriteNotice } from "./authoring/feedback"
+import { SelectField, TextAreaField } from "./authoring/fields"
 import { WorldTimePicker } from "./authoring/WorldTimePicker"
 import "./authoring/authoring.css"
 
@@ -18,6 +24,9 @@ const CODE_MESSAGE: Readonly<Record<string, string>> = {
     clock_not_set: "There is no recorded time to correct yet. Advance the clock first.",
     clock_unchanged: "The clock already shows that time.",
     world_time_id_invalid: "That time is not available. Choose another.",
+    clock_cause_invalid: "That event can no longer be recorded as the cause. Choose another or none.",
+    clock_cause_after_target:
+        "That event takes effect after the new time, so it cannot have caused this advance.",
 }
 
 // The campaign's current world time on Campaign Home. Every member sees it;
@@ -46,11 +55,31 @@ export function CampaignClockCard({
     const [timeId, setTimeId] = useState("")
     const [confirming, setConfirming] = useState(false)
     const [pickerError, setPickerError] = useState<string | null>(null)
+    const [causeId, setCauseId] = useState("")
+    const [explanation, setExplanation] = useState("")
 
     const state = clock.state.kind === "ready" ? clock.state.data : null
 
+    // The optional cause picker reads only while the advance form is open, for the chosen time
+    // (the server offers only events that take effect by then). A failed read never blocks the
+    // advance: the picker is replaced by a note and the advance stays manual.
+    const causes = useAuthoringResource<ClockCauseChoices>(
+        canEdit && mode === "advance" ? clockCauseChoicesPath(campaignId, timeId) : null,
+    )
+    const choices = causes.state.kind === "ready" ? causes.state.data.choices : null
+    const chosenCause = choices?.find((c) => c.event_id === causeId) ?? null
+    // A cause that is not among the offered ones (the time changed under it) is not submitted.
+    const droppedCause = causeId !== "" && choices !== null && chosenCause === null
+
     const mutation = useAuthoringMutation<
-        { kind: "advance" | "correct"; timeId: string; version: number; eventId: string | null },
+        {
+            kind: "advance" | "correct"
+            timeId: string
+            version: number
+            eventId: string | null
+            causeEventId: string
+            explanation: string
+        },
         ClockReceipt
     >({
         scopeKey: `clock:${campaignId}`,
@@ -58,7 +87,13 @@ export function CampaignClockCard({
             command.kind === "advance"
                 ? advanceClock(
                       campaignId,
-                      { world_time_id: command.timeId, expected_row_version: command.version },
+                      {
+                          world_time_id: command.timeId,
+                          expected_row_version: command.version,
+                          // Left out entirely for a plain manual advance.
+                          ...(command.causeEventId !== "" ? { cause_event_id: command.causeEventId } : {}),
+                          ...(command.explanation.trim() !== "" ? { explanation: command.explanation.trim() } : {}),
+                      },
                       ctx,
                   )
                 : correctClock(
@@ -74,6 +109,8 @@ export function CampaignClockCard({
             const done = mode === "correct" ? "Clock corrected" : "Clock advanced"
             setMode("idle")
             setTimeId("")
+            setCauseId("")
+            setExplanation("")
             setConfirming(false)
             await clock.refetch()
             announce(done)
@@ -103,6 +140,8 @@ export function CampaignClockCard({
             timeId,
             version: state!.row_version,
             eventId: state!.last_event_id,
+            causeEventId: kind === "advance" && !droppedCause ? causeId : "",
+            explanation: kind === "advance" ? explanation : "",
         })
     }
 
@@ -200,6 +239,53 @@ export function CampaignClockCard({
                         required
                         error={pickerError}
                     />
+                    {mode === "advance" ? (
+                        <fieldset className="campaign-time__optional" aria-describedby="clock-optional-hint">
+                            <legend>Optional details</legend>
+                            <p id="clock-optional-hint" className="authoring-note">
+                                Leave both empty for a manual advance.
+                            </p>
+                            {causes.state.kind === "loading" ? (
+                                <p role="status">Loading events that could be the cause…</p>
+                            ) : choices === null ? (
+                                <p role="status">
+                                    Events that could be the cause could not be loaded. You can still advance the
+                                    clock manually.
+                                </p>
+                            ) : choices.length === 0 ? (
+                                <p>
+                                    No recorded events could have caused an advance to this time, so it will be a
+                                    manual advance.
+                                </p>
+                            ) : (
+                                <SelectField
+                                    id="clock-cause"
+                                    label="Cause"
+                                    value={droppedCause ? "" : causeId}
+                                    placeholder="No cause (manual advance)"
+                                    hint={
+                                        droppedCause
+                                            ? "The event you chose takes effect after this time, so it was cleared."
+                                            : "An event already recorded in this campaign. Members see it only if they may open that event."
+                                    }
+                                    options={choices.map((c) => ({
+                                        value: c.event_id,
+                                        label: `${c.name} (${c.in_world_time})`,
+                                    }))}
+                                    onChange={setCauseId}
+                                />
+                            )}
+                            <TextAreaField
+                                id="clock-explanation"
+                                label="Explanation for members"
+                                value={explanation}
+                                onChange={setExplanation}
+                                maxLength={CLOCK_EXPLANATION_MAX_LENGTH}
+                                rows={3}
+                                hint="Shown to campaign members who can view this event, so write it for players. Do not include GM-only notes."
+                            />
+                        </fieldset>
+                    ) : null}
                     <div className="authoring-actions">
                         <button
                             type="submit"
@@ -220,6 +306,8 @@ export function CampaignClockCard({
                             onClick={() => {
                                 setMode("idle")
                                 setTimeId("")
+                                setCauseId("")
+                                setExplanation("")
                                 setPickerError(null)
                                 mutation.reset()
                             }}

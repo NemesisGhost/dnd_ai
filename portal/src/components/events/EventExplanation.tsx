@@ -107,6 +107,18 @@ function BeforeAfter({ x }: { x: EventExplanationData }) {
     return null
 }
 
+// How a clock advance recorded under CP-9b came about. An earlier advance has no origin and says
+// nothing: lacking a cause does not make it manual.
+function advanceCause(x: EventExplanationData): string | null {
+    if (x.advance_origin === "manual") return "Manual advance"
+    if (x.advance_origin === "event_cause") {
+        return x.relations.some((r) => r.relation === "caused_by")
+            ? "A recorded event (linked below)"
+            : "A recorded event that is not available to you"
+    }
+    return null
+}
+
 // The shared explanation of an event. The two times are always separate and labelled: "In-world"
 // is the effective fictional time, "Recorded" the real moment the event was written down.
 export function EventExplanation({ explanation: x, density = "compact", campaignId = "", showTime = true, eventHref }: EventExplanationProps) {
@@ -117,6 +129,12 @@ export function EventExplanation({ explanation: x, density = "compact", campaign
         return (
             <div className="event-explanation event-explanation--compact">
                 {sentence !== null ? <p className="event-explanation__sentence">{sentence}</p> : null}
+                {x.advance_origin === "manual" ? (
+                    <p className="event-explanation__origin">Manual advance</p>
+                ) : null}
+                {x.member_explanation !== null ? (
+                    <p className="event-explanation__note">{x.member_explanation}</p>
+                ) : null}
                 {isTravel ? <TravelLegs legs={x.travel!.legs} /> : null}
                 {showTime ? <span className="session-activity__time">In-world: {x.in_world_time}</span> : null}
             </div>
@@ -143,6 +161,18 @@ export function EventExplanation({ explanation: x, density = "compact", campaign
                     </dd>
                 </div>
                 <BeforeAfter x={x} />
+                {advanceCause(x) !== null ? (
+                    <div className="fact-grid__row">
+                        <dt>Cause</dt>
+                        <dd>{advanceCause(x)}</dd>
+                    </div>
+                ) : null}
+                {x.member_explanation !== null ? (
+                    <div className="fact-grid__row">
+                        <dt>Explanation</dt>
+                        <dd className="event-explanation__note">{x.member_explanation}</dd>
+                    </div>
+                ) : null}
                 {x.session !== null ? (
                     <div className="fact-grid__row">
                         <dt>Session</dt>

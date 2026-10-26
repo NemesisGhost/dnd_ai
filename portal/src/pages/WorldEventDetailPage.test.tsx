@@ -30,6 +30,8 @@ const joinExplanation: EventExplanation = {
     new_build: null,
     previous_time: null,
     new_time: null,
+    advance_origin: null,
+    member_explanation: null,
     travel: null,
     session: null,
     relations: [],

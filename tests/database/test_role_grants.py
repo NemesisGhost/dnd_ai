@@ -119,6 +119,8 @@ MANAGED_TABLES = [
     ("narrative", "event_effects"),
     # Phase 15 checkpoint 15.2E-1 (revision 124): event corrections.
     ("narrative", "event_corrections"),
+    # CP-9b (revision 140): clock advance details.
+    ("narrative", "clock_advance_details"),
     ("narrative", "event_observations"),
     # Phase 6 — interactions
     ("interaction", "interaction_types"),

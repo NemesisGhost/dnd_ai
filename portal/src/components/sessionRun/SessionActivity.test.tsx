@@ -36,6 +36,8 @@ const clockExplanation: EventExplanation = {
     new_build: null,
     previous_time: { state: "named", text: "Year 1" },
     new_time: { state: "named", text: "Year 2" },
+    advance_origin: null,
+    member_explanation: null,
     travel: null,
     session: null,
     relations: [],

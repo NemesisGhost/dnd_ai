@@ -205,6 +205,7 @@ EXPECTED_TABLES = {
         "world.settlements",
     ],
     "narrative": [
+        "narrative.clock_advance_details",
         "narrative.event_causes",
         "narrative.event_corrections",
         "narrative.event_effects",

@@ -188,6 +188,7 @@ from .locations import (
     settlements,
 )
 from .narrative import (
+    clock_advance_details,
     event_causes,
     event_corrections,
     event_effects,
@@ -362,6 +363,7 @@ __all__ = [
     "entity_names",
     "entity_tags",
     "entity_types",
+    "clock_advance_details",
     "event_causes",
     "event_corrections",
     "event_effects",

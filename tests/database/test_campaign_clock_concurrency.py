@@ -14,6 +14,7 @@ import pytest
 from sqlalchemy import Engine, text
 
 from dnd_ai.commands.campaign_clock import advance_campaign_clock
+from dnd_ai.commands.events import record_event
 from dnd_ai.commands.world_time import create_calendar, create_world_time
 from dnd_ai.domain.authoring import StaleWriteError
 from tests.builders import make_authored_campaign, make_authored_world
@@ -123,3 +124,58 @@ def test_two_first_advances_one_creates_the_clock_the_other_is_stale(fx: Fixture
     assert isinstance(out["error"], StaleWriteError), out
     assert fx.clock() == (fx.years[0], 1)
     assert fx.events() == 1
+
+
+def test_two_causal_advances_with_one_expected_version_leave_one_detail_row(fx: Fixture) -> None:
+    with fx.engine.begin() as connection:
+        fx.advance(connection, 0, 0)
+        scope = connection.execute(
+            text(
+                "SELECT c.timeline_id, t.world_id FROM campaign.campaigns c "
+                "JOIN campaign.timelines t ON t.timeline_id = c.timeline_id "
+                "WHERE c.campaign_id = :c"
+            ),
+            {"c": fx.campaign_id},
+        ).one()
+    cause = record_event(
+        fx.engine,
+        world_id=scope.world_id,
+        timeline_id=scope.timeline_id,
+        world_time_id=fx.years[0],
+        event_type_code="other",
+        name="The cause",
+        campaign_id=fx.campaign_id,
+    ).event_id
+
+    def causal(index: int):  # type: ignore[no-untyped-def]
+        def run(connection):  # type: ignore[no-untyped-def]
+            return advance_campaign_clock(
+                connection,
+                campaign_id=fx.campaign_id,
+                actor_user_id=fx.owner,
+                world_time_id=fx.years[index],
+                expected_row_version=1,
+                cause_event_id=cause,
+                explanation=f"Explained {index}",
+            )
+
+        return run
+
+    out = race(fx.engine, causal(1), causal(2), CLOCK_ROW_LOCK)
+    assert isinstance(out["error"], StaleWriteError)
+    assert fx.clock() == (fx.years[1], 2)
+    with fx.engine.connect() as connection:
+        details = (
+            connection.execute(
+                text(
+                    "SELECT d.member_explanation FROM narrative.clock_advance_details d "
+                    "JOIN narrative.events e ON e.event_id = d.event_id "
+                    "WHERE e.campaign_id = :c ORDER BY d.created_at"
+                ),
+                {"c": fx.campaign_id},
+            )
+            .scalars()
+            .all()
+        )
+    # The first advance (no explanation) and the winner; the loser's rows rolled back.
+    assert details == [None, "Explained 1"]

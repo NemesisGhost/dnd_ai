@@ -6,6 +6,9 @@ const enc = encodeURIComponent
 
 export const clockPath = (campaignId: string): string => `/campaigns/${enc(campaignId)}/clock`
 
+export const clockCauseChoicesPath = (campaignId: string, worldTimeId: string): string =>
+    `${clockPath(campaignId)}/cause-choices${worldTimeId === "" ? "" : `?world_time_id=${enc(worldTimeId)}`}`
+
 export function advanceClock(
     campaignId: string,
     body: AdvanceClockBody,
