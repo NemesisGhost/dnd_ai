@@ -709,9 +709,7 @@ def resolve_knowledge_list(
             include_archived=False,
         )
     else:
-        scope = knowledge_archive_scope(
-            connection, world_id=world_id, lifecycle=lifecycle, viewer_user_id=access.user_id
-        )
+        scope = knowledge_archive_scope(connection, world_id=world_id, lifecycle=lifecycle)
         lifecycle_hidden = scope.hidden
         only_item_ids = scope.only
     items = list_knowledge(

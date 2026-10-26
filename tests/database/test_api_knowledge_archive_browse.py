@@ -49,6 +49,20 @@ class Claims:
                 connection, "Archived rejected golf", "rejected", "archived"
             )
             self.draft = self._claim(connection, "Active draft hotel", "draft", "active")
+            self.active_superseded = self._claim(
+                connection, "Active superseded juliet", "superseded", "active"
+            )
+            self.active_deprecated = self._claim(
+                connection, "Active deprecated kilo", "deprecated", "active"
+            )
+            self.active_unpublished = [
+                self._claim(connection, f"Active {status} lima", status, "active")
+                for status in ("proposed", "approved", "rejected")
+            ]
+            self.archived_unpublished = [
+                self._claim(connection, f"Archived {status} mike", status, "archived")
+                for status in ("proposed", "approved")
+            ]
             self.deleted = self._claim(connection, "Deleted claim india", "canon", "deleted")
             self.editor_user_id = fx.gm_user_id
 
@@ -145,16 +159,32 @@ def test_archived_and_all_semantics(
 
     everything = _ids(_list(client, f, view="known", lifecycle="all", limit=100))
     active = _ids(_list(client, f, view="known", lifecycle="active", limit=100))
-    assert active < everything
-    assert everything - active == {
-        str(claims.archived_a),
-        str(claims.archived_b),
-        str(claims.archived_c),
-        str(claims.archived_superseded),
-        str(claims.archived_deprecated),
+    # `active` is unchanged: the editor's unpublished active claims are still there.
+    assert str(claims.draft) in active
+    assert {str(c) for c in claims.active_unpublished} <= active
+    # `all` is published history in either operational state, whatever the canon status.
+    published_history = {
+        claims.active,
+        claims.active_superseded,
+        claims.active_deprecated,
+        claims.archived_a,
+        claims.archived_b,
+        claims.archived_c,
+        claims.archived_superseded,
+        claims.archived_deprecated,
+        f.fact_id,
     }
-    # Drafts/rejected (archived or not) stay out of archive browsing; deleted never appears.
-    for hidden in (claims.archived_draft, claims.archived_rejected, claims.deleted):
+    assert {str(c) for c in published_history} <= everything
+    # Unpublished claims never appear in archive browsing, active or archived; deleted never does.
+    unpublished = {
+        claims.draft,
+        claims.archived_draft,
+        claims.archived_rejected,
+        claims.deleted,
+        *claims.active_unpublished,
+        *claims.archived_unpublished,
+    }
+    for hidden in unpublished:
         assert str(hidden) not in everything
         assert str(hidden) not in archived
 

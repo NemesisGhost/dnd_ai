@@ -143,15 +143,15 @@ def knowledge_archive_scope(
     *,
     world_id: uuid.UUID,
     lifecycle: Literal["archived", "all"],
-    viewer_user_id: uuid.UUID,
 ) -> ArchiveScope:
     """The Knowledge archive-browse scope for a caller already known to be eligible (baseline
     campaign `canon.edit` and `world.canon.read_private`; the API decides that).
 
     * `archived`: operationally archived claims whose canon status is `canon`.
-    * `all`: the active list (unchanged) plus every archived published-history claim (`canon`,
-      `superseded`, `deprecated`). Archived drafts, proposals and rejected claims never appear:
-      they belong to the review views. Deleted claims never appear.
+    * `all`: every published-history claim (canon status `canon`, `superseded` or `deprecated`),
+      active or archived. Unpublished claims (draft, proposed, approved, rejected) never appear in
+      archive browsing whatever their lifecycle, since they live in the review views; deleted
+      claims never appear. Unlike `active`, `all` does not include the editor's unpublished claims.
     """
     if lifecycle == "archived":
         rows = connection.execute(
@@ -170,16 +170,9 @@ def knowledge_archive_scope(
         ).scalars()
         return ArchiveScope(only=frozenset(rows), hidden=frozenset())
 
-    active_hidden = lifecycle_hidden_entity_ids(
-        connection,
-        world_id=world_id,
-        mode="browse",
-        viewer_user_id=viewer_user_id,
-        can_edit_canon=True,
-        include_noncanon=True,
-        include_archived=True,
-    )
-    unpublished_archived = connection.execute(
+    # `all` is published history in either operational state: canon status and lifecycle status
+    # are independent, so an active draft is excluded exactly like an archived one.
+    not_history = connection.execute(
         text("""
             SELECT e.entity_id
             FROM core.entities e
@@ -188,12 +181,14 @@ def knowledge_archive_scope(
             JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = e.lifecycle_status_id
             WHERE e.world_id = :world_id
               AND et.code = 'knowledge_item'
-              AND ls.code = 'archived'
-              AND NOT (cs.code = ANY(CAST(:history AS text[])))
+              AND NOT (
+                    cs.code = ANY(CAST(:history AS text[]))
+                    AND ls.code IN ('active', 'archived')
+                  )
         """),
         {"world_id": world_id, "history": list(ARCHIVE_HISTORY_CANON_STATUSES)},
     ).scalars()
-    return ArchiveScope(only=None, hidden=active_hidden | frozenset(unpublished_archived))
+    return ArchiveScope(only=None, hidden=frozenset(not_history))
 
 
 @dataclass(frozen=True)
