@@ -144,7 +144,8 @@ def get_campaign_summary_endpoint(
                 event_status_code=e.event_status_code,
                 world_time_id=e.world_time_id,
                 world_time_display=e.world_time_display,
-                details=e.details,
+                # GM-only (D-3, data class GM_ONLY): the free-form event record is not a recap.
+                details=e.details if access.has_capability("canon.edit") else None,
                 explanation=explained.get(e.event_id),
             )
             for e in view.recent_events

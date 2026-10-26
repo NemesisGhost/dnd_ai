@@ -590,3 +590,35 @@ def test_an_event_of_another_campaign_is_not_explained_here(s: ContentSetup) -> 
     times = Times(s)
     event = _advance(s, times.at(1), 0).json()["event_id"]
     assert s.stranger.get(f"/campaigns/{s.other_cid}/world/events/{event}").status_code == 404
+
+
+def test_the_summary_withholds_gm_only_event_details_from_members(s: ContentSetup) -> None:
+    times = Times(s)
+    start_clock(s, times)
+    marker = "PRIVATE-DETAILS-MARKER-7731"
+    event = record_event(s, times.at(1), "A quiet moment", details=marker)
+    member = s.player.get(f"/campaigns/{s.cid}/summary")
+    assert member.status_code == 200, member.text
+    assert marker not in member.text
+    shown = next(e for e in member.json()["recent_events"] if e["event_id"] == event)
+    assert shown["name"] == "A quiet moment" and shown["details"] is None
+    assert shown["explanation"]["family"] == "other"
+    editor = s.gm.get(f"/campaigns/{s.cid}/summary").json()["recent_events"]
+    assert next(e for e in editor if e["event_id"] == event)["details"] == marker
+
+
+def test_only_a_clock_events_own_chain_row_reads_as_a_clock_chain_link(s: ContentSetup) -> None:
+    times = Times(s)
+    first = _advance(s, times.at(1), 0).json()["event_id"]
+    second = _advance(s, times.at(2), 1).json()["event_id"]
+    other = record_event(s, times.at(2), "Because of the new time")
+    s.connection.execute(
+        text("INSERT INTO narrative.event_causes (event_id, cause_event_id) VALUES (:e, :c)"),
+        {"e": other, "c": second},
+    )
+    (recorded,) = explanation(s, s.gm, other)["relations"]
+    assert recorded["relation"] == "caused_by" and recorded["event"]["entity_id"] == second
+    # The clock event's own chain row keeps its label.
+    (chain,) = explanation(s, s.gm, second)["relations"][:1]
+    assert chain["relation"] == "follows_previous_clock_change"
+    assert chain["event"]["entity_id"] == first

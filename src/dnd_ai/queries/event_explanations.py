@@ -612,9 +612,10 @@ def _relations(
 
 def _cause_relation(type_code: str, ref: tuple[ExplanationRef, str] | None) -> str:
     """The existing chain row of a clock event reads as following the previous clock change (or
-    correcting it); it is not proof that the earlier change caused gameplay. Any other cause is a
-    recorded gameplay cause."""
-    if ref is not None and ref[1] in _CLOCK_TYPES:
+    correcting it); it is not proof that the earlier change caused gameplay. Only a clock event's
+    own chain row is read this way: any other event whose cause is a clock event, and any other
+    cause, is a recorded cause."""
+    if type_code in _CLOCK_TYPES and ref is not None and ref[1] in _CLOCK_TYPES:
         return REL_CORRECTS_CLOCK if type_code == CLOCK_EVENT_CORRECTED else REL_FOLLOWS_CLOCK
     return REL_CAUSED_BY
 
