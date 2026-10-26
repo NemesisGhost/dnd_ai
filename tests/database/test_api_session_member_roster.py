@@ -12,6 +12,7 @@ from sqlalchemy import Connection, text
 
 from tests.authoring_support import AuthoringHarness, harness_fixture_factory
 from tests.content_support import ContentSetup, add_member
+from tests.database.test_api_campaign_clock import Times
 from tests.database.test_api_session_play import (
     base,
     detail,
@@ -141,17 +142,59 @@ def test_a_player_sees_their_character_and_a_discoverable_npc_but_not_a_hidden_o
     assert len(_roster(s, sid, "gm")) == 3
 
 
-def test_member_rows_are_present_only_and_carry_no_removed_history(s: ContentSetup) -> None:
-    pc = published_pc(s)
-    sid = _session(s, (pc, "player_character"))
-    _relate(s, s.player, pc, "character.view_summary")
-    first = _roster(s, sid, "gm")[0]
-    assert (
-        post(s, sid, f"/participants/{first['session_participant_id']}/remove", {}).status_code
-        == 200
-    )
-    assert _roster(s, sid) == []
-    assert len(_roster(s, sid, "gm")) == 1
+def test_a_member_sees_every_stint_of_a_discoverable_character_on_a_completed_session(
+    s: ContentSetup,
+) -> None:
+    from tests.database.test_api_session_play import set_clock
+
+    seen_pc, seen_npc = published_pc(s), published_npc(s, "Mira")
+    hidden, denied = published_npc(s, "Secret Agent"), published_npc(s, "Denied Dara")
+    set_clock(s)
+    sid = new_session(s)["session_id"]
+    assert post(s, sid, "/start", {}).status_code == 200
+
+    def add(character: str, role: str) -> dict:
+        added = post(
+            s, sid, "/participants", {"character_id": character, "participation_role": role}
+        )
+        assert added.status_code == 201, added.text
+        return added.json()
+
+    def remove(stint: dict) -> None:
+        done = post(s, sid, f"/participants/{stint['session_participant_id']}/remove", {})
+        assert done.status_code == 200, done.text
+
+    body = {"character_id": seen_pc, "participation_role": "player_character"}
+    first = add(seen_pc, "player_character")
+    remove(first)
+    assert post(s, sid, "/participants", body).status_code == 201  # rejoined
+    remove(add(seen_npc, "npc"))  # left for good
+    remove(add(hidden, "npc"))
+    add(denied, "npc")
+    _relate(s, s.player, seen_pc, "character.view_summary")
+    _grant(s, s.player, "character.discover", effect="allow", character_id=seen_npc)
+    _grant(s, s.player, "character.discover", effect="allow", character_id=denied)
+    _grant(s, s.player, "campaign.view", effect="deny", entity_id=denied)
+    assert post(s, sid, "/end", {"end_world_time_id": Times(s).at(5)}).status_code == 200
+
+    response = s.player.get(base(s, sid))
+    assert response.status_code == 200, response.text
+    assert response.json()["play_status"] == "completed"
+    rows = response.json()["participants"]
+    assert [(p["character_name"], p["removed_at"] is None) for p in rows] == [
+        ("Aldric", True),
+        ("Aldric", False),
+        ("Mira", False),
+    ]
+    assert all(p["added_at"] for p in rows)
+    assert len({p["session_participant_id"] for p in rows}) == 3
+    assert rows[1]["session_participant_id"] == first["session_participant_id"]
+    assert rows[1]["removed_at"] and rows[2]["removed_at"]
+    for forbidden in (hidden, denied, "Secret Agent", "Denied Dara"):
+        assert forbidden not in response.text
+    assert not any("hidden" in key or "count" in key for key in response.json())
+    # The GM still sees every stint of every character, unchanged.
+    assert len(_roster(s, sid, "gm")) == 5
 
 
 def test_an_entity_deny_removes_a_participant_for_that_member_only(s: ContentSetup) -> None:

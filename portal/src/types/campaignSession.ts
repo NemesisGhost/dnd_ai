@@ -93,7 +93,7 @@ export interface CampaignSessionDetail
     events: CampaignSessionEvent[]
     // Readable entries for the travel events above. Absent from older servers.
     travel?: SessionTravelEntry[]
-    // Editors: everyone, present or gone. Members: only the present participants they may
+    // Editors: every stint. Members: every stint (present or left) of the characters they may
     // discover; the list says nothing about anyone else.
     participants?: SessionParticipant[] | null
     // Editors only: the roles each kind of character may take (matching role first). Absent

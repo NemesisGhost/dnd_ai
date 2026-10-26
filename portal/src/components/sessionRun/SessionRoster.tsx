@@ -5,7 +5,7 @@ import { characterKindLabel } from "../../utils/characterKind"
 import { ROLE_LABEL } from "./participantRoles"
 import { RealWorldTime } from "./RealWorldTime"
 
-// The roster for one session (the GM's: every stint; a member's: only those present they may discover): every participant stint, present first, then those who left.
+// The roster for one session (the GM's: every stint; a member's: the same stints, only for characters they may discover). Present first, then those who left.
 // A character removed and added again is two rows (keyed by the participant record, not the
 // character). Read-only on its own; the Run page passes `controls` for the rows it may change.
 export function SessionRoster({

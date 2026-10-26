@@ -172,8 +172,8 @@ class SessionDetailResponse(BaseModel):
     play_status: str = "unscheduled"
     row_version: int | None = None
     available_actions: list[str] | None = None
-    # Editors: everyone who is (or was) present. Members: only those still present whom the
-    # caller may discover, with no trace of anyone else (no counts, placeholders or ids).
+    # Editors: every stint. Members: every stint, present or left, of the characters the caller
+    # may discover, with no trace of anyone else (no counts, placeholders or ids).
     participants: list[SessionParticipantResponse] | None = None
     # Editors only: the roles each kind of character may take, from the same policy the add
     # command enforces (character kind -> roles, matching role first). Additive.

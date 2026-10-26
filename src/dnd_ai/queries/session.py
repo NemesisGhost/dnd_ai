@@ -309,13 +309,13 @@ def list_session_participants(
     session_id: uuid.UUID,
     audience: MemberRosterAudience | None = None,
 ) -> tuple[SessionParticipantView, ...]:
-    """Present participants first (by name), then those removed.
+    """Present participants first (by name), then those who left; every stint is a row.
 
     With no `audience` this is the unfiltered GM roster, for `canon.edit` holders only
     (the route decides): presence names characters the viewer might not otherwise be
     allowed to see. With an `audience` (a campaign member without `canon.edit`) the
-    rows are filtered in SQL to the people who are still present and whom that caller
-    may discover, by the World Explorer's own rule: not entity-denied, and either
+    rows are filtered in SQL to the characters whom that caller may discover (every
+    stint of each, present or left, so a rejoin reads as two rows), by the World Explorer's own rule: not entity-denied, and either
     discoverable as a baseline and not force-hidden, or force-visible. A hidden
     participant never reaches Python, so no id, name or count of one can be serialized."""
     rows = connection.execute(
@@ -330,8 +330,7 @@ def list_session_participants(
               AND (
                 NOT CAST(:member AS boolean)
                 OR (
-                  sp.removed_at IS NULL
-                  AND NOT (sp.character_id = ANY(CAST(:denied AS uuid[])))
+                  NOT (sp.character_id = ANY(CAST(:denied AS uuid[])))
                   AND (
                     (CAST(:discover_all AS boolean)
                      AND NOT (sp.character_id = ANY(CAST(:char_hidden AS uuid[]))))
