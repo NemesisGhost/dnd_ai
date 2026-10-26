@@ -1,6 +1,7 @@
 import {
     useCallback,
     useEffect,
+    useRef,
     useState,
 } from "react"
 import {
@@ -8,6 +9,7 @@ import {
     KnowledgeRequestError,
 } from "../api/knowledge"
 import { useSession } from "../context/SessionContext"
+import type { RefetchOutcome } from "./useAuthoringResource"
 import type { KnowledgeDetail } from "../types/knowledge"
 
 export type KnowledgeDetailState =
@@ -30,8 +32,12 @@ export interface UseKnowledgeDetailResult {
     state: KnowledgeDetailState
     retry: () => void
     // Re-reads the detail in place: the current item stays on screen (nothing remounts)
-    // until the new one arrives, unlike `retry`, which starts again from "loading".
-    refresh: () => void
+    // until the new one arrives, unlike `retry`, which starts again from "loading". It resolves
+    // with what the read did and never rejects. "failed": it was not applied; a recoverable
+    // failure keeps the item already shown (a caller that just saved reports it as behind), while
+    // a refused or missing answer makes the item unavailable. "superseded": a newer read, a change
+    // of record or perspective, or a sign-in boundary replaced it.
+    refresh: () => Promise<RefetchOutcome>
 }
 
 interface KnowledgeDetailSnapshot {
@@ -59,7 +65,7 @@ export function useKnowledgeDetail(
 ): UseKnowledgeDetailResult {
     const { reload } = useSession()
     const [requestVersion, setRequestVersion] = useState(0)
-    const [refreshVersion, setRefreshVersion] = useState(0)
+    const refreshController = useRef<AbortController | null>(null)
 
     const [snapshot, setSnapshot] =
         useState<KnowledgeDetailSnapshot>(() => ({
@@ -71,9 +77,40 @@ export function useKnowledgeDetail(
             state: initialState,
         }))
 
-    const refresh = useCallback(() => {
-        setRefreshVersion((currentVersion) => currentVersion + 1)
-    }, [])
+    const refresh = useCallback(async (): Promise<RefetchOutcome> => {
+        refreshController.current?.abort()
+        const controller = new AbortController()
+        refreshController.current = controller
+        const keys = { campaignId, knowledgeItemId, characterId, partyId, requestVersion }
+        try {
+            const item = await fetchKnowledgeDetail(
+                campaignId,
+                knowledgeItemId,
+                characterId,
+                partyId,
+                controller.signal,
+            )
+            if (controller.signal.aborted) return "superseded"
+            setSnapshot({ ...keys, state: { status: "success", item } })
+            return "ok"
+        } catch (error: unknown) {
+            if (controller.signal.aborted) return "superseded"
+            if (error instanceof DOMException && error.name === "AbortError") return "superseded"
+            if (error instanceof KnowledgeRequestError && error.status === 401) {
+                void reload()
+                return "superseded"
+            }
+            if (
+                error instanceof KnowledgeRequestError &&
+                (error.status === 403 || error.status === 404)
+            ) {
+                setSnapshot({ ...keys, state: { status: "unavailable" } })
+                return "failed"
+            }
+            // Recoverable: the item already shown stays, and the caller says it may be behind.
+            return "failed"
+        }
+    }, [campaignId, knowledgeItemId, characterId, partyId, requestVersion, reload])
 
     const retry = useCallback(() => {
         setRequestVersion(
@@ -179,6 +216,7 @@ export function useKnowledgeDetail(
 
         return () => {
             controller.abort()
+            refreshController.current?.abort()
         }
     }, [
         campaignId,
@@ -187,7 +225,6 @@ export function useKnowledgeDetail(
         partyId,
         reload,
         requestVersion,
-        refreshVersion,
     ])
 
     return {

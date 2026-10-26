@@ -224,6 +224,73 @@ describe("useKnowledgeDetail", () => {
         )
     })
 
+    describe("refresh outcomes", () => {
+        const loaded = async () => {
+            fetchKnowledgeDetailMock.mockResolvedValueOnce(itemFixture)
+            const hook = renderHook(() => useKnowledgeDetail("campaign-a", "knowledge-a", null, null))
+            await waitFor(() => expect(hook.result.current.state.status).toBe("success"))
+            return hook
+        }
+
+        it("resolves ok once the new item is applied", async () => {
+            const { result } = await loaded()
+            const updated = { ...itemFixture, statement: "Changed." }
+            fetchKnowledgeDetailMock.mockResolvedValueOnce(updated)
+            let outcome: string | undefined
+            await act(async () => {
+                outcome = await result.current.refresh()
+            })
+            expect(outcome).toBe("ok")
+            expect(result.current.state).toEqual({ status: "success", item: updated })
+        })
+
+        it("resolves failed and keeps the item shown when the read fails recoverably", async () => {
+            const { result } = await loaded()
+            fetchKnowledgeDetailMock.mockRejectedValueOnce(new KnowledgeRequestError(500))
+            let outcome: string | undefined
+            await act(async () => {
+                outcome = await result.current.refresh()
+            })
+            expect(outcome).toBe("failed")
+            expect(result.current.state).toEqual({ status: "success", item: itemFixture })
+        })
+
+        it("fails closed when the read says the item is no longer available", async () => {
+            const { result } = await loaded()
+            fetchKnowledgeDetailMock.mockRejectedValueOnce(new KnowledgeRequestError(403))
+            let outcome: string | undefined
+            await act(async () => {
+                outcome = await result.current.refresh()
+            })
+            expect(outcome).toBe("failed")
+            expect(result.current.state).toEqual({ status: "unavailable" })
+        })
+
+        it("resolves superseded when a newer refresh replaces it, and applies only the newer", async () => {
+            const { result } = await loaded()
+            let releaseFirst: (item: KnowledgeDetail) => void = () => {}
+            fetchKnowledgeDetailMock.mockImplementationOnce(
+                (_c: string, _k: string, _ch: string | null, _p: string | null, signal: AbortSignal) =>
+                    new Promise<KnowledgeDetail>((resolve, reject) => {
+                        releaseFirst = resolve
+                        signal.addEventListener("abort", () => reject(new DOMException("x", "AbortError")))
+                    }),
+            )
+            const newer = { ...itemFixture, statement: "Newer." }
+            fetchKnowledgeDetailMock.mockResolvedValueOnce(newer)
+            let first: Promise<string> | undefined
+            let second: string | undefined
+            await act(async () => {
+                first = result.current.refresh()
+                second = await result.current.refresh()
+            })
+            releaseFirst({ ...itemFixture, statement: "Older." })
+            expect(await first).toBe("superseded")
+            expect(second).toBe("ok")
+            expect(result.current.state).toEqual({ status: "success", item: newer })
+        })
+    })
+
     it("aborts the request when the hook unmounts", () => {
         fetchKnowledgeDetailMock.mockReturnValue(
             new Promise<KnowledgeDetail>(() => {}),

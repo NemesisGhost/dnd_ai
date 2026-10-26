@@ -613,6 +613,31 @@ describe("unified knowledge claim page", () => {
       expect(screen.getByRole("button", { name: "Save claim" })).toBeDisabled()
     })
 
+    it("reports a confirmed save whose detail read failed as saved but behind, and retries only the read", async () => {
+      setup()
+      server.on("POST", UPDATE, () => {
+        current = { detail: detail({ truth_status_code: "false" }), view: view({ truth_status: "false", row_version: 2 }) }
+        // The authoring read-back works; the audience-safe detail read does not.
+        server.on("GET", DETAIL, { status: 500, body: { error: { code: "internal_error", message: "m", correlation_id: "c" } } })
+        return { body: RECEIPT }
+      })
+      await claimBox()
+      fireEvent.change(screen.getByRole("combobox", { name: /Truth/ }), { target: { value: "false" } })
+      fireEvent.click(screen.getByRole("button", { name: "Save claim" }))
+      expect(await screen.findByText(/Claim saved\. The latest claim could not be loaded/)).toBeInTheDocument()
+      const live = screen.getByTestId("authoring-announcer")
+      expect(live).toHaveTextContent("Saved, but the latest data could not be loaded.")
+      expect(live).not.toHaveTextContent("Knowledge claim saved")
+      // The confirmed edit is cleared from the form and the page stays mounted on what it had.
+      expect(screen.getByRole("combobox", { name: /Truth/ })).toHaveValue("false")
+      expect(screen.getByRole("button", { name: "Save claim" })).toBeDisabled()
+      // Load latest reads again once the detail is back, and never sends the save again.
+      server.on("GET", DETAIL, () => ({ body: current.detail }))
+      fireEvent.click(screen.getByRole("button", { name: "Load latest" }))
+      await waitFor(() => expect(screen.queryByText(/The latest claim could not be loaded/)).toBeNull())
+      expect(server.callsTo("POST", UPDATE)).toHaveLength(1)
+    })
+
     it("asks before changing a published claim", async () => {
       setup()
       current = { detail: detail(), view: view({ canon_status: "canon" }) }

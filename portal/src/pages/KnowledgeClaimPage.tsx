@@ -12,7 +12,7 @@ import { provenancePath } from "../api/sources"
 import { useAnnounce } from "../components/authoring/announcer"
 import { ConfirmDialog } from "../components/authoring/ConfirmDialog"
 import { SelectField, TextAreaField, TextField } from "../components/authoring/fields"
-import { ErrorSummary, MutationStatusMessage, StaleWriteNotice } from "../components/authoring/feedback"
+import { ErrorSummary, MutationStatusMessage, SavedRefreshFailedNotice, StaleWriteNotice } from "../components/authoring/feedback"
 import type { FieldError } from "../components/authoring/feedback"
 import { ReferenceCombobox } from "../components/authoring/ReferenceCombobox"
 import type { ReferenceOption } from "../components/authoring/ReferenceCombobox"
@@ -44,7 +44,7 @@ import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import type { RefreshOutcome } from "../hooks/useAuthoringMutation"
 import { useGatedAuthoringResource } from "../hooks/useGatedAuthoringResource"
-import type { UseAuthoringResourceResult } from "../hooks/useAuthoringResource"
+import type { RefetchOutcome, UseAuthoringResourceResult } from "../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard"
 import type { KnowledgeDetail } from "../types/knowledge"
@@ -53,6 +53,7 @@ import type { KnowledgeAuthoringView, KnowledgeOptions } from "../types/knowledg
 import type { Provenance } from "../types/provenance"
 import { ERROR_CODE_MESSAGE, REASON_MAX, fieldForErrorCode } from "../utils/authoringValidation"
 import { describeBlockedReason } from "../utils/blockedReason"
+import { combineRefetchOutcomes } from "../utils/refreshOutcome"
 import { KnowledgeDetailsPanel } from "../components/knowledge/KnowledgeDetailsPanel"
 import { characterKnowledgeOf } from "../utils/characterKnowledge"
 import { humanizeCode } from "../utils/humanize"
@@ -72,8 +73,8 @@ interface KnowledgeClaimPageProps {
     /** The perspective this claim was requested under. */
     characterId: string | null
     partyId: string | null
-    /** Re-reads the audience-safe detail in place after a claim save. */
-    refreshDetail: () => void
+    /** Re-reads the audience-safe detail in place after a claim save, and says what the read did. */
+    refreshDetail: () => Promise<RefetchOutcome>
 }
 
 const LOCK_REASON = "Someone already knows this claim, so this cannot change."
@@ -374,7 +375,7 @@ export function KnowledgeClaimPage({
                     afterDeletePath={listHref}
                     onChanged={() => {
                         void view.refetch()
-                        refreshDetail()
+                        void refreshDetail()
                     }}
                 >
                     <StageNav
@@ -895,6 +896,10 @@ function ClaimForm({
     const [attempt, setAttempt] = useState(0)
     const [confirming, setConfirming] = useState(false)
     const [saved, setSaved] = useState(false)
+    // The claim was saved, but the claim or its audience-safe detail could not be read back. Kept
+    // here, not in the mutation's status, which resets when the saved row version changes the scope.
+    const [behind, setBehind] = useState(false)
+    const [rereading, setRereading] = useState(false)
     const values: KnowledgeFormValues = { ...base, ...changes }
     const setValues = (next: KnowledgeFormValues) => setChanges(changedFields(base, next))
     const dirty = !same(values, base) || changeNote.trim() !== ""
@@ -908,12 +913,13 @@ function ClaimForm({
         request: (body, ctx) => updateKnowledgeItem(campaignId, knowledgeItemId, body, ctx),
         onSuccess: async () => {
             setConfirming(false)
-            const outcome = await refetch()
-            refreshDetail()
+            // Both reads must have been applied for the save to be shown as fully refreshed.
+            const outcome = combineRefetchOutcomes([await refetch(), await refreshDetail()])
             setChanges({})
             setChangeNote("")
             setErrors([])
             setSaved(true)
+            setBehind(outcome !== "ok")
             if (outcome === "ok") announce("Knowledge claim saved")
             return outcome
         },
@@ -963,9 +969,29 @@ function ClaimForm({
         }))
     }
 
+    // Reads again only; the save is confirmed and is never sent a second time.
+    async function loadLatest() {
+        setRereading(true)
+        try {
+            const outcome = combineRefetchOutcomes([await refetch(), await refreshDetail()])
+            if (outcome === "ok") setBehind(false)
+        } finally {
+            setRereading(false)
+        }
+    }
+
     const actions = (
         <>
             <ErrorSummary errors={all} attempt={attempt} />
+            {behind ? (
+                <SavedRefreshFailedNotice
+                    what="claim"
+                    done="Claim saved."
+                    quiet
+                    onRetry={() => void loadLatest()}
+                    retrying={rereading}
+                />
+            ) : null}
             {error !== null && error.kind === "stale" ? (
                 <StaleWriteNotice
                     loading={refreshing}
