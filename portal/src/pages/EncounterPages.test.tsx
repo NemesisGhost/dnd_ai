@@ -511,4 +511,58 @@ describe("PreparedEncounterPage operation", () => {
         expect(screen.queryByRole("form", { name: "Record a turn" })).not.toBeInTheDocument()
         expect(screen.queryByRole("form", { name: "End the encounter" })).not.toBeInTheDocument()
     })
+
+    it("reports a confirmed start whose re-read fails, holds every command, and recovers by reading only", async () => {
+        const server = setup(
+            "/app/c1/sessions/s1/encounters/e1",
+            encounter({ participants: encounter().participants.map((p: object) => ({ ...p, initiative: null })) }),
+        )
+        let started = false
+        let readFails = false
+        server.on("GET", `${AUTH}/e1`, () => {
+            if (readFails) return { status: 500, body: {} }
+            return { body: started ? active() : encounter() }
+        })
+        server.on("POST", `${BASE}/e1/start`, () => {
+            started = true
+            readFails = true
+            return { body: active() }
+        })
+        fireEvent.click(await screen.findByRole("button", { name: "Start encounter" }))
+
+        expect(await screen.findByText(/Encounter started. The latest encounter could not be loaded/)).toBeInTheDocument()
+        expect(screen.getByTestId("authoring-announcer")).not.toHaveTextContent(/^Encounter started/)
+        // The pending encounter stays on screen (not "does not exist"), and it no longer offers Start.
+        expect(screen.queryByText(/does not exist/)).toBeNull()
+        expect(screen.getByRole("button", { name: "Start encounter" })).toBeDisabled()
+        expect(server.callsTo("POST", `${BASE}/e1/start`)).toHaveLength(1)
+
+        readFails = false
+        fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+        await vi.waitFor(() => expect(screen.queryByRole("button", { name: "Start encounter" })).toBeNull())
+        expect(screen.queryByText(/could not be loaded/)).toBeNull()
+        expect(server.callsTo("POST", `${BASE}/e1/start`)).toHaveLength(1)
+    })
+
+    it("reports a confirmed turn whose re-read fails and does not let the same turn be sent again from the old view", async () => {
+        const server = setup("/app/c1/sessions/s1/encounters/e1", active())
+        let readFails = false
+        server.on("GET", `${AUTH}/e1`, () => (readFails ? { status: 500, body: {} } : { body: active() }))
+        server.on("POST", `${BASE}/e1/turns`, () => {
+            readFails = true
+            return { body: active() }
+        })
+        const form = await screen.findByRole("form", { name: "Record a turn" })
+        fireEvent.change(within(form).getByRole("combobox", { name: "Who acts" }), { target: { value: "n1" } })
+        fireEvent.click(within(form).getByRole("button", { name: "Record turn" }))
+
+        expect(await screen.findByText(/Turn recorded. The latest encounter could not be loaded/)).toBeInTheDocument()
+        expect(within(form).getByRole("button", { name: "Record turn" })).toBeDisabled()
+        expect(server.callsTo("POST", `${BASE}/e1/turns`)).toHaveLength(1)
+
+        readFails = false
+        fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+        await vi.waitFor(() => expect(within(form).getByRole("button", { name: "Record turn" })).toBeEnabled())
+        expect(server.callsTo("POST", `${BASE}/e1/turns`)).toHaveLength(1)
+    })
 })

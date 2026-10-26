@@ -7,6 +7,7 @@ import {
     createBuild,
     initializeCharacterState,
 } from "../api/characterBuilds"
+import { StaleReadNotice } from "../components/StaleReadNotice"
 import { ConfirmDialog } from "../components/authoring/ConfirmDialog"
 import { useAnnounce } from "../components/authoring/announcer"
 import { SelectField, TextField } from "../components/authoring/fields"
@@ -21,6 +22,9 @@ import type { FieldError } from "../components/authoring/feedback"
 import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
+import type { RefetchOutcome } from "../hooks/useAuthoringResource"
+import { useAnnounceWhenRead, useConfirmedRefresh } from "../hooks/useConfirmedRefresh"
+import { useKept } from "../hooks/useKeptResource"
 import { usePageArrival } from "../hooks/usePageArrival"
 import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard"
 import type {
@@ -64,10 +68,19 @@ function Unavailable({ noun }: { noun: string }) {
 // for anyone else, so a player sees only "unavailable").
 export function CharacterBuildsPage() {
     const { campaignId = "", characterId = "" } = useParams()
-    const resource = useAuthoringResource<CharacterBuilds>(characterBuildsPath(campaignId, characterId))
+    const buildsPath = characterBuildsPath(campaignId, characterId)
+    const resource = useAuthoringResource<CharacterBuilds>(buildsPath)
     const ready = resource.state.kind === "ready"
     const headingRef = usePageArrival(ready)
-    const data = resource.state.kind === "ready" ? resource.state.data : null
+    // The last builds that loaded stay through a failed re-read after a write, so the page that
+    // reports the save is not replaced by an error screen; a denied or missing answer drops them.
+    const data = useKept(resource.state, buildsPath)
+    const stale = resource.state.kind === "error" && data !== null
+    // A write whose read-back failed is announced by the page once the builds are read.
+    const announceWhenRead = useAnnounceWhenRead(
+        resource.state.kind === "ready" && !resource.state.refreshing,
+        resource.state,
+    )
 
     return (
         <section className="authoring-page" aria-labelledby="builds-heading">
@@ -89,23 +102,30 @@ export function CharacterBuildsPage() {
             </h1>
             {resource.state.kind === "loading" ? (
                 <p role="status">Loading builds…</p>
-            ) : resource.state.kind === "error" ? (
-                <p role="alert">The builds could not be loaded. Try reloading the page.</p>
             ) : data === null ? (
-                <Unavailable noun="character" />
+                resource.state.kind === "error" ? (
+                    <p role="alert">The builds could not be loaded. Try reloading the page.</p>
+                ) : (
+                    <Unavailable noun="character" />
+                )
             ) : (
                 <>
+                    {stale ? <StaleReadNotice what="builds" onRetry={() => void resource.refetch()} /> : null}
                     <StateSection
                         campaignId={campaignId}
                         characterId={characterId}
                         data={data}
                         refetch={resource.refetch}
+                        pageStale={stale}
+                        onUnread={announceWhenRead}
                     />
                     <BuildList
                         campaignId={campaignId}
                         characterId={characterId}
                         data={data}
                         refetch={resource.refetch}
+                        pageStale={stale}
+                        onUnread={announceWhenRead}
                     />
                 </>
             )}
@@ -118,11 +138,17 @@ function StateSection({
     characterId,
     data,
     refetch,
+    pageStale,
+    onUnread,
 }: {
     campaignId: string
     characterId: string
     data: CharacterBuilds
-    refetch: () => Promise<unknown>
+    refetch: () => Promise<RefetchOutcome>
+    // The page's latest read failed and `data` is the last builds that loaded.
+    pageStale: boolean
+    // The page announces a write it could not read back once the builds are read.
+    onUnread: (message: string) => void
 }) {
     const { reload } = useSession()
     const announce = useAnnounce()
@@ -137,10 +163,24 @@ function StateSection({
         scopeKey: `init-state:${campaignId}:${characterId}`,
         request: (body, ctx) => initializeCharacterState(campaignId, characterId, body, ctx),
         onSuccess: async () => {
-            await refetch()
-            announce("Starting state saved")
+            const outcome = await refetch()
+            if (outcome === "ok") announce("Starting state saved")
+            else onUnread("Starting state saved")
+            return outcome
         },
     })
+    const refreshed = useConfirmedRefresh({
+        status: mutation.status,
+        reset: mutation.reset,
+        what: "builds",
+        message: "Starting state saved",
+        read: refetch,
+        pageStale,
+        quietRecovery: true,
+    })
+    // The shown builds still say there is no state, so the form waits for the read instead of
+    // offering the same starting state a second time.
+    const writesHeld = refreshed.held || pageStale
 
     if (data.state.initialized) {
         return (
@@ -154,6 +194,7 @@ function StateSection({
     const pending = mutation.status.kind === "pending"
 
     function submit() {
+        if (writesHeld) return
         const found: FieldError[] = []
         if (!isWholeNumber(maximum) || Number(maximum) < 1) {
             found.push({
@@ -193,6 +234,7 @@ function StateSection({
                 This character has no state in this campaign yet. Set its hit points before activating a
                 build.
             </p>
+            {refreshed.notice}
             <ErrorSummary errors={errors} attempt={attempt} />
             {message !== null ? (
                 <p role="alert">{message}</p>
@@ -217,6 +259,7 @@ function StateSection({
             />
             <FormActions
                 pending={pending}
+                saveDisabled={writesHeld}
                 saveLabel="Set starting state"
                 onCancel={() => {
                     setMaximum("")
@@ -234,11 +277,15 @@ function BuildList({
     characterId,
     data,
     refetch,
+    pageStale,
+    onUnread,
 }: {
     campaignId: string
     characterId: string
     data: CharacterBuilds
-    refetch: () => Promise<unknown>
+    refetch: () => Promise<RefetchOutcome>
+    pageStale: boolean
+    onUnread: (message: string) => void
 }) {
     const { reload } = useSession()
     const announce = useAnnounce()
@@ -249,10 +296,23 @@ function BuildList({
             activateBuild(campaignId, characterId, build.character_build_id, data.active_build_id, ctx),
         onSuccess: async () => {
             setTarget(null)
-            await refetch()
-            announce("Build activated")
+            const outcome = await refetch()
+            if (outcome === "ok") announce("Build activated")
+            else onUnread("Build activated")
+            return outcome
         },
     })
+    const refreshed = useConfirmedRefresh({
+        status: mutation.status,
+        reset: mutation.reset,
+        what: "builds",
+        message: "Build activated",
+        read: refetch,
+        pageStale,
+        quietRecovery: true,
+    })
+    // Activation names the build that was active when it was shown; that is stale until the read.
+    const writesHeld = refreshed.held || pageStale
     const error = mutation.status.kind === "error" ? mutation.status.error : null
     const message = error?.code ? (CODE_MESSAGE[error.code] ?? null) : null
     const pending = mutation.status.kind === "pending"
@@ -268,6 +328,7 @@ function BuildList({
                     New build
                 </Link>
             </p>
+            {refreshed.notice}
             {error?.kind === "stale" ? (
                 <StaleWriteNotice
                     onLoadLatest={() => {
@@ -293,7 +354,7 @@ function BuildList({
                                 <button
                                     type="button"
                                     className="authoring-button"
-                                    disabled={!data.state.initialized}
+                                    disabled={!data.state.initialized || writesHeld}
                                     aria-describedby={
                                         data.state.initialized ? undefined : "activate-needs-state"
                                     }

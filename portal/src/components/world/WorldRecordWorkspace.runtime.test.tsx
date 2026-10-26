@@ -243,13 +243,17 @@ describe("an NPC's Run section agrees with the workspace", () => {
         fireEvent.click(within(form).getByRole("button", { name: "Apply hit point change" }))
         await waitFor(() => expect(server.callsTo("POST", `/campaigns/${C}/characters/n1/hit-points`)).toHaveLength(1))
         const run = inSection("Run this NPC")
-        expect(await run.findByText(/may be out of date/)).toBeVisible()
+        // The panel's own read warning, and the saved-but-not-read notice for the change that was sent.
+        expect((await run.findAllByText(/may be out of date/)).length).toBeGreaterThan(0)
+        expect(await run.findByText(/Hit points changed\. The latest NPC information could not be loaded/)).toBeVisible()
+        expect(screen.getByTestId("authoring-announcer")).not.toHaveTextContent(/^Hit points changed/)
         expect(run.getByText("10 of 20")).toBeInTheDocument()
         expect(fails.failed).toBeGreaterThan(0)
         fails.character = false
         fireEvent.click(run.getByRole("button", { name: "Try again" }))
         expect(await run.findByText("7 of 20")).toBeInTheDocument()
         expect(run.queryByText(/may be out of date/)).not.toBeInTheDocument()
+        await waitFor(() => expect(screen.getByTestId("authoring-announcer")).toHaveTextContent("Hit points changed"))
         // The retry only read: the change was recorded exactly once.
         expect(server.callsTo("POST", `/campaigns/${C}/characters/n1/hit-points`)).toHaveLength(1)
     })
@@ -423,13 +427,18 @@ describe("an organization's members and status", () => {
         fireEvent.click(within(form).getByRole("button", { name: "Set status" }))
         await waitFor(() => expect(server.callsTo("POST", `/campaigns/${C}/organizations/o1/status`)).toHaveLength(1))
         const members = within(screen.getByRole("heading", { level: 2, name: "Members and offices" }).closest("section")!)
-        expect(await members.findByText(/may be out of date/)).toBeVisible()
+        // The roster's own read warning, and the notice that the status was saved but not read back.
+        expect((await members.findAllByText(/may be out of date/)).length).toBeGreaterThan(0)
+        expect(await members.findByText(/Organization status saved\. The latest members and status could not be loaded/)).toBeVisible()
+        expect(screen.getByTestId("authoring-announcer")).not.toHaveTextContent(/^Organization status saved/)
         expect(members.getByText("Now: not recorded")).toBeInTheDocument()
+        expect(members.getByRole("button", { name: "Set status" })).toBeDisabled()
         expect(fails.failed).toBeGreaterThan(0)
         fails.roster = false
         fireEvent.click(members.getByRole("button", { name: "Try again" }))
         expect(await members.findByText("Now: dissolved")).toBeInTheDocument()
         expect(members.queryByText(/may be out of date/)).not.toBeInTheDocument()
+        await waitFor(() => expect(screen.getByTestId("authoring-announcer")).toHaveTextContent("Organization status saved"))
         expect(server.callsTo("POST", `/campaigns/${C}/organizations/o1/status`)).toHaveLength(1)
         fireEvent.click(screen.getByRole("link", { name: "1. Prepare" }))
         fireEvent.click(await screen.findByRole("link", { name: "Sources" }))

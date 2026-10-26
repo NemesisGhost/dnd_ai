@@ -1207,6 +1207,33 @@ describe("RelationshipsPanel: the editor keeps each form's input separate", () =
         await vi.waitFor(() => expect(screen.queryByRole("button", { name: "Details (unsaved)" })).toBeNull())
         expect(server.callsTo("POST", `${BASE}/r1/update`)).toHaveLength(1)
     })
+
+    it("holds a second save of a relationship whose latest read failed, reports the first as saved once, and recovers by reading only", async () => {
+        const { server } = live()
+        await openRow()
+        await screen.findByRole("form", { name: "Edit relationship" })
+        fireEvent.change(description(), { target: { value: "Saved text" } })
+        let detailFails = false
+        server.on("GET", `${BASE}/r1`, () =>
+            detailFails ? { status: 500, body: {} } : { body: { ...VIEW, description: "Saved text", row_version: 3 } },
+        )
+        server.on("POST", `${BASE}/r1/update`, () => {
+            detailFails = true
+            return { body: { ...VIEW, description: "Saved text", row_version: 3, changed: true } }
+        })
+        fireEvent.click(screen.getByRole("button", { name: "Save relationship" }))
+        expect(await screen.findByText(/latest relationship could not be loaded/)).toBeInTheDocument()
+        // The version the form still holds is the one before the save: another save would name it.
+        fireEvent.change(description(), { target: { value: "Edited again" } })
+        expect(screen.getByRole("button", { name: "Save relationship" })).toBeDisabled()
+        expect(server.callsTo("POST", `${BASE}/r1/update`)).toHaveLength(1)
+
+        detailFails = false
+        fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+        await vi.waitFor(() => expect(screen.getByRole("button", { name: "Save relationship" })).toBeEnabled())
+        expect(description()).toHaveValue("Edited again")
+        expect(server.callsTo("POST", `${BASE}/r1/update`)).toHaveLength(1)
+    })
 })
 
 describe("RelationshipsPanel: closing and switching", () => {

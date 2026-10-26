@@ -401,7 +401,9 @@ export function KnowledgeClaimPage({
                     view={lifecycleView ?? NO_LIFECYCLE(knowledgeItemId)}
                     refetch={async () => {
                         lifecycleRead.current = await lifecycle.refetch()
+                        return lifecycleRead.current
                     }}
+                    pageReportsRefresh
                     unsavedEdits={claimDirty}
                     afterDeletePath={listHref}
                     onChanged={readBack}

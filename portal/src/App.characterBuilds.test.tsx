@@ -110,6 +110,67 @@ describe("character build pages", () => {
     )
   })
 
+  it("reports an activation whose builds re-read fails, holds activation, and recovers by reading only", async () => {
+    let state = listing()
+    let readFails = false
+    server.on("GET", BUILDS, () => (readFails ? { status: 500, body: {} } : { body: state }))
+    server.on("POST", `${BUILDS}/b2/activate`, () => {
+      state = listing({
+        active_build_id: "b2",
+        builds: [build("b1", "Level 1", false), build("b2", "Level 2", true)],
+      })
+      readFails = true
+      return { body: { character_id: "c1", character_build_id: "b2", event_id: "ev", created: false, changed: true } }
+    })
+    openApp("/app/mundivita/characters/c1/builds")
+    fireEvent.click(await screen.findByRole("button", { name: "Activate Level 2" }))
+    const dialog = await screen.findByRole("dialog", { name: "Activate this build?" })
+    fireEvent.click(within(dialog).getByRole("button", { name: "Activate build" }))
+
+    expect(await screen.findByText(/Build activated\. The latest builds could not be loaded/)).toBeInTheDocument()
+    const live = screen.getByTestId("authoring-announcer")
+    expect(live).toHaveTextContent("Saved, but the latest data could not be loaded.")
+    expect(live).not.toHaveTextContent(/^Build activated/)
+    // The list stays (still showing Level 1 as active); activation would name that stale build.
+    expect(screen.getByRole("button", { name: "Activate Level 2" })).toBeDisabled()
+    expect(server.callsTo("POST", `${BUILDS}/b2/activate`)).toHaveLength(1)
+
+    readFails = false
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+    await waitFor(() => expect(screen.getByRole("button", { name: "Activate Level 1" })).toBeEnabled())
+    await waitFor(() => expect(live).toHaveTextContent("Build activated"))
+    expect(screen.queryByText(/could not be loaded/)).toBeNull()
+    expect(server.callsTo("POST", `${BUILDS}/b2/activate`)).toHaveLength(1)
+  })
+
+  it("reports a starting state whose re-read fails and never offers the form again until it is read", async () => {
+    let state = listing({
+      state: { initialized: false, current_hit_points: null, maximum_hit_points: null },
+      active_build_id: null,
+      builds: [build("b1", "Level 1", false)],
+    })
+    let readFails = false
+    server.on("GET", BUILDS, () => (readFails ? { status: 500, body: {} } : { body: state }))
+    server.on("POST", "/campaigns/mundivita/authoring/characters/c1/state/initialize", () => {
+      state = listing({ active_build_id: null, builds: [build("b1", "Level 1", false)] })
+      readFails = true
+      return { status: 201, body: { character_id: "c1", created: true, changed: true } }
+    })
+    openApp("/app/mundivita/characters/c1/builds")
+    fireEvent.change(await screen.findByLabelText(/Maximum hit points/), { target: { value: "12" } })
+    fireEvent.click(screen.getByRole("button", { name: "Set starting state" }))
+
+    expect(await screen.findByText(/Starting state saved\. The latest builds could not be loaded/)).toBeInTheDocument()
+    expect(screen.getByTestId("authoring-announcer")).not.toHaveTextContent(/^Starting state saved/)
+    expect(screen.getByRole("button", { name: "Set starting state" })).toBeDisabled()
+
+    readFails = false
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+    expect(await screen.findByText(/Hit points: 9 of 12/)).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByTestId("authoring-announcer")).toHaveTextContent("Starting state saved"))
+    expect(server.callsTo("POST", "/campaigns/mundivita/authoring/characters/c1/state/initialize")).toHaveLength(1)
+  })
+
   it.each([
     ["character_not_published", /Publish the character/],
     ["clock_required", /Set the campaign time/],

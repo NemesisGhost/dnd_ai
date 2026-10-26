@@ -7,6 +7,8 @@ import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import type { RefreshOutcome } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
+import { useConfirmedRefresh } from "../hooks/useConfirmedRefresh"
+import { combineRefetchOutcomes } from "../utils/refreshOutcome"
 import type {
     EntityLifecycleView,
     EntityTransitionBody,
@@ -173,11 +175,14 @@ function LoadedPanel({ campaignId, entityId, category, onChanged }: EntityLifecy
 interface PanelProps {
     campaignId: string
     view: EntityLifecycleView
-    refetch: () => Promise<unknown>
+    refetch: () => Promise<RefreshOutcome>
     // Called after a transition, once the record is read again. A caller that reads more than the
     // record (a claim's detail) may return what those reads did: anything but "ok" means the
     // change is confirmed but the page is behind, so the transition is not announced as done.
     onChanged?: () => void | Promise<RefreshOutcome>
+    // The page reports a step that was confirmed but not read back itself (its own notice and its own
+    // way to read again), so the panel adds neither a second notice nor a hold of its own.
+    pageReportsRefresh?: boolean
     // Set while the page holds unsaved edits to the record: every action then asks first, and says
     // the edits are not part of the change.
     unsavedEdits?: boolean
@@ -196,6 +201,11 @@ interface LifecycleActions {
     errorNode: ReactNode
     // Submitting for review has no dialog, so its failure is shown inline.
     inlineError: boolean
+    // "Saved, but the latest data could not be loaded", while a step that was confirmed has not been read
+    // back. Rendered beside the actions, because the dialog that sent the step closes once it is saved.
+    savedNotice: ReactNode
+    // The step is confirmed and what is shown is still from before it: no further step is offered.
+    held: boolean
     moreRef: RefObject<HTMLDetailsElement | null>
 }
 
@@ -211,6 +221,7 @@ function useLifecycleActions({
     onChanged,
     unsavedEdits = false,
     afterDeletePath,
+    pageReportsRefresh = false,
 }: PanelProps): { actions: LifecycleActions; dialogs: ReactNode } {
     const navigate = useNavigate()
     const announce = useAnnounce()
@@ -233,10 +244,18 @@ function useLifecycleActions({
     const moreRef = useRef<HTMLDetailsElement>(null)
     const asksFirst = (code: string | null) => code !== null && (ACTIONS[code]?.immediate !== true || unsavedEdits)
 
+    // Everything the step changed, read back: the record's lifecycle and whatever the page reads with
+    // it. "ok" only when every read was applied.
+    const readBack = async (): Promise<RefreshOutcome> =>
+        combineRefetchOutcomes([await refetch(), (await onChanged?.()) ?? "ok"])
+    // A confirmed step that was not read back. It is kept here, not in the mutation's status: the
+    // status belongs to the record's version and ends with it, while the step is still unread.
+    const [unread, setUnread] = useState<string | null>(null)
     const mutation = useAuthoringMutation<Submission, EntityTransitionResponse>({
         scopeKey: `entity:${view.entity_id}:${view.row_version}`,
         request: (submission, ctx) =>
             runEntityAction(campaignId, view.entity_id, submission.action, submission.body, ctx),
+        ownsRefreshNotice: true,
         onSuccess: async (result) => {
             const message = action === "supersede" ? "Record superseded" : (spec?.done ?? "Updated")
             setAction(null)
@@ -247,14 +266,32 @@ function useLifecycleActions({
                 })
                 return
             }
-            await refetch()
-            const read = await onChanged?.()
-            if (read === undefined || read === "ok") announce(message)
-            return read
+            const outcome = await readBack()
+            if (outcome === "ok") {
+                announce(message)
+            } else {
+                // Saved, but the record on screen is the one from before. Said at once (this
+                // component may be replaced when the record is read again), then held and offered a
+                // read; "done" is announced only when that read works.
+                announce("Saved, but the latest data could not be loaded.")
+                if (!pageReportsRefresh) setUnread(message)
+            }
+            return outcome
         },
+    })
+    const refreshed = useConfirmedRefresh({
+        status: unread === null ? { kind: "idle" } : { kind: "confirmed", refresh: "failed" },
+        reset: () => setUnread(null),
+        what: "status of this record",
+        message: unread,
+        read: readBack,
+        // The page stands in an empty lifecycle while its own read has not worked; the read that then
+        // works is what recovers a step that was saved before it.
+        pageStale: !view.lifecycle_managed,
     })
 
     function open(next: string) {
+        if (refreshed.held) return
         mutation.reset()
         setReason("")
         setReasonError(null)
@@ -266,7 +303,7 @@ function useLifecycleActions({
     }
 
     function confirm() {
-        if (spec === undefined) return
+        if (spec === undefined || refreshed.held) return
         const problem = validateReason(reason, spec.reason === "required")
         setReasonError(problem)
         if (problem) return
@@ -280,6 +317,7 @@ function useLifecycleActions({
     }
 
     function confirmSupersede(replacement: ReplacementCandidate) {
+        if (refreshed.held) return
         mutation.submit({
             action: "supersede",
             body: {
@@ -364,6 +402,8 @@ function useLifecycleActions({
             open,
             errorNode,
             inlineError: spec?.immediate === true && !unsavedEdits,
+            savedNotice: refreshed.notice,
+            held: refreshed.held,
             moreRef,
         },
         dialogs,
@@ -394,15 +434,16 @@ const actionButtonLabel = (code: string): string => (code === "supersede" ? "Sup
 // review section, so the step is there without a second click. Renders nothing when none is
 // available to the person.
 export function LifecycleReviewAction() {
-    const { available, pending, open, errorNode, inlineError } = useActions()
+    const { available, pending, open, errorNode, inlineError, savedNotice, held } = useActions()
     const code = FORWARD.find((c) => available.has(c))
     if (code === undefined) return null
     return (
         <div className="lifecycle-compact" role="group" aria-label="Review decision">
+            {savedNotice}
             <button
                 type="button"
                 className="authoring-button authoring-button--primary"
-                disabled={pending}
+                disabled={pending || held}
                 onClick={() => open(code)}
             >
                 {actionLabel(code)}
@@ -414,7 +455,7 @@ export function LifecycleReviewAction() {
 
 // Every action the server offers: the next step as the primary button, the rest under "More".
 export function LifecycleActionList() {
-    const { view, available, pending, open, errorNode, inlineError, moreRef } = useActions()
+    const { view, available, pending, open, errorNode, inlineError, moreRef, savedNotice, held } = useActions()
     const visible = ORDER.filter((code) => available.has(code))
     // The next forward step. When there is none, the step that leads out of a dead end is the
     // primary one instead of hiding under "More": Restore for an archived record, and Return to
@@ -432,7 +473,7 @@ export function LifecycleActionList() {
             key={code}
             type="button"
             className={primaryStyle ? "authoring-button authoring-button--primary" : "authoring-button"}
-            disabled={pending}
+            disabled={pending || held}
             onClick={() => open(code)}
         >
             {actionButtonLabel(code)}
@@ -440,6 +481,7 @@ export function LifecycleActionList() {
     )
     return (
         <div className="lifecycle-compact" role="group" aria-label="Lifecycle">
+            {savedNotice}
             {primary !== undefined ? button(primary, true) : null}
             {more.length > 0 ? (
                 <details className="lifecycle-compact__more" ref={moreRef}>

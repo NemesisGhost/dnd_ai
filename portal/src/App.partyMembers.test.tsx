@@ -131,6 +131,103 @@ describe("party members page", () => {
     )
   })
 
+  it("reports an ended membership whose roster re-read fails, holds further writes, and recovers by reading only", async () => {
+    let state = listing()
+    let rosterFails = false
+    server.on("GET", MEMBERS, () => (rosterFails ? { status: 500, body: {} } : { body: state }))
+    server.on("POST", `${MEMBERS}/m1/end`, () => {
+      state = listing("active", [member("m1", "Aldric", false)])
+      rosterFails = true
+      return {
+        body: { party_id: "p1", party_membership_id: "m1", row_version: 5, event_id: "ev", created: false, changed: true },
+      }
+    })
+    openApp("/app/mundivita/parties/p1")
+    fireEvent.click(await screen.findByRole("button", { name: "End membership of Aldric" }))
+    const dialog = await screen.findByRole("dialog", { name: "End this membership?" })
+    fireEvent.change(await within(dialog).findByRole("combobox", { name: /Ends at/ }), { target: { value: "t2" } })
+    fireEvent.click(within(dialog).getByRole("button", { name: "End membership" }))
+
+    expect(await screen.findByText(/Membership ended\. The latest party members could not be loaded/)).toBeInTheDocument()
+    const live = screen.getByTestId("authoring-announcer")
+    expect(live).toHaveTextContent("Saved, but the latest data could not be loaded.")
+    expect(live).not.toHaveTextContent(/^Membership ended/)
+    // The roster on screen is the older one, and it is not replaced by an error screen. It carries
+    // party version 4, so nothing that sends a version is offered until it is read again.
+    expect(screen.getByRole("button", { name: "End membership of Aldric" })).toBeDisabled()
+    expect(screen.getByRole("button", { name: "Add member" })).toBeDisabled()
+
+    rosterFails = false
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+    await waitFor(() => expect(screen.queryByRole("button", { name: "End membership of Aldric" })).toBeNull())
+    await waitFor(() => expect(live).toHaveTextContent("Membership ended"))
+    expect(screen.queryByText(/could not be loaded/)).toBeNull()
+    expect(server.callsTo("POST", `${MEMBERS}/m1/end`)).toHaveLength(1)
+  })
+
+  it("reports an added member whose roster re-read fails and never resends the add", async () => {
+    let state = listing("active", [])
+    let rosterFails = false
+    server.on("GET", MEMBERS, () => (rosterFails ? { status: 500, body: {} } : { body: state }))
+    server.on("POST", MEMBERS, () => {
+      state = listing("active", [member("m9", "Cael", true)])
+      rosterFails = true
+      return {
+        body: { party_id: "p1", party_membership_id: "m9", row_version: 5, event_id: "ev", created: true, changed: true },
+      }
+    })
+    openApp("/app/mundivita/parties/p1")
+    await screen.findByRole("heading", { level: 2, name: "Add a member" })
+    fireEvent.focus(screen.getByRole("combobox", { name: "Character" }))
+    fireEvent.click(await screen.findByRole("option", { name: /Cael/ }))
+    fireEvent.change(await screen.findByRole("combobox", { name: /Joins at/ }), { target: { value: "t1" } })
+    fireEvent.click(screen.getByRole("button", { name: "Add member" }))
+
+    expect(await screen.findByText(/Member added\. The latest party members could not be loaded/)).toBeInTheDocument()
+    expect(screen.getByTestId("authoring-announcer")).not.toHaveTextContent(/^Member added/)
+    // Saved once; the form is cleared and held, so the same member cannot be added again from here.
+    expect(screen.getByRole("button", { name: "Add member" })).toBeDisabled()
+    expect(server.callsTo("POST", MEMBERS)).toHaveLength(1)
+
+    rosterFails = false
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+    expect(await screen.findByRole("button", { name: "End membership of Cael" })).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByTestId("authoring-announcer")).toHaveTextContent("Member added"))
+    expect(server.callsTo("POST", MEMBERS)).toHaveLength(1)
+  })
+
+  it("retries an add whose answer was lost with the same body and key, and then reports the failed roster read without a third send", async () => {
+    let state = listing("active", [])
+    let rosterFails = false
+    let posts = 0
+    server.on("GET", MEMBERS, () => (rosterFails ? { status: 500, body: {} } : { body: state }))
+    server.on("POST", MEMBERS, () => {
+      posts += 1
+      if (posts === 1) return { networkError: true }
+      state = listing("active", [member("m9", "Cael", true)])
+      rosterFails = true
+      return {
+        body: { party_id: "p1", party_membership_id: "m9", row_version: 5, event_id: "ev", created: true, changed: true },
+      }
+    })
+    openApp("/app/mundivita/parties/p1")
+    await screen.findByRole("heading", { level: 2, name: "Add a member" })
+    fireEvent.focus(screen.getByRole("combobox", { name: "Character" }))
+    fireEvent.click(await screen.findByRole("option", { name: /Cael/ }))
+    fireEvent.change(await screen.findByRole("combobox", { name: /Joins at/ }), { target: { value: "t1" } })
+    fireEvent.click(screen.getByRole("button", { name: "Add member" }))
+
+    // The answer was lost: nothing is claimed, the input is kept, and Retry sends the same request.
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }))
+    expect(await screen.findByText(/Member added\. The latest party members could not be loaded/)).toBeInTheDocument()
+    const sent = server.callsTo("POST", MEMBERS)
+    expect(sent).toHaveLength(2)
+    expect(sent[1]!.body).toEqual(sent[0]!.body)
+    expect(sent[1]!.headers["Idempotency-Key"]).toBe(sent[0]!.headers["Idempotency-Key"])
+    expect(screen.getByRole("button", { name: "Add member" })).toBeDisabled()
+    expect(screen.getByTestId("authoring-announcer")).not.toHaveTextContent(/^Member added/)
+  })
+
   it("adds a member after choosing a character and a time, and explains an overlap", async () => {
     server.on("GET", MEMBERS, { body: listing("active", []) })
     server.on("POST", MEMBERS, {

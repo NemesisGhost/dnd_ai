@@ -385,7 +385,7 @@ function Workspace({
                     view={lifecycleView ?? NO_LIFECYCLE(questId)}
                     refetch={lifecycle.refetch}
                     afterDeletePath={reviewBack ?? questsPath(campaignId)}
-                    onChanged={() => void refreshAll()}
+                    onChanged={refreshAll}
                 >
                     <StageNav
                         ariaLabel="Quest workflow"

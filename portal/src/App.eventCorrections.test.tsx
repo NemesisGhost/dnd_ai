@@ -198,6 +198,79 @@ describe("event pages", () => {
     expect(await screen.findByText(/This event was voided: Entered twice/)).toBeInTheDocument()
   })
 
+  it("reports a confirmed void when the event re-read fails, holds the actions, and recovers by reading both again", async () => {
+    const fails = { event: true, preview: false }
+    let state = view()
+    let failing = { event: false, preview: false }
+    server.on("GET", E, () => (failing.event ? { status: 500, body: {} } : { body: state }))
+    server.on("GET", `${E}/correction-preview`, () =>
+      failing.preview ? { status: 500, body: {} } : { body: preview({ status: state.status }) },
+    )
+    server.on("POST", `${E}/void`, () => {
+      state = view({
+        status: "voided",
+        correction: { kind: "void", reason: "Entered twice", correcting_event_id: "e2", replacement_event_id: null },
+      })
+      failing = fails
+      return { body: { event_id: "e1", status: "voided", correction_id: "k1", correcting_event_id: "e2" } }
+    })
+    openApp("/app/mundivita/events/e1")
+    fireEvent.click(await screen.findByRole("button", { name: "Void event" }))
+    const dialog = await screen.findByRole("dialog", { name: "Void this event?" })
+    fireEvent.change(within(dialog).getByLabelText(/Reason/), { target: { value: "Entered twice" } })
+    fireEvent.click(within(dialog).getByRole("button", { name: "Void event" }))
+
+    expect(await screen.findByText(/Event voided\. The latest event could not be loaded/)).toBeInTheDocument()
+    const live = screen.getByTestId("authoring-announcer")
+    expect(live).toHaveTextContent("Saved, but the latest data could not be loaded.")
+    expect(live).not.toHaveTextContent(/^Event voided/)
+    // The page stays on what it last read, and cannot void or correct that event a second time.
+    expect(screen.getByRole("heading", { level: 1, name: "Mira is hurt" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Void event" })).toBeDisabled()
+    expect(screen.getByRole("button", { name: "Correct event" })).toBeDisabled()
+
+    failing = { event: false, preview: false }
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+    expect(await screen.findByText(/This event was voided: Entered twice/)).toBeInTheDocument()
+    await waitFor(() => expect(live).toHaveTextContent("Event voided"))
+    expect(screen.queryByText(/could not be loaded/)).toBeNull()
+    expect(server.callsTo("POST", `${E}/void`)).toHaveLength(1)
+  })
+
+  it("reports a confirmed void when only the correction preview re-read fails: the void shows, the page says it is behind, and no completion is announced until both reads work", async () => {
+    let state = view()
+    let previewFails = false
+    server.on("GET", E, () => ({ body: state }))
+    server.on("GET", `${E}/correction-preview`, () =>
+      previewFails ? { status: 500, body: {} } : { body: preview({ status: state.status }) },
+    )
+    server.on("POST", `${E}/void`, () => {
+      state = view({
+        status: "voided",
+        correction: { kind: "void", reason: "Entered twice", correcting_event_id: "e2", replacement_event_id: null },
+      })
+      previewFails = true
+      return { body: { event_id: "e1", status: "voided", correction_id: "k1", correcting_event_id: "e2" } }
+    })
+    openApp("/app/mundivita/events/e1")
+    fireEvent.click(await screen.findByRole("button", { name: "Void event" }))
+    const dialog = await screen.findByRole("dialog", { name: "Void this event?" })
+    fireEvent.change(within(dialog).getByLabelText(/Reason/), { target: { value: "Entered twice" } })
+    fireEvent.click(within(dialog).getByRole("button", { name: "Void event" }))
+
+    // The event read worked and shows the void; the form that sent it is gone with it. The page still
+    // says what it shows may be behind, and "Event voided" is not announced as done yet.
+    expect(await screen.findByText(/This event was voided: Entered twice/)).toBeInTheDocument()
+    expect(await screen.findByText(/The latest event could not be loaded/)).toBeInTheDocument()
+    expect(screen.getByTestId("authoring-announcer")).not.toHaveTextContent("Event voided")
+
+    previewFails = false
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+    await waitFor(() => expect(screen.queryByText(/could not be loaded/)).toBeNull())
+    await waitFor(() => expect(screen.getByTestId("authoring-announcer")).toHaveTextContent("Event voided"))
+    expect(server.callsTo("POST", `${E}/void`)).toHaveLength(1)
+  })
+
   it("corrects with a replacement and shows a refusal inside the dialog", async () => {
     server.on("GET", E, { body: view({ event_type_code: "other", effects: [] }) })
     server.on("GET", `${E}/correction-preview`, { body: preview({ effects: [] }) })

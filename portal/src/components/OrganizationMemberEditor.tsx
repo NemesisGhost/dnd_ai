@@ -3,6 +3,7 @@ import { relationshipAuthoringPath, runRelationshipCommand } from "../api/relati
 import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
+import type { RefetchOutcome } from "../hooks/useAuthoringResource"
 import type { RelationshipCommand, RelationshipView } from "../types/relationshipAuthoring"
 import { RELATIONSHIP_CODE_MESSAGE } from "../utils/relationshipForm"
 import { useAnnounce } from "./authoring/announcer"
@@ -26,7 +27,9 @@ interface Props {
     relationshipId: string
     memberName: string
     // The membership was recorded or ended: the roster reads again and closes this editor.
-    onSaved: () => void
+    onSaved: () => Promise<RefetchOutcome>
+    // The roster saved a change it could not read back; the panel reports it and announces it once it can.
+    onUnread: (message: string) => void
     onCancel: () => void
 }
 
@@ -38,7 +41,7 @@ interface Props {
 //     effective time and a new one starts there, so the earlier office stays in the history;
 //   - End: the member left, at a time after they joined.
 // Only the form being used is open, each saves on its own, and a refused save keeps what was typed.
-export function OrganizationMemberEditor({ campaignId, relationshipId, memberName, onSaved, onCancel }: Props) {
+export function OrganizationMemberEditor({ campaignId, relationshipId, memberName, onSaved, onUnread, onCancel }: Props) {
     const { reload } = useSession()
     const announce = useAnnounce()
     const { state, refetch } = useAuthoringResource<RelationshipView>(
@@ -49,9 +52,13 @@ export function OrganizationMemberEditor({ campaignId, relationshipId, memberNam
     const mutation = useAuthoringMutation<RelationshipCommand, RelationshipView>({
         scopeKey: `org-member:${relationshipId}`,
         request: (command, ctx) => runRelationshipCommand(campaignId, relationshipId, command, ctx),
-        onSuccess: () => {
-            announce(done)
-            onSaved()
+        // The roster panel reports a change it could not read back, with its own notice.
+        ownsRefreshNotice: true,
+        onSuccess: async () => {
+            const outcome = await onSaved()
+            if (outcome === "ok") announce(done)
+            else onUnread(done)
+            return outcome
         },
     })
     const error = mutation.status.kind === "error" ? mutation.status.error : null

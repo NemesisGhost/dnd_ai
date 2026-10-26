@@ -40,6 +40,7 @@ import { useRunNavigation } from "../components/sessionRun/useRunNavigation"
 import { useFocusOnSectionChange } from "../components/staged/useFocusOnSectionChange"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
+import { useAnnounceWhenRead, useConfirmedRefresh } from "../hooks/useConfirmedRefresh"
 import { useKept } from "../hooks/useKeptResource"
 import type { RefetchOutcome } from "../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
@@ -80,6 +81,12 @@ export function SessionRunPage() {
     // answer drops it: protected data is never shown past the end of the right to see it.
     const data = useKept(detail.state, path)
     const refreshFailed = detail.state.kind === "error" && data !== null
+    // A start or an end that was saved but not read back is announced once the session is read: the
+    // control that sent it is replaced by then (a started session no longer offers Start).
+    const announceWhenRead = useAnnounceWhenRead(
+        detail.state.kind === "ready" && !detail.state.refreshing,
+        detail.state,
+    )
 
     return (
         <section className="authoring-page" aria-labelledby="run-session-heading">
@@ -114,6 +121,7 @@ export function SessionRunPage() {
                         session={data}
                         refetch={detail.refetch}
                         refreshFailed={refreshFailed}
+                        onUnread={announceWhenRead}
                     />
                 </>
             )}
@@ -136,12 +144,15 @@ function RunBody({
     session,
     refetch,
     refreshFailed,
+    onUnread,
 }: {
     campaignId: string
     session: CampaignSessionDetail
     refetch: () => Promise<RefetchOutcome>
     // True when the latest read failed and `session` is the last one that loaded.
     refreshFailed: boolean
+    // What was saved without the session being read back: announced (and then acted on) once it is.
+    onUnread: (message: string, then?: () => void) => void
 }) {
     const actions = session.available_actions ?? []
     const status = session.play_status ?? "unscheduled"
@@ -215,6 +226,7 @@ function RunBody({
                 campaignId={campaignId}
                 session={session}
                 refetch={refetch}
+                refreshFailed={refreshFailed}
                 canLog={canLog}
                 reason={logReason}
             />
@@ -267,6 +279,8 @@ function RunBody({
                 campaignId={campaignId}
                 session={session}
                 refetch={refetch}
+                refreshFailed={refreshFailed}
+                onUnread={onUnread}
                 onEnded={() => setNotice("ended")}
             />
         ) : (
@@ -320,6 +334,8 @@ function RunBody({
                                     campaignId={campaignId}
                                     session={session}
                                     refetch={refetch}
+                                    refreshFailed={refreshFailed}
+                                    onUnread={onUnread}
                                     onStarted={() => setNotice("started")}
                                 />
                             ) : null}
@@ -349,11 +365,16 @@ function StartControl({
     campaignId,
     session,
     refetch,
+    refreshFailed,
+    onUnread,
     onStarted,
 }: {
     campaignId: string
     session: CampaignSessionDetail
-    refetch: () => Promise<unknown>
+    refetch: () => Promise<RefetchOutcome>
+    // The latest read failed and `session` is the last one that loaded: its version may be behind.
+    refreshFailed: boolean
+    onUnread: (message: string, then?: () => void) => void
     onStarted: () => void
 }) {
     const { reload } = useSession()
@@ -372,10 +393,26 @@ function StartControl({
                 ctx,
             ),
         onSuccess: async () => {
-            await refetch()
+            const outcome = await refetch()
+            if (outcome !== "ok") {
+                // Started, but the session on screen still says it has not: no completion, and no
+                // second start from it. The page announces it, and shows the link to the log, once
+                // the session is read (this control is gone by then).
+                onUnread("Session started", onStarted)
+                return outcome
+            }
             announce("Session started")
             onStarted()
         },
+    })
+    const refreshed = useConfirmedRefresh({
+        status: mutation.status,
+        reset: mutation.reset,
+        what: "session",
+        message: "Session started",
+        read: refetch,
+        pageStale: refreshFailed,
+        quietRecovery: true,
     })
     const error = mutation.status.kind === "error" ? mutation.status.error : null
     const message = useMessage(error)
@@ -398,10 +435,11 @@ function StartControl({
             ) : error !== null ? (
                 <MutationStatusMessage error={error} onRetry={mutation.retry} onCheckSession={reload} />
             ) : null}
+            {refreshed.notice}
             <button
                 type="button"
                 className="authoring-button authoring-button--primary"
-                disabled={mutation.status.kind === "pending"}
+                disabled={mutation.status.kind === "pending" || refreshed.held || refreshFailed}
                 onClick={() => mutation.submit()}
             >
                 Start session
@@ -531,12 +569,15 @@ function LogSection({
     campaignId,
     session,
     refetch,
+    refreshFailed,
     canLog,
     reason,
 }: {
     campaignId: string
     session: CampaignSessionDetail
-    refetch: () => Promise<unknown>
+    refetch: () => Promise<RefetchOutcome>
+    // The latest read failed and the log shown is from before the entry that was just recorded.
+    refreshFailed: boolean
     canLog: boolean
     reason: string
 }) {
@@ -569,9 +610,19 @@ function LogSection({
             }
             setErrors([])
             const outcome = await refetch()
-            if (outcome !== "ok") return outcome === "failed" ? "failed" : "superseded"
+            if (outcome !== "ok") return outcome
             announce("Entry recorded")
         },
+    })
+    // Recorded once, but the log shown does not list it yet: say so beside the form (so nobody types
+    // it again), and announce it once the session is read.
+    const refreshed = useConfirmedRefresh({
+        status: mutation.status,
+        reset: mutation.reset,
+        what: "session log",
+        message: "Entry recorded",
+        read: refetch,
+        pageStale: refreshFailed,
     })
     // The text in the form differs from an entry that may already have been recorded.
     const [earlierFirst, setEarlierFirst] = useState(false)
@@ -616,6 +667,7 @@ function LogSection({
             )}
             {canLog ? (
                 <AuthoringForm label="Record an entry" onSubmit={submit}>
+                    {refreshed.notice}
                     <ErrorSummary errors={errors} attempt={attempt} />
                     {message !== null ? (
                         <p role="alert">{message}</p>
@@ -681,11 +733,16 @@ function EndControl({
     campaignId,
     session,
     refetch,
+    refreshFailed,
+    onUnread,
     onEnded,
 }: {
     campaignId: string
     session: CampaignSessionDetail
-    refetch: () => Promise<unknown>
+    refetch: () => Promise<RefetchOutcome>
+    // The latest read failed and `session` is the last one that loaded: its version may be behind.
+    refreshFailed: boolean
+    onUnread: (message: string, then?: () => void) => void
     onEnded: () => void
 }) {
     const { reload } = useSession()
@@ -708,18 +765,35 @@ function EndControl({
             ),
         onSuccess: async () => {
             setOpen(false)
-            await refetch()
+            const outcome = await refetch()
+            if (outcome !== "ok") {
+                // Ended, but the session on screen still says it is running: no completion, and no
+                // second end from it. The page announces it once the session is read.
+                onUnread("Session ended", onEnded)
+                return outcome
+            }
             announce("Session ended")
             onEnded()
         },
+    })
+    const refreshed = useConfirmedRefresh({
+        status: mutation.status,
+        reset: mutation.reset,
+        what: "session",
+        message: "Session ended",
+        read: refetch,
+        pageStale: refreshFailed,
+        quietRecovery: true,
     })
     const error = mutation.status.kind === "error" ? mutation.status.error : null
     const message = useMessage(error)
     return (
         <>
+            {refreshed.notice}
             <button
                 type="button"
                 className="authoring-button"
+                disabled={refreshed.held || refreshFailed}
                 onClick={() => {
                     mutation.reset()
                     setOpen(true)

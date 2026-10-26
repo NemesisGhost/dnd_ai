@@ -8,6 +8,7 @@ import {
     restoreParty,
     updateParty,
 } from "../api/parties"
+import { StaleReadNotice } from "../components/StaleReadNotice"
 import { ConfirmDialog } from "../components/authoring/ConfirmDialog"
 import { useAnnounce } from "../components/authoring/announcer"
 import { TextAreaField, TextField } from "../components/authoring/fields"
@@ -22,6 +23,9 @@ import type { FieldError } from "../components/authoring/feedback"
 import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
+import type { RefetchOutcome } from "../hooks/useAuthoringResource"
+import { useAnnounceWhenRead, useConfirmedRefresh } from "../hooks/useConfirmedRefresh"
+import { useKept } from "../hooks/useKeptResource"
 import { usePageArrival } from "../hooks/usePageArrival"
 import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard"
 import type { PartyFieldsBody, PartyItem, PartyList, PartyReceipt } from "../types/parties"
@@ -45,9 +49,16 @@ const CODE_MESSAGE: Readonly<Record<string, string>> = {
 export function PartiesPage() {
     const { campaignId = "" } = useParams()
     const [showArchived, setShowArchived] = useState(false)
-    const list = useAuthoringResource<PartyList>(partiesPath(campaignId, showArchived))
+    const listPath = partiesPath(campaignId, showArchived)
+    const list = useAuthoringResource<PartyList>(listPath)
     const headingRef = usePageArrival(list.state.kind === "ready")
-    const data = list.state.kind === "ready" ? list.state.data : null
+    // The last list that loaded stays through a failed re-read (after an archive or restore, say),
+    // so the rows and the notice that explains the failure are not replaced by an error screen.
+    const data = useKept(list.state, listPath)
+    const stale = list.state.kind === "error" && data !== null
+    // What a row saved without the list being read back. The row can be gone from the recovered
+    // list (an archived party), so the page announces it once a read has succeeded.
+    const announceWhenRead = useAnnounceWhenRead(list.state.kind === "ready" && !list.state.refreshing, list.state)
 
     return (
         <section className="authoring-page" aria-labelledby="parties-heading">
@@ -59,12 +70,15 @@ export function PartiesPage() {
             </h1>
             {list.state.kind === "loading" ? (
                 <p role="status">Loading parties…</p>
-            ) : list.state.kind === "error" ? (
-                <p role="alert">The parties could not be loaded. Try reloading the page.</p>
             ) : data === null ? (
-                <p role="alert">You do not have access to this campaign's parties.</p>
+                list.state.kind === "error" ? (
+                    <p role="alert">The parties could not be loaded. Try reloading the page.</p>
+                ) : (
+                    <p role="alert">You do not have access to this campaign's parties.</p>
+                )
             ) : (
                 <>
+                    {stale ? <StaleReadNotice what="party list" onRetry={() => void list.refetch()} /> : null}
                     {data.can_create ? (
                         <div className="authoring-page__actions-row">
                             <Link className="authoring-button" to={`${base(campaignId)}/parties/new`}>
@@ -90,6 +104,8 @@ export function PartiesPage() {
                                     campaignId={campaignId}
                                     party={party}
                                     refetch={list.refetch}
+                                    pageStale={stale}
+                                    onUnread={announceWhenRead}
                                 />
                             ))}
                         </ul>
@@ -104,16 +120,23 @@ function PartyRow({
     campaignId,
     party,
     refetch,
+    pageStale,
+    onUnread,
 }: {
     campaignId: string
     party: PartyItem
-    refetch: () => Promise<unknown>
+    refetch: () => Promise<RefetchOutcome>
+    // The page's latest read of the list failed and this row is from an earlier one.
+    pageStale: boolean
+    // This row saved something the list has not been read back for.
+    onUnread: (message: string) => void
 }) {
     const { reload } = useSession()
     const announce = useAnnounce()
     const [dialog, setDialog] = useState<"archive" | "restore" | null>(null)
     const [reason, setReason] = useState("")
     const [reasonError, setReasonError] = useState<string | null>(null)
+    const [saved, setSaved] = useState<string | null>(null)
     const mutation = useAuthoringMutation<"archive" | "restore", PartyReceipt>({
         scopeKey: `party-lifecycle:${party.party_id}:${party.row_version}`,
         request: (action, ctx) =>
@@ -132,12 +155,27 @@ function PartyRow({
                   ),
         onSuccess: async () => {
             const done = dialog === "archive" ? "Party archived" : "Party restored"
+            setSaved(done)
             setDialog(null)
             setReason("")
-            await refetch()
-            announce(done)
+            const outcome = await refetch()
+            // Saved, but the list was not read back: the row still shows the old state and version.
+            if (outcome === "ok") announce(done)
+            else onUnread(done)
+            return outcome
         },
     })
+    const refreshed = useConfirmedRefresh({
+        status: mutation.status,
+        reset: mutation.reset,
+        what: "party list",
+        message: saved,
+        read: refetch,
+        pageStale,
+        quietRecovery: true,
+    })
+    // The row's actions send the version it shows, so they wait for the read that replaces it.
+    const writesHeld = refreshed.held || pageStale
     const error = mutation.status.kind === "error" ? mutation.status.error : null
     const message = error?.code ? (CODE_MESSAGE[error.code] ?? null) : null
     const actions = party.available_actions ?? []
@@ -176,6 +214,7 @@ function PartyRow({
                         <button
                             type="button"
                             className="authoring-button"
+                            disabled={writesHeld}
                             onClick={() => {
                                 mutation.reset()
                                 setDialog("archive")
@@ -188,6 +227,7 @@ function PartyRow({
                         <button
                             type="button"
                             className="authoring-button"
+                            disabled={writesHeld}
                             onClick={() => {
                                 mutation.reset()
                                 setDialog("restore")
@@ -198,6 +238,7 @@ function PartyRow({
                     ) : null}
                 </p>
             )}
+            {refreshed.notice}
             <ConfirmDialog
                 open={dialog !== null}
                 title={dialog === "restore" ? "Restore this party?" : "Archive this party?"}

@@ -398,6 +398,40 @@ describe("OrganizationMembers", () => {
         await vi.waitFor(() => expect(screen.queryByRole("form", { name: "Add a member" })).not.toBeInTheDocument())
     })
 
+    it("reports an added member whose roster re-read fails, holds another add, and recovers by reading only", async () => {
+        const server = setup()
+        let rosterFails = false
+        server.on("GET", ROSTER_PATH, () => (rosterFails ? { status: 500, body: {} } : { body: roster() }))
+        server.on("POST", /authoring\/relationships$/, () => {
+            rosterFails = true
+            return { status: 201, body: { relationship_id: "r9" } }
+        })
+        fireEvent.click(await screen.findByRole("button", { name: "Add a member" }))
+        const form = screen.getByRole("form", { name: "Add a member" })
+        fireEvent.focus(within(form).getByRole("combobox", { name: "Member" }))
+        fireEvent.click((await within(form).findAllByRole("option", { name: /Ann/ }))[0]!)
+        fireEvent.change(await within(form).findByRole("combobox", { name: "Joined" }), { target: { value: "t1" } })
+        fireEvent.click(within(form).getByRole("button", { name: "Add member" }))
+
+        expect(await screen.findByText(/Member added\. The latest members and status could not be loaded/)).toBeInTheDocument()
+        const live = screen.getByTestId("authoring-announcer")
+        expect(live).not.toHaveTextContent(/^Member added/)
+        // The roster shown is the one from before, and adding again is held until it is read.
+        expect(screen.getByText("Mira")).toBeInTheDocument()
+        fireEvent.click(screen.getByRole("button", { name: "Add a member" }))
+        expect(within(screen.getByRole("form", { name: "Add a member" })).getByRole("button", { name: "Add member" })).toBeDisabled()
+        expect(server.callsTo("POST", /authoring\/relationships$/)).toHaveLength(1)
+
+        rosterFails = false
+        fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+        await vi.waitFor(() =>
+            expect(within(screen.getByRole("form", { name: "Add a member" })).getByRole("button", { name: "Add member" })).toBeEnabled(),
+        )
+        await vi.waitFor(() => expect(live).toHaveTextContent("Member added"))
+        expect(screen.queryByText(/could not be loaded/)).toBeNull()
+        expect(server.callsTo("POST", /authoring\/relationships$/)).toHaveLength(1)
+    })
+
     it("records a new time inside a form without nesting a form in it", async () => {
         setup()
         fireEvent.click(await screen.findByRole("button", { name: "Add a member" }))

@@ -3,8 +3,11 @@ import { Link, useParams } from "react-router"
 import { archiveWorld, restoreWorld, worldPath } from "../api/worlds"
 import { TransitionControls } from "../components/authoring/TransitionControls"
 import { LifecycleBadge } from "../components/authoring/feedback"
+import { StaleReadNotice } from "../components/StaleReadNotice"
 import { TimelineTree } from "../components/TimelineTree"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
+import type { RefetchOutcome } from "../hooks/useAuthoringResource"
+import { useKept } from "../hooks/useKeptResource"
 import { usePageArrival } from "../hooks/usePageArrival"
 import type { WorldDetail } from "../types/worldAuthoring"
 import { ERROR_CODE_MESSAGE } from "../utils/authoringValidation"
@@ -19,7 +22,12 @@ import "../components/authoring/authoring.css"
 // restore, timeline-authoring, or campaign-creation controls or links at all.
 export function WorldOverviewPage() {
     const { worldId = "" } = useParams()
-    const { state, refetch } = useAuthoringResource<WorldDetail>(worldPath(worldId))
+    const url = worldPath(worldId)
+    const { state, refetch } = useAuthoringResource<WorldDetail>(url)
+    // The last world that loaded stays through a failed re-read (after an archive or restore, say),
+    // so the page that reports the save is not replaced by "could not be loaded".
+    const kept = useKept(state, url)
+    const stale = state.kind === "error" && kept !== null
     const headingRef = usePageArrival(state.kind === "ready")
 
     return (
@@ -47,21 +55,27 @@ export function WorldOverviewPage() {
                             <Link to="/worlds">Back to your worlds</Link>
                         </p>
                     </>
-                ) : state.kind === "error" ? (
+                ) : kept === null ? (
                     <>
                         <h1 ref={headingRef} tabIndex={-1}>
                             World
                         </h1>
                         <p role="alert">The world could not be loaded. Try reloading the page.</p>
                     </>
-                ) : worldAccess(state.data) === "edit" ? (
-                    <WorldOverview
-                        world={state.data}
-                        headingRef={headingRef}
-                        refetch={refetch}
-                    />
                 ) : (
-                    <ReadOnlyWorldOverview world={state.data} headingRef={headingRef} />
+                    <>
+                        {stale ? <StaleReadNotice what="world" onRetry={() => void refetch()} /> : null}
+                        {worldAccess(kept) === "edit" ? (
+                            <WorldOverview
+                                world={kept}
+                                headingRef={headingRef}
+                                refetch={refetch}
+                                pageStale={stale}
+                            />
+                        ) : (
+                            <ReadOnlyWorldOverview world={kept} headingRef={headingRef} />
+                        )}
+                    </>
                 )}
             </div>
         </div>
@@ -147,10 +161,12 @@ function ReadOnlyWorldOverview({ world, headingRef }: ReadOnlyWorldOverviewProps
 interface WorldOverviewProps {
     world: WorldDetail
     headingRef: RefObject<HTMLHeadingElement | null>
-    refetch: () => Promise<unknown>
+    refetch: () => Promise<RefetchOutcome>
+    // The page's latest read failed and `world` is the last that loaded.
+    pageStale: boolean
 }
 
-function WorldOverview({ world, headingRef, refetch }: WorldOverviewProps) {
+function WorldOverview({ world, headingRef, refetch, pageStale }: WorldOverviewProps) {
     const available = new Set(world.available_actions)
     // A transition blocked only because the record is in the wrong state is
     // obvious from the state itself; every other reason is worth explaining.
@@ -219,6 +235,7 @@ function WorldOverview({ world, headingRef, refetch }: WorldOverviewProps) {
                     archive={(body, ctx) => archiveWorld(world.world_id, body, ctx)}
                     restore={(body, ctx) => restoreWorld(world.world_id, body, ctx)}
                     refetch={refetch}
+                    pageStale={pageStale}
                     archiveDescription="An archived world is read-only until it is restored. Its timelines and campaigns are not changed, and it cannot be archived while it has active campaigns."
                     restoreDescription="The world becomes editable again. Its timelines and campaigns are not changed."
                 />

@@ -5,6 +5,8 @@ import { useAnnounce } from "./authoring/announcer"
 import { MutationStatusMessage, StaleWriteNotice } from "./authoring/feedback"
 import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
+import type { RefreshOutcome } from "../hooks/useAuthoringMutation"
+import { useConfirmedRefresh } from "../hooks/useConfirmedRefresh"
 import type { CampaignSessionDetail, SessionReceipt } from "../types/campaignSession"
 import { SESSION_ERROR_MESSAGE } from "../utils/sessionForm"
 import "./authoring/authoring.css"
@@ -31,7 +33,10 @@ export function SessionLifecycleControls({
     const [dialog, setDialog] = useState<"archive" | "restore" | null>(null)
     const [reason, setReason] = useState("")
     const [reasonError, setReasonError] = useState<string | null>(null)
+    const [saved, setSaved] = useState<string | null>(null)
     const actions = canManage ? (session.available_actions ?? []) : []
+    // A read that did not apply is "failed" here: the caller keeps the session it has either way.
+    const read = async (): Promise<RefreshOutcome> => ((await refresh()) ? "ok" : "failed")
     const mutation = useAuthoringMutation<"archive" | "restore", SessionReceipt>({
         scopeKey: `session-lifecycle:${session.session_id}:${session.row_version ?? 0}`,
         request: (action, ctx) =>
@@ -50,11 +55,21 @@ export function SessionLifecycleControls({
                   ),
         onSuccess: async () => {
             const done = dialog === "archive" ? "Session archived" : "Session restored"
+            setSaved(done)
             setDialog(null)
             setReason("")
-            await refresh()
-            announce(done)
+            const outcome = await read()
+            // Saved, but the session on screen still offers the old action at the old version.
+            if (outcome === "ok") announce(done)
+            return outcome
         },
+    })
+    const refreshed = useConfirmedRefresh({
+        status: mutation.status,
+        reset: mutation.reset,
+        what: "session",
+        message: saved,
+        read,
     })
     const error = mutation.status.kind === "error" ? mutation.status.error : null
     const message = error?.code ? (SESSION_ERROR_MESSAGE[error.code] ?? null) : null
@@ -64,6 +79,7 @@ export function SessionLifecycleControls({
     return (
         <section aria-labelledby="session-lifecycle-heading">
             <h2 id="session-lifecycle-heading">Archive</h2>
+            {refreshed.notice}
             {inProgress ? (
                 <p className="authoring-note">End the session before archiving it.</p>
             ) : null}
@@ -71,7 +87,7 @@ export function SessionLifecycleControls({
                 <button
                     type="button"
                     className="authoring-button"
-                    disabled={Boolean(blockedReason)}
+                    disabled={Boolean(blockedReason) || refreshed.held}
                     onClick={() => {
                         mutation.reset()
                         setDialog("archive")
@@ -87,6 +103,7 @@ export function SessionLifecycleControls({
                 <button
                     type="button"
                     className="authoring-button"
+                    disabled={refreshed.held}
                     onClick={() => {
                         mutation.reset()
                         setDialog("restore")

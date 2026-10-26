@@ -5,6 +5,8 @@ import { fetchWorldEntities } from "../api/world"
 import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
+import type { RefetchOutcome } from "../hooks/useAuthoringResource"
+import { useConfirmedRefresh } from "../hooks/useConfirmedRefresh"
 import type { CreateRelationshipBody, RelationshipView } from "../types/relationshipAuthoring"
 import type { OrganizationMembers as Roster, StatusReceipt } from "../types/organizationMembers"
 import { useAnnounce } from "./authoring/announcer"
@@ -65,10 +67,27 @@ export function OrganizationMembers({
     )
     useRefetchOnChange(refreshToken, refetch)
     const { data: kept, stale } = useKeptData(state)
-    const changed = () => {
-        void refetch()
+    // A member or a status was saved: the roster is read again, and its outcome is what the form that
+    // sent it reports (a write the roster was not read back for is not announced as done). The page's
+    // own view agrees through `onChanged`, which reports its own failure.
+    const changed = async (): Promise<RefetchOutcome> => {
+        const read = await refetch()
         onChanged?.()
+        return read
     }
+    // What was saved without the roster being read back. It is kept here, not in the form: the form
+    // that sent it closes once the change is saved.
+    const [unread, setUnread] = useState<string | null>(null)
+    const refreshed = useConfirmedRefresh({
+        status: unread === null ? { kind: "idle" } : { kind: "confirmed", refresh: "failed" },
+        reset: () => setUnread(null),
+        what: "members and status",
+        message: unread,
+        read: refetch,
+        pageStale: stale,
+    })
+    // The status names the status the roster showed, so nothing is sent from a roster that is behind.
+    const writesHeld = refreshed.held || stale
     if (kept === null) {
         // Inside a staged section a missing body would read as "no members", so say why.
         if (embedded !== true) return null
@@ -88,20 +107,25 @@ export function OrganizationMembers({
     return (
         <PanelFrame embedded={embedded} title="Members and offices" headingId="members-heading">
             {stale ? <StaleReadNotice what="members and status" onRetry={() => void refetch()} /> : null}
+            {refreshed.notice}
             <MemberRoster
                 campaignId={campaignId}
                 organizationId={organizationId}
                 roster={roster}
                 manage={manage}
                 editorView={roster.can_set_status ?? roster.can_edit}
+                held={writesHeld}
                 onChanged={changed}
+                onUnread={setUnread}
             />
             {canSetStatus ? (
                 <StatusControl
                     campaignId={campaignId}
                     organizationId={organizationId}
                     roster={roster}
+                    held={writesHeld}
                     onChanged={changed}
+                    onUnread={setUnread}
                 />
             ) : null}
         </PanelFrame>
@@ -114,7 +138,9 @@ function MemberRoster({
     roster,
     manage,
     editorView,
+    held,
     onChanged,
+    onUnread,
 }: {
     campaignId: string
     organizationId: string
@@ -122,7 +148,10 @@ function MemberRoster({
     manage: boolean
     // The roster includes private and archived stints (a campaign editor's view).
     editorView: boolean
-    onChanged: () => void
+    // The roster shown is behind a change that was just saved, or its latest read failed.
+    held: boolean
+    onChanged: () => Promise<RefetchOutcome>
+    onUnread: (message: string) => void
 }) {
     const [adding, setAdding] = useState(false)
     const [editing, setEditing] = useState<string | null>(null)
@@ -159,10 +188,12 @@ function MemberRoster({
                     <AddMember
                         campaignId={campaignId}
                         organizationId={organizationId}
+                        held={held}
                         onAdded={() => {
                             setAdding(false)
-                            onChanged()
+                            return onChanged()
                         }}
+                        onUnread={onUnread}
                         onCancel={() => setAdding(false)}
                     />
                 </div>
@@ -240,8 +271,9 @@ function MemberRoster({
                                         memberName={m.member_name}
                                         onSaved={() => {
                                             close(m.relationship_id)
-                                            onChanged()
+                                            return onChanged()
                                         }}
+                                        onUnread={onUnread}
                                         onCancel={() => close(m.relationship_id)}
                                     />
                                 ) : null}
@@ -258,12 +290,16 @@ function StatusControl({
     campaignId,
     organizationId,
     roster,
+    held,
     onChanged,
+    onUnread,
 }: {
     campaignId: string
     organizationId: string
     roster: Roster
-    onChanged: () => void
+    held: boolean
+    onChanged: () => Promise<RefetchOutcome>
+    onUnread: (message: string) => void
 }) {
     const { reload } = useSession()
     const announce = useAnnounce()
@@ -276,10 +312,14 @@ function StatusControl({
     >({
         scopeKey: `org-status:${organizationId}`,
         request: (body, ctx) => setOrganizationStatus(campaignId, organizationId, body, ctx),
-        onSuccess: () => {
+        // The roster panel reports a status it could not read back, with its own notice.
+        ownsRefreshNotice: true,
+        onSuccess: async () => {
             setNext("")
-            onChanged()
-            announce("Organization status saved")
+            const outcome = await onChanged()
+            if (outcome === "ok") announce("Organization status saved")
+            else onUnread("Organization status saved")
+            return outcome
         },
     })
     const error = mutation.status.kind === "error" ? mutation.status.error : null
@@ -305,7 +345,7 @@ function StatusControl({
                 <StaleWriteNotice
                     onLoadLatest={() => {
                         mutation.reset()
-                        onChanged()
+                        void onChanged()
                     }}
                 />
             ) : explained !== null ? (
@@ -323,7 +363,7 @@ function StatusControl({
                 onChange={setNext}
             />
             <WorldTimePicker campaignId={campaignId} id="org-status-time" label="When" value={when} onChange={setWhen} />
-            <button type="submit" className="authoring-button" disabled={mutation.status.kind === "pending"}>
+            <button type="submit" className="authoring-button" disabled={mutation.status.kind === "pending" || held}>
                 Set status
             </button>
         </form>
@@ -333,12 +373,17 @@ function StatusControl({
 function AddMember({
     campaignId,
     organizationId,
+    held,
     onAdded,
+    onUnread,
     onCancel,
 }: {
     campaignId: string
     organizationId: string
-    onAdded: () => void
+    held: boolean
+    // Closes the form and reads the roster again; resolves with what that read did.
+    onAdded: () => Promise<RefetchOutcome>
+    onUnread: (message: string) => void
     onCancel: () => void
 }) {
     const { reload } = useSession()
@@ -352,12 +397,16 @@ function AddMember({
     const mutation = useAuthoringMutation<CreateRelationshipBody, RelationshipView>({
         scopeKey: `add-member:${organizationId}`,
         request: (body, ctx) => createRelationship(campaignId, body, ctx),
-        onSuccess: () => {
+        // The roster panel reports a member it could not read back, with its own notice.
+        ownsRefreshNotice: true,
+        onSuccess: async () => {
             setMember(null)
             setRole("")
             setRank("")
-            onAdded()
-            announce("Member added")
+            const outcome = await onAdded()
+            if (outcome === "ok") announce("Member added")
+            else onUnread("Member added")
+            return outcome
         },
     })
     const error = mutation.status.kind === "error" ? mutation.status.error : null
@@ -438,7 +487,7 @@ function AddMember({
                 <button
                     type="submit"
                     className="authoring-button authoring-button--primary"
-                    disabled={mutation.status.kind === "pending"}
+                    disabled={mutation.status.kind === "pending" || held}
                 >
                     Add member
                 </button>

@@ -17,10 +17,14 @@ import { ReferenceCombobox } from "../components/authoring/ReferenceCombobox"
 import type { ReferenceOption } from "../components/authoring/ReferenceCombobox"
 import { WorldTimePicker } from "../components/authoring/WorldTimePicker"
 import { PartyInventoryPanel } from "../components/InventoryPanels"
+import { StaleReadNotice } from "../components/StaleReadNotice"
 import { TableScroll } from "../components/TableScroll"
 import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
+import type { RefetchOutcome } from "../hooks/useAuthoringResource"
+import { useConfirmedRefresh } from "../hooks/useConfirmedRefresh"
+import { useKept } from "../hooks/useKeptResource"
 import { usePageArrival } from "../hooks/usePageArrival"
 import type { MembershipReceipt, PartyMember, PartyMembers } from "../types/parties"
 import "../components/authoring/authoring.css"
@@ -42,9 +46,13 @@ const CODE_MESSAGE: Readonly<Record<string, string>> = {
 // each record a campaign event at the time the editor chooses.
 export function PartyMembersPage() {
     const { campaignId = "", partyId = "" } = useParams()
-    const resource = useAuthoringResource<PartyMembers>(partyMembersPath(campaignId, partyId))
+    const membersPath = partyMembersPath(campaignId, partyId)
+    const resource = useAuthoringResource<PartyMembers>(membersPath)
     const headingRef = usePageArrival(resource.state.kind === "ready")
-    const data = resource.state.kind === "ready" ? resource.state.data : null
+    // The last roster that loaded stays through a failed re-read, so a member added or ended is
+    // not hidden behind an error screen, and the forms keep what was typed.
+    const data = useKept(resource.state, membersPath)
+    const stale = resource.state.kind === "error" && data !== null
 
     return (
         <section className="authoring-page" aria-labelledby="members-heading">
@@ -56,12 +64,15 @@ export function PartyMembersPage() {
             </h1>
             {resource.state.kind === "loading" ? (
                 <p role="status">Loading members…</p>
-            ) : resource.state.kind === "error" ? (
-                <p role="alert">The members could not be loaded. Try reloading the page.</p>
             ) : data === null ? (
-                <p role="alert">This party does not exist, or you do not have access to it.</p>
+                resource.state.kind === "error" ? (
+                    <p role="alert">The members could not be loaded. Try reloading the page.</p>
+                ) : (
+                    <p role="alert">This party does not exist, or you do not have access to it.</p>
+                )
             ) : (
                 <>
+                    {stale ? <StaleReadNotice what="party members" onRetry={() => void resource.refetch()} /> : null}
                     {data.party.lifecycle_status === "archived" ? (
                         <p className="authoring-note">
                             This party is archived. Members can be ended but not added.
@@ -71,6 +82,7 @@ export function PartyMembersPage() {
                         campaignId={campaignId}
                         data={data}
                         refetch={resource.refetch}
+                        pageStale={stale}
                         current
                     />
                     {data.party.lifecycle_status === "active" ? (
@@ -78,12 +90,14 @@ export function PartyMembersPage() {
                             campaignId={campaignId}
                             data={data}
                             refetch={resource.refetch}
+                            pageStale={stale}
                         />
                     ) : null}
                     <MemberTable
                         campaignId={campaignId}
                         data={data}
                         refetch={resource.refetch}
+                        pageStale={stale}
                         current={false}
                     />
                     <PartyInventoryPanel campaignId={campaignId} partyId={partyId} />
@@ -97,11 +111,15 @@ function MemberTable({
     campaignId,
     data,
     refetch,
+    pageStale,
     current,
 }: {
     campaignId: string
     data: PartyMembers
-    refetch: () => Promise<unknown>
+    refetch: () => Promise<RefetchOutcome>
+    // The page's latest read failed and `data` is the last roster that loaded: its party version
+    // may be behind, so a version-checked write waits for the read.
+    pageStale: boolean
     current: boolean
 }) {
     const { reload } = useSession()
@@ -129,10 +147,20 @@ function MemberTable({
             setTarget(null)
             setTimeId("")
             setReason("")
-            await refetch()
-            announce("Membership ended")
+            const outcome = await refetch()
+            if (outcome === "ok") announce("Membership ended")
+            return outcome
         },
     })
+    const refreshed = useConfirmedRefresh({
+        status: mutation.status,
+        reset: mutation.reset,
+        what: "party members",
+        message: "Membership ended",
+        read: refetch,
+        pageStale,
+    })
+    const writesHeld = refreshed.held || pageStale
     const error = mutation.status.kind === "error" ? mutation.status.error : null
     const message = error?.code ? (CODE_MESSAGE[error.code] ?? null) : null
     const headingId = current ? "current-members-heading" : "member-history-heading"
@@ -140,6 +168,7 @@ function MemberTable({
     return (
         <section aria-labelledby={headingId}>
             <h2 id={headingId}>{current ? "Current members" : "History"}</h2>
+            {current ? refreshed.notice : null}
             {rows.length === 0 ? (
                 <p>{current ? "No current members." : "No past members."}</p>
             ) : (
@@ -171,6 +200,7 @@ function MemberTable({
                                         <button
                                             type="button"
                                             className="authoring-button"
+                                            disabled={writesHeld}
                                             onClick={() => {
                                                 mutation.reset()
                                                 setTarget(member)
@@ -256,10 +286,13 @@ function AddMemberForm({
     campaignId,
     data,
     refetch,
+    pageStale,
 }: {
     campaignId: string
     data: PartyMembers
-    refetch: () => Promise<unknown>
+    refetch: () => Promise<RefetchOutcome>
+    // The page's latest read failed: the party version this form would send may be behind.
+    pageStale: boolean
 }) {
     const { reload } = useSession()
     const announce = useAnnounce()
@@ -290,10 +323,20 @@ function AddMemberForm({
             setTimeId("")
             setReason("")
             setErrors([])
-            await refetch()
-            announce("Member added")
+            const outcome = await refetch()
+            if (outcome === "ok") announce("Member added")
+            return outcome
         },
     })
+    const refreshed = useConfirmedRefresh({
+        status: mutation.status,
+        reset: mutation.reset,
+        what: "party members",
+        message: "Member added",
+        read: refetch,
+        pageStale,
+    })
+    const writesHeld = refreshed.held || pageStale
     const error = mutation.status.kind === "error" ? mutation.status.error : null
     const message = error?.code ? (CODE_MESSAGE[error.code] ?? null) : null
     const errorFor = (id: string) => errors.find((e) => e.fieldId === id)?.message ?? null
@@ -315,6 +358,7 @@ function AddMemberForm({
     }
 
     function submit() {
+        if (writesHeld) return
         const found: FieldError[] = []
         if (character === null) {
             found.push({ fieldId: "member-character", message: "Choose a character." })
@@ -335,6 +379,7 @@ function AddMemberForm({
     return (
         <AuthoringForm label="Add a member" onSubmit={submit}>
             <h2>Add a member</h2>
+            {refreshed.notice}
             <ErrorSummary errors={errors} attempt={attempt} />
             {error?.kind === "stale" ? (
                 <StaleWriteNotice onLoadLatest={() => void refetch()} />
@@ -375,6 +420,7 @@ function AddMemberForm({
             />
             <FormActions
                 pending={mutation.status.kind === "pending"}
+                saveDisabled={writesHeld}
                 saveLabel="Add member"
                 onCancel={() => {
                     setCharacter(null)

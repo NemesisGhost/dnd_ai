@@ -179,6 +179,38 @@ describe("Area now for a campaign GM with no world role", () => {
         expect(server.calls.map((c) => c.path).filter((p) => AUTHORING.test(p))).toEqual([])
     })
 
+    it("reports a recorded status whose runtime re-read fails, holds further commands, and recovers by reading only", async () => {
+        let readFails = false
+        const { server } = setup({
+            authoring: CAMPAIGN_ONLY_RECORD_AUTHORING,
+            worldCapabilities: NO_WORLD_CAPABILITIES,
+            runtime: () => (readFails ? { status: 500, body: {} } : { body: runtime() }),
+            extra: (srv) =>
+                srv.on("POST", `/campaigns/${C}/dungeon-areas/l1/state`, () => {
+                    readFails = true
+                    return { body: { dungeon_area_id: "l1", kind: "hazard", target_id: "h1", changed: true } }
+                }),
+        })
+        fireEvent.click(await screen.findByRole("button", { name: "Change status of Spike trap" }))
+        fireEvent.change(await screen.findByRole("combobox", { name: /status/i }), { target: { value: "triggered" } })
+        fireEvent.click(screen.getByRole("button", { name: /^(Save|Record)/ }))
+        await waitFor(() => expect(server.callsTo("POST", `/campaigns/${C}/dungeon-areas/l1/state`)).toHaveLength(1))
+
+        expect(await screen.findByText(/Hazard status saved\. The latest dungeon could not be loaded/)).toBeInTheDocument()
+        expect(screen.getByTestId("authoring-announcer")).not.toHaveTextContent(/^Hazard status saved/)
+        // The stale event token is what every further command would name, so a save is held (the
+        // editor opens, with what is typed, but cannot send).
+        fireEvent.click(screen.getByRole("button", { name: "Change status of Spike trap" }))
+        expect(await screen.findByRole("button", { name: /^(Save|Record)/ })).toBeDisabled()
+        expect(server.callsTo("POST", `/campaigns/${C}/dungeon-areas/l1/state`)).toHaveLength(1)
+
+        readFails = false
+        fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+        await waitFor(() => expect(screen.getByRole("button", { name: /^(Save|Record)/ })).toBeEnabled())
+        await waitFor(() => expect(screen.getByTestId("authoring-announcer")).toHaveTextContent("Hazard status saved"))
+        expect(server.callsTo("POST", `/campaigns/${C}/dungeon-areas/l1/state`)).toHaveLength(1)
+    })
+
     it("keeps the rest of the record when the optional read fails, and retries only that read", async () => {
         let fail = true
         const { server } = setup({

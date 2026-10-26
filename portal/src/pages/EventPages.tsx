@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useCallback, useState } from "react"
 import { Link, useNavigate, useParams } from "react-router"
 import {
     correctEvent,
@@ -20,9 +20,14 @@ import {
 } from "../components/authoring/feedback"
 import type { FieldError } from "../components/authoring/feedback"
 import { WorldTimePicker } from "../components/authoring/WorldTimePicker"
+import { StaleReadNotice } from "../components/StaleReadNotice"
+import { combineRefetchOutcomes } from "../utils/refreshOutcome"
 import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
+import type { RefetchOutcome } from "../hooks/useAuthoringResource"
+import { useAnnounceWhenRead, useConfirmedRefresh } from "../hooks/useConfirmedRefresh"
+import { useKept } from "../hooks/useKeptResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { usePageArrival } from "../hooks/usePageArrival"
 import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard"
@@ -231,11 +236,34 @@ export function RecordEventPage() {
 export function EventDetailPage() {
     const { campaignId = "", eventId = "" } = useParams()
     const canEdit = useCampaignCapability(campaignId, "canon.edit")
-    const event = useAuthoringResource<EventAuthoringView>(eventPath(campaignId, eventId))
-    const preview = useAuthoringResource<CorrectionPreview>(correctionPreviewPath(campaignId, eventId))
+    const eventUrl = eventPath(campaignId, eventId)
+    const previewUrl = correctionPreviewPath(campaignId, eventId)
+    const event = useAuthoringResource<EventAuthoringView>(eventUrl)
+    const preview = useAuthoringResource<CorrectionPreview>(previewUrl)
     const headingRef = usePageArrival(event.state.kind === "ready")
-    const data = event.state.kind === "ready" ? event.state.data : null
-    const plan = preview.state.kind === "ready" ? preview.state.data : null
+    // Both reads keep their last good answer through a failed re-read (after a void or a
+    // correction), so the page that reports the save is not replaced by "does not exist".
+    const data = useKept(event.state, eventUrl)
+    const plan = useKept(preview.state, previewUrl)
+    const stale =
+        (event.state.kind === "error" && data !== null) || (preview.state.kind === "error" && plan !== null)
+    const eventRead = event.refetch
+    const previewRead = preview.refetch
+    // What a correction changes is read in two places (the event and what correcting it would do),
+    // so the write is read back only when both were.
+    const refetchBoth = useCallback(
+        async () => combineRefetchOutcomes(await Promise.all([eventRead(), previewRead()])),
+        [eventRead, previewRead],
+    )
+    // A voided or corrected event no longer offers the form that saved it, so the page announces a
+    // change it could not read back once both reads have answered.
+    const announceWhenRead = useAnnounceWhenRead(
+        event.state.kind === "ready" &&
+            !event.state.refreshing &&
+            preview.state.kind === "ready" &&
+            !preview.state.refreshing,
+        [event.state, preview.state],
+    )
 
     return (
         <section className="authoring-page" aria-labelledby="event-heading">
@@ -252,15 +280,17 @@ export function EventDetailPage() {
             ) : data === null ? (
                 <p role="alert">This event does not exist, or you do not have access to it.</p>
             ) : (
-                <EventBody
-                    campaignId={campaignId}
-                    event={data}
-                    plan={plan}
-                    refetch={async () => {
-                        await event.refetch()
-                        await preview.refetch()
-                    }}
-                />
+                <>
+                    {stale ? <StaleReadNotice what="event" onRetry={() => void refetchBoth()} /> : null}
+                    <EventBody
+                        campaignId={campaignId}
+                        event={data}
+                        plan={plan}
+                        refetch={refetchBoth}
+                        pageStale={stale}
+                        onUnread={announceWhenRead}
+                    />
+                </>
             )}
         </section>
     )
@@ -271,11 +301,15 @@ function EventBody({
     event,
     plan,
     refetch,
+    pageStale,
+    onUnread,
 }: {
     campaignId: string
     event: EventAuthoringView
     plan: CorrectionPreview | null
-    refetch: () => Promise<unknown>
+    refetch: () => Promise<RefetchOutcome>
+    pageStale: boolean
+    onUnread: (message: string) => void
 }) {
     const link = (id: string) => `${base(campaignId)}/events/${encodeURIComponent(id)}`
     const blocked = plan !== null ? plan.effects.filter((e) => !e.reversible) : []
@@ -355,6 +389,8 @@ function EventBody({
                     canCorrect={plan.can_correct}
                     blockedReasons={blocked.map((e) => e.reason)}
                     refetch={refetch}
+                    pageStale={pageStale}
+                    onUnread={onUnread}
                 />
             ) : null}
         </>
@@ -367,12 +403,17 @@ function Corrections({
     canCorrect,
     blockedReasons,
     refetch,
+    pageStale,
+    onUnread,
 }: {
     campaignId: string
     event: EventAuthoringView
     canCorrect: boolean
     blockedReasons: (string | null)[]
-    refetch: () => Promise<unknown>
+    refetch: () => Promise<RefetchOutcome>
+    // The page's latest read failed: what it shows (and offers) is from before the save.
+    pageStale: boolean
+    onUnread: (message: string) => void
 }) {
     const { reload } = useSession()
     const announce = useAnnounce()
@@ -383,6 +424,7 @@ function Corrections({
     const [details, setDetails] = useState(event.details ?? "")
     const [timeId, setTimeId] = useState("")
     const [nameError, setNameError] = useState<string | null>(null)
+    const [saved, setSaved] = useState<string | null>(null)
     const mutation = useAuthoringMutation<"void" | "correct", CorrectionReceipt>({
         scopeKey: `correct-event:${event.event_id}`,
         request: (action, ctx) =>
@@ -404,12 +446,26 @@ function Corrections({
                   ),
         onSuccess: async () => {
             const done = dialog === "void" ? "Event voided" : "Event corrected"
+            setSaved(done)
             setDialog(null)
             setReason("")
-            await refetch()
-            announce(done)
+            const outcome = await refetch()
+            if (outcome === "ok") announce(done)
+            else onUnread(done)
+            return outcome
         },
     })
+    const refreshed = useConfirmedRefresh({
+        status: mutation.status,
+        reset: mutation.reset,
+        what: "event",
+        message: saved,
+        read: refetch,
+        pageStale,
+        quietRecovery: true,
+    })
+    // The page still shows the event as recorded, so voiding or correcting it again waits for the read.
+    const writesHeld = refreshed.held || pageStale
     const error = mutation.status.kind === "error" ? mutation.status.error : null
     const message = error?.code ? (CODE_MESSAGE[error.code] ?? null) : null
     const reasons = [...new Set(blockedReasons.filter((r): r is string => r !== null))]
@@ -429,6 +485,7 @@ function Corrections({
     return (
         <section aria-labelledby="corrections-heading">
             <h2 id="corrections-heading">Correct this event</h2>
+            {refreshed.notice}
             {canCorrect ? (
                 <p>
                     Voiding or correcting keeps this event in the history and reverses what it changed.
@@ -446,7 +503,7 @@ function Corrections({
                 <button
                     type="button"
                     className="authoring-button"
-                    disabled={!canCorrect}
+                    disabled={!canCorrect || writesHeld}
                     onClick={() => {
                         mutation.reset()
                         setDialog("void")
@@ -457,7 +514,7 @@ function Corrections({
                 <button
                     type="button"
                     className="authoring-button"
-                    disabled={!canCorrect}
+                    disabled={!canCorrect || writesHeld}
                     onClick={() => {
                         mutation.reset()
                         setDialog("correct")

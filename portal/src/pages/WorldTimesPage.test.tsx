@@ -143,6 +143,47 @@ describe("WorldTimesPage", () => {
         expect(call!.body).toEqual({ calendar_id: "cal-1", year: 3, month_number: 2, day: 5 })
     })
 
+    it("reports a recorded time whose list re-read fails, shows no completion, and recovers by reading only", async () => {
+        const server = installMockServer()
+        let recorded = false
+        let readFails = false
+        server.on("GET", TIMES_PATH, () =>
+            readFails
+                ? { status: 500, body: {} }
+                : { body: { items: recorded ? [TIME("t9", "Year 3 (Founding), Bloom 5")] : [], next_cursor: null } },
+        )
+        server.on("GET", CALENDARS_PATH, { body: { calendars: [CALENDAR] } })
+        server.on("POST", TIMES_PATH, () => {
+            recorded = true
+            readFails = true
+            return { status: 201, body: { world_time_id: "t9", created: true, changed: true } }
+        })
+        renderAuthoringRoutes({
+            initialEntry: `/app/${CAMPAIGN}/world-times`,
+            bootstrap: bootstrap(true),
+            routes: [{ path: "/app/:campaignId/world-times", element: <WorldTimesPage /> }],
+        })
+        await screen.findByRole("form", { name: "Record a world time" })
+        fireEvent.change(screen.getByRole("textbox", { name: /Year/ }), { target: { value: "3" } })
+        fireEvent.change(screen.getByRole("combobox", { name: "Month" }), { target: { value: "2" } })
+        fireEvent.change(screen.getByRole("textbox", { name: "Day" }), { target: { value: "5" } })
+        fireEvent.click(screen.getByRole("button", { name: "Record time" }))
+
+        expect(await screen.findByText(/World time recorded\. The latest world times could not be loaded/)).toBeInTheDocument()
+        expect(screen.getByTestId("authoring-announcer")).not.toHaveTextContent(/^World time recorded/)
+        // The page stays (not an error screen) and the list is still the one from before the write.
+        expect(screen.getByRole("form", { name: "Record a world time" })).toBeInTheDocument()
+        expect(screen.getByText("No times have been recorded for this world yet.")).toBeInTheDocument()
+        expect(server.callsTo("POST", TIMES_PATH)).toHaveLength(1)
+
+        readFails = false
+        fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+        expect(await screen.findByText(/Year 3 \(Founding\), Bloom 5/)).toBeInTheDocument()
+        await waitFor(() => expect(screen.getByTestId("authoring-announcer")).toHaveTextContent("World time recorded"))
+        expect(screen.queryByText(/could not be loaded/)).toBeNull()
+        expect(server.callsTo("POST", TIMES_PATH)).toHaveLength(1)
+    })
+
     it("validates before sending and keeps the input", async () => {
         const server = installMockServer()
         server.on("GET", TIMES_PATH, { body: { items: [], next_cursor: null } })

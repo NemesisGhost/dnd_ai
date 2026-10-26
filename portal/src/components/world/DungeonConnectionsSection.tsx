@@ -1,3 +1,4 @@
+import type { RefreshOutcome } from "../../hooks/useAuthoringMutation"
 import { useCallback, useState } from "react"
 import { Link } from "react-router"
 import type { ConnectionView } from "../../types/dungeonAuthoring"
@@ -20,7 +21,7 @@ interface Props {
     campaignId: string
     dungeonId: string
     read: DungeonRead
-    refresh: () => Promise<void>
+    refresh: () => Promise<RefreshOutcome>
     // The Areas section, for the line that says connections need two areas.
     areasHref: string
     linkState?: object
@@ -61,10 +62,11 @@ export function DungeonConnectionsSection({ campaignId, dungeonId, read, refresh
     const [removing, setRemoving] = useState<ConnectionView | null>(null)
     // One mutation for the section; the failure notice appears where the command was sent from.
     const [origin, setOrigin] = useState<"add" | "edit" | "remove">("add")
-    const base = useDungeonCommand({ campaignId, dungeonId, areaId: null, scope: "connections", refetch: refresh })
+    const base = useDungeonCommand({ campaignId, dungeonId, areaId: null, scope: "connections", refetch: refresh, pageStale: read.stale })
     const commandFor = (from: typeof origin): DungeonCommandHandle => ({
         busy: base.busy,
         notice: origin === from ? base.notice : null,
+        savedNotice: null,
         clear: base.clear,
         send: (command, message, after) => {
             setOrigin(from)
@@ -177,6 +179,7 @@ export function DungeonConnectionsSection({ campaignId, dungeonId, read, refresh
                     </button>
                 </p>
             ) : null}
+            {base.savedNotice}
             <div className="area-bar">
                 <p className="area-bar__count">
                     <strong>{plural(view.connections.length, "connection", "connections")}</strong>

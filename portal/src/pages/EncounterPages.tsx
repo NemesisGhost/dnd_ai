@@ -19,11 +19,15 @@ import { useAnnounce } from "../components/authoring/announcer"
 import { ConfirmDialog } from "../components/authoring/ConfirmDialog"
 import { SelectField, TextAreaField, TextField } from "../components/authoring/fields"
 import { MutationStatusMessage } from "../components/authoring/feedback"
+import { StaleReadNotice } from "../components/StaleReadNotice"
 import { ReferenceCombobox } from "../components/authoring/ReferenceCombobox"
 import type { ReferenceOption } from "../components/authoring/ReferenceCombobox"
 import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
+import type { RefetchOutcome } from "../hooks/useAuthoringResource"
+import { useAnnounceWhenRead, useConfirmedRefresh } from "../hooks/useConfirmedRefresh"
+import { useKept } from "../hooks/useKeptResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { usePageArrival } from "../hooks/usePageArrival"
 import { sessionPath } from "../api/sessionAuthoring"
@@ -173,8 +177,19 @@ type Command =
 export function PreparedEncounterPage() {
     const { campaignId = "", sessionId = "", encounterId = "" } = useParams()
     const canEdit = useCampaignCapability(campaignId, "canon.edit")
-    const resource = useAuthoringResource<PreparedEncounter>(preparedEncounterPath(campaignId, encounterId))
-    const options = useAuthoringResource<EncounterOptions>(encounterOptionsPath(campaignId))
+    const encounterUrl = preparedEncounterPath(campaignId, encounterId)
+    const optionsUrl = encounterOptionsPath(campaignId)
+    const resource = useAuthoringResource<PreparedEncounter>(encounterUrl)
+    const options = useAuthoringResource<EncounterOptions>(optionsUrl)
+    // The last encounter that loaded stays through a failed re-read after a command (a recoverable
+    // failure is not "does not exist"); a denied or missing answer drops it.
+    const encounter = useKept(resource.state, encounterUrl)
+    const choices = useKept(options.state, optionsUrl)
+    const stale = resource.state.kind === "error" && encounter !== null
+    const announceWhenRead = useAnnounceWhenRead(
+        resource.state.kind === "ready" && !resource.state.refreshing,
+        resource.state,
+    )
     const headingRef = usePageArrival(resource.state.kind === "ready")
     const session = useAuthoringResource<CampaignSessionDetail>(sessionPath(campaignId, sessionId))
     return (
@@ -185,8 +200,8 @@ export function PreparedEncounterPage() {
                 title={sessionTitle(session.state)}
                 from={{
                     section:
-                        resource.state.kind === "ready"
-                            ? resource.state.data.status === "pending"
+                        encounter !== null
+                            ? encounter.status === "pending"
                                 ? "encounter-prep"
                                 : "encounters"
                             : undefined,
@@ -200,15 +215,20 @@ export function PreparedEncounterPage() {
                 <p role="alert">You do not have permission to prepare encounters.</p>
             ) : resource.state.kind === "loading" || options.state.kind === "loading" ? (
                 <p role="status">Loading…</p>
-            ) : resource.state.kind !== "ready" || options.state.kind !== "ready" ? (
+            ) : encounter === null || choices === null ? (
                 <p role="alert">This encounter does not exist, or you do not have access to it.</p>
             ) : (
-                <Loaded
-                    campaignId={campaignId}
-                    view={resource.state.data}
-                    options={options.state.data}
-                    refetch={resource.refetch}
-                />
+                <>
+                    {stale ? <StaleReadNotice what="encounter" onRetry={() => void resource.refetch()} /> : null}
+                    <Loaded
+                        campaignId={campaignId}
+                        view={encounter}
+                        options={choices}
+                        refetch={resource.refetch}
+                        pageStale={stale}
+                        onUnread={announceWhenRead}
+                    />
+                </>
             )}
         </section>
     )
@@ -219,11 +239,16 @@ function Loaded({
     view,
     options,
     refetch,
+    pageStale,
+    onUnread,
 }: {
     campaignId: string
     view: PreparedEncounter
     options: EncounterOptions
-    refetch: () => Promise<unknown>
+    refetch: () => Promise<RefetchOutcome>
+    // The page's latest read failed and `view` is the last encounter that loaded.
+    pageStale: boolean
+    onUnread: (message: string) => void
 }) {
     const { reload } = useSession()
     const announce = useAnnounce()
@@ -241,6 +266,8 @@ function Loaded({
     const [inflight, setInflight] = useState<Command | null>(null)
     const [problem, setProblem] = useState<string | null>(null)
     const [done, setDone] = useState<string | null>(null)
+    // What the last confirmed command said, for the notice if its re-read fails.
+    const [savedMessage, setSavedMessage] = useState<string | null>(null)
     const [actor, setActor] = useState("")
     const [action, setAction] = useState("attack")
     const [target, setTarget] = useState("")
@@ -311,13 +338,30 @@ function Loaded({
             setResult("")
             setDamage("")
             setConfirmAbort(false)
-            await refetch()
-            if (message !== null) announce(message)
+            setSavedMessage(message)
+            const outcome = await refetch()
+            if (message !== null) {
+                if (outcome === "ok") announce(message)
+                else onUnread(message)
+            }
+            return outcome
         },
+    })
+    const refreshed = useConfirmedRefresh({
+        status: mutation.status,
+        reset: mutation.reset,
+        what: "encounter",
+        message: savedMessage,
+        read: refetch,
+        pageStale,
+        quietRecovery: true,
     })
     const error = mutation.status.kind === "error" ? mutation.status.error : null
     const explained = error?.code ? (CODE_MESSAGE[error.code] ?? null) : null
-    const busy = mutation.status.kind === "pending"
+    const sending = mutation.status.kind === "pending"
+    // Until the encounter is read again, what is shown still offers the step that was just taken (or
+    // lacks the turn just recorded), so no further command is sent from it.
+    const busy = sending || refreshed.held || pageStale
     const run = (command: Command, message: string) => {
         setProblem(null)
         setDone(message)
@@ -342,6 +386,7 @@ function Loaded({
                 Status: <strong>{view.status}</strong>
                 {view.can_prepare ? "" : ". Preparation is over; this encounter can no longer be changed here."}
             </p>
+            {refreshed.notice}
             {rowFailure === null ? failureNotice : null}
             {problem !== null ? <p role="alert">{problem}</p> : null}
 
@@ -415,7 +460,7 @@ function Loaded({
                     />
                     <SelectField id="encounter-add-side" label="Side" value={side} options={options.sides} onChange={setSide} />
                     <button type="submit" className="authoring-button encounter-roster__button" disabled={busy}>
-                        {busy && inflight?.op === "add" ? "Adding…" : "Add participant"}
+                        {sending && inflight?.op === "add" ? "Adding…" : "Add participant"}
                     </button>
                 </form>
             ) : null}
@@ -432,8 +477,8 @@ function Loaded({
                             const draft = edits[p.encounter_participant_id]
                             const dirty = draft !== undefined && draft !== p.side
                             const mine = inflight !== null && "participant_id" in inflight && inflight.participant_id === p.encounter_participant_id
-                            const saving = busy && mine && inflight?.op === "change"
-                            const removing = busy && mine && inflight?.op === "remove"
+                            const saving = sending && mine && inflight?.op === "change"
+                            const removing = sending && mine && inflight?.op === "remove"
                             return (
                                 <li key={p.encounter_participant_id} className="encounter-roster__row">
                                     <div className="encounter-roster__who">
@@ -728,7 +773,7 @@ function Loaded({
                         : "The encounter ends without a result. Turns already recorded stay in the history."
                 }
                 confirmLabel={view.status === "pending" ? "Discard encounter" : "Abort encounter"}
-                pending={busy}
+                pending={sending}
                 onConfirm={() => run({ op: "abort" }, "Encounter closed")}
                 onCancel={() => setConfirmAbort(false)}
             />

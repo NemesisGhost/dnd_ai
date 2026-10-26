@@ -1218,6 +1218,86 @@ describe("travel in the session", () => {
 })
 
 describe("unresolved writes and retained session data", () => {
+  it("reports a confirmed start whose session re-read fails, holds Start, and announces it only once the session is read", async () => {
+    let state = session()
+    let failRead = false
+    server.on("GET", S, () => (failRead ? { status: 500, body: {} } : { body: state }))
+    server.on("POST", `${S}/start`, () => {
+      state = playing({ row_version: 4 })
+      failRead = true
+      return { body: { session_id: "s1", row_version: 4, changed: true } }
+    })
+    openApp(`${RUN}?section=log`)
+    fireEvent.click(await screen.findByRole("button", { name: "Start session" }))
+    expect(await screen.findByText(/Session started\. The latest session could not be loaded/)).toBeInTheDocument()
+    // The page still shows the unstarted session: not "In progress", no link to the log, nothing
+    // announced as done, and Start (which names version 3) is held.
+    expect(screen.getByText("Scheduled")).toBeInTheDocument()
+    expect(screen.queryByRole("link", { name: "Go to the session log" })).toBeNull()
+    expect(screen.getByTestId("authoring-announcer")).not.toHaveTextContent(/^Session started/)
+    expect(screen.getByRole("button", { name: "Start session" })).toBeDisabled()
+    expect(server.callsTo("POST", `${S}/start`)).toHaveLength(1)
+
+    failRead = false
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+    expect(await screen.findByText("In progress")).toBeInTheDocument()
+    expect(await screen.findByRole("link", { name: "Go to the session log" })).toBeVisible()
+    await waitFor(() => expect(screen.getByTestId("authoring-announcer")).toHaveTextContent("Session started"))
+    expect(screen.queryByRole("button", { name: "Start session" })).toBeNull()
+    expect(server.callsTo("POST", `${S}/start`)).toHaveLength(1)
+  })
+
+  it("reports a confirmed end whose session re-read fails, holds End, and announces it only once the session is read", async () => {
+    let state = playing()
+    let failRead = false
+    server.on("GET", S, () => (failRead ? { status: 500, body: {} } : { body: state }))
+    server.on("POST", `${S}/end`, () => {
+      state = session({ play_status: "completed", ended_at: "2026-10-12T22:00:00Z", row_version: 4, available_actions: ["update", "archive"] })
+      failRead = true
+      return { body: { session_id: "s1", row_version: 4, changed: true } }
+    })
+    openApp(`${RUN}?section=end`)
+    fireEvent.click(await screen.findByRole("button", { name: "End session" }))
+    const dialog = await screen.findByRole("dialog", { name: "End this session?" })
+    fireEvent.click(within(dialog).getByRole("button", { name: "End session" }))
+    expect(await screen.findByText(/Session ended\. The latest session could not be loaded/)).toBeInTheDocument()
+    expect(screen.getByText("In progress")).toBeInTheDocument()
+    expect(screen.queryByRole("link", { name: "Go to the session review" })).toBeNull()
+    expect(screen.getByTestId("authoring-announcer")).not.toHaveTextContent(/^Session ended/)
+    expect(screen.getByRole("button", { name: "End session" })).toBeDisabled()
+
+    failRead = false
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+    expect(await screen.findByRole("link", { name: "Go to the session review" })).toBeVisible()
+    await waitFor(() => expect(screen.getByTestId("authoring-announcer")).toHaveTextContent("Session ended"))
+    expect(server.callsTo("POST", `${S}/end`)).toHaveLength(1)
+  })
+
+  it("reports a recorded log entry whose session re-read fails, and announces it only once the session is read", async () => {
+    let state = playing()
+    let failRead = false
+    server.on("GET", S, () => (failRead ? { status: 500, body: {} } : { body: state }))
+    server.on("POST", `${S}/log`, () => {
+      state = playing({ events: [{ event_id: "ev1", name: "Dawn breaks.", world_time: "Year 1", details: null }] })
+      failRead = true
+      return { status: 201, body: { session_id: "s1", row_version: 3, changed: true, event_id: "ev1" } }
+    })
+    openApp(`${RUN}?section=log`)
+    fireEvent.change(await screen.findByLabelText(/What happened/), { target: { value: "Dawn breaks." } })
+    fireEvent.click(screen.getByRole("button", { name: "Record entry" }))
+    expect(await screen.findByText(/Entry recorded\. The latest session log could not be loaded/)).toBeInTheDocument()
+    expect(screen.getByTestId("authoring-announcer")).not.toHaveTextContent(/^Entry recorded/)
+    // Recorded once and the draft that was recorded is cleared, so it is not typed and sent again.
+    expect(screen.getByLabelText(/What happened/)).toHaveValue("")
+    expect(server.callsTo("POST", `${S}/log`)).toHaveLength(1)
+
+    failRead = false
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+    await waitFor(() => expect(screen.getByTestId("authoring-announcer")).toHaveTextContent("Entry recorded"))
+    expect(screen.queryByText(/The latest session (data|log) could not be loaded/)).toBeNull()
+    expect(server.callsTo("POST", `${S}/log`)).toHaveLength(1)
+  })
+
   const ENTRY = { event_id: "ev1", name: "Original entry", summary: null, event_type_code: "session_narrative", event_status_code: "recorded", world_time_id: "t1", details: null }
 
   it("confirms a log entry whose answer was lost before edited text can become a second entry", async () => {

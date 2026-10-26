@@ -5,6 +5,7 @@ import { relationshipAuthoringPath, runRelationshipCommand } from "../../api/rel
 import { useSession } from "../../context/SessionContext"
 import { useAuthoringMutation } from "../../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../../hooks/useAuthoringResource"
+import type { RefetchOutcome } from "../../hooks/useAuthoringResource"
 import { useKeptData } from "../../hooks/useKeptData"
 import type {
     PerspectiveView,
@@ -13,6 +14,7 @@ import type {
     RelationshipView,
     TypedFields,
 } from "../../types/relationshipAuthoring"
+import { combineRefetchOutcomes } from "../../utils/refreshOutcome"
 import { RELATIONSHIP_CODE_MESSAGE, counterparts, periodSummary } from "../../utils/relationshipForm"
 import { DraftConflict } from "../quests/DraftConflict"
 import { useUnsavedReport } from "../quests/useUnsavedReport"
@@ -36,7 +38,7 @@ interface Props {
     // Where a membership is managed (its Members and offices section), for a membership.
     manage: { to: string; label: string } | null
     // Runs after a write, once this editor has read the record again: the roster reads its list.
-    onChanged: (change?: { archived?: boolean }) => Promise<void>
+    onChanged: (change?: { archived?: boolean }) => Promise<RefetchOutcome>
     onUnsaved: ReportUnsaved
 }
 
@@ -70,7 +72,13 @@ interface Shared {
     busy: boolean
     markDirty: (key: string, label: string | null) => void
     markPending: (key: string, pending: boolean) => void
-    afterWrite: (result: RelationshipView, message: string, change?: { archived?: boolean }) => Promise<string>
+    afterWrite: (
+        result: RelationshipView,
+        message: string,
+        change?: { archived?: boolean },
+    ) => Promise<{ note: string; outcome: RefetchOutcome }>
+    // The latest read of this relationship failed and the form shows the last that loaded.
+    stale: boolean
     loadLatest: () => void
 }
 
@@ -84,11 +92,16 @@ function useFormCommand(shared: Shared, scope: string) {
     const mutation = useAuthoringMutation<RelationshipCommand, RelationshipView>({
         scopeKey: `relationship:${shared.relationshipId}:${scope}`,
         request: (command, ctx) => runRelationshipCommand(shared.campaignId, shared.relationshipId, command, ctx),
+        // The editor announces and words its own outcome (below); the hook only needs to know whether
+        // the write was read back.
+        ownsRefreshNotice: true,
         onSuccess: async (result) => {
             const sent = meta.current
             if (sent === null) return
             sent.accept()
-            setNote(await shared.afterWrite(result, sent.message, sent.change))
+            const { note, outcome } = await shared.afterWrite(result, sent.message, sent.change)
+            setNote(note)
+            return outcome
         },
     })
     const pending = mutation.status.kind === "pending"
@@ -123,7 +136,9 @@ function useFormCommand(shared: Shared, scope: string) {
         ) : error !== null ? (
             <MutationStatusMessage error={error} onRetry={mutation.retry} onCheckSession={reload} />
         ) : null
-    return { run, pending, note, feedback, disabled: shared.busy || pending }
+    // A form that shows a relationship whose latest read failed holds the version a save would name,
+    // so it waits for the read ("Try again" on the notice above) instead of sending it.
+    return { run, pending, note, feedback, disabled: shared.busy || pending || shared.stale }
 }
 
 // The form's own report that its last save went through; shown only while nothing further is unsent.
@@ -186,16 +201,20 @@ export function RelationshipEditor({
 
     // After a write: read this record again, say what happened (including when the read failed, so
     // nobody repeats a command that already went through), then let the roster read its list.
+    // Both reads count: this record and the roster list. A read that was replaced by a newer one
+    // (superseded) has not shown the write either, so it is not "read back".
     const afterWrite = async (result: RelationshipView, message: string, change?: { archived?: boolean }) => {
-        await detail.refetch()
-        const note = !detail.refreshOk.current
-            ? "Saved. The latest version could not be loaded; do not save it again."
-            : result.changed === false
-              ? "Nothing changed"
-              : message
+        const own = await detail.refetch()
+        const listed = await onChanged(change)
+        const outcome = combineRefetchOutcomes([own, listed])
+        const note =
+            own !== "ok"
+                ? "Saved. The latest version could not be loaded; do not save it again."
+                : result.changed === false
+                  ? "Nothing changed"
+                  : message
         announce(note)
-        await onChanged(change)
-        return note
+        return { note, outcome }
     }
     const shared: Shared = {
         campaignId,
@@ -204,6 +223,7 @@ export function RelationshipEditor({
         markDirty,
         markPending,
         afterWrite,
+        stale,
         loadLatest: () => void detail.refetch(),
     }
     const lifecycle = useFormCommand(shared, "lifecycle")

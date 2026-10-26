@@ -1,6 +1,8 @@
 import { useState } from "react"
 import { campaignCalendarsPath, worldTimesPath } from "../../api/worldTime"
 import { useAuthoringResource } from "../../hooks/useAuthoringResource"
+import { useConfirmedRefresh } from "../../hooks/useConfirmedRefresh"
+import { useKept } from "../../hooks/useKeptResource"
 import type { CalendarListResponse, WorldTimePage, WorldTimeReceipt } from "../../types/worldTime"
 import { SelectField } from "./fields"
 import { WorldTimeForm } from "./WorldTimeForm"
@@ -34,16 +36,36 @@ export function WorldTimePicker({
     error,
     hint,
 }: WorldTimePickerProps) {
-    const times = useAuthoringResource<WorldTimePage>(
-        worldTimesPath(campaignId, { limit: PICKER_PAGE_SIZE }),
-    )
-    const calendars = useAuthoringResource<CalendarListResponse>(campaignCalendarsPath(campaignId))
+    const timesPath = worldTimesPath(campaignId, { limit: PICKER_PAGE_SIZE })
+    const calendarsPath = campaignCalendarsPath(campaignId)
+    const times = useAuthoringResource<WorldTimePage>(timesPath)
+    const calendars = useAuthoringResource<CalendarListResponse>(calendarsPath)
+    // The last lists that loaded stay through a failed re-read (after recording a time), so the form
+    // that is choosing a time is not replaced by an error; a denied or missing answer drops them.
+    const heldTimes = useKept(times.state, timesPath)
+    const heldCalendars = useKept(calendars.state, calendarsPath)
     const [adding, setAdding] = useState(false)
+    // A time that was recorded but is not in the list yet: it is chosen once the list shows it.
+    const [recorded, setRecorded] = useState<string | null>(null)
+    const refreshed = useConfirmedRefresh({
+        status: recorded === null ? { kind: "idle" } : { kind: "confirmed", refresh: "failed" },
+        reset: () => setRecorded(null),
+        what: "world times",
+        message: "World time recorded",
+        read: async () => {
+            const outcome = await times.refetch()
+            if (outcome === "ok" && recorded !== null) {
+                onChange(recorded)
+                setAdding(false)
+            }
+            return outcome
+        },
+    })
 
     if (times.state.kind === "loading" || calendars.state.kind === "loading") {
         return <p role="status">Loading world times…</p>
     }
-    if (times.state.kind !== "ready" || calendars.state.kind !== "ready") {
+    if (heldTimes === null || heldCalendars === null) {
         return (
             <p role="alert">
                 World times could not be loaded.{" "}
@@ -53,14 +75,20 @@ export function WorldTimePicker({
             </p>
         )
     }
-    const items = times.state.data.items
-    const hasMore = times.state.data.next_cursor !== null
+    const items = heldTimes.items
+    const hasMore = heldTimes.next_cursor !== null
 
-    function created(receipt: WorldTimeReceipt) {
-        void times.refetch().then(() => {
+    // Chosen only once the list that offers it has been read; a read that fails leaves the form open
+    // with a notice and a read-only way to try again, and never records the time a second time.
+    async function created(receipt: WorldTimeReceipt) {
+        const outcome = await times.refetch()
+        if (outcome === "ok") {
             onChange(receipt.world_time_id)
             setAdding(false)
-        })
+        } else {
+            setRecorded(receipt.world_time_id)
+        }
+        return outcome
     }
 
     return (
@@ -79,10 +107,11 @@ export function WorldTimePicker({
                 onChange={onChange}
                 error={error}
             />
-            {adding ? (
+            {refreshed.notice}
+            {refreshed.held ? null : adding ? (
                 <WorldTimeForm
                     campaignId={campaignId}
-                    calendars={calendars.state.data.calendars}
+                    calendars={heldCalendars.calendars}
                     times={items}
                     heading="Record a new world time"
                     nested

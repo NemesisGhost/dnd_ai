@@ -262,7 +262,7 @@ function Workspace({
                     view={lifecycleView ?? NO_LIFECYCLE(itemId)}
                     refetch={lifecycle.refetch}
                     afterDeletePath={backHref}
-                    onChanged={() => void refetchItem()}
+                    onChanged={refetchItem}
                 >
                     <StageNav
                         ariaLabel="Item stages"

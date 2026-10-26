@@ -1,3 +1,4 @@
+import type { RefreshOutcome } from "../../hooks/useAuthoringMutation"
 import { useCallback, useState } from "react"
 import { LocationCurrentState } from "../../pages/WorldLocationDetailPage"
 import type { EntityLifecycleView } from "../../types/entityLifecycle"
@@ -20,7 +21,7 @@ interface Props {
     lifecycleView: Pick<EntityLifecycleView, "canon_status" | "lifecycle_status"> | null
     read: AreaRuntimeRead
     // Reads the area again, and the facts above (the page's own detail).
-    refresh: () => Promise<void>
+    refresh: () => Promise<RefreshOutcome>
     onUnsaved: ReportUnsaved
 }
 
@@ -58,7 +59,7 @@ export function AreaNowSection({ campaignId, areaId, location, lifecycleView, re
     const [editing, setEditing] = useState<string | null>(null)
     const [editorDirty, setEditorDirty] = useState(false)
     const dungeonId = read.view?.dungeon.entity_id ?? ""
-    const command = useDungeonCommand({ campaignId, dungeonId, areaId, scope: "state", refetch: refresh })
+    const command = useDungeonCommand({ campaignId, dungeonId, areaId, scope: "state", refetch: refresh, pageStale: read.stale })
     const report = useCallback<ReportUnsaved>(
         (source, labels) => {
             if (source.startsWith("state-")) setEditorDirty(labels.length > 0)
@@ -209,6 +210,15 @@ export function AreaNowSection({ campaignId, areaId, location, lifecycleView, re
         const s = view.state
         return (
             <div className="area-section">
+                {read.stale ? (
+                    <p className="authoring-note" role="status">
+                        The latest state could not be loaded, so what is shown may be out of date.{" "}
+                        <button type="button" className="authoring-button" onClick={() => void read.reload()}>
+                            Try again
+                        </button>
+                    </p>
+                ) : null}
+                {command.savedNotice}
                 <p className="authoring-note">
                     Recording what is happening here does not change the area itself. Each change is recorded for this
                     campaign only.

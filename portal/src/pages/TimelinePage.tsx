@@ -3,8 +3,11 @@ import { Link, useParams } from "react-router"
 import { archiveTimeline, restoreTimeline, timelinePath } from "../api/timelines"
 import { TransitionControls } from "../components/authoring/TransitionControls"
 import { LifecycleBadge } from "../components/authoring/feedback"
+import { StaleReadNotice } from "../components/StaleReadNotice"
 import { TimelineTree } from "../components/TimelineTree"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
+import type { RefetchOutcome } from "../hooks/useAuthoringResource"
+import { useKept } from "../hooks/useKeptResource"
 import { usePageArrival } from "../hooks/usePageArrival"
 import type { TimelineDetail } from "../types/timelineAuthoring"
 import { ERROR_CODE_MESSAGE } from "../utils/authoringValidation"
@@ -12,9 +15,12 @@ import "../components/authoring/authoring.css"
 
 export function TimelinePage() {
     const { worldId = "", timelineId = "" } = useParams()
-    const { state, refetch } = useAuthoringResource<TimelineDetail>(
-        timelinePath(worldId, timelineId),
-    )
+    const url = timelinePath(worldId, timelineId)
+    const { state, refetch } = useAuthoringResource<TimelineDetail>(url)
+    // The last timeline that loaded stays through a failed re-read (after an archive or restore, say),
+    // so the page that reports the save is not replaced by "could not be loaded".
+    const kept = useKept(state, url)
+    const stale = state.kind === "error" && kept !== null
     const headingRef = usePageArrival(state.kind === "ready")
 
     return (
@@ -43,7 +49,7 @@ export function TimelinePage() {
                             This timeline does not exist, or you do not have access to it.
                         </p>
                     </>
-                ) : state.kind === "error" ? (
+                ) : kept === null ? (
                     <>
                         <h1 ref={headingRef} tabIndex={-1}>
                             Timeline
@@ -51,12 +57,16 @@ export function TimelinePage() {
                         <p role="alert">The timeline could not be loaded. Try reloading the page.</p>
                     </>
                 ) : (
-                    <TimelineView
-                        worldId={worldId}
-                        timeline={state.data}
-                        headingRef={headingRef}
-                        refetch={refetch}
-                    />
+                    <>
+                        {stale ? <StaleReadNotice what="timeline" onRetry={() => void refetch()} /> : null}
+                        <TimelineView
+                            worldId={worldId}
+                            timeline={kept}
+                            headingRef={headingRef}
+                            refetch={refetch}
+                            pageStale={stale}
+                        />
+                    </>
                 )}
             </div>
         </div>
@@ -67,10 +77,12 @@ interface TimelineViewProps {
     worldId: string
     timeline: TimelineDetail
     headingRef: RefObject<HTMLHeadingElement | null>
-    refetch: () => Promise<unknown>
+    refetch: () => Promise<RefetchOutcome>
+    // The page's latest read failed and `timeline` is the last that loaded.
+    pageStale: boolean
 }
 
-function TimelineView({ worldId, timeline, headingRef, refetch }: TimelineViewProps) {
+function TimelineView({ worldId, timeline, headingRef, refetch, pageStale }: TimelineViewProps) {
     const available = new Set(timeline.available_actions)
     const blocked = timeline.blocked_actions.filter(
         (b) => b.reason !== "lifecycle_transition_not_allowed",
@@ -127,6 +139,7 @@ function TimelineView({ worldId, timeline, headingRef, refetch }: TimelineViewPr
                     archive={(body, ctx) => archiveTimeline(worldId, timeline.timeline_id, body, ctx)}
                     restore={(body, ctx) => restoreTimeline(worldId, timeline.timeline_id, body, ctx)}
                     refetch={refetch}
+                    pageStale={pageStale}
                     archiveDescription="No new branches or campaigns can be started on an archived timeline. Existing branches keep inheriting its history."
                     restoreDescription="The timeline accepts new branches and campaigns again."
                 />

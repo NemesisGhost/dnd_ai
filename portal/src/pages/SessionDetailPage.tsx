@@ -273,6 +273,9 @@ export function SessionDetailPage({
                 setRefreshFailed(true)
             }
             setSavedNotice(true)
+            // Saved, but the session on screen is the one from before: it is reported as such (the
+            // notice below), not announced as done until a read has worked.
+            if (!fresh) return "failed"
             announce("Session saved")
         },
     })
@@ -285,7 +288,9 @@ export function SessionDetailPage({
     // particular is echoed verbatim (not round-tripped through the local
     // input) so a started session's unchanged value is never rejected.
     function submit() {
-        if (!canEdit) return
+        // The session shown is behind the save that was just confirmed, so its version is stale: the
+        // next save waits for the read ("Reload session").
+        if (!canEdit || refreshFailed) return
         const editable = dirtyFields.filter((field) => field !== "scheduledFor" || scheduledEditable)
         const values: FormValues = {
             title: valueOf("title"),
@@ -317,8 +322,9 @@ export function SessionDetailPage({
     }
 
     async function loadLatest() {
-        await refresh()
-        mutation.reset()
+        // The stale notice goes once the latest version is in; if the read fails it stays, so the
+        // person can read again instead of saving against the version the server has moved past.
+        if (await refresh()) mutation.reset()
     }
 
     async function reloadAfterSave() {
@@ -326,6 +332,7 @@ export function SessionDetailPage({
             forgetSaved(saved)
             setSaved({})
             setRefreshFailed(false)
+            announce("Session saved")
         }
     }
 
@@ -464,7 +471,7 @@ export function SessionDetailPage({
                             <button
                                 type="submit"
                                 className="authoring-button authoring-button--primary"
-                                disabled={pending || !canEdit}
+                                disabled={pending || !canEdit || refreshFailed}
                                 aria-busy={pending}
                             >
                                 {pending ? "Saving…" : "Save"}

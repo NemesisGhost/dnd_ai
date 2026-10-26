@@ -140,6 +140,39 @@ describe("party pages", () => {
     expect(screen.getByLabelText(/Name/)).toHaveValue("The Crew")
   })
 
+  it("reports a confirmed archive whose list re-read fails, holds the row, and recovers by reading only", async () => {
+    let items = [party("p1", "The Company")]
+    let listFails = false
+    server.on("GET", LIST, () =>
+      listFails ? { status: 500, body: {} } : { body: { can_create: true, items } },
+    )
+    server.on("POST", `${LIST}/p1/archive`, () => {
+      items = []
+      listFails = true
+      return { body: { party_id: "p1", row_version: 3, created: false, changed: true } }
+    })
+    openApp("/app/mundivita/parties")
+    fireEvent.click(await screen.findByRole("button", { name: "Archive The Company" }))
+    const dialog = await screen.findByRole("dialog", { name: "Archive this party?" })
+    fireEvent.click(within(dialog).getByRole("button", { name: "Archive party" }))
+
+    // Saved, not "done": the notice says the list is behind, the row stays but is held.
+    expect(await screen.findByText(/Party archived\. The latest party list could not be loaded/)).toBeInTheDocument()
+    expect(screen.getByTestId("authoring-announcer")).toHaveTextContent("Saved, but the latest data could not be loaded.")
+    expect(screen.getByTestId("authoring-announcer")).not.toHaveTextContent("Party archived")
+    expect(screen.getByText("The Company")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Archive The Company" })).toBeDisabled()
+
+    // The page's own retry reads again; it never sends the archive a second time, and the first
+    // read that works also completes the archive.
+    listFails = false
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+    await waitFor(() => expect(screen.queryByText("The Company")).toBeNull())
+    await waitFor(() => expect(screen.getByTestId("authoring-announcer")).toHaveTextContent("Party archived"))
+    expect(screen.queryByText(/could not be loaded/)).toBeNull()
+    expect(server.callsTo("POST", `${LIST}/p1/archive`)).toHaveLength(1)
+  })
+
   it("says an archived or missing party cannot be edited", async () => {
     server.on("GET", `${LIST}/p2`, { body: party("p2", "Old Crew", "archived") })
     openApp("/app/mundivita/parties/p2/edit")

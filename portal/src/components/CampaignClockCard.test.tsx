@@ -118,6 +118,49 @@ describe("CampaignClockCard", () => {
         )
     })
 
+    it("reports a confirmed advance whose clock re-read fails, holds Advance and Correct, and recovers by reading only", async () => {
+        const server = installMockServer()
+        let state = { ...STATE }
+        let readFails = false
+        server.on("GET", CLOCK_PATH, () => (readFails ? { status: 500, body: {} } : { body: state }))
+        server.on("GET", TIMES_PATH, {
+            body: { items: [TIME("t2", "Year 2"), TIME("t1", "Year 1")], next_cursor: null },
+        })
+        server.on("GET", CALENDARS_PATH, { body: { calendars: [] } })
+        server.on("POST", `${CLOCK_PATH}/advance`, () => {
+            state = { ...state, current: { world_time_id: "t2", display: "Year 2" }, row_version: 2 }
+            readFails = true
+            return { body: { world_time_id: "t2", event_id: "ev-2", row_version: 2, created: false, changed: true } }
+        })
+        renderAuthoringRoutes({
+            initialEntry: "/clock",
+            bootstrap: bootstrap(true),
+            routes: [{ path: "/clock", element: <CampaignClockCard campaignId={CAMPAIGN} /> }],
+        })
+        fireEvent.click(await screen.findByRole("button", { name: "Advance time" }))
+        fireEvent.change(await screen.findByRole("combobox", { name: /Advance to/ }), { target: { value: "t2" } })
+        const form = screen.getByRole("form", { name: "Advance time" })
+        fireEvent.click(within(form).getByRole("button", { name: "Advance time" }))
+
+        expect(await screen.findByText(/Clock advanced\. The latest campaign time could not be loaded/)).toBeInTheDocument()
+        const live = screen.getByTestId("authoring-announcer")
+        expect(live).toHaveTextContent("Saved, but the latest data could not be loaded.")
+        expect(live).not.toHaveTextContent(/^Clock advanced/)
+        // The card keeps the time it last read, and offers nothing that would name its version.
+        expect(screen.getByText("Now: Year 1")).toBeInTheDocument()
+        expect(screen.getByRole("button", { name: "Advance time" })).toBeDisabled()
+        expect(screen.getByRole("button", { name: "Correct time" })).toBeDisabled()
+        expect(server.callsTo("POST", `${CLOCK_PATH}/advance`)).toHaveLength(1)
+
+        readFails = false
+        fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+        expect(await screen.findByText("Now: Year 2")).toBeInTheDocument()
+        await waitFor(() => expect(live).toHaveTextContent("Clock advanced"))
+        expect(screen.getByRole("button", { name: "Advance time" })).toBeEnabled()
+        expect(screen.queryByText(/could not be loaded/)).toBeNull()
+        expect(server.callsTo("POST", `${CLOCK_PATH}/advance`)).toHaveLength(1)
+    })
+
     it("requires a chosen time before sending", async () => {
         const { server } = setup(STATE)
         fireEvent.click(await screen.findByRole("button", { name: "Advance time" }))

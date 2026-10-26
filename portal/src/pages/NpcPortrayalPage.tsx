@@ -5,9 +5,13 @@ import { npcPortrayalPath, saveNpcPortrayal, setNpcDetailLevel } from "../api/np
 import { useAnnounce } from "../components/authoring/announcer"
 import { SelectField, TextAreaField, TextField } from "../components/authoring/fields"
 import { MutationStatusMessage, StaleWriteNotice } from "../components/authoring/feedback"
+import { StaleReadNotice } from "../components/StaleReadNotice"
 import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
+import type { RefetchOutcome } from "../hooks/useAuthoringResource"
+import { useAnnounceWhenRead, useConfirmedRefresh } from "../hooks/useConfirmedRefresh"
+import { useKept } from "../hooks/useKeptResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { usePageArrival } from "../hooks/usePageArrival"
 import type { NpcPortrayalView } from "../types/npcPortrayal"
@@ -24,15 +28,19 @@ const nullable = (value: string): string | null => (value.trim() === "" ? null :
 export function NpcPortrayalPage() {
     const { campaignId = "", characterId = "" } = useParams()
     const canEdit = useCampaignCapability(campaignId, "canon.edit")
-    const { state, refetch } = useAuthoringResource<NpcPortrayalView>(
-        npcPortrayalPath(campaignId, characterId),
-    )
+    const portrayalPath = npcPortrayalPath(campaignId, characterId)
+    const { state, refetch } = useAuthoringResource<NpcPortrayalView>(portrayalPath)
+    // The last portrayal that loaded stays through a failed re-read after a save, so the page and
+    // what was typed are not replaced by "does not exist"; a denied or missing answer drops it.
+    const view = useKept(state, portrayalPath)
+    const stale = state.kind === "error" && view !== null
+    const announceWhenRead = useAnnounceWhenRead(state.kind === "ready" && !state.refreshing, state)
     const headingRef = usePageArrival(state.kind === "ready")
     return (
         <section className="authoring-page" aria-labelledby="portrayal-heading">
             <p className="authoring-page__breadcrumb">
                 <Link to={`/app/${encodeURIComponent(campaignId)}/world/character/${encodeURIComponent(characterId)}`}>
-                    {state.kind === "ready" ? state.data.name : "Character"}
+                    {view !== null ? view.name : "Character"}
                 </Link>
             </p>
             <h1 id="portrayal-heading" ref={headingRef} tabIndex={-1}>
@@ -42,15 +50,20 @@ export function NpcPortrayalPage() {
                 <p role="alert">You do not have permission to edit how this NPC is played.</p>
             ) : state.kind === "loading" ? (
                 <p role="status">Loading…</p>
-            ) : state.kind !== "ready" ? (
+            ) : view === null ? (
                 <p role="alert">This NPC does not exist, or you do not have access to it.</p>
             ) : (
-                <Loaded
-                    key={`${state.data.current_version}:${state.data.row_version}`}
-                    campaignId={campaignId}
-                    view={state.data}
-                    refetch={refetch}
-                />
+                <>
+                    {stale ? <StaleReadNotice what="portrayal" onRetry={() => void refetch()} /> : null}
+                    <Loaded
+                        key={`${view.current_version}:${view.row_version}`}
+                        campaignId={campaignId}
+                        view={view}
+                        refetch={refetch}
+                        pageStale={stale}
+                        onUnread={announceWhenRead}
+                    />
+                </>
             )}
         </section>
     )
@@ -60,10 +73,17 @@ function Loaded({
     campaignId,
     view,
     refetch,
+    pageStale,
+    onUnread,
 }: {
     campaignId: string
     view: NpcPortrayalView
-    refetch: () => Promise<unknown>
+    refetch: () => Promise<RefetchOutcome>
+    // The page's latest read failed and `view` is the last that loaded: both writes send its
+    // versions, so they wait for the read.
+    pageStale: boolean
+    // This record saved something that has not been read back; the page announces it when it is.
+    onUnread: (message: string) => void
 }) {
     const { reload } = useSession()
     const announce = useAnnounce()
@@ -73,6 +93,8 @@ function Loaded({
     const [note, setNote] = useState("")
     const [level, setLevel] = useState(view.detail_level)
     const [done, setDone] = useState<string | null>(null)
+    // What the last confirmed save said, for the notice if its re-read fails.
+    const [savedMessage, setSavedMessage] = useState<string | null>(null)
     const [problem, setProblem] = useState<string | null>(null)
     const [shown, setShown] = useState<NpcPortrayalView | null>(null)
 
@@ -83,8 +105,13 @@ function Loaded({
             const message = done
             setDone(null)
             setNote("")
-            await refetch()
-            if (message !== null) announce(message)
+            setSavedMessage(message)
+            const outcome = await refetch()
+            if (message !== null) {
+                if (outcome === "ok") announce(message)
+                else onUnread(message)
+            }
+            return outcome
         },
     })
     const levelMutation = useAuthoringMutation<
@@ -94,17 +121,39 @@ function Loaded({
         scopeKey: `detail-level:${view.npc_id}`,
         request: (body, ctx) => setNpcDetailLevel(campaignId, view.npc_id, body, ctx),
         onSuccess: async () => {
-            await refetch()
-            announce("Detail level saved")
+            const outcome = await refetch()
+            if (outcome === "ok") announce("Detail level saved")
+            else onUnread("Detail level saved")
+            return outcome
         },
     })
+    const savedRefresh = useConfirmedRefresh({
+        status: saveMutation.status,
+        reset: saveMutation.reset,
+        what: "portrayal",
+        message: savedMessage,
+        read: refetch,
+        pageStale,
+        quietRecovery: true,
+    })
+    const levelRefresh = useConfirmedRefresh({
+        status: levelMutation.status,
+        reset: levelMutation.reset,
+        what: "portrayal",
+        message: "Detail level saved",
+        read: refetch,
+        pageStale,
+        quietRecovery: true,
+    })
+    const writesHeld = savedRefresh.held || levelRefresh.held || pageStale
     const error =
         saveMutation.status.kind === "error"
             ? saveMutation.status.error
             : levelMutation.status.kind === "error"
               ? levelMutation.status.error
               : null
-    const busy = saveMutation.status.kind === "pending" || levelMutation.status.kind === "pending"
+    const busy =
+        saveMutation.status.kind === "pending" || levelMutation.status.kind === "pending" || writesHeld
     const explained = error?.code ? (CODE_MESSAGE[error.code] ?? null) : null
     const max = view.limits.field_max_length
 
@@ -133,6 +182,8 @@ function Loaded({
                     onCheckSession={reload}
                 />
             ) : null}
+            {savedRefresh.notice}
+            {levelRefresh.notice}
             <p className="authoring-note">
                 Only people who can edit canon see this. It is not shown to players and is not used
                 by the AI.

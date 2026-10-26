@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import { bootstrapWith, installMockServer, renderAuthoringRoutes } from "../test/authoringHarness"
 import type { SessionParticipant, SessionTravelEntry } from "../types/campaignSession"
+import type { RefetchOutcome } from "../hooks/useAuthoringResource"
 import { TravelSection } from "./TravelSection"
 
 const SESSION_TRAVEL = "/campaigns/c1/sessions/s1/travel"
@@ -39,11 +40,11 @@ interface Options {
     travel?: SessionTravelEntry[]
     canRecord?: boolean
     refreshFailed?: boolean
-    refetch?: () => Promise<void>
+    refetch?: () => Promise<RefetchOutcome>
 }
 
 function setup(options: Options = {}) {
-    const refetch = vi.fn(options.refetch ?? (() => Promise.resolve()))
+    const refetch = vi.fn(options.refetch ?? (() => Promise.resolve<RefetchOutcome>("ok")))
     const server = installMockServer()
     server.on("GET", "/campaigns/c1/parties", {
         body: {
@@ -247,6 +248,7 @@ describe("TravelSection", () => {
         const { server, refetch } = setup({
             refetch: async () => {
                 order.push("refetch")
+                return "ok"
             },
         })
         const form = await screen.findByRole("form", { name: "Record travel" })
@@ -278,14 +280,36 @@ describe("TravelSection", () => {
         expect(within(form).getByRole("checkbox", { name: "Aldric" })).toBeChecked()
     })
 
-    it("tells the user not to record again when the journey was saved but the refresh failed", async () => {
-        setup({ refreshFailed: true })
+    it("tells the user not to record again when the journey was saved but the session read failed", async () => {
+        const { server, refetch } = setup({ refreshFailed: true, refetch: async () => "failed" })
         const form = await screen.findByRole("form", { name: "Record travel" })
         await chooseDestination(form)
         fireEvent.click(within(form).getByRole("checkbox", { name: "Aldric" }))
         submit(form)
-        const status = await screen.findByText(/Do not record this journey again/, { selector: "p[role=status]" })
-        expect(status).toHaveTextContent(/1 traveler arrived and the journey was recorded/)
+        expect(await screen.findByText(/1 traveler arrived and the journey was recorded\. The latest travel history could not be loaded/)).toBeInTheDocument()
+        expect(screen.getByText(/Do not record this journey again/)).toBeInTheDocument()
+        // Saved is not done: nothing is announced as completed, and the write is sent once.
+        expect(screen.getByTestId("authoring-announcer")).not.toHaveTextContent(/arrived/)
+        expect(server.callsTo("POST", SESSION_TRAVEL)).toHaveLength(1)
+        expect(refetch).toHaveBeenCalledTimes(1)
+    })
+
+    it("offers a read-only Load latest when the session read was superseded, and announces once it works", async () => {
+        let outcome: RefetchOutcome = "superseded"
+        const { server, refetch } = setup({ refetch: async () => outcome })
+        const form = await screen.findByRole("form", { name: "Record travel" })
+        await chooseDestination(form)
+        fireEvent.click(within(form).getByRole("checkbox", { name: "Aldric" }))
+        submit(form)
+        // A superseded read says nothing about the history: not a completed refresh.
+        const load = await screen.findByRole("button", { name: "Load latest" })
+        expect(screen.getByTestId("authoring-announcer")).not.toHaveTextContent(/1 traveler arrived/)
+        outcome = "ok"
+        fireEvent.click(load)
+        await waitFor(() => expect(screen.getByTestId("authoring-announcer")).toHaveTextContent(/1 traveler arrived/))
+        expect(screen.queryByRole("button", { name: "Load latest" })).toBeNull()
+        expect(refetch).toHaveBeenCalledTimes(2)
+        expect(server.callsTo("POST", SESSION_TRAVEL)).toHaveLength(1)
     })
 
     it.each([

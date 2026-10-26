@@ -3,6 +3,7 @@ import type { ReactNode } from "react"
 import { createWorldTime } from "../../api/worldTime"
 import { useSession } from "../../context/SessionContext"
 import { useAuthoringMutation } from "../../hooks/useAuthoringMutation"
+import type { RefreshOutcome } from "../../hooks/useAuthoringMutation"
 import type {
     Calendar,
     CreateWorldTimeBody,
@@ -37,7 +38,9 @@ interface WorldTimeFormProps {
     calendars: Calendar[]
     // Existing points (latest first), offered as the "after"/"before" anchors.
     times: WorldTimeItem[]
-    onCreated: (receipt: WorldTimeReceipt) => void
+    // The time was recorded. A caller that reads the times again afterwards returns what that read
+    // did, so a recorded time whose read-back failed is reported as such (and never recorded twice).
+    onCreated: (receipt: WorldTimeReceipt) => void | RefreshOutcome | Promise<void | RefreshOutcome>
     onCancel: () => void
     heading?: string
     // The form sits inside another form (the picker does): render a group that saves by click or
@@ -65,10 +68,12 @@ export function WorldTimeForm({
     const mutation = useAuthoringMutation<CreateWorldTimeBody, WorldTimeReceipt>({
         scopeKey: `create-world-time:${campaignId}`,
         request: (body, ctx) => createWorldTime(campaignId, body, ctx),
+        // The caller words the outcome of its own read-back (a notice beside the form).
+        ownsRefreshNotice: true,
         onSuccess: (receipt) => {
             setValues(emptyWorldTimeForm(calendars))
             setErrors([])
-            onCreated(receipt)
+            return onCreated(receipt)
         },
     })
     const pending = mutation.status.kind === "pending"

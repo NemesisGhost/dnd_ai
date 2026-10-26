@@ -1,3 +1,4 @@
+import type { RefreshOutcome } from "../../hooks/useAuthoringMutation"
 import { useCallback, useState } from "react"
 import { Link } from "react-router"
 import type { AreaAuthoringView, ChildKind, ChildView, ConnectionView } from "../../types/dungeonAuthoring"
@@ -18,7 +19,7 @@ interface Props {
     areaId: string
     read: AreaRead
     // Reads the area, its lifecycle and its revisions again after a change.
-    refresh: () => Promise<void>
+    refresh: () => Promise<RefreshOutcome>
     // The dungeon's Connections section, where an area's connections are managed.
     connectionsHref: string
     linkState?: object
@@ -90,10 +91,11 @@ export function AreaContentsSection({ campaignId, areaId, read, refresh, connect
     const [removing, setRemoving] = useState<{ child: ChildView; singular: string; name: string } | null>(null)
     const [origin, setOrigin] = useState<Origin>("edit")
     const dungeonId = read.view?.dungeon.entity_id ?? ""
-    const base = useDungeonCommand({ campaignId, dungeonId, areaId, scope: "contents", refetch: refresh })
+    const base = useDungeonCommand({ campaignId, dungeonId, areaId, scope: "contents", refetch: refresh, pageStale: read.stale })
     const commandFor = (from: Origin): DungeonCommandHandle => ({
         busy: base.busy,
         notice: origin === from ? base.notice : null,
+        savedNotice: null,
         clear: base.clear,
         send: (command, message, after) => {
             setOrigin(from)
@@ -209,6 +211,7 @@ export function AreaContentsSection({ campaignId, areaId, read, refresh, connect
                     </button>
                 </p>
             ) : null}
+            {base.savedNotice}
             {!canChange ? (
                 <p className="authoring-note">
                     Contents can be changed while both this area and {dungeon.name} can be edited. This area is{" "}

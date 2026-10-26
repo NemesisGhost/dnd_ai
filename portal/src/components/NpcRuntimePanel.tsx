@@ -7,6 +7,8 @@ import { fetchWorldEntities } from "../api/world"
 import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
+import type { RefetchOutcome } from "../hooks/useAuthoringResource"
+import { useConfirmedRefresh } from "../hooks/useConfirmedRefresh"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import type { CharacterDetail } from "../types/character"
 import type { RuntimeOptions } from "../types/npcPortrayal"
@@ -132,6 +134,7 @@ function Loaded({ campaignId, characterId, embedded, refreshToken, onChanged, bl
             optionsRetry={options.state.kind === "error" ? () => void options.refetch() : null}
             detail={characterView}
             refetch={character.refetch}
+            pageStale={characterStale}
             onChanged={onChanged}
             />
         </>
@@ -145,6 +148,7 @@ function Panel({
     optionsRetry,
     detail,
     refetch,
+    pageStale,
     embedded,
     onChanged,
 }: Props & {
@@ -153,7 +157,9 @@ function Panel({
     options: RuntimeOptions | null
     optionsRetry: (() => void) | null
     detail: CharacterDetail
-    refetch: () => Promise<unknown>
+    refetch: () => Promise<RefetchOutcome>
+    // The character read failed and `detail` is the last that loaded.
+    pageStale: boolean
 }) {
     const { reload } = useSession()
     const announce = useAnnounce()
@@ -167,6 +173,8 @@ function Panel({
     const [destination, setDestination] = useState<ReferenceOption | null>(null)
     const [problem, setProblem] = useState<string | null>(null)
     const [done, setDone] = useState<string | null>(null)
+    // What the last confirmed command said, for the notice if the character could not be read back.
+    const [saved, setSaved] = useState<string | null>(null)
 
     const mutation = useAuthoringMutation<Command, unknown>({
         scopeKey: `npc-runtime:${characterId}`,
@@ -213,14 +221,28 @@ function Panel({
             setDelta("")
             setResourceDelta("")
             setSource("")
-            await refetch()
+            setSaved(message)
+            const outcome = await refetch()
+            // The page's own view of the character is read by the page, which reports it if it fails.
             onChanged?.()
-            if (message !== null) announce(message)
+            if (outcome === "ok" && message !== null) announce(message)
+            return outcome
         },
+    })
+    const refreshed = useConfirmedRefresh({
+        status: mutation.status,
+        reset: mutation.reset,
+        what: "NPC information",
+        message: saved,
+        read: refetch,
+        pageStale,
     })
     const error = mutation.status.kind === "error" ? mutation.status.error : null
     const explained = error?.code ? (CODE_MESSAGE[error.code] ?? null) : null
-    const busy = mutation.status.kind === "pending"
+    // Hit points, conditions and resources change relative to what the server holds. Until the
+    // character is read again the panel shows the values from before, so a second change is held
+    // rather than typed against numbers that are no longer true.
+    const busy = mutation.status.kind === "pending" || refreshed.held || pageStale
     const run = (command: Command, message: string) => {
         if (when === "") {
             setProblem("Choose when this happens first.")
@@ -262,6 +284,7 @@ function Panel({
     )
     return (
         <PanelFrame embedded={embedded} title="Run this NPC" headingId="npc-runtime-heading">
+            {refreshed.notice}
             {explained !== null ? (
                 <p role="alert">{explained}</p>
             ) : error !== null ? (

@@ -264,6 +264,52 @@ describe("Quest workspace: Review and Publication", () => {
         expect(within(header).queryByRole("group", { name: "Record status" })).toBeNull()
     })
 
+    it("reports a confirmed step whose lifecycle re-read fails: not announced as done, no second step, announced once the lifecycle is read", async () => {
+        const { server } = setupQuestWorkspace({
+            section: "publication",
+            lifecycle: { available_actions: ["submit_for_review"] },
+        })
+        let lifecycleFails = false
+        const lifecycleBody = (status: string, version: number, actions: string[]) => ({
+            entity_id: "q1",
+            entity_type_code: "quest",
+            canonical_name: "The Lost Amulet",
+            canon_status: status,
+            lifecycle_status: "active",
+            row_version: version,
+            lifecycle_managed: true,
+            superseded_by: null,
+            available_actions: actions,
+            blocked_actions: [],
+        })
+        let status = "draft"
+        server.on("GET", /\/entities\/q1\/lifecycle$/, () =>
+            lifecycleFails
+                ? { status: 500, body: {} }
+                : { body: lifecycleBody(status, status === "draft" ? 1 : 2, status === "draft" ? ["submit_for_review"] : ["approve"]) },
+        )
+        server.on("POST", /\/entities\/q1\/lifecycle\/submit-for-review$/, () => {
+            status = "proposed"
+            lifecycleFails = true
+            return { status: 200, body: { entity_id: "q1" } }
+        })
+        fireEvent.click(await screen.findByRole("button", { name: /Submit for review/ }))
+
+        // The lifecycle on screen is gone (it could not be read), the step is saved, and nothing says it is done.
+        expect(await screen.findByText(/lifecycle could not be loaded, so no step is shown/)).toBeInTheDocument()
+        const live = screen.getByTestId("authoring-announcer")
+        expect(live).toHaveTextContent("Saved, but the latest data could not be loaded.")
+        expect(live).not.toHaveTextContent(/^Submitted for review/)
+        expect(writes(server)).toHaveLength(1)
+
+        lifecycleFails = false
+        fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+        await waitFor(() => expect(live).toHaveTextContent("Submitted for review"))
+        expect(await screen.findByRole("button", { name: "Approve" })).toBeEnabled()
+        expect(screen.queryByText(/Submitted for review\. The latest status/)).toBeNull()
+        expect(writes(server)).toHaveLength(1)
+    })
+
     it("submits for review without any other write first", async () => {
         const { server } = setupQuestWorkspace({
             section: "publication",

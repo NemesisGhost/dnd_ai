@@ -7,6 +7,8 @@ import { fetchWorldEntities } from "../api/world"
 import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
+import type { RefetchOutcome } from "../hooks/useAuthoringResource"
+import { useConfirmedRefresh } from "../hooks/useConfirmedRefresh"
 import type { ClockState } from "../types/campaignClock"
 import type { PartyList, PartyMembers } from "../types/parties"
 import type { SessionParticipantPick, SessionTravelEntry } from "../types/campaignSession"
@@ -28,7 +30,7 @@ interface Props {
     // The session's travel, already filtered for the caller, shown beneath the form.
     travel: SessionTravelEntry[]
     // Re-reads the session (and so its travel). Resolves whether or not the read succeeded.
-    refetch: () => Promise<unknown>
+    refetch: () => Promise<RefetchOutcome>
     // True while the page's latest read of the session failed and it is showing older data.
     refreshFailed?: boolean
     // False when recording is not offered (the session is not in progress); the reason is shown
@@ -162,10 +164,23 @@ function TravelForm({
                 setRoute("")
                 setNote("")
                 setTimeId("")
-                await refetch()
+                // The journey is recorded; the session's travel history is what proves it on screen.
+                const read = await refetch()
+                if (read !== "ok") return read
             }
+            // A journey that moved no one recorded nothing, so there is nothing to read back.
             announce(arrivedText(receipt))
         },
+    })
+    // Recorded once, but the history below does not list it yet: the journey is described from the
+    // receipt (which is the server's answer), and the page is said to be behind until it is read.
+    const refreshed = useConfirmedRefresh({
+        status: mutation.status,
+        reset: mutation.reset,
+        what: "travel history",
+        message: outcome === null ? null : arrivedText(outcome),
+        read: refetch,
+        pageStale: refreshFailed,
     })
     const error = mutation.status.kind === "error" ? mutation.status.error : null
     const explained = error?.code ? (CODE_MESSAGE[error.code] ?? null) : null
@@ -362,13 +377,14 @@ function TravelForm({
                     Record travel
                 </button>
             </form>
-            {outcome !== null ? (
-                <p role="status">
-                    {arrivedText(outcome)}
-                    {outcome.changed && refreshFailed
-                        ? " The session could not be refreshed, so the history below may be out of date. Do not record this journey again."
-                        : ""}
-                </p>
+            {outcome !== null && refreshed.notice === null ? <p role="status">{arrivedText(outcome)}</p> : null}
+            {refreshed.notice !== null ? (
+                <>
+                    {refreshed.notice}
+                    <p className="authoring-note">
+                        Do not record this journey again: it is saved, and the history below is only behind.
+                    </p>
+                </>
             ) : null}
         </>
     )

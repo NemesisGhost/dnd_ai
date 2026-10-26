@@ -5,6 +5,7 @@ import {
     dungeonOptionsPath,
 } from "../../api/dungeonAuthoring"
 import { useAuthoringResource } from "../../hooks/useAuthoringResource"
+import type { RefreshOutcome } from "../../hooks/useAuthoringMutation"
 import { useKept } from "../../hooks/useKeptResource"
 import { usePairedRead } from "../../hooks/usePairedRead"
 import type { PairedRead } from "../../hooks/usePairedRead"
@@ -46,7 +47,7 @@ export interface AreaRuntimeRead {
     view: AreaRuntimeView | null
     status: "loading" | "ready" | "failed" | "unavailable"
     stale: boolean
-    reload: () => Promise<void>
+    reload: () => Promise<RefreshOutcome>
 }
 
 export function useAreaRuntimeRead(campaignId: string, areaId: string, enabled: boolean): AreaRuntimeRead {
@@ -64,8 +65,7 @@ export function useAreaRuntimeRead(campaignId: string, areaId: string, enabled: 
                 ? "failed"
                 : "loading",
         stale: record.state.kind === "error",
-        reload: async () => {
-            await record.refetch()
-        },
+        // A read the area did not answer (failed, or replaced by a newer one) is reported as such.
+        reload: async () => record.refetch(),
     }
 }

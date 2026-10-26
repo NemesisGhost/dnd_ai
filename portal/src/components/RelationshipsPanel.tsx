@@ -24,6 +24,7 @@ import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { useKeptData } from "../hooks/useKeptData"
+import type { RefetchOutcome } from "../hooks/useAuthoringResource"
 import type {
     CreateRelationshipBody,
     RelationshipList,
@@ -186,24 +187,28 @@ function LoadedPanel({ campaignId, entityId, embedded, kind: recordKind, members
         else if (current !== null) closeEditor(current)
     }
 
-    const created = async (view: RelationshipView) => {
+    // The outcome of the list read is what this reports: the new row exists on screen only when that
+    // read was applied. A read that failed is said so (nobody adds it again); one replaced by a newer
+    // read is not yet shown either, and the newer read (or its own failure notice) answers for it.
+    const created = async (view: RelationshipView): Promise<RefetchOutcome> => {
         setAdding(false)
-        await list.refetch()
-        if (list.refreshOk.current) {
-            announce(
-                `Relationship added: ${view.relationship_type_label} with ${counterparts(view.participants, entityId)}`,
-            )
-            focusSoon(`relationship-open-${view.relationship_id}`)
-        } else {
+        const outcome = await list.refetch()
+        if (outcome === "failed") {
             setAddedUnrefreshed(true)
             announce("The relationship was added, but the list could not be refreshed. Do not add it again.")
             focusSoon("relationship-add-button")
+        } else {
+            announce(
+                `Relationship added: ${view.relationship_type_label} with ${counterparts(view.participants, entityId)}`,
+            )
+            if (outcome === "ok") focusSoon(`relationship-open-${view.relationship_id}`)
         }
+        return outcome
     }
 
-    const changed = async (change?: { archived?: boolean }) => {
+    const changed = async (change?: { archived?: boolean }): Promise<RefetchOutcome> => {
         if (change?.archived === true && open !== null) setArchivedId(open)
-        await list.refetch()
+        return list.refetch()
     }
 
     const count = items.length
@@ -454,7 +459,7 @@ function AddRelationship({
     recordKind?: WorldKind
     membersHref?: string
     options: RelationshipOptions
-    onCreated: (view: RelationshipView) => Promise<void>
+    onCreated: (view: RelationshipView) => Promise<RefetchOutcome>
     onClose: () => void
     onUnsaved: ReportUnsaved
 }) {
@@ -585,6 +590,9 @@ function AddRelationship({
     const mutation = useAuthoringMutation<CreateRelationshipBody, RelationshipView>({
         scopeKey: `create-relationship:${entityId}`,
         request: (body, ctx) => createRelationship(campaignId, body, ctx),
+        // The panel announces and words the outcome itself (see `created`); the hook only needs to
+        // know whether the list was read back.
+        ownsRefreshNotice: true,
         // The form closes and resets; the list reads again and the new row takes focus.
         onSuccess: (result) => onCreated(result),
     })

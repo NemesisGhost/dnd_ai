@@ -451,13 +451,24 @@ describe("World record workspace: Review and Publication", () => {
         fireEvent.click(screen.getByRole("link", { name: "2. Review & publish" }))
         fireEvent.click(await screen.findByRole("link", { name: "Publication" }))
         fireEvent.click(await screen.findByRole("button", { name: "Submit for review" }))
-        expect(await screen.findByText(/could not be loaded, so what is shown may be out of date/)).toBeInTheDocument()
+        // The workspace banner, and the notice that the step was saved but its status was not read back.
+        expect((await screen.findAllByText(/could not be loaded, so what is shown may be out of date/)).length).toBeGreaterThan(0)
+        // Every section that offers lifecycle steps is mounted, so the notice is in more than one.
+        expect(
+            (await screen.findAllByText(/Submitted for review\. The latest status of this record could not be loaded/)).length,
+        ).toBeGreaterThan(0)
         expect(screen.getByRole("heading", { level: 1, name: "Old Mill" })).toBeInTheDocument()
         expect(screen.getByLabelText("Title")).toHaveValue("Kept title")
         expect(server.callsTo("POST", `/campaigns/${C}/entities/l1/lifecycle/submit-for-review`)).toHaveLength(1)
         reads = 0
+        // The workspace's own retry reads the record; the saved step's notice has its own read-only
+        // button. Neither sends the step again.
         fireEvent.click(screen.getByRole("button", { name: "Try again" }))
-        await waitFor(() => expect(screen.queryByText(/may be out of date/)).not.toBeInTheDocument())
+        await waitFor(() => expect(screen.queryByText(/The latest information could not be loaded/)).not.toBeInTheDocument())
+        reads = 0
+        fireEvent.click((await screen.findAllByRole("button", { name: "Load latest" }))[0]!)
+        await waitFor(() => expect(screen.queryAllByText(/Submitted for review\. The latest status/)).toHaveLength(0))
+        expect(server.callsTo("POST", `/campaigns/${C}/entities/l1/lifecycle/submit-for-review`)).toHaveLength(1)
     })
 
     it("lists every step the server offers in Publication, with the history link", async () => {

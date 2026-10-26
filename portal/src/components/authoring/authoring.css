@@ -952,3 +952,8 @@
     min-width: 0;
   }
 }
+
+/* A notice placed in an action row takes the whole row instead of sharing it with the buttons. */
+.authoring-actions > .authoring-message {
+  flex: 1 1 100%;
+}

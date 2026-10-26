@@ -297,4 +297,53 @@ describe("WorldSharingPage: last owner, focus and the transfer control (CP-4 smo
         await waitFor(() => expect(screen.queryByText("Bob Editor")).not.toBeInTheDocument())
         await waitFor(() => expect(screen.getByRole("heading", { name: "People with a role" })).toHaveFocus())
     })
+
+    it("reports a saved role whose list re-read fails, holds the controls, and recovers by reading only", async () => {
+        const { server, setCurrent } = setup()
+        server.on("POST", "/worlds/w1/roles", {
+            status: 201,
+            body: { world_id: "w1", user_id: "u9", record_id: "m9", role_code: "world_reader", changed: true },
+        })
+        await screen.findByText("Bob Editor")
+        fireEvent.change(screen.getByRole("textbox", { name: "Login name" }), { target: { value: "dana" } })
+        server.on("GET", "/worlds/w1/access", { status: 500, body: {} })
+        fireEvent.click(screen.getByRole("button", { name: "Give role" }))
+
+        expect(await screen.findByText(/Role assigned\. The latest sharing list could not be loaded/)).toBeInTheDocument()
+        const live = screen.getByTestId("authoring-announcer")
+        expect(live).toHaveTextContent("Saved, but the latest data could not be loaded.")
+        expect(live).not.toHaveTextContent(/^Role assigned/)
+        // The list on screen stays, and nothing can be changed from it until it is read again.
+        expect(screen.getByText("Bob Editor")).toBeInTheDocument()
+        expect(screen.getByRole("button", { name: "Give role" })).toBeDisabled()
+        expect(screen.getByRole("button", { name: /End role for Bob Editor/ })).toBeDisabled()
+        expect(server.callsTo("POST", "/worlds/w1/roles")).toHaveLength(1)
+
+        setCurrent(access())
+        server.on("GET", "/worlds/w1/access", () => ({ body: access() }))
+        fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+        await waitFor(() => expect(screen.getByRole("button", { name: "Give role" })).toBeEnabled())
+        await waitFor(() => expect(live).toHaveTextContent("Role assigned"))
+        expect(screen.queryByText(/could not be loaded/)).toBeNull()
+        expect(server.callsTo("POST", "/worlds/w1/roles")).toHaveLength(1)
+    })
+
+    it("still announces a transfer whose read-back is the denial that ended the person's own access", async () => {
+        const { server } = setup()
+        server.on("POST", "/worlds/w1/ownership-transfer", {
+            body: { world_id: "w1", previous_owner_user_id: "u1", new_owner_user_id: "u4", retained_role_code: "world_editor" },
+        })
+        await screen.findByText("Bob Editor")
+        fireEvent.change(screen.getByRole("textbox", { name: /New owner/ }), { target: { value: "erin" } })
+        fireEvent.click(screen.getByRole("button", { name: /Transfer ownership…/ }))
+        const dialog = await screen.findByRole("dialog")
+        server.on("GET", "/worlds/w1/access", { status: 403, body: { error: { code: "forbidden", message: "m", correlation_id: "x" } } })
+        fireEvent.click(within(dialog).getByRole("button", { name: "Transfer ownership" }))
+        expect(await screen.findByText(/Sharing is not available for this world with your account/)).toBeInTheDocument()
+        // A denied read is the authoritative answer here, not a read that failed: the loss is explained
+        // and the transfer is announced; the removed content is not kept.
+        await waitFor(() => expect(screen.getByTestId("authoring-announcer")).toHaveTextContent("Ownership transferred"))
+        expect(screen.queryByText("Bob Editor")).toBeNull()
+        expect(server.callsTo("POST", "/worlds/w1/ownership-transfer")).toHaveLength(1)
+    })
 })

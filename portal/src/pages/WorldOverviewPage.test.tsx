@@ -171,6 +171,50 @@ describe("WorldOverviewPage", () => {
         await waitFor(() => expect(screen.queryByRole("dialog", { hidden: false })).not.toBeInTheDocument())
     })
 
+    it("reports a confirmed archive whose world re-read fails, holds the transition, and recovers by reading only", async () => {
+        const { server } = setup(worldDetail())
+        let archived = false
+        let readFails = false
+        server.on("GET", "/worlds/w1", () =>
+            readFails
+                ? { status: 500, body: {} }
+                : {
+                      body: archived
+                          ? worldDetail({
+                                lifecycle_status: "archived",
+                                row_version: 4,
+                                available_actions: ["restore"],
+                                blocked_actions: [],
+                            })
+                          : worldDetail(),
+                  },
+        )
+        server.on("POST", "/worlds/w1/archive", () => {
+            archived = true
+            readFails = true
+            return { body: { world_id: "w1", lifecycle_status: "archived", row_version: 4 } }
+        })
+        await screen.findByRole("heading", { level: 1, name: "Eberron" })
+        fireEvent.click(screen.getByRole("button", { name: "Archive world" }))
+        const dialog = screen.getByRole("dialog", { name: "Archive this world?", hidden: true })
+        fireEvent.click(within(dialog).getByRole("button", { name: "Archive world" }))
+
+        expect(await screen.findByText(/World archived\. The latest world could not be loaded/)).toBeInTheDocument()
+        const live = screen.getByTestId("authoring-announcer")
+        expect(live).not.toHaveTextContent(/^World archived/)
+        // The world stays on screen (not an error page), still offering Archive at the old version, held.
+        expect(screen.getByRole("heading", { level: 1, name: "Eberron" })).toBeInTheDocument()
+        expect(screen.getByRole("button", { name: "Archive world" })).toBeDisabled()
+        expect(server.callsTo("POST", "/worlds/w1/archive")).toHaveLength(1)
+
+        readFails = false
+        fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+        expect(await screen.findByRole("button", { name: "Restore world" })).toBeEnabled()
+        await waitFor(() => expect(live).toHaveTextContent("World archived"))
+        expect(screen.queryByText(/could not be loaded/)).toBeNull()
+        expect(server.callsTo("POST", "/worlds/w1/archive")).toHaveLength(1)
+    })
+
     it("keeps a failed archive inside the dialog with a recoverable message", async () => {
         const { server } = setup(worldDetail())
         server.on("POST", "/worlds/w1/archive", {

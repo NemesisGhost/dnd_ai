@@ -3,7 +3,11 @@ import { Link, useParams } from "react-router"
 import { campaignCalendarsPath, fetchWorldTimes, worldTimesPath } from "../api/worldTime"
 import { WorldTimeForm } from "../components/authoring/WorldTimeForm"
 import { useAnnounce } from "../components/authoring/announcer"
+import { StaleReadNotice } from "../components/StaleReadNotice"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
+import type { RefetchOutcome } from "../hooks/useAuthoringResource"
+import { useConfirmedRefresh } from "../hooks/useConfirmedRefresh"
+import { useKept } from "../hooks/useKeptResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { usePageArrival } from "../hooks/usePageArrival"
 import type { CalendarListResponse, WorldTimeItem, WorldTimePage } from "../types/worldTime"
@@ -19,12 +23,15 @@ export function WorldTimesPage() {
     const { campaignId } = useParams<{ campaignId: string }>()
     const id = campaignId ?? ""
     const canEdit = useCampaignCapability(campaignId, "canon.edit")
-    const times = useAuthoringResource<WorldTimePage>(
-        canEdit ? worldTimesPath(id, { limit: PAGE_SIZE }) : null,
-    )
-    const calendars = useAuthoringResource<CalendarListResponse>(
-        canEdit ? campaignCalendarsPath(id) : null,
-    )
+    const timesUrl = canEdit ? worldTimesPath(id, { limit: PAGE_SIZE }) : null
+    const calendarsUrl = canEdit ? campaignCalendarsPath(id) : null
+    const times = useAuthoringResource<WorldTimePage>(timesUrl)
+    const calendars = useAuthoringResource<CalendarListResponse>(calendarsUrl)
+    // The last lists that loaded stay through a failed re-read (after recording a time), so the page
+    // that reports the save is not replaced by an error; a denied or missing answer drops them.
+    const heldTimes = useKept(times.state, timesUrl ?? "")
+    const heldCalendars = useKept(calendars.state, calendarsUrl ?? "")
+    const stale = times.state.kind === "error" && heldTimes !== null
     const headingRef = usePageArrival(!canEdit || times.state.kind !== "loading")
 
     return (
@@ -39,15 +46,19 @@ export function WorldTimesPage() {
                 <p role="alert">You do not have permission to manage world times.</p>
             ) : times.state.kind === "loading" || calendars.state.kind === "loading" ? (
                 <p role="status">Loading world times…</p>
-            ) : times.state.kind !== "ready" || calendars.state.kind !== "ready" ? (
+            ) : heldTimes === null || heldCalendars === null ? (
                 <p role="alert">World times could not be loaded. Try reloading the page.</p>
             ) : (
-                <WorldTimesContent
-                    campaignId={id}
-                    page={times.state.data}
-                    calendars={calendars.state.data}
-                    refetch={times.refetch}
-                />
+                <>
+                    {stale ? <StaleReadNotice what="world times" onRetry={() => void times.refetch()} /> : null}
+                    <WorldTimesContent
+                        campaignId={id}
+                        page={heldTimes}
+                        calendars={heldCalendars}
+                        refetch={times.refetch}
+                        pageStale={stale}
+                    />
+                </>
             )}
         </div>
     )
@@ -57,11 +68,32 @@ interface WorldTimesContentProps {
     campaignId: string
     page: WorldTimePage
     calendars: CalendarListResponse
-    refetch: () => Promise<unknown>
+    refetch: () => Promise<RefetchOutcome>
+    // The latest read failed and `page` is the last that loaded.
+    pageStale: boolean
 }
 
-function WorldTimesContent({ campaignId, page, calendars, refetch }: WorldTimesContentProps) {
+function WorldTimesContent({ campaignId, page, calendars, refetch, pageStale }: WorldTimesContentProps) {
     const announce = useAnnounce()
+    // A time that was recorded but is not in the list yet.
+    const [recorded, setRecorded] = useState(false)
+    // Reading again starts the list from its first page, as it does after a time is recorded.
+    const readFromTheStart = async (): Promise<RefetchOutcome> => {
+        const outcome = await refetch()
+        if (outcome === "ok") {
+            setOlder([])
+            setCursor(undefined)
+        }
+        return outcome
+    }
+    const refreshed = useConfirmedRefresh({
+        status: recorded ? { kind: "confirmed", refresh: "failed" } : { kind: "idle" },
+        reset: () => setRecorded(false),
+        what: "world times",
+        message: "World time recorded",
+        read: readFromTheStart,
+        pageStale,
+    })
     const [older, setOlder] = useState<WorldTimeItem[]>([])
     // undefined: still on the first page's own cursor.
     const [cursor, setCursor] = useState<string | null | undefined>(undefined)
@@ -145,16 +177,22 @@ function WorldTimesContent({ campaignId, page, calendars, refetch }: WorldTimesC
                         world owner can create a calendar from the world page.
                     </p>
                 ) : null}
+                {refreshed.notice}
                 <WorldTimeForm
                     campaignId={campaignId}
                     calendars={calendars.calendars}
                     times={shown}
-                    onCreated={() => {
-                        void refetch().then(() => {
+                    onCreated={async () => {
+                        const outcome = await refetch()
+                        if (outcome === "ok") {
                             setOlder([])
                             setCursor(undefined)
                             announce("World time recorded")
-                        })
+                        } else {
+                            // Recorded, but the list does not show it yet: said so, not announced as done.
+                            setRecorded(true)
+                        }
+                        return outcome
                     }}
                     onCancel={() => undefined}
                 />

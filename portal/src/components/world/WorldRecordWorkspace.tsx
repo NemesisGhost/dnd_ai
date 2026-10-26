@@ -10,7 +10,8 @@ import { revisionsPath } from "../../api/review"
 import { apiRequest } from "../../api/http"
 import { useAuthoringResource } from "../../hooks/useAuthoringResource"
 import { useGatedAuthoringResource } from "../../hooks/useGatedAuthoringResource"
-import type { UseAuthoringResourceResult } from "../../hooks/useAuthoringResource"
+import type { RefetchOutcome, UseAuthoringResourceResult } from "../../hooks/useAuthoringResource"
+import { combineRefetchOutcomes } from "../../utils/refreshOutcome"
 import { useCampaignCapability } from "../../hooks/useCampaignCapability"
 import { useHeldWorldCapability, WORLD_CANON_READ_PRIVATE } from "../../hooks/useWorldCapability"
 import { usePageArrival } from "../../hooks/usePageArrival"
@@ -345,7 +346,7 @@ function Workspace({
     data: WorkspaceDetail
     // The last refresh failed; `data` is the last read that succeeded.
     refreshFailed: boolean
-    refetchDetail: () => Promise<unknown>
+    refetchDetail: () => Promise<RefetchOutcome>
     lifecycle: UseAuthoringResourceResult<EntityLifecycleView>
     provenance: UseAuthoringResourceResult<Provenance>
     revisions: UseAuthoringResourceResult<RevisionHistory>
@@ -406,28 +407,53 @@ function Workspace({
     // A command recorded on a panel (hit points, a status): the page's own view of the record is
     // read again; nothing is remounted and no other section's input is touched.
     const refreshDetail = () => void refetchDetail()
-    const refreshRecord = () => {
-        setChanges((n) => n + 1)
-        void refetchDetail()
-        void revisions.refetch()
-        void dungeonRead.reload()
-        void areaRead.reload()
-        void areaRuntime.reload()
-    }
     // A structural command bumps the dungeon's version, which the lifecycle actions send as their
     // stale-write token: read the dungeon, its lifecycle and its revisions together, so a publish
     // right after adding a connection names the version the server now holds.
-    const refreshStructure = async () => {
-        await Promise.all([dungeonRead.reload(), lifecycle.refetch(), revisions.refetch()])
-    }
+    // The outcome is every one of those reads together, so a command that was confirmed but not read
+    // back is reported as such by the section that sent it (and is not announced as done).
+    // A read that is not the caller's to make is never sent, so it is not a read that failed: only
+    // reads this record actually makes are required.
+    const whenAllowed = (allowed: boolean, read: () => Promise<RefetchOutcome>): Promise<RefetchOutcome> =>
+        allowed ? read() : Promise.resolve("ok")
+    const lifecycleRead = () => whenAllowed(authoring.can_read_private, lifecycle.refetch)
+    const revisionsRead = () => whenAllowed(canReadWorldPrivate, revisions.refetch)
+    const refreshStructure = async () =>
+        combineRefetchOutcomes(
+            await Promise.all([
+                whenAllowed(kind === "dungeon" && canReadWorldPrivate, dungeonRead.reload),
+                lifecycleRead(),
+                revisionsRead(),
+            ]),
+        )
     // A change to an area's contents reads the area, its lifecycle and its revisions again (the
     // dungeon's lifecycle is not on this page).
-    const refreshContents = async () => {
-        await Promise.all([areaRead.reload(), areaRuntime.reload(), lifecycle.refetch(), revisions.refetch()])
-    }
+    const refreshContents = async () =>
+        combineRefetchOutcomes(
+            await Promise.all([
+                whenAllowed(kind === "area" && canReadWorldPrivate, areaRead.reload),
+                whenAllowed(kind === "area", areaRuntime.reload),
+                lifecycleRead(),
+                revisionsRead(),
+            ]),
+        )
     // A recorded state reads the area again, and the facts shown above its controls.
-    const refreshState = async () => {
-        await Promise.all([areaRuntime.reload(), refetchDetail()])
+    const refreshState = async () =>
+        combineRefetchOutcomes(await Promise.all([whenAllowed(kind === "area", areaRuntime.reload), refetchDetail()]))
+    // A lifecycle step changes the record's status everywhere it is read: the record itself, its
+    // revisions, and the dungeon or area views that depend on it. The outcome is all of them, so the
+    // step is announced as done only when every one was read back.
+    const refreshRecord = async () => {
+        setChanges((n) => n + 1)
+        return combineRefetchOutcomes(
+            await Promise.all([
+                refetchDetail(),
+                revisionsRead(),
+                whenAllowed(kind === "dungeon" && canReadWorldPrivate, dungeonRead.reload),
+                whenAllowed(kind === "area" && canReadWorldPrivate, areaRead.reload),
+                whenAllowed(kind === "area", areaRuntime.reload),
+            ]),
+        )
     }
 
     // Move focus to the section heading when the section changes after arrival (a link, Back or

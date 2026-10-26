@@ -298,6 +298,62 @@ describe("session authoring pages", () => {
     })
   })
 
+  it("reports a confirmed save whose session re-read fails: not announced as saved, the next save is held, and Reload session reads only", async () => {
+    let state = detail()
+    let readFails = false
+    server.on("GET", `${LIST}/s1`, () => (readFails ? { status: 500, body: {} } : { body: state }))
+    server.on("POST", `${LIST}/s1/update`, () => {
+      state = detail({ title: "Renamed", row_version: 3 })
+      readFails = true
+      return { body: { session_id: "s1", session_number: 1, row_version: 3, created: false, changed: true } }
+    })
+    openApp("/app/mundivita/sessions/s1")
+    fireEvent.change(await screen.findByLabelText("Title"), { target: { value: "Renamed" } })
+    fireEvent.click(screen.getByRole("button", { name: "Save" }))
+
+    expect(await screen.findByText(/Your changes were saved, but the latest version could not be loaded/)).toBeInTheDocument()
+    const live = screen.getByTestId("authoring-announcer")
+    expect(live).toHaveTextContent("Saved, but the latest data could not be loaded.")
+    expect(live).not.toHaveTextContent(/^Session saved/)
+    expect(screen.queryByText("Session saved.")).toBeNull()
+    // The version this page holds is behind: another save is held and the write is sent once.
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled()
+    expect(server.callsTo("POST", `${LIST}/s1/update`)).toHaveLength(1)
+
+    readFails = false
+    fireEvent.click(screen.getByRole("button", { name: "Reload session" }))
+    expect(await screen.findByText("Session saved.")).toBeInTheDocument()
+    await waitFor(() => expect(live).toHaveTextContent("Session saved"))
+    expect(screen.getByRole("heading", { level: 1, name: "Renamed" })).toBeInTheDocument()
+    expect(server.callsTo("POST", `${LIST}/s1/update`)).toHaveLength(1)
+  })
+
+  it("reports a confirmed archive whose session re-read fails, holds the action, and recovers by reading only", async () => {
+    let state = detail()
+    let readFails = false
+    server.on("GET", `${LIST}/s1`, () => (readFails ? { status: 500, body: {} } : { body: state }))
+    server.on("POST", `${LIST}/s1/archive`, () => {
+      state = detail({ status_code: "archived", row_version: 3, available_actions: ["restore"] })
+      readFails = true
+      return { body: { session_id: "s1", session_number: 1, row_version: 3, created: false, changed: true } }
+    })
+    openApp("/app/mundivita/sessions/s1")
+    fireEvent.click(await screen.findByRole("button", { name: "Archive session" }))
+    const dialog = await screen.findByRole("dialog", { name: "Archive this session?" })
+    fireEvent.click(within(dialog).getByRole("button", { name: "Archive session" }))
+
+    expect(await screen.findByText(/Session archived\. The latest session could not be loaded/)).toBeInTheDocument()
+    expect(screen.getByTestId("authoring-announcer")).not.toHaveTextContent(/^Session archived/)
+    expect(screen.getByRole("button", { name: "Archive session" })).toBeDisabled()
+    expect(server.callsTo("POST", `${LIST}/s1/archive`)).toHaveLength(1)
+
+    readFails = false
+    fireEvent.click(screen.getByRole("button", { name: "Load latest" }))
+    expect(await screen.findByRole("button", { name: "Restore session" })).toBeEnabled()
+    await waitFor(() => expect(screen.getByTestId("authoring-announcer")).toHaveTextContent("Session archived"))
+    expect(server.callsTo("POST", `${LIST}/s1/archive`)).toHaveLength(1)
+  })
+
   it("shows an archived session read-only; Restore needs a reason and then enables editing", async () => {
     let restored = false
     server.on("GET", `${LIST}/s1`, () => ({

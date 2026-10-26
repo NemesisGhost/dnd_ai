@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { MemoryRouter } from "react-router"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { TimelineTree } from "../components/TimelineTree"
@@ -119,6 +119,41 @@ describe("TimelinePage", () => {
         expect(screen.queryByRole("link", { name: "Create branch" })).not.toBeInTheDocument()
         expect(screen.getByRole("button", { name: "Restore timeline" })).toBeInTheDocument()
         expect(screen.getByRole("list", { name: "Unavailable actions" })).toHaveTextContent("timeline is archived")
+    })
+
+    it("reports a confirmed timeline archive whose re-read fails, holds the transition, and recovers by reading only", async () => {
+        const server = installMockServer()
+        let archived = false
+        let readFails = false
+        server.on("GET", "/worlds/w1/timelines/t1", () =>
+            readFails
+                ? { status: 500, body: {} }
+                : {
+                      body: archived
+                          ? detail({ is_primary: false, lifecycle_status: "archived", row_version: 3, available_actions: ["restore"] })
+                          : detail({ is_primary: false, available_actions: ["update", "archive"] }),
+                  },
+        )
+        server.on("POST", "/worlds/w1/timelines/t1/archive", () => {
+            archived = true
+            readFails = true
+            return { body: { timeline_id: "t1", lifecycle_status: "archived", row_version: 3 } }
+        })
+        renderAuthoringRoutes({ initialEntry: "/worlds/w1/timelines/t1", routes })
+        fireEvent.click(await screen.findByRole("button", { name: "Archive timeline" }))
+        const dialog = screen.getByRole("dialog", { hidden: true })
+        fireEvent.click(within(dialog).getByRole("button", { name: "Archive timeline" }))
+
+        expect(await screen.findByText(/Timeline archived\. The latest timeline could not be loaded/)).toBeInTheDocument()
+        expect(screen.getByTestId("authoring-announcer")).not.toHaveTextContent(/^Timeline archived/)
+        expect(screen.getByRole("heading", { level: 1, name: "Main" })).toBeInTheDocument()
+        expect(screen.getByRole("button", { name: "Archive timeline" })).toBeDisabled()
+
+        readFails = false
+        fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+        expect(await screen.findByRole("button", { name: "Restore timeline" })).toBeEnabled()
+        await waitFor(() => expect(screen.getByTestId("authoring-announcer")).toHaveTextContent("Timeline archived"))
+        expect(server.callsTo("POST", "/worlds/w1/timelines/t1/archive")).toHaveLength(1)
     })
 
     it("is non-disclosing when the timeline cannot be reached", async () => {

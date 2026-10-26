@@ -211,6 +211,57 @@ describe("NpcRuntimePanel", () => {
         expect(server.callsTo("POST", `${BASE}/hit-points`)[0]!.body).toEqual({ world_time_id: "t1", delta: -5 })
     })
 
+    it("reports a hit point change whose character re-read fails, holds further changes, and recovers by reading only", async () => {
+        const server = setup()
+        let readFails = false
+        const character = (hp: number) => ({
+            character_id: "n1",
+            name: "Mira",
+            canon_status: "canon",
+            lifecycle_status: "active",
+            species_code: "human",
+            size_category: "medium",
+            current_hit_points: hp,
+            maximum_hit_points: 20,
+            temporary_hit_points: null,
+            exhaustion_level: null,
+            death_save_successes: null,
+            death_save_failures: null,
+            current_location_id: null,
+            active_encounter_id: null,
+            conditions: [],
+            resources: [],
+        })
+        let hp = 12
+        server.on("GET", BASE, () => (readFails ? { status: 500, body: {} } : { body: character(hp) }))
+        server.on("POST", `${BASE}/hit-points`, () => {
+            hp = 7
+            readFails = true
+            return { body: { changed: true } }
+        })
+        await chooseTime()
+        const form = await screen.findByRole("form", { name: "Adjust hit points" })
+        fireEvent.change(within(form).getByRole("textbox", { name: /Change/ }), { target: { value: "-5" } })
+        fireEvent.click(within(form).getByRole("button", { name: "Apply hit point change" }))
+
+        expect(await screen.findByText(/Hit points changed\. The latest NPC information could not be loaded/)).toBeInTheDocument()
+        const live = screen.getByTestId("authoring-announcer")
+        expect(live).toHaveTextContent("Saved, but the latest data could not be loaded.")
+        expect(live).not.toHaveTextContent(/^Hit points changed/)
+        // The panel keeps the hit points it last read (12), and a second change is held rather than
+        // typed against numbers that are no longer true.
+        expect(screen.getByText("12 of 20")).toBeInTheDocument()
+        expect(screen.getByRole("button", { name: "Apply hit point change" })).toBeDisabled()
+        expect(server.callsTo("POST", `${BASE}/hit-points`)).toHaveLength(1)
+
+        readFails = false
+        fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+        expect(await screen.findByText("7 of 20")).toBeInTheDocument()
+        await vi.waitFor(() => expect(live).toHaveTextContent("Hit points changed"))
+        expect(screen.getByRole("button", { name: "Apply hit point change" })).toBeEnabled()
+        expect(server.callsTo("POST", `${BASE}/hit-points`)).toHaveLength(1)
+    })
+
     it("rejects a zero or fractional change", async () => {
         const server = setup()
         await chooseTime()

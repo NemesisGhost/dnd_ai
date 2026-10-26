@@ -1,3 +1,4 @@
+import type { RefreshOutcome } from "../../hooks/useAuthoringMutation"
 import { useState } from "react"
 import { Link } from "react-router"
 import type { DungeonAuthoringView } from "../../types/dungeonAuthoring"
@@ -18,7 +19,7 @@ interface Props {
     dungeonId: string
     read: DungeonRead
     // Reads the dungeon, its lifecycle and its revisions again after a change.
-    refresh: () => Promise<void>
+    refresh: () => Promise<RefreshOutcome>
     // Opening an area from here keeps where the person came from.
     linkState?: object
     // The state for an area's edit page, which names this section as the place to return to.
@@ -40,7 +41,7 @@ export function DungeonAreasSection({ campaignId, dungeonId, read, refresh, link
     const [name, setName] = useState("")
     const [kind, setKind] = useState("")
     const [problem, setProblem] = useState<string | null>(null)
-    const command = useDungeonCommand({ campaignId, dungeonId, areaId: null, scope: "areas", refetch: refresh })
+    const command = useDungeonCommand({ campaignId, dungeonId, areaId: null, scope: "areas", refetch: refresh, pageStale: read.stale })
     useUnsavedReport(onUnsaved, "new-area", name.trim() !== "" || kind.trim() !== "" ? ["a new area"] : [])
     useRetainedInput(
         "new-area",
@@ -126,6 +127,7 @@ export function DungeonAreasSection({ campaignId, dungeonId, read, refresh, link
                         : "Adding an area is unavailable right now."}
                 </p>
             ) : null}
+            {command.savedNotice}
             {command.notice}
 
             {canAdd && open ? (

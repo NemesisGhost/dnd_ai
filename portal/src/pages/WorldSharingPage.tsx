@@ -14,9 +14,13 @@ import { useAnnounce } from "../components/authoring/announcer"
 import { ConfirmDialog } from "../components/authoring/ConfirmDialog"
 import { SelectField, TextField } from "../components/authoring/fields"
 import { MutationStatusMessage } from "../components/authoring/feedback"
+import { StaleReadNotice } from "../components/StaleReadNotice"
 import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
+import type { RefetchOutcome } from "../hooks/useAuthoringResource"
+import { useAnnounceWhenRead, useConfirmedRefresh } from "../hooks/useConfirmedRefresh"
+import { useKept } from "../hooks/useKeptResource"
 import { usePageArrival } from "../hooks/usePageArrival"
 import type {
     RetainedWorldRoleCode,
@@ -63,21 +67,36 @@ interface Action {
 export function WorldSharingPage() {
     const { worldId = "" } = useParams()
     const world = useAuthoringResource<WorldDetail>(worldPath(worldId))
-    const access = useAuthoringResource<WorldAccessView>(worldAccessPath(worldId))
+    const accessPath = worldAccessPath(worldId)
+    const access = useAuthoringResource<WorldAccessView>(accessPath)
+    // The last access list that loaded stays through a failed re-read, so a change that was saved is
+    // not hidden behind "not available"; a denied or missing answer (a transfer that ended the
+    // person's own Owner role, say) drops it and the controls with it.
+    const view = useKept(access.state, accessPath)
+    const stale = access.state.kind === "error" && view !== null
     const headingRef = usePageArrival(access.state.kind !== "loading")
     const worldName = world.state.kind === "ready" ? world.state.data.name : "World"
+    // A change saved without its read-back is announced when a read answers: with the list, or with
+    // the denial that is the truth after a transfer.
+    const announceWhenRead = useAnnounceWhenRead(
+        (access.state.kind === "ready" && !access.state.refreshing) ||
+            access.state.kind === "denied" ||
+            access.state.kind === "unavailable",
+        access.state,
+    )
     // Once the page has shown the controls, a read that no longer allows them (a transfer that ended the
     // person's own Owner role) replaces the controls, the dialog and the button that had focus. Focus then
     // goes to the page heading, which is followed by the explanation, instead of falling to the page.
     const wasReady = useRef(false)
+    const shown = view !== null
     useEffect(() => {
-        if (access.state.kind === "ready") {
+        if (shown) {
             wasReady.current = true
         } else if (wasReady.current && access.state.kind !== "loading") {
             wasReady.current = false
             headingRef.current?.focus()
         }
-    }, [access.state.kind, headingRef])
+    }, [shown, access.state.kind, headingRef])
 
     return (
         <div className="world-page">
@@ -92,17 +111,22 @@ export function WorldSharingPage() {
                 </h1>
                 {access.state.kind === "loading" ? (
                     <p role="status">Loading…</p>
-                ) : access.state.kind !== "ready" ? (
+                ) : view === null ? (
                     <p role="alert">
                         Sharing is not available for this world with your account.{" "}
                         <Link to={`/worlds/${worldId}`}>Back to the world</Link>
                     </p>
                 ) : (
-                    <SharingContent
-                        worldId={worldId}
-                        view={access.state.data}
-                        refetch={access.refetch}
-                    />
+                    <>
+                        {stale ? <StaleReadNotice what="sharing list" onRetry={() => void access.refetch()} /> : null}
+                        <SharingContent
+                            worldId={worldId}
+                            view={view}
+                            refetch={access.refetch}
+                            pageStale={stale}
+                            onUnread={announceWhenRead}
+                        />
+                    </>
                 )}
             </div>
         </div>
@@ -112,10 +136,14 @@ export function WorldSharingPage() {
 interface ContentProps {
     worldId: string
     view: WorldAccessView
-    refetch: () => Promise<unknown>
+    refetch: () => Promise<RefetchOutcome>
+    // The page's latest read failed and `view` is the last list that loaded.
+    pageStale: boolean
+    // The page announces a change it could not read back when a read answers.
+    onUnread: (message: string) => void
 }
 
-function SharingContent({ worldId, view, refetch }: ContentProps) {
+function SharingContent({ worldId, view, refetch, pageStale, onUnread }: ContentProps) {
     const announce = useAnnounce()
     const { reload } = useSession()
     const [login, setLogin] = useState("")
@@ -130,10 +158,21 @@ function SharingContent({ worldId, view, refetch }: ContentProps) {
         scopeKey: `world-sharing:${worldId}`,
         request: (action, ctx) => action.run(ctx),
         onSuccess: async () => {
-            await refetch()
+            const outcome = await refetch()
             setPending(null)
-            announce(lastAnnounce)
+            if (outcome === "ok") announce(lastAnnounce)
+            else onUnread(lastAnnounce)
+            return outcome
         },
+    })
+    const refreshed = useConfirmedRefresh({
+        status: mutation.status,
+        reset: mutation.reset,
+        what: "sharing list",
+        message: lastAnnounce === "" ? null : lastAnnounce,
+        read: refetch,
+        pageStale,
+        quietRecovery: true,
     })
     // When the dialog closes, the dialog returns focus to the control that opened it. If that control is
     // gone (the ended role's row), nothing holds focus: land on the roles heading, not on the page. The
@@ -149,7 +188,9 @@ function SharingContent({ worldId, view, refetch }: ContentProps) {
         }
     }, [pending])
     const error = mutation.status.kind === "error" ? mutation.status.error : null
-    const busy = mutation.status.kind === "pending"
+    const pendingWrite = mutation.status.kind === "pending"
+    // The lists on screen are behind the saved change, so another change waits for the read.
+    const busy = pendingWrite || refreshed.held || pageStale
 
     function submit(action: Action) {
         setLastAnnounce(action.announce)
@@ -203,6 +244,7 @@ function SharingContent({ worldId, view, refetch }: ContentProps) {
                 Share this world with other accounts. A role on the world never makes anyone a
                 member of a campaign, and a campaign role never confers a role on the world.
             </p>
+            {refreshed.notice}
             {error !== null && pending === null ? (
                 <MutationStatusMessage error={error} onRetry={mutation.retry} onCheckSession={reload} />
             ) : null}
@@ -370,7 +412,7 @@ function SharingContent({ worldId, view, refetch }: ContentProps) {
                 confirmLabel={dialog.confirm}
                 onConfirm={confirmPending}
                 onCancel={() => setPending(null)}
-                pending={busy}
+                pending={pendingWrite}
                 error={
                     error === null ? null : (
                         <MutationStatusMessage error={error} onRetry={mutation.retry} onCheckSession={reload} />

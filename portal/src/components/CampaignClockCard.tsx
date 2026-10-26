@@ -3,6 +3,8 @@ import { advanceClock, clockCauseChoicesPath, clockPath, correctClock } from "..
 import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
+import { useConfirmedRefresh } from "../hooks/useConfirmedRefresh"
+import { useKept } from "../hooks/useKeptResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import {
     CLOCK_EXPLANATION_MAX_LENGTH,
@@ -15,6 +17,7 @@ import { useAnnounce } from "./authoring/announcer"
 import { MutationStatusMessage, StaleWriteNotice } from "./authoring/feedback"
 import { SelectField, TextAreaField } from "./authoring/fields"
 import { WorldTimePicker } from "./authoring/WorldTimePicker"
+import { StaleReadNotice } from "./StaleReadNotice"
 import "./authoring/authoring.css"
 
 type Mode = "idle" | "advance" | "correct"
@@ -48,7 +51,12 @@ export function CampaignClockCard({
     actionsVisible?: boolean
 }) {
     const canEdit = useCampaignCapability(campaignId, "canon.edit")
-    const clock = useAuthoringResource<ClockState>(clockPath(campaignId))
+    const clockUrl = clockPath(campaignId)
+    const clock = useAuthoringResource<ClockState>(clockUrl)
+    // The last clock that loaded stays through a failed re-read (after an advance or a correction), so
+    // the card that reports the save does not disappear; a denied or missing answer drops it.
+    const kept = useKept(clock.state, clockUrl)
+    const stale = clock.state.kind === "error" && kept !== null
     const announce = useAnnounce()
     const { reload } = useSession()
     const [mode, setMode] = useState<Mode>("idle")
@@ -58,7 +66,7 @@ export function CampaignClockCard({
     const [causeId, setCauseId] = useState("")
     const [explanation, setExplanation] = useState("")
 
-    const state = clock.state.kind === "ready" ? clock.state.data : null
+    const state = kept
 
     // The optional cause picker reads only while the advance form is open, for the chosen time
     // (the server offers only events that take effect by then). A failed read never blocks the
@@ -71,6 +79,8 @@ export function CampaignClockCard({
     // A cause that is not among the offered ones (the time changed under it) is not submitted.
     const droppedCause = causeId !== "" && choices !== null && chosenCause === null
 
+    // What the last confirmed write said, for the notice if the clock could not be read back.
+    const [saved, setSaved] = useState<string | null>(null)
     const mutation = useAuthoringMutation<
         {
             kind: "advance" | "correct"
@@ -112,10 +122,23 @@ export function CampaignClockCard({
             setCauseId("")
             setExplanation("")
             setConfirming(false)
-            await clock.refetch()
-            announce(done)
+            setSaved(done)
+            const outcome = await clock.refetch()
+            if (outcome === "ok") announce(done)
+            return outcome
         },
     })
+    const refreshed = useConfirmedRefresh({
+        status: mutation.status,
+        reset: mutation.reset,
+        what: "campaign time",
+        message: saved,
+        read: clock.refetch,
+        pageStale: stale,
+    })
+    // Advance and Correct name the clock's version and its last event: the card shows the earlier
+    // ones until it is read again, so neither is offered from it.
+    const writesHeld = refreshed.held || stale
 
     if (clock.state.kind === "loading") {
         return <p role="status">Loading the campaign clock…</p>
@@ -130,6 +153,7 @@ export function CampaignClockCard({
     const message = code !== null ? (CODE_MESSAGE[code] ?? null) : null
 
     function submit(kind: "advance" | "correct") {
+        if (writesHeld) return
         if (timeId === "") {
             setPickerError("Choose a time.")
             return
@@ -169,6 +193,7 @@ export function CampaignClockCard({
                         <button
                             type="button"
                             className="authoring-button"
+                            disabled={writesHeld}
                             onClick={() => {
                                 mutation.reset()
                                 setMode("advance")
@@ -182,6 +207,7 @@ export function CampaignClockCard({
                             <button
                                 type="button"
                                 className="authoring-button"
+                                disabled={writesHeld}
                                 onClick={() => {
                                     mutation.reset()
                                     setMode("correct")
@@ -193,6 +219,8 @@ export function CampaignClockCard({
                     </div>
                 ) : null}
             </div>
+            {stale ? <StaleReadNotice what="campaign time" onRetry={() => void clock.refetch()} /> : null}
+            {refreshed.notice}
             {canEdit && mode !== "idle" ? (
                 <form
                     className="campaign-time__form"

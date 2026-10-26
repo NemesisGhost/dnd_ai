@@ -1,3 +1,5 @@
+import { combineRefetchOutcomes } from "../utils/refreshOutcome"
+import type { RefreshOutcome } from "./useAuthoringMutation"
 import { useAuthoringResource } from "./useAuthoringResource"
 import { useKept } from "./useKeptResource"
 
@@ -13,7 +15,7 @@ export interface PairedRead<T, O> {
     // The latest read failed; `view` is the last one that succeeded.
     stale: boolean
     // Reads the record again.
-    reload: () => Promise<void>
+    reload: () => Promise<RefreshOutcome>
 }
 
 // A null path requests nothing (the record is not one this read applies to).
@@ -39,8 +41,15 @@ export function usePairedRead<T, O>(path: string | null, optionsPath: string | n
         options: closed ? null : choices,
         status,
         stale: record.state.kind === "error" || options.state.kind === "error",
-        reload: async () => {
-            await Promise.all([record.refetch(), options.state.kind === "ready" ? Promise.resolve() : options.refetch()])
-        },
+        // The record, and the choices only if they are not already held. "ok" only when every read
+        // that was needed was applied, so a caller can tell a write that was read back from one that
+        // was not.
+        reload: async () =>
+            combineRefetchOutcomes(
+                await Promise.all([
+                    record.refetch(),
+                    options.state.kind === "ready" ? Promise.resolve("ok" as const) : options.refetch(),
+                ]),
+            ),
     }
 }
