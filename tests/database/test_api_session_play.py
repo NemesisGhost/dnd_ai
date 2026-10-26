@@ -207,7 +207,7 @@ def test_participants_are_published_characters_with_a_matching_role(s: ContentSe
         after = detail(s, sid)
         assert after["participants"] == before["participants"]
         assert after["row_version"] == before["row_version"]
-    # The member view carries neither the roster nor the catalog.
+    # The member view carries no role catalog.
     assert detail(s, sid, "player")["participant_role_options"] is None
     bad_role = post(
         s, sid, "/participants", {"character_id": pc, "participation_role": "spectator"}
@@ -243,7 +243,7 @@ def test_participants_are_published_characters_with_a_matching_role(s: ContentSe
         ("Mira", "npc"),
         ("Visitor", "npc"),
     ]
-    assert detail(s, sid, who="player")["participants"] is None
+    assert detail(s, sid, who="player")["participants"] == []
     (audit, *_) = s.audit("add_session_participant")
     assert audit.changed_fields["participation_role"] == "player_character"
 
@@ -273,9 +273,9 @@ def test_a_participant_can_be_removed_once_and_added_again(s: ContentSetup) -> N
     assert len({p["session_participant_id"] for p in participants}) == 2
     assert participants[1]["session_participant_id"] == first["session_participant_id"]
     assert participants[1]["removed_at"] is not None
-    # A member sees neither stint: the roster stays editor-only.
+    # A member without discovery sees neither stint, and no hint of one.
     member = detail(s, sid, "player")
-    assert member["participants"] is None and member["participant_role_options"] is None
+    assert member["participants"] == [] and member["participant_role_options"] is None
     missing = post(s, sid, f"/participants/{uuid.uuid4()}/remove", {})
     assert missing.status_code == 404
 

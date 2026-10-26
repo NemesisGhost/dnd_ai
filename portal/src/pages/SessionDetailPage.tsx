@@ -491,7 +491,15 @@ export function SessionDetailPage({
             {session.participants != null ? (
                 <section aria-labelledby="session-participants-heading">
                     <h2 id="session-participants-heading">Participants</h2>
-                    <SessionRoster campaignId={campaignId} participants={session.participants} />
+                    <SessionRoster
+                        campaignId={campaignId}
+                        participants={session.participants}
+                        emptyText={
+                            hasCapability
+                                ? undefined
+                                : "No participants in this session are visible to you."
+                        }
+                    />
                     {canRunSession(session.available_actions) ? (
                         <p>
                             <Link

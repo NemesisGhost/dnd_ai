@@ -69,6 +69,9 @@ export interface SessionParticipant {
     participation_role: "player_character" | "npc" | "guest"
     added_at: string
     removed_at: string | null
+    // False when the reader route would refuse this character's page (a member who can only
+    // discover them). Absent from older servers, in which case the link is offered as before.
+    can_open_character?: boolean
 }
 
 // What the item and travel pickers need of a participant: who, and whether they are still present.
@@ -90,7 +93,8 @@ export interface CampaignSessionDetail
     events: CampaignSessionEvent[]
     // Readable entries for the travel events above. Absent from older servers.
     travel?: SessionTravelEntry[]
-    // Editors only.
+    // Editors: everyone, present or gone. Members: only the present participants they may
+    // discover; the list says nothing about anyone else.
     participants?: SessionParticipant[] | null
     // Editors only: the roles each kind of character may take (matching role first). Absent
     // from older servers, in which case no role is offered.

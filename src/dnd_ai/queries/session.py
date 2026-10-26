@@ -54,6 +54,7 @@ from dnd_ai.domain.session_authoring import derive_play_status
 
 from .campaign_clock import clock_display
 from .character import character_kind_for_type_code
+from .world_explorer import CharacterVisibility
 
 
 class SessionNotFoundError(DomainAuthorizationError):
@@ -292,12 +293,31 @@ class SessionParticipantView:
     removed_at: datetime | None
 
 
+@dataclass(frozen=True)
+class MemberRosterAudience:
+    """Who a member-safe roster is for: the World Explorer's resolved character
+    visibility plus the entity-level `campaign.view` denies (and lifecycle-hidden
+    definitions) that route applies to every character it names."""
+
+    character_visibility: CharacterVisibility
+    denied_entity_ids: frozenset[uuid.UUID]
+
+
 def list_session_participants(
-    connection: Connection, *, session_id: uuid.UUID
+    connection: Connection,
+    *,
+    session_id: uuid.UUID,
+    audience: MemberRosterAudience | None = None,
 ) -> tuple[SessionParticipantView, ...]:
-    """Present participants first (by name), then those removed. For `canon.edit`
-    holders only (the route decides): presence names characters the viewer might
-    not otherwise be allowed to see."""
+    """Present participants first (by name), then those removed.
+
+    With no `audience` this is the unfiltered GM roster, for `canon.edit` holders only
+    (the route decides): presence names characters the viewer might not otherwise be
+    allowed to see. With an `audience` (a campaign member without `canon.edit`) the
+    rows are filtered in SQL to the people who are still present and whom that caller
+    may discover, by the World Explorer's own rule: not entity-denied, and either
+    discoverable as a baseline and not force-hidden, or force-visible. A hidden
+    participant never reaches Python, so no id, name or count of one can be serialized."""
     rows = connection.execute(
         text("""
             SELECT sp.session_participant_id, sp.character_id, e.canonical_name,
@@ -307,9 +327,28 @@ def list_session_participants(
             JOIN core.entities e ON e.entity_id = sp.character_id
             JOIN core.entity_types et ON et.entity_type_id = e.entity_type_id
             WHERE sp.session_id = :s
+              AND (
+                NOT CAST(:member AS boolean)
+                OR (
+                  sp.removed_at IS NULL
+                  AND NOT (sp.character_id = ANY(CAST(:denied AS uuid[])))
+                  AND (
+                    (CAST(:discover_all AS boolean)
+                     AND NOT (sp.character_id = ANY(CAST(:char_hidden AS uuid[]))))
+                    OR sp.character_id = ANY(CAST(:char_visible AS uuid[]))
+                  )
+                )
+              )
             ORDER BY (sp.removed_at IS NOT NULL), lower(e.canonical_name), sp.added_at
         """),
-        {"s": session_id},
+        {
+            "s": session_id,
+            "member": audience is not None,
+            "denied": list(audience.denied_entity_ids) if audience else [],
+            "discover_all": audience.character_visibility.discover_all if audience else False,
+            "char_hidden": list(audience.character_visibility.force_hidden) if audience else [],
+            "char_visible": list(audience.character_visibility.force_visible) if audience else [],
+        },
     ).all()
     return tuple(
         SessionParticipantView(

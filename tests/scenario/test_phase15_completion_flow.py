@@ -266,7 +266,9 @@ def test_a_gm_sets_up_and_runs_a_campaign(
     assert played["play_status"] == "in_progress"
     assert [p["character_name"] for p in played["participants"]] == ["Aldric"]
     seen_by_player = s.player.get(session_url).json()
-    assert seen_by_player["participants"] is None
+    assert [p["character_name"] for p in seen_by_player["participants"]] == [
+        "Aldric"
+    ]  # CP-8: the player's own, discoverable PC
     assert [e["details"] for e in seen_by_player["events"]] == [None]
     write(
         f"{session_url}/end",

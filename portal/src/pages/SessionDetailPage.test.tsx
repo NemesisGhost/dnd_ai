@@ -281,6 +281,39 @@ describe("SessionDetailPage participants", () => {
         expect(runLink()).toBeNull()
     })
 
+    it("shows a member only the participants returned, linking only those the server says open", () => {
+        renderSessionDetail({
+            ...sessionFixture,
+            participants: [
+                { ...stint("p1", "Aldric", "player_character", "player_character"), can_open_character: true },
+                { ...stint("p3", "Mira", "npc", "guest"), can_open_character: false },
+            ],
+        })
+        const section = screen.getByRole("region", { name: "Participants" })
+        const rows = within(section).getAllByRole("listitem")
+        expect(rows).toHaveLength(2)
+        expect(rows[0]).toHaveTextContent("Aldric (Player character; role: Player character). Present.")
+        expect(within(rows[0]).getByRole("link", { name: "Aldric" })).toBeInTheDocument()
+        expect(rows[1]).toHaveTextContent("Mira (NPC; role: Guest). Present.")
+        expect(within(rows[1]).queryByRole("link")).toBeNull()
+        expect(within(section).queryByRole("button")).toBeNull()
+        expect(within(section).queryByRole("combobox")).toBeNull()
+        expect(section).not.toHaveTextContent(/hidden|\d+ (more|others)/i)
+        expect(runLink()).toBeNull()
+    })
+
+    it("tells a member with no visible participants so, without implying anyone is hidden", () => {
+        renderSessionDetail({ ...sessionFixture, participants: [] })
+        const section = screen.getByRole("region", { name: "Participants" })
+        expect(within(section).getByText("No participants in this session are visible to you.")).toBeInTheDocument()
+        expect(within(section).queryByRole("listitem")).toBeNull()
+    })
+
+    it("keeps the GM's empty roster wording", () => {
+        renderSessionDetail(withRoster({ participants: [] }), ["canon.edit"])
+        expect(within(screen.getByRole("region", { name: "Participants" })).getByText("No one is in this session yet.")).toBeInTheDocument()
+    })
+
     it("shows no roster to a member, whose response carries none", () => {
         renderSessionDetail({ ...sessionFixture, participants: null })
         expect(screen.queryByRole("region", { name: "Participants" })).toBeNull()

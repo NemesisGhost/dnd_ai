@@ -22,6 +22,16 @@ const renderRoster = (participants: SessionParticipant[], controls?: (p: Session
     )
 
 describe("SessionRoster", () => {
+    it("shows a name without a link when the server says the character cannot be opened", () => {
+        renderRoster([
+            person({ session_participant_id: "p1", can_open_character: false }),
+            person({ session_participant_id: "p2", character_id: "c2", character_name: "Dara", can_open_character: true }),
+        ])
+        expect(screen.queryByRole("link", { name: "Cael" })).toBeNull()
+        expect(screen.getByText(/Cael/)).toBeInTheDocument()
+        expect(screen.getByRole("link", { name: "Dara" })).toBeInTheDocument()
+    })
+
     it("says so when nobody is in the session", () => {
         renderRoster([])
         expect(screen.getByText("No one is in this session yet.")).toBeInTheDocument()

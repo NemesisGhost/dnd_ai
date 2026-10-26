@@ -44,6 +44,7 @@ from sqlalchemy import Connection
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.domain.session_participation import participant_role_options
 from dnd_ai.queries.session import (
+    MemberRosterAudience,
     get_session_view,
     list_campaign_sessions,
     list_session_participants,
@@ -51,7 +52,11 @@ from dnd_ai.queries.session import (
 from dnd_ai.queries.session_travel import list_session_travel
 
 from ._shared import timeline_world_id
-from .access import require_campaign_capability
+from .access import (
+    CharacterViewNotAuthorizedError,
+    require_campaign_capability,
+    resolve_character_view_tier,
+)
 from .deps import get_connection
 from .errors import NotFoundError
 from .world_explorer import resolve_world_entity_visibility
@@ -145,6 +150,9 @@ class SessionParticipantResponse(BaseModel):
     participation_role: str
     added_at: datetime
     removed_at: datetime | None
+    # Whether the caller may open this character's page (the character route's own gate).
+    # Always true for editors; for a member, discovering a character does not imply it.
+    can_open_character: bool = True
 
 
 class SessionDetailResponse(BaseModel):
@@ -164,11 +172,47 @@ class SessionDetailResponse(BaseModel):
     play_status: str = "unscheduled"
     row_version: int | None = None
     available_actions: list[str] | None = None
-    # Editors only: who is (or was) present.
+    # Editors: everyone who is (or was) present. Members: only those still present whom the
+    # caller may discover, with no trace of anyone else (no counts, placeholders or ids).
     participants: list[SessionParticipantResponse] | None = None
     # Editors only: the roles each kind of character may take, from the same policy the add
     # command enforces (character kind -> roles, matching role first). Additive.
     participant_role_options: dict[str, list[str]] | None = None
+
+
+def _can_open_character(access: AccessContext, character_id: uuid.UUID) -> bool:
+    """The character route's own gate, after the entity deny and lifecycle checks the member
+    roster query has already applied: some character-view tier must be held."""
+    try:
+        resolve_character_view_tier(access, character_id=character_id)
+    except CharacterViewNotAuthorizedError:
+        return False
+    return True
+
+
+def _participants(
+    connection: Connection, access: AccessContext, *, session_id: uuid.UUID, can_edit: bool
+) -> list[SessionParticipantResponse]:
+    audience = None
+    if not can_edit:
+        visibility = resolve_world_entity_visibility(access, connection)
+        audience = MemberRosterAudience(
+            character_visibility=visibility.character_visibility,
+            denied_entity_ids=visibility.campaign_view_denied_entity_ids,
+        )
+    return [
+        SessionParticipantResponse(
+            session_participant_id=p.session_participant_id,
+            character_id=p.character_id,
+            character_name=p.character_name,
+            character_kind=p.character_kind,  # type: ignore[arg-type]
+            participation_role=p.participation_role,
+            added_at=p.added_at,
+            removed_at=p.removed_at,
+            can_open_character=can_edit or _can_open_character(access, p.character_id),
+        )
+        for p in list_session_participants(connection, session_id=session_id, audience=audience)
+    ]
 
 
 def _actions(lifecycle_status: str, play_status: str) -> list[str]:
@@ -297,22 +341,7 @@ def get_session_endpoint(
             if access.has_capability(_CANON_EDIT_CAPABILITY)
             else None
         ),
-        participants=(
-            [
-                SessionParticipantResponse(
-                    session_participant_id=p.session_participant_id,
-                    character_id=p.character_id,
-                    character_name=p.character_name,
-                    character_kind=p.character_kind,  # type: ignore[arg-type]
-                    participation_role=p.participation_role,
-                    added_at=p.added_at,
-                    removed_at=p.removed_at,
-                )
-                for p in list_session_participants(connection, session_id=session_id)
-            ]
-            if access.has_capability(_CANON_EDIT_CAPABILITY)
-            else None
-        ),
+        participants=_participants(connection, access, session_id=session_id, can_edit=can_edit),
         participant_role_options=(
             participant_role_options() if access.has_capability(_CANON_EDIT_CAPABILITY) else None
         ),

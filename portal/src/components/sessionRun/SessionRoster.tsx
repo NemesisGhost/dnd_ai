@@ -5,7 +5,7 @@ import { characterKindLabel } from "../../utils/characterKind"
 import { ROLE_LABEL } from "./participantRoles"
 import { RealWorldTime } from "./RealWorldTime"
 
-// The GM's roster for one session: every participant stint, present first, then those who left.
+// The roster for one session (the GM's: every stint; a member's: only those present they may discover): every participant stint, present first, then those who left.
 // A character removed and added again is two rows (keyed by the participant record, not the
 // character). Read-only on its own; the Run page passes `controls` for the rows it may change.
 export function SessionRoster({
@@ -29,11 +29,15 @@ export function SessionRoster({
         <ul className="op-list" aria-label="Session participants">
             {[...present, ...gone].map((p) => (
                 <li key={p.session_participant_id}>
-                    <Link
-                        to={`/app/${encodeURIComponent(campaignId)}/characters/${encodeURIComponent(p.character_id)}`}
-                    >
-                        {p.character_name}
-                    </Link>{" "}
+                    {p.can_open_character === false ? (
+                        p.character_name
+                    ) : (
+                        <Link
+                            to={`/app/${encodeURIComponent(campaignId)}/characters/${encodeURIComponent(p.character_id)}`}
+                        >
+                            {p.character_name}
+                        </Link>
+                    )}{" "}
                     ({characterKindLabel(p.character_kind)}; role: {ROLE_LABEL[p.participation_role] ?? p.participation_role}
                     ). <strong>{p.removed_at === null ? "Present" : "Left"}</strong>.{" "}
                     <RealWorldTime label="Added" value={p.added_at} />

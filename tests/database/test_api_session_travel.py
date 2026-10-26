@@ -482,7 +482,7 @@ def test_players_see_authorized_names_only_and_never_the_gm_note(s: ContentSetup
     assert last["legs"][0]["to"] == {"state": "unavailable", "entity_id": None, "name": None}
     assert last["legs"][0]["from"]["name"] == "Northmark"
     assert "Mira" not in str(player["travel"]) and "Southmark" not in str(player["travel"])
-    assert "GM only" not in str(player) and player["participants"] is None
+    assert "GM only" not in str(player) and player["participants"] == []
     gm = detail(s, sid)
     assert gm["travel"][-1]["note"] == "GM only: ambush ahead"
     assert [leg["traveler"]["name"] for leg in gm["travel"][-1]["legs"]] == ["Aldric", "Mira"]
