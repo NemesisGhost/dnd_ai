@@ -1,3 +1,6 @@
+import {
+    useEffect,
+} from "react"
 import type {
     ReactNode,
 } from "react"
@@ -5,6 +8,7 @@ import {
     useKnowledgeItems,
 } from "../hooks/useKnowledgeItems"
 import type {
+    KnowledgeLifecycle,
     KnowledgePage,
     KnowledgeView,
 } from "../types/knowledge"
@@ -18,6 +22,9 @@ interface KnowledgeItemsBoundaryProps {
     knowledgeType: string | null
     cursor?: string | null
     includePublic?: boolean
+    lifecycle?: KnowledgeLifecycle
+    /** Called when the server refuses a non-active lifecycle for this caller. */
+    onLifecycleRejected?: () => void
     children: (
         page: KnowledgePage,
         refreshing: boolean,
@@ -33,6 +40,8 @@ export function KnowledgeItemsBoundary({
     knowledgeType,
     cursor = null,
     includePublic = true,
+    lifecycle = "active",
+    onLifecycleRejected,
     children,
 }: KnowledgeItemsBoundaryProps) {
     const { state, retry } =
@@ -45,9 +54,22 @@ export function KnowledgeItemsBoundary({
             knowledgeType,
             cursor,
             includePublic,
+            lifecycle,
         )
 
-    if (state.status === "loading") {
+    const lifecycleRejected =
+        state.status === "lifecycle_rejected"
+
+    useEffect(() => {
+        if (lifecycleRejected) {
+            onLifecycleRejected?.()
+        }
+    }, [lifecycleRejected, onLifecycleRejected])
+
+    if (
+        state.status === "loading" ||
+        state.status === "lifecycle_rejected"
+    ) {
         return (
             <div
                 role="region"

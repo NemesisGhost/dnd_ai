@@ -482,7 +482,7 @@ def test_no_perspective_yields_only_public_knowledge_not_an_error(
     assert [i["knowledge_item_id"] for i in body["items"]] == [str(f.public_id)]
     assert body["items"][0]["scope"] == "public"
     assert body["next_cursor"] is None
-    assert opted_out == {"items": [], "next_cursor": None}
+    assert opted_out == {"items": [], "next_cursor": None, "archive_browse_available": False}
 
 
 def test_a_mismatched_perspective_is_rejected(
@@ -1519,7 +1519,11 @@ def test_include_public_false_explicitly_excludes_public_records(
             _url(f), params={"view": "public", "include_public": "false"}
         ).json()
         public_only = client.get(_url(f), params={"view": "public", **_perspective(f)}).json()
-    assert public_only_opted_out == {"items": [], "next_cursor": None}
+    assert public_only_opted_out == {
+        "items": [],
+        "next_cursor": None,
+        "archive_browse_available": False,
+    }
     # `view=public` stays the public-only filter even with a perspective.
     assert _ids(public_only) == [str(f.public_id)]
 
@@ -1623,7 +1627,7 @@ def test_public_records_keep_targeted_denies_and_lifecycle_restrictions(
     with client_factory(f.player_user_id) as client:
         listed = client.get(_url(f), params={"limit": 100}).json()
         detail = client.get(f"/campaigns/{f.campaign_id}/knowledge/{f.public_id}")
-    assert listed == {"items": [], "next_cursor": None}
+    assert listed == {"items": [], "next_cursor": None, "archive_browse_available": False}
     assert detail.status_code == 404
 
 

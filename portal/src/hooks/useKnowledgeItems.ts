@@ -11,6 +11,7 @@ import {
     useSession,
 } from "../context/SessionContext"
 import type {
+    KnowledgeLifecycle,
     KnowledgePage,
     KnowledgeView,
 } from "../types/knowledge"
@@ -31,6 +32,11 @@ export type KnowledgeItemsState =
         status: "unavailable"
     }
     | {
+        // The server refused a non-active lifecycle (archive browsing is not allowed for this
+        // caller): the page falls back to the active list rather than showing a dead end.
+        status: "lifecycle_rejected"
+    }
+    | {
         status: "error"
         error: unknown
     }
@@ -49,6 +55,7 @@ interface KnowledgeItemsSnapshot {
     knowledgeType: string | null
     cursor: string | null
     includePublic: boolean
+    lifecycle: KnowledgeLifecycle
     requestVersion: number
     state: KnowledgeItemsState
 }
@@ -75,6 +82,7 @@ export function useKnowledgeItems(
     knowledgeType: string | null,
     cursor: string | null = null,
     includePublic = true,
+    lifecycle: KnowledgeLifecycle = "active",
 ): UseKnowledgeItemsResult {
     const { reload } = useSession()
 
@@ -91,6 +99,7 @@ export function useKnowledgeItems(
             knowledgeType,
             cursor,
             includePublic,
+            lifecycle,
             requestVersion: 0,
             state: initialState,
         }))
@@ -112,11 +121,15 @@ export function useKnowledgeItems(
         knowledgeType &&
         snapshot.cursor === cursor &&
         snapshot.includePublic === includePublic &&
+        snapshot.lifecycle === lifecycle &&
         snapshot.requestVersion ===
         requestVersion
 
+    // A lifecycle change is a different collection, not a refinement: never keep showing the
+    // previous lifecycle's results while the new ones load (they would be mislabelled).
     const authorizationScopeMatches =
         snapshot.campaignId === campaignId &&
+        snapshot.lifecycle === lifecycle &&
         snapshot.view === view &&
         snapshot.characterId === characterId &&
         snapshot.partyId === partyId
@@ -149,6 +162,7 @@ export function useKnowledgeItems(
                 knowledgeType,
                 cursor,
                 includePublic,
+                lifecycle,
             },
             controller.signal,
         )
@@ -168,6 +182,7 @@ export function useKnowledgeItems(
                     knowledgeType,
                     cursor,
                     includePublic,
+                    lifecycle,
                     requestVersion,
                     state: {
                         status: "success",
@@ -205,11 +220,37 @@ export function useKnowledgeItems(
                         knowledgeType,
                         cursor,
                         includePublic,
+                        lifecycle,
                         requestVersion,
                         state: initialState,
                     })
 
                     void reload()
+                    return
+                }
+
+                if (
+                    error instanceof
+                    KnowledgeRequestError &&
+                    error.status === 403 &&
+                    lifecycle !== "active"
+                ) {
+                    setSnapshot({
+                        campaignId,
+                        view,
+                        characterId,
+                        partyId,
+                        query,
+                        knowledgeType,
+                        cursor,
+                        includePublic,
+                        lifecycle,
+                        requestVersion,
+                        state: {
+                            status:
+                                "lifecycle_rejected",
+                        },
+                    })
                     return
                 }
 
@@ -228,6 +269,7 @@ export function useKnowledgeItems(
                         knowledgeType,
                         cursor,
                         includePublic,
+                        lifecycle,
                         requestVersion,
                         state: {
                             status:
@@ -246,6 +288,7 @@ export function useKnowledgeItems(
                     knowledgeType,
                     cursor,
                     includePublic,
+                    lifecycle,
                     requestVersion,
                     state: {
                         status: "error",
@@ -266,6 +309,7 @@ export function useKnowledgeItems(
         knowledgeType,
         cursor,
         includePublic,
+        lifecycle,
         requestVersion,
         reload,
     ])

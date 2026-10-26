@@ -261,13 +261,15 @@ def list_knowledge(
     after_time_sort: int | None,
     after_record_id: uuid.UUID | None,
     include_public: bool = True,
+    only_item_ids: frozenset[uuid.UUID] | None = None,
 ) -> tuple[KnowledgeListItem, ...]:
     """Up to `limit + 1` visible knowledge records for `view`.
 
     Public knowledge is **additive** (see "Public knowledge" in the module
     docstring): unless `include_public` is `False`, every view also returns
     the timeline's public items that fit it, whatever perspective the
-    caller has or lacks. Only the audience-specific part of a view needs a
+    caller has or lacks. `only_item_ids` (archive browsing) restricts every source to exactly
+    those items, before precedence, search and the keyset cursor run. Only the audience-specific part of a view needs a
     perspective; without one that part is simply empty — never an error,
     and never an existence hint. `view="public"` is the explicit
     public-only filter, so it returns an empty page when `include_public`
@@ -312,6 +314,8 @@ def list_knowledge(
         "gm": include_ground_truth,
         "gt_allowed": list(ground_truth_allowed_item_ids),
         "gt_denied": list(ground_truth_denied_item_ids),
+        "has_only": only_item_ids is not None,
+        "only_ids": list(only_item_ids or ()),
     }
 
     if view == "recent":
@@ -389,6 +393,8 @@ def _item_filters(view: str) -> str:
           {view_clause}
           AND (CAST(:type_code AS text) IS NULL OR kt.code = CAST(:type_code AS text))
           AND NOT (ki.knowledge_item_id = ANY(CAST(:denied AS uuid[])))
+          AND (NOT CAST(:has_only AS boolean)
+               OR ki.knowledge_item_id = ANY(CAST(:only_ids AS uuid[])))
     """
 
 

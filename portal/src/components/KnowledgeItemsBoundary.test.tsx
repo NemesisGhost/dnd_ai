@@ -104,6 +104,7 @@ describe("KnowledgeItemsBoundary", () => {
             "fact",
             "knowledge-cursor",
             true,
+            "active",
         )
     })
 

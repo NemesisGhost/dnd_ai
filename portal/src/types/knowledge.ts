@@ -8,6 +8,10 @@ export type KnowledgeView =
     | "recent"
     | "public"
 
+/** Which claims a Knowledge list covers. `active` is the everyday list; `archived` and `all` browse
+ * archived published history and are offered only when the server says `archive_browse_available`. */
+export type KnowledgeLifecycle = "active" | "archived" | "all"
+
 export type KnowledgeScope =
     | "canonical"
     | "party"
@@ -48,11 +52,16 @@ export interface KnowledgeListItem {
     source_interaction_id: string | null
     subject_entity_id: string | null
     subject?: KnowledgeSubject | null
+    /** Authoring state, present only for `canon.edit` holders. */
+    canon_status?: string | null
+    lifecycle_status?: string | null
 }
 
 export interface KnowledgePage {
     items: KnowledgeListItem[]
     next_cursor: string | null
+    /** Server-computed: may this caller browse archived knowledge? Absent means no. */
+    archive_browse_available?: boolean
 }
 
 export interface KnowledgeSearchParameters {
@@ -66,6 +75,9 @@ export interface KnowledgeSearchParameters {
     /** Public knowledge is included in every view by default; only an
      * explicit `false` asks the server to leave it out. */
     includePublic?: boolean
+    /** Omitted (or `active`) sends nothing; the server rejects `archived`/`all` for an
+     * ineligible caller. */
+    lifecycle?: KnowledgeLifecycle
 }
 
 // Matches the backend's KnowledgeResponse (GET .../knowledge/{id}) —

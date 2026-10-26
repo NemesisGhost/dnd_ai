@@ -54,7 +54,11 @@ from pydantic import BaseModel
 from sqlalchemy import Connection, text
 
 from dnd_ai.domain.access import AccessContext
-from dnd_ai.queries.entity_lifecycle import lifecycle_hidden_entity_ids
+from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
+from dnd_ai.queries.entity_lifecycle import (
+    knowledge_archive_scope,
+    lifecycle_hidden_entity_ids,
+)
 from dnd_ai.queries.knowledge import KnowledgeNotAuthorizedError, get_knowledge_view
 from dnd_ai.queries.knowledge import KnowledgeView as KnowledgeViewResult
 from dnd_ai.queries.knowledge_authoring import knowledge_definition_states
@@ -66,6 +70,7 @@ from dnd_ai.queries.knowledge_browse import (
     list_knowledge,
 )
 from dnd_ai.queries.quest import audience_tracked_quest_ids
+from dnd_ai.queries.world_authority import resolve_world_authority
 from dnd_ai.queries.world_explorer import discoverable_entity_ids, world_category_for_type_code
 
 from ._shared import timeline_world_id
@@ -77,7 +82,12 @@ from .access import (
     resolve_party_perspective,
 )
 from .deps import get_connection
-from .errors import NotFoundError
+from .errors import (
+    ArchiveBrowseForbiddenError,
+    CursorFilterMismatchError,
+    InvalidCursorError,
+    NotFoundError,
+)
 from .pagination import (
     DEFAULT_PAGE_SIZE,
     MAX_PAGE_SIZE,
@@ -94,6 +104,8 @@ _KNOWLEDGE_GROUND_TRUTH_CAPABILITY = "canon.edit"
 _CHARACTER_KNOWLEDGE_CAPABILITY = "character.view_knowledge"
 
 KnowledgeView = Literal["known", "rumors", "party_shared", "character_private", "recent", "public"]
+
+KnowledgeLifecycle = Literal["active", "archived", "all"]
 
 _MAX_QUERY_LEN = 200
 
@@ -191,6 +203,9 @@ class KnowledgeListItemResponse(BaseModel):
 class KnowledgeListResponse(BaseModel):
     items: list[KnowledgeListItemResponse]
     next_cursor: str | None
+    # Whether this caller may request `lifecycle=archived|all`: baseline campaign `canon.edit`
+    # and `world.canon.read_private`. Server-computed; a member preview is always `false`.
+    archive_browse_available: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -530,6 +545,7 @@ def list_knowledge_endpoint(
     include_public: Annotated[bool, Query()] = True,
     limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
     cursor: Annotated[str | None, Query()] = None,
+    lifecycle: Annotated[KnowledgeLifecycle, Query()] = "active",
 ) -> KnowledgeListResponse:
     """The audience-filtered Knowledge screen list. See
     `dnd_ai.queries.knowledge_browse` for the `view` vocabulary and
@@ -554,7 +570,47 @@ def list_knowledge_endpoint(
         include_public=include_public,
         limit=limit,
         cursor=cursor,
+        lifecycle=lifecycle,
     )
+
+
+def can_browse_archived_knowledge(
+    connection: Connection, *, access: AccessContext, world_id: uuid.UUID
+) -> bool:
+    """Archive browsing needs the **baseline** campaign `canon.edit` (a claim-targeted grant is
+    never baseline) and `world.canon.read_private` on the campaign's world. Independent of the
+    historical direct read by id, which stays open to every caller who can see published history."""
+    if not access.has_capability(_KNOWLEDGE_GROUND_TRUTH_CAPABILITY):
+        return False
+    authority = resolve_world_authority(connection, user_id=access.user_id, world_id=world_id)
+    return authority is not None and authority.has_capability(WORLD_CANON_READ_PRIVATE)
+
+
+def _lifecycle_cursor_keyset(base: str, lifecycle: KnowledgeLifecycle) -> str:
+    # `active` keeps the original keyset name, so existing cursors stay valid.
+    return base if lifecycle == "active" else f"{base}:{lifecycle}"
+
+
+def _reject_foreign_lifecycle_cursor(
+    cursor: str | None,
+    *,
+    base: str,
+    lifecycle: KnowledgeLifecycle,
+    fields: tuple[CursorFieldType, ...],
+) -> None:
+    """A cursor that is valid for another lifecycle filter is a safe 400, not a malformed (422)
+    one: it tells the client to restart rather than page across filters."""
+    if cursor is None or cursor == "":
+        return
+    others: tuple[KnowledgeLifecycle, ...] = ("active", "archived", "all")
+    for other in others:
+        if other == lifecycle:
+            continue
+        try:
+            decode_typed_cursor(cursor, keyset=_lifecycle_cursor_keyset(base, other), fields=fields)
+        except InvalidCursorError:
+            continue
+        raise CursorFilterMismatchError()
 
 
 def resolve_knowledge_list(
@@ -570,11 +626,19 @@ def resolve_knowledge_list(
     include_public: bool,
     limit: int,
     cursor: str | None,
+    lifecycle: KnowledgeLifecycle = "active",
+    allow_archive_browse: bool = True,
 ) -> KnowledgeListResponse:
     """The audience-filtered list for `access`. The one derivation behind both a member's own
     request and the audience preview (`dnd_ai.api.preview`), which passes the **subject's**
     resolved `AccessContext` in place of the actor's."""
     include_ground_truth = access.has_capability(_KNOWLEDGE_GROUND_TRUTH_CAPABILITY)
+    world_id = timeline_world_id(connection, access.timeline_id)
+    archive_browse_available = allow_archive_browse and can_browse_archived_knowledge(
+        connection, access=access, world_id=world_id
+    )
+    if lifecycle != "active" and not archive_browse_available:
+        raise ArchiveBrowseForbiddenError()
 
     eligible_party_ids: tuple[uuid.UUID, ...] = ()
     authorized_knower_id: uuid.UUID | None = None
@@ -605,7 +669,8 @@ def resolve_knowledge_list(
         authorized_knower_id = perspective.knower_id
 
     time_ordered = view == "recent"
-    keyset_name = RECENT_KEYSET if time_ordered else KNOWN_KEYSET
+    base_keyset = RECENT_KEYSET if time_ordered else KNOWN_KEYSET
+    keyset_name = _lifecycle_cursor_keyset(base_keyset, lifecycle)
     # `recent` orders by an integer world-time sort key (nullable); every
     # other view orders by a bounded statement-prefix string. A cursor
     # shaped for the wrong one — or carrying a non-int / non-UUID / `null`
@@ -613,6 +678,9 @@ def resolve_knowledge_list(
     # with a bare `int()`/`uuid.UUID()` that would raise deeper (500).
     cursor_fields: tuple[CursorFieldType, ...] = (
         ("int_or_none", "uuid") if time_ordered else ("str", "uuid")
+    )
+    _reject_foreign_lifecycle_cursor(
+        cursor, base=base_keyset, lifecycle=lifecycle, fields=cursor_fields
     )
     keyset = decode_typed_cursor(cursor, keyset=keyset_name, fields=cursor_fields)
     after_statement: str | None = None
@@ -626,18 +694,26 @@ def resolve_knowledge_list(
             after_statement = cast(str, keyset[0])
 
     ground_truth_allowed, ground_truth_denied = _ground_truth_item_targets(access)
-    world_id = timeline_world_id(connection, access.timeline_id)
     # Phase 15.1 draft/published separation: everyone sees only published, active
-    # claims in lists; a `canon.edit` holder also sees unpublished ones.
-    lifecycle_hidden = lifecycle_hidden_entity_ids(
-        connection,
-        world_id=world_id,
-        mode="browse",
-        viewer_user_id=access.user_id,
-        can_edit_canon=include_ground_truth,
-        include_noncanon=include_ground_truth,
-        include_archived=False,
-    )
+    # claims in lists; a `canon.edit` holder also sees unpublished ones. An eligible caller may
+    # widen the list to archived published history (`lifecycle`), filtered here, before paging.
+    only_item_ids: frozenset[uuid.UUID] | None = None
+    if lifecycle == "active":
+        lifecycle_hidden = lifecycle_hidden_entity_ids(
+            connection,
+            world_id=world_id,
+            mode="browse",
+            viewer_user_id=access.user_id,
+            can_edit_canon=include_ground_truth,
+            include_noncanon=include_ground_truth,
+            include_archived=False,
+        )
+    else:
+        scope = knowledge_archive_scope(
+            connection, world_id=world_id, lifecycle=lifecycle, viewer_user_id=access.user_id
+        )
+        lifecycle_hidden = scope.hidden
+        only_item_ids = scope.only
     items = list_knowledge(
         connection,
         view=view,
@@ -658,6 +734,7 @@ def resolve_knowledge_list(
         after_time_sort=after_time_sort,
         after_record_id=after_record_id,
         include_public=include_public,
+        only_item_ids=only_item_ids,
     )
 
     if time_ordered:
@@ -717,6 +794,7 @@ def resolve_knowledge_list(
             for item, subject in zip(page.items, subjects, strict=True)
         ],
         next_cursor=page.next_cursor,
+        archive_browse_available=archive_browse_available,
     )
 
 

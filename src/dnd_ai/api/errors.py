@@ -360,6 +360,25 @@ class InvalidCursorError(ApiError):
     safe_message = "The pagination cursor is invalid."
 
 
+class CursorFilterMismatchError(ApiError):
+    """A well-formed cursor minted under a different list filter (for the Knowledge list: another
+    `lifecycle`). A fixed 400 and non-disclosing: it says only that the cursor does not belong to
+    this filter, so the client restarts from the first page instead of paging across filters."""
+
+    status_code = 400
+    error_code = "cursor_filter_mismatch"
+    safe_message = "The pagination cursor does not belong to this filter."
+
+
+class ArchiveBrowseForbiddenError(ForbiddenError):
+    """A non-`active` Knowledge `lifecycle` requested by a caller who may not browse archives
+    (needs baseline campaign `canon.edit` and `world.canon.read_private`). Rejected rather than
+    ignored so a UI can never label active results as archived."""
+
+    error_code = "archive_browse_forbidden"
+    safe_message = "You do not have permission to browse archived knowledge."
+
+
 class RateLimitedError(UnauthorizedError):
     """Too many attempts for one IP/account combination within the current
     window (docs/PLAN.md §23.4/§23.5, Phase 11R workstream B —
@@ -392,6 +411,12 @@ _API_ERROR_CONTRACTS: dict[type[ApiError], _ErrorContract] = {
     ConflictError: _ErrorContract(409, "conflict", ConflictError.safe_message),
     InvalidCursorError: _ErrorContract(422, "invalid_cursor", InvalidCursorError.safe_message),
     RateLimitedError: _ErrorContract(429, "rate_limited", RateLimitedError.safe_message),
+    CursorFilterMismatchError: _ErrorContract(
+        400, "cursor_filter_mismatch", CursorFilterMismatchError.safe_message
+    ),
+    ArchiveBrowseForbiddenError: _ErrorContract(
+        403, "archive_browse_forbidden", ArchiveBrowseForbiddenError.safe_message
+    ),
 }
 
 

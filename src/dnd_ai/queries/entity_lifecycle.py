@@ -126,6 +126,76 @@ def lifecycle_hidden_entity_ids(
     return frozenset(rows)
 
 
+ARCHIVE_HISTORY_CANON_STATUSES = REFERENCE_VISIBLE_CANON_STATUSES
+
+
+@dataclass(frozen=True)
+class ArchiveScope:
+    """What an archive-browsing list adds to or removes from its candidates: `only` restricts the
+    list to exactly these ids (`None` = no restriction) and `hidden` removes ids from it."""
+
+    only: frozenset[uuid.UUID] | None
+    hidden: frozenset[uuid.UUID]
+
+
+def knowledge_archive_scope(
+    connection: Connection,
+    *,
+    world_id: uuid.UUID,
+    lifecycle: Literal["archived", "all"],
+    viewer_user_id: uuid.UUID,
+) -> ArchiveScope:
+    """The Knowledge archive-browse scope for a caller already known to be eligible (baseline
+    campaign `canon.edit` and `world.canon.read_private`; the API decides that).
+
+    * `archived`: operationally archived claims whose canon status is `canon`.
+    * `all`: the active list (unchanged) plus every archived published-history claim (`canon`,
+      `superseded`, `deprecated`). Archived drafts, proposals and rejected claims never appear:
+      they belong to the review views. Deleted claims never appear.
+    """
+    if lifecycle == "archived":
+        rows = connection.execute(
+            text("""
+                SELECT e.entity_id
+                FROM core.entities e
+                JOIN core.entity_types et ON et.entity_type_id = e.entity_type_id
+                JOIN core.canon_statuses cs ON cs.canon_status_id = e.canon_status_id
+                JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = e.lifecycle_status_id
+                WHERE e.world_id = :world_id
+                  AND et.code = 'knowledge_item'
+                  AND ls.code = 'archived'
+                  AND cs.code = 'canon'
+            """),
+            {"world_id": world_id},
+        ).scalars()
+        return ArchiveScope(only=frozenset(rows), hidden=frozenset())
+
+    active_hidden = lifecycle_hidden_entity_ids(
+        connection,
+        world_id=world_id,
+        mode="browse",
+        viewer_user_id=viewer_user_id,
+        can_edit_canon=True,
+        include_noncanon=True,
+        include_archived=True,
+    )
+    unpublished_archived = connection.execute(
+        text("""
+            SELECT e.entity_id
+            FROM core.entities e
+            JOIN core.entity_types et ON et.entity_type_id = e.entity_type_id
+            JOIN core.canon_statuses cs ON cs.canon_status_id = e.canon_status_id
+            JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = e.lifecycle_status_id
+            WHERE e.world_id = :world_id
+              AND et.code = 'knowledge_item'
+              AND ls.code = 'archived'
+              AND NOT (cs.code = ANY(CAST(:history AS text[])))
+        """),
+        {"world_id": world_id, "history": list(ARCHIVE_HISTORY_CANON_STATUSES)},
+    ).scalars()
+    return ArchiveScope(only=None, hidden=active_hidden | frozenset(unpublished_archived))
+
+
 @dataclass(frozen=True)
 class EntityLifecycleView:
     entity_id: uuid.UUID

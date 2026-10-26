@@ -44,6 +44,25 @@ function buildDetailPath(
     return query === "" ? path : `${path}?${query}`
 }
 
+// Only archived published history carries a badge: an archived claim, or one the world has
+// replaced or retired. Drafts and everyday active claims stay unbadged, as they always were.
+function historyStatusLabel(item: KnowledgeListItem): string | null {
+    const labels: string[] = []
+
+    if (item.lifecycle_status === "archived") {
+        labels.push("Archived")
+    }
+
+    if (
+        item.canon_status === "superseded" ||
+        item.canon_status === "deprecated"
+    ) {
+        labels.push(humanizeCode(item.canon_status))
+    }
+
+    return labels.length === 0 ? null : labels.join(" · ")
+}
+
 // Domain-specific wrapper mapping one authorized KnowledgeListItem into the
 // shared EntityCard primitive. The claim text is the card's content and its
 // one link; the claim kind is a quiet secondary label. Scope and canonical
@@ -80,6 +99,7 @@ export function KnowledgeCard({
     return (
         <EntityCard
             className="knowledge-card"
+            status={historyStatusLabel(item)}
             title={item.statement}
             metadata={metadata}
             to={

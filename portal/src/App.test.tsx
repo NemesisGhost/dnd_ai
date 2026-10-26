@@ -1002,6 +1002,7 @@ describe("portal routing", () => {
       null,
       null,
       true,
+      "active",
     )
 
     expect(

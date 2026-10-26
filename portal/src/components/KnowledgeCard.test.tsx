@@ -233,4 +233,26 @@ describe("KnowledgeCard", () => {
             expect(container.querySelector(".entity-card__footer")).toBeNull()
         })
     })
+    it.each([
+        [{ lifecycle_status: "archived", canon_status: "canon" }, "Archived"],
+        [{ lifecycle_status: "archived", canon_status: "superseded" }, "Archived · Superseded"],
+        [{ lifecycle_status: "active", canon_status: "deprecated" }, "Deprecated"],
+    ])("badges archived published history (%j)", (state, label) => {
+        renderCard({ ...baseItem, ...state })
+
+        expect(screen.getByText(label)).toBeInTheDocument()
+    })
+
+    it("leaves active, draft and unstated claims unbadged", () => {
+        for (const state of [
+            {},
+            { lifecycle_status: "active", canon_status: "canon" },
+            { lifecycle_status: "active", canon_status: "draft" },
+        ]) {
+            const { unmount } = renderCard({ ...baseItem, ...state })
+
+            expect(screen.queryByText(/Archived|Superseded|Deprecated|Draft/)).not.toBeInTheDocument()
+            unmount()
+        }
+    })
 })

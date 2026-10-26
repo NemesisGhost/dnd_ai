@@ -140,6 +140,37 @@ describe("fetchKnowledgeItems", () => {
         ])
     })
 
+    it("sends lifecycle only when it is not active", async () => {
+        const emptyPage = { items: [], next_cursor: null } satisfies KnowledgePage
+        const fetchMock = vi.fn().mockImplementation(() =>
+            Promise.resolve(
+                new Response(JSON.stringify(emptyPage), {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            ),
+        )
+        vi.stubGlobal("fetch", fetchMock)
+
+        const base = {
+            view: "known" as const,
+            characterId: null,
+            partyId: null,
+            query: "",
+            knowledgeType: null,
+        }
+
+        await fetchKnowledgeItems("campaign-a", { ...base, lifecycle: "active" })
+        await fetchKnowledgeItems("campaign-a", { ...base, lifecycle: "archived" })
+        await fetchKnowledgeItems("campaign-a", { ...base, lifecycle: "all", cursor: "c" })
+
+        expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+            "/api/campaigns/campaign-a/knowledge?view=known",
+            "/api/campaigns/campaign-a/knowledge?view=known&lifecycle=archived",
+            "/api/campaigns/campaign-a/knowledge?view=known&lifecycle=all&cursor=c",
+        ])
+    })
+
     it("omits empty optional parameters while preserving the required view", async () => {
         const emptyPage = {
             items: [],

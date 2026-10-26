@@ -159,6 +159,7 @@ describe("useKnowledgeItems", () => {
                 knowledgeType: "fact",
                 cursor: null,
                 includePublic: true,
+                lifecycle: "active",
             },
             expect.any(AbortSignal),
         )
@@ -189,6 +190,37 @@ describe("useKnowledgeItems", () => {
             })
         },
     )
+
+    it("reports a refused non-active lifecycle as lifecycle_rejected, not unavailable", async () => {
+        fetchKnowledgeItemsMock.mockRejectedValue(
+            new KnowledgeRequestError(403),
+        )
+
+        const { result } = renderHook(() =>
+            useKnowledgeItems(
+                "campaign-a",
+                "known",
+                "character-a",
+                null,
+                "",
+                null,
+                null,
+                true,
+                "archived",
+            ),
+        )
+
+        await waitFor(() => {
+            expect(result.current.state).toEqual({
+                status: "lifecycle_rejected",
+            })
+        })
+        expect(fetchKnowledgeItemsMock).toHaveBeenCalledWith(
+            "campaign-a",
+            expect.objectContaining({ lifecycle: "archived" }),
+            expect.any(AbortSignal),
+        )
+    })
 
     it("reloads the session after an unauthorized response", async () => {
         fetchKnowledgeItemsMock.mockRejectedValue(
@@ -366,6 +398,7 @@ describe("useKnowledgeItems", () => {
                 knowledgeType: "rumor",
                 cursor: "next-knowledge-page",
                 includePublic: true,
+                lifecycle: "active",
             },
             expect.any(AbortSignal),
         )

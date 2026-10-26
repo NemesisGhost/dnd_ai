@@ -67,6 +67,16 @@ function buildKnowledgePath(
         )
     }
 
+    if (
+        parameters.lifecycle !== undefined &&
+        parameters.lifecycle !== "active"
+    ) {
+        searchParameters.set(
+            "lifecycle",
+            parameters.lifecycle,
+        )
+    }
+
     if (parameters.cursor) {
         searchParameters.set(
             "cursor",

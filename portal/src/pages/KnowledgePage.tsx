@@ -3,7 +3,7 @@ import type { ReactNode } from "react"
 import { Link } from "react-router"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import type { AuthorizedParty } from "../types/bootstrap"
-import type { KnowledgeView } from "../types/knowledge"
+import type { KnowledgeLifecycle, KnowledgeView } from "../types/knowledge"
 
 interface KnowledgePageProps {
     campaignId: string
@@ -16,6 +16,10 @@ interface KnowledgePageProps {
     onQueryChange: (query: string) => void
     onPartyChange: (partyId: string | null) => void
     onIncludePublicChange: (includePublic: boolean) => void
+    /** The server's `archive_browse_available`. The Lifecycle filter exists only when true. */
+    archiveBrowseAvailable?: boolean
+    lifecycle?: KnowledgeLifecycle
+    onLifecycleChange?: (lifecycle: KnowledgeLifecycle) => void
     children: ReactNode
 }
 
@@ -33,6 +37,12 @@ const viewOptions: ViewOption[] = [
     { value: "public", label: "Public only" },
 ]
 
+const lifecycleOptions: { value: KnowledgeLifecycle; label: string }[] = [
+    { value: "active", label: "Active" },
+    { value: "archived", label: "Archived" },
+    { value: "all", label: "All" },
+]
+
 export function KnowledgePage({
     campaignId,
     view,
@@ -44,6 +54,9 @@ export function KnowledgePage({
     onQueryChange,
     onPartyChange,
     onIncludePublicChange,
+    archiveBrowseAvailable = false,
+    lifecycle = "active",
+    onLifecycleChange,
     children,
 }: KnowledgePageProps) {
     const canAuthor = useCampaignCapability(campaignId, "canon.edit")
@@ -51,6 +64,7 @@ export function KnowledgePage({
     const searchInputId = useId()
     const partySelectId = useId()
     const includePublicId = useId()
+    const lifecycleSelectId = useId()
     const publicOnly = view === "public"
 
     const hasParties = parties.length > 0
@@ -99,6 +113,33 @@ export function KnowledgePage({
                         ))}
                     </select>
                 </div>
+
+                {archiveBrowseAvailable && onLifecycleChange !== undefined ? (
+                    <div className="knowledge-page__field">
+                        <label htmlFor={lifecycleSelectId}>
+                            Lifecycle
+                        </label>
+                        <select
+                            id={lifecycleSelectId}
+                            value={lifecycle}
+                            onChange={(event) =>
+                                onLifecycleChange(
+                                    event.currentTarget
+                                        .value as KnowledgeLifecycle,
+                                )
+                            }
+                        >
+                            {lifecycleOptions.map((option) => (
+                                <option
+                                    key={option.value}
+                                    value={option.value}
+                                >
+                                    {option.label}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+                ) : null}
 
                 <div className="knowledge-page__field">
                     <label htmlFor={searchInputId}>

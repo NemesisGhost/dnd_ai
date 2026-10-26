@@ -579,6 +579,7 @@ def preview_knowledge_list_endpoint(
                 include_public=include_public,
                 limit=limit,
                 cursor=cursor,
+                allow_archive_browse=False,
             )
             if access.has_capability("campaign.view")
             else None
