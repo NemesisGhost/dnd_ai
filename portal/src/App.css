@@ -3065,6 +3065,26 @@ a.app-header__title:focus-visible {
   font-weight: 400;
 }
 
+.recent-events__item-summary {
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+
+.event-explanation {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.event-explanation__sentence {
+  margin: 0 0 0.25rem;
+}
+
+.event-explanation--detail .fact-grid {
+  margin-block: 0.5rem;
+}
+
 .recent-events__detail {
   min-width: 0;
   padding: 0.75rem 1rem;

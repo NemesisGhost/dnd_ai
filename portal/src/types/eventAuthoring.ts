@@ -1,5 +1,7 @@
 // Event authoring and correction contracts (Phase 15 checkpoint 15.2E-1).
 
+import type { EventExplanation } from "./eventExplanation"
+
 export interface EventParticipantView {
     entity_id: string
     name: string
@@ -39,6 +41,8 @@ export interface EventAuthoringView {
     effects: EventEffectView[]
     correction: EventCorrectionInfo | null
     corrects_event_id: string | null
+    // The same explanation the readers get, with correction reasons and every own-timeline link.
+    explanation?: EventExplanation | null
 }
 
 export interface EffectPreview {

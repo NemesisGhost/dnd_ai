@@ -48,6 +48,7 @@ from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .errors import NotFoundError
+from .event_explanations import explain_for_caller
 
 router = APIRouter(tags=["event-corrections"])
 
@@ -78,6 +79,11 @@ class CorrectEventRequest(BaseAuthoringRequest):
 
 def _jsonable(value: object) -> object:
     return str(value) if isinstance(value, uuid.UUID) else value
+
+
+def _explanation(access: AccessContext, connection: Connection, event_id: uuid.UUID) -> object:
+    found = explain_for_caller(access, connection, [event_id], authoring=True).get(event_id)
+    return None if found is None else found.model_dump(mode="json", by_alias=True)
 
 
 @router.get(_BASE)
@@ -129,6 +135,7 @@ def get_event_endpoint(event_id: uuid.UUID, access: _Edit, connection: _Conn) ->
         "corrects_event_id": None
         if view.corrects_event_id is None
         else str(view.corrects_event_id),
+        "explanation": _explanation(access, connection, event_id),
     }
 
 

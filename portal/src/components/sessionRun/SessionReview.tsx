@@ -85,6 +85,7 @@ export function SessionReview({
                 <SessionEventList
                     events={session.events}
                     travel={session.travel}
+                    explanations={session.explanations}
                     label="Recorded entries"
                     eventHref={(id) => `${campaign}/events/${enc(id)}`}
                 />

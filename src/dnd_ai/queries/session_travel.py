@@ -77,10 +77,12 @@ def list_session_travel(
     timeline_id: uuid.UUID,
     visibility: WorldEntityVisibility,
     include_gm_note: bool,
+    any_event_type: bool = False,
 ) -> tuple[SessionTravelEntry, ...]:
     """Entries for the travel events among `events`, in the order given (in-world time, then
-    creation)."""
-    travel_events = [e for e in events if e.event_type_code == TRAVEL_EVENT_TYPE]
+    creation). `any_event_type` also reads the `current_location_id` effects of other event types
+    (a recorded move), which the event explanations share with travel."""
+    travel_events = [e for e in events if any_event_type or e.event_type_code == TRAVEL_EVENT_TYPE]
     if not travel_events:
         return ()
     event_ids = [e.event_id for e in travel_events]

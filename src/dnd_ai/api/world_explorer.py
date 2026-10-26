@@ -62,6 +62,7 @@ from .access import (
     require_campaign_capability,
 )
 from .deps import get_connection
+from .event_explanations import EventExplanationResponse, explain_for_caller
 from .pagination import (
     DEFAULT_PAGE_SIZE,
     MAX_PAGE_SIZE,
@@ -370,6 +371,8 @@ class EventDetailResponse(BaseModel):
     session_id: uuid.UUID | None
     participants: list[EventParticipantResponse]
     locations: list[EventLocationResponse]
+    # What happened, to whom, and when (CP-9a); null for an event with nothing to add.
+    explanation: EventExplanationResponse | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -816,7 +819,13 @@ def get_event_endpoint(
         world_time_id=view.world_time_id,
         # GM-only (D-3, data class GM_ONLY): the free-form event record is not a recap.
         details=view.details if access.has_capability(_GM_CAPABILITY) else None,
-        session_id=view.session_id,
+        # A session the caller may not view is not named, here or in the explanation.
+        session_id=(
+            view.session_id
+            if view.session_id is not None
+            and access.has_capability(_VIEW_CAPABILITY, session_id=view.session_id)
+            else None
+        ),
         participants=[
             EventParticipantResponse(entity_id=p.entity_id, role_code=p.role_code)
             for p in view.participants
@@ -825,4 +834,5 @@ def get_event_endpoint(
             EventLocationResponse(location_id=loc.location_id, role=loc.role)
             for loc in view.locations
         ],
+        explanation=explain_for_caller(access, connection, [view.event_id]).get(view.event_id),
     )

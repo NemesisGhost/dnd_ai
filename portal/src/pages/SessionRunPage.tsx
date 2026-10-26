@@ -613,6 +613,7 @@ function LogSection({
                 <SessionEventList
                     events={session.events}
                     travel={session.travel}
+                    explanations={session.explanations}
                     label="Session log"
                     ordered
                     eventHref={(id) => `${base(campaignId)}/events/${encodeURIComponent(id)}`}

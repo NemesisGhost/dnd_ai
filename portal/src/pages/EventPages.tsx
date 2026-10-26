@@ -8,6 +8,7 @@ import {
     voidEvent,
 } from "../api/eventAuthoring"
 import { ConfirmDialog } from "../components/authoring/ConfirmDialog"
+import { EventExplanation } from "../components/events/EventExplanation"
 import { useAnnounce } from "../components/authoring/announcer"
 import { SelectField, TextAreaField, TextField } from "../components/authoring/fields"
 import {
@@ -284,6 +285,14 @@ function EventBody({
                 Status: <strong>{event.status}</strong> · When: {event.world_time} · Kind:{" "}
                 {event.event_type_code.replace(/_/g, " ")}
             </p>
+            {event.explanation ? (
+                <EventExplanation
+                    explanation={event.explanation}
+                    density="detail"
+                    campaignId={campaignId}
+                    eventHref={link}
+                />
+            ) : null}
             {event.details !== null ? <p className="authoring-note">GM notes: {event.details}</p> : null}
             {event.session_id !== null ? (
                 <p>

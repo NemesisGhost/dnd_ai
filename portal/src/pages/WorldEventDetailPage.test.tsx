@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react"
 import { MemoryRouter } from "react-router"
 import { describe, expect, it } from "vitest"
+import type { EventExplanation } from "../types/eventExplanation"
 import type { EventDetail } from "../types/world"
 import { WorldEventDetailPage } from "./WorldEventDetailPage"
 
@@ -15,6 +16,23 @@ const eventFixture: EventDetail = {
     session_id: "session-a",
     participants: [{ entity_id: "character-a", role_code: "instigator" }],
     locations: [{ location_id: "location-a", role: "epicenter" }],
+}
+
+const joinExplanation: EventExplanation = {
+    event_id: "event-a",
+    family: "party_member_joined",
+    in_world_time: "Common Reckoning: Year 1",
+    recorded_at: "2026-10-25T03:04:05+00:00",
+    subject: { state: "named", kind: "character", entity_id: "char-1", name: "Aldric", openable: true },
+    party: { state: "named", kind: "party", entity_id: "party-1", name: "The Company", openable: true },
+    build_detail: null,
+    previous_build: null,
+    new_build: null,
+    previous_time: null,
+    new_time: null,
+    travel: null,
+    session: null,
+    relations: [],
 }
 
 function renderPage(event: EventDetail) {
@@ -59,5 +77,22 @@ describe("WorldEventDetailPage", () => {
         renderPage({ ...eventFixture, details: null, summary: null })
 
         expect(screen.getByText("Not recorded")).toBeInTheDocument()
+    })
+
+    it("explains what happened with the shared explanation and both times", () => {
+        renderPage({ ...eventFixture, explanation: joinExplanation })
+        expect(screen.getByRole("heading", { name: "What happened" })).toBeInTheDocument()
+        expect(screen.getByRole("link", { name: "Aldric" })).toHaveAttribute(
+            "href",
+            "/app/campaign-a/characters/char-1",
+        )
+        expect(screen.getByText("In-world time")).toBeInTheDocument()
+        expect(screen.getAllByText("Recorded").length).toBe(2) // status and recording time
+        expect(screen.getByText("Occurred during the Second Age.")).toBeInTheDocument()
+    })
+
+    it("shows no explanation panel when the server sent none", () => {
+        renderPage(eventFixture)
+        expect(screen.queryByRole("heading", { name: "What happened" })).toBeNull()
     })
 })

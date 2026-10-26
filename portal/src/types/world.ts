@@ -1,4 +1,5 @@
 import type { RecordAuthoring } from "../utils/recordAuthoring"
+import type { EventExplanation } from "./eventExplanation"
 
 export type WorldCategory =
     | "location"
@@ -171,4 +172,6 @@ export interface EventDetail {
     session_id: string | null
     participants: EventParticipant[]
     locations: EventLocationRole[]
+    // What happened, to whom and when (CP-9a). Absent from older servers.
+    explanation?: EventExplanation | null
 }

@@ -1,4 +1,6 @@
 import { Link } from "react-router"
+import type { EventExplanation as EventExplanationData } from "../../types/eventExplanation"
+import { EventExplanation } from "../events/EventExplanation"
 import type {
     CampaignSessionEvent,
     SessionTravelEntry,
@@ -52,21 +54,27 @@ export function InWorldTime({ value }: { value: string | undefined }) {
     return value ? <span className="session-activity__time">In-world: {value}</span> : null
 }
 
+// The journey lines for a set of legs, without a heading (shared by the travel entries and the
+// event explanations).
+export function TravelLegs({ legs }: { legs: SessionTravelLeg[] }) {
+    const groups = groupLegs(legs)
+    return groups.length === 0 ? (
+        <p className="authoring-note">Travel was recorded.</p>
+    ) : (
+        <ul className="session-activity__legs">
+            {groups.map((group) => (
+                <li key={group.key}>{legLine(group)}</li>
+            ))}
+        </ul>
+    )
+}
+
 // The journey lines for one travel event, without a heading. `showNote` is for the surfaces that
 // are editors-only; the server already returns a null note to everyone else.
 export function TravelSummary({ entry, showNote = true }: { entry: SessionTravelEntry; showNote?: boolean }) {
-    const groups = groupLegs(entry.legs)
     return (
         <>
-            {groups.length === 0 ? (
-                <p className="authoring-note">Travel was recorded.</p>
-            ) : (
-                <ul className="session-activity__legs">
-                    {groups.map((group) => (
-                        <li key={group.key}>{legLine(group)}</li>
-                    ))}
-                </ul>
-            )}
+            <TravelLegs legs={entry.legs} />
             {showNote && entry.note !== null ? <p className="authoring-note">GM notes: {entry.note}</p> : null}
         </>
     )
@@ -100,14 +108,20 @@ export function SessionEventList({
     label,
     ordered = false,
     eventHref,
+    explanations,
 }: {
     events: CampaignSessionEvent[]
     travel: SessionTravelEntry[] | undefined
+    // The typed explanations for the other events (party, build, clock, recorded moves).
+    explanations?: EventExplanationData[]
     label: string
     ordered?: boolean
     eventHref: (eventId: string) => string | null
 }) {
     const byEvent = new Map((travel ?? []).map((entry) => [entry.event_id, entry]))
+    const explained = new Map(
+        (explanations ?? []).filter((x) => x.family !== "other").map((x) => [x.event_id, x]),
+    )
     const Tag = ordered ? "ol" : "ul"
     return (
         <Tag className="record-list" aria-label={label}>
@@ -118,6 +132,14 @@ export function SessionEventList({
                     <li key={event.event_id}>
                         {entry !== undefined ? (
                             <TravelEntry entry={entry} href={href} />
+                        ) : explained.has(event.event_id) ? (
+                            <>
+                                {href ? <Link to={href}>{event.name}</Link> : event.name}
+                                <EventExplanation explanation={explained.get(event.event_id)!} />
+                                {event.details !== null ? (
+                                    <p className="authoring-note">GM notes: {event.details}</p>
+                                ) : null}
+                            </>
                         ) : (
                             <>
                                 {href ? <Link to={href}>{event.name}</Link> : event.name}{" "}

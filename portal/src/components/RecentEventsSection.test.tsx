@@ -1,7 +1,25 @@
 import { fireEvent, render, screen } from "@testing-library/react"
 import { describe, expect, it } from "vitest"
 import type { RecentCampaignEvent } from "../types/campaignSummary"
+import type { EventExplanation } from "../types/eventExplanation"
 import { RecentEventsSection } from "./RecentEventsSection"
+
+const joinExplanation: EventExplanation = {
+    event_id: "event-a",
+    family: "party_member_joined",
+    in_world_time: "Common Reckoning: Year 1",
+    recorded_at: "2026-10-25T03:04:05+00:00",
+    subject: { state: "named", kind: "character", entity_id: "char-1", name: "Aldric", openable: true },
+    party: { state: "named", kind: "party", entity_id: "party-1", name: "The Company", openable: true },
+    build_detail: null,
+    previous_build: null,
+    new_build: null,
+    previous_time: null,
+    new_time: null,
+    travel: null,
+    session: null,
+    relations: [],
+}
 
 function makeEvent(id: string, overrides: Partial<RecentCampaignEvent> = {}): RecentCampaignEvent {
     return {
@@ -100,5 +118,30 @@ describe("RecentEventsSection", () => {
 
         rerender(<RecentEventsSection events={[makeEvent("1"), makeEvent("2")]} />)
         expect(selectedTitle()).toHaveTextContent("Event 1")
+    })
+
+    it("adds one compact sentence per explained row and the same sentence in the detail", () => {
+        render(
+            <RecentEventsSection
+                events={[makeEvent("1", { explanation: joinExplanation }), makeEvent("2")]}
+            />,
+        )
+        const row = screen.getByRole("button", { name: /Event 1/ })
+        expect(row).toHaveTextContent("Aldric joined The Company.")
+        expect(screen.getByRole("button", { name: /Event 2/ })).not.toHaveTextContent("joined")
+        // The detail shows the sentence once, without repeating the in-world time or links.
+        expect(screen.getAllByText("Aldric joined The Company.")).toHaveLength(2)
+        expect(screen.queryByRole("link")).toBeNull()
+        expect(screen.queryByText(/In-world:/)).toBeNull()
+    })
+
+    it("leaves an event with no adapter as before", () => {
+        render(
+            <RecentEventsSection
+                events={[makeEvent("1", { explanation: { ...joinExplanation, family: "other" } })]}
+            />,
+        )
+        expect(screen.getByRole("button", { name: /Event 1/ })).not.toHaveTextContent("joined")
+        expect(screen.getByText("Summary 1")).toBeInTheDocument()
     })
 })

@@ -1,4 +1,5 @@
 import type { CharacterKind } from "./character"
+import type { EventExplanation } from "./eventExplanation"
 
 export interface CampaignSessionListItem {
     session_id: string
@@ -93,6 +94,8 @@ export interface CampaignSessionDetail
     events: CampaignSessionEvent[]
     // Readable entries for the travel events above. Absent from older servers.
     travel?: SessionTravelEntry[]
+    // Explanations for the other events above (party, build, clock, recorded moves). Additive.
+    explanations?: EventExplanation[]
     // Editors: every stint. Members: every stint (present or left) of the characters they may
     // discover; the list says nothing about anyone else.
     participants?: SessionParticipant[] | null

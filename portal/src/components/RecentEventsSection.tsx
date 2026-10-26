@@ -1,5 +1,7 @@
 import { useState } from "react"
 import type { RecentCampaignEvent } from "../types/campaignSummary"
+import { EventExplanation } from "./events/EventExplanation"
+import { explanationSentence } from "./events/explanationSentence"
 
 const NO_TIME = "World time unassigned"
 const NO_DESCRIPTION = "No event description is available."
@@ -66,6 +68,11 @@ export function RecentEventsSection({ events }: RecentEventsSectionProps) {
                                         <span className="recent-events__item-time">
                                             {timeText(event)}
                                         </span>
+                                        {event.explanation && explanationSentence(event.explanation) ? (
+                                            <span className="recent-events__item-summary">
+                                                {explanationSentence(event.explanation)}
+                                            </span>
+                                        ) : null}
                                     </button>
                                 </li>
                             )
@@ -78,6 +85,9 @@ export function RecentEventsSection({ events }: RecentEventsSectionProps) {
                     >
                         <h3 id="recent-event-detail-heading">{selected.name}</h3>
                         <p className="recent-events__detail-time">{timeText(selected)}</p>
+                        {selected.explanation && selected.explanation.family !== "other" ? (
+                            <EventExplanation explanation={selected.explanation} showTime={false} />
+                        ) : null}
                         {descriptionParagraphs(selected).map((text, index) => (
                             <p key={index}>{text}</p>
                         ))}

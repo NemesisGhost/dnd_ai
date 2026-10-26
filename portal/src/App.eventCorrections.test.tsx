@@ -77,6 +77,48 @@ describe("event pages", () => {
     expect(screen.getByRole("button", { name: "Void event" })).toBeEnabled()
   })
 
+  it("explains a build change with the shared explanation, both times and the correction link", async () => {
+    server.on("GET", E, {
+      body: view({
+        name: "A character build was activated",
+        event_type_code: "character_build_activated",
+        effects: [],
+        explanation: {
+          event_id: "e1",
+          family: "character_build_activated",
+          in_world_time: "Year 1",
+          recorded_at: "2026-10-25T03:04:05+00:00",
+          subject: { state: "named", kind: "character", entity_id: "c1", name: "Mira", openable: true },
+          party: null,
+          build_detail: "full",
+          previous_build: { state: "named", kind: "build", entity_id: null, name: "Fighter 1", openable: false },
+          new_build: { state: "named", kind: "build", entity_id: null, name: "Fighter 2", openable: false },
+          previous_time: null,
+          new_time: null,
+          travel: null,
+          session: null,
+          relations: [
+            {
+              relation: "corrected_by",
+              event: { state: "named", kind: "event", entity_id: "e9", name: "A recorded event was corrected", openable: true },
+              reason: "Wrong build",
+            },
+          ],
+        },
+      }),
+    })
+    server.on("GET", `${E}/correction-preview`, { body: preview({ effects: [] }) })
+    openApp("/app/mundivita/events/e1")
+    expect(await screen.findByText("Mira's active build changed from Fighter 1 to Fighter 2.")).toBeInTheDocument()
+    expect(screen.getByText("In-world time")).toBeInTheDocument()
+    expect(screen.getByText("Recorded", { selector: "dt" })).toBeInTheDocument()
+    expect(screen.getByRole("link", { name: "A recorded event was corrected" })).toHaveAttribute(
+      "href",
+      "/app/mundivita/events/e9",
+    )
+    expect(screen.getByText(/Reason: Wrong build/)).toBeInTheDocument()
+  })
+
   it("names a travel event's places and links its session, never printing an id", async () => {
     server.on("GET", E, {
       body: view({

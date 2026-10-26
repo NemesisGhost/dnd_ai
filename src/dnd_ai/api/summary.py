@@ -50,6 +50,7 @@ from dnd_ai.queries.summary import get_campaign_summary_view
 
 from .access import require_campaign_capability
 from .deps import get_connection
+from .event_explanations import EventExplanationResponse, explain_for_caller
 
 router = APIRouter(tags=["summary"])
 
@@ -80,6 +81,8 @@ class RecentEventResponse(BaseModel):
     world_time_id: uuid.UUID
     world_time_display: str | None
     details: str | None
+    # Typed explanation for this event's family (CP-9a); null when none applies.
+    explanation: EventExplanationResponse | None = None
 
 
 class CampaignSummaryResponse(BaseModel):
@@ -116,6 +119,8 @@ def get_campaign_summary_endpoint(
         allowed_draft_event_ids=allowed_draft_event_ids,
     )
 
+    explained = explain_for_caller(access, connection, [e.event_id for e in view.recent_events])
+
     return CampaignSummaryResponse(
         current_session=(
             None
@@ -140,6 +145,7 @@ def get_campaign_summary_endpoint(
                 world_time_id=e.world_time_id,
                 world_time_display=e.world_time_display,
                 details=e.details,
+                explanation=explained.get(e.event_id),
             )
             for e in view.recent_events
         ],

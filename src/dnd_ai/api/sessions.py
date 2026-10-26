@@ -38,7 +38,7 @@ from datetime import datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 from sqlalchemy import Connection
 
 from dnd_ai.domain.access import AccessContext
@@ -49,7 +49,7 @@ from dnd_ai.queries.session import (
     list_campaign_sessions,
     list_session_participants,
 )
-from dnd_ai.queries.session_travel import list_session_travel
+from dnd_ai.queries.session_travel import TRAVEL_EVENT_TYPE, list_session_travel
 
 from ._shared import timeline_world_id
 from .access import (
@@ -59,6 +59,12 @@ from .access import (
 )
 from .deps import get_connection
 from .errors import NotFoundError
+from .event_explanations import (
+    EventExplanationResponse,
+    TravelLegResponse,
+    explain_for_caller,
+    travel_legs_response,
+)
 from .world_explorer import resolve_world_entity_visibility
 
 router = APIRouter(tags=["sessions"])
@@ -110,29 +116,6 @@ class SessionEventResponse(BaseModel):
     world_time: str = ""
 
 
-class TravelPlaceResponse(BaseModel):
-    """One end of a leg. `state` is `named` (readable and discoverable by the caller),
-    `unrecorded` (the traveler had no earlier location) or `unavailable` (not resolvable or not
-    discoverable by the caller). A name is only ever present when `state` is `named`."""
-
-    state: str
-    entity_id: uuid.UUID | None = None
-    name: str | None = None
-
-
-class TravelTravelerResponse(BaseModel):
-    entity_id: uuid.UUID
-    name: str
-
-
-class TravelLegResponse(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    traveler: TravelTravelerResponse
-    from_: TravelPlaceResponse = Field(alias="from")
-    to: TravelPlaceResponse
-
-
 class SessionTravelResponse(BaseModel):
     event_id: uuid.UUID
     world_time_id: uuid.UUID
@@ -168,6 +151,9 @@ class SessionDetailResponse(BaseModel):
     events: list[SessionEventResponse]
     # Readable travel entries for the travel events above (same order). Additive.
     travel: list[SessionTravelResponse] = Field(default_factory=list)
+    # Typed explanations for the other events above (party, build, clock, recorded moves);
+    # travel events are explained by `travel`. Additive.
+    explanations: list[EventExplanationResponse] = Field(default_factory=list)
     scheduled_for: datetime | None = None
     play_status: str = "unscheduled"
     row_version: int | None = None
@@ -323,6 +309,12 @@ def get_session_endpoint(
         include_gm_note=can_edit,
     )
 
+    explained = explain_for_caller(
+        access,
+        connection,
+        [e.event_id for e in view.events if e.event_type_code != TRAVEL_EVENT_TYPE],
+    )
+
     return SessionDetailResponse(
         session_id=view.session_id,
         session_number=view.session_number,
@@ -365,27 +357,9 @@ def get_session_endpoint(
                 world_time_id=t.world_time_id,
                 world_time=t.world_time,
                 note=t.note if can_edit else None,
-                legs=[
-                    TravelLegResponse(
-                        traveler=TravelTravelerResponse(
-                            entity_id=leg.traveler_id, name=leg.traveler_name
-                        ),
-                        **{
-                            "from": TravelPlaceResponse(
-                                state=leg.origin.state,
-                                entity_id=leg.origin.entity_id,
-                                name=leg.origin.name,
-                            )
-                        },
-                        to=TravelPlaceResponse(
-                            state=leg.destination.state,
-                            entity_id=leg.destination.entity_id,
-                            name=leg.destination.name,
-                        ),
-                    )
-                    for leg in t.legs
-                ],
+                legs=travel_legs_response(t),
             )
             for t in travel
         ],
+        explanations=[explained[e.event_id] for e in view.events if e.event_id in explained],
     )
