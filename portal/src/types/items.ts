@@ -126,4 +126,6 @@ export interface CharacterInventoryItem {
     condition_percentage?: number | null
     is_equipped: boolean
     is_destroyed: boolean
+    // The holder is attuned to it (the server's open attunement for this timeline).
+    is_attuned?: boolean
 }

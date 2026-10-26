@@ -85,6 +85,12 @@ class InventoryItemView:
     """The item's optimistic token (`campaign.item_state.last_event_id`)."""
     is_published: bool = True
     """False for a draft or archived instance, which only a GM (`reveal_all_properties`) sees."""
+    is_attuned: bool = False
+    """Whether the holder is currently attuned to this item on the timeline: an open
+    `campaign.item_attunements` row (`broken_world_time_id IS NULL`, the codebase's definition of
+    active, as the attune/end-attunement commands and the item editor read it) for this timeline,
+    this item and this holder. An ended attunement, another character's, and another timeline's
+    all read `False`; nothing is inferred from the definition's attunement requirement."""
 
 
 def get_inventory_view(
@@ -126,7 +132,14 @@ def get_inventory_view(
                    COALESCE(ist.is_destroyed, false) AS is_destroyed,
                    io.owner_entity_id,
                    COALESCE(idn.identification_level, :default_level) AS identification_level,
-                   idn.known_properties_jsonb
+                   idn.known_properties_jsonb,
+                   EXISTS (
+                       SELECT 1 FROM campaign.item_attunements att
+                       WHERE att.timeline_id = ie.timeline_id
+                         AND att.item_instance_id = ie.item_instance_id
+                         AND att.character_id = ie.holder_entity_id
+                         AND att.broken_world_time_id IS NULL
+                   ) AS is_attuned
             FROM campaign.inventory_entries ie
             JOIN world.item_instances ii ON ii.item_instance_id = ie.item_instance_id
             JOIN core.entities ie_ent ON ie_ent.entity_id = ii.item_instance_id
@@ -183,6 +196,7 @@ def get_inventory_view(
                 name=row["instance_name"],
                 last_event_id=row["last_event_id"],
                 is_published=bool(row["is_published"]),
+                is_attuned=bool(row["is_attuned"]),
             )
         )
 
@@ -195,7 +209,7 @@ class RestrictedInventoryItemView:
     `character.view_inventory` without the full character view may see. This is an allowlist, so a
     field added to `InventoryItemView` is withheld from this view until it is added here on purpose.
 
-    Withheld: `condition_percentage`, `charges_current`/`charges_maximum` (item-instance mechanical
+    Attunement (`is_attuned`) is part of the allowlist. Withheld: `condition_percentage`, `charges_current`/`charges_maximum` (item-instance mechanical
     state), `last_event_id` (the mutation token), `is_published` (a restricted reader never sees an
     unpublished instance), and `owner_entity_id` (replaced by `ownership`, so the id of an
     entity the reader may not be able to discover is not disclosed). GM-only instance fields such
@@ -210,6 +224,7 @@ class RestrictedInventoryItemView:
     quantity: int
     is_equipped: bool
     is_destroyed: bool
+    is_attuned: bool
     ownership: str
     """`holder` when the legal owner is the character carrying the item, `other` when someone else
     owns what the character carries (custody without ownership), `none` when it has no owner."""
@@ -242,6 +257,7 @@ def restrict_inventory_view(
                 quantity=item.quantity,
                 is_equipped=item.is_equipped,
                 is_destroyed=item.is_destroyed,
+                is_attuned=item.is_attuned,
                 ownership=ownership,
                 identification_level=item.identification_level,
                 properties=item.properties,

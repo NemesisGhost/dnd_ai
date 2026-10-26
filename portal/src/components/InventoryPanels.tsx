@@ -19,6 +19,7 @@ interface Row {
     condition_percentage?: number | null
     is_equipped: boolean
     is_destroyed: boolean
+    is_attuned?: boolean
 }
 
 function ItemList({ campaignId, items }: { campaignId: string; items: Row[] }) {
@@ -36,6 +37,7 @@ function ItemList({ campaignId, items }: { campaignId: string; items: Row[] }) {
                     {item.quantity !== 1 ? `, ×${item.quantity}` : ""}
                     {item.condition_percentage !== null && item.condition_percentage !== undefined ? `, ${item.condition_percentage}% condition` : ""}
                     {item.is_equipped ? ", equipped" : ""}
+                    {item.is_attuned === true ? ", attuned" : ""}
                     {item.is_destroyed ? ", destroyed" : ""}
                 </li>
             ))}

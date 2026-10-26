@@ -11,6 +11,7 @@ import { LandingRedirect } from "./pages/LandingRedirect"
 import { CampaignsPage } from "./pages/CampaignsPage"
 import { CampaignHomePage } from "./pages/CampaignHomePage"
 import { CampaignCharactersBrowsePage, CampaignCharactersPage } from "./pages/CampaignCharactersPage"
+import { CharacterInventoryRoutePage } from "./pages/CharacterInventoryRoutePage"
 import { CharacterSheetRoutePage } from "./pages/CharacterSheetRoutePage"
 import { CampaignQuestsPage } from "./pages/CampaignQuestsPage"
 import { CampaignQuestDetailPage } from "./pages/CampaignQuestDetailPage"
@@ -388,6 +389,11 @@ function App() {
             <Route
               path="characters/:characterId/edit"
               element={<EditCharacterPage />}
+            />
+
+            <Route
+              path="characters/:characterId/inventory"
+              element={<CharacterInventoryRoutePage />}
             />
 
             <Route

@@ -23,6 +23,7 @@ from tests.factories import (
     make_campaign_membership,
     make_character,
     make_inventory_entry,
+    make_item_attunement,
     make_item_definition,
     make_item_identification,
     make_item_instance,
@@ -35,6 +36,7 @@ from tests.factories import (
     make_timeline,
     make_user,
     make_world,
+    make_world_time,
     oidc_principal,
     system_role_id,
 )
@@ -51,6 +53,7 @@ _RESTRICTED_KEYS = {
     "quantity",
     "is_equipped",
     "is_destroyed",
+    "is_attuned",
     "ownership",
     "identification_level",
     "properties",
@@ -343,6 +346,11 @@ def test_a_direct_grant_to_a_plain_player_opens_the_restricted_inventory(
     assert response.status_code == 200
     assert all(set(row) == _RESTRICTED_KEYS for row in response.json())
     assert client.get(w.url("/sheet")).status_code == 404
+    # The grant is the player's only access: the real character read stays denied (the portal's
+    # direct Inventory entry therefore never makes it), as do the other sections.
+    assert client.get(w.url()).status_code == 404
+    for suffix in ("/relationships", "/parties"):
+        assert client.get(w.url(suffix)).status_code != 200, suffix
 
 
 def test_a_revoked_grant_closes_the_inventory_again(
@@ -354,6 +362,18 @@ def test_a_revoked_grant_closes_the_inventory_again(
     assert client.get(w.url("/inventory")).status_code == 200
     db_connection.execute(text("UPDATE security.resource_grants SET revoked_at = now()"))
     assert client.get(w.url("/inventory")).status_code == 404
+    assert client.get(w.url()).status_code == 404
+
+
+def test_a_direct_grant_only_player_with_an_explicit_deny_gets_nothing(
+    w: World, client_for: Callable[[uuid.UUID], TestClient]
+) -> None:
+    player = w.member("Plain Player")
+    w.grant(player, _INVENTORY, "allow")
+    w.grant(player, _INVENTORY, "deny")
+    client = client_for(player)
+    assert client.get(w.url("/inventory")).status_code == 404
+    assert client.get(w.url()).status_code == 404
 
 
 def test_an_explicit_inventory_deny_beats_both_relationship_and_full_tier(
@@ -498,3 +518,61 @@ def test_the_capability_is_referenced_only_by_the_read_side() -> None:
 def test_the_openapi_contract_lists_the_restricted_row() -> None:
     schema = json.dumps(create_app().openapi())
     assert "RestrictedInventoryItemResponse" in schema
+
+
+# --- attunement -------------------------------------------------------------------------------
+
+
+def test_attunement_is_shown_only_for_an_open_attunement_of_the_holder_on_this_timeline(
+    w: World, client_for: Callable[[uuid.UUID], TestClient], db_connection: Connection
+) -> None:
+    c = db_connection
+    began = make_world_time(c, w.world_id, 10)
+    ended = make_world_time(c, w.world_id, 20)
+    # Open attunement of the holder: attuned.
+    make_item_attunement(c, w.timeline_id, w.ring_id, w.character_id, attuned_world_time_id=began)
+    # Ended attunement of the holder: not attuned.
+    make_item_attunement(
+        c,
+        w.timeline_id,
+        w.sword_id,
+        w.character_id,
+        attuned_world_time_id=began,
+        broken_world_time_id=ended,
+    )
+    # Open attunement of someone else to a carried item: not the holder's.
+    make_item_attunement(c, w.timeline_id, w.loan_id, w.stranger_id, attuned_world_time_id=began)
+    # Open attunement of the holder on another timeline only: isolated.
+    make_item_attunement(
+        c, w.branch_timeline_id, w.known_id, w.character_id, attuned_world_time_id=began
+    )
+
+    viewer = w.member("Viewer")
+    w.relate(viewer, "viewer")
+    response = client_for(viewer).get(w.url("/inventory"))
+    assert response.status_code == 200
+    rows = _rows(response.json())
+    assert {iid: row["is_attuned"] for iid, row in rows.items()} == {
+        str(w.ring_id): True,
+        str(w.sword_id): False,
+        str(w.loan_id): False,
+        str(w.known_id): False,
+    }
+    # The allowlist is unchanged apart from the indicator; no attunement detail leaks.
+    assert all(set(row) == _RESTRICTED_KEYS for row in response.json())
+    assert str(began) not in response.text and str(ended) not in response.text
+    assert "attuned_world_time_id" not in response.text
+
+    # The full projection reads the same state.
+    full = _rows(client_for(w.gm).get(w.url("/inventory")).json())
+    assert full[str(w.ring_id)]["is_attuned"] is True
+    assert full[str(w.sword_id)]["is_attuned"] is False
+
+
+def test_an_item_with_no_attunement_row_is_not_attuned_whatever_its_definition_says(
+    w: World, client_for: Callable[[uuid.UUID], TestClient]
+) -> None:
+    viewer = w.member("Viewer")
+    w.relate(viewer, "viewer")
+    rows = _rows(client_for(viewer).get(w.url("/inventory")).json())
+    assert all(row["is_attuned"] is False for row in rows.values())

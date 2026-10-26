@@ -236,6 +236,8 @@ class InventoryItemResponse(BaseModel):
     charges_maximum: int | None
     is_equipped: bool
     is_destroyed: bool
+    # Whether the holder is attuned (an open `campaign.item_attunements` row on this timeline).
+    is_attuned: bool = False
     owner_entity_id: uuid.UUID | None
     identification_level: str
     # None unless identification_level allows it (or the caller holds
@@ -259,6 +261,7 @@ class RestrictedInventoryItemResponse(BaseModel):
     quantity: int
     is_equipped: bool
     is_destroyed: bool
+    is_attuned: bool
     # `holder` (the character owns it), `other` (carried but owned by someone else), or `none`.
     ownership: Literal["holder", "other", "none"]
     identification_level: str
@@ -795,6 +798,7 @@ def get_character_inventory_endpoint(
                 quantity=item.quantity,
                 is_equipped=item.is_equipped,
                 is_destroyed=item.is_destroyed,
+                is_attuned=item.is_attuned,
                 ownership=item.ownership,  # type: ignore[arg-type]
                 identification_level=item.identification_level,
                 properties=item.properties,
@@ -814,6 +818,7 @@ def get_character_inventory_endpoint(
             charges_maximum=item.charges_maximum,
             is_equipped=item.is_equipped,
             is_destroyed=item.is_destroyed,
+            is_attuned=item.is_attuned,
             owner_entity_id=item.owner_entity_id,
             identification_level=item.identification_level,
             properties=item.properties,

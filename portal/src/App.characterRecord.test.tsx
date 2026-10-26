@@ -267,6 +267,7 @@ const RESTRICTED_INVENTORY = [
         quantity: 2,
         is_equipped: true,
         is_destroyed: false,
+        is_attuned: true,
         ownership: "holder",
         identification_level: "unidentified",
         properties: null,
@@ -289,6 +290,7 @@ describe("Character record: inventory-only reader", () => {
         expect(await screen.findByText(/Longsword/)).toBeVisible()
         expect(screen.getByText(/×2/)).toBeVisible()
         expect(screen.getByText(/equipped/)).toBeVisible()
+        expect(screen.getByText(/attuned/)).toBeVisible()
         // A row without condition does not render "undefined% condition".
         expect(screen.queryByText(/condition/)).not.toBeInTheDocument()
         expect(screen.queryByRole("navigation", { name: "Manage character" })).not.toBeInTheDocument()
@@ -315,6 +317,56 @@ describe("Character record: inventory-only reader", () => {
         openApp(WORLD, ["campaign.view"], NO_PERSPECTIVE)
         await ready()
         expect(rowNames()).toEqual(["Details", "Relationships", "Inventory"])
+    })
+})
+
+// CP-6 follow-up: a player whose only access is a direct `character.view_inventory` grant is refused
+// the character read itself, so the direct Inventory address must work from the inventory endpoint
+// alone: it never reads the character, sheet, relationships or parties, and fails safely when the
+// inventory read is refused (a revoked grant or an explicit deny answers the same 404).
+describe("Direct inventory address", () => {
+    const INVENTORY_URL = "/app/mundivita/characters/pc-1/inventory"
+    const refuseCharacterRead = () => {
+        server.on("GET", "/campaigns/mundivita/characters/pc-1", NOT_FOUND)
+        server.on("GET", "/campaigns/mundivita/characters/pc-1/sheet", NOT_FOUND)
+        server.on("GET", "/campaigns/mundivita/characters/pc-1/relationships", NOT_FOUND)
+    }
+    const onlyInventoryRead = () => {
+        expect(calls("")).toHaveLength(0)
+        expect(calls("/sheet")).toHaveLength(0)
+        expect(calls("/relationships")).toHaveLength(0)
+        expect(calls("/parties")).toHaveLength(0)
+        expect(server.calls.some((c) => c.method !== "GET")).toBe(false)
+    }
+
+    it("shows the restricted inventory while the character read is refused, without reading the character", async () => {
+        refuseCharacterRead()
+        server.on("GET", "/campaigns/mundivita/characters/pc-1/inventory", { body: RESTRICTED_INVENTORY })
+        openApp(INVENTORY_URL, ["campaign.view"], NO_PERSPECTIVE)
+        expect(await screen.findByText(/Longsword/)).toBeVisible()
+        expect(screen.getByText(/attuned/)).toBeVisible()
+        expect(screen.getAllByRole("heading", { name: "Inventory" })).toHaveLength(1)
+        expect(screen.queryByRole("navigation", { name: "Character sections" })).not.toBeInTheDocument()
+        onlyInventoryRead()
+        expect(calls("/inventory")).toHaveLength(1)
+    })
+
+    it("fails safely when the inventory read is refused after a revoke or an explicit deny", async () => {
+        refuseCharacterRead()
+        server.on("GET", "/campaigns/mundivita/characters/pc-1/inventory", NOT_FOUND)
+        openApp(INVENTORY_URL, ["campaign.view"], NO_PERSPECTIVE)
+        expect(await screen.findByRole("alert")).toHaveTextContent(/not available|no longer access/)
+        expect(screen.queryByText(/Longsword/)).not.toBeInTheDocument()
+        onlyInventoryRead()
+    })
+
+    it("says so, with a retry that only reads, when the inventory read fails", async () => {
+        refuseCharacterRead()
+        server.on("GET", "/campaigns/mundivita/characters/pc-1/inventory", { status: 500, body: {} })
+        openApp(INVENTORY_URL, ["campaign.view"], NO_PERSPECTIVE)
+        fireEvent.click(await screen.findByRole("button", { name: /try again/i }))
+        await waitFor(() => expect(calls("/inventory").length).toBeGreaterThan(1))
+        onlyInventoryRead()
     })
 })
 
