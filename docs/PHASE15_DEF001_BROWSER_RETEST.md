@@ -144,13 +144,35 @@ Everything above this section is the record for `38d2865` and is kept under that
 
 ### 9.2 Results by script
 
-| Script | Covers | Result |
-|---|---|---|
-| `run1`: `ga` `gb` `gc2` `gc3` `gd` `ge` `ge2` `gf` `gf2` `gg` `gh` `gi` `gj` `gk` `gl` `gn` `go` (+ `gg2` rerun) | ops 1–26 first variants; RC-03…RC-09; C1/D1/D2 | all pass except the script faults in §9.5. `ga` 15/15 including the DEF-005 reproduction, `gb` 14/14 (counting fixed per write), `gc2` 6/6, `gc3` 8/8, `gd` 10/10, `ge2` 12 (+2 faults), `gf2` 2/2, `gg` 5/5, `gg2` 3/3, `gh` 8/8, `gi` 4/4, `gj` 4/4, `gk` 3/3, `gl` 12 (+1 stale record), `gn` 13/13, `go` 7/7 |
-| `gp` | DEF-005 two-write sequences | **21/21** |
-| `gq` | DEF-006 | **29/29** (the 2 recorded fails are a superseded `gp` script error carried into its file) |
-| `gr` | party restore, NPC condition, event correct, clock correct | **8/8** |
-| `gs` | ownership transfer, end role, allow/revoke hosting | **13/13** |
+**Raw recorded totals** are what each result file contains (`retest2_20261027\<script>.json`, as written; nothing was edited or excluded). The last column says where each recorded failure came from. A script that throws before its own `save` writes nothing, and its records are carried into the next file saved by the same process, so a file can hold records of a different script. Failures of executions whose file was never written exist only in `logs\run*.log` (§9.5).
+
+| File | Recorded pass / fail | Covers | Recorded failures |
+|---|---|---|---|
+| `ga.json` | 15 / 0 | ops 1, 2; the DEF-005 reproduction | none |
+| `gb.json` | 14 / 0 | op 11 (counting fixed per write) | none |
+| `gc2.json` | 6 / 0 | ops 7–9 | none |
+| `gc3.json` | 8 / 0 | ops 3–6 | none |
+| `gd.json` | 10 / 0 | ops 10, 16, 25, 26 | none |
+| `ge2.json` | 12 / 2 | ops 13, 17, 18; carries `ge` | both from the `ge` execution in `run1` (op 13 script fault, then `SCRIPT ERROR ge`); `ge2` itself recorded no failure |
+| `gf.json` | 5 / 1 | op 19; the first op 20 attempt | the old op 20 check (script fault), superseded by `gf2` |
+| `gf2.json` | 2 / 0 | op 20 hit points | none |
+| `gg.json` | 5 / 0 | op 21 add area | none |
+| `gg2.json` | 3 / 0 | op 21 Area now (rerun, `run2`) | none |
+| `gh.json` | 8 / 1 | op 22, Reviewer | the `SCRIPT ERROR gg2` of the first `gg2` execution in `run1`; `gh` itself recorded no failure |
+| `gi.json` / `gj.json` / `gk.json` | 4 / 0, 4 / 0, 3 / 0 | ops 24, 23; RC-03 | none |
+| `gl.json` | 12 / 1 | RC-04 … RC-07 | one unconditional record at the end of the script of the `38d2865` DEF-006 finding (a historical record, not a measurement of `88ee96a`); DEF-006 on `88ee96a` is measured in `gq` |
+| `gn.json` / `go.json` | 13 / 0, 7 / 0 | C1/D1/D2; RC-08, RC-09, permission loss | none |
+| `gp.json` | **21 / 0** | DEF-005 two-write sequences | none. Written by the **`run5`** execution (see below) |
+| `gq.json` | **31 records: 29 pass / 2 fail** | DEF-006 | **both failures are `gp` records from the `run4` execution** (see below). `gq` itself recorded **19 checks, all passed** (records 13–31 of the file) |
+| `gr.json` | 8 / 0 | party restore, NPC condition, event correct, clock correct | none. Written by `run14` |
+| `gs.json` | 13 / 0 | ownership transfer, end role, allow/revoke hosting | none. Written by `run8` |
+
+**`gp` and `gq`, reconciled.** `run4` executed `gp` and then `gq` in one process (`logs\run4.log`: 29 PASS, 2 FAIL).
+- `gp` in `run4` recorded 10 passes, then failed `DEF-005 organization: SECOND write (add member) on the same mounted roster reports its own failed read, not announced early` (a Playwright wait, 8 s timeout) and threw `SCRIPT ERROR gp` (a click timeout). It never reached its own `save`, so these 12 records (10 pass, 2 fail) were written into `gq.json` by `gq`'s save, followed by `gq`'s 19 own records. That is why `gq.json` is 31 records, 29 pass and 2 fail, and why the 29 is **not** "gq passed 29/29": 10 of the 29 passes are `gp` records and 19 are `gq`.
+- **Cause of the failed organization assertion:** the failure screenshot (`shots\FAIL_DEF_005_organization_SECOND_write_add_member_on_the_same_mounted_roste.png`, taken in `run4`) shows the add-member form with the message "That member already belongs to this organization during that time" and Tobin Reed already on the roster. The preceding `run3` execution of the same script had added Tobin Reed to that organization's roster on the same disposable database; `run4` selected the same character again, so the write was refused (it was not a confirmed write with a failed read). This is a script/fixture-state cause, shown by the screenshot rather than inferred.
+- **What resolves it:** the script was changed to select a different character (Sella), and `gp` was run alone as `run5` (`logs\run5.log`: 21 PASS, 0 FAIL), which wrote `gp.json` (21 records, 21 pass, 0 fail). That `gp.json` includes the organization scenario (status, then the second write, add member, on the same mounted roster: records 9–12 of the file). `run3` had also passed 21/21 with the original character on a roster that did not yet contain him; its `gp.json` was overwritten by `run5`'s. The 21/21 in `gp.json` is therefore attributed to `run5`, not to `run4`.
+- **`SCRIPT ERROR gp` in `gq.json`** is the click timeout thrown by that same `run4` execution after the organization step; it has the same origin and the same resolution. A second, earlier `gp` failure exists only in `logs\run2.log`: an organization **status** step that chose a status the organization already had ("already has that status", shown in `shots\FAIL_DEF_005_organization_status_confirmed_roster_read_fails_notice_held_no.png`); it threw before any save, so it is in no JSON. Selecting the status from the page's own "Now:" text fixed it (`run3` onward).
+- **Not resolved by evidence:** nothing in these records shows the second organization write failing as a product behaviour. The records do not prove why `run3`'s clean pass and `run4`'s failure differ beyond the roster state shown in the screenshot; no rerun was made to test that statement further.
 
 ### 9.3 DEF-005 and DEF-006 in a real browser
 
@@ -165,7 +187,7 @@ Everything above this section is the record for `38d2865` and is kept under that
 - a second submit of the form while the first is pending (held at the server): the POST was started once, then confirmed once;
 - ownership transfer, end role, allow hosting then revoke hosting on one mounted Sharing page (`gs`).
 
-**DEF-006** (`gq`; `logs\run4.log`, shots `def006_*.png`). On fresh claims:
+**DEF-006** (`gq`: its own 19 checks, `logs\run4.log`, shots `def006_*.png`). On fresh claims:
 
 - authoring read **500**: notice "Claim saved. The latest claim could not be loaded", the editor stays, the generic status is announced, "Knowledge claim saved" is not; an edit on the retained editor keeps **Save held**; **Load latest** failing again changes nothing; following the Knowledge link shows the unsaved-changes dialog and **Keep editing** preserves the draft; once authoring and detail work the notice goes, the draft is kept, Save is enabled, no second POST, and the next save carries `expected_row_version` 1 → 2, a new key, and is announced;
 - authoring read **403** and **404**, both immediately after the save and after a retained edit: the editor, the form controls and the draft text are gone, a status says the editor is no longer available, and leaving is no longer guarded;
@@ -175,9 +197,23 @@ Everything above this section is the record for `38d2865` and is kept under that
 
 The supported system-role assignment (`POST /admin/accounts/{id}/system-roles`, the call behind the Platform accounts role checkboxes) gave the existing account `player_b` the Game Master system role **on the disposable copy only**. Transfer with "Keep me on the world as" Editor and the access read failing: notice, controls held, not announced early; the read-only retry is then answered with an **authoritative denial** (an Editor cannot read Sharing), which removes the content and announces "Ownership transferred" exactly once, one POST. Transfer keeping no role: the real read is refused, content removed, announced, focus on the heading, one POST (no fault injection). End role, allow hosting and revoke hosting each show their own notice and recover by a read, with one POST each.
 
-### 9.5 Script faults and stale records (not product failures; nothing weakened)
+### 9.5 Failures recorded in earlier executions, and how each was resolved
 
-`ge` op 13 and `gf` op 20 are the earlier-script faults already recorded in §5, superseded by `ge2`/`gf2`; `gg2` first used a "(1)" suffix that only exists when a hazard name is duplicated (fixed, rerun passes); `gp` first used a member who was already on the roster on a rerun (changed to a different character, rerun 21/21); `gs` first matched the header's "Administrator" text instead of the page; `gl` still contains one hard-coded record of the `38d2865` DEF-006 finding (kept as history; superseded by `gq`); several faults in the new scripts were corrected before the recorded runs (organization status option, reason fields, dialog button order). No product failure occurred.
+Every failure below was recorded by an execution of the scripts on this run's disposable database; none was removed from a log or a result file. Each is a script, fixture-state or selector problem **as shown by the cited evidence**, was resolved by changing the script (never by relaxing what it asserts) and rerunning, and was superseded by clean evidence.
+
+| Execution | Recorded | Origin and evidence | Superseded by |
+|---|---|---|---|
+| `run1` `ge` | `op13 session end` fail, then `SCRIPT ERROR ge` (in `ge2.json`) | the same script fault as in §5 (the session end needs the clock advanced first, which `ge2` does); this run's screenshot was not re-inspected, the attribution rests on `ge2` passing op 13 with that change | `ge2` in `run1`: op 13 passes |
+| `run1` `gf` | `op20 NPC hit points` recovery fail (in `gf.json`) | the same script fault as in §5 (the banner's Try again was clicked instead of the panel's); not re-inspected for this run, the attribution rests on `gf2` passing with the panel's button | `gf2` 2/2 |
+| `run1` `gg2` | `SCRIPT ERROR gg2` (in `gh.json`) | selector "Spike trap (1)" exists only when a hazard name is duplicated | `gg2` rerun in `run2`: 3/3 (`gg2.json`) |
+| `run2` `gp` | organization status fail, `SCRIPT ERROR gp` (log only) | the status chosen was the current one (screenshot) | `run3` 21/21, `run5` 21/21 |
+| `run4` `gp` (in `gq.json`) | organization add-member fail, `SCRIPT ERROR gp` | character already on the roster from `run3` (screenshot) | `run5` 21/21 (`gp.json`) |
+| `run6`, `run7` `gs` | fails and `SCRIPT ERROR gs` (logs only) | wrong write path in the fault rule (`/transfer` instead of `/ownership-transfer`); an assertion that matched the header's "Administrator" text; assuming the Editor's retry shows a role table when an Editor cannot read Sharing (an authoritative denial); a role already assigned by the earlier execution; the wrong dialog button | `run8` 13/13 (`gs.json`) |
+| `run9` … `run13` `gr` | fails and `SCRIPT ERROR gr` (logs only) | the restore dialog requires a reason; NPC **resource** is refused because this NPC tracks no resource (a fixture limit: TC-38 block); NPC **move** selected nothing in the script; the clock Correct form and its confirmation dialog | `run14` 8/8 (`gr.json`); resource and move **remain unexercised** |
+| `run15` `gt` | `SCRIPT ERROR gt` (log only) | the archive action was not reachable as a button on the Publication tab | not superseded: World-record archive/restore steps **remain unexercised** |
+| `gl.json` | one unconditional historical record of the `38d2865` DEF-006 finding | written by the script's last line regardless of outcome | measured separately in `gq` |
+
+**Accounting statement.** The earlier executions listed above recorded failures. The subsequent clean executions (`gp` 21/21, `gq`'s 19 checks, `gr` 8/8, `gs` 13/13, and the passing reruns of the other scripts) are the evidence that supports the DEF-005 and DEF-006 fixes, and the Codex review of the fixes found no code defect. Whether any recorded failure was a product defect is decided here only by the cited screenshots and logs; where they are silent (the exact reason `run3` and `run4` differ beyond the roster state in the screenshot), this document does not claim more.
 
 ### 9.6 RC-03 … RC-10 reassessed, and what is still not browser-verified
 
