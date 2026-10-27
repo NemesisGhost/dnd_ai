@@ -73,7 +73,7 @@ describe("a static destination the account lacks the capability for", () => {
         // One focus move on arrival is the announcement; there is no second live region.
         await waitFor(() => expect(heading).toHaveFocus())
         expect(screen.queryByRole("alert")).toBeNull()
-        expect(document.title).toBe("Access denied · portal")
+        await waitFor(() => expect(document.title).toBe("Access denied · portal"))
         expect(screen.queryByRole("main")).toBeNull()
         expect(screen.queryByRole("textbox")).toBeNull()
         expect(screen.getByRole("link", { name: "Go to Worlds" })).toHaveAttribute("href", "/worlds")
@@ -89,10 +89,10 @@ describe("a static destination the account lacks the capability for", () => {
             bootstrap: bootstrapWith({ global_capabilities: [] }),
         })
         await screen.findByRole("heading", { name: "Access denied" })
-        expect(document.title).toBe("Access denied · portal")
+        await waitFor(() => expect(document.title).toBe("Access denied · portal"))
         fireEvent.click(screen.getByRole("link", { name: "Go to Worlds" }))
         await screen.findByText("Worlds list")
-        expect(document.title).toBe("Elsewhere")
+        await waitFor(() => expect(document.title).toBe("Elsewhere"))
         view.unmount()
     })
 })
@@ -120,7 +120,7 @@ describe("/worlds/:worldId/edit", () => {
         expect(screen.getByRole("alert")).toHaveTextContent("Your role on this world does not include being able to edit it")
         expect(screen.queryByRole("textbox")).toBeNull()
         expect(screen.getByRole("link", { name: "Back to Eberron" })).toHaveAttribute("href", "/worlds/w1")
-        expect(document.title).toBe("Action unavailable · portal")
+        await waitFor(() => expect(document.title).toBe("Action unavailable · portal"))
         expect(nonGet(server)).toEqual([])
     })
 

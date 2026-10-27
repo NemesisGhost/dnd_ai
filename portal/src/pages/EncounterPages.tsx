@@ -24,7 +24,7 @@ import { ReferenceCombobox } from "../components/authoring/ReferenceCombobox"
 import type { ReferenceOption } from "../components/authoring/ReferenceCombobox"
 import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
-import { useAuthoringResource } from "../hooks/useAuthoringResource"
+import { retryFailedReads, useAuthoringResource } from "../hooks/useAuthoringResource"
 import type { RefetchOutcome } from "../hooks/useAuthoringResource"
 import { useAnnounceWhenRead, useConfirmedRefresh } from "../hooks/useConfirmedRefresh"
 import { useKept } from "../hooks/useKeptResource"
@@ -220,7 +220,7 @@ export function PreparedEncounterPage() {
                 <ReadTerminal
                     states={[resource.state, options.state]}
                     what="encounter"
-                    onRetry={() => Promise.all([resource.refetch(), options.refetch()])}
+                    onRetry={() => retryFailedReads(resource, options)}
                     back={{ to: `${base(campaignId)}/sessions/${encodeURIComponent(sessionId)}/run`, label: "Back to the session" }}
                 />
             ) : (

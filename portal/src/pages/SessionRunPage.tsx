@@ -52,6 +52,7 @@ import type {
     SessionParticipant,
 } from "../types/campaignSession"
 import { ReadTerminal } from "../components/authoring/ReadState"
+import { useRetryFocus } from "../hooks/useRetryFocus"
 import "../components/authoring/authoring.css"
 
 const base = (campaignId: string): string => `/app/${encodeURIComponent(campaignId)}`
@@ -113,12 +114,7 @@ export function SessionRunPage() {
             ) : (
                 <>
                     {refreshFailed ? (
-                        <p role="alert">
-                            The latest session data could not be loaded, so what you see may be out of date.{" "}
-                            <button type="button" className="authoring-button" onClick={() => void detail.refetch()}>
-                                Try again
-                            </button>
-                        </p>
+                        <SessionStaleNotice onRetry={() => void detail.refetch()} />
                     ) : null}
                     <RunBody
                         // Drafts belong to one session: another session starts with empty forms.
@@ -143,6 +139,28 @@ function whyNotPlayable(session: CampaignSessionDetail, doing: string): string {
     return (session.play_status ?? "unscheduled") === "completed"
         ? `This session has ended, so you can no longer ${doing}.`
         : `Start the session to ${doing}.`
+}
+
+// The session data kept through a failed re-read; its retry hands focus back like the other read notices.
+function SessionStaleNotice({ onRetry }: { onRetry: () => void }) {
+    const { ref: retryRef, used: retryUsed, left: retryLeft } = useRetryFocus<HTMLButtonElement>()
+    return (
+        <p role="alert">
+            The latest session data could not be loaded, so what you see may be out of date.{" "}
+            <button
+                type="button"
+                className="authoring-button"
+                ref={retryRef}
+                onBlur={retryLeft}
+                onClick={() => {
+                    retryUsed()
+                    onRetry()
+                }}
+            >
+                Try again
+            </button>
+        </p>
+    )
 }
 
 function RunBody({

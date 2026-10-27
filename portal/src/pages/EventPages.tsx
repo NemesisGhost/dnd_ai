@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react"
+import type { ReactNode } from "react"
 import { Link, useNavigate, useParams } from "react-router"
 import {
     correctEvent,
@@ -24,7 +25,7 @@ import { StaleReadNotice } from "../components/StaleReadNotice"
 import { combineRefetchOutcomes } from "../utils/refreshOutcome"
 import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
-import { useAuthoringResource } from "../hooks/useAuthoringResource"
+import { retryFailedReads, useAuthoringResource } from "../hooks/useAuthoringResource"
 import type { RefetchOutcome } from "../hooks/useAuthoringResource"
 import { useAnnounceWhenRead, useConfirmedRefresh } from "../hooks/useConfirmedRefresh"
 import { useKept } from "../hooks/useKeptResource"
@@ -280,9 +281,11 @@ export function EventDetailPage() {
                 <p role="status">Loading event…</p>
             ) : data === null ? (
                 <ReadTerminal
-                    states={[event.state]}
+                    // Both reads back the page: the least revealing closed answer wins, and a retry
+                    // reads again whichever of them failed.
+                    states={[event.state, preview.state]}
                     what="event"
-                    onRetry={event.refetch}
+                    onRetry={() => retryFailedReads(event, preview)}
                     back={{ to: base(campaignId), label: "Back to the campaign" }}
                 />
             ) : (
@@ -292,6 +295,21 @@ export function EventDetailPage() {
                         campaignId={campaignId}
                         event={data}
                         plan={plan}
+                        planProblem={
+                            plan !== null ? null : preview.state.kind === "loading" ? (
+                                <p role="status">Loading what correcting it would change…</p>
+                            ) : (
+                                // The event is readable without the check that backs its correction
+                                // controls, so it stays; the missing check is said to be missing and,
+                                // when it can be, retried, rather than the controls just vanishing.
+                                <ReadTerminal
+                                    states={[preview.state]}
+                                    what="correction options for this event"
+                                    onRetry={preview.refetch}
+                                    pageTitle={false}
+                                />
+                            )
+                        }
                         refetch={refetchBoth}
                         pageStale={stale}
                         onUnread={announceWhenRead}
@@ -306,6 +324,7 @@ function EventBody({
     campaignId,
     event,
     plan,
+    planProblem,
     refetch,
     pageStale,
     onUnread,
@@ -313,6 +332,8 @@ function EventBody({
     campaignId: string
     event: EventAuthoringView
     plan: CorrectionPreview | null
+    // What stands in for the correction controls while the check behind them is not read.
+    planProblem: ReactNode
     refetch: () => Promise<RefetchOutcome>
     pageStale: boolean
     onUnread: (message: string) => void
@@ -388,16 +409,20 @@ function EventBody({
                 </section>
             ) : plan !== null && plan.is_correction ? (
                 <p className="authoring-note">This event is a correction and cannot itself be corrected.</p>
-            ) : event.status === "recorded" && plan !== null ? (
-                <Corrections
-                    campaignId={campaignId}
-                    event={event}
-                    canCorrect={plan.can_correct}
-                    blockedReasons={blocked.map((e) => e.reason)}
-                    refetch={refetch}
-                    pageStale={pageStale}
-                    onUnread={onUnread}
-                />
+            ) : event.status === "recorded" ? (
+                plan === null ? (
+                    planProblem
+                ) : (
+                    <Corrections
+                        campaignId={campaignId}
+                        event={event}
+                        canCorrect={plan.can_correct}
+                        blockedReasons={blocked.map((e) => e.reason)}
+                        refetch={refetch}
+                        pageStale={pageStale}
+                        onUnread={onUnread}
+                    />
+                )
             ) : null}
         </>
     )

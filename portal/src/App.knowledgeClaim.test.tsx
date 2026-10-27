@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react"
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { installCampaignShellMocks, openApp } from "./test/campaignRoutes"
 import type { MockServer } from "./test/authoringHarness"
@@ -872,9 +872,14 @@ describe("unified knowledge claim page", () => {
       withLifecycle(lifecycle())
       const { router } = setup(at("claim"))
       await claimBox()
+      // The page's own reads have settled before the count is taken, and following the link is a
+      // router transition that is awaited rather than assumed to have happened synchronously.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      })
       const before = server.calls.length
       fireEvent.click(screen.getByRole("link", { name: /Submit for review/ }))
-      expect(router.state.location.search).toBe("?section=review")
+      await waitFor(() => expect(router.state.location.search).toBe("?section=review"))
       expect(server.calls.length).toBe(before)
     })
 

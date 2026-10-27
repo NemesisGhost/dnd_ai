@@ -3,6 +3,7 @@ import { useState } from "react"
 import { Link } from "react-router"
 import { describeBlockedReason } from "../../utils/blockedReason"
 import { useDocumentTitle } from "../../hooks/useDocumentTitle"
+import { useRetryFocus } from "../../hooks/useRetryFocus"
 import type { Recovery } from "../terminalRecovery"
 import "./authoring.css"
 
@@ -19,11 +20,13 @@ export function ReadFailedNotice({
     retrying?: boolean
 }) {
     const [reading, setReading] = useState(false)
+    const { ref: retryRef, used: retryUsed, left: retryLeft } = useRetryFocus<HTMLButtonElement>()
     const busy = retrying || reading
     const retry = () => {
         if (busy) {
             return
         }
+        retryUsed()
         const started = onRetry()
         if (started instanceof Promise) {
             setReading(true)
@@ -38,7 +41,9 @@ export function ReadFailedNotice({
                 <button
                     type="button"
                     className="authoring-button"
+                    ref={retryRef}
                     onClick={retry}
+                    onBlur={retryLeft}
                     // aria-disabled, not disabled: a disabled button that has focus drops it to the page.
                     aria-disabled={busy ? true : undefined}
                     aria-busy={busy}

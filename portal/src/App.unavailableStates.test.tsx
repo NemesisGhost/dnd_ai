@@ -106,6 +106,10 @@ afterEach(() => {
 // The page's own output: its heading, the notice and the links around it (not the shell's generated ids).
 const page = () => screen.getByRole("alert").parentElement!.textContent
 
+// A title is set by a passive effect, which runs after the commit that a text query resolves on, so
+// an assertion on it waits for the effect rather than racing it.
+const titleIs = (title: string) => waitFor(() => expect(document.title).toBe(title))
+
 const nonGet = () => server.calls.filter((call) => call.method !== "GET")
 
 describe.each(cases)("$name: first-read states", (c) => {
@@ -116,7 +120,7 @@ describe.each(cases)("$name: first-read states", (c) => {
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument()
     expect(screen.getByRole("heading", { level: 1, name: c.heading })).toBeInTheDocument()
     expect(screen.getAllByRole("main")).toHaveLength(1)
-    expect(document.title).toBe("Could not load · portal")
+    await titleIs("Could not load · portal")
     expect(nonGet()).toEqual([])
   })
 
@@ -135,19 +139,21 @@ describe.each(cases)("$name: first-read states", (c) => {
     openApp(c.entry, c.capabilities)
     expect(await screen.findByText(`You do not have access to the ${c.what}.`)).toBeInTheDocument()
     expect(screen.queryByRole("button", { name: "Try again" })).toBeNull()
-    expect(document.title).toBe("Access denied · portal")
+    await titleIs("Access denied · portal")
   })
 
   it("shows a missing and a hidden record identically", async () => {
     c.wire(server, NOT_FOUND)
     const first = openApp(c.entry, c.capabilities)
     expect(await screen.findByText(`The ${c.what} is not available, or you can no longer access it.`)).toBeInTheDocument()
+    await titleIs("Not available · portal")
     const missing = `${document.title}|${page()}`
     first.unmount()
 
     c.wire(server, HIDDEN)
     openApp(c.entry, c.capabilities)
     expect(await screen.findByText(`The ${c.what} is not available, or you can no longer access it.`)).toBeInTheDocument()
+    await titleIs("Not available · portal")
     expect(`${document.title}|${page()}`).toBe(missing)
     expect(screen.queryByText(/different message/)).toBeNull()
   })
@@ -156,11 +162,11 @@ describe.each(cases)("$name: first-read states", (c) => {
     c.wire(server, NOT_FOUND)
     const { router } = openApp(c.entry, c.capabilities)
     await screen.findByText(`The ${c.what} is not available, or you can no longer access it.`)
-    expect(document.title).toBe("Not available · portal")
+    await titleIs("Not available · portal")
     server.on("GET", /^\/campaigns\/mundivita\/(summary|home)/, { body: {} })
     await act(async () => {
       await router.navigate("/app/mundivita/parties/new")
     })
-    expect(document.title).not.toBe("Not available · portal")
+    await waitFor(() => expect(document.title).not.toBe("Not available · portal"))
   })
 })

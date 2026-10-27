@@ -54,6 +54,14 @@ async function load<T>(path: string, signal: AbortSignal): Promise<Outcome<T>> {
 
 const LOADING = { kind: "loading" } as const
 
+// Retries the reads of a page that failed recoverably, and only those: a read that answered (even
+// with a refusal) is left as it is, so a good answer is never replaced by a second attempt.
+export function retryFailedReads(
+    ...reads: readonly { state: { kind: string }; refetch: () => Promise<RefetchOutcome> }[]
+): Promise<unknown> {
+    return Promise.all(reads.filter((read) => read.state.kind === "error").map((read) => read.refetch()))
+}
+
 // A GET loader for authoring read models. State is keyed by the request path,
 // so a record loaded for one URL is never shown under another while the next
 // one loads. A 404 is "unavailable" (not found or not accessible — the server

@@ -13,7 +13,7 @@ import { SelectField, TextAreaField, TextField } from "../components/authoring/f
 import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import type { RefreshOutcome } from "../hooks/useAuthoringMutation"
-import { useAuthoringResource } from "../hooks/useAuthoringResource"
+import { retryFailedReads, useAuthoringResource } from "../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { useHeldWorldCapability, WORLD_CANON_EDIT, WORLD_CANON_READ_PRIVATE } from "../hooks/useWorldCapability"
 import { useDefinitionsBackPath } from "../hooks/useItemsBackPath"
@@ -93,9 +93,9 @@ export function ItemDefinitionsPage() {
                 <p role="status">Loading…</p>
             ) : list.state.kind !== "ready" ? (
                 <ReadTerminal
-                    states={[list.state]}
+                    states={[list.state, options.state]}
                     what="list of item definitions"
-                    onRetry={list.refetch}
+                    onRetry={() => retryFailedReads(list, options)}
                     back={{ to: `/app/${encodeURIComponent(campaignId)}/home`, label: "Back to the campaign" }}
                 />
             ) : (
@@ -118,14 +118,27 @@ export function ItemDefinitionsPage() {
                         <p className="authoring-note">{EDIT_AUTHORITY_NEEDED}</p>
                     )}
                     <form noValidate aria-label="Filter item definitions" className="authoring-form">
-                        <SelectField
-                            id="item-filter-category"
-                            label="Category"
-                            value={category}
-                            placeholder="All categories"
-                            options={options.state.kind === "ready" ? options.state.data.categories : []}
-                            onChange={(value) => setFilter("category", value)}
-                        />
+                        {options.state.kind === "ready" ? (
+                            <SelectField
+                                id="item-filter-category"
+                                label="Category"
+                                value={category}
+                                placeholder="All categories"
+                                options={options.state.data.categories}
+                                onChange={(value) => setFilter("category", value)}
+                            />
+                        ) : options.state.kind === "loading" ? (
+                            <p role="status">Loading categories…</p>
+                        ) : (
+                            // The list is usable without the categories, but a missing catalog is
+                            // said to be missing, never shown as an empty choice.
+                            <ReadTerminal
+                                states={[options.state]}
+                                what="category filter"
+                                onRetry={options.refetch}
+                                pageTitle={false}
+                            />
+                        )}
                         <label>
                             <input
                                 type="checkbox"
@@ -218,7 +231,7 @@ export function ItemDefinitionFormPage() {
                 <ReadTerminal
                     states={definitionId === undefined ? [options.state] : [existing.state, options.state]}
                     what={definitionId === undefined ? "form" : "item definition"}
-                    onRetry={() => Promise.all([options.refetch(), existing.refetch()])}
+                    onRetry={() => retryFailedReads(options, existing)}
                     back={{ to: listPath, label: "Back to item definitions" }}
                 />
             ) : definitionId !== undefined && existing.state.kind === "ready" && !existing.state.data.can_edit ? (

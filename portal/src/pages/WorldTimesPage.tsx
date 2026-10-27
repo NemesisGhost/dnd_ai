@@ -4,7 +4,7 @@ import { campaignCalendarsPath, fetchWorldTimes, worldTimesPath } from "../api/w
 import { WorldTimeForm } from "../components/authoring/WorldTimeForm"
 import { useAnnounce } from "../components/authoring/announcer"
 import { StaleReadNotice } from "../components/StaleReadNotice"
-import { useAuthoringResource } from "../hooks/useAuthoringResource"
+import { retryFailedReads, useAuthoringResource } from "../hooks/useAuthoringResource"
 import type { RefetchOutcome } from "../hooks/useAuthoringResource"
 import { useConfirmedRefresh, useUnreadWrite } from "../hooks/useConfirmedRefresh"
 import { useKept } from "../hooks/useKeptResource"
@@ -51,7 +51,7 @@ export function WorldTimesPage() {
                 <ReadTerminal
                     states={[times.state, calendars.state]}
                     what="world times"
-                    onRetry={() => Promise.all([times.refetch(), calendars.refetch()])}
+                    onRetry={() => retryFailedReads(times, calendars)}
                     back={{ to: `/app/${encodeURIComponent(id)}/home`, label: "Back to the campaign home" }}
                 />
             ) : (
