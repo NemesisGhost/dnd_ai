@@ -638,6 +638,108 @@ describe("unified knowledge claim page", () => {
       expect(server.callsTo("POST", UPDATE)).toHaveLength(1)
     })
 
+    describe("a confirmed save whose authoring read-back fails (DEF-006)", () => {
+      const FAIL = { status: 500, body: { error: { code: "internal_error", message: "m", correlation_id: "c" } } }
+      const DENIED = { status: 403, body: { error: { code: "forbidden", message: "m", correlation_id: "c" } } }
+
+      function saveWith(authoringAnswer: object) {
+        setup()
+        server.on("POST", UPDATE, () => {
+          current = { detail: detail({ truth_status_code: "false" }), view: view({ truth_status: "false", row_version: 2 }) }
+          // The audience-safe detail read-back works; the claim's own authoring read does not.
+          server.on("GET", VIEW_PATH, authoringAnswer)
+          return { body: RECEIPT }
+        })
+      }
+      const changeTruth = async () => {
+        await claimBox()
+        fireEvent.change(screen.getByRole("combobox", { name: /Truth/ }), { target: { value: "false" } })
+        fireEvent.click(screen.getByRole("button", { name: "Save claim" }))
+      }
+
+      it("says the save went through, keeps the editor, holds Save, and recovers by reading only", async () => {
+        saveWith(FAIL)
+        await changeTruth()
+        expect(await screen.findByText(/Claim saved\. The latest claim could not be loaded/)).toBeInTheDocument()
+        // Assistive technology hears the generic status once; nothing says the claim is done.
+        const live = screen.getByTestId("authoring-announcer")
+        expect(live).toHaveTextContent("Saved, but the latest data could not be loaded.")
+        expect(live).not.toHaveTextContent("Knowledge claim saved")
+        // The editor is still there (on the last read that worked), not replaced by a read-only view.
+        expect(screen.getByRole("form", { name: "Knowledge claim" })).toBeInTheDocument()
+        // Another edit cannot be saved from a record that may be behind.
+        fireEvent.change(await claimBox(), { target: { value: "Edited again" } })
+        expect(screen.getByRole("button", { name: "Save claim" })).toBeDisabled()
+        expect(server.callsTo("POST", UPDATE)).toHaveLength(1)
+
+        // Load latest while the authoring read still fails changes nothing: the unrelated detail read that
+        // works is not a recovery of the required authoring read.
+        fireEvent.click(screen.getByRole("button", { name: "Load latest" }))
+        await waitFor(() => expect(server.callsTo("GET", VIEW_PATH).length).toBeGreaterThan(2))
+        expect(await screen.findByText(/Claim saved\. The latest claim could not be loaded/)).toBeInTheDocument()
+        expect(screen.getByRole("button", { name: "Save claim" })).toBeDisabled()
+
+        // Once the authoring read works, recovery needs no second mutation and the unsent edit is kept.
+        server.on("GET", VIEW_PATH, () => ({ body: current.view }))
+        fireEvent.click(screen.getByRole("button", { name: "Load latest" }))
+        await waitFor(() => expect(screen.queryByText(/The latest claim could not be loaded/)).toBeNull())
+        expect(await claimBox()).toHaveValue("Edited again")
+        expect(screen.getByRole("combobox", { name: /Truth/ })).toHaveValue("false")
+        expect(screen.getByRole("button", { name: "Save claim" })).toBeEnabled()
+        expect(server.callsTo("POST", UPDATE)).toHaveLength(1)
+
+        // The next save carries the new row version.
+        fireEvent.click(screen.getByRole("button", { name: "Save claim" }))
+        await waitFor(() => expect(server.callsTo("POST", UPDATE)).toHaveLength(2))
+        expect(server.callsTo("POST", UPDATE)[1]!.body).toMatchObject({ expected_row_version: 2, statement: "Edited again" })
+      })
+
+      it("reports the two reads independently: detail failing alone is not cleared by the authoring read, and vice versa", async () => {
+        saveWith(FAIL)
+        server.on("POST", UPDATE, () => {
+          current = { detail: detail({ truth_status_code: "false" }), view: view({ truth_status: "false", row_version: 2 }) }
+          // Both reads fail after the save.
+          server.on("GET", VIEW_PATH, FAIL)
+          server.on("GET", DETAIL, FAIL)
+          return { body: RECEIPT }
+        })
+        await changeTruth()
+        expect(await screen.findByText(/Claim saved\. The latest claim could not be loaded/)).toBeInTheDocument()
+        // The authoring read comes back but the detail read does not: still behind.
+        server.on("GET", VIEW_PATH, () => ({ body: current.view }))
+        fireEvent.click(screen.getByRole("button", { name: "Load latest" }))
+        await waitFor(() => expect(server.callsTo("GET", VIEW_PATH).length).toBeGreaterThan(2))
+        expect(await screen.findByText(/Claim saved\. The latest claim could not be loaded/)).toBeInTheDocument()
+        // Both work: recovered.
+        server.on("GET", DETAIL, () => ({ body: current.detail }))
+        fireEvent.click(screen.getByRole("button", { name: "Load latest" }))
+        await waitFor(() => expect(screen.queryByText(/The latest claim could not be loaded/)).toBeNull())
+        expect(server.callsTo("POST", UPDATE)).toHaveLength(1)
+      })
+
+      it("removes the editor and everything it was sent when the authoring read-back says access is gone", async () => {
+        saveWith(DENIED)
+        await changeTruth()
+        expect(await screen.findByText(/The claim's editor is no longer available to you/)).toBeInTheDocument()
+        expect(screen.queryByRole("form", { name: "Knowledge claim" })).toBeNull()
+        expect(screen.queryByRole("textbox", { name: /^Claim/ })).toBeNull()
+        expect(screen.queryByRole("combobox", { name: /Truth/ })).toBeNull()
+        expect(screen.queryByRole("button", { name: "Save claim" })).toBeNull()
+        expect(screen.queryByRole("button", { name: "Load latest" })).toBeNull()
+        expect(server.callsTo("POST", UPDATE)).toHaveLength(1)
+      })
+
+      it("offers a read-only retry when the editor could not be loaded at all", async () => {
+        setup()
+        server.on("GET", VIEW_PATH, FAIL)
+        expect(await screen.findByText("The claim's editor could not be loaded.")).toBeInTheDocument()
+        server.on("GET", VIEW_PATH, () => ({ body: current.view }))
+        fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+        expect(await claimBox()).toBeInTheDocument()
+        expect(server.callsTo("POST", /./)).toHaveLength(0)
+      })
+    })
+
     it("asks before changing a published claim", async () => {
       setup()
       current = { detail: detail(), view: view({ canon_status: "canon" }) }

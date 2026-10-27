@@ -52,6 +52,36 @@ Started 2026-10-26 for code `9ab549ddbc78cb9b5c1aac9c99f3a967112edc62`. Acceptan
 
 Recorded in plan §11 and not re-opened: Windows CRLF frozen-seed test failures; intermittent portal timing tests (8 s `findBy` waits) in local full runs; legacy adapter revocation races (documented, separately guarded by automated route/concurrency tests). Informational unless a new run shows a change. Results of this run: see the environment document §6.
 
+### DEF-005 — A second confirmed write in the same mounted view loses its saved-but-behind notice (found by the DEF-001 browser retest)
+
+| Field | Value |
+|---|---|
+| Trigger / workflow | In one mounted view, a confirmed write whose read-back failed is recovered through the **page's own Try again** (not **Load latest**); a second confirmed write whose read-back fails follows without leaving the view. Reproduced: archive a world with the read failing, recover, then restore without reloading (`retest_20261027\ga.mjs`, "DEF-005 repro"; earlier-run screenshot `shots\FAIL_op1_world_restore_saved_but_behind_notice_held_no_done.png`). |
+| Persona | GM / Admin / Owner. |
+| Expected | The second write shows its own "saved, but the latest could not be loaded" notice, holds the control, announces when read. |
+| Actual | No notice; the held flag is lifted; the recovery announcement is lost. The write is **not** repeated and "done" is not announced early; the page-level stale state still disables the buttons. |
+| Cause (code reading, to be confirmed by the fix) | `useConfirmedRefresh` keeps its `recovered` flag set while the caller's synthetic status (the "unread" message state) stays non-null, so the hook never passes through idle for the second write. Callers that keep the unread write in component state **and** have a `pageStale` / automatic recovery path are affected: `TransitionControls`, the `EntityLifecyclePanel` provider, `OrganizationMembers`, `WorldTimesPage`. `WorldTimePicker` (no `pageStale`) and callers that use the mutation's real status are not. |
+| Practical impact | The user is not told the second save was confirmed but the view is behind; the view is still guarded. No data loss, no duplicate. |
+| Proposed rubric score | Exposure **1** + Impact **1** + Triggerability **1** + Detection **1** + Blast **0** = **4 — Medium** (proposed; the owner decides). |
+| Affected coverage | Operations 1, 2, 22 (provider), 24, 26 when two unread writes happen in one mounted view; RC-10. |
+| Disposition | **Owner chose to fix (not accept).** Fix implemented: `useConfirmedRefresh` now ends a write's episode by calling the caller's `reset()` once the page's read has recovered it, so the status returns to idle and the next confirmed write starts afresh (read-only; nothing is re-sent; Load latest, the page retry and the uncertain-retry path are otherwise unchanged). Regressions: `WorldOverviewPage.test.tsx` (full archive, page Try again, restore, page Try again: one POST each) and `useConfirmedRefresh.test.tsx`; both fail on `38d2865`. **Not closed:** needs Codex review, current-head CI, and the browser retest (`ga` DEF-005 repro; ops 1, 2, 22, 24, 26). |
+| Bounded fix handoff | In `portal/src/hooks/useConfirmedRefresh.tsx`, once `recovered` becomes true (after the announcement) call the caller's `reset()` from an effect so the status returns to idle and the episode state resets; the four callers pass their `reset`. Test (per caller): first write recovered through the page retry, then a second unread write on the same mounted component must show its notice, keep the control held and announce on recovery. Gate: portal `tsc`/`eslint`/focused `vitest`/`vite build`, current-head CI on PR #66, Codex review. Retest: `ga` "DEF-005 repro", RC-10 operations 1, 2, 22, 24, 26. No backend change. |
+
+### DEF-006 — Claim save whose authoring read fails replaces the editor silently (found by the DEF-001 browser retest)
+
+| Field | Value |
+|---|---|
+| Trigger / workflow | Save a claim (Knowledge → claim → Claim section → Save claim). The save succeeds; the claim's **authoring** read (`GET /campaigns/<c>/authoring/knowledge/<id>`) then fails. (The audience-safe detail read failing is handled correctly: notice, **Load latest**, no premature "Knowledge claim saved".) `retest_20261027\ex5.mjs auth`, `logs\ex5_auth.log`, `shots\ex5_auth.png`. |
+| Persona | GM / Admin with `canon.edit`. |
+| Expected | The same contract as the detail-read case: a saved-but-behind notice with a read-only retry, no premature "done". |
+| Actual | The page header shows the new text, but the claim form is replaced by the read-only "GM and canonical information" presentation with **no notice, no retry and no announcement** (`main` has no buttons). A reload restores the editor. The save is not repeated and "done" is not announced. |
+| Cause (code reading, to be confirmed) | The saved-but-behind state (`behind`) lives inside the editable form component, which unmounts when the authoring view read leaves the ready state; the page-level `lifecycleBehind` notice is set only by lifecycle steps. |
+| Practical impact | The author cannot tell the save succeeded or why the editor disappeared until they reload. No data loss, no duplicate. |
+| Proposed rubric score | Exposure **1** + Impact **1** + Triggerability **1** + Detection **1** + Blast **0** = **4 — Medium** (proposed). |
+| Affected coverage | RC-06 and the claim-save error-recovery assertions in the Knowledge tasks (see the coverage matrix). |
+| Disposition | **Owner chose to fix (not accept).** Fix implemented in `KnowledgeClaimPage.tsx`: the authoring view is kept through a recoverable failure (`useKeptData`), so the editor stays on its last good read with the "Claim saved. The latest claim could not be loaded" notice, the generic live-region status and a read-only **Load latest**; **Save claim is held** until a read works; a failed read is recovered only when the required reads (authoring and detail) both succeed, never by an unrelated read; a denied or missing authoring answer removes the editor and everything it was sent, says why in a status, and drops unsent edits; an editor that never loaded offers a read-only **Try again**. Regressions in `App.knowledgeClaim.test.tsx` fail on `38d2865`. **Not closed:** needs Codex review, current-head CI, and the browser retest (`gl` RC-06 authoring variant, `ex5.mjs auth`, plus a 403 variant). |
+| Bounded fix handoff | In `KnowledgeClaimPage.tsx`, report the claim save's unread outcome at page level (reuse `lifecycleBehind` / `SavedRefreshFailedNotice` with a read-only retry that refetches `view`, the lifecycle and the detail) so it survives the form unmounting; keep the last good authoring view (as `useKept` does elsewhere) rather than withdrawing the editor. Test: claim save, authoring read fails, notice and retry shown, editor held, one POST, retry reads only. Gate and retest as DEF-005, plus `gl` RC-06 authoring variant. |
+
 ## 2. Blockers to the owner's run (not defects)
 
 | ID | Blocker | Needed from the owner |
@@ -102,5 +132,7 @@ Owner decision (DR-9): **fix**, across all affected operations. Starting HEAD `5
 | Browser / database | **Not performed.** No browser or database mutation was made in this work; `dnd_ai` and the acceptance databases were not touched |
 
 **Not fixed here (as instructed).** DEF-002 (duplicate route decorator) and DEF-003 (`.env`-dependent unit test) are untouched. Neither the fix nor its tests depend on them; DEF-003 still makes `scripts/verify.sh full` fail locally on a machine whose `.env` sets `DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS`.
+
+**Browser retest (2026-10-26, on the Codex-reviewed candidate `38d2865`).** Scripted real-browser retest done; results, the operation-by-operation evidence map and the remaining coverage are in [PHASE15_DEF001_BROWSER_RETEST.md](PHASE15_DEF001_BROWSER_RETEST.md). Every exercised operation wrote once, kept the page, explained "saved, but the view is behind", announced no premature "done", held version-dependent controls and recovered by a read; permission loss removed private content. Two residual defects were found (DEF-005, DEF-006, above). Owner acceptance and the human run remain pending, so **DEF-001 stays Open — fix implemented and browser-retested by script; not accepted**.
 
 **Still required before DEF-001 can be called closed.** (1) Codex review of the diff and of inventory §4.4 (the reload-through-loading family was assessed as unaffected and left alone). (2) Current-head CI on PR #66. (3) Retest on the reviewed head: RC-10 (rewritten for the 26 operations) and RC-04 … RC-09, the tasks and cases listed in the register's "Affected coverage" plus the additions in the environment document §9, in a real browser. Until then DEF-001 stays **Open — fix implemented, unverified in a browser**, and no ledger row changes state.

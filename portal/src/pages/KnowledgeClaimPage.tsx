@@ -46,6 +46,7 @@ import type { RefreshOutcome } from "../hooks/useAuthoringMutation"
 import { useGatedAuthoringResource } from "../hooks/useGatedAuthoringResource"
 import type { RefetchOutcome, UseAuthoringResourceResult } from "../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
+import { useKeptData } from "../hooks/useKeptData"
 import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard"
 import type { KnowledgeDetail } from "../types/knowledge"
 import type { EntityLifecycleView } from "../types/entityLifecycle"
@@ -121,6 +122,10 @@ export function KnowledgeClaimPage({
         knowledgeAuthoringPath(campaignId, knowledgeItemId),
         canPrepare,
     )
+    // The last authoring read that worked, kept through a recoverable failure (so a confirmed save whose
+    // read-back fails does not take the editor away) and dropped the moment the answer is "denied" or
+    // "unavailable" (access lost: nothing the server sent before is shown any more).
+    const keptView = useKeptData(view.state)
     const options = useGatedAuthoringResource<KnowledgeOptions>(knowledgeOptionsPath(campaignId), canPrepare)
     const lifecycle = useGatedAuthoringResource<EntityLifecycleView>(
         entityLifecyclePath(campaignId, knowledgeItemId),
@@ -143,6 +148,12 @@ export function KnowledgeClaimPage({
     // being replaced by a read-only presentation.
     const [changes, setChanges] = useState<Partial<KnowledgeFormValues>>({})
     const [changeNote, setChangeNote] = useState("")
+    // Access to the claim's editor ended: what was typed on top of what the server sent is dropped with it.
+    const accessEnded = view.state.kind === "denied" || view.state.kind === "unavailable"
+    if (accessEnded && (Object.keys(changes).length > 0 || changeNote !== "")) {
+        setChanges({})
+        setChangeNote("")
+    }
     const [sourcesDirty, setSourcesDirty] = useState(false)
     const [rosterDirty, setRosterDirty] = useState(false)
     const base = view.state.kind === "ready" ? fromView(view.state.data) : null
@@ -298,6 +309,7 @@ export function KnowledgeClaimPage({
         claim: (
             <EditableClaim
                 view={view}
+                kept={keptView}
                 options={options}
                 changes={changes}
                 setChanges={setChanges}
@@ -512,6 +524,7 @@ function editBlockedNote(
 // layout shows the values as text (with one line saying why editing is blocked).
 function EditableClaim({
     view,
+    kept,
     options,
     changes,
     setChanges,
@@ -524,6 +537,8 @@ function EditableClaim({
 }: KnowledgeClaimPageProps &
     DraftBindings & {
         view: UseAuthoringResourceResult<KnowledgeAuthoringView>
+        // The last authoring read that worked, and whether the latest one failed after it.
+        kept: { data: KnowledgeAuthoringView | null; stale: boolean }
         options: UseAuthoringResourceResult<KnowledgeOptions>
         claimDirty: boolean
         publicationHref: string
@@ -532,8 +547,11 @@ function EditableClaim({
     if (view.state.kind === "loading" || options.state.kind === "loading") {
         return <p role="status">Loading the claim…</p>
     }
-    if (view.state.kind === "ready" && options.state.kind === "ready") {
-        if (view.state.data.available_actions.includes("update")) {
+    // The editor stays on the last read that worked when only the latest read failed (a transient
+    // failure); a denied or missing answer leaves nothing to keep.
+    const viewData = view.state.kind === "ready" ? view.state.data : kept.data
+    if (viewData !== null && options.state.kind === "ready") {
+        if (viewData.available_actions.includes("update")) {
             return (
                 <ClaimForm
                     {...props}
@@ -541,14 +559,15 @@ function EditableClaim({
                     setChanges={setChanges}
                     changeNote={changeNote}
                     setChangeNote={setChangeNote}
-                    view={view.state.data}
+                    view={viewData}
                     options={options.state.data}
-                    refreshing={view.state.refreshing}
+                    refreshing={view.state.kind === "ready" && view.state.refreshing}
+                    stale={kept.stale}
                     refetch={view.refetch}
                 />
             )
         }
-        const data = view.state.data
+        const data = viewData
         const optionData = options.state.data
         return (
             <>
@@ -591,16 +610,36 @@ function EditableClaim({
             </>
         )
     }
+    // The editor cannot be shown. Say why (nothing was said before), and for a read that only failed offer
+    // the read again; for lost access there is nothing to retry.
+    const lost = view.state.kind === "denied" || view.state.kind === "unavailable"
     return (
-        <ClaimLayout
-            campaignId={props.campaignId}
-            item={props.item}
-            characterId={props.characterId}
-            partyId={props.partyId}
-            inPanel
-            edit={null}
-            note={null}
-        />
+        <>
+            {lost ? (
+                <p role="status" className="authoring-note">
+                    The claim's editor is no longer available to you, so nothing from it is shown. If you just saved,
+                    the save went through. Reload the page to check your access.
+                </p>
+            ) : view.state.kind === "error" ? (
+                <div className="authoring-message authoring-message--warning" role="status">
+                    <div>
+                        <p>The claim's editor could not be loaded.</p>
+                        <button type="button" className="authoring-button" onClick={() => void view.refetch()}>
+                            Try again
+                        </button>
+                    </div>
+                </div>
+            ) : null}
+            <ClaimLayout
+                campaignId={props.campaignId}
+                item={props.item}
+                characterId={props.characterId}
+                partyId={props.partyId}
+                inPanel
+                edit={null}
+                note={null}
+            />
+        </>
     )
 }
 
@@ -904,6 +943,7 @@ function ClaimForm({
     view,
     options,
     refreshing,
+    stale,
     refetch,
     changes,
     setChanges,
@@ -914,6 +954,8 @@ function ClaimForm({
         view: KnowledgeAuthoringView
         options: KnowledgeOptions
         refreshing: boolean
+        // `view` is the last read that worked because the latest one failed: it may be older than the saved claim.
+        stale: boolean
         refetch: () => Promise<RefreshOutcome>
     }) {
     const { reload } = useSession()
@@ -934,6 +976,9 @@ function ClaimForm({
     const setValues = (next: KnowledgeFormValues) => setChanges(changedFields(base, next))
     const dirty = !same(values, base) || changeNote.trim() !== ""
     const isCanon = view.canon_status === "canon"
+    // A save from a record that may be behind would carry the old row version, so saving is held until
+    // a read of the claim and its detail works.
+    const held = behind || stale
 
     const mutation = useAuthoringMutation<
         ReturnType<typeof toBody> & { expected_row_version: number; change_note: string | null },
@@ -978,6 +1023,7 @@ function ClaimForm({
     }
 
     function handleSubmit() {
+        if (held) return
         setSaved(false)
         const found = [...validate(values), ...noteError]
         setErrors(found)
@@ -1021,6 +1067,21 @@ function ClaimForm({
                     onRetry={() => void loadLatest()}
                     retrying={rereading}
                 />
+            ) : stale ? (
+                <div className="authoring-message authoring-message--warning" role="status">
+                    <div>
+                        <p>The latest claim could not be loaded, so what is shown may be out of date.</p>
+                        <button
+                            type="button"
+                            className="authoring-button"
+                            onClick={() => void loadLatest()}
+                            disabled={rereading}
+                            aria-busy={rereading}
+                        >
+                            {rereading ? "Loading…" : "Load latest"}
+                        </button>
+                    </div>
+                </div>
             ) : null}
             {error !== null && error.kind === "stale" ? (
                 <StaleWriteNotice
@@ -1039,7 +1100,7 @@ function ClaimForm({
                 <button
                     type="submit"
                     className="authoring-button authoring-button--primary"
-                    disabled={pending || !dirty}
+                    disabled={pending || !dirty || held}
                     aria-busy={pending}
                 >
                     {pending ? "Saving…" : "Save claim"}

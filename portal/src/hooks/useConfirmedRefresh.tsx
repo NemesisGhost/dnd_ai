@@ -48,10 +48,10 @@ export function useConfirmedRefresh({
     const [sawStale, setSawStale] = useState(false)
     const [recovered, setRecovered] = useState(false)
     const mounted = useRef(true)
-    const latest = useRef({ announce, message })
+    const latest = useRef({ announce, message, reset })
     useEffect(() => {
         mounted.current = true
-        latest.current = { announce, message }
+        latest.current = { announce, message, reset }
         return () => {
             mounted.current = false
         }
@@ -70,9 +70,15 @@ export function useConfirmedRefresh({
     const active = confirmed && !recovered
 
     useEffect(() => {
-        if (recovered && !quietRecovery && latest.current.message !== null) {
+        if (!recovered) return
+        if (!quietRecovery && latest.current.message !== null) {
             latest.current.announce(latest.current.message)
         }
+        // The page's read recovered this write, so its episode is over: the caller's status goes back to
+        // idle. Without this a caller that keeps "saved, not yet read" in its own state stays `confirmed`
+        // for good, `recovered` stays set, and the next confirmed write whose read fails would show no
+        // notice and hold nothing. The write is never sent again by this.
+        latest.current.reset()
     }, [recovered, quietRecovery])
 
     async function load() {

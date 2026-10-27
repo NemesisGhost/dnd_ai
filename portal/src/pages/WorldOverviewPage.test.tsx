@@ -215,6 +215,70 @@ describe("WorldOverviewPage", () => {
         expect(server.callsTo("POST", "/worlds/w1/archive")).toHaveLength(1)
     })
 
+    it("tells the user about a second confirmed write whose re-read fails, after the first was recovered through the page's own Try again (DEF-005)", async () => {
+        const { server } = setup(worldDetail())
+        let state: "active" | "archived" = "active"
+        let readFails = false
+        const view = () =>
+            state === "archived"
+                ? worldDetail({
+                      lifecycle_status: "archived",
+                      row_version: 4,
+                      available_actions: ["restore"],
+                      blocked_actions: [],
+                  })
+                : worldDetail({ row_version: state === "active" ? 3 : 5 })
+        server.on("GET", "/worlds/w1", () => (readFails ? { status: 500, body: {} } : { body: view() }))
+        server.on("POST", "/worlds/w1/archive", () => {
+            state = "archived"
+            readFails = true
+            return { body: { world_id: "w1", lifecycle_status: "archived", row_version: 4 } }
+        })
+        server.on("POST", "/worlds/w1/restore", () => {
+            state = "active"
+            readFails = true
+            return { body: { world_id: "w1", lifecycle_status: "active", row_version: 5 } }
+        })
+        const live = () => screen.getByTestId("authoring-announcer")
+        await screen.findByRole("heading", { level: 1, name: "Eberron" })
+
+        // First write: confirmed, read-back fails, recovered by the page's own Try again.
+        fireEvent.click(screen.getByRole("button", { name: "Archive world" }))
+        fireEvent.click(
+            within(screen.getByRole("dialog", { name: "Archive this world?", hidden: true })).getByRole("button", {
+                name: "Archive world",
+            }),
+        )
+        expect(await screen.findByText(/World archived\. The latest world could not be loaded/)).toBeInTheDocument()
+        readFails = false
+        fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+        const restore = await screen.findByRole("button", { name: "Restore world" })
+        await waitFor(() => expect(restore).toBeEnabled())
+        await waitFor(() => expect(live()).toHaveTextContent("World archived"))
+        expect(screen.queryByText(/could not be loaded/)).toBeNull()
+
+        // Second write in the same mounted view: it must explain itself and hold, exactly as the first did.
+        fireEvent.click(restore)
+        fireEvent.click(
+            within(screen.getByRole("dialog", { name: "Restore this world?", hidden: true })).getByRole("button", {
+                name: "Restore world",
+            }),
+        )
+        expect(await screen.findByText(/World restored\. The latest world could not be loaded/)).toBeInTheDocument()
+        expect(live()).not.toHaveTextContent(/^World restored/)
+        expect(screen.getByRole("button", { name: "Restore world" })).toBeDisabled()
+        expect(server.callsTo("POST", "/worlds/w1/restore")).toHaveLength(1)
+
+        readFails = false
+        fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+        expect(await screen.findByRole("button", { name: "Archive world" })).toBeEnabled()
+        await waitFor(() => expect(live()).toHaveTextContent("World restored"))
+        expect(screen.queryByText(/could not be loaded/)).toBeNull()
+        // Neither write was sent again by either recovery.
+        expect(server.callsTo("POST", "/worlds/w1/archive")).toHaveLength(1)
+        expect(server.callsTo("POST", "/worlds/w1/restore")).toHaveLength(1)
+    })
+
     it("keeps a failed archive inside the dialog with a recoverable message", async () => {
         const { server } = setup(worldDetail())
         server.on("POST", "/worlds/w1/archive", {

@@ -1,3 +1,4 @@
+import { useState } from "react"
 import { act, fireEvent, render, screen } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 import { AnnouncerContext } from "../components/authoring/announcer"
@@ -133,6 +134,53 @@ describe("useConfirmedRefresh", () => {
         expect(screen.getByTestId("held")).toHaveTextContent("false")
         expect(screen.queryByText(/could not be loaded/)).toBeNull()
         expect(announce).toHaveBeenCalledTimes(1)
+    })
+
+    it("ends the episode of a write the page's read recovered, so the next confirmed write is reported afresh (DEF-005)", () => {
+        const announce = vi.fn()
+        const read = async (): Promise<RefreshOutcome> => "ok"
+        // A caller that keeps "saved, not yet read" in its own state: its status goes idle only when reset runs.
+        function Caller({ pageStale, message }: { pageStale: boolean; message: string }) {
+            const [unread, setUnread] = useState<string | null>(message)
+            const refreshed = useConfirmedRefresh({
+                status: unread === null ? IDLE : CONFIRMED,
+                reset: () => setUnread(null),
+                what: "party list",
+                message: unread,
+                read,
+                pageStale,
+            })
+            return (
+                <div>
+                    {refreshed.notice}
+                    <span data-testid="held">{String(refreshed.held)}</span>
+                    <button type="button" onClick={() => setUnread("Second write saved")}>
+                        second write
+                    </button>
+                </div>
+            )
+        }
+        const wrap = (stale: boolean) => (
+            <AnnouncerContext.Provider value={{ announce }}>
+                <Caller pageStale={stale} message="First write saved" />
+            </AnnouncerContext.Provider>
+        )
+        const view = render(wrap(true))
+        expect(screen.getByTestId("held")).toHaveTextContent("true")
+        view.rerender(wrap(false))
+        expect(screen.getByTestId("held")).toHaveTextContent("false")
+        expect(announce).toHaveBeenCalledWith("First write saved")
+        expect(announce).toHaveBeenCalledTimes(1)
+
+        // The second write is confirmed and the page's read has failed again.
+        fireEvent.click(screen.getByRole("button", { name: "second write" }))
+        view.rerender(wrap(true))
+        expect(screen.getByTestId("held")).toHaveTextContent("true")
+        expect(screen.getByText(/Second write saved\. The latest party list could not be loaded/)).toBeInTheDocument()
+        view.rerender(wrap(false))
+        expect(screen.getByTestId("held")).toHaveTextContent("false")
+        expect(announce).toHaveBeenLastCalledWith("Second write saved")
+        expect(announce).toHaveBeenCalledTimes(2)
     })
 
     it("leaves the announcement to the page when it is told the component will be gone", async () => {
