@@ -1,6 +1,6 @@
+import type { KnowledgeReceipt } from "../types/contentAuthoring"
 import type {
     CreateKnowledgeBody,
-    KnowledgeAuthoringView,
     KnowledgeSubjectOptionPage,
     UpdateKnowledgeBody,
 } from "../types/knowledgeAuthoring"
@@ -34,8 +34,8 @@ export function createKnowledgeItem(
     campaignId: string,
     body: CreateKnowledgeBody,
     ctx: MutationContext,
-): Promise<KnowledgeAuthoringView> {
-    return apiRequest<KnowledgeAuthoringView>("POST", base(campaignId), { body, ...ctx })
+): Promise<KnowledgeReceipt> {
+    return apiRequest<KnowledgeReceipt>("POST", base(campaignId), { body, ...ctx })
 }
 
 export function updateKnowledgeItem(
@@ -43,8 +43,8 @@ export function updateKnowledgeItem(
     knowledgeItemId: string,
     body: UpdateKnowledgeBody,
     ctx: MutationContext,
-): Promise<KnowledgeAuthoringView> {
-    return apiRequest<KnowledgeAuthoringView>(
+): Promise<KnowledgeReceipt> {
+    return apiRequest<KnowledgeReceipt>(
         "POST",
         `${knowledgeAuthoringPath(campaignId, knowledgeItemId)}/update`,
         { body, ...ctx },

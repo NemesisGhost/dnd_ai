@@ -1,0 +1,4005 @@
+{
+  "relationship_types": [
+    {
+      "code": "family",
+      "label": "Family",
+      "kind": "family",
+      "symmetric": false,
+      "min_participants": 2,
+      "max_participants": 20,
+      "roles": [
+        {
+          "code": "parent",
+          "label": "Parent",
+          "entity_type_codes": [
+            "npc",
+            "player_character"
+          ]
+        },
+        {
+          "code": "child",
+          "label": "Child",
+          "entity_type_codes": [
+            "npc",
+            "player_character"
+          ]
+        },
+        {
+          "code": "subject",
+          "label": "Subject",
+          "entity_type_codes": [
+            "npc",
+            "player_character"
+          ]
+        },
+        {
+          "code": "object",
+          "label": "Object",
+          "entity_type_codes": [
+            "npc",
+            "player_character"
+          ]
+        },
+        {
+          "code": "other",
+          "label": "Other",
+          "entity_type_codes": [
+            "npc",
+            "player_character"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "employment",
+      "label": "Employment",
+      "kind": "employment",
+      "symmetric": false,
+      "min_participants": 2,
+      "max_participants": 2,
+      "roles": [
+        {
+          "code": "employer",
+          "label": "Employer",
+          "entity_type_codes": [
+            "business",
+            "government",
+            "military_unit",
+            "npc",
+            "organization",
+            "player_character",
+            "political_faction",
+            "religious_organization"
+          ]
+        },
+        {
+          "code": "employee",
+          "label": "Employee",
+          "entity_type_codes": [
+            "business",
+            "government",
+            "military_unit",
+            "npc",
+            "organization",
+            "player_character",
+            "political_faction",
+            "religious_organization"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "ownership",
+      "label": "Ownership",
+      "kind": "ownership",
+      "symmetric": false,
+      "min_participants": 2,
+      "max_participants": 2,
+      "roles": [
+        {
+          "code": "owner",
+          "label": "Owner",
+          "entity_type_codes": [
+            "business",
+            "government",
+            "military_unit",
+            "npc",
+            "organization",
+            "player_character",
+            "political_faction",
+            "religion",
+            "religious_organization"
+          ]
+        },
+        {
+          "code": "property",
+          "label": "Owned",
+          "entity_type_codes": [
+            "building",
+            "business",
+            "continent",
+            "district",
+            "dungeon",
+            "dungeon_area",
+            "geographic_feature",
+            "government",
+            "location",
+            "military_unit",
+            "nation",
+            "npc",
+            "organization",
+            "plane",
+            "player_character",
+            "political_faction",
+            "realm",
+            "region",
+            "religious_organization",
+            "settlement"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "membership",
+      "label": "Membership",
+      "kind": "membership",
+      "symmetric": false,
+      "min_participants": 2,
+      "max_participants": 2,
+      "roles": [
+        {
+          "code": "member",
+          "label": "Member",
+          "entity_type_codes": [
+            "business",
+            "government",
+            "military_unit",
+            "npc",
+            "organization",
+            "player_character",
+            "political_faction",
+            "religious_organization"
+          ]
+        },
+        {
+          "code": "organization",
+          "label": "Organization",
+          "entity_type_codes": [
+            "business",
+            "government",
+            "military_unit",
+            "organization",
+            "political_faction",
+            "religious_organization"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "route",
+      "label": "Route",
+      "kind": "route",
+      "symmetric": false,
+      "min_participants": 2,
+      "max_participants": 2,
+      "roles": [
+        {
+          "code": "origin",
+          "label": "Origin",
+          "entity_type_codes": [
+            "building",
+            "continent",
+            "district",
+            "dungeon",
+            "dungeon_area",
+            "geographic_feature",
+            "location",
+            "nation",
+            "plane",
+            "realm",
+            "region",
+            "settlement"
+          ]
+        },
+        {
+          "code": "destination",
+          "label": "Destination",
+          "entity_type_codes": [
+            "building",
+            "continent",
+            "district",
+            "dungeon",
+            "dungeon_area",
+            "geographic_feature",
+            "location",
+            "nation",
+            "plane",
+            "realm",
+            "region",
+            "settlement"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "alliance",
+      "label": "Alliance",
+      "kind": "political",
+      "symmetric": true,
+      "min_participants": 2,
+      "max_participants": 20,
+      "roles": [
+        {
+          "code": "ally",
+          "label": "Ally",
+          "entity_type_codes": [
+            "business",
+            "district",
+            "government",
+            "location",
+            "military_unit",
+            "nation",
+            "npc",
+            "organization",
+            "player_character",
+            "political_faction",
+            "realm",
+            "region",
+            "religion",
+            "religious_organization",
+            "settlement"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "rivalry",
+      "label": "Rivalry",
+      "kind": "political",
+      "symmetric": true,
+      "min_participants": 2,
+      "max_participants": 20,
+      "roles": [
+        {
+          "code": "rival",
+          "label": "Rival",
+          "entity_type_codes": [
+            "business",
+            "district",
+            "government",
+            "location",
+            "military_unit",
+            "nation",
+            "npc",
+            "organization",
+            "player_character",
+            "political_faction",
+            "realm",
+            "region",
+            "religion",
+            "religious_organization",
+            "settlement"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "war",
+      "label": "War",
+      "kind": "political",
+      "symmetric": false,
+      "min_participants": 2,
+      "max_participants": 20,
+      "roles": [
+        {
+          "code": "subject",
+          "label": "Side A",
+          "entity_type_codes": [
+            "business",
+            "district",
+            "government",
+            "location",
+            "military_unit",
+            "nation",
+            "npc",
+            "organization",
+            "player_character",
+            "political_faction",
+            "realm",
+            "region",
+            "religion",
+            "religious_organization",
+            "settlement"
+          ]
+        },
+        {
+          "code": "object",
+          "label": "Side B",
+          "entity_type_codes": [
+            "business",
+            "district",
+            "government",
+            "location",
+            "military_unit",
+            "nation",
+            "npc",
+            "organization",
+            "player_character",
+            "political_faction",
+            "realm",
+            "region",
+            "religion",
+            "religious_organization",
+            "settlement"
+          ]
+        },
+        {
+          "code": "other",
+          "label": "Third party",
+          "entity_type_codes": [
+            "business",
+            "district",
+            "government",
+            "location",
+            "military_unit",
+            "nation",
+            "npc",
+            "organization",
+            "player_character",
+            "political_faction",
+            "realm",
+            "region",
+            "religion",
+            "religious_organization",
+            "settlement"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "control",
+      "label": "Control",
+      "kind": "political",
+      "symmetric": false,
+      "min_participants": 2,
+      "max_participants": 20,
+      "roles": [
+        {
+          "code": "ruler",
+          "label": "Controller",
+          "entity_type_codes": [
+            "business",
+            "district",
+            "government",
+            "location",
+            "military_unit",
+            "nation",
+            "npc",
+            "organization",
+            "player_character",
+            "political_faction",
+            "realm",
+            "region",
+            "religion",
+            "religious_organization",
+            "settlement"
+          ]
+        },
+        {
+          "code": "territory",
+          "label": "Controlled place",
+          "entity_type_codes": [
+            "building",
+            "continent",
+            "district",
+            "dungeon",
+            "dungeon_area",
+            "geographic_feature",
+            "location",
+            "nation",
+            "plane",
+            "realm",
+            "region",
+            "settlement"
+          ]
+        },
+        {
+          "code": "object",
+          "label": "Controlled party",
+          "entity_type_codes": [
+            "business",
+            "government",
+            "military_unit",
+            "npc",
+            "organization",
+            "player_character",
+            "political_faction",
+            "religious_organization"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "worship",
+      "label": "Worship",
+      "kind": "general",
+      "symmetric": false,
+      "min_participants": 2,
+      "max_participants": 20,
+      "roles": [
+        {
+          "code": "subject",
+          "label": "Worshipper",
+          "entity_type_codes": [
+            "building",
+            "business",
+            "continent",
+            "district",
+            "dungeon",
+            "dungeon_area",
+            "geographic_feature",
+            "government",
+            "location",
+            "military_unit",
+            "nation",
+            "npc",
+            "organization",
+            "plane",
+            "player_character",
+            "political_faction",
+            "realm",
+            "region",
+            "religious_organization",
+            "settlement"
+          ]
+        },
+        {
+          "code": "object",
+          "label": "Worshipped",
+          "entity_type_codes": [
+            "building",
+            "business",
+            "continent",
+            "district",
+            "dungeon",
+            "dungeon_area",
+            "geographic_feature",
+            "government",
+            "location",
+            "military_unit",
+            "nation",
+            "npc",
+            "organization",
+            "plane",
+            "player_character",
+            "political_faction",
+            "realm",
+            "region",
+            "religion",
+            "religious_organization",
+            "settlement"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "adjacency",
+      "label": "Adjacency",
+      "kind": "general",
+      "symmetric": true,
+      "min_participants": 2,
+      "max_participants": 2,
+      "roles": [
+        {
+          "code": "subject",
+          "label": "Adjoining place",
+          "entity_type_codes": [
+            "building",
+            "continent",
+            "district",
+            "dungeon",
+            "geographic_feature",
+            "location",
+            "nation",
+            "plane",
+            "realm",
+            "region",
+            "settlement"
+          ]
+        },
+        {
+          "code": "object",
+          "label": "Adjoining place",
+          "entity_type_codes": [
+            "building",
+            "continent",
+            "district",
+            "dungeon",
+            "geographic_feature",
+            "location",
+            "nation",
+            "plane",
+            "realm",
+            "region",
+            "settlement"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "capital_of",
+      "label": "Capital Of",
+      "kind": "general",
+      "symmetric": false,
+      "min_participants": 2,
+      "max_participants": 2,
+      "roles": [
+        {
+          "code": "subject",
+          "label": "Capital",
+          "entity_type_codes": [
+            "location",
+            "settlement"
+          ]
+        },
+        {
+          "code": "object",
+          "label": "Governed place",
+          "entity_type_codes": [
+            "continent",
+            "location",
+            "nation",
+            "plane",
+            "realm",
+            "region"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "parent_of",
+      "label": "Parent Of",
+      "kind": "general",
+      "symmetric": false,
+      "min_participants": 2,
+      "max_participants": 2,
+      "roles": [
+        {
+          "code": "subject",
+          "label": "Parent",
+          "entity_type_codes": [
+            "building",
+            "business",
+            "continent",
+            "district",
+            "dungeon",
+            "dungeon_area",
+            "geographic_feature",
+            "government",
+            "location",
+            "military_unit",
+            "nation",
+            "organization",
+            "plane",
+            "political_faction",
+            "realm",
+            "region",
+            "religion",
+            "religious_organization",
+            "settlement"
+          ]
+        },
+        {
+          "code": "object",
+          "label": "Child",
+          "entity_type_codes": [
+            "building",
+            "business",
+            "continent",
+            "district",
+            "dungeon",
+            "dungeon_area",
+            "geographic_feature",
+            "government",
+            "location",
+            "military_unit",
+            "nation",
+            "organization",
+            "plane",
+            "political_faction",
+            "realm",
+            "region",
+            "religion",
+            "religious_organization",
+            "settlement"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "other",
+      "label": "Other",
+      "kind": "general",
+      "symmetric": false,
+      "min_participants": 2,
+      "max_participants": 20,
+      "roles": [
+        {
+          "code": "subject",
+          "label": "Subject",
+          "entity_type_codes": [
+            "building",
+            "business",
+            "continent",
+            "district",
+            "dungeon",
+            "dungeon_area",
+            "geographic_feature",
+            "government",
+            "location",
+            "military_unit",
+            "nation",
+            "npc",
+            "organization",
+            "plane",
+            "player_character",
+            "political_faction",
+            "realm",
+            "region",
+            "religion",
+            "religious_organization",
+            "settlement"
+          ]
+        },
+        {
+          "code": "object",
+          "label": "Object",
+          "entity_type_codes": [
+            "building",
+            "business",
+            "continent",
+            "district",
+            "dungeon",
+            "dungeon_area",
+            "geographic_feature",
+            "government",
+            "location",
+            "military_unit",
+            "nation",
+            "npc",
+            "organization",
+            "plane",
+            "player_character",
+            "political_faction",
+            "realm",
+            "region",
+            "religion",
+            "religious_organization",
+            "settlement"
+          ]
+        },
+        {
+          "code": "other",
+          "label": "Other",
+          "entity_type_codes": [
+            "building",
+            "business",
+            "continent",
+            "district",
+            "dungeon",
+            "dungeon_area",
+            "geographic_feature",
+            "government",
+            "location",
+            "military_unit",
+            "nation",
+            "npc",
+            "organization",
+            "plane",
+            "player_character",
+            "political_faction",
+            "realm",
+            "region",
+            "religion",
+            "religious_organization",
+            "settlement"
+          ]
+        }
+      ]
+    }
+  ],
+  "pairings": {
+    "npc": [
+      {
+        "relationship_type": "family",
+        "my_role": "parent",
+        "other_role": "parent",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "parent",
+        "other_role": "child",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "parent",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "parent",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "parent",
+        "other_role": "other",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "child",
+        "other_role": "parent",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "child",
+        "other_role": "child",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "child",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "child",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "child",
+        "other_role": "other",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "subject",
+        "other_role": "parent",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "subject",
+        "other_role": "child",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "subject",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "subject",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "subject",
+        "other_role": "other",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "object",
+        "other_role": "parent",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "object",
+        "other_role": "child",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "object",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "object",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "object",
+        "other_role": "other",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "other",
+        "other_role": "parent",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "other",
+        "other_role": "child",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "other",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "other",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "other",
+        "other_role": "other",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "employment",
+        "my_role": "employer",
+        "other_role": "employee",
+        "other_entity_type_codes": [
+          "business",
+          "government",
+          "military_unit",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "religious_organization"
+        ]
+      },
+      {
+        "relationship_type": "employment",
+        "my_role": "employee",
+        "other_role": "employer",
+        "other_entity_type_codes": [
+          "business",
+          "government",
+          "military_unit",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "religious_organization"
+        ]
+      },
+      {
+        "relationship_type": "ownership",
+        "my_role": "owner",
+        "other_role": "property",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "ownership",
+        "my_role": "property",
+        "other_role": "owner",
+        "other_entity_type_codes": [
+          "business",
+          "government",
+          "military_unit",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "religion",
+          "religious_organization"
+        ]
+      },
+      {
+        "relationship_type": "membership",
+        "my_role": "member",
+        "other_role": "organization",
+        "other_entity_type_codes": [
+          "business",
+          "government",
+          "military_unit",
+          "organization",
+          "political_faction",
+          "religious_organization"
+        ]
+      },
+      {
+        "relationship_type": "alliance",
+        "my_role": "ally",
+        "other_role": "ally",
+        "other_entity_type_codes": [
+          "business",
+          "district",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "rivalry",
+        "my_role": "rival",
+        "other_role": "rival",
+        "other_entity_type_codes": [
+          "business",
+          "district",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "war",
+        "my_role": "subject",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "business",
+          "district",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "war",
+        "my_role": "object",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "business",
+          "district",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "control",
+        "my_role": "ruler",
+        "other_role": "territory",
+        "other_entity_type_codes": [
+          "building",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "location",
+          "nation",
+          "plane",
+          "realm",
+          "region",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "control",
+        "my_role": "ruler",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "business",
+          "government",
+          "military_unit",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "religious_organization"
+        ]
+      },
+      {
+        "relationship_type": "control",
+        "my_role": "object",
+        "other_role": "ruler",
+        "other_entity_type_codes": [
+          "business",
+          "district",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "worship",
+        "my_role": "subject",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "worship",
+        "my_role": "object",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "subject",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "subject",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "subject",
+        "other_role": "other",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "object",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "object",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "object",
+        "other_role": "other",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "other",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "other",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "other",
+        "other_role": "other",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      }
+    ],
+    "player_character": [
+      {
+        "relationship_type": "family",
+        "my_role": "parent",
+        "other_role": "parent",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "parent",
+        "other_role": "child",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "parent",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "parent",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "parent",
+        "other_role": "other",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "child",
+        "other_role": "parent",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "child",
+        "other_role": "child",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "child",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "child",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "child",
+        "other_role": "other",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "subject",
+        "other_role": "parent",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "subject",
+        "other_role": "child",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "subject",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "subject",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "subject",
+        "other_role": "other",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "object",
+        "other_role": "parent",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "object",
+        "other_role": "child",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "object",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "object",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "object",
+        "other_role": "other",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "other",
+        "other_role": "parent",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "other",
+        "other_role": "child",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "other",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "other",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "family",
+        "my_role": "other",
+        "other_role": "other",
+        "other_entity_type_codes": [
+          "npc",
+          "player_character"
+        ]
+      },
+      {
+        "relationship_type": "employment",
+        "my_role": "employer",
+        "other_role": "employee",
+        "other_entity_type_codes": [
+          "business",
+          "government",
+          "military_unit",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "religious_organization"
+        ]
+      },
+      {
+        "relationship_type": "employment",
+        "my_role": "employee",
+        "other_role": "employer",
+        "other_entity_type_codes": [
+          "business",
+          "government",
+          "military_unit",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "religious_organization"
+        ]
+      },
+      {
+        "relationship_type": "ownership",
+        "my_role": "owner",
+        "other_role": "property",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "ownership",
+        "my_role": "property",
+        "other_role": "owner",
+        "other_entity_type_codes": [
+          "business",
+          "government",
+          "military_unit",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "religion",
+          "religious_organization"
+        ]
+      },
+      {
+        "relationship_type": "membership",
+        "my_role": "member",
+        "other_role": "organization",
+        "other_entity_type_codes": [
+          "business",
+          "government",
+          "military_unit",
+          "organization",
+          "political_faction",
+          "religious_organization"
+        ]
+      },
+      {
+        "relationship_type": "alliance",
+        "my_role": "ally",
+        "other_role": "ally",
+        "other_entity_type_codes": [
+          "business",
+          "district",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "rivalry",
+        "my_role": "rival",
+        "other_role": "rival",
+        "other_entity_type_codes": [
+          "business",
+          "district",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "war",
+        "my_role": "subject",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "business",
+          "district",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "war",
+        "my_role": "object",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "business",
+          "district",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "control",
+        "my_role": "ruler",
+        "other_role": "territory",
+        "other_entity_type_codes": [
+          "building",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "location",
+          "nation",
+          "plane",
+          "realm",
+          "region",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "control",
+        "my_role": "ruler",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "business",
+          "government",
+          "military_unit",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "religious_organization"
+        ]
+      },
+      {
+        "relationship_type": "control",
+        "my_role": "object",
+        "other_role": "ruler",
+        "other_entity_type_codes": [
+          "business",
+          "district",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "worship",
+        "my_role": "subject",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "worship",
+        "my_role": "object",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "subject",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "subject",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "subject",
+        "other_role": "other",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "object",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "object",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "object",
+        "other_role": "other",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "other",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "other",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "other",
+        "other_role": "other",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      }
+    ],
+    "settlement": [
+      {
+        "relationship_type": "ownership",
+        "my_role": "property",
+        "other_role": "owner",
+        "other_entity_type_codes": [
+          "business",
+          "government",
+          "military_unit",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "religion",
+          "religious_organization"
+        ]
+      },
+      {
+        "relationship_type": "route",
+        "my_role": "origin",
+        "other_role": "destination",
+        "other_entity_type_codes": [
+          "building",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "location",
+          "nation",
+          "plane",
+          "realm",
+          "region",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "route",
+        "my_role": "destination",
+        "other_role": "origin",
+        "other_entity_type_codes": [
+          "building",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "location",
+          "nation",
+          "plane",
+          "realm",
+          "region",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "alliance",
+        "my_role": "ally",
+        "other_role": "ally",
+        "other_entity_type_codes": [
+          "business",
+          "district",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "rivalry",
+        "my_role": "rival",
+        "other_role": "rival",
+        "other_entity_type_codes": [
+          "business",
+          "district",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "war",
+        "my_role": "subject",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "business",
+          "district",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "war",
+        "my_role": "object",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "business",
+          "district",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "control",
+        "my_role": "ruler",
+        "other_role": "territory",
+        "other_entity_type_codes": [
+          "building",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "location",
+          "nation",
+          "plane",
+          "realm",
+          "region",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "control",
+        "my_role": "ruler",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "business",
+          "government",
+          "military_unit",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "religious_organization"
+        ]
+      },
+      {
+        "relationship_type": "control",
+        "my_role": "territory",
+        "other_role": "ruler",
+        "other_entity_type_codes": [
+          "business",
+          "district",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "worship",
+        "my_role": "subject",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "worship",
+        "my_role": "object",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "adjacency",
+        "my_role": "subject",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "building",
+          "continent",
+          "district",
+          "dungeon",
+          "geographic_feature",
+          "location",
+          "nation",
+          "plane",
+          "realm",
+          "region",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "adjacency",
+        "my_role": "object",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "building",
+          "continent",
+          "district",
+          "dungeon",
+          "geographic_feature",
+          "location",
+          "nation",
+          "plane",
+          "realm",
+          "region",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "capital_of",
+        "my_role": "subject",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "continent",
+          "location",
+          "nation",
+          "plane",
+          "realm",
+          "region"
+        ]
+      },
+      {
+        "relationship_type": "parent_of",
+        "my_role": "subject",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "building",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "location",
+          "nation",
+          "plane",
+          "realm",
+          "region",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "parent_of",
+        "my_role": "object",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "building",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "location",
+          "nation",
+          "plane",
+          "realm",
+          "region",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "subject",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "subject",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "subject",
+        "other_role": "other",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "object",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "object",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "object",
+        "other_role": "other",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "other",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "other",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "other",
+        "other_role": "other",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      }
+    ],
+    "nation": [
+      {
+        "relationship_type": "ownership",
+        "my_role": "property",
+        "other_role": "owner",
+        "other_entity_type_codes": [
+          "business",
+          "government",
+          "military_unit",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "religion",
+          "religious_organization"
+        ]
+      },
+      {
+        "relationship_type": "route",
+        "my_role": "origin",
+        "other_role": "destination",
+        "other_entity_type_codes": [
+          "building",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "location",
+          "nation",
+          "plane",
+          "realm",
+          "region",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "route",
+        "my_role": "destination",
+        "other_role": "origin",
+        "other_entity_type_codes": [
+          "building",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "location",
+          "nation",
+          "plane",
+          "realm",
+          "region",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "alliance",
+        "my_role": "ally",
+        "other_role": "ally",
+        "other_entity_type_codes": [
+          "business",
+          "district",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "rivalry",
+        "my_role": "rival",
+        "other_role": "rival",
+        "other_entity_type_codes": [
+          "business",
+          "district",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "war",
+        "my_role": "subject",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "business",
+          "district",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "war",
+        "my_role": "object",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "business",
+          "district",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "control",
+        "my_role": "ruler",
+        "other_role": "territory",
+        "other_entity_type_codes": [
+          "building",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "location",
+          "nation",
+          "plane",
+          "realm",
+          "region",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "control",
+        "my_role": "ruler",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "business",
+          "government",
+          "military_unit",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "religious_organization"
+        ]
+      },
+      {
+        "relationship_type": "control",
+        "my_role": "territory",
+        "other_role": "ruler",
+        "other_entity_type_codes": [
+          "business",
+          "district",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "worship",
+        "my_role": "subject",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "worship",
+        "my_role": "object",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "adjacency",
+        "my_role": "subject",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "building",
+          "continent",
+          "district",
+          "dungeon",
+          "geographic_feature",
+          "location",
+          "nation",
+          "plane",
+          "realm",
+          "region",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "adjacency",
+        "my_role": "object",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "building",
+          "continent",
+          "district",
+          "dungeon",
+          "geographic_feature",
+          "location",
+          "nation",
+          "plane",
+          "realm",
+          "region",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "capital_of",
+        "my_role": "object",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "location",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "parent_of",
+        "my_role": "subject",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "building",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "location",
+          "nation",
+          "plane",
+          "realm",
+          "region",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "parent_of",
+        "my_role": "object",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "building",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "location",
+          "nation",
+          "plane",
+          "realm",
+          "region",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "subject",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "subject",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "subject",
+        "other_role": "other",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "object",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "object",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "object",
+        "other_role": "other",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "other",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "other",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "other",
+        "other_role": "other",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      }
+    ],
+    "organization": [
+      {
+        "relationship_type": "employment",
+        "my_role": "employer",
+        "other_role": "employee",
+        "other_entity_type_codes": [
+          "business",
+          "government",
+          "military_unit",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "religious_organization"
+        ]
+      },
+      {
+        "relationship_type": "employment",
+        "my_role": "employee",
+        "other_role": "employer",
+        "other_entity_type_codes": [
+          "business",
+          "government",
+          "military_unit",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "religious_organization"
+        ]
+      },
+      {
+        "relationship_type": "ownership",
+        "my_role": "owner",
+        "other_role": "property",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "ownership",
+        "my_role": "property",
+        "other_role": "owner",
+        "other_entity_type_codes": [
+          "business",
+          "government",
+          "military_unit",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "religion",
+          "religious_organization"
+        ]
+      },
+      {
+        "relationship_type": "membership",
+        "my_role": "member",
+        "other_role": "organization",
+        "other_entity_type_codes": [
+          "business",
+          "government",
+          "military_unit",
+          "organization",
+          "political_faction",
+          "religious_organization"
+        ]
+      },
+      {
+        "relationship_type": "membership",
+        "my_role": "organization",
+        "other_role": "member",
+        "other_entity_type_codes": [
+          "business",
+          "government",
+          "military_unit",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "religious_organization"
+        ]
+      },
+      {
+        "relationship_type": "alliance",
+        "my_role": "ally",
+        "other_role": "ally",
+        "other_entity_type_codes": [
+          "business",
+          "district",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "rivalry",
+        "my_role": "rival",
+        "other_role": "rival",
+        "other_entity_type_codes": [
+          "business",
+          "district",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "war",
+        "my_role": "subject",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "business",
+          "district",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "war",
+        "my_role": "object",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "business",
+          "district",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "control",
+        "my_role": "ruler",
+        "other_role": "territory",
+        "other_entity_type_codes": [
+          "building",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "location",
+          "nation",
+          "plane",
+          "realm",
+          "region",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "control",
+        "my_role": "ruler",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "business",
+          "government",
+          "military_unit",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "religious_organization"
+        ]
+      },
+      {
+        "relationship_type": "control",
+        "my_role": "object",
+        "other_role": "ruler",
+        "other_entity_type_codes": [
+          "business",
+          "district",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "worship",
+        "my_role": "subject",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "worship",
+        "my_role": "object",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "parent_of",
+        "my_role": "subject",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "business",
+          "government",
+          "military_unit",
+          "organization",
+          "political_faction",
+          "religious_organization"
+        ]
+      },
+      {
+        "relationship_type": "parent_of",
+        "my_role": "object",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "business",
+          "government",
+          "military_unit",
+          "organization",
+          "political_faction",
+          "religious_organization"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "subject",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "subject",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "subject",
+        "other_role": "other",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "object",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "object",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "object",
+        "other_role": "other",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "other",
+        "other_role": "subject",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "other",
+        "other_role": "object",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      },
+      {
+        "relationship_type": "other",
+        "my_role": "other",
+        "other_role": "other",
+        "other_entity_type_codes": [
+          "building",
+          "business",
+          "continent",
+          "district",
+          "dungeon",
+          "dungeon_area",
+          "geographic_feature",
+          "government",
+          "location",
+          "military_unit",
+          "nation",
+          "npc",
+          "organization",
+          "plane",
+          "player_character",
+          "political_faction",
+          "realm",
+          "region",
+          "religion",
+          "religious_organization",
+          "settlement"
+        ]
+      }
+    ]
+  }
+}

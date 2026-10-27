@@ -38,10 +38,13 @@ from dnd_ai.domain.entity_lifecycle import (
     evaluate_actions,
     is_lifecycle_eligible,
 )
+from dnd_ai.domain.record_authoring import CAMPAIGN_ORIGINATED_TYPES
+from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.content_preconditions import (
     replacement_publish_blocked_reason,
     type_specific_blocks,
 )
+from dnd_ai.queries.world_authority import resolve_world_authority
 
 REFERENCE_VISIBLE_CANON_STATUSES = ("canon", "superseded", "deprecated")
 
@@ -51,15 +54,38 @@ def lifecycle_hidden_entity_ids(
     *,
     world_id: uuid.UUID,
     mode: Literal["reference", "browse"],
+    viewer_user_id: uuid.UUID,
     can_edit_canon: bool,
     include_noncanon: bool = False,
     include_archived: bool = False,
 ) -> frozenset[uuid.UUID]:
     """IDs of lifecycle-managed entities in `world_id` the caller must not see
     in `mode`. Bounded by the number of non-published/archived definitions in
-    one world; one query per request."""
+    one world; one query per request.
+
+    `can_edit_canon` is the caller's *campaign* capability to see unpublished
+    definitions; it only takes effect while `viewer_user_id` also holds
+    `world.canon.read_private` on `world_id` (docs/adr/0020-scoped-system-world-and-
+    campaign-roles.md, D6). Drafts belong to the world, so a GM of another campaign
+    on the same world never sees them; every caller passes its own user, so no
+    call site can skip the world check. The campaign-originated records
+    (`dnd_ai.domain.record_authoring.CAMPAIGN_ORIGINATED_TYPES`: player-character
+    identity and item instances, decisions E2/E3) are the exception: the campaign
+    capability alone shows their unpublished versions, as it alone authors them."""
+    campaign_can_edit = can_edit_canon
+    if can_edit_canon:
+        authority = resolve_world_authority(connection, user_id=viewer_user_id, world_id=world_id)
+        can_edit_canon = authority is not None and authority.has_capability(
+            WORLD_CANON_READ_PRIVATE
+        )
+    # Per row: the campaign-originated types follow the campaign capability, everything else the
+    # world-checked one.
+    edit_ok = (
+        "(CASE WHEN et.code = ANY(CAST(:originated AS text[])) "
+        "THEN CAST(:campaign_can_edit AS boolean) ELSE CAST(:can_edit AS boolean) END)"
+    )
     rows = connection.execute(
-        text("""
+        text(f"""
             SELECT e.entity_id
             FROM core.entities e
             JOIN core.entity_types et ON et.entity_type_id = e.entity_type_id
@@ -71,16 +97,16 @@ def lifecycle_hidden_entity_ids(
                     ls.code = 'deleted'
                     OR (
                         :mode = 'reference'
-                        AND NOT CAST(:can_edit AS boolean)
+                        AND NOT {edit_ok}
                         AND NOT (cs.code = ANY(CAST(:reference_visible AS text[])))
                     )
                     OR (
                         :mode = 'browse'
                         AND NOT (
                             (cs.code = 'canon'
-                             OR (CAST(:can_edit AS boolean) AND CAST(:inc_noncanon AS boolean)))
+                             OR ({edit_ok} AND CAST(:inc_noncanon AS boolean)))
                             AND (ls.code = 'active'
-                                 OR (CAST(:can_edit AS boolean) AND CAST(:inc_archived AS boolean)))
+                                 OR ({edit_ok} AND CAST(:inc_archived AS boolean)))
                         )
                     )
                   )
@@ -88,14 +114,81 @@ def lifecycle_hidden_entity_ids(
         {
             "world_id": world_id,
             "eligible": sorted(ENTITY_LIFECYCLE_ELIGIBLE_TYPE_CODES),
+            "originated": sorted(CAMPAIGN_ORIGINATED_TYPES),
             "mode": mode,
             "can_edit": can_edit_canon,
+            "campaign_can_edit": campaign_can_edit,
             "inc_noncanon": include_noncanon,
             "inc_archived": include_archived,
             "reference_visible": list(REFERENCE_VISIBLE_CANON_STATUSES),
         },
     ).scalars()
     return frozenset(rows)
+
+
+ARCHIVE_HISTORY_CANON_STATUSES = REFERENCE_VISIBLE_CANON_STATUSES
+
+
+@dataclass(frozen=True)
+class ArchiveScope:
+    """What an archive-browsing list adds to or removes from its candidates: `only` restricts the
+    list to exactly these ids (`None` = no restriction) and `hidden` removes ids from it."""
+
+    only: frozenset[uuid.UUID] | None
+    hidden: frozenset[uuid.UUID]
+
+
+def knowledge_archive_scope(
+    connection: Connection,
+    *,
+    world_id: uuid.UUID,
+    lifecycle: Literal["archived", "all"],
+) -> ArchiveScope:
+    """The Knowledge archive-browse scope for a caller already known to be eligible (baseline
+    campaign `canon.edit` and `world.canon.read_private`; the API decides that).
+
+    * `archived`: operationally archived claims whose canon status is `canon`.
+    * `all`: every published-history claim (canon status `canon`, `superseded` or `deprecated`),
+      active or archived. Unpublished claims (draft, proposed, approved, rejected) never appear in
+      archive browsing whatever their lifecycle, since they live in the review views; deleted
+      claims never appear. Unlike `active`, `all` does not include the editor's unpublished claims.
+    """
+    if lifecycle == "archived":
+        rows = connection.execute(
+            text("""
+                SELECT e.entity_id
+                FROM core.entities e
+                JOIN core.entity_types et ON et.entity_type_id = e.entity_type_id
+                JOIN core.canon_statuses cs ON cs.canon_status_id = e.canon_status_id
+                JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = e.lifecycle_status_id
+                WHERE e.world_id = :world_id
+                  AND et.code = 'knowledge_item'
+                  AND ls.code = 'archived'
+                  AND cs.code = 'canon'
+            """),
+            {"world_id": world_id},
+        ).scalars()
+        return ArchiveScope(only=frozenset(rows), hidden=frozenset())
+
+    # `all` is published history in either operational state: canon status and lifecycle status
+    # are independent, so an active draft is excluded exactly like an archived one.
+    not_history = connection.execute(
+        text("""
+            SELECT e.entity_id
+            FROM core.entities e
+            JOIN core.entity_types et ON et.entity_type_id = e.entity_type_id
+            JOIN core.canon_statuses cs ON cs.canon_status_id = e.canon_status_id
+            JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = e.lifecycle_status_id
+            WHERE e.world_id = :world_id
+              AND et.code = 'knowledge_item'
+              AND NOT (
+                    cs.code = ANY(CAST(:history AS text[]))
+                    AND ls.code IN ('active', 'archived')
+                  )
+        """),
+        {"world_id": world_id, "history": list(ARCHIVE_HISTORY_CANON_STATUSES)},
+    ).scalars()
+    return ArchiveScope(only=None, hidden=frozenset(not_history))
 
 
 @dataclass(frozen=True)

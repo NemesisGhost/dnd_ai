@@ -33,6 +33,8 @@ import {
     validateName,
 } from "../utils/authoringValidation"
 import { describeBranchPoint } from "../utils/branchPoints"
+import { ActionUnavailableNotice, ReadTerminal } from "../components/authoring/ReadState"
+import { blockedReasonFor } from "../utils/blockedReason"
 import "../components/authoring/authoring.css"
 
 export function CreateTimelineBranchPage() {
@@ -60,19 +62,30 @@ export function CreateTimelineBranchPage() {
                 {!ready ? (
                     <p role="status">Loading…</p>
                 ) : timeline.state.kind !== "ready" ? (
-                    <p role="alert">This timeline does not exist, or you do not have access to it.</p>
-                ) : !timeline.state.data.available_actions.includes("create_branch") ? (
-                    <p role="alert">
-                        This timeline cannot be branched right now. It may be archived, or its world may
-                        be.{" "}
-                        <Link to={`/worlds/${worldId}/timelines/${timelineId}`}>Back to the timeline</Link>
-                    </p>
-                ) : (
-                    <BranchForm
-                        worldId={worldId}
-                        parentId={timelineId}
-                        options={points.state.kind === "ready" ? points.state.data.items : []}
+                    <ReadTerminal
+                        states={[timeline.state]}
+                        what="timeline"
+                        onRetry={timeline.refetch}
+                        back={{ to: `/worlds/${worldId}`, label: "Back to the world" }}
                     />
+                ) : !timeline.state.data.available_actions.includes("create_branch") ? (
+                    <ActionUnavailableNotice
+                        noun="timeline"
+                        action="branch"
+                        reason={blockedReasonFor(timeline.state.data.blocked_actions, "create_branch")}
+                        archived={timeline.state.data.lifecycle_status === "archived"}
+                        back={{ to: `/worlds/${worldId}/timelines/${timelineId}`, label: "Back to the timeline" }}
+                    />
+                ) : points.state.kind !== "ready" ? (
+                    // A catalog that did not load is not an empty one: no form opens on a guess.
+                    <ReadTerminal
+                        states={[points.state]}
+                        what="list of branch points"
+                        onRetry={points.refetch}
+                        back={{ to: `/worlds/${worldId}/timelines/${timelineId}`, label: "Back to the timeline" }}
+                    />
+                ) : (
+                    <BranchForm worldId={worldId} parentId={timelineId} options={points.state.data.items} />
                 )}
             </div>
         </div>

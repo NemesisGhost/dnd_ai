@@ -37,6 +37,7 @@ interface QuestSnapshot {
     campaignId: string
     questId: string
     characterId: string | null
+    partyId: string | null
     requestVersion: number
     state: QuestState
 }
@@ -49,6 +50,7 @@ export function useQuest(
     campaignId: string,
     questId: string,
     characterId: string | null,
+    partyId: string | null = null,
 ): UseQuestResult {
     const { reload } = useSession()
 
@@ -60,6 +62,7 @@ export function useQuest(
             campaignId,
             questId,
             characterId,
+            partyId,
             requestVersion: 0,
             state: initialState,
         }))
@@ -74,6 +77,7 @@ export function useQuest(
         snapshot.campaignId === campaignId &&
         snapshot.questId === questId &&
         snapshot.characterId === characterId &&
+        snapshot.partyId === partyId &&
         snapshot.requestVersion === requestVersion
 
     const state = snapshotMatchesRequest
@@ -87,6 +91,7 @@ export function useQuest(
             campaignId,
             questId,
             characterId,
+            partyId,
             controller.signal,
         )
             .then((quest) => {
@@ -98,6 +103,7 @@ export function useQuest(
                     campaignId,
                     questId,
                     characterId,
+                    partyId,
                     requestVersion,
                     state: {
                         status: "success",
@@ -134,6 +140,7 @@ export function useQuest(
                         campaignId,
                         questId,
                         characterId,
+                        partyId,
                         requestVersion,
                         state: {
                             status: "unavailable",
@@ -146,6 +153,7 @@ export function useQuest(
                     campaignId,
                     questId,
                     characterId,
+                    partyId,
                     requestVersion,
                     state: {
                         status: "error",
@@ -161,6 +169,7 @@ export function useQuest(
         campaignId,
         questId,
         characterId,
+        partyId,
         reload,
         requestVersion,
     ])

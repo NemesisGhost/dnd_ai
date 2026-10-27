@@ -9,6 +9,8 @@ import {
     MemoryRouter,
     Route,
     Routes,
+    useLocation,
+    useNavigate,
 } from "react-router"
 import {
     afterEach,
@@ -74,7 +76,6 @@ function buildSessionState(
             },
             csrf_token: "fixture-csrf-token",
             browser_session_id: "browser-session-a",
-            is_platform_administrator: false,
             startup_campaign_id: "campaign-a",
             campaign_preferences: {
               startup_mode: "resume_last_visited",
@@ -169,6 +170,36 @@ function typeInSearch(value: string) {
     })
 }
 
+function RouterProbe() {
+    const location = useLocation()
+    const navigate = useNavigate()
+
+    return (
+        <>
+            <output data-testid="location">
+                {location.pathname + location.search}
+            </output>
+            <button type="button" onClick={() => void navigate(-1)}>
+                Probe back
+            </button>
+        </>
+    )
+}
+
+function archiveBrowsePage(available: boolean) {
+    return {
+        ...knowledgePageFixture,
+        archive_browse_available: available,
+    }
+}
+
+function mockPage(page: unknown) {
+    useKnowledgeItemsMock.mockReturnValue({
+        state: { status: "success", page: page as never },
+        retry: vi.fn(),
+    })
+}
+
 function renderCampaignKnowledgePage(
     path = "/app/campaign-a/knowledge",
     characterId: string | null = "character-a",
@@ -185,6 +216,7 @@ function renderCampaignKnowledgePage(
             }}
         >
             <MemoryRouter initialEntries={[path]}>
+                <RouterProbe />
                 <Routes>
                     <Route
                         path="/app/:campaignId/knowledge"
@@ -216,6 +248,8 @@ describe("CampaignKnowledgePage", () => {
             "",
             null,
             null,
+            true,
+            "active",
         )
 
         expect(
@@ -250,7 +284,7 @@ describe("CampaignKnowledgePage", () => {
                 )
                 .map((option) => option.textContent),
         ).toEqual([
-            "No party selected",
+            "All parties",
             "The Adventuring Party",
             "The Merchant Council",
         ])
@@ -275,6 +309,8 @@ describe("CampaignKnowledgePage", () => {
             "",
             null,
             "next-knowledge-page",
+            true,
+            "active",
         )
 
         fireEvent.change(
@@ -298,6 +334,8 @@ describe("CampaignKnowledgePage", () => {
             "",
             null,
             null,
+            true,
+            "active",
         )
 
         typeInSearch("ossuary")
@@ -312,6 +350,8 @@ describe("CampaignKnowledgePage", () => {
             "ossuary",
             null,
             null,
+            true,
+            "active",
         )
 
         fireEvent.click(
@@ -341,6 +381,8 @@ describe("CampaignKnowledgePage", () => {
             "ossuary",
             null,
             null,
+            true,
+            "active",
         )
     })
 
@@ -505,6 +547,8 @@ describe("CampaignKnowledgePage", () => {
             "",
             null,
             null,
+            true,
+            "active",
         )
 
         act(() => {
@@ -521,6 +565,8 @@ describe("CampaignKnowledgePage", () => {
             "oss",
             null,
             null,
+            true,
+            "active",
         )
     })
 
@@ -592,6 +638,8 @@ describe("CampaignKnowledgePage", () => {
             "",
             null,
             "next-knowledge-page",
+            true,
+            "active",
         )
 
         getSelectedCharacterId.mockReturnValue(
@@ -632,6 +680,8 @@ describe("CampaignKnowledgePage", () => {
             "",
             null,
             null,
+            true,
+            "active",
         )
 
         expect(
@@ -702,6 +752,8 @@ describe("CampaignKnowledgePage", () => {
             "ossuary",
             null,
             "next-knowledge-page",
+            true,
+            "active",
         )
 
         fireEvent.click(
@@ -720,6 +772,8 @@ describe("CampaignKnowledgePage", () => {
             "",
             null,
             null,
+            true,
+            "active",
         )
 
         expect(
@@ -868,5 +922,260 @@ describe("CampaignKnowledgePage", () => {
         expect(
             useKnowledgeItemsMock,
         ).not.toHaveBeenCalled()
+    })
+
+    it("includes public knowledge by default and only drops it on an explicit opt-out", () => {
+        renderCampaignKnowledgePage()
+
+        fireEvent.click(
+            screen.getByRole("button", {
+                name: "Next page",
+            }),
+        )
+
+        fireEvent.click(
+            screen.getByRole("checkbox", {
+                name: "Include public knowledge",
+            }),
+        )
+
+        expect(
+            useKnowledgeItemsMock,
+        ).toHaveBeenLastCalledWith(
+            "campaign-a",
+            "known",
+            "character-a",
+            null,
+            "",
+            null,
+            null,
+            false,
+            "active",
+        )
+
+        // Selecting a party adds that audience; it never re-enables or
+        // removes public knowledge on its own.
+        fireEvent.change(
+            screen.getByRole("combobox", {
+                name: "Party",
+            }),
+            {
+                target: {
+                    value: "party-primary",
+                },
+            },
+        )
+
+        expect(
+            useKnowledgeItemsMock,
+        ).toHaveBeenLastCalledWith(
+            "campaign-a",
+            "known",
+            "character-a",
+            "party-primary",
+            "",
+            null,
+            null,
+            false,
+            "active",
+        )
+
+        // The public-only view ignores the opt-out.
+        fireEvent.change(
+            screen.getByRole("combobox", {
+                name: "View",
+            }),
+            {
+                target: {
+                    value: "public",
+                },
+            },
+        )
+
+        expect(
+            useKnowledgeItemsMock,
+        ).toHaveBeenLastCalledWith(
+            "campaign-a",
+            "public",
+            "character-a",
+            "party-primary",
+            "",
+            null,
+            null,
+            true,
+            "active",
+        )
+    })
+    describe("archived knowledge browsing", () => {
+        it("offers no Lifecycle filter unless the server says archive browsing is available", () => {
+            mockPage(knowledgePageFixture)
+            renderCampaignKnowledgePage()
+
+            expect(
+                screen.queryByRole("combobox", { name: "Lifecycle" }),
+            ).not.toBeInTheDocument()
+        })
+
+        it("offers Active / Archived / All when the server allows it", () => {
+            mockPage(archiveBrowsePage(true))
+            renderCampaignKnowledgePage()
+
+            const lifecycle = screen.getByRole("combobox", {
+                name: "Lifecycle",
+            })
+            expect(lifecycle).toHaveValue("active")
+            expect(
+                Array.from(
+                    (lifecycle as HTMLSelectElement).options,
+                ).map((option) => option.label),
+            ).toEqual(["Active", "Archived", "All"])
+        })
+
+        it("keeps the lifecycle in the address, resets the cursor, and requests it", () => {
+            mockPage(archiveBrowsePage(true))
+            renderCampaignKnowledgePage()
+
+            fireEvent.click(
+                screen.getByRole("button", { name: "Next page" }),
+            )
+            expect(useKnowledgeItemsMock).toHaveBeenLastCalledWith(
+                "campaign-a",
+                "known",
+                "character-a",
+                null,
+                "",
+                null,
+                "next-knowledge-page",
+                true,
+                "active",
+            )
+
+            fireEvent.change(
+                screen.getByRole("combobox", { name: "Lifecycle" }),
+                { target: { value: "archived" } },
+            )
+
+            expect(useKnowledgeItemsMock).toHaveBeenLastCalledWith(
+                "campaign-a",
+                "known",
+                "character-a",
+                null,
+                "",
+                null,
+                null,
+                true,
+                "archived",
+            )
+            expect(screen.getByTestId("location")).toHaveTextContent(
+                "/app/campaign-a/knowledge?lifecycle=archived",
+            )
+
+            fireEvent.change(
+                screen.getByRole("combobox", { name: "Lifecycle" }),
+                { target: { value: "active" } },
+            )
+            expect(screen.getByTestId("location").textContent).toBe(
+                "/app/campaign-a/knowledge",
+            )
+        })
+
+        it("restores lifecycle, view, search and party from the address", () => {
+            mockPage(archiveBrowsePage(true))
+            renderCampaignKnowledgePage(
+                "/app/campaign-a/knowledge?lifecycle=all&view=rumors&q=ossuary&party_id=party-primary",
+            )
+
+            expect(useKnowledgeItemsMock).toHaveBeenLastCalledWith(
+                "campaign-a",
+                "rumors",
+                "character-a",
+                "party-primary",
+                "ossuary",
+                null,
+                null,
+                true,
+                "all",
+            )
+            expect(
+                screen.getByRole("searchbox", { name: "Search" }),
+            ).toHaveValue("ossuary")
+            expect(
+                screen.getByRole("combobox", { name: "View" }),
+            ).toHaveValue("rumors")
+        })
+
+        it("treats an unknown lifecycle or view in the address as the default", () => {
+            mockPage(knowledgePageFixture)
+            renderCampaignKnowledgePage(
+                "/app/campaign-a/knowledge?lifecycle=everything&view=bogus",
+            )
+
+            expect(useKnowledgeItemsMock).toHaveBeenLastCalledWith(
+                "campaign-a",
+                "known",
+                "character-a",
+                null,
+                "",
+                null,
+                null,
+                true,
+                "active",
+            )
+        })
+
+        it("brings the previous lifecycle, view and search back with Back", () => {
+            mockPage(archiveBrowsePage(true))
+            renderCampaignKnowledgePage()
+
+            fireEvent.change(
+                screen.getByRole("combobox", { name: "View" }),
+                { target: { value: "rumors" } },
+            )
+            fireEvent.change(
+                screen.getByRole("combobox", { name: "Lifecycle" }),
+                { target: { value: "archived" } },
+            )
+            typeInSearch("shard")
+
+            expect(screen.getByTestId("location").textContent).toBe(
+                "/app/campaign-a/knowledge?view=rumors&lifecycle=archived&q=shard",
+            )
+
+            // Typing replaces; the lifecycle change was the last entry that was pushed.
+            fireEvent.click(
+                screen.getByRole("button", { name: "Probe back" }),
+            )
+            expect(screen.getByTestId("location").textContent).toBe(
+                "/app/campaign-a/knowledge?view=rumors",
+            )
+            expect(
+                screen.getByRole("searchbox", { name: "Search" }),
+            ).toHaveValue("")
+            expect(useKnowledgeItemsMock).toHaveBeenLastCalledWith(
+                "campaign-a",
+                "rumors",
+                "character-a",
+                null,
+                "",
+                null,
+                null,
+                true,
+                "active",
+            )
+        })
+
+        it("falls back to the active list when the server refuses the lifecycle", () => {
+            useKnowledgeItemsMock.mockReturnValue({
+                state: { status: "lifecycle_rejected" },
+                retry: vi.fn(),
+            })
+            renderCampaignKnowledgePage(
+                "/app/campaign-a/knowledge?lifecycle=archived&view=rumors",
+            )
+
+            expect(screen.getByTestId("location").textContent).toBe(
+                "/app/campaign-a/knowledge?view=rumors",
+            )
+        })
     })
 })

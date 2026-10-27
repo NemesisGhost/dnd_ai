@@ -23,7 +23,10 @@ Usage:
   uv run python scripts/bootstrap_admin.py \\
       --login-name admin --display-name "Platform Administrator" \\
       [--email admin@example.com]
-      # prints the new user id and a one-time activation token/link the
+      # creates the first account with the system `admin` and `gm` roles (so the first
+      # administrator can also create the first world and campaign; every account
+      # created afterwards starts as `player`), then prints the new user id and a
+      # one-time activation token/link the
       # very first administrator uses to choose their own password
       # (POST /auth/activate) — paste it somewhere the administrator can
       # retrieve it; it is never printed, logged, or retrievable again.

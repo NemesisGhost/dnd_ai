@@ -9,15 +9,34 @@ interface WorldEntityListProps {
     campaignId: string
     page: WorldEntityPage
     refreshing?: boolean
+    // 1-based number of the page shown.
+    pageNumber?: number
+    hasPreviousPage?: boolean
+    onPreviousPage?: () => void
     onNextPage: () => void
+    // Current search text and selected category noun, for the empty state.
+    query?: string
+    categoryNoun?: string
+    onClearSearch?: () => void
+    returnSearch?: string
 }
 
 export function WorldEntityList({
     campaignId,
     page,
     refreshing = false,
+    pageNumber = 1,
+    hasPreviousPage = false,
+    onPreviousPage,
     onNextPage,
+    query = "",
+    categoryNoun = "entries",
+    onClearSearch,
+    returnSearch,
 }: WorldEntityListProps) {
+    const hasNextPage = page.next_cursor !== null
+    const searching = query !== ""
+
     return (
         <div
             role="region"
@@ -33,21 +52,43 @@ export function WorldEntityList({
                             key={entity.entity_id}
                             campaignId={campaignId}
                             entity={entity}
+                            returnSearch={returnSearch}
                         />
                     ))}
                 </CardGrid>
             ) : (
-                <p>No world entities match the current search.</p>
+                <div className="world-empty">
+                    <p>
+                        {searching
+                            ? `No ${categoryNoun} match “${query}”.`
+                            : `No ${categoryNoun} to show here yet.`}
+                    </p>
+                    {searching && onClearSearch !== undefined && (
+                        <button type="button" onClick={onClearSearch}>
+                            Clear search
+                        </button>
+                    )}
+                </div>
             )}
 
-            {page.next_cursor !== null && (
-                <button
-                    type="button"
-                    disabled={refreshing}
-                    onClick={onNextPage}
-                >
-                    Next page
-                </button>
+            {(hasPreviousPage || hasNextPage) && (
+                <nav aria-label="World pagination" className="world-pager">
+                    <button
+                        type="button"
+                        disabled={refreshing || !hasPreviousPage || onPreviousPage === undefined}
+                        onClick={onPreviousPage}
+                    >
+                        Previous page
+                    </button>
+                    <span className="world-pager__position">Page {pageNumber}</span>
+                    <button
+                        type="button"
+                        disabled={refreshing || !hasNextPage}
+                        onClick={onNextPage}
+                    >
+                        Next page
+                    </button>
+                </nav>
             )}
         </div>
     )

@@ -40,7 +40,7 @@ describe("useCreateAccount", () => {
 
         const { result } = renderHook(() => useCreateAccount(onSuccess))
         act(() => {
-            result.current.submit("new.gm", "New GM", null)
+            result.current.submit("new.gm", "New GM", null, ["player"])
         })
 
         await waitFor(() => {
@@ -50,6 +50,7 @@ describe("useCreateAccount", () => {
             "new.gm",
             "New GM",
             null,
+            ["player"],
             "fixture-csrf-token",
             expect.anything(),
         )
@@ -61,7 +62,7 @@ describe("useCreateAccount", () => {
         const { result } = renderHook(() => useCreateAccount(vi.fn()))
 
         act(() => {
-            result.current.submit("new.gm", "New GM", null)
+            result.current.submit("new.gm", "New GM", null, ["player"])
         })
 
         await waitFor(() => {
@@ -74,7 +75,7 @@ describe("useCreateAccount", () => {
         const { result } = renderHook(() => useCreateAccount(vi.fn()))
 
         act(() => {
-            result.current.submit("new.gm", "New GM", null)
+            result.current.submit("new.gm", "New GM", null, ["player"])
         })
 
         expect(createAccountMock).not.toHaveBeenCalled()

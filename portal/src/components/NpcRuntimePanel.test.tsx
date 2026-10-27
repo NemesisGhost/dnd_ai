@@ -1,0 +1,328 @@
+import { fireEvent, screen, within } from "@testing-library/react"
+import { afterEach, describe, expect, it, vi } from "vitest"
+import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
+import { bootstrapWith, installMockServer, renderAuthoringRoutes } from "../test/authoringHarness"
+import { NpcRuntimePanel } from "./NpcRuntimePanel"
+
+const BASE = "/campaigns/c1/characters/n1"
+
+const TIME = {
+    world_time_id: "t1",
+    calendar_id: "cal",
+    year: 1,
+    month_number: null,
+    day: null,
+    hour: null,
+    minute: null,
+    label: null,
+    precision: "year",
+    sort_key: 1,
+    display: "Year 1",
+}
+
+const OPTIONS = {
+    body: {
+        conditions: [{ value: "c-poisoned", label: "Poisoned", code: "poisoned" }],
+        resources: [{ value: "r-ki", label: "Ki points", code: "ki_points" }],
+    },
+}
+
+function setup(
+    canon = "canon",
+    capabilities = ["canon.edit"],
+    lifecycle = "active",
+    hitPoints: { current: number | null; maximum: number | null } = { current: 12, maximum: 20 },
+    optionsFail = false,
+) {
+    const server = installMockServer()
+    // The NPC's authoring view is the world's private side: a campaign GM with no world role is refused
+    // it. The panel must never depend on it, so the mock refuses it for everyone.
+    server.on("GET", /authoring\/npcs\/n1$/, {
+        status: 403,
+        body: { error: { code: "world_authority_required", message: "m", correlation_id: "x" } },
+    })
+    server.on(
+        "GET",
+        /npc-runtime-options/,
+        optionsFail
+            ? { status: 500, body: { error: { code: "internal_error", message: "m", correlation_id: "x" } } }
+            : OPTIONS,
+    )
+    server.on("GET", BASE, {
+        body: {
+            character_id: "n1",
+            name: "Mira",
+            canon_status: canon,
+            lifecycle_status: lifecycle,
+            species_code: "human",
+            size_category: "medium",
+            current_hit_points: hitPoints.current,
+            maximum_hit_points: hitPoints.maximum,
+            temporary_hit_points: null,
+            exhaustion_level: null,
+            death_save_successes: null,
+            death_save_failures: null,
+            current_location_id: null,
+            active_encounter_id: null,
+            conditions: [{ condition_code: "poisoned", source_description: "A dart" }],
+            resources: [{ resource_code: "ki_points", current_amount: 2, maximum_amount: 4 }],
+        },
+    })
+    server.on("GET", /world-times/, { body: { items: [TIME], next_cursor: null } })
+    server.on("GET", /calendars/, { body: { calendars: [] } })
+    server.on("GET", /world\/search/, {
+        body: {
+            items: [
+                { entity_id: "l1", category: "location", entity_type_code: "settlement", name: "Stonebridge", summary: null },
+            ],
+            next_cursor: null,
+        },
+    })
+    server.on("POST", new RegExp(`${BASE}/`), { body: { changed: true } })
+    server.on("POST", "/campaigns/c1/travel", { body: { changed: true, moved: ["n1"], already_there: [] } })
+    renderAuthoringRoutes({
+        initialEntry: "/app/c1/npc",
+        bootstrap: bootstrapWith({
+            campaigns: [{ ...sessionBootstrapFixture.campaigns[0]!, campaign_id: "c1", capabilities }],
+        }),
+        routes: [{ path: "/app/:campaignId/npc", element: <NpcRuntimePanel campaignId="c1" characterId="n1" /> }],
+    })
+    return server
+}
+
+async function chooseTime() {
+    fireEvent.change(await screen.findByRole("combobox", { name: "When this happens" }), { target: { value: "t1" } })
+}
+
+afterEach(() => {
+    vi.unstubAllGlobals()
+})
+
+describe("NpcRuntimePanel", () => {
+    it("shows the state of a published NPC", async () => {
+        setup()
+        expect(await screen.findByText("12 of 20")).toBeInTheDocument()
+        expect(screen.getByText(/poisoned \(A dart\)/)).toBeInTheDocument()
+        expect(screen.getByText(/ki points: 2 of 4/)).toBeInTheDocument()
+    })
+
+    it("asks to publish a draft NPC and shows no controls", async () => {
+        setup("draft")
+        expect(await screen.findByText(/Publish this NPC/)).toBeInTheDocument()
+        expect(screen.queryByRole("form", { name: "Adjust hit points" })).not.toBeInTheDocument()
+    })
+
+    it("runs a published NPC without any read of its private authoring view, and a refusal of it cannot blank the panel", async () => {
+        const server = setup()
+        expect(await screen.findByRole("form", { name: "Adjust hit points" })).toBeInTheDocument()
+        expect(server.calls.filter((c) => /authoring\/npcs\//.test(c.path))).toHaveLength(0)
+        expect(screen.queryByText(/could not be loaded/)).not.toBeInTheDocument()
+    })
+
+    it("takes the status of the NPC from its own read, so a superseded NPC is not run either", async () => {
+        setup("superseded")
+        expect(await screen.findByText(/Publish this NPC/)).toBeInTheDocument()
+        expect(screen.queryByRole("form", { name: "Adjust hit points" })).not.toBeInTheDocument()
+    })
+
+    it("shows nothing and sends nothing to people who cannot edit", async () => {
+        const server = setup("canon", [])
+        await new Promise((resolve) => setTimeout(resolve, 50))
+        expect(screen.queryByRole("heading", { name: "Run this NPC" })).not.toBeInTheDocument()
+        expect(server.callsTo("GET", BASE)).toHaveLength(0)
+    })
+
+    it("offers no controls for an archived NPC, even one that was published", async () => {
+        const server = setup("canon", ["canon.edit"], "archived")
+        expect(await screen.findByText(/This NPC is archived. Restore it before/)).toBeInTheDocument()
+        expect(screen.queryByRole("form", { name: "Adjust hit points" })).not.toBeInTheDocument()
+        expect(screen.queryByRole("form", { name: "Move this NPC" })).not.toBeInTheDocument()
+        expect(server.calls.filter((c) => c.method !== "GET")).toHaveLength(0)
+    })
+
+    it("offers no hit point change for an NPC with no starting state, and says how to set it", async () => {
+        const server = setup("canon", ["canon.edit"], "active", { current: null, maximum: null })
+        expect(await screen.findByText(/Set this NPC's starting hit points before changing them/)).toBeInTheDocument()
+        expect(screen.queryByRole("form", { name: "Adjust hit points" })).not.toBeInTheDocument()
+        expect(screen.getByRole("link", { name: "Set starting state" })).toHaveAttribute(
+            "href",
+            "/app/c1/characters/n1/builds",
+        )
+        // The rest of the panel still runs the NPC, and nothing was sent.
+        expect(screen.getByRole("form", { name: "Move this NPC" })).toBeInTheDocument()
+        expect(server.calls.filter((c) => c.method !== "GET")).toHaveLength(0)
+    })
+
+    it("explains a refusal for missing starting state if the server still gives one", async () => {
+        const server = setup()
+        server.on("POST", `${BASE}/hit-points`, {
+            status: 409,
+            body: {
+                error: { code: "character_state_not_initialized", message: "m", correlation_id: "x" },
+            },
+        })
+        await chooseTime()
+        const form = await screen.findByRole("form", { name: "Adjust hit points" })
+        fireEvent.change(within(form).getByRole("textbox", { name: /Change/ }), { target: { value: "-5" } })
+        fireEvent.click(within(form).getByRole("button", { name: "Apply hit point change" }))
+        expect(await screen.findByText(/no starting hit points yet/)).toBeInTheDocument()
+    })
+
+    it("keeps the panel and status up when only the runtime options fail, withholds their controls and retries", async () => {
+        const server = setup("canon", ["canon.edit"], "active", { current: 12, maximum: 20 }, true)
+        expect(await screen.findByText(/The choices for this could not be loaded/)).toBeInTheDocument()
+        // Core panel: status, hit points, location, and the current conditions and resources.
+        expect(screen.getByRole("heading", { name: "Run this NPC" })).toBeInTheDocument()
+        expect(screen.getByText("12 of 20")).toBeInTheDocument()
+        expect(screen.getByRole("form", { name: "Adjust hit points" })).toBeInTheDocument()
+        expect(screen.getByRole("form", { name: "Move this NPC" })).toBeInTheDocument()
+        expect(screen.getByText(/poisoned \(A dart\)/)).toBeInTheDocument()
+        // Controls that need the options are withheld, and no private authoring read was made.
+        expect(screen.queryByRole("form", { name: "Add a condition" })).not.toBeInTheDocument()
+        expect(screen.queryByRole("form", { name: "Adjust a resource" })).not.toBeInTheDocument()
+        expect(screen.queryByRole("button", { name: /Remove Poisoned/ })).not.toBeInTheDocument()
+        expect(server.calls.filter((c) => /authoring\/npcs\//.test(c.path))).toHaveLength(0)
+        expect(server.calls.filter((c) => c.method !== "GET")).toHaveLength(0)
+
+        // A visible retry reads the choices again and the controls come back.
+        server.on("GET", /npc-runtime-options/, OPTIONS)
+        fireEvent.click(screen.getByRole("button", { name: "Try loading the choices again" }))
+        expect(await screen.findByRole("form", { name: "Add a condition" })).toBeInTheDocument()
+        expect(screen.getByRole("form", { name: "Adjust a resource" })).toBeInTheDocument()
+        expect(screen.queryByText(/could not be loaded/)).not.toBeInTheDocument()
+    })
+
+    it("needs a time before anything is sent", async () => {
+        const server = setup()
+        const form = await screen.findByRole("form", { name: "Adjust hit points" })
+        fireEvent.change(within(form).getByRole("textbox", { name: /Change/ }), { target: { value: "-5" } })
+        fireEvent.click(within(form).getByRole("button", { name: "Apply hit point change" }))
+        expect(await screen.findByText(/Choose when this happens first/)).toBeInTheDocument()
+        expect(server.callsTo("POST", `${BASE}/hit-points`)).toHaveLength(0)
+    })
+
+    it("adjusts hit points at the chosen time", async () => {
+        const server = setup()
+        await chooseTime()
+        const form = await screen.findByRole("form", { name: "Adjust hit points" })
+        fireEvent.change(within(form).getByRole("textbox", { name: /Change/ }), { target: { value: "-5" } })
+        fireEvent.click(within(form).getByRole("button", { name: "Apply hit point change" }))
+        await vi.waitFor(() => expect(server.callsTo("POST", `${BASE}/hit-points`)).toHaveLength(1))
+        expect(server.callsTo("POST", `${BASE}/hit-points`)[0]!.body).toEqual({ world_time_id: "t1", delta: -5 })
+    })
+
+    it("reports a hit point change whose character re-read fails, holds further changes, and recovers by reading only", async () => {
+        const server = setup()
+        let readFails = false
+        const character = (hp: number) => ({
+            character_id: "n1",
+            name: "Mira",
+            canon_status: "canon",
+            lifecycle_status: "active",
+            species_code: "human",
+            size_category: "medium",
+            current_hit_points: hp,
+            maximum_hit_points: 20,
+            temporary_hit_points: null,
+            exhaustion_level: null,
+            death_save_successes: null,
+            death_save_failures: null,
+            current_location_id: null,
+            active_encounter_id: null,
+            conditions: [],
+            resources: [],
+        })
+        let hp = 12
+        server.on("GET", BASE, () => (readFails ? { status: 500, body: {} } : { body: character(hp) }))
+        server.on("POST", `${BASE}/hit-points`, () => {
+            hp = 7
+            readFails = true
+            return { body: { changed: true } }
+        })
+        await chooseTime()
+        const form = await screen.findByRole("form", { name: "Adjust hit points" })
+        fireEvent.change(within(form).getByRole("textbox", { name: /Change/ }), { target: { value: "-5" } })
+        fireEvent.click(within(form).getByRole("button", { name: "Apply hit point change" }))
+
+        expect(await screen.findByText(/Hit points changed\. The latest NPC information could not be loaded/)).toBeInTheDocument()
+        const live = screen.getByTestId("authoring-announcer")
+        expect(live).toHaveTextContent("Saved, but the latest data could not be loaded.")
+        expect(live).not.toHaveTextContent(/^Hit points changed/)
+        // The panel keeps the hit points it last read (12), and a second change is held rather than
+        // typed against numbers that are no longer true.
+        expect(screen.getByText("12 of 20")).toBeInTheDocument()
+        expect(screen.getByRole("button", { name: "Apply hit point change" })).toBeDisabled()
+        expect(server.callsTo("POST", `${BASE}/hit-points`)).toHaveLength(1)
+
+        readFails = false
+        fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+        expect(await screen.findByText("7 of 20")).toBeInTheDocument()
+        await vi.waitFor(() => expect(live).toHaveTextContent("Hit points changed"))
+        expect(screen.getByRole("button", { name: "Apply hit point change" })).toBeEnabled()
+        expect(server.callsTo("POST", `${BASE}/hit-points`)).toHaveLength(1)
+    })
+
+    it("rejects a zero or fractional change", async () => {
+        const server = setup()
+        await chooseTime()
+        const form = await screen.findByRole("form", { name: "Adjust hit points" })
+        fireEvent.change(within(form).getByRole("textbox", { name: /Change/ }), { target: { value: "0" } })
+        fireEvent.click(within(form).getByRole("button", { name: "Apply hit point change" }))
+        expect(await screen.findByText(/whole number other than zero/)).toBeInTheDocument()
+        expect(server.callsTo("POST", `${BASE}/hit-points`)).toHaveLength(0)
+    })
+
+    it("adds and removes a condition", async () => {
+        const server = setup()
+        await chooseTime()
+        const form = await screen.findByRole("form", { name: "Add a condition" })
+        fireEvent.change(within(form).getByRole("combobox", { name: "Condition" }), { target: { value: "c-poisoned" } })
+        fireEvent.change(within(form).getByRole("textbox", { name: /Source/ }), { target: { value: "A trap" } })
+        fireEvent.click(within(form).getByRole("button", { name: "Add condition" }))
+        await vi.waitFor(() => expect(server.callsTo("POST", `${BASE}/conditions`)).toHaveLength(1))
+        expect(server.callsTo("POST", `${BASE}/conditions`)[0]!.body).toEqual({
+            world_time_id: "t1",
+            condition_id: "c-poisoned",
+            source_description: "A trap",
+        })
+    })
+
+    it("removes a condition by its rules id", async () => {
+        const server = setup()
+        await chooseTime()
+        fireEvent.click(await screen.findByRole("button", { name: "Remove Poisoned" }))
+        await vi.waitFor(() =>
+            expect(server.callsTo("POST", `${BASE}/conditions/c-poisoned/remove`)).toHaveLength(1),
+        )
+    })
+
+    it("adjusts a resource and moves the NPC", async () => {
+        const server = setup()
+        await chooseTime()
+        const resourceForm = await screen.findByRole("form", { name: "Adjust a resource" })
+        fireEvent.change(within(resourceForm).getByRole("combobox", { name: "Resource" }), { target: { value: "r-ki" } })
+        fireEvent.change(within(resourceForm).getByRole("textbox", { name: /Change/ }), { target: { value: "-1" } })
+        fireEvent.click(within(resourceForm).getByRole("button", { name: "Adjust resource" }))
+        await vi.waitFor(() => expect(server.callsTo("POST", `${BASE}/resources`)).toHaveLength(1))
+        expect(server.callsTo("POST", `${BASE}/resources`)[0]!.body).toEqual({
+            world_time_id: "t1",
+            resource_definition_id: "r-ki",
+            delta: -1,
+        })
+        const move = screen.getByRole("form", { name: "Move this NPC" })
+        fireEvent.focus(within(move).getByRole("combobox", { name: "Move to" }))
+        fireEvent.click(await within(move).findByRole("option", { name: /Stonebridge/ }))
+        await vi.waitFor(() =>
+            expect(within(move).getByRole("button", { name: "Move NPC" })).toBeEnabled(),
+        )
+        fireEvent.click(within(move).getByRole("button", { name: "Move NPC" }))
+        await vi.waitFor(() => expect(server.callsTo("POST", "/campaigns/c1/travel")).toHaveLength(1))
+        expect(server.callsTo("POST", "/campaigns/c1/travel")[0]!.body).toEqual({
+            destination_location_id: "l1",
+            character_ids: ["n1"],
+            party_id: null,
+            route_id: null,
+            world_time_id: "t1",
+        })
+    })
+})

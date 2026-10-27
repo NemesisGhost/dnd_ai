@@ -112,7 +112,11 @@ describe("CreateNpcPage", () => {
 
     it("creates a draft and replaces history with the character detail", async () => {
         const { server, router } = setup()
-        server.on("POST", CREATE_PATH, { status: 201, body: { ...VIEW, changed: true } })
+        // A typed write answers with a receipt only; the detail page refetches.
+        server.on("POST", CREATE_PATH, {
+            status: 201,
+            body: { npc_id: "n1", row_version: 1, created: true, changed: true },
+        })
         await screen.findByRole("combobox", { name: /Species/ })
         fireEvent.change(screen.getByRole("textbox", { name: /Name/ }), { target: { value: " Mira " } })
         fireEvent.change(screen.getByRole("combobox", { name: /Species/ }), { target: { value: "sp-elf" } })

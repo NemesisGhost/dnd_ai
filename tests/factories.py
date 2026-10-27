@@ -217,30 +217,79 @@ def make_user(
     return value
 
 
-def make_platform_administrator(
-    connection: Connection, display_name: str = "Admin", *, status_code: str = "active"
+def make_world_role_assignment(
+    connection: Connection,
+    world_id: uuid.UUID,
+    user_id: uuid.UUID,
+    role_code: str,
+    *,
+    granted_by_user_id: uuid.UUID | None = None,
 ) -> uuid.UUID:
-    """A `security.users` row with `is_platform_administrator = true`
-    (revision 099_local_authentication, Phase 11R workstream A) — for
-    tests exercising `dnd_ai.commands.local_auth.create_local_account`/
-    `issue_password_reset_token`, both gated on this flag rather than any
-    campaign-scoped capability. A direct raw insert (this module's own
-    docstring's established "production commands don't exist yet"
-    exception applies loosely here too: `dnd_ai.commands.local_auth.
-    bootstrap_initial_admin` is the real production path, but it only
-    succeeds against a completely empty `security.users` table — never
-    true in this shared session database once any other fixture has run —
-    so ordinary tests need this shortcut instead)."""
+    """An open `security.world_memberships` assignment of the world role `role_code` -- a direct raw
+    insert, the shortcut ordinary tests use instead of the Sharing commands. A campaign GM edits
+    shared canon only with the matching world role (docs/adr/0020-scoped-system-world-and-
+    campaign-roles.md), so a factory-built GM that must author or preview drafts is given one."""
     value = connection.execute(
         text("""
-            INSERT INTO security.users (display_name, lifecycle_status_id, is_platform_administrator)
-            VALUES (:name, :status, true)
-            RETURNING user_id
+            INSERT INTO security.world_memberships
+                (world_id, user_id, world_role_id, membership_status_id, granted_by_user_id)
+            VALUES (
+                :w, :u,
+                (SELECT world_role_id FROM security.world_roles WHERE code = :role),
+                (SELECT membership_status_id FROM security.membership_statuses WHERE code = 'active'),
+                :granted_by
+            )
+            RETURNING world_membership_id
         """),
-        {"name": display_name, "status": status_id(connection, "lifecycle_statuses", status_code)},
+        {"w": world_id, "u": user_id, "role": role_code, "granted_by": granted_by_user_id},
     ).scalar()
     assert isinstance(value, uuid.UUID)
     return value
+
+
+def make_system_role_assignment(
+    connection: Connection,
+    user_id: uuid.UUID,
+    role_code: str,
+    *,
+    granted_by_user_id: uuid.UUID | None = None,
+    revoked: bool = False,
+) -> uuid.UUID:
+    """An open (or, with `revoked=True`, revoked) `security.user_system_roles`
+    assignment of the system role `role_code` -- a direct raw insert, the
+    shortcut ordinary tests use instead of the (admin-gated) commands."""
+    value = connection.execute(
+        text("""
+            INSERT INTO security.user_system_roles
+                (user_id, system_role_id, granted_by_user_id, revoked_at, revoked_by_user_id)
+            SELECT CAST(:u AS uuid), sr.system_role_id, CAST(:granted_by AS uuid),
+                   CASE WHEN CAST(:revoked AS boolean) THEN now() ELSE NULL END,
+                   CASE WHEN CAST(:revoked AS boolean) THEN CAST(:granted_by AS uuid) END
+            FROM security.system_roles sr WHERE sr.code = :code
+            RETURNING user_system_role_id
+        """),
+        {"u": user_id, "code": role_code, "granted_by": granted_by_user_id, "revoked": revoked},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_platform_administrator(
+    connection: Connection, display_name: str = "Admin", *, status_code: str = "active"
+) -> uuid.UUID:
+    """A user holding an open system `admin` assignment (docs/adr/0020-scoped-
+    system-world-and-campaign-roles.md) -- for tests exercising
+    `dnd_ai.commands.local_auth.create_local_account`/`issue_password_reset_token`,
+    gated on platform administration rather than any campaign-scoped
+    capability. Admin alone implies no GM, world, or campaign authority; tests
+    that also need world creation add `make_system_role_assignment(..., "gm")`.
+    A direct raw insert: `dnd_ai.commands.local_auth.bootstrap_initial_admin` is
+    the real production path, but it only succeeds against a completely empty
+    `security.users` table -- never true in this shared session database once
+    any other fixture has run."""
+    user_id = make_user(connection, display_name, status_code=status_code)
+    make_system_role_assignment(connection, user_id, "admin")
+    return user_id
 
 
 def make_external_identity(
@@ -375,6 +424,16 @@ def make_role_capability(
     )
 
 
+def system_role_id(connection: Connection, code: str) -> uuid.UUID:
+    """A built-in system-template role (`campaign_id IS NULL`) by code."""
+    value = connection.execute(
+        text("SELECT role_id FROM security.roles WHERE campaign_id IS NULL AND code = :code"),
+        {"code": code},
+    ).scalar()
+    assert isinstance(value, uuid.UUID), code
+    return value
+
+
 def make_membership_role(
     connection: Connection,
     campaign_membership_id: uuid.UUID,
@@ -461,7 +520,9 @@ def make_relationship_type_capability(
     connection.execute(
         text(
             "INSERT INTO security.character_relationship_type_capabilities "
-            "(character_relationship_type_id, capability_id) VALUES (:rt, :c)"
+            "(character_relationship_type_id, capability_id) VALUES (:rt, :c) "
+            # The production matrix (migration 114) already seeds the built-in pairs.
+            "ON CONFLICT DO NOTHING"
         ),
         {"rt": character_relationship_type_id, "c": capability_id},
     )

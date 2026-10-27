@@ -20,6 +20,7 @@ const tl = (over: Partial<TimelineSummary> = {}): TimelineSummary => ({
 const world = (over: object = {}) => ({
     world_id: "w1",
     name: "World One",
+    capabilities: ["campaign.create", "timeline.manage", "world.manage", "world.view"],
     timelines: [
         tl(),
         tl({ timeline_id: "t2", name: "Bridge", is_primary: false, parent_timeline_id: "t1" }),

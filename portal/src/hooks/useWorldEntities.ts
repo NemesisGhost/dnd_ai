@@ -9,6 +9,7 @@ import {
 } from "../api/world"
 import { useSession } from "../context/SessionContext"
 import type {
+    CharacterType,
     WorldCategory,
     WorldEntityPage,
 } from "../types/world"
@@ -47,6 +48,7 @@ interface WorldEntitiesSnapshot {
     query: string
     cursor: string | null
     includeHidden: boolean
+    characterType: CharacterType | undefined
     requestVersion: number
     state: WorldEntitiesState
 }
@@ -70,6 +72,7 @@ export function useWorldEntities(
     query: string,
     cursor: string | null = null,
     includeHidden = false,
+    characterType?: CharacterType,
 ): UseWorldEntitiesResult {
     const { reload } = useSession()
 
@@ -83,6 +86,7 @@ export function useWorldEntities(
             query,
             cursor,
             includeHidden,
+            characterType,
             requestVersion: 0,
             state: initialState,
         }))
@@ -99,6 +103,7 @@ export function useWorldEntities(
         snapshot.query === query &&
         snapshot.cursor === cursor &&
         snapshot.includeHidden === includeHidden &&
+        snapshot.characterType === characterType &&
         snapshot.requestVersion === requestVersion
 
     // A campaign switch is a new authorization scope: never carry the
@@ -127,6 +132,7 @@ export function useWorldEntities(
                 query,
                 cursor,
                 ...(includeHidden ? { includeHidden } : {}),
+                ...(characterType === undefined ? {} : { characterType }),
             },
             controller.signal,
         )
@@ -141,6 +147,7 @@ export function useWorldEntities(
                     query,
                     cursor,
                     includeHidden,
+                    characterType,
                     requestVersion,
                     state: {
                         status: "success",
@@ -173,6 +180,7 @@ export function useWorldEntities(
                         query,
                         cursor,
                         includeHidden,
+                        characterType,
                         requestVersion,
                         state: initialState,
                     })
@@ -191,6 +199,7 @@ export function useWorldEntities(
                         query,
                         cursor,
                         includeHidden,
+                        characterType,
                         requestVersion,
                         state: {
                             status: "unavailable",
@@ -205,6 +214,7 @@ export function useWorldEntities(
                     query,
                     cursor,
                     includeHidden,
+                    characterType,
                     requestVersion,
                     state: {
                         status: "error",
@@ -222,6 +232,7 @@ export function useWorldEntities(
         query,
         cursor,
         includeHidden,
+        characterType,
         reload,
         requestVersion,
     ])

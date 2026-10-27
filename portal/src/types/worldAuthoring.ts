@@ -23,6 +23,9 @@ export interface TimelineSummary {
     branch_point: BranchPoint | null
     lifecycle_status: "active" | "archived" | string
     row_version: number
+    // Whether the caller may start a campaign on this timeline (ADR 0020, D7). Only the world
+    // detail carries it; the reason is `timeline_in_use` or `world_use_not_permitted`.
+    campaign_hosting?: { eligible: boolean; reason: string | null }
 }
 
 export interface ManagedCampaign {
@@ -40,6 +43,9 @@ export interface WorldSummary {
     row_version: number
     primary_timeline_id: string | null
     capabilities: string[]
+    // Display only: the caller's world roles and whether they hold a use grant.
+    role_codes?: string[]
+    has_use_grant?: boolean
 }
 
 export interface RulesetVersionOption {

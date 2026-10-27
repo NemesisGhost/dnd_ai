@@ -24,6 +24,7 @@ from dnd_ai.commands.npcs import create_npc, update_npc
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.domain.authoring import DESCRIPTION_MAX_LENGTH, NAME_MAX_LENGTH, REASON_MAX_LENGTH
 from dnd_ai.domain.npc_authoring import NPC_TEXT_MAX_LENGTH, SIZE_CATEGORIES
+from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.npc_authoring import NpcAuthoringView, get_npc_authoring, list_species_options
 
 from ._authoring import (
@@ -31,9 +32,9 @@ from ._authoring import (
     finish_campaign_idempotency,
     start_campaign_idempotency,
 )
-from ._content_support import audit_content_write, clean_note
+from ._content_support import audit_content_write, clean_note, write_receipt
 from ._shared import timeline_world_id
-from .access import require_campaign_capability
+from .access import can_create_definitions, require_campaign_capability, restrict_authoring_view
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .errors import NotFoundError
@@ -44,6 +45,13 @@ _BASE = "/campaigns/{campaign_id}/authoring/npcs"
 _CAPABILITY = "canon.edit"
 
 _Access = Annotated[AccessContext, Depends(require_campaign_capability(_CAPABILITY))]
+# Reads of the private side of shared world canon (drafts, GM-only prep, revisions,
+# provenance, sources, the review queue) also need `world.canon.read_private`
+# (docs/adr/0020-scoped-system-world-and-campaign-roles.md, D6).
+_PrivateRead = Annotated[
+    AccessContext,
+    Depends(require_campaign_capability(_CAPABILITY, world_capability=WORLD_CANON_READ_PRIVATE)),
+]
 _Conn = Annotated[Connection, Depends(get_connection)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
@@ -72,7 +80,7 @@ class UpdateNpcRequest(_NpcFields):
 def _view_json(view: NpcAuthoringView, *, changed: bool | None = None) -> dict[str, Any]:
     labels = dict(SIZE_CATEGORIES)
     body: dict[str, Any] = {
-        "npc_id": str(view.npc_id),
+        "npc_id": str(view.character_id),
         "name": view.name,
         "summary": view.summary,
         "species": {"species_id": str(view.species_id), "name": view.species_name},
@@ -105,16 +113,15 @@ def _view_json(view: NpcAuthoringView, *, changed: bool | None = None) -> dict[s
 def _response(
     connection: Connection, result: ContentWriteResult, *, changed: bool
 ) -> dict[str, Any]:
-    view = get_npc_authoring(connection, world_id=result.world_id, npc_id=result.entity_id)
-    assert view is not None
-    return _view_json(view, changed=changed)
+    del connection
+    return write_receipt(result, "npc_id", changed=changed)
 
 
 @router.get(_BASE + "/options")
-def npc_options_endpoint(access: _Access, connection: _Conn) -> dict[str, Any]:
+def npc_options_endpoint(access: _PrivateRead, connection: _Conn) -> dict[str, Any]:
     world_id = timeline_world_id(connection, access.timeline_id)
     return {
-        "can_create": True,
+        "can_create": can_create_definitions(connection, access=access),
         "species": [
             {
                 "species_id": str(s.species_id),
@@ -173,6 +180,9 @@ def create_npc_endpoint(
         access=access,
         correlation_id=correlation_id,
         reason=None,
+        view_loader=lambda: get_npc_authoring(
+            connection, world_id=result.world_id, npc_id=result.entity_id
+        ),
     )
     response = _response(connection, result, changed=True)
     finish_campaign_idempotency(connection, idem, status_code=201, body=response)
@@ -181,13 +191,13 @@ def create_npc_endpoint(
 
 @router.get(_BASE + "/{npc_id}")
 def get_npc_authoring_endpoint(
-    npc_id: uuid.UUID, access: _Access, connection: _Conn
+    npc_id: uuid.UUID, access: _PrivateRead, connection: _Conn
 ) -> dict[str, Any]:
     world_id = timeline_world_id(connection, access.timeline_id)
     view = get_npc_authoring(connection, world_id=world_id, npc_id=npc_id)
     if view is None:
         raise NotFoundError()
-    return _view_json(view)
+    return restrict_authoring_view(connection, access=access, body=_view_json(view))
 
 
 @router.post(_BASE + "/{npc_id}/update")
@@ -235,6 +245,9 @@ def update_npc_endpoint(
             access=access,
             correlation_id=correlation_id,
             reason=clean_note(body.change_note),
+            view_loader=lambda: get_npc_authoring(
+                connection, world_id=result.world_id, npc_id=result.entity_id
+            ),
         )
     response = _response(connection, result, changed=result.changed)
     finish_campaign_idempotency(connection, idem, status_code=200, body=response)

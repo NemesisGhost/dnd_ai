@@ -3,6 +3,7 @@ import { createAccount } from "../api/createAccount"
 import { PlatformAccountsRequestError } from "../api/platformAccounts"
 import { useSession } from "../context/SessionContext"
 import type { CreateAccountResponse } from "../types/platformAccounts"
+import type { SystemRoleCode } from "../utils/systemAccess"
 
 export type CreateAccountStatus =
     | { kind: "idle" }
@@ -13,7 +14,12 @@ export type CreateAccountStatus =
 
 export interface UseCreateAccountResult {
     status: CreateAccountStatus
-    submit: (loginName: string, displayName: string, email: string | null) => void
+    submit: (
+        loginName: string,
+        displayName: string,
+        email: string | null,
+        systemRoleCodes: readonly SystemRoleCode[],
+    ) => void
     reset: () => void
 }
 
@@ -33,7 +39,12 @@ export function useCreateAccount(
     }, [])
 
     const submit = useCallback(
-        (loginName: string, displayName: string, email: string | null) => {
+        (
+            loginName: string,
+            displayName: string,
+            email: string | null,
+            systemRoleCodes: readonly SystemRoleCode[],
+        ) => {
             if (status.kind === "pending") {
                 return
             }
@@ -49,6 +60,7 @@ export function useCreateAccount(
                 loginName,
                 displayName,
                 email,
+                systemRoleCodes,
                 sessionState.bootstrap.csrf_token,
                 controller.signal,
             )

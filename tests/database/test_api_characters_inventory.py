@@ -192,6 +192,7 @@ class Fixture:
         full_view_membership_id = make_campaign_membership(
             connection, self.campaign_id, self.full_view_user_id
         )
+        self.full_view_membership_id = full_view_membership_id
         make_membership_role(connection, full_view_membership_id, base_role_id)
         self.full_view_relationship_type_id = make_character_relationship_type(connection)
         make_relationship_type_capability(
@@ -250,6 +251,22 @@ class Fixture:
             self.character_id,
             self.summary_view_relationship_type_id,
             timeline_id=self.timeline_id,
+        )
+
+        # Once held the same full-view relationship, since revoked: the sections must agree with
+        # the endpoints that no longer let this person in.
+        self.revoked_user_id = make_user(connection, "Inventory Query Revoked Viewer")
+        revoked_membership_id = make_campaign_membership(
+            connection, self.campaign_id, self.revoked_user_id
+        )
+        make_membership_role(connection, revoked_membership_id, base_role_id)
+        make_membership_character_relationship(
+            connection,
+            revoked_membership_id,
+            self.character_id,
+            self.full_view_relationship_type_id,
+            timeline_id=self.timeline_id,
+            revoked=True,
         )
 
         # A member with no role/capability at all — proves ForbiddenError,
@@ -447,6 +464,7 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
                     fixture.base_view_user_id,
                     fixture.full_view_user_id,
                     fixture.summary_view_user_id,
+                    fixture.revoked_user_id,
                     fixture.capless_user_id,
                     fixture.outsider_user_id,
                 ]
@@ -666,3 +684,113 @@ def test_a_holder_in_a_different_world_is_rejected(
     with client_factory(f.gm_user_id) as client:
         response = client.get(_inventory_url(f, f.other_world_character_id))
     assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Section eligibility (`sections` on the character read) agrees with each section endpoint
+# ---------------------------------------------------------------------------
+
+_SECTION_ENDPOINTS = {
+    "sheet": "/sheet",
+    "inventory": "/inventory",
+    "relationships": "/relationships",
+    "parties": "/parties",
+}
+
+
+def _assert_sections_agree(
+    client: TestClient, f: Fixture, character_id: uuid.UUID
+) -> dict[str, bool] | None:
+    """The `sections` the character read reports must equal whether each section endpoint answers
+    200. When the character read itself is refused no section may open either."""
+    base = f"/campaigns/{f.campaign_id}/characters/{character_id}"
+    detail = client.get(base)
+    answers = {
+        name: client.get(base + path).status_code for name, path in _SECTION_ENDPOINTS.items()
+    }
+    if detail.status_code != 200:
+        assert all(code != 200 for code in answers.values()), (detail.status_code, answers)
+        return None
+    sections = detail.json()["sections"]
+    assert sections["details"] is True
+    for name, code in answers.items():
+        assert sections[name] is (code == 200), (name, sections, answers)
+    return {name: bool(sections[name]) for name in sections}
+
+
+@pytest.mark.parametrize(
+    ("persona", "expected"),
+    [
+        # GM (canon.edit): the full tier, so the sheet and the inventory open.
+        ("gm_user_id", {"sheet": True, "inventory": True, "relationships": True}),
+        # An independent full-view relationship (an owner, controller, portrayer or direct
+        # grantee all resolve to this same capability).
+        ("full_view_user_id", {"sheet": True, "inventory": True, "relationships": True}),
+        ("privileged_user_id", {"sheet": True, "inventory": True, "relationships": True}),
+        # The summary tier: the page and the relationships, never the sheet or the inventory.
+        ("summary_view_user_id", {"sheet": False, "inventory": False, "relationships": True}),
+        # Campaign view alone, a revoked relationship: no character-view tier, nothing opens.
+        ("base_view_user_id", None),
+        ("revoked_user_id", None),
+        ("capless_user_id", None),
+        ("outsider_user_id", None),
+    ],
+)
+def test_sections_agree_with_each_section_endpoint(
+    client_factory: Callable[[uuid.UUID], TestClient],
+    f: Fixture,
+    persona: str,
+    expected: dict[str, bool] | None,
+) -> None:
+    with client_factory(getattr(f, persona)) as client:
+        sections = _assert_sections_agree(client, f, f.character_id)
+    if expected is None:
+        assert sections is None
+    else:
+        assert {k: sections[k] for k in expected} == expected  # type: ignore[index]
+
+
+def test_an_explicit_deny_of_view_full_removes_the_full_sections_with_the_endpoints(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as setup:
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            lookup_id(setup, "security", "capabilities", "capability_id", "character.view_full"),
+            character_id=f.character_id,
+            grantee_campaign_membership_id=f.full_view_membership_id,
+            effect="deny",
+        )
+    with client_factory(f.full_view_user_id) as client:
+        sections = _assert_sections_agree(client, f, f.character_id)
+    # With the only tier denied nothing is left to open, and the endpoints say the same.
+    assert sections is None
+
+
+def test_parties_are_offered_only_with_view_knowledge_for_the_character(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with client_factory(f.full_view_user_id) as client:
+        before = _assert_sections_agree(client, f, f.character_id)
+    assert before is not None and before["parties"] is False
+    with postgres_engine.begin() as setup:
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            lookup_id(
+                setup, "security", "capabilities", "capability_id", "character.view_knowledge"
+            ),
+            character_id=f.character_id,
+            grantee_campaign_membership_id=f.full_view_membership_id,
+        )
+    with client_factory(f.full_view_user_id) as client:
+        after = _assert_sections_agree(client, f, f.character_id)
+    assert after is not None and after["parties"] is True
+
+
+def test_a_character_of_another_world_opens_no_section(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.gm_user_id) as client:
+        assert _assert_sections_agree(client, f, f.other_world_character_id) is None

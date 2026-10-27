@@ -44,6 +44,7 @@ interface MemberAccessCardProps {
     assignableCharacters: AssignableCharacter[]
     assignableRelationshipTypes: AssignableCharacterRelationshipType[]
     grantableResourceCapabilities: GrantableResourceCapability[]
+    preselectCharacterId: string | null
     onChanged: (message: string) => void
     onMutationStart: () => void
 }
@@ -56,6 +57,7 @@ function MemberAccessCard({
     assignableCharacters,
     assignableRelationshipTypes,
     grantableResourceCapabilities,
+    preselectCharacterId,
     onChanged,
     onMutationStart,
 }: MemberAccessCardProps) {
@@ -134,7 +136,7 @@ function MemberAccessCard({
 
                 <section aria-labelledby={relationshipsHeadingId}>
                     <h3 id={relationshipsHeadingId}>
-                        Character relationships
+                        Character access
                     </h3>
 
                     {member.character_relationships.length > 0 ? (
@@ -185,7 +187,7 @@ function MemberAccessCard({
                             )}
                         </ul>
                     ) : (
-                        <p>No character relationships.</p>
+                        <p>No character access.</p>
                     )}
 
                     <AddCharacterRelationship
@@ -196,6 +198,7 @@ function MemberAccessCard({
                         }
                         memberDisplayName={member.display_name}
                         assignableCharacters={assignableCharacters}
+                        preselectCharacterId={preselectCharacterId}
                         assignableRelationshipTypes={
                             assignableRelationshipTypes
                         }
@@ -459,6 +462,9 @@ function AccessGroupCard({
 interface AccessPageProps {
     campaignId: string
     overview: CampaignAccessOverview
+    // A character the relationship control starts on (from `?character=<id>` on
+    // a player character's page); the server still validates everything.
+    preselectCharacterId?: string | null
     onChanged: (message: string) => void
     onMutationStart: () => void
 }
@@ -466,11 +472,11 @@ interface AccessPageProps {
 export function AccessPage({
     campaignId,
     overview,
+    preselectCharacterId = null,
     onChanged,
     onMutationStart,
 }: AccessPageProps) {
     const { state: sessionState } = useSession()
-
     const campaignName =
         sessionState.status === "authenticated"
             ? (sessionState.bootstrap.campaigns.find(
@@ -484,11 +490,11 @@ export function AccessPage({
             <h1 id="access-heading">Access</h1>
 
             <p className="access-page__description">
-                Current members, roles, character relationships, and direct
+                Current members, roles, character access, and direct
                 resource access for this campaign. Adding an existing
                 account as a member, changing and removing an existing
                 member's roles, adding/changing/revoking a member's
-                character relationships, adding/revoking a member's direct
+                character access, adding/revoking a member's direct
                 resource access, and removing an existing member are
                 available below; other access changes are not available
                 here yet.
@@ -522,6 +528,7 @@ export function AccessPage({
                                 grantableResourceCapabilities={
                                     overview.grantable_resource_capabilities
                                 }
+                                preselectCharacterId={preselectCharacterId}
                                 onChanged={onChanged}
                                 onMutationStart={onMutationStart}
                             />

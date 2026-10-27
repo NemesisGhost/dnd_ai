@@ -45,3 +45,8 @@ export interface UpdateNpcBody extends NpcFieldsBody {
     expected_row_version: number
     change_note?: string | null
 }
+
+// A player character's identity authoring view: the NPC view with its own id field.
+export type PlayerCharacterAuthoringView = Omit<NpcAuthoringView, "npc_id"> & {
+    player_character_id: string
+}

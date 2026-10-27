@@ -5,13 +5,16 @@ import type { LucideIcon } from "lucide-react"
 import {
   BookOpen,
   CalendarDays,
+  ClipboardCheck,
   LayoutList,
   MessageCircleQuestion,
+  Package,
   PanelLeftClose,
   PanelLeftOpen,
   ScrollText,
   ShieldCheck,
   Users,
+  UsersRound,
 } from "lucide-react"
 import { useSession } from "../context/SessionContext"
 import { useWorkspaceHierarchy } from "../context/WorkspaceHierarchyContext"
@@ -19,25 +22,47 @@ import { useSelectCampaign } from "../hooks/useSelectCampaign"
 import { useSidebarCollapsed } from "../hooks/useSidebarCollapsed"
 import type { NavigationDrawerControl } from "../hooks/useNavigationDrawer"
 import { resolveNavigationCampaign } from "../utils/resolveNavigationCampaign"
+import { canCreateWorlds } from "../utils/worldAccess"
 import { AccessNavGroup } from "./AccessNavGroup"
 import { CampaignHomeNavGroup } from "./CampaignHomeNavGroup"
 import { DisabledNavItem } from "./DisabledNavItem"
-import { SELECT_CAMPAIGN_FIRST } from "./navigationReasons"
+import { ItemsNavGroup } from "./ItemsNavGroup"
+import { KnowledgeNavGroup } from "./KnowledgeNavGroup"
+import { NEEDS_WORLD_ROLE, SELECT_CAMPAIGN_FIRST } from "./navigationReasons"
 import { WorldsNavGroup } from "./WorldsNavGroup"
 
 interface NavigationItem {
   path: string
   label: string
   icon: LucideIcon
+  // Shown only on a campaign that grants this capability.
+  capability?: string
+  // Offered as a link only where the caller also holds this capability on the campaign's world
+  // (the bootstrap's server-computed list); otherwise shown as unavailable, never requested.
+  worldCapability?: string
 }
 
 // Campaign Home is rendered by CampaignHomeNavGroup; the campaign world page
 // lives under the Worlds group (WorldsNavGroup).
 const campaignNavigationItems: NavigationItem[] = [
   { path: "characters", label: "Characters", icon: Users },
+  { path: "parties", label: "Parties", icon: UsersRound },
   { path: "quests", label: "Quests", icon: ScrollText },
   { path: "sessions", label: "Sessions", icon: CalendarDays },
   { path: "knowledge", label: "Knowledge", icon: BookOpen },
+  {
+    path: "review",
+    label: "Review queue",
+    icon: ClipboardCheck,
+    capability: "canon.edit",
+    worldCapability: "world.canon.read_private",
+  },
+  {
+    path: "items",
+    label: "Items",
+    icon: Package,
+    capability: "canon.edit",
+  },
 ]
 
 const NAVIGATION_LIST_ID = "main-navigation-list"
@@ -61,7 +86,8 @@ interface PortalSidebarProps {
 //   authenticated     full content.
 //
 // Campaign-specific links target the *resolved* authorized campaign (route
-// campaign, else last visited, else startup) — never a guessed or stale ID.
+// campaign; else, on a world route, a campaign of that world; else last
+// visited, else startup) — never a guessed or stale ID.
 export function PortalSidebar({ drawer }: PortalSidebarProps) {
   const { state } = useSession()
   const routeMatch = useMatch("/app/:campaignId/*")
@@ -71,7 +97,19 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
   // World and timeline context come from the route-derived hierarchy, which
   // confirms them against server data (WorkspaceHierarchyProvider) — never a
   // raw route ID.
-  const { authoringWorldId, authoringTimelineId } = useWorkspaceHierarchy()
+  const {
+    activeWorldId,
+    activeTimelineId,
+    authoringWorldId,
+    authoringTimelineId,
+    authoringWorldAccess,
+    routeNamesWorld,
+    routeNamesTimeline,
+    world,
+  } = useWorkspaceHierarchy()
+  // The caller's capabilities on the world the route confirmed, from the server's own read.
+  const worldHas = (capability: string): boolean =>
+    world?.kind === "ready" && world.data.capabilities.includes(capability)
   const navigationRef = useRef<HTMLElement>(null)
   const { open: drawerOpen, closeAndFocusToggle, close } = drawer
 
@@ -146,7 +184,12 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
   const resolvedCampaign =
     bootstrap === null
       ? null
-      : resolveNavigationCampaign(bootstrap, routeCampaignId)
+      : resolveNavigationCampaign(bootstrap, routeCampaignId, {
+          routeNamesWorld,
+          routeNamesTimeline,
+          activeWorldId,
+          activeTimelineId,
+        })
   const authorizedRouteCampaignId =
     bootstrap?.campaigns.some(
       (campaign) => campaign.campaign_id === routeCampaignId,
@@ -155,6 +198,11 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
       : undefined
   const campaignPath =
     resolvedCampaign === null ? null : `/app/${resolvedCampaign.campaign_id}`
+
+  // The caller's world capabilities for the campaign the links point at, from the bootstrap
+  // (server-computed). Fails closed: no list, no link to a page that would only be refused.
+  const worldRoleHas = (capability: string): boolean =>
+    resolvedCampaign?.world_capabilities?.includes(capability) === true
 
   const toggleLabel = collapsed ? "Expand navigation" : "Collapse navigation"
   const CollapseIcon = collapsed ? PanelLeftOpen : PanelLeftClose
@@ -218,21 +266,60 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
               />
 
               <WorldsNavGroup
-                activeWorldId={authoringWorldId}
+                activeWorldId={
+                  authoringWorldAccess === "none" ? null : authoringWorldId
+                }
                 activeTimelineId={authoringTimelineId}
+                canAuthorWorld={authoringWorldAccess === "edit" || worldHas("timeline.manage")}
+                canShareWorld={worldHas("world.share")}
+                canReadCanon={worldHas("world.canon.read")}
                 campaignWorldPath={
                   campaignPath === null ? null : `${campaignPath}/world`
                 }
-                canCreateWorld={
-                  bootstrap.global_capabilities?.includes("world.create") ===
-                  true
-                }
+                canCreateWorld={canCreateWorlds(bootstrap)}
                 collapsed={collapsed}
                 onNavigate={close}
               />
 
-              {campaignNavigationItems.map((item) => {
+              {campaignNavigationItems
+                .filter(
+                  (item) =>
+                    item.capability === undefined ||
+                    resolvedCampaign?.capabilities.includes(item.capability) ===
+                      true,
+                )
+                .map((item) => {
                 const Icon = item.icon
+                // Knowledge expands into Claims and Member preview for anyone who can
+                // preview a member; everyone else keeps the plain link below.
+                if (
+                  item.path === "knowledge" &&
+                  campaignPath !== null &&
+                  resolvedCampaign?.capabilities.includes("access.manage") ===
+                    true
+                ) {
+                  return (
+                    <KnowledgeNavGroup
+                      key={item.path}
+                      campaignPath={campaignPath}
+                      collapsed={collapsed}
+                      onNavigate={close}
+                    />
+                  )
+                }
+                // Items expands into Inventory and Definitions (the capability filter above
+                // already limits it to `canon.edit`).
+                if (item.path === "items" && campaignPath !== null) {
+                  return (
+                    <ItemsNavGroup
+                      key={item.path}
+                      campaignPath={campaignPath}
+                      collapsed={collapsed}
+                      canOpenDefinitions={worldRoleHas("world.canon.read_private")}
+                      onNavigate={close}
+                    />
+                  )
+                }
                 return (
                   <li key={item.path}>
                     {campaignPath === null ? (
@@ -240,6 +327,14 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
                         icon={Icon}
                         label={item.label}
                         reason={SELECT_CAMPAIGN_FIRST}
+                        collapsed={collapsed}
+                      />
+                    ) : item.worldCapability !== undefined &&
+                      !worldRoleHas(item.worldCapability) ? (
+                      <DisabledNavItem
+                        icon={Icon}
+                        label={item.label}
+                        reason={NEEDS_WORLD_ROLE}
                         collapsed={collapsed}
                       />
                     ) : (

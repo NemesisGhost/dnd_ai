@@ -26,6 +26,10 @@ export interface CampaignContext {
   character_perspectives: CharacterPerspective[]
   selected_character_id: string | null
   capabilities: string[]
+  // The caller's capabilities on this campaign's *world* (ADR 0020), independent of
+  // `capabilities`. Optional only so older fixtures keep compiling; the server always
+  // sends it. Decides what to offer; the server re-checks every request.
+  world_capabilities?: readonly string[]
 }
 
 export interface FeatureManifest {
@@ -50,13 +54,20 @@ export interface SessionBootstrap {
   user: UserSummary
   csrf_token: string
   browser_session_id: string | null
-  // Phase 13E checkpoint 9: the only server-authoritative signal for
-  // whether to render an admin surface at all (CP 10's /admin/accounts
-  // page) — campaign-scoped access.manage grants nothing here.
-  is_platform_administrator: boolean
-  // Phase 14: server-computed global (non-campaign) capabilities, currently
-  // `world.create` for human principals. Optional only so older fixtures keep
-  // compiling; the server always sends it. Never inferred client-side.
+  // Browser-session lifetime: the idle window slides with each authenticated
+  // request, the absolute expiry is fixed. Null/absent for a non-browser
+  // caller. Used only to sign the user out of the UI when the session lapses.
+  session_idle_timeout_seconds?: number | null
+  session_absolute_expires_at?: string | null
+  // The caller's unrevoked system roles (admin, gm, player, observer): display
+  // only. Optional so older fixtures keep compiling; the server always sends it.
+  system_roles?: readonly string[]
+  // Server-computed global (non-campaign) capabilities for this user: the union
+  // of the system capabilities of their system roles (accounts.manage,
+  // system_roles.manage, system_roles.grant_admin while the deployment enables
+  // it, world.create, campaign.host, world.administer; ADR 0020). Optional only
+  // so older fixtures keep compiling; the server always sends it. Never inferred
+  // client-side (see utils/systemAccess.ts and utils/worldAccess.ts).
   global_capabilities?: readonly string[]
   // Server-computed landing campaign (docs/UI_DESIGN.md §4.2): null means
   // "no campaign to resume" and the portal lands on /campaigns. Always null or

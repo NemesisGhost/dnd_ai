@@ -10,7 +10,12 @@ from dnd_ai.commands.worlds import update_world
 from dnd_ai.domain.access import LOCAL_AUTH_ISSUER
 from dnd_ai.domain.authoring import WorldAlreadyClaimedError
 from tests.builders import make_authored_world
-from tests.factories import make_external_identity, make_user, make_world
+from tests.factories import (
+    make_external_identity,
+    make_system_role_assignment,
+    make_user,
+    make_world,
+)
 
 pytestmark = pytest.mark.database
 
@@ -33,6 +38,8 @@ def test_list_unowned_includes_only_worlds_with_no_membership_rows(
 
 def test_claim_makes_the_user_the_owner_who_can_then_author_it(db_connection: Connection) -> None:
     user = _local_user(db_connection, "claimer")
+    # Managing a world (here: renaming it) needs the system `gm` role as well (ADR 0020, D11).
+    make_system_role_assignment(db_connection, user, "gm")
     legacy = make_world(db_connection, "claim-legacy-world", name="Legacy")
     result = claim_world_ownership.claim_world(db_connection, world_id=legacy, user_id=user)
     assert result.user_id == user

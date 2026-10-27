@@ -1,9 +1,12 @@
 import {
+    useCallback,
     useEffect,
+    useRef,
     useState,
 } from "react"
 import {
     useParams,
+    useSearchParams,
 } from "react-router"
 import {
     CardGrid,
@@ -24,15 +27,11 @@ import {
     useSession,
 } from "../context/SessionContext"
 import type {
-    SessionBootstrapState,
-} from "../hooks/useSessionBootstrap"
-import type {
-    AuthorizedParty,
-} from "../types/bootstrap"
-import type {
+    KnowledgeLifecycle,
     KnowledgePage as KnowledgeResultsPage,
     KnowledgeView,
 } from "../types/knowledge"
+import { resolveAuthorizedParties } from "../utils/authorizedParties"
 import PlaceholderPage from "./PlaceholderPage"
 import { KnowledgePage } from "./KnowledgePage"
 
@@ -42,39 +41,14 @@ import { KnowledgePage } from "./KnowledgePage"
 // results visible (as "refreshing") while the new one is in flight.
 const SEARCH_DEBOUNCE_MS = 180
 
-// The authorized-party list lives on the selected character's perspective
-// in the session bootstrap, not the knowledge API itself — a character can
-// only filter by a party they are actually authorized to see.
-function resolveAuthorizedParties(
-    sessionState: SessionBootstrapState,
-    campaignId: string,
-    characterId: string | null,
-): AuthorizedParty[] {
-    if (sessionState.status !== "authenticated") {
-        return []
-    }
-
-    const campaign = sessionState.bootstrap.campaigns.find(
-        (candidate) => candidate.campaign_id === campaignId,
-    )
-
-    if (campaign === undefined) {
-        return []
-    }
-
-    const character = campaign.character_perspectives.find(
-        (candidate) => candidate.character_id === characterId,
-    )
-
-    return character?.authorized_parties ?? []
-}
-
 interface KnowledgeItemListProps {
     campaignId: string
     characterId: string | null
     partyId: string | null
     page: KnowledgeResultsPage
     refreshing: boolean
+    lifecycle: KnowledgeLifecycle
+    onArchiveBrowseAvailable: (available: boolean) => void
     onNextPage: () => void
 }
 
@@ -84,8 +58,17 @@ function KnowledgeItemList({
     partyId,
     page,
     refreshing,
+    lifecycle,
+    onArchiveBrowseAvailable,
     onNextPage,
 }: KnowledgeItemListProps) {
+    const archiveBrowseAvailable =
+        page.archive_browse_available === true
+
+    useEffect(() => {
+        onArchiveBrowseAvailable(archiveBrowseAvailable)
+    }, [archiveBrowseAvailable, onArchiveBrowseAvailable])
+
     return (
         <div
             role="region"
@@ -110,7 +93,11 @@ function KnowledgeItemList({
                     ))}
                 </CardGrid>
             ) : (
-                <p>No knowledge matches the current search.</p>
+                <p>
+                    {lifecycle === "archived"
+                        ? "No archived knowledge matches the current search."
+                        : "No knowledge matches the current search."}
+                </p>
             )}
 
             {page.next_cursor !== null && (
@@ -130,6 +117,44 @@ interface CampaignKnowledgeContentProps {
     campaignId: string
 }
 
+const knowledgeViews: readonly KnowledgeView[] = [
+    "known",
+    "rumors",
+    "party_shared",
+    "character_private",
+    "recent",
+    "public",
+]
+
+const knowledgeLifecycles: readonly KnowledgeLifecycle[] = [
+    "active",
+    "archived",
+    "all",
+]
+
+// The address carries the list's own state (view, search, party, lifecycle) so Back and a
+// reload reproduce it. An unknown value is the default, never an error. The character
+// perspective stays in its own persisted selection.
+function viewFromAddress(value: string | null): KnowledgeView {
+    return knowledgeViews.find((view) => view === value) ?? "known"
+}
+
+function lifecycleFromAddress(value: string | null): KnowledgeLifecycle {
+    return knowledgeLifecycles.find((lifecycle) => lifecycle === value) ?? "active"
+}
+
+function setOrRemove(
+    parameters: URLSearchParams,
+    key: string,
+    value: string | null,
+) {
+    if (value === null || value === "") {
+        parameters.delete(key)
+    } else {
+        parameters.set(key, value)
+    }
+}
+
 function CampaignKnowledgeContent({
     campaignId,
 }: CampaignKnowledgeContentProps) {
@@ -143,41 +168,90 @@ function CampaignKnowledgeContent({
         characterId,
     )
 
-    const [view, setView] =
-        useState<KnowledgeView>("known")
-    const [partyId, setPartyId] =
-        useState<string | null>(null)
+    const [searchParams, setSearchParams] = useSearchParams()
+    const view = viewFromAddress(searchParams.get("view"))
+    const lifecycle = lifecycleFromAddress(
+        searchParams.get("lifecycle"),
+    )
+    const debouncedQuery = searchParams.get("q") ?? ""
+    const addressPartyId = searchParams.get("party_id")
+
+    // A party that is not (or no longer) authorized for the selected character is no filter at
+    // all; the address is cleaned below.
+    const partyId =
+        addressPartyId !== null &&
+            parties.some(
+                (party) => party.party_id === addressPartyId,
+            )
+            ? addressPartyId
+            : null
+
     const [searchInputValue, setSearchInputValue] =
-        useState("")
-    const [debouncedQuery, setDebouncedQuery] =
-        useState("")
-    const [cursor, setCursor] =
-        useState<string | null>(null)
+        useState(debouncedQuery)
+    // Public knowledge is part of every view by default, whatever the
+    // perspective; leaving it out is only ever the user's explicit choice.
+    const [includePublic, setIncludePublic] =
+        useState(true)
+    // Whether the server offers archive browsing, learned from the latest page it returned.
+    const [archiveBrowseAvailable, setArchiveBrowseAvailable] =
+        useState(false)
 
-    // A perspective switch changes what's authorized to see, same as a
-    // category change: never leave a stale cursor (or a party filter that
-    // may no longer be authorized) pointed at a page that belonged to the
-    // previous character. Reset during render (rather than in an effect)
-    // so it lands before the boundary below re-requests.
-    const [
-        characterIdAtLastRender,
-        setCharacterIdAtLastRender,
-    ] = useState(characterId)
+    // A cursor belongs to exactly one filter combination: it is honoured only while the filters
+    // that produced it are unchanged, so any change (including Back, a perspective switch or a
+    // lifecycle change) starts again from the first page.
+    const filterSignature = JSON.stringify([
+        view,
+        characterId,
+        partyId,
+        debouncedQuery,
+        includePublic,
+        lifecycle,
+    ])
+    const [cursorState, setCursorState] = useState<{
+        signature: string
+        cursor: string | null
+    }>({ signature: filterSignature, cursor: null })
+    const cursor =
+        cursorState.signature === filterSignature
+            ? cursorState.cursor
+            : null
 
-    const selectedPartyIsAvailable =
-        partyId === null ||
-        parties.some(
-            (party) => party.party_id === partyId,
-        )
+    const updateAddress = useCallback(
+        (
+            change: (parameters: URLSearchParams) => void,
+            replace: boolean,
+        ) => {
+            setSearchParams(
+                (previous) => {
+                    const next = new URLSearchParams(previous)
+                    change(next)
+                    return next
+                },
+                { replace },
+            )
+        },
+        [setSearchParams],
+    )
 
-    if (characterId !== characterIdAtLastRender) {
-        setCharacterIdAtLastRender(characterId)
-        setCursor(null)
-        setPartyId(null)
-    } else if (!selectedPartyIsAvailable) {
-        setCursor(null)
-        setPartyId(null)
-    }
+    useEffect(() => {
+        if (addressPartyId !== null && partyId === null) {
+            updateAddress(
+                (parameters) => parameters.delete("party_id"),
+                true,
+            )
+        }
+    }, [addressPartyId, partyId, updateAddress])
+
+    // The last query this page wrote to the address; a different one arriving (Back/Forward)
+    // is shown in the search box.
+    const committedQuery = useRef(debouncedQuery)
+
+    useEffect(() => {
+        if (debouncedQuery !== committedQuery.current) {
+            committedQuery.current = debouncedQuery
+            setSearchInputValue(debouncedQuery)
+        }
+    }, [debouncedQuery])
 
     useEffect(() => {
         if (searchInputValue === debouncedQuery) {
@@ -185,22 +259,58 @@ function CampaignKnowledgeContent({
         }
 
         const timeoutId = window.setTimeout(() => {
-            setDebouncedQuery(searchInputValue)
-            setCursor(null)
+            committedQuery.current = searchInputValue
+            updateAddress(
+                (parameters) =>
+                    setOrRemove(parameters, "q", searchInputValue),
+                true,
+            )
         }, SEARCH_DEBOUNCE_MS)
 
         return () => window.clearTimeout(timeoutId)
-    }, [searchInputValue, debouncedQuery])
+    }, [searchInputValue, debouncedQuery, updateAddress])
 
     function handleViewChange(nextView: KnowledgeView) {
-        setView(nextView)
-        setCursor(null)
+        updateAddress(
+            (parameters) =>
+                setOrRemove(
+                    parameters,
+                    "view",
+                    nextView === "known" ? null : nextView,
+                ),
+            false,
+        )
     }
 
     function handlePartyChange(nextPartyId: string | null) {
-        setPartyId(nextPartyId)
-        setCursor(null)
+        updateAddress(
+            (parameters) =>
+                setOrRemove(parameters, "party_id", nextPartyId),
+            false,
+        )
     }
+
+    function handleLifecycleChange(nextLifecycle: KnowledgeLifecycle) {
+        updateAddress(
+            (parameters) =>
+                setOrRemove(
+                    parameters,
+                    "lifecycle",
+                    nextLifecycle === "active" ? null : nextLifecycle,
+                ),
+            false,
+        )
+    }
+
+    // The server refused archive browsing for this caller (a hand-edited address, or a role
+    // withdrawn since): fall back to the active list.
+    const handleLifecycleRejected = useCallback(() => {
+        setArchiveBrowseAvailable(false)
+        updateAddress(
+            (parameters) => parameters.delete("lifecycle"),
+            true,
+        )
+    }, [updateAddress, setArchiveBrowseAvailable])
 
     return (
         <KnowledgePage
@@ -209,9 +319,14 @@ function CampaignKnowledgeContent({
             query={searchInputValue}
             partyId={partyId}
             parties={parties}
+            includePublic={includePublic}
+            archiveBrowseAvailable={archiveBrowseAvailable}
+            lifecycle={lifecycle}
             onViewChange={handleViewChange}
             onQueryChange={setSearchInputValue}
             onPartyChange={handlePartyChange}
+            onIncludePublicChange={setIncludePublic}
+            onLifecycleChange={handleLifecycleChange}
         >
             <KnowledgeItemsBoundary
                 campaignId={campaignId}
@@ -221,6 +336,11 @@ function CampaignKnowledgeContent({
                 query={debouncedQuery}
                 knowledgeType={null}
                 cursor={cursor}
+                // The Public view *is* the public-only filter, so the
+                // opt-out never applies to it.
+                includePublic={includePublic || view === "public"}
+                lifecycle={lifecycle}
+                onLifecycleRejected={handleLifecycleRejected}
             >
                 {(page, refreshing) => (
                     <KnowledgeItemList
@@ -229,8 +349,13 @@ function CampaignKnowledgeContent({
                         partyId={partyId}
                         page={page}
                         refreshing={refreshing}
+                        lifecycle={lifecycle}
+                        onArchiveBrowseAvailable={setArchiveBrowseAvailable}
                         onNextPage={() =>
-                            setCursor(page.next_cursor)
+                            setCursorState({
+                                signature: filterSignature,
+                                cursor: page.next_cursor,
+                            })
                         }
                     />
                 )}

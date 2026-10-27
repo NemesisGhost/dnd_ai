@@ -12,6 +12,7 @@ them; tests cover them instead).
 """
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     Column,
     ForeignKey,
@@ -82,6 +83,43 @@ relationships = Table(
     ),
     Column("source_id", UUID(), ForeignKey("core.sources.source_id", ondelete="SET NULL")),
     *_timestamps(),
+    # Added by revision 129 (Phase 15 checkpoint 15.3A-2a).
+    Column(
+        "row_version",
+        BigInteger(),
+        nullable=False,
+        server_default=text("1"),
+        comment=(
+            "Optimistic-concurrency token, incremented by every UPDATE "
+            "(core.bump_row_version()). Authoring commands require the caller's "
+            "expected_row_version to equal it under a row lock and reject a stale write."
+        ),
+    ),
+    Column(
+        "lifecycle_status_id",
+        UUID(),
+        ForeignKey("core.lifecycle_statuses.lifecycle_status_id", ondelete="RESTRICT"),
+        nullable=False,
+        comment=(
+            "Operational lifecycle (active or archived). An archived relationship stays in "
+            "history, is hidden from readers who cannot edit canon, and takes no authoring or "
+            "state writes until restored."
+        ),
+    ),
+    Column(
+        "archived_at",
+        TIMESTAMP(timezone=True),
+        comment="When the relationship was archived; NULL while active.",
+    ),
+    Column(
+        "created_by_user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="SET NULL"),
+        comment=(
+            "The authenticated human who created the relationship through the authoring "
+            "command; NULL for relationships created before revision 129 or by operator tooling."
+        ),
+    ),
     schema="world",
     comment=(
         "Connects entities through a meaningful association (docs/DOMAIN_MODEL.md "
@@ -95,6 +133,12 @@ relationships = Table(
 )
 
 Index("ix_relationships_world_id", relationships.c.world_id)
+Index("ix_relationships_lifecycle_status_id", relationships.c.lifecycle_status_id)
+Index(
+    "ix_relationships_created_by_user_id",
+    relationships.c.created_by_user_id,
+    postgresql_where=relationships.c.created_by_user_id.isnot(None),
+)
 Index("ix_relationships_relationship_type_id", relationships.c.relationship_type_id)
 Index(
     "ix_relationships_source_id",
@@ -642,5 +686,37 @@ political_relationships = Table(
         "relationship is world.relationships.relationship_type_id (alliance/"
         "rivalry/war/control/...); is_active/treaty_terms are the typed "
         "additions beyond that generic shape."
+    ),
+)
+
+route_relationships = Table(
+    "route_relationships",
+    metadata,
+    Column(
+        "relationship_id",
+        UUID(),
+        ForeignKey("world.relationships.relationship_id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("distance_text", Text()),
+    Column("travel_time_text", Text()),
+    Column("travel_mode", Text()),
+    Column(
+        "is_hidden",
+        Boolean(),
+        nullable=False,
+        server_default=text("false"),
+        comment=(
+            "The route is concealed: only people who can edit canon see it. A fact about the "
+            "route itself, never about who has found it."
+        ),
+    ),
+    *_timestamps(),
+    schema="world",
+    comment=(
+        "A specialized relationship: a route between two locations (origin and destination "
+        "participants). Distance, travel time and mode are free text; is_hidden says the route "
+        "is built to be concealed and is shown only to editors. Travel along it is recorded "
+        "by the travel command, which updates character location history."
     ),
 )

@@ -1,9 +1,8 @@
 import { useRef, useState } from "react"
-import { useNavigate } from "react-router"
 import { fetchQuestTargetOptions, runQuestCommand } from "../../api/questAuthoring"
 import { useSession } from "../../context/SessionContext"
 import { useAuthoringMutation } from "../../hooks/useAuthoringMutation"
-import { useUnsavedChangesGuard } from "../../hooks/useUnsavedChangesGuard"
+import type { RefreshOutcome } from "../../hooks/useAuthoringMutation"
 import type {
     ObjectiveBody,
     QuestAuthoringView,
@@ -24,6 +23,8 @@ import {
 } from "../../utils/authoringValidation"
 import { statusDetail } from "../../utils/locationForm"
 import { reorderedStageIds, steppedStageIds } from "../../utils/stageOrder"
+import { useUnsavedReport } from "../quests/useUnsavedReport"
+import type { ReportUnsaved } from "../quests/useUnsavedReport"
 import { useAnnounce } from "./announcer"
 import { ConfirmDialog } from "./ConfirmDialog"
 import { SelectField, TextAreaField, TextField } from "./fields"
@@ -38,17 +39,14 @@ import type { FieldError } from "./feedback"
 import { ReferenceCombobox } from "./ReferenceCombobox"
 import type { ReferenceOption } from "./ReferenceCombobox"
 import "./authoring.css"
+import type { QuestReceipt } from "../../types/contentAuthoring"
 
-// The Quest definition editor: one reloadable page with the quest's details and
-// its stages and objectives as inline panels. Every change is one idempotent
-// command carrying the quest's row version; the page re-fetches the authoritative
-// aggregate after each. Structure that recorded progress depends on is shown
-// locked, with the reason, never silently hidden.
-
-interface DetailsValues {
-    name: string
-    summary: string
-}
+// The quest's stages and objectives: the authored adventure, as the Stages and objectives section
+// of the Quest workspace. Stages and objectives are inline panels in connected collapsible cards.
+// Every change is one idempotent command carrying the quest's row version; the page re-fetches the
+// authoritative aggregate after each. Structure that recorded progress depends on is shown
+// locked, with the reason, never silently hidden. (The quest's details, the completion design and
+// the lifecycle are other sections of the workspace.)
 
 interface StageValues {
     name: string
@@ -181,50 +179,22 @@ function validateObjective(values: ObjectiveValues, options: QuestOptions): Fiel
     return errors
 }
 
-interface QuestEditorProps {
+interface QuestStructureEditorProps {
     campaignId: string
     view: QuestAuthoringView
     options: QuestOptions
     refreshing: boolean
-    refetch: () => Promise<void>
+    refetch: () => Promise<RefreshOutcome>
+    // Reports an open stage or objective form that has unsent changes, to the page's one guard.
+    onUnsaved: ReportUnsaved
 }
 
-export function QuestEditor({ campaignId, view, options, refreshing, refetch }: QuestEditorProps) {
-    const navigate = useNavigate()
+export function QuestStructureEditor({ campaignId, view, options, refreshing, refetch, onUnsaved }: QuestStructureEditorProps) {
     const announce = useAnnounce()
     const { reload } = useSession()
     const editable = view.available_actions.includes("update")
     const structureLocked = view.has_progress
     const can = (action: string) => view.available_actions.includes(action)
-
-    // --- details --------------------------------------------------------------------------------
-    // `sync` is the server state the details form was last in agreement with. Its
-    // version advances with every child command only while the server's name and
-    // summary still match it, so an unrelated change never makes a details save
-    // stale, while a real concurrent rename still does.
-    const [sync, setSync] = useState({
-        name: view.name,
-        summary: view.summary ?? "",
-        version: view.row_version,
-    })
-    const [details, setDetails] = useState<DetailsValues>({
-        name: view.name,
-        summary: view.summary ?? "",
-    })
-    const [keptDetails, setKeptDetails] = useState<DetailsValues | null>(null)
-    const [resyncing, setResyncing] = useState(false)
-    const serverDetailsMatchSync =
-        view.name === sync.name && (view.summary ?? "") === sync.summary
-    if (serverDetailsMatchSync && sync.version !== view.row_version) {
-        setSync({ ...sync, version: view.row_version })
-    }
-    if (resyncing && !refreshing) {
-        setResyncing(false)
-        setSync({ name: view.name, summary: view.summary ?? "", version: view.row_version })
-        setDetails({ name: view.name, summary: view.summary ?? "" })
-    }
-    const detailsDirty =
-        details.name.trim() !== sync.name.trim() || details.summary.trim() !== sync.summary.trim()
 
     // --- panels, removal, and the single command mutation --------------------------------------
     const [panel, setPanel] = useState<Panel | null>(null)
@@ -250,19 +220,20 @@ export function QuestEditor({ campaignId, view, options, refreshing, refetch }: 
         null,
     )
 
-    const mutation = useAuthoringMutation<QuestCommand, QuestAuthoringView>({
+    const mutation = useAuthoringMutation<QuestCommand, QuestReceipt>({
         scopeKey: `quest:${view.quest_id}`,
         request: (command, ctx) => runQuestCommand(campaignId, view.quest_id, command, ctx),
         onSuccess: async () => {
             const done = pending.current
             pending.current = null
-            await refetch()
+            const outcome = await refetch()
             done?.after()
-            if (done?.message) announce(done.message)
+            if (outcome === "ok" && done?.message) announce(done.message)
             if (done?.focusId) {
                 const id = done.focusId
                 window.setTimeout(() => document.getElementById(id)?.focus(), 0)
             }
+            return outcome
         },
     })
     const busy = mutation.status.kind === "pending"
@@ -274,7 +245,11 @@ export function QuestEditor({ campaignId, view, options, refreshing, refetch }: 
             : panel.kind === "stage"
               ? !sameStage(panel.values, panel.initial)
               : !sameObjective(panel.values, panel.initial)
-    const guard = useUnsavedChangesGuard(detailsDirty || panelDirty)
+    useUnsavedReport(
+        onUnsaved,
+        "structure",
+        panel === null || !panelDirty ? [] : [panel.kind === "stage" ? "a stage" : "an objective"],
+    )
 
     function send(
         command: QuestCommand,
@@ -308,28 +283,6 @@ export function QuestEditor({ campaignId, view, options, refreshing, refetch }: 
             ? [{ fieldId: serverField, message: ERROR_CODE_MESSAGE[error.code] ?? "Check this field." }]
             : []
     const shownErrors = [...errors, ...serverErrors]
-    const errorFor = (id: string) => shownErrors.find((e) => e.fieldId === id)?.message ?? null
-
-    // --- details actions ------------------------------------------------------------------------
-    function saveDetails() {
-        const found: FieldError[] = []
-        const name = validateName(details.name)
-        if (name) found.push({ fieldId: "quest-name", message: name })
-        const summary = validateDescription(details.summary)
-        if (summary) found.push({ fieldId: "quest-summary", message: summary })
-        setErrors(found)
-        setAttempt((n) => n + 1)
-        if (found.length > 0) return
-        const body = {
-            expected_row_version: sync.version,
-            name: details.name.trim(),
-            summary: details.summary.trim() === "" ? null : details.summary.trim(),
-        }
-        send({ op: "update_quest", body }, "Quest details saved", () => {
-            setSync({ name: body.name, summary: body.summary ?? "", version: sync.version })
-            setKeptDetails(null)
-        })
-    }
 
     // --- stage and objective actions ------------------------------------------------------------
     function saveStage() {
@@ -453,16 +406,11 @@ export function QuestEditor({ campaignId, view, options, refreshing, refetch }: 
             <StaleWriteNotice
                 loading={refreshing}
                 onLoadLatest={() => {
-                    // Keep everything typed: panels hold their own values; the details
-                    // form is re-synchronized with a copy of the user's edits kept.
-                    if (detailsDirty) {
-                        setKeptDetails(details)
-                        setResyncing(true)
-                    }
+                    // Keep everything typed: the open panel holds its own values.
                     loadLatest()
                 }}
                 yourChanges={
-                    panel !== null || detailsDirty ? (
+                    panel !== null ? (
                         <p>The values you entered stay in the form below.</p>
                     ) : undefined
                 }
@@ -486,83 +434,9 @@ export function QuestEditor({ campaignId, view, options, refreshing, refetch }: 
                     quest, create a replacement and supersede this one.
                 </p>
             ) : null}
-            {!editable ? (
-                <p className="authoring-message authoring-message--warning" role="note">
-                    This quest cannot be edited right now
-                    {view.blocked_actions.find((b) => b.action === "update")
-                        ? ` (${view.blocked_actions.find((b) => b.action === "update")!.reason.replace(/_/g, " ")})`
-                        : ""}
-                    . Return it to draft first.
-                </p>
-            ) : null}
             {topError}
 
-            {keptDetails !== null ? (
-                <section
-                    aria-label="Your unsaved changes"
-                    className="authoring-message authoring-message--warning"
-                >
-                    <div>
-                        <h2>Your unsaved changes</h2>
-                        <p>The details below now show the latest version. You had entered:</p>
-                        <dl className="authoring-fact-list">
-                            <dt>Name</dt>
-                            <dd>{keptDetails.name}</dd>
-                            <dt>Summary</dt>
-                            <dd>{keptDetails.summary || "(empty)"}</dd>
-                        </dl>
-                        <button
-                            type="button"
-                            className="authoring-button"
-                            onClick={() => {
-                                setDetails(keptDetails)
-                                setKeptDetails(null)
-                            }}
-                        >
-                            Re-apply my changes
-                        </button>
-                    </div>
-                </section>
-            ) : null}
-
-            <section className="authoring-section" aria-labelledby="quest-details-heading">
-                <h2 id="quest-details-heading">Details</h2>
-                <AuthoringForm label="Quest details" onSubmit={saveDetails}>
-                    {panel === null ? <ErrorSummary errors={shownErrors} attempt={attempt} /> : null}
-                    <TextField
-                        id="quest-name"
-                        label="Name"
-                        value={details.name}
-                        onChange={(name) => setDetails({ ...details, name })}
-                        required
-                        maxLength={NAME_MAX}
-                        disabled={!editable}
-                        error={errorFor("quest-name")}
-                    />
-                    <TextAreaField
-                        id="quest-summary"
-                        label="Summary"
-                        value={details.summary}
-                        onChange={(summary) => setDetails({ ...details, summary })}
-                        maxLength={DESCRIPTION_MAX}
-                        disabled={!editable}
-                        error={errorFor("quest-summary")}
-                    />
-                    {editable ? (
-                        <FormActions
-                            pending={busy}
-                            saveLabel="Save details"
-                            onCancel={() =>
-                                setDetails({ name: sync.name, summary: sync.summary })
-                            }
-                            cancelLabel="Reset"
-                        />
-                    ) : null}
-                </AuthoringForm>
-            </section>
-
-            <section className="authoring-section" aria-labelledby="quest-stages-heading">
-                <h2 id="quest-stages-heading">Stages</h2>
+            <div className="authoring-section">
                 {view.stages.length === 0 ? (
                     <p className="authoring-note">
                         This quest has no stages yet. A quest needs at least one stage with an
@@ -980,17 +854,7 @@ export function QuestEditor({ campaignId, view, options, refreshing, refetch }: 
                         )}
                     </>
                 ) : null}
-            </section>
-
-            <p>
-                <button
-                    type="button"
-                    className="authoring-button"
-                    onClick={() => void navigate(`/app/${encodeURIComponent(campaignId)}/quests`)}
-                >
-                    Back to quests
-                </button>
-            </p>
+            </div>
 
             <ConfirmDialog
                 open={removal !== null}
@@ -1021,15 +885,6 @@ export function QuestEditor({ campaignId, view, options, refreshing, refetch }: 
                     setRemoval(null)
                     mutation.reset()
                 }}
-            />
-            <ConfirmDialog
-                open={guard.blocked}
-                title="Discard unsaved changes?"
-                description="You have edits to this quest that have not been saved."
-                confirmLabel="Discard changes"
-                cancelLabel="Keep editing"
-                onConfirm={guard.discard}
-                onCancel={guard.stay}
             />
         </>
     )
@@ -1064,7 +919,7 @@ function StagePanel({
     const errorFor = (id: string) => errors.find((e) => e.fieldId === id)?.message ?? null
     const locked = structureLocked && panel.stageId !== null
     return (
-        <section className="authoring-aside" aria-label={panel.stageId === null ? "New stage" : "Edit stage"}>
+        <section className="inset-group" aria-label={panel.stageId === null ? "New stage" : "Edit stage"}>
             <AuthoringForm label={panel.stageId === null ? "New stage" : "Edit stage"} onSubmit={onSave}>
                 <ErrorSummary errors={errors} attempt={attempt} />
                 <TextField
@@ -1134,7 +989,7 @@ function ObjectivePanel({
     const lockHint = locked ? "Locked: this quest has recorded progress." : undefined
     const title = panel.objectiveId === null ? "New objective" : "Edit objective"
     return (
-        <section className="authoring-aside" aria-label={title}>
+        <section className="inset-group" aria-label={title}>
             <AuthoringForm label={title} onSubmit={onSave}>
                 <ErrorSummary errors={errors} attempt={attempt} />
                 <TextField

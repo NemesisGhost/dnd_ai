@@ -41,6 +41,7 @@ from dnd_ai.domain.organization_authoring import (
     OrganizationField,
     OrganizationKind,
 )
+from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.organization_authoring import (
     OrganizationAuthoringView,
     ReferenceSummary,
@@ -61,9 +62,10 @@ from ._content_support import (
     clean_note,
     decode_name_cursor,
     reference_options_page,
+    write_receipt,
 )
 from ._shared import timeline_world_id
-from .access import require_campaign_capability
+from .access import can_create_definitions, require_campaign_capability, restrict_authoring_view
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .errors import NotFoundError
@@ -76,6 +78,13 @@ _REL = "/campaigns/{campaign_id}/authoring/religions"
 _CAPABILITY = "canon.edit"
 
 _Access = Annotated[AccessContext, Depends(require_campaign_capability(_CAPABILITY))]
+# Reads of the private side of shared world canon (drafts, GM-only prep, revisions,
+# provenance, sources, the review queue) also need `world.canon.read_private`
+# (docs/adr/0020-scoped-system-world-and-campaign-roles.md, D6).
+_PrivateRead = Annotated[
+    AccessContext,
+    Depends(require_campaign_capability(_CAPABILITY, world_capability=WORLD_CANON_READ_PRIVATE)),
+]
 _Conn = Annotated[Connection, Depends(get_connection)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
@@ -220,10 +229,9 @@ def _religion_json(view: ReligionAuthoringView, *, changed: bool | None = None) 
 
 
 @router.get(_ORG + "/options")
-def organization_options_endpoint(access: _Access) -> dict[str, Any]:
-    del access
+def organization_options_endpoint(access: _PrivateRead, connection: _Conn) -> dict[str, Any]:
     return {
-        "can_create": True,
+        "can_create": can_create_definitions(connection, access=access),
         "kinds": [_kind_json(k) for k in list_organization_kinds()],
         "limits": {
             "name_max_length": NAME_MAX_LENGTH,
@@ -237,7 +245,7 @@ def organization_options_endpoint(access: _Access) -> dict[str, Any]:
 
 @router.get(_ORG + "/parent-options")
 def organization_parent_options_endpoint(
-    access: _Access,
+    access: _PrivateRead,
     connection: _Conn,
     for_organization: Annotated[uuid.UUID | None, Query(alias="for")] = None,
     q: Annotated[str | None, Query(max_length=200)] = None,
@@ -321,6 +329,9 @@ def create_organization_endpoint(
         access=access,
         correlation_id=correlation_id,
         reason=None,
+        view_loader=lambda: get_organization_authoring(
+            connection, world_id=result.world_id, organization_id=result.entity_id
+        ),
     )
     response = _organization_response(connection, result, changed=True)
     finish_campaign_idempotency(connection, idem, status_code=201, body=response)
@@ -329,7 +340,7 @@ def create_organization_endpoint(
 
 @router.get(_ORG + "/{organization_id}")
 def get_organization_authoring_endpoint(
-    organization_id: uuid.UUID, access: _Access, connection: _Conn
+    organization_id: uuid.UUID, access: _PrivateRead, connection: _Conn
 ) -> dict[str, Any]:
     world_id = timeline_world_id(connection, access.timeline_id)
     view = get_organization_authoring(
@@ -337,7 +348,7 @@ def get_organization_authoring_endpoint(
     )
     if view is None:
         raise NotFoundError()
-    return _organization_json(view)
+    return restrict_authoring_view(connection, access=access, body=_organization_json(view))
 
 
 @router.post(_ORG + "/{organization_id}/update")
@@ -385,6 +396,9 @@ def update_organization_endpoint(
             access=access,
             correlation_id=correlation_id,
             reason=clean_note(body.change_note),
+            view_loader=lambda: get_organization_authoring(
+                connection, world_id=result.world_id, organization_id=result.entity_id
+            ),
         )
     response = _organization_response(connection, result, changed=result.changed)
     finish_campaign_idempotency(connection, idem, status_code=200, body=response)
@@ -394,21 +408,17 @@ def update_organization_endpoint(
 def _organization_response(
     connection: Connection, result: ContentWriteResult, *, changed: bool
 ) -> dict[str, Any]:
-    view = get_organization_authoring(
-        connection, world_id=result.world_id, organization_id=result.entity_id
-    )
-    assert view is not None
-    return _organization_json(view, changed=changed)
+    del connection
+    return write_receipt(result, "organization_id", changed=changed)
 
 
 # --- Religions ---------------------------------------------------------------------------------
 
 
 @router.get(_REL + "/options")
-def religion_options_endpoint(access: _Access) -> dict[str, Any]:
-    del access
+def religion_options_endpoint(access: _PrivateRead, connection: _Conn) -> dict[str, Any]:
     return {
-        "can_create": True,
+        "can_create": can_create_definitions(connection, access=access),
         "limits": {
             "name_max_length": NAME_MAX_LENGTH,
             "summary_max_length": DESCRIPTION_MAX_LENGTH,
@@ -420,7 +430,7 @@ def religion_options_endpoint(access: _Access) -> dict[str, Any]:
 
 @router.get(_REL + "/reference-options")
 def religion_reference_options_endpoint(
-    access: _Access,
+    access: _PrivateRead,
     connection: _Conn,
     q: Annotated[str | None, Query(max_length=200)] = None,
     limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
@@ -483,6 +493,9 @@ def create_religion_endpoint(
         access=access,
         correlation_id=correlation_id,
         reason=None,
+        view_loader=lambda: get_religion_authoring(
+            connection, world_id=result.world_id, religion_id=result.entity_id
+        ),
     )
     response = _religion_response(connection, result, changed=True)
     finish_campaign_idempotency(connection, idem, status_code=201, body=response)
@@ -491,13 +504,13 @@ def create_religion_endpoint(
 
 @router.get(_REL + "/{religion_id}")
 def get_religion_authoring_endpoint(
-    religion_id: uuid.UUID, access: _Access, connection: _Conn
+    religion_id: uuid.UUID, access: _PrivateRead, connection: _Conn
 ) -> dict[str, Any]:
     world_id = timeline_world_id(connection, access.timeline_id)
     view = get_religion_authoring(connection, world_id=world_id, religion_id=religion_id)
     if view is None:
         raise NotFoundError()
-    return _religion_json(view)
+    return restrict_authoring_view(connection, access=access, body=_religion_json(view))
 
 
 @router.post(_REL + "/{religion_id}/update")
@@ -540,6 +553,9 @@ def update_religion_endpoint(
             access=access,
             correlation_id=correlation_id,
             reason=clean_note(body.change_note),
+            view_loader=lambda: get_religion_authoring(
+                connection, world_id=result.world_id, religion_id=result.entity_id
+            ),
         )
     response = _religion_response(connection, result, changed=result.changed)
     finish_campaign_idempotency(connection, idem, status_code=200, body=response)
@@ -549,8 +565,5 @@ def update_religion_endpoint(
 def _religion_response(
     connection: Connection, result: ContentWriteResult, *, changed: bool
 ) -> dict[str, Any]:
-    view = get_religion_authoring(
-        connection, world_id=result.world_id, religion_id=result.entity_id
-    )
-    assert view is not None
-    return _religion_json(view, changed=changed)
+    del connection
+    return write_receipt(result, "religion_id", changed=changed)

@@ -19,8 +19,13 @@ Every mutating command here:
    change;
 4. only then checks state preconditions and writes.
 
-`create_world` makes the creator the first `world_owner` and creates the
-world's **primary timeline** in the same transaction (a world without a
+`create_world` first authorizes its creator against the world-creation policy
+(`dnd_ai.queries.world_authority.may_create_worlds`: an active platform
+administrator or an effective built-in `gm`, docs/adr/0018-world-creation-
+eligibility.md) in the caller's transaction — before validating input or
+writing anything, so a refused request leaves no row behind and learns nothing
+about ruleset availability. It then makes the creator the first `world_owner`
+and creates the world's **primary timeline** in the same transaction (a world without a
 timeline cannot host a campaign). The slug is server-generated: client-chosen
 global slugs would let any user probe for other users' worlds, so a collision
 is resolved silently with a random suffix and is never reported.
@@ -36,6 +41,7 @@ from dnd_ai.domain.authoring import (
     RulesetNotAvailableError,
     StaleWriteError,
     WorldAlreadyClaimedError,
+    WorldCreationNotAuthorizedError,
     WorldNotAuthorizedError,
     normalize_description,
     normalize_name,
@@ -49,12 +55,13 @@ from dnd_ai.domain.authoring_policy import (
     raise_for_reason,
     world_blocked_reason,
 )
+from dnd_ai.domain.data_classification import audit_change
 from dnd_ai.domain.world_authority import (
     WORLD_MANAGE,
     WORLD_OWNER_ROLE,
     WorldAuthority,
 )
-from dnd_ai.queries.world_authority import resolve_world_authority
+from dnd_ai.queries.world_authority import may_create_worlds, resolve_world_authority
 from dnd_ai.queries.worlds import world_has_blocking_campaigns
 
 from ._shared import lifecycle_code, lookup_id
@@ -157,7 +164,13 @@ def create_world(
     `row_version` is read back after the default ruleset is set: the
     `core.worlds` default-ruleset trigger requires the allow-list to exist
     first, so the world is inserted, given its allow-list, and then updated —
-    the returned version is the true current one, not an assumed 1."""
+    the returned version is the true current one, not an assumed 1.
+
+    Raises `WorldCreationNotAuthorizedError` when `creator_user_id` may not
+    create worlds. This is the authoritative check; the API route and the
+    portal only repeat it as defense in depth."""
+    if not may_create_worlds(connection, user_id=creator_user_id):
+        raise WorldCreationNotAuthorizedError(f"user {creator_user_id} may not create worlds")
     clean_name = normalize_name(name)
     clean_description = normalize_description(description)
     clean_timeline_name = normalize_name(primary_timeline_name)
@@ -283,7 +296,7 @@ def update_world(
     if clean_name != world.name:
         changed["name"] = {"from": world.name, "to": clean_name}
     if clean_description != world.description:
-        changed["description"] = {"from": world.description, "to": clean_description}
+        changed["description"] = audit_change("description", world.description, clean_description)
     if not changed:
         return WorldMutationResult(
             world_id=world_id,

@@ -393,6 +393,12 @@ def test_a_gm_sees_recorded_and_draft_events_ordered_most_recent_first(
         str(f.recorded_new_event_id),
         str(f.recorded_old_event_id),
     ]
+    # Readable in-world time (make_world_time sets year = 1000 + sort_key).
+    assert [e["world_time_display"] for e in response.json()["recent_events"]] == [
+        "Year 1300",
+        "Year 1200",
+        "Year 1100",
+    ]
 
 
 def test_a_player_never_sees_draft_or_voided_events(
@@ -721,3 +727,71 @@ def test_a_voided_event_stays_excluded_even_with_a_targeted_allow(
     assert response.status_code == 200, response.text
     event_ids = {e["event_id"] for e in response.json()["recent_events"]}
     assert str(f.voided_event_id) not in event_ids
+
+
+def test_event_times_read_as_calendar_date_clock_and_label(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as setup:
+        calendar_id = setup.execute(
+            text("""
+                INSERT INTO core.calendars (world_id, code, display_name, epoch_label)
+                VALUES (:w, 'summary_cal', 'Common Reckoning', 'Founding')
+                RETURNING calendar_id
+            """),
+            {"w": f.world_id},
+        ).scalar()
+        setup.execute(
+            text("""
+                INSERT INTO core.calendar_months (calendar_id, month_number, name, day_count)
+                VALUES (:c, 1, 'Bloom', 30)
+            """),
+            {"c": calendar_id},
+        )
+        ids = {}
+        for key, sort_key, year, label in (
+            ("clock", 500, 0, None),
+            ("labelled", 600, 3, "Harvest feast"),
+            ("narrative", 700, None, "Before the war"),
+        ):
+            ids[key] = setup.execute(
+                text("""
+                    INSERT INTO core.world_times
+                        (world_id, calendar_id, world_time_precision_id, year, month_number,
+                         day, hour, minute, label, sort_key)
+                    VALUES (:w, :cal,
+                            (SELECT world_time_precision_id FROM core.world_time_precisions
+                             WHERE code = 'exact'),
+                            :year, :month, :day, :hour, :minute, :label, :sort_key)
+                    RETURNING world_time_id
+                """),
+                {
+                    "w": f.world_id,
+                    "cal": None if key == "narrative" else calendar_id,
+                    "year": year,
+                    "month": None if key == "narrative" else 1,
+                    "day": None if key == "narrative" else 5,
+                    "hour": 7 if key == "clock" else None,
+                    "minute": 5 if key == "clock" else None,
+                    "label": label,
+                    "sort_key": sort_key,
+                },
+            ).scalar()
+            make_event(
+                setup,
+                f.world_id,
+                f.timeline_id,
+                ids[key],
+                campaign_id=f.campaign_id,
+                name=f"Time {key}",
+            )
+
+    with client_factory(f.gm_user_id) as client:
+        response = client.get(_summary_url(f))
+    assert response.status_code == 200, response.text
+    displays = {e["name"]: e["world_time_display"] for e in response.json()["recent_events"]}
+    assert displays["Time clock"] == "Common Reckoning: Year 0 (Founding), Bloom 5, 07:05"
+    assert displays["Time labelled"] == (
+        "Common Reckoning: Year 3 (Founding), Bloom 5 — Harvest feast"
+    )
+    assert displays["Time narrative"] == "Before the war"

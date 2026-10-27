@@ -9,7 +9,7 @@ It is designed to become the shared source of truth behind a campaign: worlds, t
 The initial rules implementation targets Dungeons & Dragons 5e (2024). The architecture is ruleset-aware and is intended to support additional tabletop systems over time.
 
 > [!IMPORTANT]
-> This project is under active development and is not yet a production release. See [Project Status](docs/PROJECT_STATUS.md) for verified current capabilities and [Project Plan](docs/PLAN.md) for upcoming work.
+> This project is under active development and is not yet a production release. See [Project Status](docs/PROJECT_STATUS.md) for verified current capabilities and [Roadmap](docs/PLANv2.md) for upcoming work.
 
 ## The product promise
 
@@ -255,6 +255,7 @@ The detailed service, transaction, AI, integration, and deployment architecture 
 - Cookie-authenticated mutations require an allowed Origin and an in-memory CSRF token.
 - Authorization is resolved from current server-side state; hiding a control in the portal is presentation, not enforcement.
 - Campaign, character-perspective, resource, and administrative access are capability-gated.
+- Authority has three independent scopes ([ADR 0020](docs/adr/0020-scoped-system-world-and-campaign-roles.md)): **system** roles (Admin, GM, Player, Observer), **world** roles (Owner, Editor, Reviewer, Reader, plus a separate permission to host campaigns), and the full **campaign** role model. No scope implies another: a system GM is not a GM in anyone's campaign, a world Owner is not a member of its campaigns, and a campaign GM cannot edit shared world canon without a role on the world. Authorship is provenance, never authority.
 - Inaccessible resources must not be disclosed through routes, identifiers, counts, suggestions, cached content, or error details.
 - Human browser sessions, optional OIDC bearer principals, Foundry device credentials, and machine principals remain separate trust boundaries.
 - Security-sensitive actions produce durable, non-secret audit records.
@@ -266,7 +267,7 @@ See the security and authentication contracts under [`docs/`](docs/) for authori
 | Schema | Responsibility |
 |---|---|
 | `core` | Worlds, entities, names, sources, statuses, tags, calendars, world time |
-| `security` | Users, sessions, roles, memberships, capabilities, grants, access groups |
+| `security` | Users, sessions, system roles, world roles and use grants, campaign roles, memberships, capabilities, grants, access groups |
 | `rules` | Rulesets and reusable mechanical definitions |
 | `character` | Shared character mechanics plus NPC and player-character extensions |
 | `world` | Locations, organizations, items, relationships, economies, religions |
@@ -305,7 +306,7 @@ For the exact current layout and ownership rules, see [Development Guide](docs/D
 The repository is evolving quickly, so this README deliberately avoids claiming that every product-direction feature above is already complete.
 
 - [Project Status](docs/PROJECT_STATUS.md) records dated, verification-backed implementation status.
-- [Project Plan](docs/PLAN.md) defines the active delivery sequence and remaining work.
+- [Roadmap (PLANv2)](docs/PLANv2.md) is the authoritative product roadmap; [Project Plan](docs/PLAN.md) is the detailed architectural record and carries the Phase 15 completion checkpoints.
 - [UI Design](docs/UI_DESIGN.md) defines portal behavior and authorization-sensitive presentation.
 - [Entity Lifecycle](docs/ENTITY_LIFECYCLE.md) defines creation, approval, mutation, supersession, archival, and deletion rules.
 
@@ -361,7 +362,7 @@ AWS RDS support remains available as an optional database-hosting path under [`t
 ### Product and status
 
 - [Project Status](docs/PROJECT_STATUS.md) — verified implementation snapshot
-- [Project Plan](docs/PLAN.md) — delivery sequence and remaining work
+- [Roadmap (PLANv2)](docs/PLANv2.md) — authoritative roadmap; [Project Plan](docs/PLAN.md) — architecture and Phase 15 checkpoints
 - [UI Design](docs/UI_DESIGN.md) — portal interaction and authorization rules
 
 ### Domain and architecture

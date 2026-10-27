@@ -213,8 +213,26 @@ describe("QuestDetailPage", () => {
         fireEvent.click(screen.getByRole("button", { name: "Expand all" }))
 
         expect(stageButton()).toHaveTextContent("No objectives shown")
-        expect(screen.getByText("No objectives shown.")).toBeVisible()
-        expect(screen.getByText("No objectives are shown for this stage.")).toBeVisible()
+        // One empty-state message per expanded stage, not a second restatement of the summary.
+        const empty = screen.getAllByText(/^No objectives (are )?shown/).filter((el) => !el.closest("button"))
+        expect(empty).toHaveLength(screen.getAllByRole("button", { name: /^\d\. / }).length)
+        empty.forEach((el) => {
+            expect(el).toHaveTextContent("No objectives are shown for this stage.")
+            expect(el).toBeVisible()
+        })
+    })
+
+    it("shows objectives with their count and no empty message, and exposes nothing while collapsed", () => {
+        renderQuestDetail(questFixture)
+        const bodies = document.querySelectorAll(".quest-stage-card__body")
+        bodies.forEach((body) => expect(body).not.toBeVisible())
+
+        fireEvent.click(screen.getByRole("button", { name: "Expand all" }))
+        const first = bodies[0] as HTMLElement
+        expect(first).toBeVisible()
+        expect(first.querySelectorAll("li").length).toBeGreaterThan(0)
+        expect(first.textContent).toMatch(/Shown objectives: \d+ of \d+ complete\./)
+        expect(first.textContent).not.toMatch(/No objectives/)
     })
 
     it("renders objectives as expandable, keyboard-accessible disclosures", () => {

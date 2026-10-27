@@ -99,6 +99,8 @@ from sqlalchemy import Connection, text
 
 from dnd_ai.domain.errors import DomainAuthorizationError
 
+from .campaign_clock import world_time_point
+
 # ---------------------------------------------------------------------------
 # Category vocabulary
 # ---------------------------------------------------------------------------
@@ -146,6 +148,13 @@ _CHARACTER_TYPE_CODES: tuple[str, ...] = WORLD_CATEGORY_TYPE_CODES["character"]
 _TYPE_CODE_TO_CATEGORY: dict[str, str] = {
     code: category for category, codes in WORLD_CATEGORY_TYPE_CODES.items() for code in codes
 }
+
+
+def world_category_for_type_code(entity_type_code: str) -> str | None:
+    """The World Explorer category an entity type browses under, or `None`
+    for a type with no World Explorer surface (a quest, a knowledge item)."""
+    return _TYPE_CODE_TO_CATEGORY.get(entity_type_code)
+
 
 # Cursor keyset names (bind a cursor to the endpoint family that issued it
 # — see `dnd_ai.api.pagination`).
@@ -239,6 +248,127 @@ def _escape_like(term: str) -> str:
     return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+# The visibility/search filter shared by the result list and the category
+# counts, so a count can never disagree with the rows it counts. Callers bind
+# the parameters built by `_search_params`.
+_VISIBLE_ENTITIES_SQL = """
+FROM core.entities e
+JOIN core.entity_types et ON et.entity_type_id = e.entity_type_id
+JOIN core.canon_statuses cs ON cs.canon_status_id = e.canon_status_id
+JOIN core.lifecycle_statuses lst ON lst.lifecycle_status_id = e.lifecycle_status_id
+LEFT JOIN narrative.events ev ON ev.event_id = e.entity_id
+LEFT JOIN narrative.event_statuses es
+       ON es.event_status_id = ev.event_status_id
+WHERE e.world_id = :world_id
+  AND et.code = ANY(CAST(:type_codes AS text[]))
+  AND (
+        CAST(:like_pattern AS text) IS NULL
+        OR e.canonical_name ILIKE CAST(:like_pattern AS text) ESCAPE '\\'
+        OR e.summary ILIKE CAST(:like_pattern AS text) ESCAPE '\\'
+      )
+  AND NOT (e.entity_id = ANY(CAST(:cv_denied AS uuid[])))
+  AND (CAST(:canon_statuses AS text[]) IS NULL
+       OR cs.code = ANY(CAST(:canon_statuses AS text[])))
+  AND (
+    CASE
+      WHEN et.code = ANY(CAST(:character_codes AS text[])) THEN
+        (CAST(:discover_all AS boolean)
+         AND NOT (e.entity_id = ANY(CAST(:char_hidden AS uuid[]))))
+        OR e.entity_id = ANY(CAST(:char_visible AS uuid[]))
+      WHEN et.code = 'event' THEN
+        ev.event_id IS NOT NULL
+        AND ev.timeline_id = :timeline_id
+        AND es.code <> 'voided'
+        AND (
+          es.code <> 'draft'
+          OR (
+            NOT (e.entity_id = ANY(CAST(:draft_denied AS uuid[])))
+            AND (
+              CAST(:include_draft AS boolean)
+              OR e.entity_id = ANY(CAST(:draft_allowed AS uuid[]))
+            )
+          )
+        )
+      ELSE TRUE
+    END
+  )
+"""
+
+
+def _search_params(
+    *,
+    world_id: uuid.UUID,
+    timeline_id: uuid.UUID,
+    category_type_codes: Sequence[str],
+    query_text: str | None,
+    campaign_view_denied_entity_ids: frozenset[uuid.UUID],
+    character_visibility: CharacterVisibility,
+    include_draft_events: bool,
+    draft_event_allowed_ids: frozenset[uuid.UUID],
+    draft_event_denied_ids: frozenset[uuid.UUID],
+    canon_status_codes: Sequence[str] | None,
+) -> dict[str, object]:
+    return {
+        "world_id": world_id,
+        "timeline_id": timeline_id,
+        "type_codes": list(category_type_codes),
+        "character_codes": list(_CHARACTER_TYPE_CODES),
+        "like_pattern": f"%{_escape_like(query_text)}%" if query_text else None,
+        "cv_denied": list(campaign_view_denied_entity_ids),
+        "discover_all": character_visibility.discover_all,
+        "char_visible": list(character_visibility.force_visible),
+        "char_hidden": list(character_visibility.force_hidden),
+        "include_draft": include_draft_events,
+        "draft_allowed": list(draft_event_allowed_ids),
+        "draft_denied": list(draft_event_denied_ids),
+        "canon_statuses": list(canon_status_codes) if canon_status_codes else None,
+    }
+
+
+def count_world_entities(
+    connection: Connection,
+    *,
+    world_id: uuid.UUID,
+    timeline_id: uuid.UUID,
+    category_type_codes: Sequence[str],
+    query_text: str | None,
+    campaign_view_denied_entity_ids: frozenset[uuid.UUID],
+    character_visibility: CharacterVisibility,
+    include_draft_events: bool,
+    draft_event_allowed_ids: frozenset[uuid.UUID],
+    draft_event_denied_ids: frozenset[uuid.UUID],
+    canon_status_codes: Sequence[str] | None = None,
+) -> dict[str, int]:
+    """The complete number of entities `search_world_entities` would list over
+    every page, per World category (a category with none is `0`). It applies
+    the identical visibility and search filter (one shared SQL fragment) and
+    never looks at a cursor, so the counts are authorized totals."""
+    params = _search_params(
+        world_id=world_id,
+        timeline_id=timeline_id,
+        category_type_codes=category_type_codes,
+        query_text=query_text,
+        campaign_view_denied_entity_ids=campaign_view_denied_entity_ids,
+        character_visibility=character_visibility,
+        include_draft_events=include_draft_events,
+        draft_event_allowed_ids=draft_event_allowed_ids,
+        draft_event_denied_ids=draft_event_denied_ids,
+        canon_status_codes=canon_status_codes,
+    )
+    rows = connection.execute(
+        text(f"""
+            SELECT et.code AS entity_type_code, count(*) AS total
+            {_VISIBLE_ENTITIES_SQL}
+            GROUP BY et.code
+        """),
+        params,
+    ).mappings()
+    counts = dict.fromkeys(WORLD_CATEGORY_TYPE_CODES, 0)
+    for row in rows:
+        counts[_TYPE_CODE_TO_CATEGORY[row["entity_type_code"]]] += int(row["total"])
+    return counts
+
+
 def search_world_entities(
     connection: Connection,
     *,
@@ -269,72 +399,33 @@ def search_world_entities(
     `summary` only — never over `core.entity_names` aliases, some of which
     (`secret`, `mistaken`) would themselves be a disclosure.
     """
-    like_pattern = f"%{_escape_like(query_text)}%" if query_text else None
-    params: dict[str, object] = {
-        "world_id": world_id,
-        "timeline_id": timeline_id,
-        "type_codes": list(category_type_codes),
-        "character_codes": list(_CHARACTER_TYPE_CODES),
-        "like_pattern": like_pattern,
-        "cv_denied": list(campaign_view_denied_entity_ids),
-        "discover_all": character_visibility.discover_all,
-        "char_visible": list(character_visibility.force_visible),
-        "char_hidden": list(character_visibility.force_hidden),
-        "include_draft": include_draft_events,
-        "draft_allowed": list(draft_event_allowed_ids),
-        "draft_denied": list(draft_event_denied_ids),
-        "limit_plus_one": limit + 1,
-        "after_name": after_name,
-        "after_entity_id": after_entity_id,
-        "has_cursor": after_name is not None and after_entity_id is not None,
-        "canon_statuses": list(canon_status_codes) if canon_status_codes else None,
-    }
+    params = _search_params(
+        world_id=world_id,
+        timeline_id=timeline_id,
+        category_type_codes=category_type_codes,
+        query_text=query_text,
+        campaign_view_denied_entity_ids=campaign_view_denied_entity_ids,
+        character_visibility=character_visibility,
+        include_draft_events=include_draft_events,
+        draft_event_allowed_ids=draft_event_allowed_ids,
+        draft_event_denied_ids=draft_event_denied_ids,
+        canon_status_codes=canon_status_codes,
+    )
+    params.update(
+        {
+            "limit_plus_one": limit + 1,
+            "after_name": after_name,
+            "after_entity_id": after_entity_id,
+            "has_cursor": after_name is not None and after_entity_id is not None,
+        }
+    )
 
     rows = connection.execute(
         text(f"""
             SELECT e.entity_id, e.canonical_name, e.summary, et.code AS entity_type_code,
                    lower(left(e.canonical_name, {_NAME_SORT_PREFIX})) AS name_sort,
                    cs.code AS canon_status, lst.code AS lifecycle_status
-            FROM core.entities e
-            JOIN core.entity_types et ON et.entity_type_id = e.entity_type_id
-            JOIN core.canon_statuses cs ON cs.canon_status_id = e.canon_status_id
-            JOIN core.lifecycle_statuses lst ON lst.lifecycle_status_id = e.lifecycle_status_id
-            LEFT JOIN narrative.events ev ON ev.event_id = e.entity_id
-            LEFT JOIN narrative.event_statuses es
-                   ON es.event_status_id = ev.event_status_id
-            WHERE e.world_id = :world_id
-              AND et.code = ANY(CAST(:type_codes AS text[]))
-              AND (
-                    CAST(:like_pattern AS text) IS NULL
-                    OR e.canonical_name ILIKE CAST(:like_pattern AS text) ESCAPE '\\'
-                    OR e.summary ILIKE CAST(:like_pattern AS text) ESCAPE '\\'
-                  )
-              AND NOT (e.entity_id = ANY(CAST(:cv_denied AS uuid[])))
-              AND (CAST(:canon_statuses AS text[]) IS NULL
-                   OR cs.code = ANY(CAST(:canon_statuses AS text[])))
-              AND (
-                CASE
-                  WHEN et.code = ANY(CAST(:character_codes AS text[])) THEN
-                    (CAST(:discover_all AS boolean)
-                     AND NOT (e.entity_id = ANY(CAST(:char_hidden AS uuid[]))))
-                    OR e.entity_id = ANY(CAST(:char_visible AS uuid[]))
-                  WHEN et.code = 'event' THEN
-                    ev.event_id IS NOT NULL
-                    AND ev.timeline_id = :timeline_id
-                    AND es.code <> 'voided'
-                    AND (
-                      es.code <> 'draft'
-                      OR (
-                        NOT (e.entity_id = ANY(CAST(:draft_denied AS uuid[])))
-                        AND (
-                          CAST(:include_draft AS boolean)
-                          OR e.entity_id = ANY(CAST(:draft_allowed AS uuid[]))
-                        )
-                      )
-                    )
-                  ELSE TRUE
-                END
-              )
+            {_VISIBLE_ENTITIES_SQL}
               AND (
                     NOT CAST(:has_cursor AS boolean)
                     OR (lower(left(e.canonical_name, {_NAME_SORT_PREFIX})), e.entity_id)
@@ -486,6 +577,50 @@ def discoverable_entity_ids(
 # ---------------------------------------------------------------------------
 
 
+# The reader rule for a relationship definition (ADR 0017 decision 2), as one SQL boolean over
+# `world.relationships r`: lifecycle `active`, and no subtype row marking the edge non-public
+# (`ownership_relationships.is_public`, `organization_memberships.is_public`,
+# `route_relationships.is_hidden`). Not time-based: an ended or not-yet-started edge is still
+# returned. Shared by the world relationship list, the relationship detail route and the
+# character page's Relationships section so the three cannot drift.
+READER_RELATIONSHIP_VISIBLE_SQL = """(
+    NOT EXISTS (
+        SELECT 1 FROM core.lifecycle_statuses rls
+        WHERE rls.lifecycle_status_id = r.lifecycle_status_id
+          AND rls.code <> 'active'
+    )
+    AND NOT EXISTS (
+        SELECT 1 FROM world.ownership_relationships orl
+        WHERE orl.relationship_id = r.relationship_id AND NOT orl.is_public
+    )
+    AND NOT EXISTS (
+        SELECT 1 FROM world.organization_memberships oml
+        WHERE oml.relationship_id = r.relationship_id AND NOT oml.is_public
+    )
+    AND NOT EXISTS (
+        SELECT 1 FROM world.route_relationships rrl
+        WHERE rrl.relationship_id = r.relationship_id AND rrl.is_hidden
+    )
+)"""
+
+
+def all_participants_discoverable_sql() -> str:
+    """A SQL boolean over `world.relationships r`: TRUE when *every* participant is independently
+    discoverable by the caller (`_entity_discoverable_expr`). One undiscoverable participant
+    suppresses the whole relationship, leaving no trace of it. Needs the `disc_*` parameters from
+    `_entity_visibility_params`."""
+    return f"""NOT EXISTS (
+        SELECT 1
+        FROM world.relationship_participants rpv
+        JOIN core.entities pe ON pe.entity_id = rpv.entity_id
+        JOIN core.entity_types pet ON pet.entity_type_id = pe.entity_type_id
+        LEFT JOIN narrative.events pev ON pev.event_id = rpv.entity_id
+        LEFT JOIN narrative.event_statuses pes ON pes.event_status_id = pev.event_status_id
+        WHERE rpv.relationship_id = r.relationship_id
+          AND NOT {_entity_discoverable_expr(e="pe", et="pet", ev="pev", es="pes")}
+    )"""
+
+
 @dataclass(frozen=True)
 class RelationshipCard:
     relationship_id: uuid.UUID
@@ -505,6 +640,7 @@ def list_world_relationships(
     visibility: WorldEntityVisibility,
     limit: int,
     after_relationship_id: uuid.UUID | None,
+    include_private: bool = False,
 ) -> tuple[RelationshipCard, ...]:
     """Up to `limit + 1` relationships in the world, ordered by
     `relationship_id`.
@@ -537,6 +673,7 @@ def list_world_relationships(
         "limit_plus_one": limit + 1,
         "after_relationship_id": after_relationship_id,
         "has_cursor": after_relationship_id is not None,
+        "include_private": include_private,
         **_entity_visibility_params(
             world_id=world_id, timeline_id=timeline_id, visibility=visibility
         ),
@@ -549,6 +686,10 @@ def list_world_relationships(
             JOIN world.relationship_types rt
               ON rt.relationship_type_id = r.relationship_type_id
             WHERE r.world_id = :world_id
+              AND (
+                    CAST(:include_private AS boolean)
+                    OR {READER_RELATIONSHIP_VISIBLE_SQL}
+                  )
               AND (CAST(:type_code AS text) IS NULL OR rt.code = CAST(:type_code AS text))
               AND (
                     CAST(:like_pattern AS text) IS NULL
@@ -566,19 +707,7 @@ def list_world_relationships(
                     AND rp.entity_id = CAST(:related_entity_id AS uuid)
                 )
               )
-              -- Suppress the whole relationship if any participant is not
-              -- independently discoverable by this caller.
-              AND NOT EXISTS (
-                SELECT 1
-                FROM world.relationship_participants rpv
-                JOIN core.entities pe ON pe.entity_id = rpv.entity_id
-                JOIN core.entity_types pet ON pet.entity_type_id = pe.entity_type_id
-                LEFT JOIN narrative.events pev ON pev.event_id = rpv.entity_id
-                LEFT JOIN narrative.event_statuses pes
-                       ON pes.event_status_id = pev.event_status_id
-                WHERE rpv.relationship_id = r.relationship_id
-                  AND NOT {_entity_discoverable_expr(e="pe", et="pet", ev="pev", es="pes")}
-              )
+              AND {all_participants_discoverable_sql()}
             ORDER BY r.relationship_id
             LIMIT :limit_plus_one
         """),
@@ -823,6 +952,13 @@ class OrganizationDetailView:
     status_code: str | None
     """The organization's current operational status on the caller's
     timeline (`campaign.organization_state`), if one is recorded."""
+    founded: str | None = None
+    dissolved: str | None = None
+    """Founding and dissolution as display text (never a world-time id)."""
+    government_form: str | None = None
+    ideology: str | None = None
+    """The `PUBLIC_WORLD` subtype text of a government or a political faction.
+    The `STRUCTURAL` business and military-unit columns are not projected."""
 
 
 def _visible_link(
@@ -858,6 +994,8 @@ def get_organization_detail_view(
                 SELECT e.world_id, e.canonical_name, e.summary, et.code AS kind_code,
                        ot.code AS organization_type_code, o.public_description,
                        o.parent_organization_id, o.headquarters_location_id,
+                       o.founded_world_time_id, o.dissolved_world_time_id,
+                       g.government_form, pf.ideology,
                        ro.religion_id, os.code AS status_code
                 FROM world.organizations o
                 JOIN core.entities e ON e.entity_id = o.organization_id
@@ -866,6 +1004,9 @@ def get_organization_detail_view(
                   ON ot.organization_type_id = o.organization_type_id
                 LEFT JOIN world.religious_organizations ro
                   ON ro.religious_organization_id = o.organization_id
+                LEFT JOIN world.governments g ON g.government_id = o.organization_id
+                LEFT JOIN world.political_factions pf
+                  ON pf.political_faction_id = o.organization_id
                 LEFT JOIN campaign.organization_state ost
                   ON ost.timeline_id = :timeline AND ost.organization_id = o.organization_id
                 LEFT JOIN campaign.organization_statuses os
@@ -892,7 +1033,17 @@ def get_organization_detail_view(
         headquarters=_visible_link(connection, row["headquarters_location_id"], denied_entity_ids),
         religion=_visible_link(connection, row["religion_id"], denied_entity_ids),
         status_code=row["status_code"],
+        founded=_time_text(connection, row["founded_world_time_id"]),
+        dissolved=_time_text(connection, row["dissolved_world_time_id"]),
+        government_form=row["government_form"],
+        ideology=row["ideology"],
     )
+
+
+def _time_text(connection: Connection, world_time_id: uuid.UUID | None) -> str | None:
+    if world_time_id is None:
+        return None
+    return world_time_point(connection, world_time_id)[1]
 
 
 # ---------------------------------------------------------------------------
@@ -914,6 +1065,46 @@ class ItemDetailView:
     charges_maximum: int | None
     is_equipped: bool | None
     is_destroyed: bool | None
+
+
+def item_instance_in_context(
+    connection: Connection,
+    *,
+    timeline_id: uuid.UUID,
+    item_instance_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> bool:
+    """Whether the item instance belongs to the caller's own context: it has a recorded state, a
+    place in an inventory or an owner on `timeline_id`, or the caller created it and it has not been
+    awarded anywhere yet. Item instances are world rows with no campaign column, so this is the
+    only record of which campaign an instance was created or awarded in. Another campaign on the
+    same world sees the shared definition but not this campaign's GM-only `origin_notes` (decision
+    D8, E2). Authorship is used only to keep an author's own not-yet-awarded notes readable; it
+    grants no authority over anything."""
+    return bool(
+        connection.execute(
+            text("""
+                SELECT EXISTS (
+                    SELECT 1 FROM campaign.item_state
+                    WHERE timeline_id = :t AND item_instance_id = :i
+                    UNION ALL
+                    SELECT 1 FROM campaign.inventory_entries
+                    WHERE timeline_id = :t AND item_instance_id = :i
+                    UNION ALL
+                    SELECT 1 FROM campaign.item_ownership
+                    WHERE timeline_id = :t AND item_instance_id = :i
+                    UNION ALL
+                    SELECT 1 FROM core.entities e
+                    WHERE e.entity_id = :i AND e.created_by_user_id = :u
+                      AND NOT EXISTS (SELECT 1 FROM campaign.item_state s
+                                      WHERE s.item_instance_id = :i)
+                      AND NOT EXISTS (SELECT 1 FROM campaign.inventory_entries x
+                                      WHERE x.item_instance_id = :i)
+                )
+            """),
+            {"t": timeline_id, "i": item_instance_id, "u": user_id},
+        ).scalar()
+    )
 
 
 def get_item_view(

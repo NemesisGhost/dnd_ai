@@ -34,7 +34,7 @@ function statusMessage(
         case "conflict":
             return "This role assignment changed elsewhere. Reload the page to see the current state."
         case "validation":
-            return "That role can no longer be assigned. Reload the page to see the current choices."
+            return "The role was not changed. Either that role can no longer be assigned, or this is the campaign's last access manager and the campaign must always keep one. Give the access-managing role to another member first, or reload the page to see the current choices."
         case "error":
             return "The role change could not be saved. Try again."
     }

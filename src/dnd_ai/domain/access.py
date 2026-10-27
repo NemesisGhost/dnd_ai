@@ -130,6 +130,7 @@ CHARACTER_TARGET_CAPABILITY_CODES = frozenset(
     {
         "character.view_summary",
         "character.view_full",
+        "character.view_inventory",
         "character.view_private",
         "character.view_knowledge",
         "character.edit_narrative",
@@ -140,6 +141,87 @@ CHARACTER_TARGET_CAPABILITY_CODES = frozenset(
 )
 
 GENERIC_TARGET_CAPABILITY_CODES = frozenset({"campaign.view", "canon.edit"})
+
+# Character-relationship policy (Phase 15 checkpoint 15.2A-1).
+#
+# The maximum capability set each *built-in* relationship type may confer.
+# `security.character_relationship_type_capabilities` supplies the default rows
+# (migration `114_relationship_defaults`), but a row is authorization-effective
+# only if this matrix also permits it: a stray, re-added, or custom-type row
+# confers nothing. A type not named here is never admitted (default deny), a
+# type with `is_active = false` confers nothing (filtered in SQL), and
+# `former_controller` is admitted with an empty set -- continued access needs a
+# separate active relationship.
+#
+# Edit/control/interact capabilities are deliberately withheld until Phase 16
+# (no route consumes them today). Only owner, primary_controller, co_controller,
+# and portrayer hold `character.view_knowledge`, which is what makes a character
+# selectable as a perspective.
+#
+# These limit *relationship-derived* grants only. Role capabilities
+# (`canon.edit`, `gm`'s `character.view_full`/`view_knowledge`, ...) and explicit
+# resource grants are independent sources and are not filtered here.
+BUILTIN_RELATIONSHIP_CAPABILITIES: dict[str, frozenset[str]] = {
+    "owner": frozenset(
+        {
+            "character.discover",
+            "character.view_summary",
+            "character.view_full",
+            "character.view_inventory",
+            "character.view_knowledge",
+            "character.view_private",
+        }
+    ),
+    "primary_controller": frozenset(
+        {
+            "character.discover",
+            "character.view_summary",
+            "character.view_full",
+            "character.view_inventory",
+            "character.view_knowledge",
+            "character.view_private",
+        }
+    ),
+    "co_controller": frozenset(
+        {
+            "character.discover",
+            "character.view_summary",
+            "character.view_full",
+            "character.view_inventory",
+            "character.view_knowledge",
+        }
+    ),
+    "portrayer": frozenset(
+        {
+            "character.discover",
+            "character.view_summary",
+            "character.view_full",
+            "character.view_inventory",
+            "character.view_knowledge",
+        }
+    ),
+    # CP-6 / DR-2: a viewer reads the character's inventory through the restricted projection
+    # (`dnd_ai.queries.inventory.restrict_inventory_view`) without `character.view_full`.
+    "viewer": frozenset(
+        {"character.discover", "character.view_summary", "character.view_inventory"}
+    ),
+    "observer_approved_viewer": frozenset(
+        {"character.discover", "character.view_summary", "character.view_inventory"}
+    ),
+    "former_controller": frozenset(),
+}
+
+ADMITTED_RELATIONSHIP_TYPES: frozenset[str] = frozenset(BUILTIN_RELATIONSHIP_CAPABILITIES)
+
+
+def relationship_capability_permitted(type_code: str, capability_code: str) -> bool:
+    """Whether the server policy lets relationship type `type_code` confer
+    `capability_code`. Unknown/custom types and any capability outside the
+    type's matrix entry are refused. Callers also require the type to be active
+    and a database mapping row; this is the code-side half of that conjunction.
+    """
+    return capability_code in BUILTIN_RELATIONSHIP_CAPABILITIES.get(type_code, frozenset())
+
 
 RESOURCE_GRANT_CAPABILITY_CATALOG: dict[str, frozenset[str]] = {
     "character_id": CHARACTER_TARGET_CAPABILITY_CODES,
@@ -602,25 +684,31 @@ def resolve_user_by_external_identity(
 
 
 def is_platform_administrator(connection: Connection, *, user_id: uuid.UUID) -> bool:
-    """True iff `user_id` names an active user with `security.users.
-    is_platform_administrator` set (Phase 11R workstream A). This is a
-    deliberately minimal, campaign-independent authorization primitive —
-    `AccessContext`/`resolve_access_context` above resolve capabilities
-    *within one campaign membership*, but account-management operations
-    (creating a local account, issuing a password-reset token, bootstrap)
-    have no campaign to scope against at all (docs/PLAN.md §23.1:
-    "possessing an active login account does not grant access to any
-    campaign" — the reverse is equally true, campaign roles grant no
-    platform-account authority). A deactivated administrator's own
-    lifecycle status already gates this the same way it gates every other
-    login path — there is no separate "revoke admin" step beyond
-    deactivating the account."""
+    """True iff `user_id` names an active user holding an unrevoked system `admin`
+    assignment (`security.user_system_roles`; docs/adr/0020-scoped-system-world-
+    and-campaign-roles.md). A deliberately minimal, campaign-independent
+    authorization primitive -- `AccessContext`/`resolve_access_context` above
+    resolve capabilities *within one campaign membership*, but account-management
+    operations (creating a local account, issuing a password-reset token,
+    bootstrap) have no campaign to scope against at all (docs/PLAN.md §23.1:
+    "possessing an active login account does not grant access to any campaign" --
+    the reverse is equally true, campaign roles grant no platform-account
+    authority). Admin implies no GM, world, or campaign authority. A deactivated
+    administrator's own lifecycle status gates this the same way it gates every
+    other login path."""
     value = connection.execute(
         text("""
-            SELECT u.is_platform_administrator
-            FROM security.users u
-            JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
-            WHERE u.user_id = :user_id AND ls.code = 'active'
+            SELECT EXISTS (
+                SELECT 1
+                FROM security.user_system_roles usr
+                JOIN security.system_roles sr ON sr.system_role_id = usr.system_role_id
+                JOIN security.users u ON u.user_id = usr.user_id
+                JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
+                WHERE usr.user_id = :user_id
+                  AND usr.revoked_at IS NULL
+                  AND sr.code = 'admin' AND sr.is_active
+                  AND ls.code = 'active'
+            )
         """),
         {"user_id": user_id},
     ).scalar()
@@ -960,23 +1048,33 @@ def resolve_access_context(
     character_capabilities: dict[uuid.UUID, set[str]] = {}
     for row in connection.execute(
         text("""
-            SELECT mcr.character_id, cap.code
+            SELECT mcr.character_id, cap.code, crt.code AS type_code
             FROM security.membership_character_relationships mcr
+            JOIN security.character_relationship_types crt
+              ON crt.character_relationship_type_id = mcr.character_relationship_type_id
             JOIN security.character_relationship_type_capabilities rtc
               ON rtc.character_relationship_type_id = mcr.character_relationship_type_id
             JOIN security.capabilities cap ON cap.capability_id = rtc.capability_id
             JOIN core.entities e ON e.entity_id = mcr.character_id
             JOIN core.lifecycle_statuses cls ON cls.lifecycle_status_id = e.lifecycle_status_id
+            JOIN core.canon_statuses ccs ON ccs.canon_status_id = e.canon_status_id
             WHERE mcr.campaign_membership_id = :membership_id
               AND mcr.revoked_at IS NULL
               AND (mcr.expires_at IS NULL OR mcr.expires_at > now())
               AND mcr.effective_to_world_time_id IS NULL
               AND (mcr.timeline_id IS NULL OR mcr.timeline_id = :timeline_id)
+              AND crt.is_active
               AND cap.is_active
               AND cls.code = 'active'
+              -- A draft or unpublished character confers no perspective (Phase 15.2B-1).
+              AND ccs.code = 'canon'
         """),
         {"membership_id": membership_id, "timeline_id": campaign_timeline_id},
     ).mappings():
+        # A database mapping is effective only if the code-defined matrix also
+        # permits it (default deny for unknown/custom types and stray rows).
+        if not relationship_capability_permitted(_as_str(row["type_code"]), _as_str(row["code"])):
+            continue
         character_id = _as_uuid(row["character_id"])
         character_capabilities.setdefault(character_id, set()).add(_as_str(row["code"]))
 

@@ -1,6 +1,7 @@
 import type { ReactNode } from "react"
 import { useKnowledgeDetail } from "../hooks/useKnowledgeDetail"
 import type { KnowledgeDetail } from "../types/knowledge"
+import type { RefetchOutcome } from "../hooks/useAuthoringResource"
 import PlaceholderPage from "../pages/PlaceholderPage"
 
 interface KnowledgeDetailBoundaryProps {
@@ -8,7 +9,8 @@ interface KnowledgeDetailBoundaryProps {
     knowledgeItemId: string
     characterId: string | null
     partyId: string | null
-    children: (item: KnowledgeDetail) => ReactNode
+    // `refresh` re-reads the detail without remounting anything below.
+    children: (item: KnowledgeDetail, refresh: () => Promise<RefetchOutcome>) => ReactNode
 }
 
 export function KnowledgeDetailBoundary({
@@ -18,7 +20,7 @@ export function KnowledgeDetailBoundary({
     partyId,
     children,
 }: KnowledgeDetailBoundaryProps) {
-    const { state, retry } = useKnowledgeDetail(
+    const { state, retry, refresh } = useKnowledgeDetail(
         campaignId,
         knowledgeItemId,
         characterId,
@@ -65,5 +67,5 @@ export function KnowledgeDetailBoundary({
         )
     }
 
-    return <>{children(state.item)}</>
+    return <>{children(state.item, refresh)}</>
 }

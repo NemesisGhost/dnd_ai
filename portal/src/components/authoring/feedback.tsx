@@ -25,12 +25,15 @@ interface ErrorSummaryProps {
     // Incremented by the page on every failed submit attempt; the summary takes
     // focus each time it changes while it has something to say.
     attempt: number
+    // A page whose fields can be out of sight (another step, a collapsed row) reveals the field
+    // itself; without it a link just focuses the field.
+    onFollow?: (fieldId: string) => void
 }
 
 // Shown after a failed submit. It is focusable and takes focus on each failed
 // attempt, announces once (role="alert"), and links every field error to its
 // input. Entered values are never cleared by a failure.
-export function ErrorSummary({ errors, formError, attempt }: ErrorSummaryProps) {
+export function ErrorSummary({ errors, formError, attempt, onFollow }: ErrorSummaryProps) {
     const ref = useRef<HTMLDivElement>(null)
     const hasContent = errors.length > 0 || Boolean(formError)
 
@@ -56,7 +59,11 @@ export function ErrorSummary({ errors, formError, attempt }: ErrorSummaryProps) 
                                 href={`#${error.fieldId}`}
                                 onClick={(event) => {
                                     event.preventDefault()
-                                    document.getElementById(error.fieldId)?.focus()
+                                    if (onFollow !== undefined) {
+                                        onFollow(error.fieldId)
+                                    } else {
+                                        document.getElementById(error.fieldId)?.focus()
+                                    }
                                 }}
                             >
                                 {error.message}
@@ -75,6 +82,14 @@ interface FormActionsProps {
     saveLabel?: string
     pendingLabel?: string
     cancelLabel?: string
+    // Navigation shown before Save in the same row (a creation step's Back link).
+    leading?: ReactNode
+    // Saves by click instead of by submitting a <form>: for actions that sit inside another form,
+    // where a nested <form> would submit the outer one in a real browser.
+    onSave?: () => void
+    // Save is unavailable for a reason shown beside the form (not because a save is pending): for
+    // example the record must be re-read before another version-checked save can be sent.
+    saveDisabled?: boolean
 }
 
 // Explicit Save and Cancel. Save is the only submit button; while pending it is
@@ -85,14 +100,19 @@ export function FormActions({
     saveLabel = "Save",
     pendingLabel = "Saving…",
     cancelLabel = "Cancel",
+    leading,
+    onSave,
+    saveDisabled = false,
 }: FormActionsProps) {
     return (
         <div className="authoring-actions">
+            {leading}
             <button
-                type="submit"
+                type={onSave === undefined ? "submit" : "button"}
                 className="authoring-button authoring-button--primary"
-                disabled={pending}
+                disabled={pending || saveDisabled}
                 aria-busy={pending}
+                onClick={onSave}
             >
                 {pending ? pendingLabel : saveLabel}
             </button>
@@ -153,7 +173,7 @@ export function MutationStatusMessage({
     switch (error.kind) {
         case "denied":
             message =
-                "You do not have permission to do this. Your access may have changed."
+                specific ?? "You do not have permission to do this. Your access may have changed."
             action = (
                 <button type="button" className="authoring-button" onClick={onCheckSession}>
                     Check my session
@@ -164,7 +184,8 @@ export function MutationStatusMessage({
             message = "This record no longer exists, or you can no longer access it."
             break
         case "network":
-            message = "We could not reach the server. Your input has been kept."
+            message =
+                "We could not reach the server, so we cannot tell whether this was saved. Your input has been kept. Retrying sends the same request, which will not be applied twice."
             action = (
                 <button type="button" className="authoring-button" onClick={onRetry}>
                     Retry
@@ -172,7 +193,8 @@ export function MutationStatusMessage({
             )
             break
         case "server":
-            message = "Something went wrong on our side. Your input has been kept."
+            message =
+                "Something went wrong on our side, and we cannot tell whether this was saved. Your input has been kept. Retrying sends the same request, which will not be applied twice."
             action = (
                 <button type="button" className="authoring-button" onClick={onRetry}>
                     Retry
@@ -200,6 +222,52 @@ export function MutationStatusMessage({
                     <p className="authoring-field__hint">Reference: {error.correlationId}</p>
                 ) : null}
                 {action}
+            </div>
+        </div>
+    )
+}
+
+interface SavedRefreshFailedNoticeProps {
+    // What could not be re-read, in the page's own words ("campaign settings").
+    what: string
+    // What was saved ("Saved." unless the write has a name of its own, like "Campaign archived.").
+    done?: string
+    // Reads again. It never repeats the save.
+    // Omitted when another notice on the page already offers the read and is announced.
+    onRetry?: () => void
+    retrying?: boolean
+    // Text only, not a live region: another notice is already announcing the failed read.
+    quiet?: boolean
+}
+
+// Shown when the server confirmed a write but re-reading afterwards failed. The change is saved;
+// only the display is behind, so the one action is a read. It is a status (announced politely
+// once), not an alert, because nothing the person did has failed.
+export function SavedRefreshFailedNotice({
+    what,
+    done = "Saved.",
+    onRetry,
+    retrying = false,
+    quiet = false,
+}: SavedRefreshFailedNoticeProps) {
+    return (
+        <div className="authoring-message authoring-message--warning" role={quiet ? undefined : "status"}>
+            <AlertTriangle aria-hidden="true" className="authoring-message__icon" />
+            <div>
+                <p>
+                    {done} The latest {what} could not be loaded, so what is shown may be out of date.
+                </p>
+                {onRetry !== undefined ? (
+                    <button
+                        type="button"
+                        className="authoring-button"
+                        onClick={onRetry}
+                        disabled={retrying}
+                        aria-busy={retrying}
+                    >
+                        {retrying ? "Loading…" : "Load latest"}
+                    </button>
+                ) : null}
             </div>
         </div>
     )

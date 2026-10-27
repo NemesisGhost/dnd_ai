@@ -65,6 +65,15 @@ def test_defaults_to_local_dev_database_url_when_unset() -> None:
     assert settings.database_url == "postgresql+psycopg://postgres:postgres@localhost:5432/dnd_ai"
 
 
+def test_the_in_app_admin_grant_is_off_unless_explicitly_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DND_AI_ALLOW_IN_APP_ADMIN_GRANT", raising=False)
+    assert Settings().allow_in_app_admin_grant is False
+    monkeypatch.setenv("DND_AI_ALLOW_IN_APP_ADMIN_GRANT", "true")
+    assert Settings().allow_in_app_admin_grant is True
+
+
 def test_test_environment_also_gets_the_local_dev_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DND_AI_ENVIRONMENT", "test")
     settings = Settings()

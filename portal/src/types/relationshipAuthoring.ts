@@ -1,0 +1,195 @@
+// World relationship authoring contracts (Phase 15 checkpoint 15.3A-2a).
+
+export interface RelationshipKindOption {
+    code: string
+    label: string
+    types: string[]
+    roles: string[]
+    fixed_roles: string[] | null
+}
+
+export interface RelationshipRolePolicy {
+    code: string
+    // Reads in the direction of the relationship ("Worshipper", "Controlled place").
+    label: string
+    entity_type_codes: string[]
+}
+
+export interface RelationshipTypePolicy {
+    code: string
+    label: string
+    kind: string
+    symmetric: boolean
+    min_participants: number
+    max_participants: number
+    roles: RelationshipRolePolicy[]
+}
+
+// One way the opened record can take part in a two-participant relationship of a type.
+export interface RelationshipPairing {
+    relationship_type: string
+    my_role: string
+    other_role: string
+    other_entity_type_codes: string[]
+}
+
+export interface RelationshipOptions {
+    can_create: boolean
+    kinds: RelationshipKindOption[]
+    relationship_types: RelationshipTypePolicy[]
+    // Present when the options were requested for a record.
+    for_entity?: {
+        entity_id: string
+        entity_type_code: string
+        pairings: RelationshipPairing[]
+    }
+    limits: {
+        text_max_length: number
+        short_text_max_length: number
+        stance_min: number
+        stance_max: number
+        min_participants: number
+        max_participants: number
+    }
+}
+
+export interface RelationshipParticipant {
+    entity_id: string
+    name: string
+    entity_type_code: string
+    canon_status: string
+    lifecycle_status: string
+    role: string
+    role_label: string
+}
+
+// Where the campaign clock sits against a relationship's recorded period, derived by the server.
+export type RelationshipPeriodStatus = "undated" | "not_started" | "in_effect" | "ended" | "clock_unset"
+
+export interface RelationshipSummary {
+    relationship_id: string
+    kind: string
+    relationship_type: string
+    relationship_type_label: string
+    description: string | null
+    lifecycle_status: string
+    ended: boolean
+    is_public: boolean | null
+    row_version: number
+    participants: RelationshipParticipant[]
+    // Why the current rules would not accept this record; empty when they do.
+    policy_conflicts: string[]
+    started_world_time_id: string | null
+    started: string | null
+    ended_world_time_id: string | null
+    // The end as a world-time display (the boolean `ended` only says an end is recorded).
+    ended_at: string | null
+    period_status: RelationshipPeriodStatus
+    // Political only: the treaty is in force. Separate from the period and from archiving.
+    in_force: boolean | null
+    // Route only.
+    is_hidden: boolean | null
+    current_status: string | null
+    current_status_label: string | null
+}
+
+export interface RelationshipList {
+    // The campaign clock the period statuses compare against; null when none is set.
+    as_of: string | null
+    items: RelationshipSummary[]
+}
+
+export interface PerspectiveView {
+    holder_entity_id: string
+    holder_name: string
+    affinity: number | null
+    trust: number | null
+    respect: number | null
+    fear: number | null
+    obligation: number | null
+    emotional_tone: string | null
+    private_interpretation: string | null
+}
+
+export interface RelationshipView {
+    relationship_id: string
+    kind: string
+    kind_label: string
+    relationship_type: string
+    relationship_type_label: string
+    description: string | null
+    started_world_time_id: string | null
+    started: string | null
+    ended_world_time_id: string | null
+    ended: string | null
+    lifecycle_status: string
+    row_version: number
+    typed: Record<string, unknown>
+    participants: RelationshipParticipant[]
+    perspectives: PerspectiveView[]
+    current_status: string | null
+    available_actions: string[]
+    policy_conflicts: string[]
+    period_status: RelationshipPeriodStatus
+    as_of: string | null
+    current_status_label: string | null
+    changed?: boolean
+}
+
+export interface TypedFields {
+    family_unit_name?: string | null
+    job_title?: string | null
+    ownership_share?: number | null
+    is_public?: boolean
+    is_active?: boolean
+    treaty_terms?: string | null
+    role?: string | null
+    rank?: string | null
+    distance_text?: string | null
+    travel_time_text?: string | null
+    travel_mode?: string | null
+    is_hidden?: boolean
+}
+
+export interface CreateRelationshipBody extends TypedFields {
+    kind: string
+    relationship_type: string
+    participants: { entity_id: string; role: string }[]
+    description: string | null
+    started_world_time_id: string | null
+}
+
+export interface PerspectiveBody {
+    holder_entity_id: string
+    affinity: number | null
+    trust: number | null
+    respect: number | null
+    fear: number | null
+    obligation: number | null
+    emotional_tone: string | null
+    private_interpretation: string | null
+}
+
+export type RelationshipCommand =
+    | {
+          op: "update"
+          body: TypedFields & {
+              expected_row_version: number
+              description: string | null
+              started_world_time_id: string | null
+          }
+      }
+    | { op: "end"; body: { expected_row_version: number; ended_world_time_id: string } }
+    | {
+          op: "change_office"
+          body: {
+              expected_row_version: number
+              effective_world_time_id: string
+              role: string | null
+              rank: string | null
+              is_public: boolean
+          }
+      }
+    | { op: "archive"; body: { expected_row_version: number } }
+    | { op: "restore"; body: { expected_row_version: number } }
+    | { op: "perspective"; body: PerspectiveBody & { expected_row_version: number } }

@@ -55,12 +55,12 @@ mutation of any kind.
 Phase 10 workstream 16 added a sub-resource:
 `GET /campaigns/{campaign_id}/characters/{character_id}/inventory`
 (`dnd_ai.queries.inventory.get_inventory_view`). It requires the *full*
-character-view tier for `character_id` — `resolve_character_view_tier`
-returning `False` (summary-only) is treated as unauthorized here too,
-since inventory contents are full-detail data with no separate summary
-form; the same `CharacterViewNotAuthorizedError` fixed 404 that route
-already raises for "neither capability held" now also covers "only the
-summary tier applies." A caller holding `canon.edit` for this exact
+character-view tier for `character_id`, or (CP-6 / DR-2) the narrower
+`character.view_inventory`, which reads the same list through the restricted
+`inventory_only` projection (`RestrictedInventoryItemResponse`). Both are decided by
+`dnd_ai.api.access.resolve_character_inventory_access`, which `sections.inventory` also uses. The
+summary tier alone is unauthorized here, with the same
+`CharacterViewNotAuthorizedError` fixed 404 as "neither capability held". A caller holding `canon.edit` for this exact
 `character_id` (`access.has_capability(..., character_id=character_id)` —
 never checked without a target, which would skip any character-scoped
 `security.resource_grants` deny and let a role-derived GM bypass an
@@ -97,29 +97,51 @@ character_sheet`'s own docstring for the active-build resolution rule
 input, the newest build, or a guess) and `docs/
 PHASE13D_CHARACTER_SHEET_BACKEND.md` for the full response contract, raw-
 vs-derived field policy, and known data-model limitations.
+
+A fourth sub-resource, `GET /campaigns/{campaign_id}/characters/{character_id}/relationships`
+(`dnd_ai.queries.character_relationships`), backs the character page's player-facing, read-only
+Relationships section. It passes exactly the gates the character read passes (`campaign.view`, the
+entity-targeted `campaign.view` deny, published, and either character-view tier — the summary tier
+is enough), then always returns the *reader* projection, even for a caller who can edit canon:
+active relationships whose subtype is public, whose every participant is discoverable by this
+caller, with counterpart names, role labels, the period status against the effective campaign
+clock and only the campaign-visible typed fields. `description`, treaty terms, participant notes,
+perspectives and every stance/tone/interpretation field are never selected. A relationship that
+is hidden for any reason leaves no trace (no count, no placeholder). No client-supplied party,
+perspective, world or timeline is read. Editors manage relationships through the authoring routes.
 """
 
 import uuid
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from sqlalchemy import Connection
+from sqlalchemy import Connection, text
 
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.queries.character import get_character_view
+from dnd_ai.queries.character_relationships import list_character_relationships_for_reader
 from dnd_ai.queries.character_sheet import get_character_sheet_view
-from dnd_ai.queries.entity_lifecycle import lifecycle_hidden_entity_ids
-from dnd_ai.queries.inventory import get_inventory_view
+from dnd_ai.queries.entity_lifecycle import (
+    get_entity_status_summary,
+    lifecycle_hidden_entity_ids,
+)
+from dnd_ai.queries.inventory import get_inventory_view, restrict_inventory_view
+from dnd_ai.queries.parties import list_character_parties
 
 from ._shared import timeline_world_id
 from .access import (
     CharacterViewNotAuthorizedError,
+    RecordAuthoringResponse,
+    can_open_participant,
+    record_authoring_response,
     require_campaign_capability,
+    resolve_character_inventory_access,
     resolve_character_view_tier,
 )
 from .deps import get_connection
 from .errors import NotFoundError
+from .world_explorer import resolve_world_entity_visibility
 
 router = APIRouter(tags=["characters"])
 
@@ -155,9 +177,36 @@ class CharacterResourceResponse(BaseModel):
     maximum_amount: int
 
 
+class CharacterSectionsResponse(BaseModel):
+    """Which of the character's reader sections the caller may open, decided by the server with the
+    same checks as the endpoint behind each one. They only decide which links the portal offers:
+    every section endpoint still authorizes its own request, and a section reported `False` here
+    answers the same fixed 404/403 it always did."""
+
+    details: bool
+    sheet: bool
+    relationships: bool
+    inventory: bool
+    parties: bool
+
+
 class CharacterResponse(BaseModel):
+    # What the caller may do to this character's definition, resolved by the server (an NPC is
+    # shared world canon; player-character identity is campaign-originated).
+    authoring: RecordAuthoringResponse
+    sections: CharacterSectionsResponse
     character_id: uuid.UUID
     name: str
+    # `npc`, `player_character`, or `character` (a bare character row). Not new
+    # disclosure: the World search card already returns the entity type to anyone
+    # who may discover the character.
+    character_kind: Literal["npc", "player_character", "character"]
+    # Where the record stands (the same two fields every World Explorer detail carries). It is
+    # what lets a runtime panel say whether this character takes new events without reading the
+    # world's private lifecycle view; the read is already limited to characters the caller may see
+    # (`_require_published_character`).
+    canon_status: str
+    lifecycle_status: str
     species_code: str
     size_category: str
     # None on every field below when the caller was authorized only for
@@ -187,10 +236,35 @@ class InventoryItemResponse(BaseModel):
     charges_maximum: int | None
     is_equipped: bool
     is_destroyed: bool
+    # Whether the holder is attuned (an open `campaign.item_attunements` row on this timeline).
+    is_attuned: bool = False
     owner_entity_id: uuid.UUID | None
     identification_level: str
     # None unless identification_level allows it (or the caller holds
     # canon.edit) — see dnd_ai.queries.inventory's own docstring.
+    properties: dict[str, Any] | None
+    # The instance's own name, and the item's optimistic token (the last event seen).
+    name: str = ""
+    last_event_id: uuid.UUID | None = None
+
+
+class RestrictedInventoryItemResponse(BaseModel):
+    """The `inventory_only` row (CP-6 / DR-2): an explicit allowlist, deliberately not a subclass or
+    reuse of `InventoryItemResponse`, so a field added there is never inherited here. Withheld:
+    condition, charges, the optimistic token, publication state and the owner's entity id."""
+
+    item_instance_id: uuid.UUID
+    name: str
+    display_name: str
+    item_category_code: str
+    rarity: str
+    quantity: int
+    is_equipped: bool
+    is_destroyed: bool
+    is_attuned: bool
+    # `holder` (the character owns it), `other` (carried but owned by someone else), or `none`.
+    ownership: Literal["holder", "other", "none"]
+    identification_level: str
     properties: dict[str, Any] | None
 
 
@@ -307,6 +381,7 @@ class CharacterSheetMovementResponse(BaseModel):
 class CharacterSheetResponse(BaseModel):
     character_id: uuid.UUID
     name: str
+    character_kind: Literal["npc", "player_character", "character"]
     species_code: str
     species_display_name: str
     size_category: str
@@ -353,10 +428,32 @@ def _require_published_character(
         connection,
         world_id=timeline_world_id(connection, access.timeline_id),
         mode="reference",
+        viewer_user_id=access.user_id,
         can_edit_canon=access.has_capability("canon.edit"),
     )
     if character_id in hidden:
         raise NotFoundError()
+
+
+def character_sections(
+    access: AccessContext, *, character_id: uuid.UUID, include_full: bool
+) -> CharacterSectionsResponse:
+    """The section eligibility of a character the caller has already been allowed to read (the
+    entity-level `campaign.view` deny and the published-character check have passed, and
+    `include_full` is `resolve_character_view_tier`'s answer). Each flag repeats the test its own
+    endpoint applies after those shared checks: the sheet and the inventory need the full tier
+    (the summary tier alone is refused), the relationships need either tier (the page itself),
+    and the parties need `character.view_knowledge` for this character. The inventory opens for
+    either inventory tier (`resolve_character_inventory_access`, the endpoint's own decision), so a
+    reader holding only `character.view_inventory` is offered the inventory and nothing else full.
+    The agreement tests hold these to the endpoints."""
+    return CharacterSectionsResponse(
+        details=True,
+        sheet=include_full,
+        relationships=True,
+        inventory=resolve_character_inventory_access(access, character_id=character_id) != "none",
+        parties=access.has_capability("character.view_knowledge", character_id=character_id),
+    )
 
 
 @router.get(
@@ -418,9 +515,19 @@ def get_character_endpoint(
         include_full=include_full,
     )
 
+    status = get_entity_status_summary(
+        connection, entity_id=character_id, hidden_entity_ids=frozenset()
+    )
     return CharacterResponse(
+        authoring=record_authoring_response(
+            connection, access=access, entity_type_code=view.character_kind
+        ),
+        sections=character_sections(access, character_id=character_id, include_full=include_full),
         character_id=view.character_id,
         name=view.name,
+        character_kind=view.character_kind,  # type: ignore[arg-type]
+        canon_status=status.canon_status,
+        lifecycle_status=status.lifecycle_status,
         species_code=view.species_code,
         size_category=view.size_category,
         current_hit_points=view.current_hit_points,
@@ -456,9 +563,190 @@ def get_character_endpoint(
     )
 
 
+class CharacterPartyResponse(BaseModel):
+    party_id: uuid.UUID
+    name: str
+
+
+class CharacterPartiesResponse(BaseModel):
+    character_id: uuid.UUID
+    # Whether the caller may open a party's own page (the member page needs `canon.edit`); decided
+    # here, once, so the portal never guesses it.
+    can_open: bool
+    items: list[CharacterPartyResponse]
+
+
+@router.get(
+    "/campaigns/{campaign_id}/characters/{character_id}/parties",
+    response_model=CharacterPartiesResponse,
+    status_code=200,
+)
+def list_character_parties_endpoint(
+    character_id: uuid.UUID,
+    access: Annotated[
+        AccessContext, Depends(require_campaign_capability(_CHARACTER_VIEW_CAPABILITY))
+    ],
+    connection: Annotated[Connection, Depends(get_connection)],
+) -> CharacterPartiesResponse:
+    """The parties the selected character currently belongs to — an informational affiliation
+    list for the campaign Info Box, never a knowledge perspective.
+
+    It is offered only for a character the caller may take the perspective of
+    (`character.view_knowledge`, the capability the session bootstrap lists characters under) that
+    is a visible character of this campaign's own world; anything else is the identical fixed 404
+    a nonexistent character gets, so neither a restricted character nor a party is disclosed. The
+    list is the complete current membership (`list_character_parties`), never paged; archived
+    parties appear only for an editor, as in every party read."""
+    if not access.has_capability(_CHARACTER_VIEW_CAPABILITY, entity_id=character_id):
+        raise NotFoundError()
+    if not access.has_capability("character.view_knowledge", character_id=character_id):
+        raise NotFoundError()
+    _require_published_character(connection, access, character_id)
+    in_world = connection.execute(
+        text("SELECT 1 FROM core.entities WHERE entity_id = :e AND world_id = :w"),
+        {"e": character_id, "w": timeline_world_id(connection, access.timeline_id)},
+    ).scalar()
+    if in_world is None:
+        raise NotFoundError()
+    editor = access.has_capability(_CHARACTER_MANAGE_CAPABILITY)
+    parties = list_character_parties(
+        connection,
+        campaign_id=access.campaign_id,
+        timeline_id=access.timeline_id,
+        character_id=character_id,
+        include_archived=editor,
+    )
+    return CharacterPartiesResponse(
+        character_id=character_id,
+        can_open=editor,
+        items=[CharacterPartyResponse(party_id=p.party_id, name=p.name) for p in parties],
+    )
+
+
+class RelationshipParticipantResponse(BaseModel):
+    entity_id: uuid.UUID
+    name: str
+    entity_type_code: str
+    # The World category the participant browses under; the portal builds a link from it only when
+    # `can_open` is true.
+    category: str | None
+    role: str
+    role_label: str
+    is_self: bool
+    can_open: bool
+
+
+class RelationshipDetailsResponse(BaseModel):
+    """Only the campaign-visible and structural typed fields; every one optional."""
+
+    family_unit_name: str | None = None
+    job_title: str | None = None
+    ownership_share: int | None = None
+    office: str | None = None
+    rank: str | None = None
+    in_force: bool | None = None
+    distance_text: str | None = None
+    travel_time_text: str | None = None
+    travel_mode: str | None = None
+
+
+class CharacterRelationshipResponse(BaseModel):
+    relationship_id: uuid.UUID
+    kind: str
+    kind_label: str
+    relationship_type: str
+    relationship_type_label: str
+    symmetric: bool
+    participants: list[RelationshipParticipantResponse]
+    started: str | None
+    ended_at: str | None
+    period_status: str
+    current_status_label: str | None
+    details: RelationshipDetailsResponse
+
+
+class CharacterRelationshipsResponse(BaseModel):
+    character_id: uuid.UUID
+    as_of: str | None
+    truncated: bool
+    items: list[CharacterRelationshipResponse]
+
+
+@router.get(
+    "/campaigns/{campaign_id}/characters/{character_id}/relationships",
+    response_model=CharacterRelationshipsResponse,
+    status_code=200,
+)
+def list_character_relationships_endpoint(
+    character_id: uuid.UUID,
+    access: Annotated[
+        AccessContext, Depends(require_campaign_capability(_CHARACTER_VIEW_CAPABILITY))
+    ],
+    connection: Annotated[Connection, Depends(get_connection)],
+) -> CharacterRelationshipsResponse:
+    """The reader view of a character's relationships — see this module's docstring. Available
+    exactly when the character page itself is; anything else is the same fixed 404 a nonexistent
+    character gets."""
+    if not access.has_capability(_CHARACTER_VIEW_CAPABILITY, entity_id=character_id):
+        raise NotFoundError()
+    _require_published_character(connection, access, character_id)
+    # Either tier opens the page; only the fixed 404 for neither is needed here.
+    resolve_character_view_tier(access, character_id=character_id)
+    world_id = timeline_world_id(connection, access.timeline_id)
+    in_world = connection.execute(
+        text("SELECT 1 FROM core.entities WHERE entity_id = :e AND world_id = :w"),
+        {"e": character_id, "w": world_id},
+    ).scalar()
+    if in_world is None:
+        raise NotFoundError()
+
+    result = list_character_relationships_for_reader(
+        connection,
+        world_id=world_id,
+        timeline_id=access.timeline_id,
+        character_id=character_id,
+        visibility=resolve_world_entity_visibility(access, connection, reader_only=True),
+    )
+    return CharacterRelationshipsResponse(
+        character_id=character_id,
+        as_of=result.as_of,
+        truncated=result.truncated,
+        items=[
+            CharacterRelationshipResponse(
+                relationship_id=item.relationship_id,
+                kind=item.kind,
+                kind_label=item.kind_label,
+                relationship_type=item.relationship_type,
+                relationship_type_label=item.relationship_type_label,
+                symmetric=item.symmetric,
+                participants=[
+                    RelationshipParticipantResponse(
+                        entity_id=p.entity_id,
+                        name=p.name,
+                        entity_type_code=p.entity_type_code,
+                        category=p.category,
+                        role=p.role,
+                        role_label=p.role_label,
+                        is_self=p.is_self,
+                        can_open=not p.is_self
+                        and can_open_participant(access, p.category, p.entity_id),
+                    )
+                    for p in item.participants
+                ],
+                started=item.started,
+                ended_at=item.ended_at,
+                period_status=item.period_status,
+                current_status_label=item.current_status_label,
+                details=RelationshipDetailsResponse(**item.details),
+            )
+            for item in result.items
+        ],
+    )
+
+
 @router.get(
     "/campaigns/{campaign_id}/characters/{character_id}/inventory",
-    response_model=list[InventoryItemResponse],
+    response_model=list[InventoryItemResponse] | list[RestrictedInventoryItemResponse],
     status_code=200,
 )
 def get_character_inventory_endpoint(
@@ -467,22 +755,23 @@ def get_character_inventory_endpoint(
         AccessContext, Depends(require_campaign_capability(_CHARACTER_VIEW_CAPABILITY))
     ],
     connection: Annotated[Connection, Depends(get_connection)],
-) -> list[InventoryItemResponse]:
-    if not access.has_capability(_CHARACTER_VIEW_CAPABILITY, entity_id=character_id):
+) -> list[InventoryItemResponse] | list[RestrictedInventoryItemResponse]:
+    inventory_access = resolve_character_inventory_access(access, character_id=character_id)
+    if inventory_access == "none" and not access.has_capability(
+        _CHARACTER_VIEW_CAPABILITY, entity_id=character_id
+    ):
         # The same entity-targeted `campaign.view` deny the character
         # detail route honors — a subresource of a character the caller may
         # not see must itself be indistinguishable from nonexistent.
         raise NotFoundError()
     _require_published_character(connection, access, character_id)
 
-    if not resolve_character_view_tier(access, character_id=character_id):
-        # The summary tier alone is not enough to see inventory contents —
-        # see this module's docstring. Raised identically to "neither
-        # capability held," which resolve_character_view_tier itself
-        # already raises for that case.
+    if inventory_access == "none":
+        # Neither inventory tier: the summary tier alone is not enough to see inventory contents
+        # (see this module's docstring), and an explicit `character.view_inventory` deny lands
+        # here too. Raised identically to "neither capability held".
         raise CharacterViewNotAuthorizedError(
-            f"user {access.user_id} holds only the summary tier for character {character_id}, "
-            "insufficient for inventory"
+            f"user {access.user_id} holds no inventory access for character {character_id}"
         )
 
     items = get_inventory_view(
@@ -490,10 +779,32 @@ def get_character_inventory_endpoint(
         holder_entity_id=character_id,
         timeline_id=access.timeline_id,
         expected_world_id=timeline_world_id(connection, access.timeline_id),
-        reveal_all_properties=access.has_capability(
-            _CHARACTER_MANAGE_CAPABILITY, character_id=character_id
+        # Only the full tier reveals GM properties and unpublished instances; `inventory_only`
+        # never does, whatever else the caller holds.
+        reveal_all_properties=(
+            inventory_access == "full"
+            and access.has_capability(_CHARACTER_MANAGE_CAPABILITY, character_id=character_id)
         ),
     )
+
+    if inventory_access == "inventory_only":
+        return [
+            RestrictedInventoryItemResponse(
+                item_instance_id=item.item_instance_id,
+                name=item.name,
+                display_name=item.display_name,
+                item_category_code=item.item_category_code,
+                rarity=item.rarity,
+                quantity=item.quantity,
+                is_equipped=item.is_equipped,
+                is_destroyed=item.is_destroyed,
+                is_attuned=item.is_attuned,
+                ownership=item.ownership,  # type: ignore[arg-type]
+                identification_level=item.identification_level,
+                properties=item.properties,
+            )
+            for item in restrict_inventory_view(items, holder_entity_id=character_id)
+        ]
 
     return [
         InventoryItemResponse(
@@ -507,9 +818,12 @@ def get_character_inventory_endpoint(
             charges_maximum=item.charges_maximum,
             is_equipped=item.is_equipped,
             is_destroyed=item.is_destroyed,
+            is_attuned=item.is_attuned,
             owner_entity_id=item.owner_entity_id,
             identification_level=item.identification_level,
             properties=item.properties,
+            name=item.name,
+            last_event_id=item.last_event_id,
         )
         for item in items
     ]
@@ -556,6 +870,7 @@ def get_character_sheet_endpoint(
     return CharacterSheetResponse(
         character_id=view.character_id,
         name=view.name,
+        character_kind=view.character_kind,  # type: ignore[arg-type]
         species_code=view.species_code,
         species_display_name=view.species_display_name,
         size_category=view.size_category,

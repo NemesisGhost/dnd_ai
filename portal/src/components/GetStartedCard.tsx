@@ -10,7 +10,7 @@ interface GetStartedCardProps {
 // next real steps; nothing here requires an AI provider or a VTT.
 export function GetStartedCard({ campaignId }: GetStartedCardProps) {
     return (
-        <section className="authoring-aside" aria-labelledby="get-started-heading">
+        <section className="inset-group" aria-labelledby="get-started-heading">
             <h2 id="get-started-heading">Get started</h2>
             <p>This campaign is ready. A few good first steps:</p>
             <ul>

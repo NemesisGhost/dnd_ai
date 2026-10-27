@@ -37,6 +37,8 @@ from dataclasses import dataclass
 
 from sqlalchemy import Connection, text
 
+from dnd_ai.domain import access as _access
+
 _GRANT_TARGET_COLUMNS = (
     "character_id",
     "entity_id",
@@ -149,6 +151,7 @@ def resolve_member_effective_access(
         text("""
             SELECT cap.code, cap.display_name AS capability_display_name,
                    rt.display_name AS relationship_type_display_name,
+                   rt.code AS relationship_type_code,
                    e.canonical_name AS character_display_name
             FROM security.membership_character_relationships mcr
             JOIN security.character_relationship_type_capabilities rtc
@@ -163,12 +166,19 @@ def resolve_member_effective_access(
               AND (mcr.expires_at IS NULL OR mcr.expires_at > now())
               AND mcr.effective_to_world_time_id IS NULL
               AND (mcr.timeline_id IS NULL OR mcr.timeline_id = :timeline_id)
+              AND rt.is_active
               AND cap.is_active
               AND cls.code = 'active'
             ORDER BY cap.code, e.canonical_name
         """),
         {"membership_id": campaign_membership_id, "timeline_id": timeline_id},
     ).mappings():
+        # Same conjunction as `resolve_access_context`: the panel must not show
+        # a source the resolver would not honour.
+        if not _access.relationship_capability_permitted(
+            str(row["relationship_type_code"]), str(row["code"])
+        ):
+            continue
         _add_source(
             str(row["code"]),
             str(row["capability_display_name"]),

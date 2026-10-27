@@ -78,12 +78,14 @@ WORLD_ARCHIVE = "archive"
 WORLD_RESTORE = "restore"
 WORLD_CREATE_TIMELINE = "create_timeline"
 WORLD_CREATE_CAMPAIGN = "create_campaign"
+WORLD_CREATE_CALENDAR = "create_calendar"
 WORLD_ACTIONS = (
     WORLD_UPDATE,
     WORLD_ARCHIVE,
     WORLD_RESTORE,
     WORLD_CREATE_TIMELINE,
     WORLD_CREATE_CAMPAIGN,
+    WORLD_CREATE_CALENDAR,
 )
 
 
@@ -91,7 +93,12 @@ def world_blocked_reason(
     action: str, *, lifecycle_status: str, has_blocking_campaigns: bool
 ) -> str | None:
     active = lifecycle_status == "active"
-    if action in (WORLD_UPDATE, WORLD_CREATE_TIMELINE, WORLD_CREATE_CAMPAIGN):
+    if action in (
+        WORLD_UPDATE,
+        WORLD_CREATE_TIMELINE,
+        WORLD_CREATE_CAMPAIGN,
+        WORLD_CREATE_CALENDAR,
+    ):
         return None if active else WORLD_ARCHIVED
     if action == WORLD_ARCHIVE:
         if not active:

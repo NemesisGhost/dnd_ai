@@ -1,3 +1,5 @@
+import type { EventExplanation } from "./eventExplanation"
+
 // Response shape for the backend campaign-summary endpoint.
 // JSON timestamps remain strings until explicitly parsed.
 
@@ -17,7 +19,11 @@ export interface RecentCampaignEvent {
     event_type_code: string
     event_status_code: string
     world_time_id: string
+    // Readable in-world time; null when the event's time has no label or year.
+    world_time_display: string | null
     details: string | null
+    // Typed explanation for this event's family (CP-9a). Absent from older servers.
+    explanation?: EventExplanation | null
 }
 
 export interface CampaignSummary {

@@ -21,7 +21,7 @@ describe("createAccount", () => {
         vi.stubGlobal("fetch", fetchMock)
 
         await expect(
-            createAccount("new.gm", "New GM", "gm@example.com", "csrf-token"),
+            createAccount("new.gm", "New GM", "gm@example.com", ["gm"], "csrf-token"),
         ).resolves.toEqual({
             user_id: "user-1",
             login_name: "new.gm",
@@ -43,6 +43,7 @@ describe("createAccount", () => {
                 login_name: "new.gm",
                 display_name: "New GM",
                 email: "gm@example.com",
+                system_role_codes: ["gm"],
             }),
         })
     })

@@ -1,6 +1,6 @@
 # ADR 0015: Typed world-content authoring (Phase 15.1)
 
-- **Status**: Accepted
+- **Status**: Accepted; decision 3 amended by [ADR 0020](0020-scoped-system-world-and-campaign-roles.md) (world-definition writes also need a world capability)
 - **Date**: 2026-10-04
 - **Builds on**: [ADR 0014](0014-world-authoring-authority.md) (authority), [ADR 0003](0003-separate-world-timeline-and-campaign.md) (world, timeline, campaign), [ADR 0004](0004-use-event-assisted-state.md) (state needs a causal event).
 - **Related**: [ENTITY_LIFECYCLE.md](../ENTITY_LIFECYCLE.md) §3, §21.1; [PLAN.md](../PLAN.md) Phase 15.
@@ -21,7 +21,7 @@ Phase 14 delivered the authoring kernel: the canon-lifecycle commands, optimisti
 5. **Type-specific publish and archive preconditions** are a hook beside the eligibility registry, consulted by both the commands and the read model: a location's parent, an organization's parent/HQ/religion, an NPC's origin, a quest's targets and completeness, and a knowledge item's subject must be `canon` to publish; an NPC with active user-character relationships cannot be archived.
 6. **Reference eligibility.** A record may be *newly* referenced only if it is in the same world, has the expected type, is lifecycle `active`, and has canon status `draft`, `proposed`, `approved`, or `canon`. Every other reason (nonexistent, other world, wrong type, archived, rejected, superseded) is one non-disclosing `<field>_invalid` code. Existing references to later-archived records are preserved.
 7. **State commands refuse draft and archived targets** (non-disclosing), so routine drafts cannot reach players through movement, reveal, advance, transfer, or event participation. Lifecycle commands also lock the campaign row `FOR SHARE` and re-check it is active.
-8. **Relationship authoring is deferred.** `world.relationships` has no canon status or `row_version`, so a new edge between canon records would be immediately visible. Whether to add those columns or to restrict edges to canon endpoints is decided by an ADR at the start of 15.2. Organization memberships, offices, employment, ownership, family, and political relationships are 15.2.
+8. **Relationship authoring is deferred.** *(Resolved by [ADR 0017](0017-world-relationship-lifecycle-and-projection.md): a version and an archive lifecycle, and projection to readers who can see the whole edge.)* `world.relationships` has no canon status or `row_version`, so a new edge between canon records would be immediately visible. Whether to add those columns or to restrict edges to canon endpoints is decided by an ADR at the start of 15.2. Organization memberships, offices, employment, ownership, family, and political relationships are 15.2.
 9. **One migration**: `113_organization_hierarchy_cycle_guard` — a trigger mirroring the location containment guard, because parent reassignment becomes a user action.
 10. **Authoring reads are `Cache-Control: no-store`** through one middleware for authenticated responses.
 11. **Residual risk accepted:** a change to a role's capability set (`security.roles` / `role_capabilities`) is an operator-level catalog change and is not serialized against an in-flight authoring command.

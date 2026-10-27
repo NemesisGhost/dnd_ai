@@ -110,6 +110,7 @@ describe("useQuest", () => {
                 "campaign-a",
                 "quest-a",
                 "character-a",
+                "party-a",
             ),
         )
 
@@ -128,6 +129,7 @@ describe("useQuest", () => {
             "campaign-a",
             "quest-a",
             "character-a",
+            "party-a",
             expect.any(AbortSignal),
         )
     })
@@ -280,7 +282,7 @@ describe("useQuest", () => {
 
         const firstSignal =
             fetchQuestMock.mock
-                .calls[0]?.[3] as AbortSignal
+                .calls[0]?.[4] as AbortSignal
 
         rerender({
             questId: "quest-b",
@@ -343,7 +345,7 @@ describe("useQuest", () => {
 
         const firstSignal =
             fetchQuestMock.mock
-                .calls[0]?.[3] as AbortSignal
+                .calls[0]?.[4] as AbortSignal
 
         rerender({
             characterId: "character-b",
@@ -384,7 +386,7 @@ describe("useQuest", () => {
 
         const signal =
             fetchQuestMock.mock
-                .calls[0]?.[3] as AbortSignal
+                .calls[0]?.[4] as AbortSignal
 
         expect(signal.aborted).toBe(false)
 

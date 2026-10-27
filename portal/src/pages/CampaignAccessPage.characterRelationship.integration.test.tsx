@@ -137,7 +137,7 @@ afterEach(() => {
 })
 
 describe("CampaignAccessPage add-character-relationship success announcement", () => {
-    it("keeps 'Character relationship added.' observable through the overview's own loading transition", async () => {
+    it("keeps 'Character access added.' observable through the overview's own loading transition", async () => {
         let overviewCallCount = 0
         let resolveSecondOverview: ((response: Response) => void) | null =
             null
@@ -193,7 +193,7 @@ describe("CampaignAccessPage add-character-relationship success announcement", (
 
         fireEvent.click(
             screen.getByRole("button", {
-                name: "Add character relationship",
+                name: "Give access to a character",
             }),
         )
         fireEvent.click(screen.getByRole("button", { name: "Add" }))
@@ -208,7 +208,7 @@ describe("CampaignAccessPage add-character-relationship success announcement", (
         ).not.toBeInTheDocument()
 
         expect(persistentAnnouncement(container)).toHaveTextContent(
-            "Character relationship added.",
+            "Character access added.",
         )
 
         await act(async () => {
@@ -224,13 +224,13 @@ describe("CampaignAccessPage add-character-relationship success announcement", (
             screen.getByText("Kestrel Vane — Viewer"),
         ).toBeInTheDocument()
         expect(persistentAnnouncement(container)).toHaveTextContent(
-            "Character relationship added.",
+            "Character access added.",
         )
     })
 })
 
 describe("CampaignAccessPage revoke-character-relationship success announcement", () => {
-    it("keeps 'Character relationship revoked.' observable through the overview's own loading transition", async () => {
+    it("keeps 'Character access removed.' observable through the overview's own loading transition", async () => {
         let overviewCallCount = 0
         let resolveSecondOverview: ((response: Response) => void) | null =
             null
@@ -279,7 +279,7 @@ describe("CampaignAccessPage revoke-character-relationship success announcement"
         ).toBeInTheDocument()
 
         fireEvent.click(
-            screen.getByRole("button", { name: "Revoke relationship" }),
+            screen.getByRole("button", { name: "Remove access" }),
         )
         fireEvent.click(screen.getByRole("button", { name: "Confirm" }))
 
@@ -290,7 +290,7 @@ describe("CampaignAccessPage revoke-character-relationship success announcement"
         })
 
         expect(persistentAnnouncement(container)).toHaveTextContent(
-            "Character relationship revoked.",
+            "Character access removed.",
         )
 
         await act(async () => {
@@ -303,10 +303,10 @@ describe("CampaignAccessPage revoke-character-relationship success announcement"
             ).toBeInTheDocument()
         })
         expect(
-            screen.getByText("No character relationships."),
+            screen.getByText("No character access."),
         ).toBeInTheDocument()
         expect(persistentAnnouncement(container)).toHaveTextContent(
-            "Character relationship revoked.",
+            "Character access removed.",
         )
     })
 })
@@ -371,14 +371,14 @@ describe("CampaignAccessPage character-relationship cross-operation announcement
         // First mutation: add, succeeds.
         fireEvent.click(
             screen.getByRole("button", {
-                name: "Add character relationship",
+                name: "Give access to a character",
             }),
         )
         fireEvent.click(screen.getByRole("button", { name: "Add" }))
 
         await waitFor(() => {
             expect(persistentAnnouncement(container)).toHaveTextContent(
-                "Character relationship added.",
+                "Character access added.",
             )
         })
 
@@ -392,7 +392,7 @@ describe("CampaignAccessPage character-relationship cross-operation announcement
         // then fails (403) — the stale "added" announcement must never
         // resurface.
         fireEvent.click(
-            screen.getByRole("button", { name: "Revoke relationship" }),
+            screen.getByRole("button", { name: "Remove access" }),
         )
         fireEvent.click(screen.getByRole("button", { name: "Confirm" }))
 
@@ -405,7 +405,7 @@ describe("CampaignAccessPage character-relationship cross-operation announcement
         })
         expect(persistentAnnouncement(container)).toHaveTextContent("")
         expect(
-            screen.queryByText("Character relationship added."),
+            screen.queryByText("Character access added."),
         ).not.toBeInTheDocument()
     })
 })

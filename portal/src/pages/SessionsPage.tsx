@@ -1,5 +1,6 @@
 import { Link } from "react-router"
 import { SortableTable } from "../components/SortableTable"
+import { canRunSession } from "../components/sessionRun/runAccess"
 import type { SortableTableColumn } from "../components/SortableTable"
 import type {
     CampaignSessionListItem,
@@ -12,6 +13,7 @@ import type { SortDirection } from "../utils/sorting"
 
 interface SessionsPageProps {
     sessions: CampaignSessionListItem[]
+    canSchedule?: boolean
 }
 
 function formatTimestamp(timestamp: string): string {
@@ -42,6 +44,13 @@ function renderTimestamp(timestamp: string | null) {
     )
 }
 
+const PLAY_STATUS_LABEL: Readonly<Record<string, string>> = {
+    unscheduled: "Not scheduled",
+    scheduled: "Scheduled",
+    in_progress: "In progress",
+    completed: "Completed",
+}
+
 const columns: SortableTableColumn<CampaignSessionListItem>[] = [
     {
         key: "session_title",
@@ -52,6 +61,30 @@ const columns: SortableTableColumn<CampaignSessionListItem>[] = [
                 {session.title ?? "Untitled session"}
             </Link>
         ),
+    },
+    {
+        key: "session_status",
+        label: "Status",
+        compare: (a, b, direction) =>
+            applyDirection(
+                direction,
+                (a.play_status ?? "").localeCompare(b.play_status ?? ""),
+            ),
+        render: (session) =>
+            `${PLAY_STATUS_LABEL[session.play_status ?? "unscheduled"] ?? "Not scheduled"}${
+                session.status_code === "archived" ? " (archived)" : ""
+            }`,
+    },
+    {
+        key: "session_scheduled_for",
+        label: "Planned start",
+        compare: (a, b, direction) =>
+            compareNullableTimestamps(
+                a.scheduled_for ?? null,
+                b.scheduled_for ?? null,
+                direction,
+            ),
+        render: (session) => renderTimestamp(session.scheduled_for ?? null),
     },
     {
         key: "session_started_at",
@@ -69,16 +102,40 @@ const columns: SortableTableColumn<CampaignSessionListItem>[] = [
     },
 ]
 
+// Editors (the server sends them `available_actions`) get a Run link where a
+// session can be run, and a link to schedule a new one. Editing happens on the
+// session detail page that the title links to.
+const editColumn: SortableTableColumn<CampaignSessionListItem> = {
+    key: "session_actions",
+    label: "Actions",
+    compare: () => 0,
+    render: (session) => {
+        const actions = session.available_actions ?? []
+        const name = session.title ?? `session ${session.session_number}`
+        if (!canRunSession(actions)) return null
+        return <Link to={`${encodeURIComponent(session.session_id)}/run`}>Run {name}</Link>
+    },
+}
+
 export function SessionsPage({
     sessions,
+    canSchedule = false,
 }: SessionsPageProps) {
+    const editor = sessions.some((session) => session.available_actions != null)
     return (
         <section aria-labelledby="sessions-heading">
             <h1 id="sessions-heading">Sessions</h1>
+            {canSchedule ? (
+                <p>
+                    <Link className="authoring-button" to="new">
+                        Schedule a session
+                    </Link>
+                </p>
+            ) : null}
             {sessions.length > 0 ? (
                 <SortableTable
                     caption="Sessions"
-                    columns={columns}
+                    columns={editor ? [...columns, editColumn] : columns}
                     rows={sessions}
                     getRowKey={(session) => session.session_id}
                     initialSort={{ column: "session_started_at", direction: "desc" }}

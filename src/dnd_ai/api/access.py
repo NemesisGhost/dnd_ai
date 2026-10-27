@@ -94,9 +94,10 @@ and capability for the requested perspective").
 import dataclasses
 import uuid
 from collections.abc import Callable
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import Depends
+from pydantic import BaseModel
 from sqlalchemy import Connection, text
 
 from dnd_ai.commands._shared import validate_campaign_party
@@ -106,12 +107,97 @@ from dnd_ai.domain.access import (
     AuthenticatedPrincipal,
     resolve_access_context,
 )
+from dnd_ai.domain.authoring import WorldAuthorityRequiredError
 from dnd_ai.domain.errors import DomainAuthorizationError
 from dnd_ai.domain.foundry_pairing import FOUNDRY_SCOPES
+from dnd_ai.domain.record_authoring import (
+    NO_AUTHORING,
+    RecordAuthoring,
+    record_authoring,
+    restrict_view_actions,
+)
+from dnd_ai.queries.world_authority import resolve_world_authority
 
+from ._shared import timeline_world_id
 from .auth import get_authenticated_user_id
 from .deps import get_connection
 from .errors import ForbiddenError, NotFoundError
+
+
+def require_world_capability_for_campaign(
+    connection: Connection, *, access: AccessContext, world_capability: str
+) -> None:
+    """Require `world_capability` on the world of the campaign `access` was
+    resolved for (decision D6), raising 403 `world_authority_required` otherwise.
+    The caller has already established campaign authority."""
+    authority = resolve_world_authority(
+        connection,
+        user_id=access.user_id,
+        world_id=timeline_world_id(connection, access.timeline_id),
+    )
+    if authority is None or not authority.has_capability(world_capability):
+        raise WorldAuthorityRequiredError(
+            f"user {access.user_id} lacks {world_capability} on the campaign's world"
+        )
+
+
+class RecordAuthoringResponse(BaseModel):
+    """The per-record eligibility fields every record read model carries
+    (`dnd_ai.domain.record_authoring.RecordAuthoring`)."""
+
+    campaign_originated: bool
+    can_read_private: bool
+    can_edit: bool
+    can_review: bool
+
+
+def record_authoring_response(
+    connection: Connection, *, access: AccessContext, entity_type_code: str
+) -> RecordAuthoringResponse:
+    return RecordAuthoringResponse(
+        **resolve_record_authoring(
+            connection, access=access, entity_type_code=entity_type_code
+        ).as_json()
+    )
+
+
+def resolve_record_authoring(
+    connection: Connection, *, access: AccessContext, entity_type_code: str
+) -> RecordAuthoring:
+    """What the caller may do to a record of `entity_type_code` in the campaign's world: the
+    per-record eligibility fields of the read models (`dnd_ai.domain.record_authoring`). It uses
+    the same resolver the commands use (`resolve_world_authority`), so a flag and its command
+    cannot disagree about a role. A caller without campaign `canon.edit` holds nothing and costs
+    no query; the command or endpoint still re-checks under its own lock."""
+    if not access.has_capability("canon.edit"):
+        return NO_AUTHORING
+    return record_authoring(
+        entity_type_code=entity_type_code,
+        has_campaign_canon_edit=True,
+        authority=resolve_world_authority(
+            connection,
+            user_id=access.user_id,
+            world_id=timeline_world_id(connection, access.timeline_id),
+        ),
+    )
+
+
+def restrict_authoring_view[T](connection: Connection, *, access: AccessContext, body: T) -> T:
+    """An authoring read of a shared definition, with only the actions this caller holds on the
+    world (see `dnd_ai.domain.record_authoring.restrict_view_actions`)."""
+    authoring = resolve_record_authoring(connection, access=access, entity_type_code="definition")
+    return restrict_view_actions(body, authoring)  # type: ignore[return-value]
+
+
+def can_create_definitions(connection: Connection, *, access: AccessContext) -> bool:
+    """Whether the caller may create shared world definitions through this campaign: campaign
+    `canon.edit` and the world Editor capability. The "can create" flag of the authoring option
+    catalogs reports it, so a Reviewer, who can read the catalogs, is not offered a form the
+    command would refuse. Campaign-originated records (player characters, item instances) need
+    neither and keep their own flag."""
+    return resolve_record_authoring(
+        connection, access=access, entity_type_code="definition"
+    ).can_edit
 
 
 def require_campaign_capability(
@@ -120,6 +206,7 @@ def require_campaign_capability(
     allow_foundry_access: bool = False,
     foundry_scope: str | None = None,
     allow_archived_campaign: bool = False,
+    world_capability: str | None = None,
 ) -> Callable[[uuid.UUID, AuthenticatedPrincipal, Connection], AccessContext]:
     """Returns a FastAPI dependency requiring `capability_code` (role- or
     character-relationship-derived, per `AccessContext.has_capability`) in
@@ -138,6 +225,15 @@ def require_campaign_capability(
     `POST .../reactivate` pass `True`; a route-registry test pins that exact
     set. `pending`/`inactive` keep their existing behavior because only
     fixtures produce them.
+
+    `world_capability` (docs/adr/0020-scoped-system-world-and-campaign-roles.md,
+    D6) additionally requires that capability on the campaign's *world*, resolved
+    for the caller in the same request. It is how a read of shared world canon's
+    private side (drafts, GM-only prep, revisions, provenance, sources, the review
+    queue) is limited to `world.canon.read_private` holders: a campaign GM with no
+    world role keeps `canon.edit` for running their game but is refused with 403
+    `world_authority_required` here. Campaign authority is checked first, so a
+    non-member still gets the non-disclosing 404.
 
     `allow_foundry_access` (Phase 11R workstream C) gates whether a
     `FOUNDRY_ACCESS_AUTH_METHOD`-authenticated request may use this route at
@@ -213,11 +309,16 @@ def require_campaign_capability(
 
         if not access.has_capability(capability_code):
             raise ForbiddenError()
+        if world_capability is not None:
+            require_world_capability_for_campaign(
+                connection, access=access, world_capability=world_capability
+            )
         return dataclasses.replace(access, principal=principal)
 
     _dependency.allow_foundry_access = allow_foundry_access  # type: ignore[attr-defined]
     _dependency.foundry_scope = foundry_scope  # type: ignore[attr-defined]
     _dependency.allow_archived_campaign = allow_archived_campaign  # type: ignore[attr-defined]
+    _dependency.world_capability = world_capability  # type: ignore[attr-defined]
     return _dependency
 
 
@@ -373,3 +474,59 @@ def resolve_character_view_tier(access: AccessContext, *, character_id: uuid.UUI
     raise CharacterViewNotAuthorizedError(
         f"user {access.user_id} holds no character-view capability for character {character_id}"
     )
+
+
+InventoryAccess = Literal["full", "inventory_only", "none"]
+
+
+def resolve_character_inventory_access(
+    access: AccessContext, *, character_id: uuid.UUID
+) -> InventoryAccess:
+    """How much of a character's inventory the caller may read (CP-6 / DR-2). The one decision the
+    inventory endpoint and `sections.inventory` share.
+
+    - An entity-level `campaign.view` deny for the character removes the resource: `none`.
+    - `canon.edit` for this character (a GM): `full`.
+    - An explicit resource-grant deny of `character.view_inventory` wins over both relationship and
+      grant sources of the two tiers below: `none`. It does not reach `canon.edit` above, which has
+      its own deny.
+    - `character.view_full`: `full` (the existing behaviour, unchanged).
+    - `character.view_inventory`: `inventory_only` (the restricted projection; no sheet, no
+      mutation, no control).
+    - Otherwise `none`. `character.view_summary` alone grants no inventory.
+
+    Pure, like `resolve_character_view_tier`: resolved from the loaded `AccessContext`."""
+    if not access.has_capability("campaign.view", entity_id=character_id):
+        return "none"
+    if access.has_capability("canon.edit", character_id=character_id):
+        return "full"
+    if (
+        access.grant_effects.get(("character_id", character_id), {}).get("character.view_inventory")
+        == "deny"
+    ):
+        return "none"
+    if access.has_capability("character.view_full", character_id=character_id):
+        return "full"
+    if access.has_capability("character.view_inventory", character_id=character_id):
+        return "inventory_only"
+    return "none"
+
+
+# Categories whose records the World reader detail routes open for anyone who can discover them.
+_OPENABLE_WORLD_CATEGORIES = frozenset({"location", "organization", "religion"})
+
+
+def can_open_participant(access: AccessContext, category: str | None, entity_id: uuid.UUID) -> bool:
+    """Whether a reader may follow a listed record to its own page: a location, organization or
+    religion always opens; a character opens only where `resolve_character_view_tier` passes, so
+    discovering a character (`character.discover`) lists it without making it a link. Shared by
+    every reader roster that names other records."""
+    if category in _OPENABLE_WORLD_CATEGORIES:
+        return True
+    if category == "character":
+        try:
+            resolve_character_view_tier(access, character_id=entity_id)
+        except CharacterViewNotAuthorizedError:
+            return False
+        return True
+    return False

@@ -209,7 +209,6 @@ describe("ProfileMenu capability filtering", () => {
         status: "authenticated",
         bootstrap: {
           ...sessionBootstrapFixture,
-          is_platform_administrator: false,
         },
       },
       reload: vi.fn(), refresh: vi.fn(),
@@ -233,7 +232,7 @@ describe("ProfileMenu capability filtering", () => {
         status: "authenticated",
         bootstrap: {
           ...sessionBootstrapFixture,
-          is_platform_administrator: true,
+          global_capabilities: ["accounts.manage", "system_roles.manage"],
         },
       },
       reload: vi.fn(), refresh: vi.fn(),
@@ -257,7 +256,6 @@ describe("ProfileMenu capability filtering", () => {
         status: "authenticated",
         bootstrap: {
           ...sessionBootstrapFixture,
-          is_platform_administrator: false,
           campaigns: [
             {
               ...sessionBootstrapFixture.campaigns[0]!,

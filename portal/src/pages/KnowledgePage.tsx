@@ -1,10 +1,9 @@
 import { useId } from "react"
 import type { ReactNode } from "react"
 import { Link } from "react-router"
-import { AudiencePreviewSection } from "../components/AudiencePreviewSection"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import type { AuthorizedParty } from "../types/bootstrap"
-import type { KnowledgeView } from "../types/knowledge"
+import type { KnowledgeLifecycle, KnowledgeView } from "../types/knowledge"
 
 interface KnowledgePageProps {
     campaignId: string
@@ -12,9 +11,15 @@ interface KnowledgePageProps {
     query: string
     partyId: string | null
     parties: AuthorizedParty[]
+    includePublic: boolean
     onViewChange: (view: KnowledgeView) => void
     onQueryChange: (query: string) => void
     onPartyChange: (partyId: string | null) => void
+    onIncludePublicChange: (includePublic: boolean) => void
+    /** The server's `archive_browse_available`. The Lifecycle filter exists only when true. */
+    archiveBrowseAvailable?: boolean
+    lifecycle?: KnowledgeLifecycle
+    onLifecycleChange?: (lifecycle: KnowledgeLifecycle) => void
     children: ReactNode
 }
 
@@ -29,7 +34,13 @@ const viewOptions: ViewOption[] = [
     { value: "party_shared", label: "Party shared" },
     { value: "character_private", label: "Character private" },
     { value: "recent", label: "Recent" },
-    { value: "public", label: "Public" },
+    { value: "public", label: "Public only" },
+]
+
+const lifecycleOptions: { value: KnowledgeLifecycle; label: string }[] = [
+    { value: "active", label: "Active" },
+    { value: "archived", label: "Archived" },
+    { value: "all", label: "All" },
 ]
 
 export function KnowledgePage({
@@ -38,15 +49,23 @@ export function KnowledgePage({
     query,
     partyId,
     parties,
+    includePublic,
     onViewChange,
     onQueryChange,
     onPartyChange,
+    onIncludePublicChange,
+    archiveBrowseAvailable = false,
+    lifecycle = "active",
+    onLifecycleChange,
     children,
 }: KnowledgePageProps) {
     const canAuthor = useCampaignCapability(campaignId, "canon.edit")
     const viewSelectId = useId()
     const searchInputId = useId()
     const partySelectId = useId()
+    const includePublicId = useId()
+    const lifecycleSelectId = useId()
+    const publicOnly = view === "public"
 
     const hasParties = parties.length > 0
 
@@ -64,8 +83,6 @@ export function KnowledgePage({
                     </Link>
                 </p>
             ) : null}
-
-            <AudiencePreviewSection campaignId={campaignId} resourceType="knowledge_item" />
 
             <div
                 className="knowledge-page__filters"
@@ -96,6 +113,33 @@ export function KnowledgePage({
                         ))}
                     </select>
                 </div>
+
+                {archiveBrowseAvailable && onLifecycleChange !== undefined ? (
+                    <div className="knowledge-page__field">
+                        <label htmlFor={lifecycleSelectId}>
+                            Lifecycle
+                        </label>
+                        <select
+                            id={lifecycleSelectId}
+                            value={lifecycle}
+                            onChange={(event) =>
+                                onLifecycleChange(
+                                    event.currentTarget
+                                        .value as KnowledgeLifecycle,
+                                )
+                            }
+                        >
+                            {lifecycleOptions.map((option) => (
+                                <option
+                                    key={option.value}
+                                    value={option.value}
+                                >
+                                    {option.label}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+                ) : null}
 
                 <div className="knowledge-page__field">
                     <label htmlFor={searchInputId}>
@@ -132,7 +176,7 @@ export function KnowledgePage({
                             disabled={!hasParties}
                         >
                             {hasParties
-                                ? "No party selected"
+                                ? "All parties"
                                 : "No party available"}
                         </option>
 
@@ -145,6 +189,23 @@ export function KnowledgePage({
                             </option>
                         ))}
                     </select>
+                </div>
+
+                <div className="knowledge-page__field">
+                    <label htmlFor={includePublicId}>
+                        <input
+                            id={includePublicId}
+                            type="checkbox"
+                            checked={includePublic || publicOnly}
+                            disabled={publicOnly}
+                            onChange={(event) =>
+                                onIncludePublicChange(
+                                    event.currentTarget.checked,
+                                )
+                            }
+                        />{" "}
+                        Include public knowledge
+                    </label>
                 </div>
             </div>
 

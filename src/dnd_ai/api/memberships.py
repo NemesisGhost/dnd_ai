@@ -81,6 +81,7 @@ from dnd_ai.commands.memberships import (
     change_membership_role,
     end_campaign_membership,
     revoke_membership_role,
+    transfer_campaign_ownership,
 )
 from dnd_ai.domain.access import AccessContext
 
@@ -103,6 +104,7 @@ _ASSIGN_ROLE_COMMAND_NAME = "assign_membership_role"
 _REVOKE_ROLE_COMMAND_NAME = "revoke_membership_role"
 _CHANGE_ROLE_COMMAND_NAME = "change_membership_role"
 _END_MEMBERSHIP_COMMAND_NAME = "end_campaign_membership"
+_TRANSFER_OWNERSHIP_COMMAND_NAME = "transfer_campaign_ownership"
 
 _CREATED_CHANGE_ACTION = "created"
 _UPDATED_CHANGE_ACTION = "updated"
@@ -606,3 +608,66 @@ def end_campaign_membership_endpoint(
         )
 
     return response
+
+
+class TransferCampaignOwnershipRequest(BaseModel):
+    target_campaign_membership_id: uuid.UUID
+    relinquish_own_ownership: bool = False
+
+
+class TransferCampaignOwnershipResponse(BaseModel):
+    target_campaign_membership_id: uuid.UUID
+    assigned: bool
+    relinquished: bool
+
+
+@router.post(
+    "/campaigns/{campaign_id}/ownership-transfer",
+    response_model=TransferCampaignOwnershipResponse,
+    status_code=200,
+)
+def transfer_campaign_ownership_endpoint(
+    campaign_id: uuid.UUID,
+    body: TransferCampaignOwnershipRequest,
+    access: Annotated[
+        AccessContext, Depends(require_campaign_capability(_ACCESS_MANAGE_CAPABILITY))
+    ],
+    connection: Annotated[Connection, Depends(get_connection)],
+    correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
+) -> TransferCampaignOwnershipResponse:
+    """Makes an existing member a campaign owner and optionally relinquishes the
+    caller's own ownership (docs/adr/0020-scoped-system-world-and-campaign-roles.md).
+    One transaction and one audit row; a repeat that changes nothing writes none."""
+    result = transfer_campaign_ownership(
+        connection,
+        campaign_id=campaign_id,
+        actor_membership_id=access.campaign_membership_id,
+        target_campaign_membership_id=body.target_campaign_membership_id,
+        relinquish_own_ownership=body.relinquish_own_ownership,
+    )
+    changed = result.assigned_membership_role_id is not None or bool(
+        result.revoked_membership_role_ids
+    )
+    if changed:
+        record_change_log(
+            connection,
+            change_action_code=_UPDATED_CHANGE_ACTION,
+            schema_name="security",
+            table_name="membership_roles",
+            record_id=result.assigned_membership_role_id or result.revoked_membership_role_ids[0],
+            entity_id=None,
+            world_id=timeline_world_id(connection, access.timeline_id),
+            actor_user_id=access.user_id,
+            correlation_id=correlation_id,
+            command_name=_TRANSFER_OWNERSHIP_COMMAND_NAME,
+            event_id=None,
+            changed_fields={
+                "assigned": result.assigned_membership_role_id is not None,
+                "relinquished": bool(result.revoked_membership_role_ids),
+            },
+        )
+    return TransferCampaignOwnershipResponse(
+        target_campaign_membership_id=result.target_campaign_membership_id,
+        assigned=result.assigned_membership_role_id is not None,
+        relinquished=bool(result.revoked_membership_role_ids),
+    )

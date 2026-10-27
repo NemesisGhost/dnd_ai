@@ -597,6 +597,57 @@ def test_full_tier_returns_mechanical_state_conditions_resources_and_location(
     ]
 
 
+def test_character_kind_is_returned_on_both_tiers(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    # The fixture's character is a bare `character` row.
+    with client_factory(f.summary_view_user_id) as client:
+        assert client.get(_character_url(f)).json()["character_kind"] == "character"
+    with client_factory(f.full_view_user_id) as client:
+        assert client.get(_character_url(f)).json()["character_kind"] == "character"
+
+
+def test_the_record_status_is_returned_on_both_tiers_without_widening_the_summary_tier(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    """CP-4 smoke D-8: a runtime panel decides whether an NPC takes new events from the character's
+    own read, not from the world's private authoring view, so the read carries the two status
+    fields every World detail carries. The summary tier still withholds everything mechanical."""
+    for user_id in (f.summary_view_user_id, f.full_view_user_id):
+        with client_factory(user_id) as client:
+            body = client.get(_character_url(f)).json()
+        assert body["canon_status"] == "canon"
+        assert body["lifecycle_status"] == "active"
+    with client_factory(f.summary_view_user_id) as client:
+        summary = client.get(_character_url(f)).json()
+    assert summary["current_hit_points"] is None and summary["conditions"] is None
+
+
+@pytest.mark.parametrize("kind", ["npc", "player_character"])
+def test_character_kind_names_an_npc_or_a_player_character(
+    client_factory: Callable[[uuid.UUID], TestClient],
+    f: Fixture,
+    postgres_engine: Engine,
+    kind: str,
+) -> None:
+    table, column = (
+        ("character.npcs", "npc_id")
+        if kind == "npc"
+        else ("character.player_characters", "player_character_id")
+    )
+    with postgres_engine.begin() as setup:
+        character_id = make_character(
+            setup, f.world_id, name=f"Typed {kind}", entity_type_code=kind
+        )
+        setup.execute(
+            text(f"INSERT INTO {table} ({column}) VALUES (:i)"),  # noqa: S608
+            {"i": character_id},
+        )
+    with client_factory(f.gm_user_id) as client:
+        body = client.get(f"/campaigns/{f.campaign_id}/characters/{character_id}").json()
+    assert body["character_kind"] == kind
+
+
 def test_full_tier_returns_the_active_encounter_id(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
 ) -> None:

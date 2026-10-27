@@ -50,6 +50,7 @@ from dnd_ai.queries.summary import get_campaign_summary_view
 
 from .access import require_campaign_capability
 from .deps import get_connection
+from .event_explanations import EventExplanationResponse, explain_for_caller
 
 router = APIRouter(tags=["summary"])
 
@@ -78,7 +79,10 @@ class RecentEventResponse(BaseModel):
     event_type_code: str
     event_status_code: str
     world_time_id: uuid.UUID
+    world_time_display: str | None
     details: str | None
+    # Typed explanation for this event's family (CP-9a); null when none applies.
+    explanation: EventExplanationResponse | None = None
 
 
 class CampaignSummaryResponse(BaseModel):
@@ -115,6 +119,8 @@ def get_campaign_summary_endpoint(
         allowed_draft_event_ids=allowed_draft_event_ids,
     )
 
+    explained = explain_for_caller(access, connection, [e.event_id for e in view.recent_events])
+
     return CampaignSummaryResponse(
         current_session=(
             None
@@ -137,7 +143,10 @@ def get_campaign_summary_endpoint(
                 event_type_code=e.event_type_code,
                 event_status_code=e.event_status_code,
                 world_time_id=e.world_time_id,
-                details=e.details,
+                world_time_display=e.world_time_display,
+                # GM-only (D-3, data class GM_ONLY): the free-form event record is not a recap.
+                details=e.details if access.has_capability("canon.edit") else None,
+                explanation=explained.get(e.event_id),
             )
             for e in view.recent_events
         ],

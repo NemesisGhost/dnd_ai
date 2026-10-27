@@ -63,7 +63,7 @@ from dataclasses import dataclass
 
 from sqlalchemy import Connection, Engine, text
 
-from dnd_ai.domain.errors import DomainAuthorizationError
+from dnd_ai.domain.errors import DomainAuthorizationError, SafeMessageError
 
 from ._shared import require_state_targetable, validate_session_campaign
 from .events import EventParticipant, _insert_event_row
@@ -75,6 +75,25 @@ class CharacterNotInWorldError(DomainAuthorizationError):
     identically, mirroring `dnd_ai.commands.movement`'s identical error.
     The supplied ids are included only in the constructor's `detail`
     argument (`str(self)`), never in `safe_message`."""
+
+
+class CharacterStateNotInitializedError(SafeMessageError):
+    """Raised by `adjust_hit_points()` when the character has no
+    `campaign.character_state` row on `timeline_id`. Hit points have no
+    default this command could invent, and it never creates the row as a
+    side effect: the starting state is set once, explicitly, by
+    `initialize_character_state` (`POST .../authoring/characters/{id}/state/
+    initialize`), after which this command works. The caller has already
+    been authorized for the character, so naming the cause discloses
+    nothing — a stable 409 the client can act on, not an unclassified 500.
+    The whole request rolls back, so no event, audit row, or idempotency
+    reservation is left behind and the same key works once state exists."""
+
+    safe_status_code = 409
+    safe_error_code = "character_state_not_initialized"
+    safe_message = (
+        "This character has no starting hit points on this timeline. Set the starting state first."
+    )
 
 
 class CharacterResourceNotTrackedError(DomainAuthorizationError):
@@ -171,8 +190,12 @@ def _adjust_hit_points_impl(
             {"timeline": timeline_id, "character": character_id},
         )
         .mappings()
-        .one()
+        .one_or_none()
     )
+    if row is None:
+        raise CharacterStateNotInitializedError(
+            f"character {character_id} has no character_state on timeline {timeline_id}"
+        )
     previous_hit_points = row["current_hit_points"]
     maximum_hit_points = row["maximum_hit_points"]
     new_hit_points = max(0, min(maximum_hit_points, previous_hit_points + delta))

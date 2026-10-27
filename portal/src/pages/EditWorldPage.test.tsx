@@ -1,7 +1,7 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { TEST_CSRF, installMockServer, renderAuthoringRoutes } from "../test/authoringHarness"
-import { EditWorldPage } from "./EditWorldPage"
+import { EditWorldRoute } from "../layouts/WorldAccessRoutes"
 
 function detail(overrides: object = {}) {
     return {
@@ -29,7 +29,7 @@ function setup(initial: object = detail()) {
     const rendered = renderAuthoringRoutes({
         initialEntry: "/worlds/w1/edit",
         routes: [
-            { path: "/worlds/:worldId/edit", element: <EditWorldPage /> },
+            { path: "/worlds/:worldId/edit", element: <EditWorldRoute /> },
             { path: "/worlds/:worldId", element: <p>World overview page</p> },
         ],
     })
@@ -57,9 +57,24 @@ describe("EditWorldPage", () => {
         expect(descriptionField()).toHaveValue("Original description")
     })
 
-    it("refuses to edit a world the server says cannot be updated", async () => {
-        setup(detail({ lifecycle_status: "archived", available_actions: ["restore"] }))
-        expect(await screen.findByRole("alert")).toHaveTextContent("cannot be edited right now")
+    it("explains the withheld update, never mounting the form", async () => {
+        const { server } = setup(
+            detail({ lifecycle_status: "archived", available_actions: ["restore"] }),
+        )
+        expect(await screen.findByRole("heading", { name: "Editing unavailable" })).toBeInTheDocument()
+        expect(screen.getByRole("alert")).toHaveTextContent("because it is archived")
+        expect(screen.queryByRole("textbox", { name: /World name/ })).not.toBeInTheDocument()
+        expect(screen.queryByRole("heading", { name: "Edit world" })).not.toBeInTheDocument()
+        // Only the read model was requested; nothing was submitted.
+        expect(server.calls.map((call) => `${call.method} ${call.path}`)).toEqual([
+            "GET /worlds/w1",
+        ])
+    })
+
+    it("explains a role without update for a view-only world, mounting no form", async () => {
+        setup(detail({ capabilities: ["world.view"], available_actions: [] }))
+        expect(await screen.findByRole("heading", { name: "Editing unavailable" })).toBeInTheDocument()
+        expect(screen.getByRole("alert")).toHaveTextContent("does not include being able to edit it")
         expect(screen.queryByRole("textbox", { name: /World name/ })).not.toBeInTheDocument()
     })
 
@@ -138,14 +153,15 @@ describe("EditWorldPage", () => {
         expect(nameField()).toHaveValue("Changed")
     })
 
-    it("shows an unavailable state when the world cannot be loaded", async () => {
+    it("renders the neutral unavailable state for an unknown or undisclosed world", async () => {
         const server = installMockServer()
         server.on("GET", "/worlds/w1", { status: 404 })
         renderAuthoringRoutes({
             initialEntry: "/worlds/w1/edit",
-            routes: [{ path: "/worlds/:worldId/edit", element: <EditWorldPage /> }],
+            routes: [{ path: "/worlds/:worldId/edit", element: <EditWorldRoute /> }],
         })
-        expect(await screen.findByRole("alert")).toHaveTextContent("does not exist, or you do not have access")
+        expect(await screen.findByRole("heading", { name: "World not available" })).toBeInTheDocument()
+        expect(screen.queryByRole("textbox", { name: /World name/ })).not.toBeInTheDocument()
     })
 
     it("holds navigation away from a changed form until confirmed", async () => {

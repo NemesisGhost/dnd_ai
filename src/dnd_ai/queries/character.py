@@ -64,6 +64,13 @@ class CharacterResourceView:
     maximum_amount: int
 
 
+def character_kind_for_type_code(entity_type_code: str) -> str:
+    """The audience-facing kind of a character entity: `npc`, `player_character`,
+    or `character` for a bare `character` row. The same type code the World
+    search card already returns to anyone who may discover the character."""
+    return entity_type_code if entity_type_code in ("npc", "player_character") else "character"
+
+
 @dataclass(frozen=True)
 class CharacterView:
     """`current_hit_points` through `resources` are always `None` when the
@@ -73,6 +80,7 @@ class CharacterView:
 
     character_id: uuid.UUID
     name: str
+    character_kind: str
     species_code: str
     size_category: str
     current_hit_points: int | None
@@ -104,9 +112,10 @@ def get_character_view(
         connection.execute(
             text("""
             SELECT c.character_id, e.world_id, e.canonical_name, sp.code AS species_code,
-                   c.size_category
+                   c.size_category, et.code AS entity_type_code
             FROM character.characters c
             JOIN core.entities e ON e.entity_id = c.character_id
+            JOIN core.entity_types et ON et.entity_type_id = e.entity_type_id
             JOIN rules.species sp ON sp.species_id = c.species_id
             WHERE c.character_id = :character
         """),
@@ -126,6 +135,7 @@ def get_character_view(
         return CharacterView(
             character_id=row["character_id"],
             name=row["canonical_name"],
+            character_kind=character_kind_for_type_code(row["entity_type_code"]),
             species_code=row["species_code"],
             size_category=row["size_category"],
             current_hit_points=None,
@@ -223,6 +233,7 @@ def get_character_view(
     return CharacterView(
         character_id=row["character_id"],
         name=row["canonical_name"],
+        character_kind=character_kind_for_type_code(row["entity_type_code"]),
         species_code=row["species_code"],
         size_category=row["size_category"],
         current_hit_points=state_row["current_hit_points"] if state_row is not None else None,

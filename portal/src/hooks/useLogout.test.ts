@@ -148,7 +148,29 @@ describe("useLogout", () => {
     expect(navigateMock).not.toHaveBeenCalled()
   })
 
-  it("does nothing when the caller is not authenticated", async () => {
+  it("treats a 401 (already-expired session) as a successful logout", async () => {
+    const reload = vi.fn()
+    fetchMock.mockResolvedValue(new Response(null, { status: 401 }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    useSessionMock.mockReturnValue({
+      state: { status: "authenticated", bootstrap: sessionBootstrapFixture },
+      reload,
+      refresh: vi.fn(),
+    })
+
+    const { result } = renderHook(() => useLogout())
+
+    await act(async () => {
+      await result.current.logout()
+    })
+
+    expect(result.current.status).toEqual({ kind: "idle" })
+    expect(reload).toHaveBeenCalledOnce()
+    expect(navigateMock).toHaveBeenCalledWith("/login", { replace: true })
+  })
+
+  it("goes to the login screen without a request when already signed out", async () => {
     const reload = vi.fn()
     vi.stubGlobal("fetch", fetchMock)
 
@@ -166,6 +188,6 @@ describe("useLogout", () => {
 
     expect(fetchMock).not.toHaveBeenCalled()
     expect(reload).not.toHaveBeenCalled()
-    expect(navigateMock).not.toHaveBeenCalled()
+    expect(navigateMock).toHaveBeenCalledWith("/login", { replace: true })
   })
 })

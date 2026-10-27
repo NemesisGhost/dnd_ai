@@ -67,17 +67,42 @@ describe("EntityLifecyclePanel", () => {
         expect(screen.queryByRole("heading", { name: "Lifecycle" })).not.toBeInTheDocument()
     })
 
-    it("shows the status and exactly the actions the server offers, explaining blocked ones", async () => {
+    it("offers the next step, keeps the rest under More, and shows exactly the server's actions", async () => {
         setup()
         await screen.findByRole("heading", { name: "Lifecycle" })
-        expect(screen.getByRole("button", { name: "Submit for review" })).toBeInTheDocument()
-        expect(screen.getByRole("button", { name: "Archive" })).toBeInTheDocument()
-        expect(screen.getByRole("button", { name: "Delete draft" })).toBeInTheDocument()
+        const group = screen.getByRole("group", { name: "Lifecycle" })
+        expect(within(group).getByRole("button", { name: "Submit for review" })).toBeVisible()
+        expect(within(group).getByRole("button", { name: "Archive" })).not.toBeVisible()
+        fireEvent.click(within(group).getByText("More"))
+        expect(within(group).getByRole("button", { name: "Archive" })).toBeVisible()
+        expect(within(group).getByRole("button", { name: "Delete draft" })).toBeVisible()
         expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument()
         expect(screen.queryByRole("button", { name: "Publish as canon" })).not.toBeInTheDocument()
-        expect(screen.getByRole("list", { name: "Unavailable lifecycle actions" })).toHaveTextContent(
-            "Restore unavailable: the record is not archived.",
-        )
+    })
+
+    it("collapses status-derived reasons and shows actionable or unrecognised ones inline, dropping none", async () => {
+        setup({
+            initial: {
+                blocked_actions: [
+                    { action: "restore", reason: "entity_not_archived" },
+                    { action: "approve", reason: "wrong_canon_status" },
+                    { action: "publish", reason: "reference_not_published" },
+                    { action: "reject", reason: "some_future_reason" },
+                ],
+            },
+        })
+        await screen.findByRole("heading", { name: "Lifecycle" })
+        const inline = screen.getByRole("list", { name: "Actions that need something first" })
+        expect(inline).toBeVisible()
+        expect(inline).toHaveTextContent("Publish as canon unavailable:")
+        expect(inline).toHaveTextContent("Reject unavailable:")
+        const summary = screen.getByText("Why other actions are unavailable (2)")
+        const reasons = screen.getByRole("list", { name: "Unavailable lifecycle actions" })
+        expect(reasons).not.toBeVisible()
+        fireEvent.click(summary)
+        expect(reasons).toBeVisible()
+        expect(reasons).toHaveTextContent("Restore unavailable: the record is not archived.")
+        expect(reasons).toHaveTextContent("Approve unavailable: not available at this canon status.")
     })
 
     it("submits for review immediately, refetches, notifies the page, and announces", async () => {
@@ -204,6 +229,6 @@ describe("EntityLifecyclePanel", () => {
             },
         })
         expect(await screen.findByText("Replaced by New Archive.")).toBeInTheDocument()
-        expect(screen.getByText("No lifecycle actions are available right now.")).toBeInTheDocument()
+        expect(screen.getByText("No lifecycle action is available to you right now.")).toBeInTheDocument()
     })
 })
