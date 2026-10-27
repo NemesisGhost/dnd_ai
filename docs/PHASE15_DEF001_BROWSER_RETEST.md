@@ -124,3 +124,80 @@ The owner chose to **fix** DEF-005 and DEF-006 (not accept them). The fixes are 
 | DEF-005: the recovery effect called the caller's `reset()`, which could clear a newer pending/confirmed write or newer unread state | No cleanup effect. Each write has its own status object; recovery is recorded against it; Load latest and `end()` / `reset(expected)` act only on the episode they were started for | The archive → page Try again → restore → page Try again sequence (`ga`), the same two-write sequence on ops 2, 22 (provider), 24, 26, Load latest followed by a further write, and a double press while pending, each checking one POST per intended write |
 
 Not changed: the retest plan in §8.1, the 38d2865 results, and every human row (all `Unexecuted`). The head after this fix is not a manual-run candidate and no baseline is frozen.
+
+## 9. Browser retest on the reviewed head `88ee96a` (run 2026-10-26/27, scripted, disposable copy)
+
+Everything above this section is the record for `38d2865` and is kept under that SHA. This section is the retest of the fixes reviewed by Codex. **Scripted browser evidence only. Every human and accessibility row stays `Unexecuted`; DEF-001, CP-11 and Phase 15 are not closed; no manual-run baseline is frozen or proposed here** (§9.6).
+
+### 9.1 What was run
+
+| Item | Value |
+|---|---|
+| Code | `phase15/completion` @ `88ee96a32a10f5c689c5e8647dbe026f5c9be3d4` (Codex-reviewed fixes for DEF-005/DEF-006; CI run 40444946370 green on this head, recorded separately). Working tree: only the owner's three unstaged acceptance documents differ |
+| Disposable database | `dnd_ai_m1415_retest2_20261027`: new, `createdb` + `pg_restore` of `accept_clean_baseline_140.dump`, fingerprint identical to the baseline at the start (219 tables / 567 rows), revision `140_clock_advance_details`. Retained, not dropped. The earlier disposable copy (`…retest_20261027`) was not reused |
+| Stack | API `127.0.0.1:8002`, Vite `127.0.0.1:5175` from the main checkout at `88ee96a`; origin `http://127.0.0.1:5175` only. Stopped afterwards (nothing listens on 8000–8002 / 5173–5175) |
+| Protected state | Human database `dnd_ai_m1415_accept_clean_20261026`: fingerprint **identical** to the baseline after the run (219 / 567). Working `dnd_ai`, the other databases and the human stack (stopped since the fixes began) were not touched. Account authority was changed **only** on the disposable copy (§9.4) |
+| Browser / harness | Chrome 155.0.8059.85 headless, playwright-core 1.49.1; folder `retest2_20261027\` (outside the repository): `lib.mjs`, `run.mjs`, the scripts below, `*.json` results, `logs\`, `shots\` (45 screenshots) |
+| Credentials | From the child environment only (`envrun.py`); never printed or stored. One sign-in per persona for the whole process (`run.mjs` shares the signed-in context), so the 10-per-15-minute throttle was not hit |
+| Personas | `admin` (campaign owner and GM, world Owner), `gm` (world Editor + Reviewer via Sharing, campaign `gm`), `player_a` (negative check only); `player_b` received the Game Master **system** role on the disposable copy for the ownership-transfer test |
+| Assertions | As §1, with the final announcement history: a MutationObserver records every announcement. After `run1` the observer was refined to count the announcer's alternating `<span>`/`<p>` node, so two identical messages are two announcements (`gp`, `gq`, `gr`, `gs` ran with it; `run1` ran with the earlier de-duplicating form, which its presence/absence checks are not affected by) |
+
+### 9.2 Results by script
+
+| Script | Covers | Result |
+|---|---|---|
+| `run1`: `ga` `gb` `gc2` `gc3` `gd` `ge` `ge2` `gf` `gf2` `gg` `gh` `gi` `gj` `gk` `gl` `gn` `go` (+ `gg2` rerun) | ops 1–26 first variants; RC-03…RC-09; C1/D1/D2 | all pass except the script faults in §9.5. `ga` 15/15 including the DEF-005 reproduction, `gb` 14/14 (counting fixed per write), `gc2` 6/6, `gc3` 8/8, `gd` 10/10, `ge2` 12 (+2 faults), `gf2` 2/2, `gg` 5/5, `gg2` 3/3, `gh` 8/8, `gi` 4/4, `gj` 4/4, `gk` 3/3, `gl` 12 (+1 stale record), `gn` 13/13, `go` 7/7 |
+| `gp` | DEF-005 two-write sequences | **21/21** |
+| `gq` | DEF-006 | **29/29** (the 2 recorded fails are a superseded `gp` script error carried into its file) |
+| `gr` | party restore, NPC condition, event correct, clock correct | **8/8** |
+| `gs` | ownership transfer, end role, allow/revoke hosting | **13/13** |
+
+### 9.3 DEF-005 and DEF-006 in a real browser
+
+**DEF-005** (`ga`, `gp`, `gs`; logs `run1.log`, `run5.log`, `run8.log`). Each second write on the same mounted view reports its own saved-but-behind notice, holds, is not announced early, recovers by a read, is announced once, and each intended write is exactly one POST:
+
+- world archive → page Try again → restore → page Try again (`ga`: the reproduction that failed on `38d2865` now passes);
+- timeline archive → Try again → restore → Try again;
+- lifecycle pair through the provider (submit for review, Try again, approve, Try again) on a World record;
+- organization status → Try again → add member (same mounted roster) → Try again;
+- two world-time records on the World times page (two announcements of the same words, counted separately);
+- inline picker: record, **Load latest**, then a further record reported afresh;
+- a second submit of the form while the first is pending (held at the server): the POST was started once, then confirmed once;
+- ownership transfer, end role, allow hosting then revoke hosting on one mounted Sharing page (`gs`).
+
+**DEF-006** (`gq`; `logs\run4.log`, shots `def006_*.png`). On fresh claims:
+
+- authoring read **500**: notice "Claim saved. The latest claim could not be loaded", the editor stays, the generic status is announced, "Knowledge claim saved" is not; an edit on the retained editor keeps **Save held**; **Load latest** failing again changes nothing; following the Knowledge link shows the unsaved-changes dialog and **Keep editing** preserves the draft; once authoring and detail work the notice goes, the draft is kept, Save is enabled, no second POST, and the next save carries `expected_row_version` 1 → 2, a new key, and is announced;
+- authoring read **403** and **404**, both immediately after the save and after a retained edit: the editor, the form controls and the draft text are gone, a status says the editor is no longer available, and leaving is no longer guarded;
+- detail read alone fails: notice, editor kept, Load latest recovers; both required reads fail: an authoring read that works alone does not recover it, both do; a claim **lifecycle step** whose authoring read fails: notice, no early "Submitted for review", one POST, a read-only retry clears it.
+
+### 9.4 Ownership transfer (op 11) and the remaining Sharing variants (`gs`)
+
+The supported system-role assignment (`POST /admin/accounts/{id}/system-roles`, the call behind the Platform accounts role checkboxes) gave the existing account `player_b` the Game Master system role **on the disposable copy only**. Transfer with "Keep me on the world as" Editor and the access read failing: notice, controls held, not announced early; the read-only retry is then answered with an **authoritative denial** (an Editor cannot read Sharing), which removes the content and announces "Ownership transferred" exactly once, one POST. Transfer keeping no role: the real read is refused, content removed, announced, focus on the heading, one POST (no fault injection). End role, allow hosting and revoke hosting each show their own notice and recover by a read, with one POST each.
+
+### 9.5 Script faults and stale records (not product failures; nothing weakened)
+
+`ge` op 13 and `gf` op 20 are the earlier-script faults already recorded in §5, superseded by `ge2`/`gf2`; `gg2` first used a "(1)" suffix that only exists when a hazard name is duplicated (fixed, rerun passes); `gp` first used a member who was already on the roster on a rerun (changed to a different character, rerun 21/21); `gs` first matched the header's "Administrator" text instead of the page; `gl` still contains one hard-coded record of the `38d2865` DEF-006 finding (kept as history; superseded by `gq`); several faults in the new scripts were corrected before the recorded runs (organization status option, reason fields, dialog button order). No product failure occurred.
+
+### 9.6 RC-03 … RC-10 reassessed, and what is still not browser-verified
+
+| Row | On `88ee96a` |
+|---|---|
+| RC-03 | Pass (`gk`). RC-04 / RC-05 / RC-07 pass (`gl`). RC-06 passes for the detail, authoring (500/403/404), both-reads and lifecycle variants (`gl`, `gq`) |
+| RC-08 | Pass (`go`; and the next claim save, `gq` A) |
+| RC-09 | Pass (`go`: drafts kept, a late response does not touch another record, permission loss removes private content; `gq`: 403/404 remove the claim editor and draft). Slow 3G was not used |
+| RC-10 | Every one of the 26 operations has at least one browser-verified variant, **but not every command of every operation**: see below. Shared-hook tests are not counted as verification of an operation |
+
+**Not exercised in a browser (still unverified):**
+
+- op 19: encounter update, participant add/change/remove, abort, end (start and record turn were run, `gf`).
+- op 20: NPC **resource** (this NPC tracks no resource, so the write is refused: the TC-38 positive-resource block) and **move** (the place search offered nothing selectable in the script).
+- op 21: dungeon Connections and Contents.
+- op 22: lifecycle reject / return / **archive / restore** / delete steps of a World record (the archive action was not reachable as a button on the Publication tab in the script), and the Item and Quest steps beyond submit.
+- op 23: relationship end, archive, perspectives.
+- op 24: organization member editor.
+- op 15: travel superseded variant. op 25: the inline picker inside the party, session, event and organization forms (clock form and World times page covered).
+- Newly covered in this run: op 3 party restore, op 10 event correct, op 16 clock correct, op 20 NPC condition, op 11 transfer / end role / allow and revoke hosting (`gr`, `gs`).
+- Also unexercised: keyboard-only, screen-reader (TC-55), responsive widths, other browsers, Slow 3G, and the backend/database suites (not rerun: no backend change since `9ab549d`).
+
+**Baseline.** The evidence supports the **retested** items passing on `88ee96a`, but the unexercised variants above remain, Codex has not reviewed this evidence, and no human row is executed. This document therefore does **not** propose a manual-run baseline and freezes none; that decision stays with the owner and Codex.
