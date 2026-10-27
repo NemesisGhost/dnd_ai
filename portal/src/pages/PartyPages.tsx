@@ -35,6 +35,7 @@ import {
     validateDescription,
     validateName,
 } from "../utils/authoringValidation"
+import { ReadTerminal } from "../components/authoring/ReadState"
 import "../components/authoring/authoring.css"
 
 const base = (campaignId: string): string => `/app/${encodeURIComponent(campaignId)}`
@@ -51,7 +52,7 @@ export function PartiesPage() {
     const [showArchived, setShowArchived] = useState(false)
     const listPath = partiesPath(campaignId, showArchived)
     const list = useAuthoringResource<PartyList>(listPath)
-    const headingRef = usePageArrival(list.state.kind === "ready")
+    const headingRef = usePageArrival(list.state.kind !== "loading")
     // The last list that loaded stays through a failed re-read (after an archive or restore, say),
     // so the rows and the notice that explains the failure are not replaced by an error screen.
     const data = useKept(list.state, listPath)
@@ -71,11 +72,12 @@ export function PartiesPage() {
             {list.state.kind === "loading" ? (
                 <p role="status">Loading parties…</p>
             ) : data === null ? (
-                list.state.kind === "error" ? (
-                    <p role="alert">The parties could not be loaded. Try reloading the page.</p>
-                ) : (
-                    <p role="alert">You do not have access to this campaign's parties.</p>
-                )
+                <ReadTerminal
+                    states={[list.state]}
+                    what="list of parties"
+                    onRetry={list.refetch}
+                    back={{ to: `${base(campaignId)}/home`, label: "Back to the campaign" }}
+                />
             ) : (
                 <>
                     {stale ? <StaleReadNotice what="party list" onRetry={() => void list.refetch()} /> : null}
@@ -442,7 +444,7 @@ export function CreatePartyPage() {
 export function EditPartyPage() {
     const { campaignId = "", partyId = "" } = useParams()
     const party = useAuthoringResource<PartyItem>(partyPath(campaignId, partyId))
-    const headingRef = usePageArrival(party.state.kind === "ready")
+    const headingRef = usePageArrival(party.state.kind !== "loading")
     const data = party.state.kind === "ready" ? party.state.data : null
     return (
         <section className="authoring-page" aria-labelledby="edit-party-heading">
@@ -455,7 +457,12 @@ export function EditPartyPage() {
             {party.state.kind === "loading" ? (
                 <p role="status">Loading party…</p>
             ) : data === null ? (
-                <p role="alert">This party does not exist, or you do not have access to it.</p>
+                <ReadTerminal
+                    states={[party.state]}
+                    what="party"
+                    onRetry={party.refetch}
+                    back={{ to: `${base(campaignId)}/parties`, label: "Back to parties" }}
+                />
             ) : !(data.available_actions ?? []).includes("update") ? (
                 <p role="alert">
                     This party cannot be edited right now.{" "}

@@ -107,7 +107,7 @@ describe("WorldSharingPage", () => {
             initialEntry: "/worlds/w1/sharing",
             routes: [{ path: "/worlds/:worldId/sharing", element: <WorldSharingPage /> }],
         })
-        expect(await screen.findByText(/Sharing is not available/)).toBeInTheDocument()
+        expect(await screen.findByText(/You do not have access to the sharing list/)).toBeInTheDocument()
         expect(screen.queryByRole("button", { name: /Give role/ })).not.toBeInTheDocument()
     })
 
@@ -249,7 +249,7 @@ describe("WorldSharingPage: last owner, focus and the transfer control (CP-4 smo
         server.on("GET", "/worlds/w1/access", { status: 403, body: { error: { code: "forbidden", message: "m", correlation_id: "x" } } })
         setCurrent(access())
         fireEvent.click(within(dialog).getByRole("button", { name: "Transfer ownership" }))
-        expect(await screen.findByText(/Sharing is not available for this world with your account/)).toBeInTheDocument()
+        expect(await screen.findByText(/You do not have access to the sharing list/)).toBeInTheDocument()
         await waitFor(() => expect(screen.getByRole("heading", { level: 1, name: "Sharing" })).toHaveFocus())
     })
 
@@ -339,7 +339,7 @@ describe("WorldSharingPage: last owner, focus and the transfer control (CP-4 smo
         const dialog = await screen.findByRole("dialog")
         server.on("GET", "/worlds/w1/access", { status: 403, body: { error: { code: "forbidden", message: "m", correlation_id: "x" } } })
         fireEvent.click(within(dialog).getByRole("button", { name: "Transfer ownership" }))
-        expect(await screen.findByText(/Sharing is not available for this world with your account/)).toBeInTheDocument()
+        expect(await screen.findByText(/You do not have access to the sharing list/)).toBeInTheDocument()
         // A denied read is the authoritative answer here, not a read that failed: the loss is explained
         // and the transfer is announced; the removed content is not kept.
         await waitFor(() => expect(screen.getByTestId("authoring-announcer")).toHaveTextContent("Ownership transferred"))

@@ -20,6 +20,8 @@ import type { CreateCampaignRequest, CreateCampaignResponse } from "../types/cam
 import type { WorldDetail, WorldListResponse } from "../types/worldAuthoring"
 import { DESCRIPTION_MAX, NAME_MAX, validateDescription, validateName } from "../utils/authoringValidation"
 import { canCreateWorlds } from "../utils/worldAccess"
+import { ActionUnavailableNotice, ReadTerminal } from "../components/authoring/ReadState"
+import { blockedReasonFor } from "../utils/blockedReason"
 import "../components/authoring/authoring.css"
 
 // The campaign setup wizard. Step state lives in the URL (`?worldId=&timelineId=`),
@@ -68,12 +70,19 @@ function ChooseWorld() {
     // Offered only with the server-computed `world.create`; never a link that
     // would fail after navigation.
     const canCreate = session.status === "authenticated" && canCreateWorlds(session.bootstrap)
-    const { state } = useAuthoringResource<WorldListResponse>(`${worldsListPath("active")}&limit=100`)
+    const { state, refetch } = useAuthoringResource<WorldListResponse>(`${worldsListPath("active")}&limit=100`)
     const [choice, setChoice] = useState("")
 
     if (state.kind === "loading") return <p role="status">Loading your worlds…</p>
     if (state.kind !== "ready") {
-        return <p role="alert">Your worlds could not be loaded. Try reloading the page.</p>
+        return (
+            <ReadTerminal
+                states={[state]}
+                what="list of your worlds"
+                onRetry={refetch}
+                back={{ to: "/campaigns", label: "Back to campaigns" }}
+            />
+        )
     }
     const eligible = state.data.items.filter((w) => w.capabilities.includes("campaign.create"))
 
@@ -114,15 +123,29 @@ function ChooseWorld() {
 
 function ChooseTimeline({ worldId }: { worldId: string }) {
     const [, setParams] = useSearchParams()
-    const { state } = useAuthoringResource<WorldDetail>(worldPath(worldId))
+    const { state, refetch } = useAuthoringResource<WorldDetail>(worldPath(worldId))
     const [choice, setChoice] = useState<string | null>(null)
 
     if (state.kind === "loading") return <p role="status">Loading world…</p>
-    if (state.kind !== "ready" || !state.data.available_actions.includes("create_campaign")) {
+    if (state.kind !== "ready") {
         return (
-            <p role="alert">
-                This world is not available for new campaigns. <Link to="/campaigns/new">Choose another world</Link>
-            </p>
+            <ReadTerminal
+                states={[state]}
+                what="world"
+                onRetry={refetch}
+                back={{ to: "/campaigns/new", label: "Choose another world" }}
+            />
+        )
+    }
+    if (!state.data.available_actions.includes("create_campaign")) {
+        return (
+            <ActionUnavailableNotice
+                noun="world"
+                action="start a campaign in"
+                reason={blockedReasonFor(state.data.blocked_actions, "create_campaign")}
+                archived={state.data.lifecycle_status === "archived"}
+                back={{ to: "/campaigns/new", label: "Choose another world" }}
+            />
         )
     }
     const active = state.data.timelines.filter((t) => t.lifecycle_status === "active")
@@ -184,16 +207,35 @@ function ChooseTimeline({ worldId }: { worldId: string }) {
 }
 
 function CampaignDetails({ worldId, timelineId }: { worldId: string; timelineId: string }) {
-    const { state } = useAuthoringResource<WorldDetail>(worldPath(worldId))
+    const { state, refetch } = useAuthoringResource<WorldDetail>(worldPath(worldId))
     if (state.kind === "loading") return <p role="status">Loading world…</p>
+    if (state.kind !== "ready") {
+        return (
+            <ReadTerminal
+                states={[state]}
+                what="world"
+                onRetry={refetch}
+                back={{ to: "/campaigns/new", label: "Start over" }}
+            />
+        )
+    }
+    if (!state.data.available_actions.includes("create_campaign")) {
+        return (
+            <ActionUnavailableNotice
+                noun="world"
+                action="start a campaign in"
+                reason={blockedReasonFor(state.data.blocked_actions, "create_campaign")}
+                archived={state.data.lifecycle_status === "archived"}
+                back={{ to: "/campaigns/new", label: "Start over" }}
+            />
+        )
+    }
     if (
-        state.kind !== "ready" ||
-        !state.data.available_actions.includes("create_campaign") ||
         !state.data.timelines.some((t) => t.timeline_id === timelineId && t.lifecycle_status === "active")
     ) {
         return (
             <p role="alert">
-                That world or timeline is not available for new campaigns.{" "}
+                That timeline is not available for new campaigns.{" "}
                 <Link to="/campaigns/new">Start over</Link>
             </p>
         )

@@ -186,7 +186,7 @@ describe("CreateTimelinePage", () => {
     it("refuses when the server does not offer create_timeline", async () => {
         installMockServer().on("GET", "/worlds/w1", { body: { name: "World", available_actions: [] } })
         renderAuthoringRoutes({ initialEntry: "/worlds/w1/timelines/new", routes })
-        expect(await screen.findByRole("alert")).toHaveTextContent("cannot be added")
+        expect(await screen.findByRole("alert")).toHaveTextContent("does not include being able to add a timeline to")
     })
 })
 
@@ -300,7 +300,7 @@ describe("CreateTimelineBranchPage", () => {
 
     it("does not offer branching for an archived parent", async () => {
         setup(history, detail({ available_actions: ["restore"], lifecycle_status: "archived" }))
-        expect(await screen.findByRole("alert")).toHaveTextContent("cannot be branched right now")
+        expect(await screen.findByRole("alert")).toHaveTextContent("because it is archived")
         expect(screen.queryByRole("textbox", { name: /Branch name/ })).not.toBeInTheDocument()
     })
 })
@@ -349,12 +349,12 @@ describe("world_viewer timeline pages", () => {
         edit.unmount()
 
         const branch = renderAuthoringRoutes({ initialEntry: "/worlds/w1/timelines/t1/branch", routes })
-        expect(await screen.findByRole("alert")).toHaveTextContent("cannot be branched")
+        expect(await screen.findByRole("alert")).toHaveTextContent("does not include being able to branch it")
         expect(screen.queryByRole("textbox")).not.toBeInTheDocument()
         branch.unmount()
 
         renderAuthoringRoutes({ initialEntry: "/worlds/w1/timelines/new", routes })
-        expect(await screen.findByRole("alert")).toHaveTextContent("cannot be added")
+        expect(await screen.findByRole("alert")).toHaveTextContent("does not include being able to add a timeline to")
         expect(screen.queryByRole("textbox")).not.toBeInTheDocument()
         expect(server.calls.filter((call) => call.method === "POST")).toHaveLength(0)
     })

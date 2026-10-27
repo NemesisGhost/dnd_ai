@@ -69,11 +69,11 @@ describe("CreateWorldPage", () => {
         expect(screen.getByRole("checkbox", { name: "House Rules" })).toBeInTheDocument()
     })
 
-    it("renders not-found and requests nothing without the server-computed world.create", async () => {
+    it("renders an explicit denial and requests nothing without the server-computed world.create", async () => {
         // Defense in depth behind CreateWorldRoute: mounted directly, the page
         // still renders no form and never asks for rulesets.
         const { server } = setup({ bootstrap: bootstrapWith({ global_capabilities: [] }) })
-        expect(await screen.findByRole("heading", { name: "Page not found" })).toBeInTheDocument()
+        expect(await screen.findByRole("heading", { name: "Access denied" })).toBeInTheDocument()
         expect(screen.queryByRole("textbox", { name: /World name/ })).toBeNull()
         expect(server.calls).toEqual([])
     })

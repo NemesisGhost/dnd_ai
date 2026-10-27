@@ -7,7 +7,8 @@ import { CreateAccountPanel } from "../components/CreateAccountPanel"
 import { TableScroll } from "../components/TableScroll"
 import { OneTimeSecretPanel } from "../components/OneTimeSecretPanel"
 import { usePlatformAccounts } from "../hooks/usePlatformAccounts"
-import { NotFoundPage } from "./NotFoundPage"
+import { AccessDeniedPage } from "../components/TerminalState"
+import { HOME_RECOVERY } from "../components/terminalRecovery"
 import type { SessionBootstrap } from "../types/bootstrap"
 import { SystemRolesEditor } from "../components/SystemRolesEditor"
 import { buildFragmentLink } from "../utils/oneTimeLink"
@@ -39,7 +40,7 @@ export function AdminAccountsPage({ bootstrap }: AdminAccountsPageProps) {
     const [issuedReset, setIssuedReset] = useState<IssuedPasswordReset | null>(null)
 
     if (!canManageAccounts(bootstrap)) {
-        return <NotFoundPage />
+        return <AccessDeniedPage what="platform accounts" recovery={[HOME_RECOVERY]} />
     }
 
     return (

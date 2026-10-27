@@ -31,6 +31,7 @@ import type {
 } from "../types/worldSharing"
 import { WORLD_ROLE_LABEL } from "../types/worldSharing"
 import type { WorldDetail } from "../types/worldAuthoring"
+import { ReadTerminal } from "../components/authoring/ReadState"
 import "../components/authoring/authoring.css"
 
 const ROLE_OPTIONS = [
@@ -112,10 +113,12 @@ export function WorldSharingPage() {
                 {access.state.kind === "loading" ? (
                     <p role="status">Loading…</p>
                 ) : view === null ? (
-                    <p role="alert">
-                        Sharing is not available for this world with your account.{" "}
-                        <Link to={`/worlds/${worldId}`}>Back to the world</Link>
-                    </p>
+                    <ReadTerminal
+                        states={[access.state]}
+                        what="sharing list"
+                        onRetry={access.refetch}
+                        back={{ to: `/worlds/${worldId}`, label: "Back to the world" }}
+                    />
                 ) : (
                     <>
                         {stale ? <StaleReadNotice what="sharing list" onRetry={() => void access.refetch()} /> : null}

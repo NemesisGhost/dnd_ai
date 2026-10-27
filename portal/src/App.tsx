@@ -6,6 +6,8 @@ import { useAuthenticatedSession } from "./layouts/useAuthenticatedSession"
 import { CampaignSessionBoundary } from "./layouts/CampaignSessionBoundary"
 import PlaceholderPage from "./pages/PlaceholderPage"
 import { NotFoundPage } from "./pages/NotFoundPage"
+import { AccessDeniedPage } from "./components/TerminalState"
+import { HOME_RECOVERY } from "./components/terminalRecovery"
 import { LoginPage } from "./pages/LoginPage"
 import { LandingRedirect } from "./pages/LandingRedirect"
 import { CampaignsPage } from "./pages/CampaignsPage"
@@ -103,7 +105,7 @@ function PlatformAccountsRoute() {
   // §3.1). AdminAccountsPage keeps its own internal check as defense in
   // depth.
   if (!canManageAccounts(bootstrap)) {
-    return <NotFoundPage />
+    return <AccessDeniedPage what="platform accounts" recovery={[HOME_RECOVERY]} />
   }
 
   return <AdminAccountsPage bootstrap={bootstrap} />

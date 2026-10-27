@@ -57,11 +57,12 @@ describe("EditWorldPage", () => {
         expect(descriptionField()).toHaveValue("Original description")
     })
 
-    it("renders not-found, never the form, when the server withholds update", async () => {
+    it("explains the withheld update, never mounting the form", async () => {
         const { server } = setup(
             detail({ lifecycle_status: "archived", available_actions: ["restore"] }),
         )
-        expect(await screen.findByRole("heading", { name: "Page not found" })).toBeInTheDocument()
+        expect(await screen.findByRole("heading", { name: "Editing unavailable" })).toBeInTheDocument()
+        expect(screen.getByRole("alert")).toHaveTextContent("because it is archived")
         expect(screen.queryByRole("textbox", { name: /World name/ })).not.toBeInTheDocument()
         expect(screen.queryByRole("heading", { name: "Edit world" })).not.toBeInTheDocument()
         // Only the read model was requested; nothing was submitted.
@@ -70,9 +71,10 @@ describe("EditWorldPage", () => {
         ])
     })
 
-    it("renders not-found for a view-only world without mounting the form", async () => {
+    it("explains a role without update for a view-only world, mounting no form", async () => {
         setup(detail({ capabilities: ["world.view"], available_actions: [] }))
-        expect(await screen.findByRole("heading", { name: "Page not found" })).toBeInTheDocument()
+        expect(await screen.findByRole("heading", { name: "Editing unavailable" })).toBeInTheDocument()
+        expect(screen.getByRole("alert")).toHaveTextContent("does not include being able to edit it")
         expect(screen.queryByRole("textbox", { name: /World name/ })).not.toBeInTheDocument()
     })
 
@@ -151,14 +153,14 @@ describe("EditWorldPage", () => {
         expect(nameField()).toHaveValue("Changed")
     })
 
-    it("renders the same not-found for an unknown or undisclosed world", async () => {
+    it("renders the neutral unavailable state for an unknown or undisclosed world", async () => {
         const server = installMockServer()
         server.on("GET", "/worlds/w1", { status: 404 })
         renderAuthoringRoutes({
             initialEntry: "/worlds/w1/edit",
             routes: [{ path: "/worlds/:worldId/edit", element: <EditWorldRoute /> }],
         })
-        expect(await screen.findByRole("heading", { name: "Page not found" })).toBeInTheDocument()
+        expect(await screen.findByRole("heading", { name: "World not available" })).toBeInTheDocument()
         expect(screen.queryByRole("textbox", { name: /World name/ })).not.toBeInTheDocument()
     })
 

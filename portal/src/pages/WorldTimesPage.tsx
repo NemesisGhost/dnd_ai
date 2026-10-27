@@ -11,6 +11,7 @@ import { useKept } from "../hooks/useKeptResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { usePageArrival } from "../hooks/usePageArrival"
 import type { CalendarListResponse, WorldTimeItem, WorldTimePage } from "../types/worldTime"
+import { ReadTerminal } from "../components/authoring/ReadState"
 import "../components/authoring/authoring.css"
 
 const PAGE_SIZE = 50
@@ -32,7 +33,7 @@ export function WorldTimesPage() {
     const heldTimes = useKept(times.state, timesUrl ?? "")
     const heldCalendars = useKept(calendars.state, calendarsUrl ?? "")
     const stale = times.state.kind === "error" && heldTimes !== null
-    const headingRef = usePageArrival(!canEdit || times.state.kind !== "loading")
+    const headingRef = usePageArrival(!canEdit || (times.state.kind !== "loading" && calendars.state.kind !== "loading"))
 
     return (
         <div className="authoring-page">
@@ -47,7 +48,12 @@ export function WorldTimesPage() {
             ) : times.state.kind === "loading" || calendars.state.kind === "loading" ? (
                 <p role="status">Loading world times…</p>
             ) : heldTimes === null || heldCalendars === null ? (
-                <p role="alert">World times could not be loaded. Try reloading the page.</p>
+                <ReadTerminal
+                    states={[times.state, calendars.state]}
+                    what="world times"
+                    onRetry={() => Promise.all([times.refetch(), calendars.refetch()])}
+                    back={{ to: `/app/${encodeURIComponent(id)}/home`, label: "Back to the campaign home" }}
+                />
             ) : (
                 <>
                     {stale ? <StaleReadNotice what="world times" onRetry={() => void times.refetch()} /> : null}

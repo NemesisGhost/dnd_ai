@@ -1,4 +1,9 @@
 import { AlertTriangle } from "lucide-react"
+import { useState } from "react"
+import { Link } from "react-router"
+import { describeBlockedReason } from "../../utils/blockedReason"
+import { useDocumentTitle } from "../../hooks/useDocumentTitle"
+import type { Recovery } from "../terminalRecovery"
 import "./authoring.css"
 
 // A read that failed for a reason worth retrying (the network or the server): nothing is wrong
@@ -9,9 +14,22 @@ export function ReadFailedNotice({
     retrying = false,
 }: {
     what: string
-    onRetry: () => void
+    // May return the read it starts; the button then reports "Loading…" until it settles.
+    onRetry: () => void | Promise<unknown>
     retrying?: boolean
 }) {
+    const [reading, setReading] = useState(false)
+    const busy = retrying || reading
+    const retry = () => {
+        if (busy) {
+            return
+        }
+        const started = onRetry()
+        if (started instanceof Promise) {
+            setReading(true)
+            void started.finally(() => setReading(false))
+        }
+    }
     return (
         <div className="authoring-message authoring-message--error" role="alert">
             <AlertTriangle aria-hidden="true" className="authoring-message__icon" />
@@ -20,11 +38,12 @@ export function ReadFailedNotice({
                 <button
                     type="button"
                     className="authoring-button"
-                    onClick={onRetry}
-                    disabled={retrying}
-                    aria-busy={retrying}
+                    onClick={retry}
+                    // aria-disabled, not disabled: a disabled button that has focus drops it to the page.
+                    aria-disabled={busy ? true : undefined}
+                    aria-busy={busy}
                 >
-                    {retrying ? "Loading…" : "Try again"}
+                    {busy ? "Loading…" : "Try again"}
                 </button>
             </div>
         </div>
@@ -40,5 +59,81 @@ export function ReadClosedNotice({ what, denied }: { what: string; denied: boole
                 ? `You do not have access to the ${what}.`
                 : `The ${what} is not available, or you can no longer access it.`}
         </p>
+    )
+}
+
+// What a first read that did not return the record shows, in place of the page's content. The
+// kinds stay apart: a 404 (not found, or not accessible — the server does not say which, so the
+// text does not either) and a 403 are closed and retrying cannot help; a network or server failure
+// is not about the person's access at all and offers a retry that only reads. When several reads
+// back one page the least revealing closed answer wins, then a refusal, then a failure.
+export function ReadTerminal({
+    states,
+    what,
+    onRetry,
+    back,
+    pageTitle = true,
+}: {
+    states: readonly { kind: string }[]
+    what: string
+    onRetry: () => void | Promise<unknown>
+    back?: Recovery
+    // False for a panel inside a page that is otherwise working, which must not retitle the page.
+    pageTitle?: boolean
+}) {
+    const kinds = states.map((state) => state.kind)
+    const kind = kinds.includes("unavailable") ? "unavailable" : kinds.includes("denied") ? "denied" : "error"
+    useDocumentTitle(
+        !pageTitle ? null : kind === "error" ? "Could not load" : kind === "denied" ? "Access denied" : "Not available",
+    )
+    return (
+        <>
+            {kind === "error" ? (
+                <ReadFailedNotice what={what} onRetry={onRetry} />
+            ) : (
+                <ReadClosedNotice what={what} denied={kind === "denied"} />
+            )}
+            {back === undefined ? null : (
+                <p>
+                    <Link to={back.to}>{back.label}</Link>
+                </p>
+            )}
+        </>
+    )
+}
+
+// A record the person may read that does not offer an action. Only what the server sent about the
+// caller's own access is used: its `blocked_actions` reason (the record's lifecycle or state) when
+// there is one, then its archived status, otherwise the plain fact that their role does not include the action.
+export function ActionUnavailableNotice({
+    noun,
+    action,
+    reason,
+    archived = false,
+    back,
+}: {
+    noun: string
+    action: string
+    reason?: string
+    // The record's own lifecycle status, which the person can read, is archived.
+    archived?: boolean
+    back?: Recovery
+}) {
+    useDocumentTitle("Action unavailable")
+    return (
+        <>
+            <p role="alert">
+                {reason !== undefined
+                    ? `You cannot ${action} this ${noun} right now: ${describeBlockedReason(reason)}`
+                    : archived
+                      ? `You cannot ${action} this ${noun} because it is archived.`
+                      : `Your role on this ${noun} does not include being able to ${action} it.`}
+            </p>
+            {back === undefined ? null : (
+                <p>
+                    <Link to={back.to}>{back.label}</Link>
+                </p>
+            )}
+        </>
     )
 }

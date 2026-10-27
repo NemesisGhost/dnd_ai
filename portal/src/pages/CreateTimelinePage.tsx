@@ -19,11 +19,13 @@ import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard"
 import type { CreateTimelineRequest, CreateTimelineResponse } from "../types/timelineAuthoring"
 import type { WorldDetail } from "../types/worldAuthoring"
 import { DESCRIPTION_MAX, NAME_MAX, validateDescription, validateName } from "../utils/authoringValidation"
+import { ActionUnavailableNotice, ReadTerminal } from "../components/authoring/ReadState"
+import { blockedReasonFor } from "../utils/blockedReason"
 import "../components/authoring/authoring.css"
 
 export function CreateTimelinePage() {
     const { worldId = "" } = useParams()
-    const { state } = useAuthoringResource<WorldDetail>(worldPath(worldId))
+    const { state, refetch } = useAuthoringResource<WorldDetail>(worldPath(worldId))
     const headingRef = usePageArrival(state.kind !== "loading")
 
     return (
@@ -40,12 +42,20 @@ export function CreateTimelinePage() {
                 {state.kind === "loading" ? (
                     <p role="status">Loading world…</p>
                 ) : state.kind !== "ready" ? (
-                    <p role="alert">This world does not exist, or you do not have access to it.</p>
+                    <ReadTerminal
+                        states={[state]}
+                        what="world"
+                        onRetry={refetch}
+                        back={{ to: "/worlds", label: "Back to Worlds" }}
+                    />
                 ) : !state.data.available_actions.includes("create_timeline") ? (
-                    <p role="alert">
-                        Timelines cannot be added to this world right now.{" "}
-                        <Link to={`/worlds/${worldId}`}>Back to the world</Link>
-                    </p>
+                    <ActionUnavailableNotice
+                        noun="world"
+                        action="add a timeline to"
+                        reason={blockedReasonFor(state.data.blocked_actions, "create_timeline")}
+                        archived={state.data.lifecycle_status === "archived"}
+                        back={{ to: `/worlds/${worldId}`, label: "Back to the world" }}
+                    />
                 ) : (
                     <>
                         <p className="authoring-page__lead">

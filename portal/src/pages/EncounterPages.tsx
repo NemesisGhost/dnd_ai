@@ -35,6 +35,7 @@ import { RunBreadcrumb } from "../components/sessionRun/RunNav"
 import type { CampaignSessionDetail } from "../types/campaignSession"
 import type { EncounterOptions, PreparedEncounter } from "../types/encounters"
 import type { WorldCategory } from "../types/world"
+import { ReadTerminal } from "../components/authoring/ReadState"
 import "../components/authoring/authoring.css"
 
 const CODE_MESSAGE: Readonly<Record<string, string>> = {
@@ -190,7 +191,7 @@ export function PreparedEncounterPage() {
         resource.state.kind === "ready" && !resource.state.refreshing,
         resource.state,
     )
-    const headingRef = usePageArrival(resource.state.kind === "ready")
+    const headingRef = usePageArrival(resource.state.kind !== "loading" && options.state.kind !== "loading")
     const session = useAuthoringResource<CampaignSessionDetail>(sessionPath(campaignId, sessionId))
     return (
         <section className="authoring-page" aria-labelledby="encounter-heading">
@@ -216,7 +217,12 @@ export function PreparedEncounterPage() {
             ) : resource.state.kind === "loading" || options.state.kind === "loading" ? (
                 <p role="status">Loading…</p>
             ) : encounter === null || choices === null ? (
-                <p role="alert">This encounter does not exist, or you do not have access to it.</p>
+                <ReadTerminal
+                    states={[resource.state, options.state]}
+                    what="encounter"
+                    onRetry={() => Promise.all([resource.refetch(), options.refetch()])}
+                    back={{ to: `${base(campaignId)}/sessions/${encodeURIComponent(sessionId)}/run`, label: "Back to the session" }}
+                />
             ) : (
                 <>
                     {stale ? <StaleReadNotice what="encounter" onRetry={() => void resource.refetch()} /> : null}

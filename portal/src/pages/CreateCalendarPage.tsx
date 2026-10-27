@@ -1,9 +1,11 @@
 import { Link, useParams } from "react-router"
+import { ActionUnavailableNotice, ReadTerminal } from "../components/authoring/ReadState"
 import { CalendarCreation } from "../components/calendar/CalendarCreation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { usePageArrival } from "../hooks/usePageArrival"
 import type { WorldDetail } from "../types/worldAuthoring"
 import { worldPath } from "../api/worlds"
+import { blockedReasonFor } from "../utils/blockedReason"
 import "../components/authoring/authoring.css"
 
 // /worlds/:worldId/calendars/new — a world owner defines a calendar: its name,
@@ -14,7 +16,7 @@ import "../components/authoring/authoring.css"
 export function CreateCalendarPage() {
     const { worldId } = useParams<{ worldId: string }>()
     const id = worldId ?? ""
-    const { state } = useAuthoringResource<WorldDetail>(worldId ? worldPath(id) : null)
+    const { state, refetch } = useAuthoringResource<WorldDetail>(worldId ? worldPath(id) : null)
     // Moving between the steps changes only the query, so arrival is once per path.
     const headingRef = usePageArrival(state.kind !== "loading", "path")
     const canCreate =
@@ -31,12 +33,21 @@ export function CreateCalendarPage() {
                 </h1>
                 {state.kind === "loading" ? (
                     <p role="status">Loading…</p>
-                ) : state.kind === "unavailable" || state.kind === "denied" ? (
-                    <p role="alert">This world is unavailable or you do not have access to it.</p>
-                ) : state.kind === "error" ? (
-                    <p role="alert">The world could not be loaded. Try reloading the page.</p>
+                ) : state.kind !== "ready" ? (
+                    <ReadTerminal
+                        states={[state]}
+                        what="world"
+                        onRetry={refetch}
+                        back={{ to: "/worlds", label: "Back to Worlds" }}
+                    />
                 ) : !canCreate ? (
-                    <p role="alert">You cannot create a calendar for this world right now.</p>
+                    <ActionUnavailableNotice
+                        noun="world"
+                        action="create a calendar for"
+                        reason={blockedReasonFor(state.data.blocked_actions, "create_calendar")}
+                        archived={state.data.lifecycle_status === "archived"}
+                        back={{ to: `/worlds/${encodeURIComponent(id)}`, label: "Back to the world" }}
+                    />
                 ) : (
                     <CalendarCreation key={id} worldId={id} />
                 )}

@@ -100,7 +100,7 @@ describe("access and arrival", () => {
 
     it("says so, without a form or steps, when the world offers no calendar creation", async () => {
         setup(["update"], "/worlds/w1/calendars/new?section=review")
-        expect(await screen.findByRole("alert")).toHaveTextContent("cannot create a calendar")
+        expect(await screen.findByRole("alert")).toHaveTextContent("does not include being able to create a calendar for")
         expect(screen.queryByRole("form")).toBeNull()
         expect(screen.queryByRole("navigation", { name: "New calendar workflow" })).toBeNull()
         expect(screen.queryByRole("button", { name: "Create calendar" })).toBeNull()
@@ -113,7 +113,7 @@ describe("access and arrival", () => {
             initialEntry: "/worlds/w1/calendars/new",
             routes: [{ path: "/worlds/:worldId/calendars/new", element: <CreateCalendarPage /> }],
         })
-        expect(await screen.findByRole("alert")).toHaveTextContent("unavailable")
+        expect(await screen.findByRole("alert")).toHaveTextContent("not available, or you can no longer access it")
     })
 
     it("keeps the World breadcrumb", async () => {

@@ -986,7 +986,7 @@ describe("stages and sections", () => {
       server.on("GET", ENCOUNTERS, { status: 500 })
       openApp(`${RUN}?section=encounters`)
       const run = await screen.findByRole("region", { name: "Encounters" })
-      expect(await within(run).findByRole("alert")).toHaveTextContent("Encounters could not be loaded.")
+      expect(await within(run).findByRole("alert")).toHaveTextContent("The list of encounters could not be loaded.")
     })
 
     it("reviews the session and links only to sections that are offered", async () => {
@@ -1049,7 +1049,7 @@ describe("stages and sections", () => {
   it("shows an unavailable session without stage controls", async () => {
     server.on("GET", S, { status: 404, body: { error: { code: "not_found", message: "m", correlation_id: "c" } } })
     openApp(RUN)
-    expect(await screen.findByRole("alert")).toHaveTextContent("does not exist, or you do not have access")
+    expect(await screen.findByRole("alert")).toHaveTextContent("is not available, or you can no longer access it")
     expect(screen.queryByRole("navigation", { name: "Session stages" })).toBeNull()
   })
 
@@ -1208,7 +1208,7 @@ describe("travel in the session", () => {
     fireEvent.click(within(form).getByRole("button", { name: "Record travel" }))
     expect(await screen.findByText(/The latest session data could not be loaded/)).toBeVisible()
     expect(screen.getByText(/Do not record this journey again/)).toBeVisible()
-    expect(screen.queryByText(/does not exist, or you do not have access/)).toBeNull()
+    expect(screen.queryByText(/is not available, or you can no longer access it/)).toBeNull()
     fail = false
     fireEvent.click(screen.getByRole("button", { name: "Try again" }))
     await waitFor(() => expect(screen.queryByText(/The latest session data could not be loaded/)).toBeNull())
@@ -1348,7 +1348,7 @@ describe("unresolved writes and retained session data", () => {
     await act(async () => {
       await router.navigate("/app/mundivita/sessions/s2/run")
     })
-    expect(await screen.findByRole("alert")).toHaveTextContent("does not exist, or you do not have access")
+    expect(await screen.findByRole("alert")).toHaveTextContent("The session could not be loaded.")
     expect(screen.queryByText(/Session One/)).toBeNull()
     expect(screen.queryByRole("button", { name: "Add participant" })).toBeNull()
   })
@@ -1364,7 +1364,7 @@ describe("unresolved writes and retained session data", () => {
     fireEvent.focus(screen.getByRole("combobox", { name: "Character" }))
     fireEvent.click(await screen.findByRole("option", { name: /Cael/ }))
     fireEvent.click(screen.getByRole("button", { name: "Add participant" }))
-    expect(await screen.findByText(/does not exist, or you do not have access/)).toBeInTheDocument()
+    expect(await screen.findByText(/You do not have access to the session/)).toBeInTheDocument()
     expect(screen.queryByText(/The Hollow Road/)).toBeNull()
     expect(screen.queryByRole("button", { name: "Add participant" })).toBeNull()
   })
@@ -1476,7 +1476,7 @@ describe("shared roster on the run page", () => {
     await act(async () => {
       await router.navigate("/app/mundivita/sessions/s2/run?section=participants")
     })
-    expect(await screen.findByRole("alert")).toHaveTextContent("does not exist, or you do not have access")
+    expect(await screen.findByRole("alert")).toHaveTextContent("The session could not be loaded.")
     expect(screen.queryByRole("link", { name: "Mira", hidden: true })).toBeNull()
     expect(screen.queryByRole("button", { name: /Remove/ })).toBeNull()
   })

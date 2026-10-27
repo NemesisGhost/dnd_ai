@@ -180,8 +180,8 @@ Each task lists: **Goal**; **Account** (window and the layer of authority being 
 - **Steps (repeat for each persona):**
   1. Sign in. Expect **Campaigns** with **You do not have access to any campaigns yet. Ask a GM to invite you.** and **Accept a campaign invitation** only.
   2. Confirm there is **no Platform accounts link** and **no Create a world** offer.
-  3. Type `/platform/accounts` and `/admin/accounts`. Expect "You do not have permission to view this page." (or a not-found state) and **no** account list request returning data.
-  4. Type `/worlds/new`. Expect **no usable form** (refusal / blocked explanation). In the response of `/auth/session` confirm the world-create and campaign-host capabilities are **absent**.
+  3. Type `/platform/accounts` and `/admin/accounts`. Expect the **Access denied** page (heading "Access denied", "Your account does not have access to platform accounts.", links to the portal home) and **no** account list request returning data. (Superseded: earlier runs expected the not-found page here; that wording is replaced by the CP-11 presentation policy, and earlier recorded results are unchanged.)
+  4. Type `/worlds/new`. Expect **no usable form** and the **Access denied** page ("Your account does not have access to world creation." with a **Go to Worlds** link); focus is on its heading, the browser tab reads "Access denied · portal", and no `GET /rulesets` is sent. In the response of `/auth/session` confirm the world-create and campaign-host capabilities are **absent**.
   5. Type `/worlds`. Expect an empty list: **The Saltmarch does not exist yet** and nothing else.
 - **Expect:** Identical emptiness for all four. In particular `gm` (a "Game Master" by name) gets **no** world-create form, because it holds only the Player system role.
 - **Compare:** This is the key permission contrast of the whole run: *the display name Game Master and the login `gm` do not grant creation.* Record that you looked specifically for the New world form on `gm`.
@@ -259,7 +259,7 @@ Each task lists: **Goal**; **Account** (window and the layer of authority being 
   2. Again with Role **Reviewer**. A person can hold both.
   3. Re-read the table: `Game Master` shows both roles.
   4. ⟲ GM: reload; **Worlds** now lists The Saltmarch. Open its overview: read access to the world, **no** management actions (no Edit, Sharing, Transfer; "View only" style state where the product shows one).
-  5. GM types `/worlds/<W>/edit`, `/worlds/<W>/sharing`, `/worlds/<W>/timelines/new`, `/worlds/<W>/calendars/new`, `/worlds/new`. Expect: edit/sharing/calendars refused; **timeline creation allowed** (Owner or Editor may create/branch timelines — do **not** save one); New world refused.
+  5. GM types `/worlds/<W>/edit`, `/worlds/<W>/sharing`, `/worlds/<W>/timelines/new`, `/worlds/<W>/calendars/new`, `/worlds/new`. Expect: edit refused with **Editing unavailable** ("Your role on this world does not include being able to edit it"), sharing refused with **Access denied** ("You do not have access to the sharing list") or the equivalent explanation, calendars refused with "does not include being able to create a calendar for"; **timeline creation allowed** (Owner or Editor may create/branch timelines — do **not** save one); New world refused with **Access denied**. Each is a stated reason, not the "Page not found" page; none shows a form. (Superseded: earlier runs expected the edit and New-world addresses to show "Page not found"; that was the disguise this policy replaced. A nonexistent or hidden world id, in contrast, still shows one neutral "World not available" with nothing about the world.)
   6. ⟲ PLAYER-A, PLAYER-B, OBSERVER: **Worlds** still empty.
 - **Expect:** Editor allows definition authoring (once the GM is also a campaign GM, E4); Reviewer allows submit/approve/publish/archive; having both lets one person take a draft all the way through. Neither role lets GM share, transfer or manage the world.
 - **Compare:** Three layers visible together: GM's *system* role is Player, *world* roles are Editor+Reviewer, *campaign* role is not yet assigned.
@@ -827,7 +827,7 @@ Session 1 is complete. Everything below reads what the run produced. Each task s
 | Time | `/world-times` |
 | New surfaces | `/worlds/<W>/sharing`, `/worlds/<W>/edit`, `/platform/accounts`, `/admin/accounts` |
 
-- **Expect:** Each GM page gives the supported permission or not-found state with no partial form and no GM fields in the response; Knowledge legacy URLs may redirect to the allowed read-only claim, never to editor stages; published member-safe pages stay usable with no management controls; party-list reads do not authorize GM member-management pages; signed-out routes require login.
+- **Expect:** Each GM page gives the supported permission, unavailable or not-found state (an explicit denial for a known page, the neutral unavailable text for a missing or hidden record, a retryable failure only for a network or server error) with no partial form and no GM fields in the response; Knowledge legacy URLs may redirect to the allowed read-only claim, never to editor stages; published member-safe pages stay usable with no management controls; party-list reads do not authorize GM member-management pages; signed-out routes require login.
 - **Record each address separately** in the ledger sub-rows; one refusal does not pass the matrix.
 - **Refs:** TC-49 (+ new-surface rows). **Ledger:** L-J9; 49.01 to 49.11, 49.observer, 49.signed-out.
 

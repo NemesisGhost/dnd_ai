@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react"
+import { MemoryRouter } from "react-router"
 import { describe, expect, it, vi } from "vitest"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import { AdminAccountsPage } from "./AdminAccountsPage"
@@ -35,13 +36,15 @@ vi.mock("../components/AccountLifecycleActions", () => ({
 }))
 
 describe("AdminAccountsPage", () => {
-    it("renders a not-found placeholder for a non-administrator bootstrap, presentation only", () => {
+    it("renders an explicit denial for a non-administrator bootstrap, presentation only", () => {
         render(
-            <AdminAccountsPage
-                bootstrap={{ ...sessionBootstrapFixture, global_capabilities: [] }}
-            />,
+            <MemoryRouter>
+                <AdminAccountsPage
+                    bootstrap={{ ...sessionBootstrapFixture, global_capabilities: [] }}
+                />
+            </MemoryRouter>,
         )
-        expect(screen.getByRole("heading", { name: "Page not found" })).toBeInTheDocument()
+        expect(screen.getByRole("heading", { name: "Access denied" })).toBeInTheDocument()
         expect(screen.queryByText("create-account-panel")).not.toBeInTheDocument()
     })
 

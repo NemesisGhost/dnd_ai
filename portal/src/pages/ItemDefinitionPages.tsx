@@ -24,6 +24,7 @@ import type {
     ItemDefinitionList,
     ItemDefinitionOptions,
 } from "../types/itemDefinitions"
+import { ReadTerminal } from "../components/authoring/ReadState"
 import "../components/authoring/authoring.css"
 
 const AMOUNT = /^\d+(\.\d{1,2})?$/
@@ -72,7 +73,7 @@ export function ItemDefinitionsPage() {
         allowed ? itemDefinitionOptionsPath(campaignId) : null,
     )
     const list = useAuthoringResource<ItemDefinitionList>(allowed ? itemDefinitionsPath(campaignId) : null)
-    const headingRef = usePageArrival(list.state.kind === "ready")
+    const headingRef = usePageArrival(list.state.kind !== "loading")
     const items =
         list.state.kind === "ready"
             ? list.state.data.items.filter(
@@ -91,7 +92,12 @@ export function ItemDefinitionsPage() {
             ) : list.state.kind === "loading" ? (
                 <p role="status">Loading…</p>
             ) : list.state.kind !== "ready" ? (
-                <p role="alert">Item definitions could not be loaded.</p>
+                <ReadTerminal
+                    states={[list.state]}
+                    what="list of item definitions"
+                    onRetry={list.refetch}
+                    back={{ to: `/app/${encodeURIComponent(campaignId)}/home`, label: "Back to the campaign" }}
+                />
             ) : (
                 <>
                     <p className="authoring-note">
@@ -176,8 +182,9 @@ export function ItemDefinitionFormPage() {
     const existing = useAuthoringResource<ItemDefinition>(
         !allowed || definitionId === undefined ? null : itemDefinitionPath(campaignId, definitionId),
     )
+    // Settled, not only ready: a read that ended in a refusal or a failure also takes the heading's focus.
     const ready =
-        options.state.kind === "ready" && (definitionId === undefined || existing.state.kind === "ready")
+        options.state.kind !== "loading" && (definitionId === undefined || existing.state.kind !== "loading")
     const headingRef = usePageArrival(ready)
     return (
         <section className="authoring-page" aria-labelledby="item-definition-heading">
@@ -208,7 +215,12 @@ export function ItemDefinitionFormPage() {
                 <p role="status">Loading…</p>
             ) : options.state.kind !== "ready" ||
               (definitionId !== undefined && existing.state.kind !== "ready") ? (
-                <p role="alert">This item definition does not exist, or you do not have access to it.</p>
+                <ReadTerminal
+                    states={definitionId === undefined ? [options.state] : [existing.state, options.state]}
+                    what={definitionId === undefined ? "form" : "item definition"}
+                    onRetry={() => Promise.all([options.refetch(), existing.refetch()])}
+                    back={{ to: listPath, label: "Back to item definitions" }}
+                />
             ) : definitionId !== undefined && existing.state.kind === "ready" && !existing.state.data.can_edit ? (
                 <p>This is a generic definition from the ruleset and cannot be changed.</p>
             ) : (

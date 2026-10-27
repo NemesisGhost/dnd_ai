@@ -30,3 +30,12 @@ export const STATUS_DERIVED_REASONS: ReadonlySet<string> = new Set([
 export function describeBlockedReason(reason: string): string {
     return BLOCKED_REASON[reason] ?? ERROR_CODE_MESSAGE[reason] ?? "not allowed right now."
 }
+
+// The reason the server gave for withholding one action, or undefined when it gave none (the caller's
+// role, not the record's state, is then what is missing). A read model without the list says nothing.
+export function blockedReasonFor(
+    blocked: readonly { action: string; reason: string }[] | undefined,
+    action: string,
+): string | undefined {
+    return blocked?.find((b) => b.action === action)?.reason
+}

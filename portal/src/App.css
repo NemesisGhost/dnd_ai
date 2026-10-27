@@ -4887,3 +4887,8 @@ a.app-header__title:focus-visible {
 .character-manage p {
   margin: 0;
 }
+
+.terminal-state__links {
+  padding: 0;
+  list-style: none;
+}

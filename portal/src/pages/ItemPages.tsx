@@ -15,6 +15,7 @@ import { usePageArrival } from "../hooks/usePageArrival"
 import { useHeldWorldCapability, WORLD_CANON_READ_PRIVATE } from "../hooks/useWorldCapability"
 import type { CreateItemBody, ItemList, ItemOptions, ItemView, UpdateItemBody } from "../types/items"
 import { validateName } from "../utils/authoringValidation"
+import { ReadTerminal } from "../components/authoring/ReadState"
 import "../components/authoring/authoring.css"
 
 const itemsListPath = (campaignId: string): string => `/app/${encodeURIComponent(campaignId)}/items`
@@ -266,7 +267,7 @@ export function ItemsPage() {
     // The definitions catalog is the world's authoring side; the link is offered only to a holder.
     const canOpenDefinitions = useHeldWorldCapability(campaignId, WORLD_CANON_READ_PRIVATE)
     const list = useAuthoringResource<ItemList>(itemsPath(campaignId))
-    const headingRef = usePageArrival(list.state.kind === "ready")
+    const headingRef = usePageArrival(list.state.kind !== "loading")
     return (
         <section className="authoring-page" aria-labelledby="items-heading">
             <h1 id="items-heading" ref={headingRef} tabIndex={-1}>
@@ -277,7 +278,12 @@ export function ItemsPage() {
             ) : list.state.kind === "loading" ? (
                 <p role="status">Loading…</p>
             ) : list.state.kind !== "ready" ? (
-                <p role="alert">Items could not be loaded.</p>
+                <ReadTerminal
+                    states={[list.state]}
+                    what="list of items"
+                    onRetry={list.refetch}
+                    back={{ to: `/app/${encodeURIComponent(campaignId)}/home`, label: "Back to the campaign" }}
+                />
             ) : (
                 <>
                     <p>

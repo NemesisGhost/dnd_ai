@@ -150,12 +150,12 @@ describe("/worlds/new inside the authenticated shell", () => {
     )
   })
 
-  it("renders not-found for a direct visit without world.create and never requests rulesets", async () => {
+  it("renders an explicit denial for a direct visit without world.create and never requests rulesets", async () => {
     useState_(authenticated({ global_capabilities: [] }))
     render(tree())
 
     expect(
-      await screen.findByRole("heading", { level: 1, name: "Page not found" }),
+      await screen.findByRole("heading", { level: 1, name: "Access denied" }),
     ).toBeInTheDocument()
     expect(screen.getByTestId("location")).toHaveTextContent("/worlds/new")
     expect(screen.queryByRole("heading", { name: "Create a world" })).toBeNull()
@@ -246,12 +246,12 @@ describe("/worlds/:worldId/edit inside the authenticated shell", () => {
   it.each([
     ["a viewer", { capabilities: ["world.view"], available_actions: [] }],
     ["an owner of an archived world", { available_actions: ["restore"] }],
-  ])("renders not-found and never mounts the form for %s", async (_label, overrides) => {
+  ])("explains why editing is unavailable and never mounts the form for %s", async (_label, overrides) => {
     server.on("GET", "/worlds/w1", { body: worldDetail(overrides) })
     render(tree("/worlds/w1/edit"))
 
     expect(
-      await screen.findByRole("heading", { level: 1, name: "Page not found" }),
+      await screen.findByRole("heading", { level: 1, name: "Editing unavailable" }),
     ).toBeInTheDocument()
     expect(screen.queryByRole("heading", { name: "Edit world" })).toBeNull()
     expect(screen.queryByRole("textbox", { name: /World name/ })).toBeNull()
@@ -260,12 +260,12 @@ describe("/worlds/:worldId/edit inside the authenticated shell", () => {
     expect(screen.getAllByRole("main")).toHaveLength(1)
   })
 
-  it("renders the same not-found for an unknown or undisclosed world", async () => {
+  it("renders the neutral unavailable state for an unknown or undisclosed world", async () => {
     server.on("GET", "/worlds/w1", { status: 404 })
     render(tree("/worlds/w1/edit"))
 
     expect(
-      await screen.findByRole("heading", { level: 1, name: "Page not found" }),
+      await screen.findByRole("heading", { level: 1, name: "World not available" }),
     ).toBeInTheDocument()
     expect(screen.queryByRole("textbox", { name: /World name/ })).toBeNull()
   })

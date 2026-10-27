@@ -464,11 +464,11 @@ describe("portal routing", () => {
     },
   )
 
-  it("shows the not-found page for a non-administrator on /platform/accounts and never mounts usePlatformAccounts", () => {
+  it("shows an explicit denial for a non-administrator on /platform/accounts and never mounts usePlatformAccounts", () => {
     renderAppAt("/platform/accounts")
 
     expect(
-      screen.getByRole("heading", { name: "Page not found" }),
+      screen.getByRole("heading", { name: "Access denied" }),
     ).toBeInTheDocument()
 
     expect(usePlatformAccountsMock).not.toHaveBeenCalled()

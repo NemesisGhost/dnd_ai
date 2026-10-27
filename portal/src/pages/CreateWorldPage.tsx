@@ -17,7 +17,8 @@ import { usePageArrival } from "../hooks/usePageArrival"
 import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard"
 import { useSession } from "../context/SessionContext"
 import { useAuthenticatedSession } from "../layouts/useAuthenticatedSession"
-import { NotFoundContent } from "./NotFoundPage"
+import { AccessDeniedContent } from "../components/TerminalState"
+import { HOME_RECOVERY } from "../components/terminalRecovery"
 import type {
     CreateWorldRequest,
     CreateWorldResponse,
@@ -34,6 +35,7 @@ import {
     validateRulesetSelection,
 } from "../utils/authoringValidation"
 import { canCreateWorlds } from "../utils/worldAccess"
+import { ReadTerminal } from "../components/authoring/ReadState"
 import "../components/authoring/authoring.css"
 
 const DEFAULT_TIMELINE_NAME = "Main Timeline"
@@ -51,13 +53,18 @@ function safeReturnTarget(value: string | null): string | null {
 export function CreateWorldPage() {
     const { bootstrap } = useAuthenticatedSession()
     if (!canCreateWorlds(bootstrap)) {
-        return <NotFoundContent />
+        return (
+            <AccessDeniedContent
+                what="world creation"
+                recovery={[{ to: "/worlds", label: "Go to Worlds" }, HOME_RECOVERY]}
+            />
+        )
     }
     return <AuthorizedCreateWorldPage />
 }
 
 function AuthorizedCreateWorldPage() {
-    const { state } = useAuthoringResource<RulesetListResponse>(RULESETS_PATH)
+    const { state, refetch } = useAuthoringResource<RulesetListResponse>(RULESETS_PATH)
     const headingRef = usePageArrival(state.kind !== "loading")
 
     return (
@@ -80,7 +87,12 @@ function AuthorizedCreateWorldPage() {
                         <CreateWorldForm rulesets={state.data.items} />
                     )
                 ) : (
-                    <p role="alert">Rulesets could not be loaded. Try reloading the page.</p>
+                    <ReadTerminal
+                        states={[state]}
+                        what="rulesets"
+                        onRetry={refetch}
+                        back={{ to: "/worlds", label: "Back to Worlds" }}
+                    />
                 )}
             </div>
         </div>

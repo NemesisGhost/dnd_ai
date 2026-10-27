@@ -51,6 +51,7 @@ import type {
     PlayReceipt,
     SessionParticipant,
 } from "../types/campaignSession"
+import { ReadTerminal } from "../components/authoring/ReadState"
 import "../components/authoring/authoring.css"
 
 const base = (campaignId: string): string => `/app/${encodeURIComponent(campaignId)}`
@@ -74,7 +75,7 @@ export function SessionRunPage() {
     const canEdit = useCampaignCapability(campaignId, "canon.edit")
     const path = sessionPath(campaignId, sessionId)
     const detail = useAuthoringResource<CampaignSessionDetail>(path)
-    const headingRef = usePageArrival(detail.state.kind === "ready")
+    const headingRef = usePageArrival(detail.state.kind !== "loading")
     // A refresh that fails for a reason worth retrying keeps the last session that loaded on
     // screen, so the drafts in every section survive. The kept session belongs to this campaign
     // and session only (a history jump to another session starts empty), and a denied or missing
@@ -103,7 +104,12 @@ export function SessionRunPage() {
             ) : detail.state.kind === "loading" ? (
                 <p role="status">Loading session…</p>
             ) : data === null ? (
-                <p role="alert">This session does not exist, or you do not have access to it.</p>
+                <ReadTerminal
+                    states={[detail.state]}
+                    what="session"
+                    onRetry={detail.refetch}
+                    back={{ to: base(campaignId), label: "Back to the campaign" }}
+                />
             ) : (
                 <>
                     {refreshFailed ? (
@@ -177,7 +183,12 @@ function RunBody({
         encounterList.state.kind === "loading" ? (
             <p role="status">Loading encounters…</p>
         ) : encounters === null ? (
-            <p role="alert">Encounters could not be loaded.</p>
+            <ReadTerminal
+                states={[encounterList.state]}
+                what="list of encounters"
+                onRetry={encounterList.refetch}
+                pageTitle={false}
+            />
         ) : (
             <EncounterList
                 campaignId={campaignId}

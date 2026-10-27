@@ -38,6 +38,7 @@ import type {
     EventEffectView,
     EventReceipt,
 } from "../types/eventAuthoring"
+import { ReadTerminal } from "../components/authoring/ReadState"
 import "../components/authoring/authoring.css"
 
 const base = (campaignId: string): string => `/app/${encodeURIComponent(campaignId)}`
@@ -240,7 +241,7 @@ export function EventDetailPage() {
     const previewUrl = correctionPreviewPath(campaignId, eventId)
     const event = useAuthoringResource<EventAuthoringView>(eventUrl)
     const preview = useAuthoringResource<CorrectionPreview>(previewUrl)
-    const headingRef = usePageArrival(event.state.kind === "ready")
+    const headingRef = usePageArrival(event.state.kind !== "loading")
     // Both reads keep their last good answer through a failed re-read (after a void or a
     // correction), so the page that reports the save is not replaced by "does not exist".
     const data = useKept(event.state, eventUrl)
@@ -278,7 +279,12 @@ export function EventDetailPage() {
             ) : event.state.kind === "loading" ? (
                 <p role="status">Loading event…</p>
             ) : data === null ? (
-                <p role="alert">This event does not exist, or you do not have access to it.</p>
+                <ReadTerminal
+                    states={[event.state]}
+                    what="event"
+                    onRetry={event.refetch}
+                    back={{ to: base(campaignId), label: "Back to the campaign" }}
+                />
             ) : (
                 <>
                     {stale ? <StaleReadNotice what="event" onRetry={() => void refetchBoth()} /> : null}
