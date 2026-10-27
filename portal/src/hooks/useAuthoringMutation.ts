@@ -64,7 +64,10 @@ export interface UseAuthoringMutationResult<TBody, TResult> {
     // Repeats the unresolved request exactly (same body, same request, same key). Does nothing
     // once a write is confirmed, so it can never repeat a confirmed write.
     retry: () => void
-    reset: () => void
+    // Returns to idle. With `expected` (the status an earlier episode ended in), it does so only while that
+    // same status is still the current one, so ending an old episode can never clear a write that has
+    // started or finished since.
+    reset: (expected?: AuthoringMutationStatus) => void
 }
 
 interface Snapshot<TResult> {
@@ -239,9 +242,16 @@ export function useAuthoringMutation<TBody, TResult>({
         }
     }, [start, scopeKey])
 
-    const reset = useCallback(() => {
-        setSnapshot({ scopeKey, status: IDLE, receipt: null })
-    }, [scopeKey])
+    const reset = useCallback(
+        (expected?: AuthoringMutationStatus) => {
+            setSnapshot((current) =>
+                expected !== undefined && current.status !== expected
+                    ? current
+                    : { scopeKey, status: IDLE, receipt: null },
+            )
+        },
+        [scopeKey],
+    )
 
     return { status, receipt, submit, retry, reset }
 }

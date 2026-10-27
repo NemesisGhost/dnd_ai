@@ -115,3 +115,12 @@ The owner chose to **fix** DEF-005 and DEF-006 (not accept them). The fixes are 
 4. Reassess RC-03 … RC-10 on the reviewed head. Operations or variants not exercised stay explicitly unverified (§3); shared-hook coverage is not counted as verification of an operation.
 5. Ownership transfer (op 11, Blocked at `38d2865`): a supported workflow exists. On a **disposable copy** only, the administrator can give an existing account (for example `gm` or `player_b`) the Game Master **system** role through Platform accounts → system roles (`system_roles.assign`). If that works there, transfer ownership with "Keep me on the world as" Editor, and test the confirmed-write/failed-read variants of the transfer, end role and grant/revoke use. Never in the human baseline or the working `dnd_ai`.
 6. Sign-in is throttled to 10 per 15 minutes per account: batch the scripts and create personas lazily.
+
+### 8.2 Codex review of `caa6589`: two confirmed findings, fixed in the next commit
+
+| Finding | Confirmed fix | Remaining browser variants (unverified until run) |
+|---|---|---|
+| DEF-006: `claimDirty` used the live authoring state, so an edit on the retained editor was not "unsaved" and leaving was not guarded | The page's dirty calculation uses the kept authoring view; denied/missing still drops it and clears the draft. Save stays held while stale | Save with the authoring read failing, edit, Load latest fails again, follow a navigation link (dialog appears, Keep editing keeps the text); the same with 403 and 404 on the authoring read (editor and draft gone, leaving not guarded) |
+| DEF-005: the recovery effect called the caller's `reset()`, which could clear a newer pending/confirmed write or newer unread state | No cleanup effect. Each write has its own status object; recovery is recorded against it; Load latest and `end()` / `reset(expected)` act only on the episode they were started for | The archive → page Try again → restore → page Try again sequence (`ga`), the same two-write sequence on ops 2, 22 (provider), 24, 26, Load latest followed by a further write, and a double press while pending, each checking one POST per intended write |
+
+Not changed: the retest plan in §8.1, the 38d2865 results, and every human row (all `Unexecuted`). The head after this fix is not a manual-run candidate and no baseline is frozen.

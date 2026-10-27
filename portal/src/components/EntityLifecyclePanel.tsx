@@ -7,7 +7,7 @@ import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import type { RefreshOutcome } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
-import { useConfirmedRefresh } from "../hooks/useConfirmedRefresh"
+import { useConfirmedRefresh, useUnreadWrite } from "../hooks/useConfirmedRefresh"
 import { combineRefetchOutcomes } from "../utils/refreshOutcome"
 import type {
     EntityLifecycleView,
@@ -250,7 +250,7 @@ function useLifecycleActions({
         combineRefetchOutcomes([await refetch(), (await onChanged?.()) ?? "ok"])
     // A confirmed step that was not read back. It is kept here, not in the mutation's status: the
     // status belongs to the record's version and ends with it, while the step is still unread.
-    const [unread, setUnread] = useState<string | null>(null)
+    const unread = useUnreadWrite<string>()
     const mutation = useAuthoringMutation<Submission, EntityTransitionResponse>({
         scopeKey: `entity:${view.entity_id}:${view.row_version}`,
         request: (submission, ctx) =>
@@ -274,16 +274,16 @@ function useLifecycleActions({
                 // component may be replaced when the record is read again), then held and offered a
                 // read; "done" is announced only when that read works.
                 announce("Saved, but the latest data could not be loaded.")
-                if (!pageReportsRefresh) setUnread(message)
+                if (!pageReportsRefresh) unread.mark(message)
             }
             return outcome
         },
     })
     const refreshed = useConfirmedRefresh({
-        status: unread === null ? { kind: "idle" } : { kind: "confirmed", refresh: "failed" },
-        reset: () => setUnread(null),
+        status: unread.status,
+        reset: unread.end,
         what: "status of this record",
-        message: unread,
+        message: unread.value,
         read: readBack,
         // The page stands in an empty lifecycle while its own read has not worked; the read that then
         // works is what recovers a step that was saved before it.

@@ -1,9 +1,8 @@
-import { useState } from "react"
 import { act, fireEvent, render, screen } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 import { AnnouncerContext } from "../components/authoring/announcer"
 import type { AuthoringMutationStatus, RefreshOutcome } from "./useAuthoringMutation"
-import { useAnnounceWhenRead, useConfirmedRefresh } from "./useConfirmedRefresh"
+import { useAnnounceWhenRead, useConfirmedRefresh, useUnreadWrite } from "./useConfirmedRefresh"
 
 const CONFIRMED: AuthoringMutationStatus = { kind: "confirmed", refresh: "failed" }
 const IDLE: AuthoringMutationStatus = { kind: "idle" }
@@ -136,17 +135,17 @@ describe("useConfirmedRefresh", () => {
         expect(announce).toHaveBeenCalledTimes(1)
     })
 
-    it("ends the episode of a write the page's read recovered, so the next confirmed write is reported afresh (DEF-005)", () => {
+    it("treats each write as its own episode, even when the next one says the same thing (DEF-005)", () => {
         const announce = vi.fn()
         const read = async (): Promise<RefreshOutcome> => "ok"
-        // A caller that keeps "saved, not yet read" in its own state: its status goes idle only when reset runs.
-        function Caller({ pageStale, message }: { pageStale: boolean; message: string }) {
-            const [unread, setUnread] = useState<string | null>(message)
+        // A caller that keeps "saved, not yet read" in its own state, as the archive and restore controls do.
+        function Caller({ pageStale }: { pageStale: boolean }) {
+            const unread = useUnreadWrite<string>()
             const refreshed = useConfirmedRefresh({
-                status: unread === null ? IDLE : CONFIRMED,
-                reset: () => setUnread(null),
+                status: unread.status,
+                reset: unread.end,
                 what: "party list",
-                message: unread,
+                message: unread.value,
                 read,
                 pageStale,
             })
@@ -154,32 +153,33 @@ describe("useConfirmedRefresh", () => {
                 <div>
                     {refreshed.notice}
                     <span data-testid="held">{String(refreshed.held)}</span>
-                    <button type="button" onClick={() => setUnread("Second write saved")}>
-                        second write
+                    <button type="button" onClick={() => unread.mark("Party archived")}>
+                        write
                     </button>
                 </div>
             )
         }
         const wrap = (stale: boolean) => (
             <AnnouncerContext.Provider value={{ announce }}>
-                <Caller pageStale={stale} message="First write saved" />
+                <Caller pageStale={stale} />
             </AnnouncerContext.Provider>
         )
-        const view = render(wrap(true))
-        expect(screen.getByTestId("held")).toHaveTextContent("true")
-        view.rerender(wrap(false))
-        expect(screen.getByTestId("held")).toHaveTextContent("false")
-        expect(announce).toHaveBeenCalledWith("First write saved")
-        expect(announce).toHaveBeenCalledTimes(1)
-
-        // The second write is confirmed and the page's read has failed again.
-        fireEvent.click(screen.getByRole("button", { name: "second write" }))
+        const view = render(wrap(false))
+        // First write: read fails (page stale), then the page's own retry works.
+        fireEvent.click(screen.getByRole("button", { name: "write" }))
         view.rerender(wrap(true))
         expect(screen.getByTestId("held")).toHaveTextContent("true")
-        expect(screen.getByText(/Second write saved\. The latest party list could not be loaded/)).toBeInTheDocument()
         view.rerender(wrap(false))
         expect(screen.getByTestId("held")).toHaveTextContent("false")
-        expect(announce).toHaveBeenLastCalledWith("Second write saved")
+        expect(announce).toHaveBeenCalledTimes(1)
+
+        // Second write with the very same message: its read fails too, and it is reported afresh.
+        fireEvent.click(screen.getByRole("button", { name: "write" }))
+        view.rerender(wrap(true))
+        expect(screen.getByTestId("held")).toHaveTextContent("true")
+        expect(screen.getByText(/Party archived\. The latest party list could not be loaded/)).toBeInTheDocument()
+        view.rerender(wrap(false))
+        expect(screen.getByTestId("held")).toHaveTextContent("false")
         expect(announce).toHaveBeenCalledTimes(2)
     })
 

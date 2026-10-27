@@ -6,7 +6,7 @@ import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import type { RefetchOutcome } from "../hooks/useAuthoringResource"
-import { useConfirmedRefresh } from "../hooks/useConfirmedRefresh"
+import { useConfirmedRefresh, useUnreadWrite } from "../hooks/useConfirmedRefresh"
 import type { CreateRelationshipBody, RelationshipView } from "../types/relationshipAuthoring"
 import type { OrganizationMembers as Roster, StatusReceipt } from "../types/organizationMembers"
 import { useAnnounce } from "./authoring/announcer"
@@ -77,12 +77,12 @@ export function OrganizationMembers({
     }
     // What was saved without the roster being read back. It is kept here, not in the form: the form
     // that sent it closes once the change is saved.
-    const [unread, setUnread] = useState<string | null>(null)
+    const unread = useUnreadWrite<string>()
     const refreshed = useConfirmedRefresh({
-        status: unread === null ? { kind: "idle" } : { kind: "confirmed", refresh: "failed" },
-        reset: () => setUnread(null),
+        status: unread.status,
+        reset: unread.end,
         what: "members and status",
-        message: unread,
+        message: unread.value,
         read: refetch,
         pageStale: stale,
     })
@@ -116,7 +116,7 @@ export function OrganizationMembers({
                 editorView={roster.can_set_status ?? roster.can_edit}
                 held={writesHeld}
                 onChanged={changed}
-                onUnread={setUnread}
+                onUnread={unread.mark}
             />
             {canSetStatus ? (
                 <StatusControl
@@ -125,7 +125,7 @@ export function OrganizationMembers({
                     roster={roster}
                     held={writesHeld}
                     onChanged={changed}
-                    onUnread={setUnread}
+                    onUnread={unread.mark}
                 />
             ) : null}
         </PanelFrame>

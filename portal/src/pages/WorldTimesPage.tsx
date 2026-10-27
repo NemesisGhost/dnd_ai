@@ -6,7 +6,7 @@ import { useAnnounce } from "../components/authoring/announcer"
 import { StaleReadNotice } from "../components/StaleReadNotice"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import type { RefetchOutcome } from "../hooks/useAuthoringResource"
-import { useConfirmedRefresh } from "../hooks/useConfirmedRefresh"
+import { useConfirmedRefresh, useUnreadWrite } from "../hooks/useConfirmedRefresh"
 import { useKept } from "../hooks/useKeptResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { usePageArrival } from "../hooks/usePageArrival"
@@ -76,7 +76,7 @@ interface WorldTimesContentProps {
 function WorldTimesContent({ campaignId, page, calendars, refetch, pageStale }: WorldTimesContentProps) {
     const announce = useAnnounce()
     // A time that was recorded but is not in the list yet.
-    const [recorded, setRecorded] = useState(false)
+    const recorded = useUnreadWrite<true>()
     // Reading again starts the list from its first page, as it does after a time is recorded.
     const readFromTheStart = async (): Promise<RefetchOutcome> => {
         const outcome = await refetch()
@@ -87,8 +87,8 @@ function WorldTimesContent({ campaignId, page, calendars, refetch, pageStale }: 
         return outcome
     }
     const refreshed = useConfirmedRefresh({
-        status: recorded ? { kind: "confirmed", refresh: "failed" } : { kind: "idle" },
-        reset: () => setRecorded(false),
+        status: recorded.status,
+        reset: recorded.end,
         what: "world times",
         message: "World time recorded",
         read: readFromTheStart,
@@ -190,7 +190,7 @@ function WorldTimesContent({ campaignId, page, calendars, refetch, pageStale }: 
                             announce("World time recorded")
                         } else {
                             // Recorded, but the list does not show it yet: said so, not announced as done.
-                            setRecorded(true)
+                            recorded.mark(true)
                         }
                         return outcome
                     }}

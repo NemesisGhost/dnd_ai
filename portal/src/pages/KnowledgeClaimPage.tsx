@@ -156,7 +156,8 @@ export function KnowledgeClaimPage({
     }
     const [sourcesDirty, setSourcesDirty] = useState(false)
     const [rosterDirty, setRosterDirty] = useState(false)
-    const base = view.state.kind === "ready" ? fromView(view.state.data) : null
+    // Against the last authoring read that worked, so edits on a retained (stale) editor still count as unsaved.
+    const base = keptView.data !== null ? fromView(keptView.data) : null
     const claimDirty = base !== null && (!same({ ...base, ...changes }, base) || changeNote.trim() !== "")
     // What is typed and not yet saved, named for the guard below.
     const unsaved = [

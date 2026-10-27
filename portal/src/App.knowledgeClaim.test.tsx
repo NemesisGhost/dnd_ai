@@ -643,13 +643,14 @@ describe("unified knowledge claim page", () => {
       const DENIED = { status: 403, body: { error: { code: "forbidden", message: "m", correlation_id: "c" } } }
 
       function saveWith(authoringAnswer: object) {
-        setup()
+        const rendered = setup()
         server.on("POST", UPDATE, () => {
           current = { detail: detail({ truth_status_code: "false" }), view: view({ truth_status: "false", row_version: 2 }) }
           // The audience-safe detail read-back works; the claim's own authoring read does not.
           server.on("GET", VIEW_PATH, authoringAnswer)
           return { body: RECEIPT }
         })
+        return rendered
       }
       const changeTruth = async () => {
         await claimBox()
@@ -727,6 +728,43 @@ describe("unified knowledge claim page", () => {
         expect(screen.queryByRole("button", { name: "Save claim" })).toBeNull()
         expect(screen.queryByRole("button", { name: "Load latest" })).toBeNull()
         expect(server.callsTo("POST", UPDATE)).toHaveLength(1)
+      })
+
+      it("keeps an edit on the retained editor unsaved: Save stays held and leaving the page asks first", async () => {
+        const { router } = saveWith(FAIL)
+        await changeTruth()
+        await screen.findByText(/Claim saved\. The latest claim could not be loaded/)
+        fireEvent.change(await claimBox(), { target: { value: "Edited after the save" } })
+        expect(screen.getByText("Unsaved changes to the claim")).toBeInTheDocument()
+        // Load latest fails again: still behind, still held, the draft is still there.
+        fireEvent.click(screen.getByRole("button", { name: "Load latest" }))
+        await waitFor(() => expect(server.callsTo("GET", VIEW_PATH).length).toBeGreaterThan(2))
+        expect(await screen.findByText(/Claim saved\. The latest claim could not be loaded/)).toBeInTheDocument()
+        expect(screen.getByRole("button", { name: "Save claim" })).toBeDisabled()
+        // Leaving is guarded by the same unsaved-changes dialog, and keeping the edit keeps the draft.
+        fireEvent.click(breadcrumbKnowledge())
+        const dialog = await screen.findByRole("dialog", { name: "Discard unsaved changes?" })
+        expect(dialog).toHaveTextContent("the claim")
+        expect(router.state.location.pathname).toBe(CLAIM)
+        fireEvent.click(within(dialog).getByRole("button", { name: "Keep editing" }))
+        expect(await claimBox()).toHaveValue("Edited after the save")
+        expect(server.callsTo("POST", UPDATE)).toHaveLength(1)
+      })
+
+      it("clears the draft when the retry says access is gone, so nothing blocks leaving and nothing returns", async () => {
+        const { router } = saveWith(FAIL)
+        await changeTruth()
+        await screen.findByText(/Claim saved\. The latest claim could not be loaded/)
+        fireEvent.change(await claimBox(), { target: { value: "Edited after the save" } })
+        server.on("GET", VIEW_PATH, DENIED)
+        fireEvent.click(screen.getByRole("button", { name: "Load latest" }))
+        expect(await screen.findByText(/The claim's editor is no longer available to you/)).toBeInTheDocument()
+        expect(screen.queryByRole("textbox", { name: /^Claim/ })).toBeNull()
+        expect(document.body.textContent).not.toContain("Edited after the save")
+        // The draft is gone with the editor, so leaving is not guarded.
+        fireEvent.click(breadcrumbKnowledge())
+        await waitFor(() => expect(router.state.location.pathname).toBe("/app/mundivita/knowledge"))
+        expect(screen.queryByRole("dialog", { name: "Discard unsaved changes?" })).toBeNull()
       })
 
       it("offers a read-only retry when the editor could not be loaded at all", async () => {

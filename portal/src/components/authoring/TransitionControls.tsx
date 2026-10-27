@@ -3,7 +3,7 @@ import type { MutationContext } from "../../api/worlds"
 import { useSession } from "../../context/SessionContext"
 import { useAuthoringMutation } from "../../hooks/useAuthoringMutation"
 import type { RefetchOutcome } from "../../hooks/useAuthoringResource"
-import { useConfirmedRefresh } from "../../hooks/useConfirmedRefresh"
+import { useConfirmedRefresh, useUnreadWrite } from "../../hooks/useConfirmedRefresh"
 import type { TransitionRequest } from "../../types/worldAuthoring"
 import { validateReason } from "../../utils/authoringValidation"
 import { useAnnounce } from "./announcer"
@@ -54,7 +54,7 @@ export function TransitionControls({
     const [pendingAction, setPendingAction] = useState<Pending>(null)
     // What was saved without the record being read back. The mutation's own status cannot carry it:
     // its scope names the open dialog, and the dialog closes once the change is saved.
-    const [unread, setUnread] = useState<string | null>(null)
+    const unread = useUnreadWrite<string>()
     const [reason, setReason] = useState("")
     const [reasonError, setReasonError] = useState<string | null>(null)
     const available = new Set(availableActions)
@@ -74,16 +74,16 @@ export function TransitionControls({
             } else {
                 // Saved, but the record on screen is the one from before: it still offers the same
                 // transition at the old version, so it is held until the record is read again.
-                setUnread(message)
+                unread.mark(message)
             }
             return outcome
         },
     })
     const refreshed = useConfirmedRefresh({
-        status: unread === null ? { kind: "idle" } : { kind: "confirmed", refresh: "failed" },
-        reset: () => setUnread(null),
+        status: unread.status,
+        reset: unread.end,
         what: noun,
-        message: unread,
+        message: unread.value,
         read: refetch,
         pageStale,
     })

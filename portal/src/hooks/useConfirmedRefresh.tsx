@@ -27,8 +27,13 @@ export function useConfirmedRefresh({
     pageStale = false,
     quietRecovery = false,
 }: {
+    // One status object per write. A real mutation's status is one; a caller that keeps "saved, not yet
+    // read" in its own state uses `useUnreadWrite`, whose status is a new object for every write. A new
+    // object is a new episode: nothing that was settled for the previous write carries over to it.
     status: AuthoringMutationStatus
-    reset: () => void
+    // Returns the caller to idle once a read it asked for worked. It is given the status it is ending
+    // and must leave a newer write alone (`useAuthoringMutation().reset` and `useUnreadWrite().end` do).
+    reset: (ended: AuthoringMutationStatus) => void
     // What could not be read, in the page's words ("party list").
     what: string
     // What was saved, as announced once it shows ("Party archived"), or null for a plain "Saved.".
@@ -42,46 +47,46 @@ export function useConfirmedRefresh({
 }): ConfirmedRefresh {
     const announce = useAnnounce()
     const [retrying, setRetrying] = useState(false)
-    // The page's read failed after this write (`sawStale`), and a later read worked (`recovered`).
-    // Recovery is final for this write: a failure of some later, unrelated read does not bring the
-    // notice back.
+    // The page's read failed after this write (`sawStale`), and a later read worked: `recovered` holds the
+    // status of the write it recovered. Recovery is final for that write: a failure of some later,
+    // unrelated read does not bring the notice back, and the next write has a status of its own.
     const [sawStale, setSawStale] = useState(false)
-    const [recovered, setRecovered] = useState(false)
+    const [recovered, setRecovered] = useState<AuthoringMutationStatus | null>(null)
     const mounted = useRef(true)
-    const latest = useRef({ announce, message, reset })
+    const latest = useRef({ announce, message })
     useEffect(() => {
         mounted.current = true
-        latest.current = { announce, message, reset }
+        latest.current = { announce, message }
         return () => {
             mounted.current = false
         }
     })
 
     const confirmed = status.kind === "confirmed"
-    // Adjusted while rendering (as `useKept` does), so a recovery is never a render behind.
-    if (!confirmed) {
+    // Adjusted while rendering (as `useKept` does), so a recovery is never a render behind. A status that
+    // is not the recovered one is a different write, so the previous write's episode state is dropped.
+    if (!confirmed || (recovered !== null && recovered !== status)) {
         if (sawStale) setSawStale(false)
-        if (recovered) setRecovered(false)
+        if (recovered !== null) setRecovered(null)
     } else if (pageStale) {
         if (!sawStale) setSawStale(true)
-    } else if (sawStale && !recovered) {
-        setRecovered(true)
+    } else if (sawStale && recovered === null) {
+        setRecovered(status)
     }
-    const active = confirmed && !recovered
+    const active = confirmed && recovered !== status
 
+    // One announcement per recovered write (`recovered` is that write's own status). Nothing is reset here:
+    // a write that starts at this boundary has a status of its own and is not touched by this one's recovery.
     useEffect(() => {
-        if (!recovered) return
-        if (!quietRecovery && latest.current.message !== null) {
+        if (recovered !== null && !quietRecovery && latest.current.message !== null) {
             latest.current.announce(latest.current.message)
         }
-        // The page's read recovered this write, so its episode is over: the caller's status goes back to
-        // idle. Without this a caller that keeps "saved, not yet read" in its own state stays `confirmed`
-        // for good, `recovered` stays set, and the next confirmed write whose read fails would show no
-        // notice and hold nothing. The write is never sent again by this.
-        latest.current.reset()
     }, [recovered, quietRecovery])
 
     async function load() {
+        // The write this read is for. If another write has started or finished by the time it answers,
+        // ending this one leaves that one alone.
+        const episode = status
         setRetrying(true)
         let outcome: RefreshOutcome
         try {
@@ -92,7 +97,7 @@ export function useConfirmedRefresh({
         if (!mounted.current) return
         setRetrying(false)
         if (outcome === "ok") {
-            reset()
+            reset(episode)
             if (message !== null && !quietRecovery) announce(message)
         }
     }
@@ -109,6 +114,21 @@ export function useConfirmedRefresh({
             />
         ) : null,
     }
+}
+
+const IDLE: AuthoringMutationStatus = { kind: "idle" }
+
+// "Saved, not yet read" for a caller that cannot use the mutation's own status (its scope names a dialog
+// that closes, say): `mark` records a write and gives it a status object of its own; `end` ends the write
+// whose status it is handed, and does nothing if a newer one has been marked since.
+export function useUnreadWrite<T>() {
+    const [held, setHeld] = useState<{ value: T; status: AuthoringMutationStatus } | null>(null)
+    const mark = useCallback((value: T) => setHeld({ value, status: { kind: "confirmed", refresh: "failed" } }), [])
+    const end = useCallback(
+        (ended: AuthoringMutationStatus) => setHeld((current) => (current !== null && current.status === ended ? null : current)),
+        [],
+    )
+    return { value: held === null ? null : held.value, status: held === null ? IDLE : held.status, mark, end }
 }
 
 // For a page whose rows or forms are replaced when the record is read again (a row that leaves the

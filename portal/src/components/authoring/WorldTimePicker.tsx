@@ -1,7 +1,7 @@
 import { useState } from "react"
 import { campaignCalendarsPath, worldTimesPath } from "../../api/worldTime"
 import { useAuthoringResource } from "../../hooks/useAuthoringResource"
-import { useConfirmedRefresh } from "../../hooks/useConfirmedRefresh"
+import { useConfirmedRefresh, useUnreadWrite } from "../../hooks/useConfirmedRefresh"
 import { useKept } from "../../hooks/useKeptResource"
 import type { CalendarListResponse, WorldTimePage, WorldTimeReceipt } from "../../types/worldTime"
 import { SelectField } from "./fields"
@@ -46,16 +46,16 @@ export function WorldTimePicker({
     const heldCalendars = useKept(calendars.state, calendarsPath)
     const [adding, setAdding] = useState(false)
     // A time that was recorded but is not in the list yet: it is chosen once the list shows it.
-    const [recorded, setRecorded] = useState<string | null>(null)
+    const recorded = useUnreadWrite<string>()
     const refreshed = useConfirmedRefresh({
-        status: recorded === null ? { kind: "idle" } : { kind: "confirmed", refresh: "failed" },
-        reset: () => setRecorded(null),
+        status: recorded.status,
+        reset: recorded.end,
         what: "world times",
         message: "World time recorded",
         read: async () => {
             const outcome = await times.refetch()
-            if (outcome === "ok" && recorded !== null) {
-                onChange(recorded)
+            if (outcome === "ok" && recorded.value !== null) {
+                onChange(recorded.value)
                 setAdding(false)
             }
             return outcome
@@ -86,7 +86,7 @@ export function WorldTimePicker({
             onChange(receipt.world_time_id)
             setAdding(false)
         } else {
-            setRecorded(receipt.world_time_id)
+            recorded.mark(receipt.world_time_id)
         }
         return outcome
     }
