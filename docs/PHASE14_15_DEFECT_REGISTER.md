@@ -136,3 +136,42 @@ Owner decision (DR-9): **fix**, across all affected operations. Starting HEAD `5
 **Browser retest (2026-10-26, on the Codex-reviewed candidate `38d2865`).** Scripted real-browser retest done; results, the operation-by-operation evidence map and the remaining coverage are in [PHASE15_DEF001_BROWSER_RETEST.md](PHASE15_DEF001_BROWSER_RETEST.md). Every exercised operation wrote once, kept the page, explained "saved, but the view is behind", announced no premature "done", held version-dependent controls and recovered by a read; permission loss removed private content. Two residual defects were found (DEF-005, DEF-006, above). Owner acceptance and the human run remain pending, so **DEF-001 stays Open — fix implemented and browser-retested by script; not accepted**.
 
 **Still required before DEF-001 can be called closed.** (1) Codex review of the diff and of inventory §4.4 (the reload-through-loading family was assessed as unaffected and left alone). (2) Current-head CI on PR #66. (3) Retest on the reviewed head: RC-10 (rewritten for the 26 operations) and RC-04 … RC-09, the tasks and cases listed in the register's "Affected coverage" plus the additions in the environment document §9, in a real browser. Until then DEF-001 stays **Open — fix implemented, unverified in a browser**, and no ledger row changes state.
+
+
+## 6. Working-campaign repair findings (2026-10-30)
+
+These are findings from the owner-authorized repair run on working `dnd_ai` (portal/API 5173/8000), not results from the clean acceptance database. Full evidence, UI-versus-database repair accounting, and limits: [Step G repair report](PHASE14_15_STEP_G_REPAIR_REPORT.md).
+
+### DEF-007 — Future party membership is treated as current before its start
+
+| Field | Value |
+|---|---|
+| Trigger / persona | As `player_b`, open Tobin's Parties section while the campaign clock is Meeting. Saved intervals are Arrival → Meeting and Descent → open-ended. |
+| Expected | G4: no current party at Meeting; the rejoin becomes current at Descent. |
+| Actual | UI shows Parties (1) and The Lantern-Bearers. Bootstrap authorizes that party despite zero stored intervals containing the Meeting sort key. The GM membership page also calls the future open-ended stint current. |
+| Confirmed cause | `queries/party_members.py`, `queries/parties.py`, `queries/bootstrap.py`, and `api/access.py::resolve_party_perspective` check an absent end rather than containment of the effective campaign clock. |
+| Impact / rubric | Incorrect current-party context and premature party-perspective authorization. No party-knowledge disclosure was exercised because this instance has no knowledge items. Severity/rubric remains unscored pending owner triage. |
+| Reproduction / evidence | `ui_db_repairs_20261030/ui_verification.json`, `after_repairs_read_models.json`, `final_database_verification.json`, `player_b-future-membership-still-current.png`, under the external CP-11 evidence directory. |
+| Coverage / retest | G4 / TC-06 / TC-21. Check Arrival, Meeting and Descent boundaries, finite intervals before their end, future open-ended intervals, bootstrap/read consistency and the per-request party-perspective authorization guard. |
+| Disposition | **Open — confirmed requirement/implementation mismatch.** The data schedule is repaired. No database workaround removed the required future rejoin. A bounded application change or explicit requirement decision is needed; no source change or acceptance decision was made. |
+
+### DEF-008 — A future-dated organization status is immediately displayed as Now
+
+| Field | Value |
+|---|---|
+| Trigger / persona | GM, Council → Members and offices: clock Meeting; set Dormant with When = Descent. |
+| Expected / decision needed | Establish whether the card means effective status at the campaign clock or the latest recorded status. The guide is time-oriented but does not explicitly settle this card's policy. |
+| Actual | The save succeeds, records an event/effect at Descent, and immediately displays Now: dormant while the clock remains Meeting. |
+| Cause | `queries/organization.py` reads `campaign.organization_state` directly without resolving status at the effective campaign clock. |
+| Evidence | Step G repair report; Set status/read-back in `ui_actions.jsonl`; event/state rows in `after_repairs_database_snapshot.json`; `council-members-and-status-after-ui.png`. |
+| Impact / rubric | Potentially misleading fictional-time presentation. Unscored observation pending semantics triage; not claimed as a failed status save or proven acceptance blocker. |
+| Disposition / retest | **Open for triage.** Decide effective-time projection versus latest-recorded labeling, then retest G7 / TC-36 and the status event explanation. No chronology-changing database workaround or product code change was made. |
+
+### DEF-DOC-01 — G6 requests a restore reason that the relationship UI cannot collect
+
+| Field | Value |
+|---|---|
+| Expected | G6: restore the General relationship with a reason. |
+| Actual | Restore relationship immediately submits; no reason field or confirmation collects one. Family and General restoration both work, with empty ordinary restore audit reasons. |
+| Evidence | Relationship restore actions and snapshots in `ui_actions.jsonl`; `archive_restore_audit` in the final database snapshot. |
+| Disposition | **Open — UI/documentation mismatch.** Add reason entry or amend the guide. No audit row was changed to imply a reason had been entered through the UI. Human results are unchanged. |

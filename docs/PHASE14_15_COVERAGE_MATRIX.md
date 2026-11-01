@@ -211,7 +211,7 @@ Evidence methods: **H** human/manual in the portal · **S** scripted real-browse
 | CP-9a | Event explanations (party join, build activation, clock, correction) | G3, G4, I2, I3 | 19.explain, 21.explain, 25.wrong-title, 15.cause |
 | CP-9b | Optional clock cause + member-safe explanation | I3 | 15.cause |
 | CP-10 | Confirmed-write/failed-refresh for quest, item, claim; shared plumbing | RC-04…RC-07; RC-10 for the deferred callers | RC-04…RC-10, NV-* |
-| DEF-001 fix (candidate `7990225…`, not frozen) | The same contract for every other write that reads its result back (26 operations: [PHASE15_DEF001_INVENTORY.md](PHASE15_DEF001_INVENTORY.md) §4.1) | RC-10 (rewritten); retest set in the environment document §9.2 | RC-03…RC-10, TC-14/15/19/20/21/24/25/33/34/35/36/37/38/42/43/44/50/51/53 and the lifecycle-step rows; none executed |
+| DEF-001 fix (candidate `7990225…`, not frozen) | The same contract for every other write that reads its result back (26 operations: [PHASE15_DEF001_INVENTORY.md](PHASE15_DEF001_INVENTORY.md) §4.1) | RC-10 (rewritten); retest set in the environment document §9.2 | RC-03…RC-10, TC-14/15/19/20/21/24/25/33/34/35/36/37/38/42/43/44/50/51/53 and the lifecycle-step rows; **no human row executed**. Scripted browser retest on the reviewed candidate `38d2865…` (2026-10-26): RC-03…RC-09 and the exercised variants of all 26 operations pass except DEF-005 (reproduced) and DEF-006 (RC-06 authoring-read variant); remaining coverage per operation in [PHASE15_DEF001_BROWSER_RETEST.md](PHASE15_DEF001_BROWSER_RETEST.md) §3; candidate not frozen |
 
 ## 5. Reverse index — guide task to cases
 
