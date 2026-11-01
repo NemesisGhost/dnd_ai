@@ -155,7 +155,8 @@ describe("ItemDefinitionFormPage", () => {
         fireEvent.click(within(form).getByRole("button", { name: "Create item definition" }))
         expect(await screen.findByText("Enter a name.")).toBeInTheDocument()
         expect(screen.getByText("Choose a category.")).toBeInTheDocument()
-        expect(screen.getByText(/Enter a number such as/)).toBeInTheDocument()
+        // Each problem is shown inline and again as a link in the error summary.
+        expect(screen.getAllByText(/Enter a number such as/)).toHaveLength(2)
         expect(server.callsTo("POST", BASE)).toHaveLength(0)
     })
 

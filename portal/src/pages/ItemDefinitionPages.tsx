@@ -8,7 +8,8 @@ import {
     updateItemDefinition,
 } from "../api/itemDefinitions"
 import { useAnnounce } from "../components/authoring/announcer"
-import { MutationStatusMessage, SavedNotice, StaleWriteNotice } from "../components/authoring/feedback"
+import { ErrorSummary, MutationStatusMessage, SavedNotice, StaleWriteNotice } from "../components/authoring/feedback"
+import type { FieldError } from "../components/authoring/feedback"
 import { SelectField, TextAreaField, TextField } from "../components/authoring/fields"
 import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
@@ -294,6 +295,14 @@ function baselineOf(existing: ItemDefinition | null): Values {
     }
 }
 
+// The inputs a validation problem can name, in form order, for the error summary's links.
+const SUMMARY_FIELDS = {
+    name: { id: "item-name", label: "Name" },
+    category: { id: "item-category", label: "Category" },
+    weight: { id: "item-weight", label: "Weight" },
+    cost: { id: "item-cost", label: "Value in gold" },
+} as const
+
 // The row version travels in the body so an attempt against another version is a different request
 // (a new Idempotency-Key), and a retry of an unresolved attempt re-sends the version it was made against.
 type SaveBody = ItemDefinitionBody & { expected_row_version?: number }
@@ -323,12 +332,20 @@ function DefinitionForm({
     const baseline = baselineOf(existing)
     const [edits, setEdits] = useState<Partial<Values>>({})
     const [problems, setProblems] = useState<Record<string, string>>({})
+    // Incremented on every failed validation, so the error summary takes focus each time.
+    const [attempt, setAttempt] = useState(0)
     // A confirmed save the shown definition does not reflect yet, and the values that save sent.
     const [unreconciled, setUnreconciled] = useState<{ version: number; sent: Partial<Values> } | null>(null)
     const [savedShown, setSavedShown] = useState(false)
     // The values of each attempt, by the body it sent, so the confirmed attempt (which can be an earlier
     // retry) is the one that is forgotten.
     const attempts = useRef(new Map<string, Partial<Values>>())
+    // A read in progress that must reach a confirmed version, and the definition shown when it began.
+    const waiter = useRef<{
+        seen: ItemDefinition | null
+        version: number
+        resolve: (outcome: RefreshOutcome) => void
+    } | null>(null)
     const inFlight = useRef(false)
     const mounted = useRef(true)
     useEffect(() => {
@@ -355,6 +372,29 @@ function DefinitionForm({
         setSavedShown(false)
     }
 
+    // The definition shown changed because a read was applied: settle the read that is waiting for it.
+    // A read that completes but is older than the confirmed save reports "failed", so it neither
+    // reconciles the save, announces it, nor releases the hold.
+    useEffect(() => {
+        const waiting = waiter.current
+        if (waiting === null || existing === null || existing === waiting.seen) return
+        waiter.current = null
+        waiting.resolve(existing.row_version >= waiting.version ? "ok" : "failed")
+    }, [existing])
+
+    // Reads the definition and reports "ok" only once what is shown includes `version`. It never writes.
+    async function readReaching(version: number): Promise<RefreshOutcome> {
+        const reflected = new Promise<RefreshOutcome>((resolve) => {
+            waiter.current = { seen: existing, version, resolve }
+        })
+        const outcome = await refetch()
+        if (outcome !== "ok") {
+            waiter.current = null
+            return outcome
+        }
+        return reflected
+    }
+
     const mutation = useAuthoringMutation<SaveBody, ItemDefinition>({
         scopeKey: `item-definition:${existing?.item_definition_id ?? "new"}`,
         request: (body, ctx) =>
@@ -374,7 +414,7 @@ function DefinitionForm({
                 return
             }
             setUnreconciled({ version: result.row_version, sent: attempts.current.get(JSON.stringify(body)) ?? {} })
-            const outcome = await refetch()
+            const outcome = await readReaching(result.row_version)
             if (outcome === "ok" && mounted.current) announce("Item definition saved")
             return outcome
         },
@@ -406,9 +446,11 @@ function DefinitionForm({
         reset: mutation.reset,
         what: "item definition",
         message: "Item definition saved",
-        read: refetch,
-        pageStale: stale,
+        read: () => readReaching(unreconciled?.version ?? 0),
+        // The page offers the read while it is stale, or while it shows a version older than the save.
+        pageStale: stale || unreconciled !== null,
     })
+    const behind = mutation.status.kind === "confirmed" && unreconciled !== null
     // The shown version is behind a confirmed save until a read works: saving from it would be refused.
     const held = existing !== null && confirmed.held
 
@@ -425,6 +467,7 @@ function DefinitionForm({
         if (parsedWeight === undefined) found.weight = "Enter a number such as 3 or 2.5."
         if (parsedCost === undefined) found.cost = "Enter an amount in gold such as 50 or 0.5."
         setProblems(found)
+        if (Object.keys(found).length > 0) setAttempt((n) => n + 1)
         if (Object.keys(found).length > 0) return
         const description = valueOf("description")
         const body: SaveBody = {
@@ -445,6 +488,9 @@ function DefinitionForm({
         if (mutation.submit(body) === "sent") inFlight.current = true
     }
 
+    const summaryErrors: FieldError[] = (Object.keys(SUMMARY_FIELDS) as (keyof typeof SUMMARY_FIELDS)[])
+        .filter((key) => problems[key] !== undefined)
+        .map((key) => ({ fieldId: SUMMARY_FIELDS[key].id, message: `${SUMMARY_FIELDS[key].label}: ${problems[key]}` }))
     const yourChanges = dirty ? (
         <p>Your unsaved changes: {dirtyFields.map((field) => FIELD_LABELS[field]).join(", ")}.</p>
     ) : undefined
@@ -459,6 +505,7 @@ function DefinitionForm({
                 submit()
             }}
         >
+            <ErrorSummary errors={summaryErrors} attempt={attempt} />
             <TextField
                 id="item-name"
                 label="Name"
@@ -522,7 +569,7 @@ function DefinitionForm({
                 options={options.canon_states}
                 onChange={(value) => setField("status", value)}
             />
-            {stale ? <StaleReadNotice what="item definition" onRetry={() => void refetch()} /> : null}
+            {stale || behind ? <StaleReadNotice what="item definition" onRetry={() => void refetch()} /> : null}
             {error?.kind === "stale" ? (
                 <StaleWriteNotice
                     yourChanges={yourChanges}
@@ -538,7 +585,11 @@ function DefinitionForm({
             ) : savedShown ? (
                 <SavedNotice>
                     <p>Item definition saved.</p>
-                    {dirty ? <p>Your newer changes are not saved yet.</p> : null}
+                    {dirty ? (
+                        <p>
+                            Your newer changes are not saved yet: {dirtyFields.map((field) => FIELD_LABELS[field]).join(", ")}.
+                        </p>
+                    ) : null}
                 </SavedNotice>
             ) : null}
             {held ? (
