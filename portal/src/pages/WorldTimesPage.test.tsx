@@ -65,6 +65,12 @@ afterEach(() => {
     vi.unstubAllGlobals()
 })
 
+// The form lives in a dialog that the page opens on request.
+async function openDialog() {
+    fireEvent.click(await screen.findByRole("button", { name: "Record a time" }))
+    return screen.findByRole("form", { name: "Record a world time" })
+}
+
 describe("WorldTimesPage", () => {
     it("shows a denial and sends no request without canon.edit", () => {
         const { server } = setup(false)
@@ -90,7 +96,9 @@ describe("WorldTimesPage", () => {
             "After the siege (narrative)",
             "Year 1 (narrative)",
         ])
-        expect(screen.getByRole("form", { name: "Record a world time" })).toBeInTheDocument()
+        // The form is not on the page until it is asked for.
+        expect(screen.queryByRole("form", { name: "Record a world time" })).toBeNull()
+        await openDialog()
         expect(screen.queryByRole("button", { name: "Show earlier times" })).toBeNull()
     })
 
@@ -131,12 +139,12 @@ describe("WorldTimesPage", () => {
             bootstrap: bootstrap(true),
             routes: [{ path: "/app/:campaignId/world-times", element: <WorldTimesPage /> }],
         })
-        await screen.findByRole("form", { name: "Record a world time" })
+        await openDialog()
         fireEvent.change(screen.getByRole("textbox", { name: /Year/ }), { target: { value: "3" } })
         fireEvent.change(screen.getByRole("combobox", { name: "Month" }), { target: { value: "2" } })
         fireEvent.change(screen.getByRole("textbox", { name: "Day" }), { target: { value: "5" } })
         fireEvent.click(screen.getByRole("button", { name: "Record time" }))
-        await screen.findByText(/Year 3 \(Founding\), Bloom 5/)
+        await within(await screen.findByRole("list")).findByText(/Year 3 \(Founding\), Bloom 5/)
         const [call] = server.callsTo("POST", TIMES_PATH)
         expect(call!.headers["X-CSRF-Token"]).toBe(TEST_CSRF)
         expect(call!.headers["Idempotency-Key"]).toBeTruthy()
@@ -163,7 +171,7 @@ describe("WorldTimesPage", () => {
             bootstrap: bootstrap(true),
             routes: [{ path: "/app/:campaignId/world-times", element: <WorldTimesPage /> }],
         })
-        await screen.findByRole("form", { name: "Record a world time" })
+        await openDialog()
         fireEvent.change(screen.getByRole("textbox", { name: /Year/ }), { target: { value: "3" } })
         fireEvent.change(screen.getByRole("combobox", { name: "Month" }), { target: { value: "2" } })
         fireEvent.change(screen.getByRole("textbox", { name: "Day" }), { target: { value: "5" } })
@@ -171,14 +179,16 @@ describe("WorldTimesPage", () => {
 
         expect(await screen.findByText(/World time recorded\. The latest world times could not be loaded/)).toBeInTheDocument()
         expect(screen.getByTestId("authoring-announcer")).not.toHaveTextContent(/^World time recorded/)
-        // The page stays (not an error screen) and the list is still the one from before the write.
-        expect(screen.getByRole("form", { name: "Record a world time" })).toBeInTheDocument()
+        // The page stays (not an error screen) and the list is still the one from before the write. The
+        // dialog has closed (the write is confirmed) and another recording waits for the list.
+        expect(screen.queryByRole("form", { name: "Record a world time" })).toBeNull()
+        expect(screen.getByRole("button", { name: "Record a time" })).toHaveAttribute("aria-disabled", "true")
         expect(screen.getByText("No times have been recorded for this world yet.")).toBeInTheDocument()
         expect(server.callsTo("POST", TIMES_PATH)).toHaveLength(1)
 
         readFails = false
         fireEvent.click(screen.getByRole("button", { name: "Try again" }))
-        expect(await screen.findByText(/Year 3 \(Founding\), Bloom 5/)).toBeInTheDocument()
+        expect(await within(await screen.findByRole("list")).findByText(/Year 3 \(Founding\), Bloom 5/)).toBeInTheDocument()
         await waitFor(() => expect(screen.getByTestId("authoring-announcer")).toHaveTextContent("World time recorded"))
         expect(screen.queryByText(/could not be loaded/)).toBeNull()
         expect(server.callsTo("POST", TIMES_PATH)).toHaveLength(1)
@@ -193,7 +203,7 @@ describe("WorldTimesPage", () => {
             bootstrap: bootstrap(true),
             routes: [{ path: "/app/:campaignId/world-times", element: <WorldTimesPage /> }],
         })
-        await screen.findByRole("form", { name: "Record a world time" })
+        await openDialog()
         fireEvent.change(screen.getByRole("textbox", { name: "Day" }), { target: { value: "2" } })
         fireEvent.click(screen.getByRole("button", { name: "Record time" }))
         const summary = await screen.findByRole("alert")
@@ -219,6 +229,7 @@ describe("WorldTimesPage", () => {
             routes: [{ path: "/app/:campaignId/world-times", element: <WorldTimesPage /> }],
         })
         // No calendar: the form opens on the narrative kind.
+        await openDialog()
         fireEvent.change(await screen.findByRole("textbox", { name: /Describe this moment/ }), {
             target: { value: "Dusk" },
         })

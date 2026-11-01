@@ -316,6 +316,20 @@
   box-shadow: 0 0.5rem 2rem var(--color-shadow);
 }
 
+/* A dialog that holds a form: wider than a confirmation, and its body scrolls so the actions stay reachable. */
+.authoring-dialog--form {
+  width: min(40rem, calc(100vw - 2rem));
+  max-width: none;
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
+}
+
+.authoring-dialog__prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
 .authoring-dialog::backdrop {
   background-color: var(--color-overlay);
 }

@@ -1,9 +1,9 @@
-import { useState } from "react"
+import { useLayoutEffect, useState } from "react"
 import type { ReactNode } from "react"
 import { createWorldTime } from "../../api/worldTime"
 import { useSession } from "../../context/SessionContext"
 import { useAuthoringMutation } from "../../hooks/useAuthoringMutation"
-import type { RefreshOutcome } from "../../hooks/useAuthoringMutation"
+import type { AuthoringMutationStatus, RefreshOutcome } from "../../hooks/useAuthoringMutation"
 import type {
     Calendar,
     CreateWorldTimeBody,
@@ -46,6 +46,14 @@ interface WorldTimeFormProps {
     // The form sits inside another form (the picker does): render a group that saves by click or
     // Enter, never a nested <form>.
     nested?: boolean
+    // Reports whether the entered values differ from an empty form (for a caller that guards leaving).
+    onDirtyChange?: (dirty: boolean) => void
+    // Reports the status of the recording request (pending, unknown outcome, confirmed...).
+    onStatusChange?: (status: AuthoringMutationStatus) => void
+    // For a form kept across a dialog closing: while an earlier attempt's outcome is unknown, a changed
+    // form re-sends that attempt (same key and body) instead of recording a second time, and a
+    // confirmed attempt clears the form only if the form still holds what it sent.
+    holdUnresolved?: boolean
 }
 
 // Records one point in fictional time: a date on a calendar, or a narrative
@@ -59,24 +67,42 @@ export function WorldTimeForm({
     onCancel,
     heading,
     nested = false,
+    onDirtyChange,
+    onStatusChange,
+    holdUnresolved = false,
 }: WorldTimeFormProps) {
     const { reload } = useSession()
     const [values, setValues] = useState<WorldTimeFormValues>(() => emptyWorldTimeForm(calendars))
     const [errors, setErrors] = useState<FieldError[]>([])
     const [attempt, setAttempt] = useState(0)
+    // The earlier attempt was sent again first because its outcome was unknown (`holdUnresolved`).
+    const [resent, setResent] = useState(false)
 
     const mutation = useAuthoringMutation<CreateWorldTimeBody, WorldTimeReceipt>({
         scopeKey: `create-world-time:${campaignId}`,
         request: (body, ctx) => createWorldTime(campaignId, body, ctx),
         // The caller words the outcome of its own read-back (a notice beside the form).
         ownsRefreshNotice: true,
-        onSuccess: (receipt) => {
-            setValues(emptyWorldTimeForm(calendars))
-            setErrors([])
+        holdUnresolved,
+        onSuccess: (receipt, body) => {
+            setResent(false)
+            if (!holdUnresolved || !differsFrom(body)) {
+                setValues(emptyWorldTimeForm(calendars))
+                setErrors([])
+            }
             return onCreated(receipt)
         },
     })
     const pending = mutation.status.kind === "pending"
+    const initial = emptyWorldTimeForm(calendars)
+    const dirty = JSON.stringify(values) !== JSON.stringify(initial)
+    // Mirrored before paint (layout effects), so a caller that decides from them never acts on a stale copy.
+    useLayoutEffect(() => {
+        onDirtyChange?.(dirty)
+    }, [dirty, onDirtyChange])
+    useLayoutEffect(() => {
+        onStatusChange?.(mutation.status)
+    }, [mutation.status, onStatusChange])
     const serverError = mutation.status.kind === "error" ? mutation.status.error : null
     const code = serverError?.code ?? null
     const serverFieldId = code === null ? null : (FIELD_FOR_CODE[code] ?? null)
@@ -93,11 +119,21 @@ export function WorldTimeForm({
         return (value: WorldTimeFormValues[K]) => setValues((current) => ({ ...current, [key]: value }))
     }
 
+    // Whether the form now holds something other than `sent` (the body of the attempt just confirmed).
+    function differsFrom(sent: CreateWorldTimeBody): boolean {
+        if (validateWorldTimeForm(values, calendars).length > 0) return true
+        return JSON.stringify(toWorldTimeBody(values)) !== JSON.stringify(sent)
+    }
+
     function submit() {
+        // A request is already on its way: nothing is validated or sent again.
+        if (pending) return
         const found = validateWorldTimeForm(values, calendars)
         setErrors(found)
         setAttempt((n) => n + 1)
-        if (found.length === 0) mutation.submit(toWorldTimeBody(values))
+        if (found.length === 0 && mutation.submit(toWorldTimeBody(values)) === "resolving-earlier") {
+            setResent(true)
+        }
     }
 
     const timeOptions = times.map((t) => ({ value: t.world_time_id, label: t.display }))
@@ -116,6 +152,12 @@ export function WorldTimeForm({
         <Shell label={label} onSubmit={submit}>
             <ErrorSummary errors={all} attempt={attempt} />
             {noBackendMessage}
+            {resent && serverError !== null ? (
+                <p role="status">
+                    Your earlier time may already have been recorded, so it was sent again first. What you changed
+                    is kept; record it once that is settled.
+                </p>
+            ) : null}
             <RadioGroupField
                 legend="Kind of time"
                 value={values.mode}

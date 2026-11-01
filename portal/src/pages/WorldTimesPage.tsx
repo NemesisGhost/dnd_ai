@@ -1,12 +1,18 @@
 import { useState } from "react"
 import { Link, useParams } from "react-router"
 import { campaignCalendarsPath, fetchWorldTimes, worldTimesPath } from "../api/worldTime"
+import { ConfirmDialog } from "../components/authoring/ConfirmDialog"
+import { SavedNotice } from "../components/authoring/feedback"
+import { FormDialog } from "../components/authoring/FormDialog"
+import type { FormDialogPrompt } from "../components/authoring/FormDialog"
 import { WorldTimeForm } from "../components/authoring/WorldTimeForm"
 import { useAnnounce } from "../components/authoring/announcer"
 import { StaleReadNotice } from "../components/StaleReadNotice"
 import { retryFailedReads, useAuthoringResource } from "../hooks/useAuthoringResource"
 import type { RefetchOutcome } from "../hooks/useAuthoringResource"
+import type { AuthoringMutationStatus } from "../hooks/useAuthoringMutation"
 import { useConfirmedRefresh, useUnreadWrite } from "../hooks/useConfirmedRefresh"
+import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard"
 import { useKept } from "../hooks/useKeptResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { usePageArrival } from "../hooks/usePageArrival"
@@ -58,6 +64,7 @@ export function WorldTimesPage() {
                 <>
                     {stale ? <StaleReadNotice what="world times" onRetry={() => void times.refetch()} /> : null}
                     <WorldTimesContent
+                        key={id}
                         campaignId={id}
                         page={heldTimes}
                         calendars={heldCalendars}
@@ -106,6 +113,29 @@ function WorldTimesContent({ campaignId, page, calendars, refetch, pageStale }: 
     const [loadingMore, setLoadingMore] = useState(false)
     const [moreFailed, setMoreFailed] = useState(false)
 
+    // The Record-a-time dialog. Its form stays mounted while the dialog is closed, so a request whose
+    // outcome is unknown (and its key and body) is owned by this page and survives closing the dialog.
+    const [open, setOpen] = useState(false)
+    // Changing the key starts a new, empty form; it is only done when nothing is unresolved.
+    const [formKey, setFormKey] = useState(0)
+    const [dirty, setDirty] = useState(false)
+    const [status, setStatus] = useState<AuthoringMutationStatus>({ kind: "idle" })
+    const [confirming, setConfirming] = useState<"discard" | "unresolved" | null>(null)
+    // The time just recorded, for the visible confirmation.
+    const [lastId, setLastId] = useState<string | null>(null)
+
+    const pending = status.kind === "pending"
+    // A network or server failure: the time may or may not have been recorded.
+    const unresolved = status.kind === "error" && (status.error.kind === "network" || status.error.kind === "server")
+    // Leaving the page would lose entered values, a request in flight, or the means to retry an uncertain one.
+    // (A confirmed write whose list could not be read loses nothing but a notice, so it is not guarded.)
+    const guard = useUnsavedChangesGuard(dirty || pending || unresolved)
+    const leaveMessage = pending
+        ? "A time is being recorded. If you leave now you will not see whether it was saved; check the list afterwards."
+        : unresolved
+          ? "A time you were recording may already have been recorded. If you leave you cannot retry it from here; check the list afterwards."
+          : "You have entered a time that has not been recorded. If you leave, it is lost."
+
     const next = cursor === undefined ? page.next_cursor : cursor
     const shown = [...page.items, ...older]
     const calendarById = new Map(calendars.calendars.map((calendar) => [calendar.calendar_id, calendar]))
@@ -130,6 +160,44 @@ function WorldTimesContent({ campaignId, page, calendars, refetch, pageStale }: 
         const date = `${calendar?.name ?? "Calendar"}: ${parts.join(", ")}`
         return item.label ? `${date} — ${item.label}` : date
     }
+
+    const savedItem = lastId === null ? undefined : shown.find((item) => item.world_time_id === lastId)
+
+    // Cancel, Escape or the form's Cancel button. Never while a request is pending.
+    function requestDismiss() {
+        if (pending) return
+        if (unresolved) setConfirming("unresolved")
+        else if (dirty) setConfirming("discard")
+        else setOpen(false)
+    }
+
+    const prompt: FormDialogPrompt | null = guard.blocked
+        ? { message: leaveMessage, keepLabel: "Stay", confirmLabel: "Leave", onKeep: guard.stay, onConfirm: guard.discard }
+        : confirming === "discard"
+          ? {
+                message: "Discard this time? What you entered will be lost.",
+                keepLabel: "Keep editing",
+                confirmLabel: "Discard",
+                onKeep: () => setConfirming(null),
+                onConfirm: () => {
+                    setConfirming(null)
+                    setOpen(false)
+                    setFormKey((n) => n + 1)
+                },
+            }
+          : confirming === "unresolved"
+            ? {
+                  message:
+                      "This time may already have been recorded. Closing keeps it so you can retry the same request or check the list; nothing is discarded.",
+                  keepLabel: "Keep editing",
+                  confirmLabel: "Close and check later",
+                  onKeep: () => setConfirming(null),
+                  onConfirm: () => {
+                      setConfirming(null)
+                      setOpen(false)
+                  },
+              }
+            : null
 
     async function loadMore() {
         if (next === null) return
@@ -183,24 +251,95 @@ function WorldTimesContent({ campaignId, page, calendars, refetch, pageStale }: 
                         world owner can create a calendar from the world page.
                     </p>
                 ) : null}
+                <p>Recording a time adds it to this world&apos;s list. It does not change the campaign&apos;s current time.</p>
                 {refreshed.notice}
-                <WorldTimeForm
-                    campaignId={campaignId}
-                    calendars={calendars.calendars}
-                    times={shown}
-                    onCreated={async () => {
-                        const outcome = await refetch()
-                        if (outcome === "ok") {
-                            setOlder([])
-                            setCursor(undefined)
-                            announce("World time recorded")
-                        } else {
-                            // Recorded, but the list does not show it yet: said so, not announced as done.
-                            recorded.mark(true)
-                        }
-                        return outcome
+                {lastId !== null && !open && !refreshed.held ? (
+                    <SavedNotice>
+                        <p>
+                            World time recorded
+                            {savedItem === undefined ? "." : `: ${recordedTime(savedItem)}`}
+                        </p>
+                    </SavedNotice>
+                ) : null}
+                {unresolved && !open ? (
+                    <div className="authoring-message authoring-message--warning" role="status">
+                        <div>
+                            <p>
+                                A time you were recording may or may not have been saved. The list can only show it if it
+                                is on the page you are viewing, so reopening to retry the same request is the safe way to
+                                find out.
+                            </p>
+                            <button type="button" className="authoring-button" onClick={() => setOpen(true)}>
+                                Reopen to retry
+                            </button>{" "}
+                            <button type="button" className="authoring-button" onClick={() => void readFromTheStart()}>
+                                Reload the list
+                            </button>
+                        </div>
+                    </div>
+                ) : null}
+                <button
+                    type="button"
+                    className="authoring-button authoring-button--primary"
+                    aria-disabled={refreshed.held}
+                    aria-describedby={refreshed.held ? "world-times-held" : undefined}
+                    onClick={() => {
+                        if (refreshed.held) return
+                        setLastId(null)
+                        setOpen(true)
                     }}
-                    onCancel={() => undefined}
+                >
+                    Record a time
+                </button>
+                {refreshed.held ? (
+                    <p id="world-times-held" className="authoring-note">
+                        Load the latest world times before recording another.
+                    </p>
+                ) : null}
+                <FormDialog
+                    open={open}
+                    title="Record a world time"
+                    description="Recording a time adds it to this world's list. It does not change the campaign's current time."
+                    onDismiss={requestDismiss}
+                    pending={pending}
+                    prompt={prompt}
+                >
+                    <WorldTimeForm
+                        key={formKey}
+                        campaignId={campaignId}
+                        calendars={calendars.calendars}
+                        times={shown}
+                        holdUnresolved
+                        onDirtyChange={setDirty}
+                        onStatusChange={setStatus}
+                        onCreated={async (receipt) => {
+                            setLastId(receipt.world_time_id)
+                            const outcome = await refetch()
+                            if (outcome === "ok") {
+                                setOlder([])
+                                setCursor(undefined)
+                                announce("World time recorded")
+                            } else {
+                                // Recorded, but the list does not show it yet: said so, not announced as done.
+                                recorded.mark(true)
+                            }
+                            setConfirming(null)
+                            setOpen(false)
+                            return outcome
+                        }}
+                        onCancel={requestDismiss}
+                    />
+                </FormDialog>
+                {/* Leaving while the dialog is closed (an uncertain request, or kept input) is asked here;
+                    while it is open the same question is asked inside it. */}
+                <ConfirmDialog
+                    open={guard.blocked && !open}
+                    title="Leave this page?"
+                    description={leaveMessage}
+                    confirmLabel="Leave"
+                    cancelLabel="Stay"
+                    onConfirm={guard.discard}
+                    onCancel={guard.stay}
                 />
             </section>
         </>
