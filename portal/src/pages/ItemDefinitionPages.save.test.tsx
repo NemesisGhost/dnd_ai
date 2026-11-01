@@ -464,12 +464,39 @@ describe("item definition save: a read older than the confirmed save", () => {
         fireEvent.change(description(), { target: { value: "Typed during recovery" } })
         save()
         expect(updates(server)).toHaveLength(1)
+
+        // The retry read is held open so it can be told apart from the earlier ones. Its (older) answer
+        // carries a name the page has not shown, and the breadcrumb takes the name of the definition
+        // read last: seeing it is the proof that the application has processed this response.
+        const RETRY_NAME = "Moonblade (retry read)"
+        let release: (() => void) | undefined
+        let held: Promise<void> | null = new Promise<void>((resolve) => {
+            release = resolve
+        })
+        let retryStarted = false
+        server.on("GET", `${BASE}/d1`, async () => {
+            if (held === null) return state.get ?? { body: state.current }
+            retryStarted = true
+            await held
+            return { body: definition({ name: RETRY_NAME }) }
+        })
+        expect(screen.queryByText(RETRY_NAME)).toBeNull()
         fireEvent.click(screen.getByRole("button", { name: "Try again" }))
-        await waitFor(() => expect(state.get).toBeDefined())
-        await new Promise((resolve) => setTimeout(resolve, 30))
+        await waitFor(() => expect(retryStarted).toBe(true))
+        expect(screen.queryByText(RETRY_NAME)).toBeNull()
+        await act(async () => release?.())
+        held = null
+        // The older answer has been applied: the page now shows the definition it carried.
+        expect(await screen.findByText(RETRY_NAME)).toBeInTheDocument()
+        await act(async () => {})
         expect(screen.queryByText(SAVED)).toBeNull()
         expect(saveButton()).toHaveAttribute("aria-disabled", "true")
+        expect(screen.getByText("Load the latest version before saving again.")).toBeInTheDocument()
         expect(spoken).not.toContain("Item definition saved")
+        expect(description()).toHaveValue("Typed during recovery")
+        expect(field(/Name/)).toHaveValue("Moonblade II")
+        expect(screen.queryByText(/Your newer changes/)).toBeNull()
+        expect(updates(server)).toHaveLength(1)
 
         // A read that reaches the saved version recovers without repeating the write.
         state.get = undefined
