@@ -175,3 +175,21 @@ These are findings from the owner-authorized repair run on working `dnd_ai` (por
 | Actual | Restore relationship immediately submits; no reason field or confirmation collects one. Family and General restoration both work, with empty ordinary restore audit reasons. |
 | Evidence | Relationship restore actions and snapshots in `ui_actions.jsonl`; `archive_restore_audit` in the final database snapshot. |
 | Disposition | **Open — UI/documentation mismatch.** Add reason entry or amend the guide. No audit row was changed to imply a reason had been entered through the UI. Human results are unchanged. |
+
+## 7. Source-confirmed privacy findings (2026-11-01)
+
+Found by the Phase 14/15 app-interaction investigation (planning ID ENC-01; investigation D6.4, S05, G02) and repaired in Batch 1 checkpoint B1-1. Not an observed live disclosure: no owner data was read.
+
+### DEF-009 — The campaign encounter detail read ignores the caller's audience
+
+| Field | Value |
+|---|---|
+| Trigger / persona | Any `campaign.view` holder without `canon.edit` calls `GET /campaigns/{campaign_id}/encounters/{encounter_id}`. |
+| Expected | ADR 0016: GM_ONLY fields omitted without `canon.edit`; participants and references limited to what the caller may discover; unstarted preparation not readable. |
+| Actual (source) | The route returned `summary` and turn `notes` (both GM_ONLY), `pending` preparation rows, every participant's entity id, `location_id`, `resulting_event_id` and combat-action `item_instance_id` without a discoverability check. An existing test asserted the player-visible notes as intended. |
+| Confirmed cause | `get_encounter_view` was written under a "no audience filtering" assumption and never updated after `notes`/`summary` were classified and `pending` rows were added. |
+| Impact / rubric | Potential disclosure of GM prose, undiscovered actors and unstarted GM preparation to members. Unscored pending owner triage. |
+| Evidence | Source confirmation: `api/encounters.py`, `queries/encounter.py`, `domain/data_classification.py`. Automated (2026-11-01, local PostgreSQL 18, not CI): `tests/database/test_api_encounters_query.py`, 13 passed; with the projection disabled 6 of them fail. **Scripted API retest: not executed.** Owner acceptance: not given. |
+| Fix | Projection inside `get_encounter_view` for non-`canon.edit` callers: started encounters only (`aborted` counts as started only with a `resulting_event_id`), `summary` and `notes` null, hidden participants and their turns removed, dense per-round `turn_order`, location/event/item ids nulled unless discoverable. Editor output unchanged. Fixed in the commit titled "fix: audience-project the campaign encounter detail read (DEF-009 / ENC-01)". |
+| Disposition | **Open — fix implemented and automated-tested; scripted API retest and owner acceptance pending.** Coverage variant `22.encounter-member` (Unexecuted). |
+| Follow-up, not fixed here | (1) `GET …/integration/external-systems/{id}/sync-state?target_encounter_id=` (`api/integration.py`, `queries/integration.py`) returns sync status for an encounter id under `campaign.view`. (2) Character detail's timeline-scoped `active_encounter_id` (`queries/character.py`). (3) `location_id` of a dungeon area follows the World Explorer rule, not campaign dungeon discovery state. (4) A started-aborted encounter whose abort event is physically deleted reads as unstarted for members (`resulting_event_id` is `ON DELETE SET NULL`; fails closed). Inventory for P03-A. |

@@ -1,7 +1,7 @@
 """Editor read models for encounter preparation (Phase 15 checkpoint 15.3B-2a).
 
-`canon.edit` only. Unlike `queries.encounter.get_encounter_view` (the audience-neutral record of
-a running or finished encounter) these name each participant and the place, and say whether the
+`canon.edit` only. Unlike `queries.encounter.get_encounter_view` (the audience-projected record
+of a started encounter) these name each participant and the place, and say whether the
 encounter can still be prepared (`pending`). Only encounters of the campaign are reachable.
 """
 

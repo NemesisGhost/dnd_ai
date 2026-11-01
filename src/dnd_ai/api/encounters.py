@@ -88,10 +88,12 @@ Phase 10 workstream 17 added the read side over the same URL prefix:
 `GET /campaigns/{campaign_id}/encounters/{encounter_id}`
 (`dnd_ai.queries.encounter.get_encounter_view`), requiring only
 `campaign.view` (the read-only counterpart to every command route's
-`canon.edit`). Unlike every other Phase 10 query, there is no audience
-filtering here at all — see `dnd_ai.queries.encounter`'s own docstring for
-why a resolved combat outcome carries no GM-only/undiscovered content the
-way a dungeon secret or a hidden quest objective does. Ownership reuses
+`canon.edit`). The response is audience-projected (ADR 0016): a `canon.edit`
+holder gets the full record, while any other member gets only started
+encounters (`pending` and aborted-before-start return the same fixed 404),
+no `summary` or turn `notes` (GM_ONLY), and only the participants, turns and
+location/event/item references the World Explorer's discoverability rule
+admits — see `dnd_ai.queries.encounter.get_encounter_view`. Ownership reuses
 the same `campaign_id`-column check every command route above performs,
 via the same `EncounterNotFoundError` (re-exported by `dnd_ai.queries.
 encounter`, not duplicated). This route is a read: no idempotency key, no
@@ -112,7 +114,7 @@ from dnd_ai.commands.encounters import (
     _start_encounter_impl,
 )
 from dnd_ai.domain.access import AccessContext
-from dnd_ai.queries.encounter import get_encounter_view
+from dnd_ai.queries.encounter import EncounterAudience, get_encounter_view
 
 from ._authoring import finish_campaign_idempotency, start_campaign_idempotency
 from ._shared import timeline_world_id
@@ -121,6 +123,7 @@ from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .items import _time_or_clock
+from .world_explorer import resolve_world_entity_visibility
 
 router = APIRouter(tags=["encounters"])
 
@@ -415,16 +418,23 @@ def end_encounter_endpoint(
 def get_encounter_endpoint(
     campaign_id: uuid.UUID,
     encounter_id: uuid.UUID,
-    # Enforces campaign.view; the resolved AccessContext itself isn't
-    # needed — this route applies no audience filtering (see this
-    # module's docstring), so no further AccessContext field is used the
-    # way other read endpoints use access.timeline_id/has_capability.
-    _access: Annotated[
+    access: Annotated[
         AccessContext, Depends(require_campaign_capability(_ENCOUNTER_VIEW_CAPABILITY))
     ],
     connection: Annotated[Connection, Depends(get_connection)],
 ) -> EncounterDetailResponse:
-    view = get_encounter_view(connection, encounter_id=encounter_id, campaign_id=campaign_id)
+    # GM_ONLY content is withheld without canon.edit (ADR 0016); the unfiltered
+    # view is reachable only through this editor branch.
+    audience = None
+    if not access.has_capability(_ENCOUNTER_MANAGE_CAPABILITY):
+        audience = EncounterAudience(
+            visibility=resolve_world_entity_visibility(access, connection),
+            world_id=timeline_world_id(connection, access.timeline_id),
+            timeline_id=access.timeline_id,
+        )
+    view = get_encounter_view(
+        connection, encounter_id=encounter_id, campaign_id=campaign_id, audience=audience
+    )
 
     return EncounterDetailResponse(
         encounter_id=view.encounter_id,
