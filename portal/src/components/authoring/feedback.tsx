@@ -273,6 +273,17 @@ export function SavedRefreshFailedNotice({
     )
 }
 
+// A visible, persistent "this was saved" result. Deliberately not a live region: the page announces
+// the save once through the shared announcer, and a second announcement from here would double it.
+export function SavedNotice({ children }: { children: ReactNode }) {
+    return (
+        <div className="authoring-message authoring-message--success">
+            <CheckCircle2 aria-hidden="true" className="authoring-message__icon" />
+            <div>{children}</div>
+        </div>
+    )
+}
+
 interface StaleWriteNoticeProps {
     onLoadLatest: () => void
     loading?: boolean

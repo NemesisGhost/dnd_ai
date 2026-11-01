@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router"
 import {
     createItemDefinition,
@@ -8,12 +8,14 @@ import {
     updateItemDefinition,
 } from "../api/itemDefinitions"
 import { useAnnounce } from "../components/authoring/announcer"
-import { MutationStatusMessage, StaleWriteNotice } from "../components/authoring/feedback"
+import { MutationStatusMessage, SavedNotice, StaleWriteNotice } from "../components/authoring/feedback"
 import { SelectField, TextAreaField, TextField } from "../components/authoring/fields"
 import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import type { RefreshOutcome } from "../hooks/useAuthoringMutation"
 import { retryFailedReads, useAuthoringResource } from "../hooks/useAuthoringResource"
+import { useConfirmedRefresh } from "../hooks/useConfirmedRefresh"
+import { useKeptData } from "../hooks/useKeptData"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { useHeldWorldCapability, WORLD_CANON_EDIT, WORLD_CANON_READ_PRIVATE } from "../hooks/useWorldCapability"
 import { useDefinitionsBackPath } from "../hooks/useItemsBackPath"
@@ -24,6 +26,7 @@ import type {
     ItemDefinitionList,
     ItemDefinitionOptions,
 } from "../types/itemDefinitions"
+import { StaleReadNotice } from "../components/StaleReadNotice"
 import { ReadTerminal } from "../components/authoring/ReadState"
 import "../components/authoring/authoring.css"
 
@@ -195,6 +198,10 @@ export function ItemDefinitionFormPage() {
     const existing = useAuthoringResource<ItemDefinition>(
         !allowed || definitionId === undefined ? null : itemDefinitionPath(campaignId, definitionId),
     )
+    // The last definition that was read. A refresh that fails recoverably (after a save, say) keeps the
+    // form on it, marked stale; a refusal or a missing record discards it and fails closed.
+    const kept = useKeptData(existing.state)
+    const current = definitionId === undefined ? null : kept.data
     // Settled, not only ready: a read that ended in a refusal or a failure also takes the heading's focus.
     const ready =
         options.state.kind !== "loading" && (definitionId === undefined || existing.state.kind !== "loading")
@@ -209,8 +216,8 @@ export function ItemDefinitionFormPage() {
                     <li aria-current="page">
                         {definitionId === undefined
                             ? "New item definition"
-                            : existing.state.kind === "ready"
-                              ? existing.state.data.name
+                            : current !== null
+                              ? current.name
                               : "Edit item definition"}
                     </li>
                 </ol>
@@ -226,22 +233,24 @@ export function ItemDefinitionFormPage() {
                 <p role="alert">{EDIT_AUTHORITY_NEEDED}</p>
             ) : options.state.kind === "loading" || (definitionId !== undefined && existing.state.kind === "loading") ? (
                 <p role="status">Loading…</p>
-            ) : options.state.kind !== "ready" ||
-              (definitionId !== undefined && existing.state.kind !== "ready") ? (
+            ) : options.state.kind !== "ready" || (definitionId !== undefined && current === null) ? (
                 <ReadTerminal
                     states={definitionId === undefined ? [options.state] : [existing.state, options.state]}
                     what={definitionId === undefined ? "form" : "item definition"}
                     onRetry={() => retryFailedReads(options, existing)}
                     back={{ to: listPath, label: "Back to item definitions" }}
                 />
-            ) : definitionId !== undefined && existing.state.kind === "ready" && !existing.state.data.can_edit ? (
+            ) : current !== null && !current.can_edit ? (
                 <p>This is a generic definition from the ruleset and cannot be changed.</p>
             ) : (
+                // Keyed by the record, not its version: a save and its re-read update this form in
+                // place, so the inputs, focus and scroll stay, and a different definition starts clean.
                 <DefinitionForm
-                    key={existing.state.kind === "ready" ? existing.state.data.row_version : "new"}
+                    key={definitionId ?? "new"}
                     campaignId={campaignId}
                     options={options.state.data}
-                    existing={existing.state.kind === "ready" ? existing.state.data : null}
+                    existing={current}
+                    stale={kept.stale}
                     refetch={existing.refetch}
                     listPath={listPath}
                 />
@@ -250,16 +259,58 @@ export function ItemDefinitionFormPage() {
     )
 }
 
+interface Values {
+    name: string
+    category: string
+    rarity: string
+    attunement: boolean
+    weight: string
+    cost: string
+    description: string
+    status: string
+}
+
+const FIELD_LABELS: Record<keyof Values, string> = {
+    name: "Name",
+    category: "Category",
+    rarity: "Rarity",
+    attunement: "Requires attunement",
+    weight: "Weight",
+    cost: "Value in gold",
+    description: "Description",
+    status: "Status",
+}
+
+function baselineOf(existing: ItemDefinition | null): Values {
+    return {
+        name: existing?.name ?? "",
+        category: existing?.category ?? "",
+        rarity: existing?.rarity ?? "common",
+        attunement: existing?.requires_attunement ?? false,
+        weight: existing?.weight === null || existing === null ? "" : String(existing.weight),
+        cost: existing?.base_cost_gp === null || existing === null ? "" : String(existing.base_cost_gp),
+        description: existing?.description ?? "",
+        status: existing?.canon_status ?? "draft",
+    }
+}
+
+// The row version travels in the body so an attempt against another version is a different request
+// (a new Idempotency-Key), and a retry of an unresolved attempt re-sends the version it was made against.
+type SaveBody = ItemDefinitionBody & { expected_row_version?: number }
+
 function DefinitionForm({
     campaignId,
     options,
     existing,
+    stale,
     refetch,
     listPath,
 }: {
     campaignId: string
     options: ItemDefinitionOptions
     existing: ItemDefinition | null
+    // The definition shown is the last good read because the latest one failed.
+    stale: boolean
     refetch: () => Promise<RefreshOutcome>
     // The list the person came from, with its filters.
     listPath: string
@@ -267,19 +318,44 @@ function DefinitionForm({
     const { reload } = useSession()
     const announce = useAnnounce()
     const navigate = useNavigate()
-    const [name, setName] = useState(existing?.name ?? "")
-    const [category, setCategory] = useState(existing?.category ?? "")
-    const [rarity, setRarity] = useState(existing?.rarity ?? "common")
-    const [attunement, setAttunement] = useState(existing?.requires_attunement ?? false)
-    const [weight, setWeight] = useState(existing?.weight === null || existing === null ? "" : String(existing.weight))
-    const [cost, setCost] = useState(
-        existing?.base_cost_gp === null || existing === null ? "" : String(existing.base_cost_gp),
-    )
-    const [description, setDescription] = useState(existing?.description ?? "")
-    const [status, setStatus] = useState(existing?.canon_status ?? "draft")
+    // Only the fields the person changed are held; everything else follows the loaded definition, so a
+    // read never overwrites typed input and a save only forgets what it actually sent.
+    const baseline = baselineOf(existing)
+    const [edits, setEdits] = useState<Partial<Values>>({})
     const [problems, setProblems] = useState<Record<string, string>>({})
+    // A confirmed save the shown definition does not reflect yet, and the values that save sent.
+    const [unreconciled, setUnreconciled] = useState<{ version: number; sent: Partial<Values> } | null>(null)
+    const [savedShown, setSavedShown] = useState(false)
+    // The values of each attempt, by the body it sent, so the confirmed attempt (which can be an earlier
+    // retry) is the one that is forgotten.
+    const attempts = useRef(new Map<string, Partial<Values>>())
+    const inFlight = useRef(false)
+    const mounted = useRef(true)
+    useEffect(() => {
+        mounted.current = true
+        return () => {
+            mounted.current = false
+        }
+    }, [])
 
-    const mutation = useAuthoringMutation<ItemDefinitionBody, ItemDefinition>({
+    const valueOf = <K extends keyof Values>(field: K): Values[K] => (edits[field] ?? baseline[field]) as Values[K]
+    const dirtyFields = (Object.keys(edits) as (keyof Values)[]).filter(
+        (field) => edits[field] !== undefined && edits[field] !== baseline[field],
+    )
+    const dirty = dirtyFields.length > 0
+
+    function setField<K extends keyof Values>(field: K, value: Values[K]) {
+        setEdits((previous) => {
+            const next = { ...previous }
+            // Back to the loaded value is no change at all.
+            if (value === baseline[field]) delete next[field]
+            else next[field] = value
+            return next
+        })
+        setSavedShown(false)
+    }
+
+    const mutation = useAuthoringMutation<SaveBody, ItemDefinition>({
         scopeKey: `item-definition:${existing?.item_definition_id ?? "new"}`,
         request: (body, ctx) =>
             existing === null
@@ -287,27 +363,169 @@ function DefinitionForm({
                 : updateItemDefinition(
                       campaignId,
                       existing.item_definition_id,
-                      { ...body, expected_row_version: existing.row_version },
+                      { ...body, expected_row_version: body.expected_row_version ?? existing.row_version },
                       ctx,
                   ),
-        onSuccess: async () => {
+        ownsRefreshNotice: true,
+        onSuccess: async (result, body) => {
             if (existing === null) {
                 announce("Item definition created")
                 void navigate(listPath)
                 return
             }
+            setUnreconciled({ version: result.row_version, sent: attempts.current.get(JSON.stringify(body)) ?? {} })
             const outcome = await refetch()
-            if (outcome === "ok") announce("Item definition saved")
+            if (outcome === "ok" && mounted.current) announce("Item definition saved")
             return outcome
         },
     })
     const error = mutation.status.kind === "error" ? mutation.status.error : null
     const busy = mutation.status.kind === "pending"
+    useEffect(() => {
+        if (mutation.status.kind !== "pending") inFlight.current = false
+    }, [mutation.status])
+
+    // The shown definition now includes the confirmed save: it becomes the baseline, and only the edits
+    // that still equal what that save sent are forgotten. Anything typed since stays, and stays dirty.
+    // Adjusted while rendering (as useKeptData does), so a read that worked is never a render behind.
+    if (unreconciled !== null && existing !== null && existing.row_version >= unreconciled.version) {
+        const sent = unreconciled.sent
+        setEdits((previous) => {
+            const next = { ...previous }
+            for (const field of Object.keys(sent) as (keyof Values)[]) {
+                if (next[field] === sent[field]) delete next[field]
+            }
+            return next
+        })
+        setUnreconciled(null)
+        setSavedShown(true)
+    }
+
+    const confirmed = useConfirmedRefresh({
+        status: mutation.status,
+        reset: mutation.reset,
+        what: "item definition",
+        message: "Item definition saved",
+        read: refetch,
+        pageStale: stale,
+    })
+    // The shown version is behind a confirmed save until a read works: saving from it would be refused.
+    const held = existing !== null && confirmed.held
+
+    function submit() {
+        if (busy || held || inFlight.current) return
+        const found: Record<string, string> = {}
+        const name = valueOf("name")
+        const weight = valueOf("weight")
+        const cost = valueOf("cost")
+        if (name.trim() === "") found.name = "Enter a name."
+        if (valueOf("category") === "") found.category = "Choose a category."
+        const parsedWeight = parseAmount(weight)
+        const parsedCost = parseAmount(cost)
+        if (parsedWeight === undefined) found.weight = "Enter a number such as 3 or 2.5."
+        if (parsedCost === undefined) found.cost = "Enter an amount in gold such as 50 or 0.5."
+        setProblems(found)
+        if (Object.keys(found).length > 0) return
+        const description = valueOf("description")
+        const body: SaveBody = {
+            name: name.trim(),
+            category: valueOf("category"),
+            description: description.trim() === "" ? null : description.trim(),
+            rarity: valueOf("rarity"),
+            requires_attunement: valueOf("attunement"),
+            weight: parsedWeight ?? null,
+            base_cost_gp: parsedCost ?? null,
+            canon_status: valueOf("status"),
+            ...(existing === null ? {} : { expected_row_version: existing.row_version }),
+        }
+        const sent: Partial<Values> = {}
+        for (const field of dirtyFields) (sent as Record<string, unknown>)[field] = edits[field]
+        attempts.current.set(JSON.stringify(body), sent)
+        setSavedShown(false)
+        if (mutation.submit(body) === "sent") inFlight.current = true
+    }
+
+    const yourChanges = dirty ? (
+        <p>Your unsaved changes: {dirtyFields.map((field) => FIELD_LABELS[field]).join(", ")}.</p>
+    ) : undefined
 
     return (
-        <>
+        <form
+            noValidate
+            aria-label="Item definition"
+            className="authoring-form"
+            onSubmit={(event) => {
+                event.preventDefault()
+                submit()
+            }}
+        >
+            <TextField
+                id="item-name"
+                label="Name"
+                required
+                value={valueOf("name")}
+                onChange={(value) => setField("name", value)}
+                maxLength={options.limits.name_max_length}
+                error={problems.name ?? null}
+            />
+            <SelectField
+                id="item-category"
+                label="Category"
+                required
+                value={valueOf("category")}
+                placeholder="Choose a category"
+                options={options.categories}
+                onChange={(value) => setField("category", value)}
+                error={problems.category ?? null}
+            />
+            <SelectField
+                id="item-rarity"
+                label="Rarity"
+                value={valueOf("rarity")}
+                options={options.rarities}
+                onChange={(value) => setField("rarity", value)}
+            />
+            <label>
+                <input
+                    type="checkbox"
+                    checked={valueOf("attunement")}
+                    onChange={(event) => setField("attunement", event.target.checked)}
+                />{" "}
+                Requires attunement
+            </label>
+            <TextField
+                id="item-weight"
+                label="Weight (optional)"
+                value={valueOf("weight")}
+                onChange={(value) => setField("weight", value)}
+                error={problems.weight ?? null}
+            />
+            <TextField
+                id="item-cost"
+                label="Value in gold (optional)"
+                value={valueOf("cost")}
+                onChange={(value) => setField("cost", value)}
+                error={problems.cost ?? null}
+            />
+            <TextAreaField
+                id="item-description"
+                label="Description (optional)"
+                value={valueOf("description")}
+                onChange={(value) => setField("description", value)}
+                maxLength={options.limits.description_max_length}
+            />
+            <SelectField
+                id="item-status"
+                label="Status"
+                hint="A draft cannot be used for new items yet."
+                value={valueOf("status")}
+                options={options.canon_states}
+                onChange={(value) => setField("status", value)}
+            />
+            {stale ? <StaleReadNotice what="item definition" onRetry={() => void refetch()} /> : null}
             {error?.kind === "stale" ? (
                 <StaleWriteNotice
+                    yourChanges={yourChanges}
                     onLoadLatest={() => {
                         mutation.reset()
                         void refetch()
@@ -315,95 +533,31 @@ function DefinitionForm({
                 />
             ) : error !== null ? (
                 <MutationStatusMessage error={error} onRetry={mutation.retry} onCheckSession={reload} />
+            ) : confirmed.notice !== null ? (
+                confirmed.notice
+            ) : savedShown ? (
+                <SavedNotice>
+                    <p>Item definition saved.</p>
+                    {dirty ? <p>Your newer changes are not saved yet.</p> : null}
+                </SavedNotice>
             ) : null}
-            <form
-                noValidate
-                aria-label="Item definition"
-                className="authoring-form"
-                onSubmit={(event) => {
-                    event.preventDefault()
-                    const found: Record<string, string> = {}
-                    if (name.trim() === "") found.name = "Enter a name."
-                    if (category === "") found.category = "Choose a category."
-                    const parsedWeight = parseAmount(weight)
-                    const parsedCost = parseAmount(cost)
-                    if (parsedWeight === undefined) found.weight = "Enter a number such as 3 or 2.5."
-                    if (parsedCost === undefined) found.cost = "Enter an amount in gold such as 50 or 0.5."
-                    setProblems(found)
-                    if (Object.keys(found).length > 0) return
-                    mutation.submit({
-                        name: name.trim(),
-                        category,
-                        description: description.trim() === "" ? null : description.trim(),
-                        rarity,
-                        requires_attunement: attunement,
-                        weight: parsedWeight ?? null,
-                        base_cost_gp: parsedCost ?? null,
-                        canon_status: status,
-                    })
-                }}
+            {held ? (
+                <p id="item-save-held" className="authoring-note">
+                    Load the latest version before saving again.
+                </p>
+            ) : null}
+            {/* Held with aria-disabled, not `disabled`: a disabled button that has focus drops it, and the
+                form's submit handler refuses a held or pending save whichever way it is submitted. */}
+            <button
+                type="submit"
+                className="authoring-button"
+                aria-disabled={busy || held}
+                aria-busy={busy}
+                aria-describedby={held ? "item-save-held" : undefined}
             >
-                <TextField
-                    id="item-name"
-                    label="Name"
-                    required
-                    value={name}
-                    onChange={setName}
-                    maxLength={options.limits.name_max_length}
-                    error={problems.name ?? null}
-                />
-                <SelectField
-                    id="item-category"
-                    label="Category"
-                    required
-                    value={category}
-                    placeholder="Choose a category"
-                    options={options.categories}
-                    onChange={setCategory}
-                    error={problems.category ?? null}
-                />
-                <SelectField id="item-rarity" label="Rarity" value={rarity} options={options.rarities} onChange={setRarity} />
-                <label>
-                    <input
-                        type="checkbox"
-                        checked={attunement}
-                        onChange={(event) => setAttunement(event.target.checked)}
-                    />{" "}
-                    Requires attunement
-                </label>
-                <TextField
-                    id="item-weight"
-                    label="Weight (optional)"
-                    value={weight}
-                    onChange={setWeight}
-                    error={problems.weight ?? null}
-                />
-                <TextField
-                    id="item-cost"
-                    label="Value in gold (optional)"
-                    value={cost}
-                    onChange={setCost}
-                    error={problems.cost ?? null}
-                />
-                <TextAreaField
-                    id="item-description"
-                    label="Description (optional)"
-                    value={description}
-                    onChange={setDescription}
-                    maxLength={options.limits.description_max_length}
-                />
-                <SelectField
-                    id="item-status"
-                    label="Status"
-                    hint="A draft cannot be used for new items yet."
-                    value={status}
-                    options={options.canon_states}
-                    onChange={setStatus}
-                />
-                <button type="submit" className="authoring-button" disabled={busy}>
-                    {existing === null ? "Create item definition" : "Save item definition"}
-                </button>
-            </form>
-        </>
+                {existing === null ? "Create item definition" : "Save item definition"}
+            </button>
+            {busy ? <span className="authoring-note"> Saving…</span> : null}
+        </form>
     )
 }
