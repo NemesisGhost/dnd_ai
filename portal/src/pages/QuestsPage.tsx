@@ -2,6 +2,7 @@ import { useId, useState } from "react"
 import { Link } from "react-router"
 import { AudiencePreviewSection } from "../components/AudiencePreviewSection"
 import { CardGrid } from "../components/CardGrid"
+import { MembershipClockUnsetNotice } from "../components/MembershipClockUnsetNotice"
 import { QuestCard } from "../components/QuestCard"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import type { AuthorizedParty } from "../types/bootstrap"
@@ -16,6 +17,8 @@ interface QuestsPageProps {
     characterId?: string | null
     partyId?: string | null
     parties?: AuthorizedParty[]
+    // The campaign has no effective clock: no authorized parties then means undetermined.
+    partiesUndetermined?: boolean
     onPartyChange?: (partyId: string | null) => void
 }
 
@@ -25,6 +28,7 @@ export function QuestsPage({
     characterId = null,
     partyId = null,
     parties = [],
+    partiesUndetermined = false,
     onPartyChange,
 }: QuestsPageProps) {
     const [sortColumn, setSortColumn] = useState<QuestSortColumn>("name")
@@ -74,7 +78,9 @@ export function QuestsPage({
                         {parties.length !== 1 ? (
                             <option value="">
                                 {parties.length === 0
-                                    ? "No party available"
+                                    ? partiesUndetermined
+                                        ? "Party membership undetermined"
+                                        : "No party available"
                                     : "No party selected"}
                             </option>
                         ) : null}
@@ -84,6 +90,9 @@ export function QuestsPage({
                             </option>
                         ))}
                     </select>
+                    {parties.length === 0 && partiesUndetermined ? (
+                        <MembershipClockUnsetNotice campaignId={campaignId} subject="Party membership" />
+                    ) : null}
                 </div>
             ) : null}
 

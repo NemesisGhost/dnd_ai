@@ -31,7 +31,7 @@ import type {
     KnowledgePage as KnowledgeResultsPage,
     KnowledgeView,
 } from "../types/knowledge"
-import { resolveAuthorizedParties } from "../utils/authorizedParties"
+import { partyMembershipUndetermined, resolveAuthorizedParties } from "../utils/authorizedParties"
 import PlaceholderPage from "./PlaceholderPage"
 import { KnowledgePage } from "./KnowledgePage"
 
@@ -167,6 +167,10 @@ function CampaignKnowledgeContent({
         campaignId,
         characterId,
     )
+
+    // Only with a character selected: without one there is no party perspective to be undetermined.
+    const partiesUndetermined =
+        characterId !== null && partyMembershipUndetermined(sessionState, campaignId)
 
     const [searchParams, setSearchParams] = useSearchParams()
     const view = viewFromAddress(searchParams.get("view"))
@@ -319,6 +323,7 @@ function CampaignKnowledgeContent({
             query={searchInputValue}
             partyId={partyId}
             parties={parties}
+            partiesUndetermined={partiesUndetermined}
             includePublic={includePublic}
             archiveBrowseAvailable={archiveBrowseAvailable}
             lifecycle={lifecycle}

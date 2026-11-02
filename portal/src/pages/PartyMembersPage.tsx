@@ -230,7 +230,7 @@ function MemberTable({
                         <tr>
                             <th scope="col">Character</th>
                             <th scope="col">Joined</th>
-                            {showLeft ? <th scope="col">Left</th> : null}
+                            {showLeft ? <th scope="col">{group === "history" ? "Left" : "Membership end"}</th> : null}
                             {canEnd ? (
                                 <th scope="col">
                                     <span className="visually-hidden">Actions</span>

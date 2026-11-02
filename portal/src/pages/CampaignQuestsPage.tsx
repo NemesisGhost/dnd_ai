@@ -5,7 +5,7 @@ import { QuestsPage } from "./QuestsPage"
 import PlaceholderPage from "./PlaceholderPage"
 
 function CampaignQuestsContent({ campaignId }: { campaignId: string }) {
-    const { characterId, partyId, parties, selectParty } =
+    const { characterId, partyId, parties, partiesUndetermined, selectParty } =
         useQuestPartyPerspective(campaignId)
 
     return (
@@ -21,6 +21,7 @@ function CampaignQuestsContent({ campaignId }: { campaignId: string }) {
                     characterId={characterId}
                     partyId={partyId}
                     parties={parties}
+                    partiesUndetermined={partiesUndetermined}
                     onPartyChange={selectParty}
                 />
             )}

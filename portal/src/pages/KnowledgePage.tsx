@@ -1,6 +1,7 @@
 import { useId } from "react"
 import type { ReactNode } from "react"
 import { Link } from "react-router"
+import { MembershipClockUnsetNotice } from "../components/MembershipClockUnsetNotice"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import type { AuthorizedParty } from "../types/bootstrap"
 import type { KnowledgeLifecycle, KnowledgeView } from "../types/knowledge"
@@ -11,6 +12,8 @@ interface KnowledgePageProps {
     query: string
     partyId: string | null
     parties: AuthorizedParty[]
+    /** The campaign has no effective clock (and a character is selected): no parties then means undetermined. */
+    partiesUndetermined?: boolean
     includePublic: boolean
     onViewChange: (view: KnowledgeView) => void
     onQueryChange: (query: string) => void
@@ -49,6 +52,7 @@ export function KnowledgePage({
     query,
     partyId,
     parties,
+    partiesUndetermined = false,
     includePublic,
     onViewChange,
     onQueryChange,
@@ -68,6 +72,7 @@ export function KnowledgePage({
     const publicOnly = view === "public"
 
     const hasParties = parties.length > 0
+    const undetermined = !hasParties && partiesUndetermined
 
     return (
         <section aria-labelledby="knowledge-heading">
@@ -177,7 +182,9 @@ export function KnowledgePage({
                         >
                             {hasParties
                                 ? "All parties"
-                                : "No party available"}
+                                : undetermined
+                                  ? "Party membership undetermined"
+                                  : "No party available"}
                         </option>
 
                         {parties.map((party) => (
@@ -189,6 +196,9 @@ export function KnowledgePage({
                             </option>
                         ))}
                     </select>
+                    {undetermined ? (
+                        <MembershipClockUnsetNotice campaignId={campaignId} subject="Party membership" />
+                    ) : null}
                 </div>
 
                 <div className="knowledge-page__field">

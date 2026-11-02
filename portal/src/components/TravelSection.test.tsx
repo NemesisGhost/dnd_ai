@@ -244,7 +244,7 @@ describe("TravelSection", () => {
         fireEvent.click(within(form).getByRole("checkbox", { name: "Mira" }))
         fireEvent.click(within(form).getByRole("checkbox", { name: "Aldric" }))
         fireEvent.change(await within(form).findByRole("combobox", { name: "Add a party" }), { target: { value: "p1" } })
-        const preview = await within(form).findByRole("list", { name: "Characters this travel will move" })
+        const preview = await within(form).findByRole("list", { name: "Travel candidates" })
         await waitFor(() => expect(within(preview).getAllByRole("listitem")).toHaveLength(3))
         const items = within(preview).getAllByRole("listitem").map((li) => li.textContent)
         expect(items).toEqual(["Aldric", "Mira", "Outsider (not in this session)"])
@@ -262,51 +262,65 @@ describe("TravelSection", () => {
     // (`effective_to_world_time_id IS NULL`) on the timeline, whatever the campaign time. The
     // preview follows the stored end, not `is_current`/`period_status`.
     describe("party preview matches the travel command's membership filter", () => {
-        async function previewFor(options: Options) {
-            const { server } = setup(options)
+        // An always-eligible actor (open-ended, in effect) sent in the same response as the actor
+        // under test. Once the control is listed the response has been applied, so an absent actor
+        // is absent because of the filter, not because the list had not loaded yet.
+        const CONTROL = row("m7", "Control", "in_effect", null)
+        const CONTROL_TEXT = "Control (not in this session)"
+
+        async function previewFor(options: Options, tick: string[] = []) {
+            const { server } = setup({ ...options, members: [CONTROL, ...(options.members ?? [])] })
             const form = await screen.findByRole("form", { name: "Record travel" })
+            for (const name of tick) fireEvent.click(within(form).getByRole("checkbox", { name }))
             fireEvent.change(await within(form).findByRole("combobox", { name: "Add a party" }), { target: { value: "p1" } })
-            await waitFor(() => expect(server.callsTo("GET", "/campaigns/c1/parties/p1/members")).toHaveLength(1))
-            // Let the member list resolve before reading the preview (it may legitimately be empty).
-            await new Promise((resolve) => setTimeout(resolve, 100))
-            const preview = within(form).queryByRole("list", { name: "Characters this travel will move" })
-            return { server, form, names: preview === null ? [] : within(preview).getAllByRole("listitem").map((li) => li.textContent) }
+            const preview = await within(form).findByRole("list", { name: "Travel candidates" })
+            await within(preview).findByText(CONTROL_TEXT)
+            expect(within(form).queryByText("No one selected yet.")).toBeNull()
+            const names = within(preview).getAllByRole("listitem").map((li) => li.textContent)
+            return { server, form, names }
         }
 
         it("includes a future open-ended membership and says it starts later", async () => {
             const { names } = await previewFor({ members: [row("m5", "Later", "not_started", null)] })
-            expect(names).toEqual(["Later (not in this session) (party membership starts later)"])
+            expect(names).toEqual([CONTROL_TEXT, "Later (not in this session) (party membership starts later)"])
         })
 
         it("excludes a finite membership that is in effect at the campaign time", async () => {
-            const { names, form } = await previewFor({ members: [row("m5", "Finite", "in_effect", "Year 9")] })
-            expect(names).toEqual([])
-            expect(within(form).getByText("No one selected yet.")).toBeInTheDocument()
+            const { names } = await previewFor({ members: [row("m5", "Finite", "in_effect", "Year 9")] })
+            expect(names).toEqual([CONTROL_TEXT])
         })
 
         it("excludes an ended finite membership", async () => {
             const { names } = await previewFor({ members: [row("m5", "Gone", "ended", "Year 0")] })
-            expect(names).toEqual([])
+            expect(names).toEqual([CONTROL_TEXT])
         })
 
         it("includes an ordinary current open-ended membership", async () => {
             const { names } = await previewFor({ members: [row("m1", "Aldric", "in_effect", null)] })
-            expect(names).toEqual(["Aldric"])
+            expect(names).toEqual([CONTROL_TEXT, "Aldric"])
+        })
+
+        it("lists a ticked character who is also an open-ended party member once", async () => {
+            const { names } = await previewFor({ members: [row("m1", "Aldric", "in_effect", null)] }, ["Aldric"])
+            expect(names.filter((n) => n === "Aldric")).toHaveLength(1)
+            expect(names).toHaveLength(2)
         })
 
         it("still includes open-ended memberships when the campaign has no clock", async () => {
             const { names } = await previewFor({
                 clockUnset: true,
-                members: [row("m1", "Aldric", "clock_unset", null), row("m8", "Left", "clock_unset", "Year 0")],
+                members: [row("m1", "Aldric", "clock_unset", null), row("m8", "Left", "clock_unset", "Year 0")].map((m) => m),
             })
-            expect(names).toEqual(["Aldric"])
+            expect(names).toEqual([CONTROL_TEXT, "Aldric"])
         })
 
-        it("labels the set as what the operation moves, not as current members, and issues no command", async () => {
+        it("calls the set candidates, not a definitive mover list, and issues no command", async () => {
             const { server, form } = await previewFor({})
-            expect(within(form).getByText("Characters this travel will move")).toBeInTheDocument()
-            expect(within(form).queryByText(/These characters will move/)).toBeNull()
-            expect(within(form).getByText(/not checked against the campaign time or the travel time/)).toBeInTheDocument()
+            expect(within(form).getByText("Travel candidates")).toBeInTheDocument()
+            expect(within(form).queryByText(/will move/)).toBeNull()
+            expect(within(form).getByText(/Candidates are the ticked characters and the party.s open-ended memberships/)).toBeInTheDocument()
+            expect(within(form).getByText(/validates travelers and skips anyone already at the destination/)).toBeInTheDocument()
+            expect(within(form).getByText(/not evaluated at the campaign time or the travel time/)).toBeInTheDocument()
             expect(within(form).getByLabelText("Add a party")).toHaveAccessibleDescription(/no recorded leave time/)
             expect(server.callsTo("POST", /./)).toHaveLength(0)
         })

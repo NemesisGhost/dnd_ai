@@ -83,7 +83,14 @@ beforeEach(() => {
     detailBoundarySpy.mockClear()
 })
 
-function sessionWithParties(parties: Record<string, AuthorizedParty[]>) {
+interface CampaignOptions {
+    // Fields of the route campaign's own bootstrap entry (e.g. current_time_set, capabilities).
+    own?: Record<string, unknown>
+    // Other campaigns in the same bootstrap, to prove the route campaign's metadata is the one read.
+    others?: Record<string, unknown>[]
+}
+
+function sessionWithParties(parties: Record<string, AuthorizedParty[]>, options: CampaignOptions = {}) {
     return {
         state: {
             status: "authenticated" as const,
@@ -101,7 +108,13 @@ function sessionWithParties(parties: Record<string, AuthorizedParty[]>) {
                                 authorized_parties: authorizedParties,
                             }),
                         ),
+                        ...options.own,
                     },
+                    ...(options.others ?? []).map((other) => ({
+                        ...sessionBootstrapFixture.campaigns[0],
+                        character_perspectives: [],
+                        ...other,
+                    })),
                 ],
             },
         },
@@ -114,10 +127,11 @@ function renderQuests(
     characterId: string | null,
     parties: Record<string, AuthorizedParty[]>,
     initialEntry = "/app/campaign-one/quests",
+    options: CampaignOptions = {},
 ) {
     const getSelectedCharacterId = vi.fn(() => characterId)
     const perspective = { getSelectedCharacterId, selectCharacter: vi.fn() }
-    const session = sessionWithParties(parties)
+    const session = sessionWithParties(parties, options)
 
     function tree(entry: string, key?: string) {
         return (
@@ -299,5 +313,78 @@ describe("CampaignQuestsPage", () => {
 
         expect(getSelectedCharacterId).not.toHaveBeenCalled()
         expect(listBoundarySpy).not.toHaveBeenCalled()
+    })
+})
+
+describe("CampaignQuestsPage party selector without an effective clock", () => {
+    const NOTICE = /Party membership cannot be determined because the campaign time has not been set/
+
+    it("says party membership is undetermined, not that no party is available", () => {
+        renderQuests("character-one", { "character-one": [] }, undefined, {
+            own: { current_time_set: false },
+        })
+
+        expect(partySelect()).toBeDisabled()
+        expect(screen.getByRole("option", { name: "Party membership undetermined" })).toBeInTheDocument()
+        expect(screen.queryByRole("option", { name: "No party available" })).toBeNull()
+        expect(screen.getByText(NOTICE)).toBeInTheDocument()
+        // Authorization filtering is untouched: nothing is invented, nothing is sent.
+        expect(screen.getAllByRole("option").filter((o) => partySelect().contains(o))).toHaveLength(1)
+        expect(listBoundarySpy).toHaveBeenLastCalledWith("campaign-one", "character-one", null)
+        // Campaign-wide quests still list.
+        expect(questLink()).toBeInTheDocument()
+    })
+
+    it("offers Campaign Home only to a user who can edit canon", () => {
+        const { unmount } = renderQuests("character-one", { "character-one": [] }, undefined, {
+            own: { current_time_set: false },
+        })
+        expect(screen.queryByRole("link", { name: /Set the campaign time/ })).toBeNull()
+        unmount()
+
+        renderQuests("character-one", { "character-one": [] }, undefined, {
+            own: { current_time_set: false, capabilities: ["campaign.view", "canon.edit"] },
+        })
+        expect(screen.getByRole("link", { name: /Set the campaign time/ })).toHaveAttribute(
+            "href",
+            "/app/campaign-one",
+        )
+    })
+
+    it("keeps the ordinary empty wording when the clock is set", () => {
+        renderQuests("character-one", { "character-one": [] }, undefined, {
+            own: { current_time_set: true },
+        })
+        expect(screen.getByRole("option", { name: "No party available" })).toBeInTheDocument()
+        expect(screen.queryByText(NOTICE)).toBeNull()
+    })
+
+    it("treats a payload without current_time_set as unknown, not as a missing clock", () => {
+        renderQuests("character-one", { "character-one": [] })
+        expect(screen.getByRole("option", { name: "No party available" })).toBeInTheDocument()
+        expect(screen.queryByText(NOTICE)).toBeNull()
+    })
+
+    it("reads the route campaign's own entry, not another campaign's", () => {
+        renderQuests("character-one", { "character-one": [] }, undefined, {
+            own: { current_time_set: true },
+            others: [{ campaign_id: "campaign-two", current_time_set: false }],
+        })
+        expect(screen.getByRole("option", { name: "No party available" })).toBeInTheDocument()
+        expect(screen.queryByText(NOTICE)).toBeNull()
+    })
+
+    it("lists the authorized parties as usual when the clock is set", () => {
+        renderQuests("character-one", { "character-one": [partyA, partyB] }, undefined, {
+            own: { current_time_set: true },
+        })
+        expect(partySelect()).toBeEnabled()
+        expect(screen.queryByText(NOTICE)).toBeNull()
+    })
+
+    it("shows no party selector, and no notice, without a selected character", () => {
+        renderQuests(null, { "character-one": [] }, undefined, { own: { current_time_set: false } })
+        expect(screen.queryByRole("combobox", { name: "Party" })).toBeNull()
+        expect(screen.queryByText(NOTICE)).toBeNull()
     })
 })

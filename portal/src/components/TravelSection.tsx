@@ -313,7 +313,7 @@ function TravelForm({
                         <SelectField
                             id="travel-party"
                             label="Add a party"
-                            hint="Everyone ticked above and the party's members with no recorded leave time travel together, whether or not they are current members at the campaign time."
+                            hint="Everyone ticked above and the party's open-ended memberships (no recorded leave time) are considered, whether or not they are current members at the campaign time."
                             value={party}
                             placeholder="No party"
                             options={partyItems
@@ -324,7 +324,7 @@ function TravelForm({
                     ) : null}
                 </fieldset>
                 <div aria-live="polite">
-                    <p id="travel-preview-heading">Characters this travel will move</p>
+                    <p id="travel-preview-heading">Travel candidates</p>
                     {willMove.size === 0 ? (
                         <p className="authoring-note">No one selected yet.</p>
                     ) : (
@@ -345,10 +345,10 @@ function TravelForm({
                         </p>
                     ) : null}
                     <p className="authoring-note">
-                        A preview only: the server decides who moves when you record, and anyone already at the
-                        destination stays put. A party adds its members with no recorded leave time; this is not
-                        checked against the campaign time or the travel time, so it can differ from the party&apos;s
-                        current members.
+                        Candidates are the ticked characters and the party&apos;s open-ended memberships (no recorded
+                        leave time). The server validates travelers and skips anyone already at the destination. This
+                        expansion is not evaluated at the campaign time or the travel time, so it can differ from the
+                        party&apos;s current members.
                     </p>
                 </div>
                 {routeItems.length > 0 ? (

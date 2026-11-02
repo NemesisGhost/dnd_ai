@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router"
 import { usePerspective } from "../context/CharacterPerspectiveContext"
 import { useSession } from "../context/SessionContext"
 import type { AuthorizedParty } from "../types/bootstrap"
-import { resolveAuthorizedParties } from "../utils/authorizedParties"
+import { partyMembershipUndetermined, resolveAuthorizedParties } from "../utils/authorizedParties"
 export { questPerspectiveSearch } from "../utils/questPerspectiveSearch"
 
 export interface QuestPartyPerspective {
@@ -12,6 +12,8 @@ export interface QuestPartyPerspective {
      * for campaign-wide quests only. Always one of `parties`. */
     partyId: string | null
     parties: AuthorizedParty[]
+    /** The campaign has no effective clock, so an empty `parties` is undetermined, not "none". */
+    partiesUndetermined: boolean
     selectParty: (partyId: string | null) => void
 }
 
@@ -73,6 +75,8 @@ export function useQuestPartyPerspective(campaignId: string): QuestPartyPerspect
         [characterId, setSearchParams],
     )
 
-    return { characterId, partyId, parties, selectParty }
+    const partiesUndetermined = partyMembershipUndetermined(sessionState, campaignId)
+
+    return { characterId, partyId, parties, partiesUndetermined, selectParty }
 }
 

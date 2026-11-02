@@ -24,6 +24,7 @@ import {
     CharacterPerspectiveContext,
 } from "../context/CharacterPerspectiveContext"
 import {
+    SessionContext,
     useSession,
 } from "../context/SessionContext"
 import {
@@ -1177,5 +1178,105 @@ describe("CampaignKnowledgePage", () => {
                 "/app/campaign-a/knowledge?view=rumors",
             )
         })
+    })
+})
+
+describe("CampaignKnowledgePage party selector without an effective clock", () => {
+    const NOTICE = /Party membership cannot be determined because the campaign time has not been set/
+
+    function useCampaignA(
+        parties: Record<string, AuthorizedParty[]>,
+        own: Record<string, unknown> = {},
+        others: Record<string, unknown> = {},
+    ) {
+        const state = buildSessionState(parties)
+        if (state.status !== "authenticated") throw new Error("fixture")
+        const [a, b] = state.bootstrap.campaigns
+        state.bootstrap.campaigns = [{ ...a!, ...own }, { ...b!, ...others }]
+        const value = { state, reload: vi.fn(), refresh: vi.fn() }
+        useSessionMock.mockReturnValue(value)
+        return value
+    }
+
+    function partyOptions() {
+        const select = screen.getByRole("combobox", { name: "Party" })
+        return screen
+            .getAllByRole("option")
+            .filter((option) => select.contains(option))
+            .map((option) => option.textContent)
+    }
+
+    it("says membership is undetermined instead of 'No party available'", () => {
+        useCampaignA({ "character-a": [] }, { current_time_set: false })
+        renderCampaignKnowledgePage()
+
+        expect(screen.getByRole("combobox", { name: "Party" })).toBeDisabled()
+        expect(partyOptions()).toEqual(["Party membership undetermined"])
+        expect(screen.getByText(NOTICE)).toBeInTheDocument()
+        // Independent behavior is untouched: the view, public toggle and results remain.
+        expect(screen.getByRole("checkbox", { name: /public/i })).toBeEnabled()
+        expect(screen.getByText(knowledgePageFixture.items[0].statement)).toBeInTheDocument()
+    })
+
+    it("offers Campaign Home only with canon.edit", () => {
+        const value = useCampaignA({ "character-a": [] }, { current_time_set: false })
+        const { unmount } = renderCampaignKnowledgePage()
+        expect(screen.queryByRole("link", { name: /Set the campaign time/ })).toBeNull()
+        unmount()
+
+        const editor = useCampaignA({ "character-a": [] }, { current_time_set: false, capabilities: ["canon.edit"] })
+        void value
+        render(
+            <SessionContext.Provider value={editor}>
+                <CharacterPerspectiveContext.Provider
+                    value={{ getSelectedCharacterId: () => "character-a", selectCharacter: vi.fn() }}
+                >
+                    <MemoryRouter initialEntries={["/app/campaign-a/knowledge"]}>
+                        <Routes>
+                            <Route path="/app/:campaignId/knowledge" element={<CampaignKnowledgePage />} />
+                        </Routes>
+                    </MemoryRouter>
+                </CharacterPerspectiveContext.Provider>
+            </SessionContext.Provider>,
+        )
+        expect(screen.getByRole("link", { name: /Set the campaign time/ })).toHaveAttribute(
+            "href",
+            "/app/campaign-a",
+        )
+    })
+
+    it("keeps 'No party available' for a genuinely empty list when the clock is set", () => {
+        useCampaignA({ "character-a": [] }, { current_time_set: true })
+        renderCampaignKnowledgePage()
+        expect(partyOptions()).toEqual(["No party available"])
+        expect(screen.queryByText(NOTICE)).toBeNull()
+    })
+
+    it("treats a missing current_time_set as unknown, not as a missing clock", () => {
+        useCampaignA({ "character-a": [] })
+        renderCampaignKnowledgePage()
+        expect(partyOptions()).toEqual(["No party available"])
+        expect(screen.queryByText(NOTICE)).toBeNull()
+    })
+
+    it("lists authorized parties as usual when the clock is set", () => {
+        useCampaignA({ "character-a": [partyPrimary, partyCouncil] }, { current_time_set: true })
+        renderCampaignKnowledgePage()
+        expect(partyOptions()).toEqual(["All parties", "The Adventuring Party", "The Merchant Council"])
+        expect(screen.queryByText(NOTICE)).toBeNull()
+    })
+
+    it("reads the route campaign's own entry, not another campaign's", () => {
+        useCampaignA({ "character-a": [] }, { current_time_set: true }, { current_time_set: false })
+        renderCampaignKnowledgePage()
+        expect(partyOptions()).toEqual(["No party available"])
+        expect(screen.queryByText(NOTICE)).toBeNull()
+    })
+
+    it("has no party perspective to be undetermined without a selected character", () => {
+        useCampaignA({ "character-a": [] }, { current_time_set: false })
+        renderCampaignKnowledgePage("/app/campaign-a/knowledge", null)
+        expect(partyOptions()).toEqual(["No party available"])
+        expect(screen.queryByText(NOTICE)).toBeNull()
     })
 })

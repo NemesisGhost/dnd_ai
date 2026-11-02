@@ -433,3 +433,33 @@ describe("party members page: effective-time groups", () => {
     expect(within(panel).queryByText("No current members.")).toBeNull()
   })
 })
+
+describe("party members page: membership end wording", () => {
+  it("does not call a future end 'Left' for a current finite membership, and keeps 'Left' for history", async () => {
+    server.on("GET", MEMBERS, {
+      body: listing("active", [
+        member("m4", "Dara", true, "in_effect", "Year 5"),
+        member("m3", "Cael", false, "not_started", "Year 9"),
+        member("m2", "Bryn", false),
+      ]),
+    })
+    openApp("/app/mundivita/parties/p1")
+    const current = await screen.findByRole("table", { name: "Current members" })
+    expect(within(current).getByRole("columnheader", { name: "Membership end" })).toBeInTheDocument()
+    expect(within(current).queryByRole("columnheader", { name: "Left" })).toBeNull()
+    const upcoming = screen.getByRole("table", { name: "Upcoming members" })
+    expect(within(upcoming).getByRole("columnheader", { name: "Membership end" })).toBeInTheDocument()
+    const past = screen.getByRole("table", { name: "Past members" })
+    expect(within(past).getByRole("columnheader", { name: "Left" })).toBeInTheDocument()
+  })
+
+  it("uses the neutral heading for undetermined memberships", async () => {
+    server.on("GET", MEMBERS, {
+      body: listing("active", [member("m2", "Bryn", false, "clock_unset", "Year 3")], { as_of: null, clock_unset: true }),
+    })
+    openApp("/app/mundivita/parties/p1")
+    const all = await screen.findByRole("table", { name: "Members (current status unknown)" })
+    expect(within(all).getByRole("columnheader", { name: "Membership end" })).toBeInTheDocument()
+    expect(within(all).queryByRole("columnheader", { name: "Left" })).toBeNull()
+  })
+})

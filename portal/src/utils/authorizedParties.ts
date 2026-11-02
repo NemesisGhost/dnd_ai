@@ -30,3 +30,19 @@ export function resolveAuthorizedParties(
 
     return character?.authorized_parties ?? []
 }
+
+// True only when the server said, for this campaign's own bootstrap entry, that it has no
+// effective clock (`current_time_set === false`), so party membership is undetermined and an empty
+// `authorized_parties` does not mean "no parties". A payload that omits the field (an older server
+// or fixture) is unknown, not proof of a missing clock: it is treated as set, so the ordinary
+// "No party available" wording stays. Never read another campaign's entry or a global flag.
+export function partyMembershipUndetermined(
+    sessionState: SessionBootstrapState,
+    campaignId: string,
+): boolean {
+    if (sessionState.status !== "authenticated") return false
+    return (
+        sessionState.bootstrap.campaigns.find((campaign) => campaign.campaign_id === campaignId)
+            ?.current_time_set === false
+    )
+}
