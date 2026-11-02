@@ -40,6 +40,20 @@ const RECORDED = {
     display: "Year 3, Bloom 5",
 }
 const SHOWN = /Year 3 \(Founding\), Bloom 5/
+// The other campaign's one time: text that only that campaign's page can show.
+const OTHER_TIME = {
+    world_time_id: "o1",
+    calendar_id: null,
+    year: null,
+    month_number: null,
+    day: null,
+    hour: null,
+    minute: null,
+    label: "Other world marker",
+    precision: "narrative",
+    sort_key: 1,
+    display: "Other world marker",
+}
 
 afterEach(() => {
     vi.unstubAllGlobals()
@@ -50,7 +64,7 @@ function setup(options: { post?: (n: number) => MockResponse | Promise<MockRespo
     const state = { items: [] as unknown[], readStatus: 0, posts: 0 }
     server.on("GET", TIMES, (call) =>
         call.path.includes(OTHER)
-            ? { body: { items: [], next_cursor: null } }
+            ? { body: { items: [OTHER_TIME], next_cursor: null } }
             : state.readStatus !== 0
               ? { status: state.readStatus, body: {} }
               : { body: { items: state.items, next_cursor: null } },
@@ -437,13 +451,214 @@ describe("Record a time dialog: leaving the page", () => {
         fireEvent.click(screen.getByRole("link", { name: "Go to the other campaign", hidden: true }))
         expect(await inDialog().findByText(/A time is being recorded/)).toBeInTheDocument()
         fireEvent.click(inDialog().getByRole("button", { name: "Leave" }))
-        await screen.findByText("No times have been recorded for this world yet.")
+        // The destination has loaded: its own time is on screen, and the origin's page is gone.
+        expect(await screen.findByText("Other world marker")).toBeInTheDocument()
+        expect(screen.queryByText("No times have been recorded for this world yet.")).toBeNull()
         await act(async () => release())
         await act(async () => {})
         expect(screen.queryByText(/World time recorded/)).toBeNull()
+        expect(screen.queryByText(/Year 3/)).toBeNull()
+        expect(screen.getByText("Other world marker")).toBeInTheDocument()
         expect(spoken).toEqual([])
         expect(screen.queryByRole("dialog")).toBeNull()
         expect(trigger()).toHaveAttribute("aria-disabled", "false")
         expect(posts(server)).toHaveLength(1)
+    })
+})
+
+describe("Record a time dialog: a retry that succeeds while newer input is waiting", () => {
+    it("keeps the dialog and the newer draft, says it is unrecorded, and records it later under a new key", async () => {
+        const { server } = setup({ post: (n) => (n === 1 ? { networkError: true } : undefined) })
+        await openIt()
+        const spoken = watchAnnouncements()
+        fill("3")
+        record()
+        await inDialog().findByText(/cannot tell whether this was saved/)
+        fireEvent.change(inDialog().getByRole("textbox", { name: /Year/ }), { target: { value: "4" } })
+
+        // Retry the original operation (year 3); the form already holds year 4.
+        fireEvent.click(inDialog().getByRole("button", { name: "Retry" }))
+        const notice = await inDialog().findByText(
+            /The time you submitted earlier was recorded: Common Reckoning: Year 3 \(Founding\), Bloom 5\. What is in the form now has not been recorded\./,
+        )
+        expect(notice).toBeInTheDocument()
+        await act(async () => {})
+        // Not closed, not announced as done, and the draft is intact.
+        expect(dialog()).toBeInTheDocument()
+        expect(spoken).not.toContain("World time recorded")
+        expect(inDialog().getByRole("textbox", { name: /Year/ })).toHaveValue("4")
+        expect(inDialog().getByRole("textbox", { name: "Day" })).toHaveValue("5")
+        expect(posts(server)).toHaveLength(2)
+        const [first, retried] = posts(server)
+        expect(retried!.body).toEqual(first!.body)
+        expect(retried!.headers["Idempotency-Key"]).toBe(first!.headers["Idempotency-Key"])
+
+        // Still guarded: leaving asks, and Stay brings the draft back.
+        fireEvent.click(screen.getByRole("link", { name: "Go home", hidden: true }))
+        expect(await inDialog().findByText(/You have entered a time that has not been recorded/)).toBeInTheDocument()
+        fireEvent.click(inDialog().getByRole("button", { name: "Stay" }))
+        expect(inDialog().getByRole("textbox", { name: /Year/ })).toHaveValue("4")
+        expect(screen.queryByText("Campaign home page")).toBeNull()
+
+        // A deliberate recording is a new request: new key, the draft's own body, once.
+        record()
+        await waitFor(() => noDialog())
+        expect(posts(server)).toHaveLength(3)
+        const third = posts(server)[2]!
+        expect(third.body).toMatchObject({ year: 4 })
+        expect(third.headers["Idempotency-Key"]).toBeTruthy()
+        expect(third.headers["Idempotency-Key"]).not.toBe(first!.headers["Idempotency-Key"])
+        await waitFor(() => expect(spoken.filter((x) => x === "World time recorded")).toHaveLength(1))
+        expect(trigger()).toHaveFocus()
+    })
+
+    it("closes normally when the retry succeeds and nothing newer was entered", async () => {
+        const { server } = setup({ post: (n) => (n === 1 ? { networkError: true } : undefined) })
+        await openIt()
+        const spoken = watchAnnouncements()
+        fill("3")
+        record()
+        await inDialog().findByText(/cannot tell whether this was saved/)
+        fireEvent.click(inDialog().getByRole("button", { name: "Retry" }))
+        await waitFor(() => noDialog())
+        expect(screen.queryByText(/has not been recorded/)).toBeNull()
+        await waitFor(() => expect(spoken.filter((x) => x === "World time recorded")).toHaveLength(1))
+        expect(trigger()).toHaveFocus()
+        expect(posts(server)).toHaveLength(2)
+    })
+
+    it("closes, keeps the draft and the page notice, and reads only, when the list read fails after the retry", async () => {
+        const { server, state } = setup({ post: (n) => (n === 1 ? { networkError: true } : undefined) })
+        await openIt()
+        fill("3")
+        record()
+        await inDialog().findByText(/cannot tell whether this was saved/)
+        fireEvent.change(inDialog().getByRole("textbox", { name: /Year/ }), { target: { value: "4" } })
+        state.readStatus = 500
+        fireEvent.click(inDialog().getByRole("button", { name: "Retry" }))
+        expect(
+            await screen.findByText(/World time recorded\. The latest world times could not be loaded/),
+        ).toBeInTheDocument()
+        noDialog()
+        expect(trigger()).toHaveAttribute("aria-disabled", "true")
+        expect(screen.getByText(/What you entered after it is kept in the form/)).toBeInTheDocument()
+        state.readStatus = 0
+        fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+        await within(await screen.findByRole("list")).findByText(/Year 3/)
+        expect(posts(server)).toHaveLength(2)
+        await waitFor(() => expect(trigger()).toHaveAttribute("aria-disabled", "false"))
+        fireEvent.click(trigger())
+        expect(await screen.findByRole("textbox", { name: /Year/ })).toHaveValue("4")
+    })
+})
+
+describe("Record a time dialog: Escape answers the question being asked", () => {
+    it("means Stay during the leave question: navigation is cancelled and no other question appears", async () => {
+        setup()
+        await openIt()
+        fill()
+        fireEvent.click(screen.getByRole("link", { name: "Go home", hidden: true }))
+        expect(await inDialog().findByText(/You have entered a time that has not been recorded/)).toBeInTheDocument()
+        expect(escape().defaultPrevented).toBe(true)
+        await waitFor(() => expect(inDialog().queryByText(/You have entered a time that has not been recorded/)).toBeNull())
+        expect(inDialog().queryByText(/Discard this time/)).toBeNull()
+        expect(inDialog().queryByRole("group", { name: "Confirm" })).toBeNull()
+        expect(screen.queryByText("Campaign home page")).toBeNull()
+        expect(inDialog().getByRole("textbox", { name: /Year/ })).toHaveValue("3")
+        expect(inDialog().getByRole("textbox", { name: "Day" })).toHaveValue("5")
+
+        // The navigation really was cancelled: ordinary Escape still asks to discard, and a new attempt asks again.
+        escape()
+        expect(inDialog().getByText(/Discard this time/)).toBeInTheDocument()
+        fireEvent.click(inDialog().getByRole("button", { name: "Keep editing" }))
+        fireEvent.click(screen.getByRole("link", { name: "Go home", hidden: true }))
+        expect(await inDialog().findByText(/You have entered a time that has not been recorded/)).toBeInTheDocument()
+    })
+
+    it("replaces a discard question with the leave question and leaves no hidden one behind", async () => {
+        setup()
+        await openIt()
+        fill()
+        escape()
+        expect(inDialog().getByText(/Discard this time/)).toBeInTheDocument()
+        fireEvent.click(screen.getByRole("link", { name: "Go home", hidden: true }))
+        expect(await inDialog().findByText(/You have entered a time that has not been recorded/)).toBeInTheDocument()
+        expect(inDialog().queryByText(/Discard this time/)).toBeNull()
+        fireEvent.click(inDialog().getByRole("button", { name: "Stay" }))
+        expect(inDialog().queryByText(/Discard this time/)).toBeNull()
+        expect(inDialog().getByRole("textbox", { name: /Year/ })).toHaveValue("3")
+    })
+
+    it("means Keep editing during the discard question", async () => {
+        const { server } = setup()
+        await openIt()
+        fill()
+        escape()
+        expect(inDialog().getByText(/Discard this time/)).toBeInTheDocument()
+        escape()
+        expect(inDialog().queryByText(/Discard this time/)).toBeNull()
+        expect(dialog()).toBeInTheDocument()
+        expect(inDialog().getByRole("textbox", { name: /Year/ })).toHaveValue("3")
+        expect(posts(server)).toHaveLength(0)
+    })
+
+    it("means Stay while a request is pending, and still cannot dismiss the dialog", async () => {
+        const { gate, release } = deferred()
+        setup({
+            post: async () => {
+                await gate
+                return undefined
+            },
+        })
+        await openIt()
+        fill()
+        record()
+        await inDialog().findByRole("button", { name: "Recording…" })
+        fireEvent.click(screen.getByRole("link", { name: "Go home", hidden: true }))
+        expect(await inDialog().findByText(/A time is being recorded/)).toBeInTheDocument()
+        escape()
+        await waitFor(() => expect(inDialog().queryByText(/A time is being recorded/)).toBeNull())
+        expect(dialog()).toBeInTheDocument()
+        expect(screen.queryByText("Campaign home page")).toBeNull()
+        escape()
+        expect(dialog()).toBeInTheDocument()
+        expect(inDialog().queryByText(/Discard this time/)).toBeNull()
+        await act(async () => release())
+        await waitFor(() => noDialog())
+    })
+})
+
+describe("Record a time dialog: where focus goes on closing", () => {
+    it("reaches the persistent button when the transient Reopen control that opened the dialog is gone", async () => {
+        const { server } = setup({ post: (n) => (n === 1 ? { networkError: true } : undefined) })
+        await openIt()
+        fill()
+        record()
+        await inDialog().findByText(/cannot tell whether this was saved/)
+        fireEvent.click(inDialog().getByRole("button", { name: "Cancel" }))
+        fireEvent.click(inDialog().getByRole("button", { name: "Close and check later" }))
+        noDialog()
+
+        const reopen = screen.getByRole("button", { name: "Reopen to retry" })
+        reopen.focus()
+        fireEvent.click(reopen)
+        await inDialog().findByText(/cannot tell whether this was saved/)
+        // The control that opened the dialog is no longer on the page.
+        expect(reopen.isConnected).toBe(false)
+        fireEvent.click(inDialog().getByRole("button", { name: "Retry" }))
+        await waitFor(() => noDialog())
+        expect(trigger()).toHaveFocus()
+        expect(posts(server)).toHaveLength(2)
+    })
+
+    it("does not move focus to the page's button once the page has been left", async () => {
+        setup()
+        await openIt()
+        fill()
+        fireEvent.click(screen.getByRole("link", { name: "Go home", hidden: true }))
+        fireEvent.click(await inDialog().findByRole("button", { name: "Leave" }))
+        expect(await screen.findByText("Campaign home page")).toBeInTheDocument()
+        expect(screen.queryByRole("button", { name: "Record a time" })).toBeNull()
+        expect(document.body.contains(document.activeElement)).toBe(true)
     })
 })

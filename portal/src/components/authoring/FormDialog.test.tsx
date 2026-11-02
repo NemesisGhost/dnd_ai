@@ -8,10 +8,12 @@ function Harness({
     onDismiss = vi.fn(),
     pending = false,
     prompt = null,
+    returnFocusTo,
 }: {
     onDismiss?: () => void
     pending?: boolean
     prompt?: FormDialogPrompt | null
+    returnFocusTo?: () => HTMLElement | null
 }) {
     const [open, setOpen] = useState(false)
     return (
@@ -29,6 +31,7 @@ function Harness({
                 onDismiss={onDismiss}
                 pending={pending}
                 prompt={prompt}
+                returnFocusTo={returnFocusTo}
             >
                 <label>
                     Name
@@ -127,5 +130,50 @@ describe("FormDialog", () => {
         expect(screen.queryByText("Discard this?")).toBeNull()
         expect(screen.getByRole("textbox", { name: "Name" })).toHaveValue("typed")
         expect(screen.getByRole("textbox", { name: "Name" })).toHaveFocus()
+    })
+
+    it("returns focus to the fallback when the opener is gone, and to the opener when it is usable", () => {
+        const fallback = document.createElement("button")
+        document.body.appendChild(fallback)
+        const { unmount } = render(<Harness returnFocusTo={() => fallback} />)
+        const opener = screen.getByRole("button", { name: "Open it" })
+        opener.focus()
+        fireEvent.click(opener)
+        fireEvent.click(screen.getByRole("button", { name: "Close it", hidden: true }))
+        // Usable opener: it wins over the fallback.
+        expect(opener).toHaveFocus()
+        // Opener unusable by the time the dialog closes: the fallback is used.
+        opener.focus()
+        fireEvent.click(opener)
+        opener.setAttribute("disabled", "")
+        fireEvent.click(screen.getByRole("button", { name: "Close it", hidden: true }))
+        expect(fallback).toHaveFocus()
+        unmount()
+        fallback.remove()
+    })
+
+    it("leaves focus alone when there is no fallback to go to", () => {
+        render(<Harness returnFocusTo={() => null} />)
+        const opener = screen.getByRole("button", { name: "Open it" })
+        opener.focus()
+        fireEvent.click(opener)
+        opener.setAttribute("disabled", "")
+        fireEvent.click(screen.getByRole("button", { name: "Close it", hidden: true }))
+        expect(opener).not.toHaveFocus()
+    })
+
+    it("hands Escape to the page while a question is shown, even when a request is pending", () => {
+        const onDismiss = vi.fn()
+        const prompt: FormDialogPrompt = {
+            message: "Leave?",
+            keepLabel: "Stay",
+            confirmLabel: "Leave",
+            onKeep: vi.fn(),
+            onConfirm: vi.fn(),
+        }
+        render(<Harness onDismiss={onDismiss} pending prompt={prompt} />)
+        fireEvent.click(screen.getByRole("button", { name: "Open it" }))
+        escape(screen.getByRole("dialog", { name: "Record a thing" }))
+        expect(onDismiss).toHaveBeenCalledTimes(1)
     })
 })

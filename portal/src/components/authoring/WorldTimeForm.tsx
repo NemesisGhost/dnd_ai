@@ -40,7 +40,12 @@ interface WorldTimeFormProps {
     times: WorldTimeItem[]
     // The time was recorded. A caller that reads the times again afterwards returns what that read
     // did, so a recorded time whose read-back failed is reported as such (and never recorded twice).
-    onCreated: (receipt: WorldTimeReceipt) => void | RefreshOutcome | Promise<void | RefreshOutcome>
+    // `newerInput` (only with `holdUnresolved`) is the form's own answer, taken when the confirmation
+    // arrived: it holds something other than what was recorded, and it was kept rather than cleared.
+    onCreated: (
+        receipt: WorldTimeReceipt,
+        outcome: { newerInput: boolean },
+    ) => void | RefreshOutcome | Promise<void | RefreshOutcome>
     onCancel: () => void
     heading?: string
     // The form sits inside another form (the picker does): render a group that saves by click or
@@ -86,11 +91,12 @@ export function WorldTimeForm({
         holdUnresolved,
         onSuccess: (receipt, body) => {
             setResent(false)
-            if (!holdUnresolved || !differsFrom(body)) {
+            const newerInput = holdUnresolved && differsFrom(body)
+            if (!newerInput) {
                 setValues(emptyWorldTimeForm(calendars))
                 setErrors([])
             }
-            return onCreated(receipt)
+            return onCreated(receipt, { newerInput })
         },
     })
     const pending = mutation.status.kind === "pending"

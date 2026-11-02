@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useCallback, useRef, useState } from "react"
 import { Link, useParams } from "react-router"
 import { campaignCalendarsPath, fetchWorldTimes, worldTimesPath } from "../api/worldTime"
 import { ConfirmDialog } from "../components/authoring/ConfirmDialog"
@@ -123,6 +123,16 @@ function WorldTimesContent({ campaignId, page, calendars, refetch, pageStale }: 
     const [confirming, setConfirming] = useState<"discard" | "unresolved" | null>(null)
     // The time just recorded, for the visible confirmation.
     const [lastId, setLastId] = useState<string | null>(null)
+    // A time the server confirmed while the form already held newer, unrecorded input: that input stays in
+    // the open dialog, and this says which time was recorded so the two are not confused.
+    const [keptAfter, setKeptAfter] = useState<string | null>(null)
+    // The persistent control that focus returns to when the opener (e.g. "Reopen to retry") has gone.
+    const recordButton = useRef<HTMLButtonElement>(null)
+    const handleStatus = useCallback((next: AuthoringMutationStatus) => {
+        setStatus(next)
+        // Sending something again ends the notice about the earlier confirmation.
+        if (next.kind === "pending") setKeptAfter(null)
+    }, [])
 
     const pending = status.kind === "pending"
     // A network or server failure: the time may or may not have been recorded.
@@ -130,6 +140,8 @@ function WorldTimesContent({ campaignId, page, calendars, refetch, pageStale }: 
     // Leaving the page would lose entered values, a request in flight, or the means to retry an uncertain one.
     // (A confirmed write whose list could not be read loses nothing but a notice, so it is not guarded.)
     const guard = useUnsavedChangesGuard(dirty || pending || unresolved)
+    // A question about leaving replaces any other question, so none can wait unseen behind it.
+    if (guard.blocked && confirming !== null) setConfirming(null)
     const leaveMessage = pending
         ? "A time is being recorded. If you leave now you will not see whether it was saved; check the list afterwards."
         : unresolved
@@ -163,8 +175,17 @@ function WorldTimesContent({ campaignId, page, calendars, refetch, pageStale }: 
 
     const savedItem = lastId === null ? undefined : shown.find((item) => item.world_time_id === lastId)
 
-    // Cancel, Escape or the form's Cancel button. Never while a request is pending.
+    // Cancel, Escape or the form's Cancel button. Escape answers the question being asked, if any, with its
+    // safe choice (stay, keep editing); otherwise it never dismisses while a request is pending.
     function requestDismiss() {
+        if (guard.blocked) {
+            guard.stay()
+            return
+        }
+        if (confirming !== null) {
+            setConfirming(null)
+            return
+        }
         if (pending) return
         if (unresolved) setConfirming("unresolved")
         else if (dirty) setConfirming("discard")
@@ -181,6 +202,7 @@ function WorldTimesContent({ campaignId, page, calendars, refetch, pageStale }: 
                 onKeep: () => setConfirming(null),
                 onConfirm: () => {
                     setConfirming(null)
+                    setKeptAfter(null)
                     setOpen(false)
                     setFormKey((n) => n + 1)
                 },
@@ -279,6 +301,7 @@ function WorldTimesContent({ campaignId, page, calendars, refetch, pageStale }: 
                     </div>
                 ) : null}
                 <button
+                    ref={recordButton}
                     type="button"
                     className="authoring-button authoring-button--primary"
                     aria-disabled={refreshed.held}
@@ -294,6 +317,7 @@ function WorldTimesContent({ campaignId, page, calendars, refetch, pageStale }: 
                 {refreshed.held ? (
                     <p id="world-times-held" className="authoring-note">
                         Load the latest world times before recording another.
+                        {dirty ? " What you entered after it is kept in the form." : ""}
                     </p>
                 ) : null}
                 <FormDialog
@@ -303,7 +327,20 @@ function WorldTimesContent({ campaignId, page, calendars, refetch, pageStale }: 
                     onDismiss={requestDismiss}
                     pending={pending}
                     prompt={prompt}
+                    returnFocusTo={() => recordButton.current}
                 >
+                    {keptAfter !== null ? (
+                        <div className="authoring-message authoring-message--success" role="status">
+                            <p>
+                                The time you submitted earlier was recorded
+                                {(() => {
+                                    const item = shown.find((t) => t.world_time_id === keptAfter)
+                                    return item === undefined ? "" : `: ${recordedTime(item)}`
+                                })()}
+                                . What is in the form now has not been recorded.
+                            </p>
+                        </div>
+                    ) : null}
                     <WorldTimeForm
                         key={formKey}
                         campaignId={campaignId}
@@ -311,20 +348,28 @@ function WorldTimesContent({ campaignId, page, calendars, refetch, pageStale }: 
                         times={shown}
                         holdUnresolved
                         onDirtyChange={setDirty}
-                        onStatusChange={setStatus}
-                        onCreated={async (receipt) => {
+                        onStatusChange={handleStatus}
+                        onCreated={async (receipt, { newerInput }) => {
                             setLastId(receipt.world_time_id)
                             const outcome = await refetch()
                             if (outcome === "ok") {
                                 setOlder([])
                                 setCursor(undefined)
-                                announce("World time recorded")
                             } else {
                                 // Recorded, but the list does not show it yet: said so, not announced as done.
                                 recorded.mark(true)
                             }
                             setConfirming(null)
-                            setOpen(false)
+                            if (newerInput) {
+                                // Newer input stays, unrecorded and guarded. With the list read, the dialog stays open
+                                // and says so in place of an announcement; with it unread, the page's notice and
+                                // held button come first and the draft waits in the form.
+                                setKeptAfter(receipt.world_time_id)
+                                if (outcome !== "ok") setOpen(false)
+                            } else {
+                                if (outcome === "ok") announce("World time recorded")
+                                setOpen(false)
+                            }
                             return outcome
                         }}
                         onCancel={requestDismiss}

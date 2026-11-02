@@ -23,7 +23,22 @@ interface FormDialogProps {
     pending?: boolean
     // When set it replaces the form (which stays mounted, with its values) until answered.
     prompt?: FormDialogPrompt | null
+    // Where focus goes on closing when the control that opened the dialog is gone, hidden or disabled
+    // (a "Reopen" link that the page removes as it opens the dialog). Returns null when there is nowhere
+    // to go, e.g. the page it belongs to has been left; focus is then left alone.
+    returnFocusTo?: () => HTMLElement | null
     children: ReactNode
+}
+
+// Whether `element` can take focus back now: in the document, outside any inert subtree, and not disabled.
+function canTakeFocus(element: Element | null): element is HTMLElement {
+    return (
+        element instanceof HTMLElement &&
+        element !== document.body &&
+        element.isConnected &&
+        element.closest("[inert], [hidden]") === null &&
+        !element.matches(":disabled")
+    )
 }
 
 // A modal that holds a form, built on the native <dialog> like ConfirmDialog (showModal supplies the
@@ -33,8 +48,23 @@ interface FormDialogProps {
 //   - a click on the backdrop does nothing, so a touch cannot lose what was typed;
 //   - Escape asks the page (`onDismiss`) and is ignored while a request is pending;
 //   - a confirmation (`prompt`) is shown inside the dialog, never as a second modal.
-// Focus enters the first control when it opens and returns to the control that opened it when it closes.
-export function FormDialog({ open, title, description, onDismiss, pending = false, prompt = null, children }: FormDialogProps) {
+// Focus enters the first control when it opens and returns to the control that opened it when it closes
+// (or to `returnFocusTo` when that control is no longer usable). Escape while a question is shown is
+// passed to the page, which answers it with the safe choice; a pending request only blocks dismissal.
+export function FormDialog({
+    open,
+    title,
+    description,
+    onDismiss,
+    pending = false,
+    prompt = null,
+    returnFocusTo,
+    children,
+}: FormDialogProps) {
+    const fallbackRef = useRef(returnFocusTo)
+    useEffect(() => {
+        fallbackRef.current = returnFocusTo
+    }, [returnFocusTo])
     const dialogRef = useRef<HTMLDialogElement>(null)
     const keepRef = useRef<HTMLButtonElement>(null)
     const returnFocusRef = useRef<Element | null>(null)
@@ -63,7 +93,11 @@ export function FormDialog({ open, title, description, onDismiss, pending = fals
         }
         const target = returnFocusRef.current
         returnFocusRef.current = null
-        if (target instanceof HTMLElement && target.isConnected) target.focus()
+        // Focus that has already moved to something on the page (not the dialog, not nowhere) is left alone.
+        const active = document.activeElement
+        if (active !== null && active !== document.body && !dialog.contains(active)) return
+        if (canTakeFocus(target)) target.focus()
+        else fallbackRef.current?.()?.focus()
     }, [open])
 
     // The question takes focus on its safe answer, and the form gets its place back when it is answered.
@@ -89,7 +123,8 @@ export function FormDialog({ open, title, description, onDismiss, pending = fals
             onCancel={(event) => {
                 // Escape: the page decides (a request may be in flight, or input may be unsaved).
                 event.preventDefault()
-                if (!pending) onDismiss()
+                // Answering a question is never a dismissal, so it is allowed while a request is pending.
+                if (!pending || asking) onDismiss()
             }}
         >
             <div className="authoring-dialog__body">
