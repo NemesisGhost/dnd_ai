@@ -72,7 +72,10 @@ export function KnowledgePage({
     const publicOnly = view === "public"
 
     const hasParties = parties.length > 0
-    const undetermined = !hasParties && partiesUndetermined
+    // The public-only view never uses a party perspective, so a membership warning there would be
+    // about nothing that view shows. The notice returns with any view that does use membership.
+    const undetermined = !hasParties && partiesUndetermined && !publicOnly
+    const undeterminedButUnused = !hasParties && partiesUndetermined && publicOnly
 
     return (
         <section aria-labelledby="knowledge-heading">
@@ -184,7 +187,9 @@ export function KnowledgePage({
                                 ? "All parties"
                                 : undetermined
                                   ? "Party membership undetermined"
-                                  : "No party available"}
+                                  : undeterminedButUnused
+                                    ? "Not used in this view"
+                                    : "No party available"}
                         </option>
 
                         {parties.map((party) => (

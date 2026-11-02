@@ -25,6 +25,7 @@ import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import type { RefetchOutcome } from "../hooks/useAuthoringResource"
 import { useAnnounceWhenRead, useConfirmedRefresh } from "../hooks/useConfirmedRefresh"
+import { useEligibilityRefresh } from "../hooks/usePartyScopeRecovery"
 import { useKept } from "../hooks/useKeptResource"
 import { usePageArrival } from "../hooks/usePageArrival"
 import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard"
@@ -135,6 +136,7 @@ function PartyRow({
 }) {
     const { reload } = useSession()
     const announce = useAnnounce()
+    const refreshEligibility = useEligibilityRefresh()
     const [dialog, setDialog] = useState<"archive" | "restore" | null>(null)
     const [reason, setReason] = useState("")
     const [reasonError, setReasonError] = useState<string | null>(null)
@@ -157,6 +159,9 @@ function PartyRow({
                   ),
         onSuccess: async () => {
             const done = dialog === "archive" ? "Party archived" : "Party restored"
+            // An archived party stops being a perspective anyone may take (and a restored one
+            // starts again): refresh eligibility in the background once the change is confirmed.
+            void refreshEligibility()
             setSaved(done)
             setDialog(null)
             setReason("")

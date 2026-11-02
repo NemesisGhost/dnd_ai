@@ -1,4 +1,4 @@
-import { useCallback } from "react"
+import { useCallback, useEffect } from "react"
 import { useSearchParams } from "react-router"
 import { usePerspective } from "../context/CharacterPerspectiveContext"
 import { useSession } from "../context/SessionContext"
@@ -48,6 +48,30 @@ export function useQuestPartyPerspective(campaignId: string): QuestPartyPerspect
         characterId !== null &&
         urlCharacterId === characterId &&
         parties.some((party) => party.party_id === urlPartyId)
+
+    // A party the address still names for the selected character, but that is no longer among that
+    // character's authorized parties (revoked, ended, or the clock moved), is dropped from the
+    // address rather than kept, so a rerender or Back cannot bring it back as a selection.
+    const urlPartyIsStale =
+        characterId !== null &&
+        urlCharacterId === characterId &&
+        urlPartyId !== null &&
+        !parties.some((party) => party.party_id === urlPartyId)
+
+    useEffect(() => {
+        if (!urlPartyIsStale) {
+            return
+        }
+        setSearchParams(
+            (current) => {
+                const next = new URLSearchParams(current)
+                next.delete("character_id")
+                next.delete("party_id")
+                return next
+            },
+            { replace: true },
+        )
+    }, [urlPartyIsStale, setSearchParams])
 
     const partyId = urlPartyIsCurrent
         ? urlPartyId

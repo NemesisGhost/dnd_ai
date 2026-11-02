@@ -267,3 +267,76 @@ describe("useSessionBootstrap", () => {
         })
     })
 })
+
+describe("useSessionBootstrap refresh coalescing", () => {
+    async function authenticatedHook() {
+        fetchSessionBootstrapMock.mockResolvedValueOnce(sessionBootstrapFixture)
+        const hook = renderHook(() => useSessionBootstrap())
+        await waitFor(() => {
+            expect(hook.result.current.state.status).toBe("authenticated")
+        })
+        return hook
+    }
+
+    it("shares one request among argument-free refreshes made while it is in flight", async () => {
+        const { result } = await authenticatedHook()
+        const updated = { ...sessionBootstrapFixture, startup_campaign_id: null }
+        let release!: (value: typeof updated) => void
+        fetchSessionBootstrapMock.mockReturnValueOnce(
+            new Promise<typeof updated>((resolve) => {
+                release = resolve
+            }),
+        )
+
+        let outcomes: boolean[] = []
+        await act(async () => {
+            const all = Promise.all([result.current.refresh(), result.current.refresh(), result.current.refresh()])
+            release(updated)
+            outcomes = await all
+        })
+
+        expect(outcomes).toEqual([true, true, true])
+        // One read for sign-in and one shared refresh.
+        expect(fetchSessionBootstrapMock).toHaveBeenCalledTimes(2)
+        expect(result.current.state).toEqual({ status: "authenticated", bootstrap: updated })
+    })
+
+    it("reads again for a refresh made after the shared one finished", async () => {
+        const { result } = await authenticatedHook()
+        fetchSessionBootstrapMock.mockResolvedValue(sessionBootstrapFixture)
+
+        await act(async () => {
+            await result.current.refresh()
+        })
+        await act(async () => {
+            await result.current.refresh()
+        })
+
+        expect(fetchSessionBootstrapMock).toHaveBeenCalledTimes(3)
+    })
+
+    it("does not share a refresh that carries its own abort signal", async () => {
+        const { result } = await authenticatedHook()
+        fetchSessionBootstrapMock.mockResolvedValue(sessionBootstrapFixture)
+
+        await act(async () => {
+            await Promise.all([result.current.refresh(), result.current.refresh(new AbortController().signal)])
+        })
+
+        expect(fetchSessionBootstrapMock).toHaveBeenCalledTimes(3)
+    })
+
+    it("a failed shared refresh rejects every caller and the next one reads again", async () => {
+        const { result } = await authenticatedHook()
+        fetchSessionBootstrapMock.mockRejectedValueOnce(new Error("boom"))
+
+        await act(async () => {
+            const results = await Promise.allSettled([result.current.refresh(), result.current.refresh()])
+            expect(results.map((r) => r.status)).toEqual(["rejected", "rejected"])
+        })
+        fetchSessionBootstrapMock.mockResolvedValueOnce(sessionBootstrapFixture)
+        await act(async () => {
+            expect(await result.current.refresh()).toBe(true)
+        })
+    })
+})

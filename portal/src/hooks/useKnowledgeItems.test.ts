@@ -22,9 +22,11 @@ import { useKnowledgeItems } from "./useKnowledgeItems"
 const {
     fetchKnowledgeItemsMock,
     reloadMock,
+    refreshMock,
 } = vi.hoisted(() => ({
     fetchKnowledgeItemsMock: vi.fn(),
     reloadMock: vi.fn(),
+    refreshMock: vi.fn(),
 }))
 
 vi.mock(
@@ -46,6 +48,7 @@ vi.mock(
 vi.mock("../context/SessionContext", () => ({
     useSession: () => ({
         reload: reloadMock,
+        refresh: refreshMock,
     }),
 }))
 
@@ -117,6 +120,8 @@ beforeEach(() => {
     fetchKnowledgeItemsMock.mockReset()
     reloadMock.mockReset()
     reloadMock.mockResolvedValue(undefined)
+    refreshMock.mockReset()
+    refreshMock.mockResolvedValue(true)
 })
 
 describe("useKnowledgeItems", () => {

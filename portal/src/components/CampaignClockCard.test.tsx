@@ -471,3 +471,90 @@ describe("CampaignClockCard: recording a time in the picker", () => {
         expect(server.callsTo("POST", TIMES_PATH)).toHaveLength(1)
     })
 })
+
+describe("CampaignClockCard refreshes party eligibility after a confirmed change", () => {
+    const RECEIPT_OK = { world_time_id: "t2", event_id: "ev-2", row_version: 2, created: false, changed: true }
+
+    function setupWithRefresh(onRefresh: () => Promise<ReturnType<typeof bootstrap>>) {
+        const server = installMockServer()
+        let state = { ...STATE }
+        let readFails = false
+        server.on("GET", CLOCK_PATH, () => (readFails ? { status: 500, body: {} } : { body: state }))
+        server.on("GET", TIMES_PATH, {
+            body: { items: [TIME("t2", "Year 2"), TIME("t1", "Year 1")], next_cursor: null },
+        })
+        server.on("GET", CALENDARS_PATH, { body: { calendars: [] } })
+        server.on("GET", CHOICES_PATH, { body: { choices: [] } })
+        renderAuthoringRoutes({
+            initialEntry: "/clock",
+            bootstrap: bootstrap(true),
+            onRefresh,
+            routes: [{ path: "/clock", element: <CampaignClockCard campaignId={CAMPAIGN} /> }],
+        })
+        return {
+            server,
+            confirm: (failRead = false) => {
+                state = { ...state, current: { world_time_id: "t2", display: "Year 2" }, row_version: 2 }
+                readFails = failRead
+            },
+        }
+    }
+
+    it("refreshes the bootstrap once after a confirmed advance, without resending it", async () => {
+        const onRefresh = vi.fn(() => Promise.resolve(bootstrap(true)))
+        const { server, confirm } = setupWithRefresh(onRefresh)
+        server.on("POST", `${CLOCK_PATH}/advance`, () => {
+            confirm()
+            return { body: RECEIPT_OK }
+        })
+        await openAdvance()
+        submitAdvance()
+        await screen.findByText("Now: Year 2")
+        await waitFor(() => expect(onRefresh).toHaveBeenCalledTimes(1))
+        expect(server.callsTo("POST", `${CLOCK_PATH}/advance`)).toHaveLength(1)
+        await waitFor(() => expect(screen.getByTestId("authoring-announcer")).toHaveTextContent("Clock advanced"))
+    })
+
+    it("still refreshes eligibility for a confirmed advance whose clock re-read fails, and does not repeat the write", async () => {
+        const onRefresh = vi.fn(() => Promise.resolve(bootstrap(true)))
+        const { server, confirm } = setupWithRefresh(onRefresh)
+        server.on("POST", `${CLOCK_PATH}/advance`, () => {
+            confirm(true)
+            return { body: RECEIPT_OK }
+        })
+        await openAdvance()
+        submitAdvance()
+        expect(await screen.findByText(/Clock advanced\. The latest campaign time could not be loaded/)).toBeInTheDocument()
+        await waitFor(() => expect(onRefresh).toHaveBeenCalledTimes(1))
+        expect(server.callsTo("POST", `${CLOCK_PATH}/advance`)).toHaveLength(1)
+    })
+
+    it("does not refresh after a write that failed", async () => {
+        const onRefresh = vi.fn(() => Promise.resolve(bootstrap(true)))
+        const { server } = setupWithRefresh(onRefresh)
+        server.on("POST", `${CLOCK_PATH}/advance`, {
+            status: 409,
+            body: { error: { code: "stale_write", message: "m", correlation_id: "c" } },
+        })
+        await openAdvance()
+        submitAdvance()
+        expect(await screen.findByRole("button", { name: "Load latest version" })).toBeInTheDocument()
+        expect(onRefresh).not.toHaveBeenCalled()
+    })
+
+    it("a failed eligibility refresh never turns a confirmed advance into a failure", async () => {
+        const onRefresh = vi.fn(() => Promise.reject(new Error("offline")))
+        const { server, confirm } = setupWithRefresh(onRefresh)
+        server.on("POST", `${CLOCK_PATH}/advance`, () => {
+            confirm()
+            return { body: RECEIPT_OK }
+        })
+        await openAdvance()
+        submitAdvance()
+        await screen.findByText("Now: Year 2")
+        await waitFor(() => expect(onRefresh).toHaveBeenCalledTimes(1))
+        await waitFor(() => expect(screen.getByTestId("authoring-announcer")).toHaveTextContent("Clock advanced"))
+        expect(screen.queryByText(/could not/)).toBeNull()
+        expect(server.callsTo("POST", `${CLOCK_PATH}/advance`)).toHaveLength(1)
+    })
+})

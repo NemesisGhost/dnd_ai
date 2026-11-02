@@ -10,6 +10,7 @@ import {
 import {
     useSession,
 } from "../context/SessionContext"
+import { usePartyNotFoundEpisodes } from "./usePartyScopeRecovery"
 import type {
     KnowledgeLifecycle,
     KnowledgePage,
@@ -85,6 +86,7 @@ export function useKnowledgeItems(
     lifecycle: KnowledgeLifecycle = "active",
 ): UseKnowledgeItemsResult {
     const { reload } = useSession()
+    const partyEpisode = usePartyNotFoundEpisodes()
 
     const [requestVersion, setRequestVersion] =
         useState(0)
@@ -254,6 +256,59 @@ export function useKnowledgeItems(
                     return
                 }
 
+                // A party-scoped 404 may mean the party is no longer authorized: the party's results
+                // are dropped at once (no "refreshing" page is kept), eligibility is refreshed once
+                // for this episode, and the page then re-derives its selection or this stays an
+                // ordinary "unavailable".
+                if (
+                    error instanceof
+                    KnowledgeRequestError &&
+                    error.status === 404 &&
+                    characterId !== null &&
+                    partyId !== null
+                ) {
+                    const scope = {
+                        campaignId,
+                        view,
+                        characterId,
+                        partyId,
+                        query,
+                        knowledgeType,
+                        cursor,
+                        includePublic,
+                        lifecycle,
+                        requestVersion,
+                    }
+                    setSnapshot({ ...scope, state: initialState })
+                    void partyEpisode(
+                        [
+                            campaignId,
+                            view,
+                            characterId,
+                            partyId,
+                            query,
+                            knowledgeType,
+                            cursor,
+                            includePublic,
+                            lifecycle,
+                            requestVersion,
+                        ].join("|"),
+                    ).then((outcome) => {
+                        if (controller.signal.aborted || outcome === "signed_out") {
+                            return
+                        }
+
+                        setSnapshot({
+                            ...scope,
+                            state:
+                                outcome === "failed"
+                                    ? { status: "error", error }
+                                    : { status: "unavailable" },
+                        })
+                    })
+                    return
+                }
+
                 if (
                     error instanceof
                     KnowledgeRequestError &&
@@ -311,6 +366,7 @@ export function useKnowledgeItems(
         includePublic,
         lifecycle,
         requestVersion,
+        partyEpisode,
         reload,
     ])
 

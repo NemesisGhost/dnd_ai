@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useRef,
   useState,
 } from "react"
 import { SESSION_EXPIRED_EVENT } from "../api/http"
@@ -55,21 +56,45 @@ export function useSessionBootstrap():
     setRequestVersion((currentVersion) => currentVersion + 1)
   }, [])
 
+  // Argument-free refreshes (eligibility after a confirmed write, or after a party-scoped
+  // not-found) share one request while it is in flight, so several callers cause one read.
+  const inFlight = useRef<Promise<boolean> | null>(null)
+
   const refresh = useCallback(
-    async (signal?: AbortSignal): Promise<boolean> => {
-      const bootstrap = await fetchSessionBootstrap(signal)
-
-      if (signal?.aborted) {
-        return false
+    (signal?: AbortSignal): Promise<boolean> => {
+      if (signal === undefined && inFlight.current !== null) {
+        return inFlight.current
       }
 
-      if (bootstrap === null) {
-        setState({ status: "unauthenticated" })
-        return false
+      const run = async (): Promise<boolean> => {
+        const bootstrap = await fetchSessionBootstrap(signal)
+
+        if (signal?.aborted) {
+          return false
+        }
+
+        if (bootstrap === null) {
+          setState({ status: "unauthenticated" })
+          return false
+        }
+
+        setState({ status: "authenticated", bootstrap })
+        return true
       }
 
-      setState({ status: "authenticated", bootstrap })
-      return true
+      const request = run()
+
+      if (signal === undefined) {
+        inFlight.current = request
+        const clear = () => {
+          if (inFlight.current === request) {
+            inFlight.current = null
+          }
+        }
+        request.then(clear, clear)
+      }
+
+      return request
     },
     [],
   )

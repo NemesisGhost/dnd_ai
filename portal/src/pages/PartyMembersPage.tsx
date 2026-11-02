@@ -25,6 +25,7 @@ import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import type { RefetchOutcome } from "../hooks/useAuthoringResource"
 import { useConfirmedRefresh } from "../hooks/useConfirmedRefresh"
+import { useEligibilityRefresh } from "../hooks/usePartyScopeRecovery"
 import { useKept } from "../hooks/useKeptResource"
 import { usePageArrival } from "../hooks/usePageArrival"
 import type {
@@ -169,6 +170,7 @@ function MemberTable({
 }) {
     const { reload } = useSession()
     const announce = useAnnounce()
+    const refreshEligibility = useEligibilityRefresh()
     const text = GROUP_TEXT[group]
     const rows = data.members.filter((m) => m.period_status === GROUP_STATUS[group])
     // Ending is a command on a membership that has no recorded end, whatever its temporal status:
@@ -195,6 +197,9 @@ function MemberTable({
                 ctx,
             ),
         onSuccess: async () => {
+            // Confirmed: who may take this party's perspective changed. Refresh it in the
+            // background; the roster read-back below is unchanged.
+            void refreshEligibility()
             setTarget(null)
             setTimeId("")
             setReason("")
@@ -347,6 +352,7 @@ function AddMemberForm({
 }) {
     const { reload } = useSession()
     const announce = useAnnounce()
+    const refreshEligibility = useEligibilityRefresh()
     const [character, setCharacter] = useState<ReferenceOption | null>(null)
     const [timeId, setTimeId] = useState("")
     const [reason, setReason] = useState("")
@@ -370,6 +376,7 @@ function AddMemberForm({
                 ctx,
             ),
         onSuccess: async () => {
+            void refreshEligibility()
             setCharacter(null)
             setTimeId("")
             setReason("")

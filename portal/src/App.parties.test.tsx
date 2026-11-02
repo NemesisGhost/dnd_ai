@@ -2,6 +2,7 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { installCampaignShellMocks, openApp } from "./test/campaignRoutes"
 import type { MockServer } from "./test/authoringHarness"
+import { useSessionBootstrap } from "./hooks/useSessionBootstrap"
 
 vi.mock("./hooks/useSessionBootstrap", () => ({ useSessionBootstrap: vi.fn() }))
 vi.mock("./api/userPreferences", () => ({
@@ -177,5 +178,24 @@ describe("party pages", () => {
     server.on("GET", `${LIST}/p2`, { body: party("p2", "Old Crew", "archived") })
     openApp("/app/mundivita/parties/p2/edit")
     expect(await screen.findByRole("alert")).toHaveTextContent("cannot be edited right now")
+  })
+})
+
+describe("party lifecycle: eligibility refresh", () => {
+  it("refreshes the bootstrap once after a confirmed archive, without resending it", async () => {
+    let items = [party("p1", "The Company")]
+    server.on("GET", LIST, () => ({ body: { can_create: true, items } }))
+    server.on("POST", `${LIST}/p1/archive`, () => {
+      items = []
+      return { body: { party_id: "p1", row_version: 3, created: false, changed: true } }
+    })
+    openApp("/app/mundivita/parties")
+    const results = vi.mocked(useSessionBootstrap).mock.results
+    const refresh = results[results.length - 1]!.value.refresh as ReturnType<typeof vi.fn>
+    fireEvent.click(await screen.findByRole("button", { name: "Archive The Company" }))
+    const dialog = await screen.findByRole("dialog", { name: "Archive this party?" })
+    fireEvent.click(within(dialog).getByRole("button", { name: "Archive party" }))
+    await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1))
+    expect(server.callsTo("POST", `${LIST}/p1/archive`)).toHaveLength(1)
   })
 })

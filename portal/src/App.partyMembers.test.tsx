@@ -2,6 +2,7 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { installCampaignShellMocks, openApp } from "./test/campaignRoutes"
 import type { MockServer } from "./test/authoringHarness"
+import { useSessionBootstrap } from "./hooks/useSessionBootstrap"
 
 vi.mock("./hooks/useSessionBootstrap", () => ({ useSessionBootstrap: vi.fn() }))
 vi.mock("./api/userPreferences", () => ({
@@ -461,5 +462,63 @@ describe("party members page: membership end wording", () => {
     const all = await screen.findByRole("table", { name: "Members (current status unknown)" })
     expect(within(all).getByRole("columnheader", { name: "Membership end" })).toBeInTheDocument()
     expect(within(all).queryByRole("columnheader", { name: "Left" })).toBeNull()
+  })
+})
+
+describe("party members page: eligibility refresh after a confirmed membership change", () => {
+  const refreshOf = () => {
+    const results = vi.mocked(useSessionBootstrap).mock.results
+    return results[results.length - 1]!.value.refresh as ReturnType<typeof vi.fn>
+  }
+
+  async function endAldric() {
+    fireEvent.click(await screen.findByRole("button", { name: "End membership of Aldric" }))
+    const dialog = await screen.findByRole("dialog", { name: "End this membership?" })
+    fireEvent.change(await within(dialog).findByRole("combobox", { name: /Ends at/ }), { target: { value: "t2" } })
+    fireEvent.click(within(dialog).getByRole("button", { name: "End membership" }))
+  }
+
+  it("refreshes once after a confirmed end, even when the roster re-read fails, and never resends the end", async () => {
+    let rosterFails = false
+    server.on("GET", MEMBERS, () => (rosterFails ? { status: 500, body: {} } : { body: listing() }))
+    server.on("POST", `${MEMBERS}/m1/end`, () => {
+      rosterFails = true
+      return {
+        body: { party_id: "p1", party_membership_id: "m1", row_version: 5, event_id: "ev", created: false, changed: true },
+      }
+    })
+    openApp("/app/mundivita/parties/p1")
+    await endAldric()
+    expect(await screen.findByText(/Membership ended\. The latest party members could not be loaded/)).toBeInTheDocument()
+    expect(refreshOf()).toHaveBeenCalledTimes(1)
+    expect(server.callsTo("POST", `${MEMBERS}/m1/end`)).toHaveLength(1)
+  })
+
+  it("does not refresh after an end that failed", async () => {
+    server.on("GET", MEMBERS, { body: listing() })
+    server.on("POST", `${MEMBERS}/m1/end`, {
+      status: 409,
+      body: { error: { code: "party_membership_not_open", message: "m", correlation_id: "c" } },
+    })
+    openApp("/app/mundivita/parties/p1")
+    await endAldric()
+    expect(await screen.findByText("That membership has already ended.")).toBeInTheDocument()
+    expect(refreshOf()).not.toHaveBeenCalled()
+  })
+
+  it("refreshes once after a confirmed add and does not resend it", async () => {
+    server.on("GET", MEMBERS, { body: listing("active", []) })
+    server.on("POST", MEMBERS, {
+      body: { party_id: "p1", party_membership_id: "m9", row_version: 5, event_id: "ev", created: true, changed: true },
+    })
+    openApp("/app/mundivita/parties/p1")
+    fireEvent.click(await screen.findByRole("button", { name: "Add member" }))
+    fireEvent.focus(screen.getByRole("combobox", { name: "Character" }))
+    fireEvent.click(await screen.findByRole("option", { name: /Cael/ }))
+    fireEvent.change(await screen.findByRole("combobox", { name: /Joins at/ }), { target: { value: "t1" } })
+    fireEvent.click(screen.getAllByRole("button", { name: "Add member" }).at(-1)!)
+    await waitFor(() => expect(server.callsTo("POST", MEMBERS)).toHaveLength(1))
+    await waitFor(() => expect(refreshOf()).toHaveBeenCalledTimes(1))
+    expect(server.callsTo("POST", MEMBERS)).toHaveLength(1)
   })
 })

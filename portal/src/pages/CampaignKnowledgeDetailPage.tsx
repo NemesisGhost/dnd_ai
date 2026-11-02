@@ -1,4 +1,4 @@
-import { useEffect } from "react"
+import { useCallback, useEffect } from "react"
 import { useParams, useSearchParams } from "react-router"
 import { KnowledgeDetailBoundary } from "../components/KnowledgeDetailBoundary"
 import { usePerspective } from "../context/CharacterPerspectiveContext"
@@ -23,7 +23,7 @@ export function CampaignKnowledgeDetailPage() {
     }>()
 
     const { getSelectedCharacterId, syncCharacterFromUrl } = usePerspective()
-    const [searchParams] = useSearchParams()
+    const [searchParams, setSearchParams] = useSearchParams()
 
     const urlCharacterId = searchParams.get("character_id")
     const selectedCharacterId =
@@ -48,6 +48,23 @@ export function CampaignKnowledgeDetailPage() {
         syncCharacterFromUrl?.(campaignId, urlCharacterId)
     }, [campaignId, urlCharacterId, selectedCharacterId, syncCharacterFromUrl])
 
+    // A party the refreshed bootstrap no longer authorizes is dropped from the address (replacing
+    // history, so Back cannot restore it); the record is then read again without it.
+    const dropRevokedParty = useCallback(
+        (revokedPartyId: string) => {
+            setSearchParams(
+                (current) => {
+                    if (current.get("party_id") !== revokedPartyId) return current
+                    const next = new URLSearchParams(current)
+                    next.delete("party_id")
+                    return next
+                },
+                { replace: true },
+            )
+        },
+        [setSearchParams],
+    )
+
     if (campaignId === undefined || knowledgeItemId === undefined) {
         return (
             <PlaceholderPage
@@ -66,6 +83,7 @@ export function CampaignKnowledgeDetailPage() {
             knowledgeItemId={knowledgeItemId}
             characterId={characterId}
             partyId={partyId}
+            onPartyRevoked={dropRevokedParty}
         >
             {(item, refresh) => (
                 <KnowledgeClaimPage

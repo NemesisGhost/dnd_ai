@@ -29,6 +29,7 @@ interface RenderOverrides {
     query?: string
     partyId?: string | null
     parties?: AuthorizedParty[]
+    partiesUndetermined?: boolean
     includePublic?: boolean
     onViewChange?: (view: KnowledgeView) => void
     onQueryChange?: (query: string) => void
@@ -403,5 +404,48 @@ describe("KnowledgePage — no per-page member preview", () => {
 
         expect(checkbox).toBeChecked()
         expect(checkbox).toBeDisabled()
+    })
+})
+
+describe("KnowledgePage party notice without an effective clock", () => {
+    const NOTICE = /Party membership cannot be determined because the campaign time has not been set/
+
+    it("shows the undetermined notice in a view that uses a party perspective", () => {
+        renderPage({ parties: [], view: "party_shared", partiesUndetermined: true })
+        expect(screen.getByText(NOTICE)).toBeInTheDocument()
+        expect(screen.getByRole("option", { name: "Party membership undetermined" })).toBeInTheDocument()
+    })
+
+    it("shows no membership warning in the public-only view, and restores it when leaving that view", () => {
+        const view = renderPage({ parties: [], view: "public", partiesUndetermined: true })
+        expect(screen.queryByText(NOTICE)).toBeNull()
+        expect(screen.queryByRole("option", { name: "Party membership undetermined" })).toBeNull()
+        // The public view itself, and its controls, are untouched.
+        expect(screen.getByText("Knowledge results go here.")).toBeInTheDocument()
+        expect(screen.getByRole("checkbox", { name: /public/i })).toBeDisabled()
+
+        view.rerender(
+            <KnowledgePage
+                campaignId={view.campaignId}
+                view="character_private"
+                query=""
+                partyId={null}
+                parties={[]}
+                partiesUndetermined
+                includePublic
+                onViewChange={vi.fn()}
+                onQueryChange={vi.fn()}
+                onPartyChange={vi.fn()}
+                onIncludePublicChange={vi.fn()}
+            >
+                <p>Knowledge results go here.</p>
+            </KnowledgePage>,
+        )
+        expect(screen.getByText(NOTICE)).toBeInTheDocument()
+    })
+
+    it("does not remove a genuine 'No party available' from the public view when the clock is set", () => {
+        renderPage({ parties: [], view: "public" })
+        expect(screen.getByRole("option", { name: "No party available" })).toBeInTheDocument()
     })
 })

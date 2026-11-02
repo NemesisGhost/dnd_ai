@@ -4,6 +4,7 @@ import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { useConfirmedRefresh } from "../hooks/useConfirmedRefresh"
+import { useEligibilityRefresh } from "../hooks/usePartyScopeRecovery"
 import { useKept } from "../hooks/useKeptResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import {
@@ -59,6 +60,7 @@ export function CampaignClockCard({
     const stale = clock.state.kind === "error" && kept !== null
     const announce = useAnnounce()
     const { reload } = useSession()
+    const refreshEligibility = useEligibilityRefresh()
     const [mode, setMode] = useState<Mode>("idle")
     const [timeId, setTimeId] = useState("")
     const [confirming, setConfirming] = useState(false)
@@ -117,6 +119,10 @@ export function CampaignClockCard({
                   ),
         onSuccess: async () => {
             const done = mode === "correct" ? "Clock corrected" : "Clock advanced"
+            // The write is confirmed. Party perspectives depend on the clock, so the bootstrap is
+            // re-read in the background (nothing is resent, nothing remounts); the card's own
+            // read-back and its failure handling below are unchanged.
+            void refreshEligibility()
             setMode("idle")
             setTimeId("")
             setCauseId("")

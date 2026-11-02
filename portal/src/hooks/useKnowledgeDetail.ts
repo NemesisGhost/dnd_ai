@@ -9,6 +9,7 @@ import {
     KnowledgeRequestError,
 } from "../api/knowledge"
 import { useSession } from "../context/SessionContext"
+import { usePartyNotFoundEpisodes } from "./usePartyScopeRecovery"
 import type { RefetchOutcome } from "./useAuthoringResource"
 import type { KnowledgeDetail } from "../types/knowledge"
 
@@ -22,6 +23,9 @@ export type KnowledgeDetailState =
     }
     | {
         status: "unavailable"
+        // Set when a party-scoped 404 was rechecked against a refreshed bootstrap: the party that
+        // request used. The caller clears that party from the address if it is no longer authorized.
+        recheckedPartyId?: string
     }
     | {
         status: "error"
@@ -64,6 +68,7 @@ export function useKnowledgeDetail(
     partyId: string | null,
 ): UseKnowledgeDetailResult {
     const { reload } = useSession()
+    const partyEpisode = usePartyNotFoundEpisodes()
     const [requestVersion, setRequestVersion] = useState(0)
     const refreshController = useRef<AbortController | null>(null)
 
@@ -186,6 +191,32 @@ export function useKnowledgeDetail(
 
                 if (
                     error instanceof KnowledgeRequestError &&
+                    error.status === 404 &&
+                    characterId !== null &&
+                    partyId !== null
+                ) {
+                    const scope = { campaignId, knowledgeItemId, characterId, partyId, requestVersion }
+                    setSnapshot({ ...scope, state: initialState })
+                    void partyEpisode(
+                        [campaignId, knowledgeItemId, characterId, partyId, requestVersion].join("|"),
+                    ).then((outcome) => {
+                        if (controller.signal.aborted || outcome === "signed_out") {
+                            return
+                        }
+
+                        setSnapshot({
+                            ...scope,
+                            state:
+                                outcome === "failed"
+                                    ? { status: "error", error }
+                                    : { status: "unavailable", recheckedPartyId: partyId },
+                        })
+                    })
+                    return
+                }
+
+                if (
+                    error instanceof KnowledgeRequestError &&
                     (error.status === 403 || error.status === 404)
                 ) {
                     setSnapshot({
@@ -223,6 +254,7 @@ export function useKnowledgeDetail(
         knowledgeItemId,
         characterId,
         partyId,
+        partyEpisode,
         reload,
         requestVersion,
     ])

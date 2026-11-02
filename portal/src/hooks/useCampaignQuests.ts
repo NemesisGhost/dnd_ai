@@ -8,6 +8,7 @@ import {
     QuestRequestError,
 } from "../api/quests"
 import { useSession } from "../context/SessionContext"
+import { usePartyNotFoundEpisodes } from "./usePartyScopeRecovery"
 import type {
     CampaignQuestListItem,
 } from "../types/quest"
@@ -51,6 +52,7 @@ export function useCampaignQuests(
     partyId: string | null = null,
 ): UseCampaignQuestsResult {
     const { reload } = useSession()
+    const partyEpisode = usePartyNotFoundEpisodes()
 
     const [requestVersion, setRequestVersion] =
         useState(0)
@@ -125,6 +127,44 @@ export function useCampaignQuests(
                     return
                 }
 
+                // A party-scoped 404 may mean the party is no longer authorized. Nothing of this
+                // party's is kept meanwhile; eligibility is refreshed once for this episode, and
+                // the page then either re-derives its selection (the party is gone, so this effect
+                // re-runs without it) or this stays an ordinary "unavailable".
+                if (
+                    error instanceof QuestRequestError &&
+                    error.status === 404 &&
+                    characterId !== null &&
+                    partyId !== null
+                ) {
+                    setSnapshot({
+                        campaignId,
+                        characterId,
+                        partyId,
+                        requestVersion,
+                        state: initialState,
+                    })
+                    void partyEpisode(
+                        [campaignId, characterId, partyId, requestVersion].join("|"),
+                    ).then((outcome) => {
+                        if (controller.signal.aborted || outcome === "signed_out") {
+                            return
+                        }
+
+                        setSnapshot({
+                            campaignId,
+                            characterId,
+                            partyId,
+                            requestVersion,
+                            state:
+                                outcome === "failed"
+                                    ? { status: "error", error }
+                                    : { status: "unavailable" },
+                        })
+                    })
+                    return
+                }
+
                 if (
                     error instanceof QuestRequestError &&
                     (error.status === 403 ||
@@ -161,6 +201,7 @@ export function useCampaignQuests(
         campaignId,
         characterId,
         partyId,
+        partyEpisode,
         reload,
         requestVersion,
     ])

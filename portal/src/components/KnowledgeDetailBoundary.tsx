@@ -1,5 +1,8 @@
+import { useEffect } from "react"
 import type { ReactNode } from "react"
+import { useSession } from "../context/SessionContext"
 import { useKnowledgeDetail } from "../hooks/useKnowledgeDetail"
+import { resolveAuthorizedParties } from "../utils/authorizedParties"
 import type { KnowledgeDetail } from "../types/knowledge"
 import type { RefetchOutcome } from "../hooks/useAuthoringResource"
 import PlaceholderPage from "../pages/PlaceholderPage"
@@ -9,6 +12,11 @@ interface KnowledgeDetailBoundaryProps {
     knowledgeItemId: string
     characterId: string | null
     partyId: string | null
+    // Called once a party-scoped not-found was rechecked against a refreshed bootstrap and that
+    // party is no longer among the character's authorized parties: the page drops it from the
+    // address, and the record is read again without it. Never called while the party is still
+    // authorized (that stays a genuine "unavailable").
+    onPartyRevoked?: (partyId: string) => void
     // `refresh` re-reads the detail without remounting anything below.
     children: (item: KnowledgeDetail, refresh: () => Promise<RefetchOutcome>) => ReactNode
 }
@@ -18,6 +26,7 @@ export function KnowledgeDetailBoundary({
     knowledgeItemId,
     characterId,
     partyId,
+    onPartyRevoked,
     children,
 }: KnowledgeDetailBoundaryProps) {
     const { state, retry, refresh } = useKnowledgeDetail(
@@ -26,6 +35,26 @@ export function KnowledgeDetailBoundary({
         characterId,
         partyId,
     )
+
+    // With no session state to compare against (an isolated render), nothing is treated as revoked.
+    const sessionState = useSession().state as ReturnType<typeof useSession>["state"] | undefined
+    const authorized =
+        sessionState === undefined
+            ? []
+            : resolveAuthorizedParties(sessionState, campaignId, characterId)
+    const recheckedPartyId =
+        state.status === "unavailable" ? (state.recheckedPartyId ?? null) : null
+    const revoked =
+        sessionState?.status === "authenticated" &&
+        recheckedPartyId !== null &&
+        recheckedPartyId === partyId &&
+        !authorized.some((party) => party.party_id === recheckedPartyId)
+
+    useEffect(() => {
+        if (revoked && recheckedPartyId !== null) {
+            onPartyRevoked?.(recheckedPartyId)
+        }
+    }, [revoked, recheckedPartyId, onPartyRevoked])
 
     if (state.status === "loading") {
         return (
