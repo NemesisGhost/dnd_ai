@@ -7,9 +7,9 @@ import {
     updatePlayerCharacter,
 } from "../api/playerCharacterAuthoring"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
-import { readCharactersReturn } from "../hooks/useCharactersBackPath"
+import { pickCharactersReturnState, readCharactersReturn } from "../hooks/useCharactersBackPath"
 import { pickWorldReturnState } from "../hooks/useWorldBackPath"
-import { Link, useParams } from "react-router"
+import { Link, useLocation, useParams } from "react-router"
 import { ContentCreatePage } from "../components/authoring/ContentCreatePage"
 import type { ContentCreateConfig } from "../components/authoring/ContentCreatePage"
 import { ContentEditPage } from "../components/authoring/ContentEditPage"
@@ -279,8 +279,12 @@ const createConfig: ContentCreateConfig<NpcOptions, NpcFormValues, CreateNpcBody
     worldPath: worldBase,
     // From World -> People the person returns to that same view, and the new NPC's workspace
     // starts with it, so Back to World lands on People again.
+    // From Characters (the New character chooser) the breadcrumb and Cancel return there instead.
     listPath: (campaignId, state) =>
+        readCharactersReturn(campaignId, state) ??
         `${worldBase(campaignId)}${pickWorldReturnState(state)?.worldSearch ?? ""}`,
+    breadcrumbLabelFor: (campaignId, state) =>
+        readCharactersReturn(campaignId, state) === undefined ? "World" : "Characters",
     resultState: (state) => pickWorldReturnState(state),
     optionsPath: npcOptionsPath,
     canCreate: (options) => options.can_create,
@@ -441,20 +445,28 @@ export function EditCharacterPage() {
 // guessed -- the author chooses one explicitly.
 export function ChooseCharacterTypePage() {
     const params = useParams()
-    const base = `/app/${encodeURIComponent(params.campaignId ?? "")}/characters`
+    const campaignId = params.campaignId ?? ""
+    const base = `/app/${encodeURIComponent(campaignId)}/characters`
+    const state = useLocation().state
+    // Only a validated Characters address is honoured and forwarded; otherwise the browser.
+    const returnState = pickCharactersReturnState(campaignId, state)
+    const backPath = readCharactersReturn(campaignId, state) ?? `${base}/all`
     return (
         <section className="authoring-page" aria-labelledby="choose-character-heading">
+            <p className="authoring-page__breadcrumb">
+                <Link to={backPath}>Characters</Link>
+            </p>
             <h1 id="choose-character-heading">New character</h1>
             <p className="authoring-page__lead">What kind of character is this?</p>
             <ul className="op-list">
                 <li>
-                    <Link className="authoring-button" to={`${base}/npc/new`}>
+                    <Link className="authoring-button" to={`${base}/npc/new`} state={returnState}>
                         New NPC
                     </Link>
                     <p>A character the GM or AI portrays.</p>
                 </li>
                 <li>
-                    <Link className="authoring-button" to={`${base}/pc/new`}>
+                    <Link className="authoring-button" to={`${base}/pc/new`} state={returnState}>
                         New player character
                     </Link>
                     <p>

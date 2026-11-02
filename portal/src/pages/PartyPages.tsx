@@ -64,9 +64,6 @@ export function PartiesPage() {
 
     return (
         <section className="authoring-page" aria-labelledby="parties-heading">
-            <p className="authoring-page__breadcrumb">
-                <Link to={base(campaignId)}>Campaign Home</Link>
-            </p>
             <h1 id="parties-heading" ref={headingRef} tabIndex={-1}>
                 Parties
             </h1>
