@@ -1,6 +1,6 @@
 import { act, configure, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { useState } from "react"
-import { Link, Route, RouterProvider, Routes, createMemoryRouter, useLocation } from "react-router"
+import { Link, Route, RouterProvider, Routes, createMemoryRouter, useLocation, useSearchParams } from "react-router"
 import type { DataRouter } from "react-router"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { ConfirmDialog } from "../components/authoring/ConfirmDialog"
@@ -121,12 +121,14 @@ function NotesPage() {
   const [hold, setHold] = useState(false)
   const guard = useUnsavedChangesGuard(draft !== "")
   useNavigationHold(hold)
-  const read = useAuthoringResource<{ who: string }>(`/campaigns/${campaignId}/probe?character_id=${perspective}`)
+  // As the Knowledge and Quest pages do: an address that names a character is what the page asks as.
+  const asCharacter = useSearchParams()[0].get("character_id") ?? perspective
+  const read = useAuthoringResource<{ who: string }>(`/campaigns/${campaignId}/probe?character_id=${asCharacter}`)
   return (
     <div>
       <h1>Notes</h1>
       <p data-testid="mount">{mountId}</p>
-      <p data-testid="read">{read.state.kind === "ready" ? read.state.data.who : read.state.kind}</p>
+      <p data-testid="read">{read.state.kind === "ready" ? `ready:${read.state.data.who}` : read.state.kind}</p>
       <textarea aria-label="Draft" value={draft} onChange={(e) => setDraft(e.target.value)} />
       <button type="button" onClick={() => setHold(true)}>
         Hold
@@ -436,6 +438,7 @@ describe("authorization and late responses", () => {
 
     await waitFor(() => expect(perspectiveSelect()).toHaveValue(""))
     expect(question()).toBeNull()
+    expect(screen.getByRole("status")).toHaveTextContent("Your selected character is no longer available.")
     expect(screen.queryByText("Loading portal")).not.toBeInTheDocument()
     await waitFor(() => expect(screen.getByTestId("mount")).toHaveTextContent("3"))
     expect(screen.getByLabelText("Draft")).toHaveValue("")
@@ -481,6 +484,195 @@ describe("authorization and late responses", () => {
   })
 })
 
+describe("revocation is an explicit, lasting clear", () => {
+  async function selectBThenRevoke() {
+    renderAt("/app/alpha/notes")
+    await settled()
+    choosePerspective("char-b")
+    await waitFor(() => expect(screen.getByTestId("read")).toHaveTextContent("char-b"))
+    await waitFor(() => expect(sessionRequests()).toBe(2))
+    server.campaigns = [campaign("alpha", ["char-a"]), campaign("beta", ["char-c"])]
+    fireEvent.click(screen.getByRole("button", { name: "Refresh session" }))
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("no longer available"))
+  }
+
+  it("re-authorization alone neither restores the lost perspective nor remounts away a new draft", async () => {
+    await selectBThenRevoke()
+    expect(perspectiveSelect()).toHaveValue("")
+    await waitFor(() => expect(screen.getByTestId("read")).toHaveTextContent(/^ready:$/))
+    const mountsNow = screen.getByTestId("mount").textContent
+    type("work after the loss")
+
+    // Eligibility comes back, and the server default now names the lost character as well.
+    server.campaigns = [{ ...campaign("alpha", ["char-a", "char-b"]), selected_character_id: "char-b" }, campaign("beta", ["char-c"])]
+    fireEvent.click(screen.getByRole("button", { name: "Refresh session" }))
+    await waitFor(() => expect(sessionRequests()).toBe(4))
+
+    expect(perspectiveSelect()).toHaveValue("")
+    expect(screen.getByLabelText("Draft")).toHaveValue("work after the loss")
+    expect(screen.getByTestId("mount")).toHaveTextContent(mountsNow!)
+    expect(question()).toBeNull()
+    // Choosing it again is the ordinary, guarded selection.
+    choosePerspective("char-b")
+    expect(await screen.findByText("Leave this page?")).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Stay" }))
+    expect(perspectiveSelect()).toHaveValue("")
+  })
+
+  it("the history entry agrees: it records no perspective, and Back to a stamped older entry is an ordinary guarded return", async () => {
+    await selectBThenRevoke()
+    await waitFor(() =>
+      expect((router.state.location.state as { ctx?: unknown } | null)?.ctx).toEqual({ v: 1, characterId: null }),
+    )
+    expect(router.state.historyAction).toBe("REPLACE")
+  })
+
+  it("a default that is revoked is cleared too, and not restored by its return", async () => {
+    server.campaigns = [{ ...campaign("alpha", ["char-a", "char-b"]), selected_character_id: "char-a" }, campaign("beta", ["char-c"])]
+    renderAt("/app/alpha/notes")
+    await settled()
+    expect(perspectiveSelect()).toHaveValue("char-a")
+    server.campaigns = [{ ...campaign("alpha", ["char-b"]), selected_character_id: null }, campaign("beta", ["char-c"])]
+    fireEvent.click(screen.getByRole("button", { name: "Refresh session" }))
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("no longer available"))
+    expect(perspectiveSelect()).toHaveValue("")
+
+    server.campaigns = [{ ...campaign("alpha", ["char-a", "char-b"]), selected_character_id: "char-a" }, campaign("beta", ["char-c"])]
+    fireEvent.click(screen.getByRole("button", { name: "Refresh session" }))
+    await waitFor(() => expect(sessionRequests()).toBe(3))
+    expect(perspectiveSelect()).toHaveValue("")
+  })
+
+  it("cleans a revoked address, reads once under none and never again as the lost character", async () => {
+    renderAt("/app/alpha/notes?character_id=char-b&party_id=p1&section=x", { ctx: { v: 1, characterId: "char-b" } })
+    await settled()
+    expect(perspectiveSelect()).toHaveValue("char-b")
+    const readsAsB = () => probeRequests().filter((r) => r.endsWith("character_id=char-b")).length
+    const before = readsAsB()
+
+    server.campaigns = [campaign("alpha", ["char-a"]), campaign("beta", ["char-c"])]
+    fireEvent.click(screen.getByRole("button", { name: "Refresh session" }))
+
+    await waitFor(() => expect(router.state.location.search).toBe("?section=x"))
+    await waitFor(() => expect(screen.getByTestId("read")).toHaveTextContent(/^ready:$/))
+    expect(router.state.location.pathname).toBe("/app/alpha/notes")
+    expect(perspectiveSelect()).toHaveValue("")
+    expect(readsAsB()).toBe(before)
+    expect(probeRequests().filter((r) => r.endsWith("character_id="))).toHaveLength(1)
+    await waitFor(() =>
+      expect((router.state.location.state as { ctx?: unknown } | null)?.ctx).toEqual({ v: 1, characterId: null }),
+    )
+    expect(router.state.historyAction).toBe("REPLACE")
+  })
+
+  it("a late answer to the lost perspective's read cannot restore private content", async () => {
+    const lateB = deferred()
+    server.probeGates.set("char-b", lateB.promise)
+    renderAt("/app/alpha/notes?character_id=char-b&section=x", { ctx: { v: 1, characterId: "char-b" } })
+    await screen.findByRole("heading", { name: "Notes" })
+    await waitFor(() => expect(probeRequests().some((r) => r.endsWith("character_id=char-b"))).toBe(true))
+
+    server.campaigns = [campaign("alpha", ["char-a"]), campaign("beta", ["char-c"])]
+    fireEvent.click(screen.getByRole("button", { name: "Refresh session" }))
+    await waitFor(() => expect(router.state.location.search).toBe("?section=x"))
+    await waitFor(() => expect(screen.getByTestId("read")).toHaveTextContent(/^ready:$/))
+    await act(async () => {
+      lateB.release()
+    })
+
+    expect(screen.getByTestId("read")).not.toHaveTextContent("char-b")
+    expect(perspectiveSelect()).toHaveValue("")
+  })
+})
+
+describe("initial entry and stamp ownership", () => {
+  it("honors an authorized initial stamp before anything reads under the default", async () => {
+    renderAt("/app/alpha/notes", { ctx: { v: 1, characterId: "char-b" } })
+    await screen.findByRole("heading", { name: "Notes" })
+    await waitFor(() => expect(screen.getByTestId("read")).toHaveTextContent("char-b"))
+
+    expect(perspectiveSelect()).toHaveValue("char-b")
+    expect(probeRequests().every((r) => r.endsWith("character_id=char-b"))).toBe(true)
+    expect(screen.getByTestId("mount")).toHaveTextContent("1")
+  })
+
+  it("restores the stamped perspective on Back from another campaign", async () => {
+    renderAt("/app/alpha/notes")
+    await settled()
+    choosePerspective("char-b")
+    await waitFor(() => expect(screen.getByTestId("read")).toHaveTextContent("char-b"))
+    await waitFor(() =>
+      expect((router.state.location.state as { ctx?: unknown } | null)?.ctx).toEqual({ v: 1, characterId: "char-b" }),
+    )
+
+    fireEvent.change(campaignSelect(), { target: { value: "beta" } })
+    expect(await screen.findByRole("heading", { name: "Home of beta as nobody" })).toBeInTheDocument()
+    await act(async () => {
+      await router.navigate(-1)
+    })
+
+    await waitFor(() => expect(perspectiveSelect()).toHaveValue("char-b"))
+    await waitFor(() => expect(screen.getByTestId("read")).toHaveTextContent("char-b"))
+    expect(router.state.location.pathname).toBe("/app/alpha/notes")
+  })
+
+  it.each([
+    ["missing", undefined],
+    ["null", null],
+    ["malformed", { ctx: "char-b" }],
+    ["a wrong version", { ctx: { v: 2, characterId: "char-b" } }],
+    ["a wrong type", { ctx: { v: 1, characterId: 7 } }],
+    ["an unauthorized id", { ctx: { v: 1, characterId: "someone-else" } }],
+    ["a foreign campaign's character", { ctx: { v: 1, characterId: "char-c" } }],
+  ])("keeps the default and repairs the stamp when the initial entry state is %s", async (_name, state) => {
+    renderAt("/app/alpha/notes", state)
+    await settled()
+    expect(perspectiveSelect()).toHaveValue("")
+    await waitFor(() =>
+      expect((router.state.location.state as { ctx?: unknown } | null)?.ctx).toEqual({ v: 1, characterId: null }),
+    )
+  })
+
+  it("an immediate click during initial stamping is not overwritten, and adds no entry or question", async () => {
+    renderAt("/app/alpha/notes")
+    await screen.findByRole("heading", { name: "Notes" })
+    type("draft")
+
+    fireEvent.click(screen.getByRole("link", { name: "Section two" }))
+    expect(router.state.location.search).toBe("?section=2")
+
+    await waitFor(() =>
+      expect((router.state.location.state as { ctx?: unknown } | null)?.ctx).toEqual({ v: 1, characterId: null }),
+    )
+    expect(router.state.location.search).toBe("?section=2")
+    expect(question()).toBeNull()
+    expect(screen.getByTestId("mount")).toHaveTextContent("1")
+    expect(sessionRequests()).toBe(1)
+    // One PUSH on top of the initial entry: Back returns to it, not to a stamping leftover.
+    await act(async () => {
+      await router.navigate(-1)
+    })
+    expect(router.state.location.search).toBe("")
+  })
+
+  it("never lets a stamp apply while a blocked transition waits for its answer", async () => {
+    renderAt("/app/alpha/notes")
+    await settled()
+    type("draft")
+    choosePerspective("char-b")
+    expect(await screen.findByText("Leave this page?")).toBeInTheDocument()
+    const held = router.state.location
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(router.state.location).toBe(held)
+    fireEvent.click(screen.getByRole("button", { name: "Stay" }))
+    expect(router.state.location).toBe(held)
+    expect(perspectiveSelect()).toHaveValue("")
+  })
+})
+
 describe("syncCharacterFromUrl", () => {
   it("adopts an authorized URL character without navigating, reloading or refreshing", async () => {
     renderAt("/app/alpha/notes")
@@ -501,6 +693,26 @@ describe("syncCharacterFromUrl", () => {
     expect(router.state.location.key).not.toBe(locationKey)
     expect(router.state.historyAction).toBe("REPLACE")
     expect(perspectiveSelect()).toHaveValue("char-b")
+  })
+})
+
+describe("a replacement never asks for a perspective", () => {
+  it("a page rewriting its query with older state does not turn back an adopted URL character", async () => {
+    renderAt("/app/alpha/notes")
+    await settled()
+    fireEvent.click(screen.getByRole("button", { name: "Sync char-b from URL" }))
+    await waitFor(() => expect(perspectiveSelect()).toHaveValue("char-b"))
+
+    await act(async () => {
+      await router.navigate({ search: "?x=1" }, { replace: true, state: { ctx: { v: 1, characterId: null } } })
+    })
+
+    await waitFor(() =>
+      expect((router.state.location.state as { ctx?: unknown } | null)?.ctx).toEqual({ v: 1, characterId: "char-b" }),
+    )
+    expect(perspectiveSelect()).toHaveValue("char-b")
+    expect(router.state.location.search).toBe("?x=1")
+    expect(sessionRequests()).toBe(1)
   })
 })
 

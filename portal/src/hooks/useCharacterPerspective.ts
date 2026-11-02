@@ -43,6 +43,19 @@ export function useCharacterPerspective({ state }: UseSessionBootstrapResult) {
                 ? selection.characterId
                 : undefined
 
+        // A selection the bootstrap no longer authorizes (revoked) is never replaced by the server
+        // default: it reads as no perspective until the campaign layout commits that as an explicit
+        // choice, so re-authorization alone cannot bring it back (UI_DESIGN §4.5).
+        if (
+            typeof requestedCharacterId === "string" &&
+            !campaign.character_perspectives.some(
+                (character) =>
+                    character.character_id === requestedCharacterId,
+            )
+        ) {
+            return null
+        }
+
         return resolveSelectedCharacterId(
             campaign,
             requestedCharacterId,

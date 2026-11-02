@@ -808,6 +808,37 @@ describe("WorldTimePicker: a perspective change at the same path", () => {
         expect(router.state.location).toBe(before)
     })
 
+    it("Stay keeps an uncertain request: reopening retries the same request with the input intact", async () => {
+        const { server } = setupServer({ post: (n) => (n === 1 ? { networkError: true } : undefined) })
+        const { router } = render()
+        await openIt()
+        fill()
+        record()
+        await inDialog().findByText(/cannot tell whether this was saved/)
+        fireEvent.click(inDialog().getByRole("button", { name: "Cancel" }))
+        fireEvent.click(inDialog().getByRole("button", { name: "Close and check later" }))
+        noDialog()
+        const before = router.state.location
+
+        fireEvent.click(screen.getByRole("link", { name: "Switch perspective" }))
+        const ask = await screen.findByRole("dialog", { name: "Leave this page?" })
+        expect(ask).toHaveAccessibleDescription(/may already have been recorded/)
+        fireEvent.click(within(ask).getByRole("button", { name: "Stay" }))
+        await waitFor(() => noDialog())
+        expect(router.state.location).toBe(before)
+        expect(screen.getByText(/may or may not have been saved/)).toBeInTheDocument()
+        expect(posts(server)).toHaveLength(1)
+
+        fireEvent.click(screen.getByRole("button", { name: "Reopen to retry" }))
+        await inDialog().findByText(/cannot tell whether this was saved/)
+        expect(inDialog().getByRole("textbox", { name: /Year/ })).toHaveValue("3")
+        fireEvent.click(inDialog().getByRole("button", { name: "Retry" }))
+        await waitFor(() => expect(posts(server)).toHaveLength(2))
+        const [first, retried] = posts(server)
+        expect(retried!.body).toEqual(first!.body)
+        expect(retried!.headers["Idempotency-Key"]).toBe(first!.headers["Idempotency-Key"])
+    })
+
     it("is held by the page's guard as the one question when the page has one", async () => {
         setupServer()
         render({ pageGuard: true })

@@ -203,7 +203,7 @@ describe("SessionProvider perspective integration", () => {
     ).toBeInTheDocument()
   })
 
-  it("removes a revoked perspective and displays the authorized server default", () => {
+  it("removes a revoked perspective and shows none, never the authorized server default", () => {
     const { rerender } = render(<TestPortal />)
 
     fireEvent.change(
@@ -259,11 +259,11 @@ describe("SessionProvider perspective integration", () => {
       screen.getByRole("combobox", {
         name: "Character perspective",
       }),
-    ).toHaveValue("character-a")
+    ).toHaveValue("")
 
     expect(
       screen.getByText(
-        "Campaign context: Mundivita — Viewing as Character A",
+        "Campaign context: Mundivita — Viewing as No character perspective selected",
         { selector: "summary" },
       ),
     ).toBeInTheDocument()
