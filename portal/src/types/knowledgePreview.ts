@@ -19,4 +19,6 @@ export interface PreviewPerspectives {
     display_name: string
     roles: string[]
     character_perspectives: PreviewCharacterPerspective[]
+    // False when the campaign has no effective clock: party perspectives are undetermined.
+    current_time_set?: boolean
 }

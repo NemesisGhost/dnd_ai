@@ -140,3 +140,27 @@ describe("CharacterParties", () => {
         expect(server.calls.every((call) => call.method === "GET" && !/knowledge/.test(call.path))).toBe(true)
     })
 })
+
+describe("CharacterParties without a campaign clock", () => {
+    it("is not a count and not 'No party memberships', and offers no clock link without canon.edit", async () => {
+        const server = installMockServer()
+        server.on("GET", PATH("hero"), {
+            body: { character_id: "hero", can_open: false, as_of: null, clock_unset: true, items: [] },
+        })
+        render(server)
+        expect(await screen.findByText(/Party membership cannot be determined/)).toBeInTheDocument()
+        expect(screen.queryByText(/Parties \(/)).toBeNull()
+        expect(screen.queryByText("No party memberships.")).toBeNull()
+        expect(screen.queryByRole("link", { name: /Set the campaign time/ })).toBeNull()
+    })
+
+    it("keeps the count and empty message when the clock is set", async () => {
+        const server = installMockServer()
+        server.on("GET", PATH("hero"), {
+            body: { character_id: "hero", can_open: false, as_of: "Year 2", clock_unset: false, items: [] },
+        })
+        render(server)
+        fireEvent.click(await screen.findByText("Parties (0)"))
+        expect(screen.getByText("No party memberships.")).toBeInTheDocument()
+    })
+})

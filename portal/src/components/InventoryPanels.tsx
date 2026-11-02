@@ -6,6 +6,7 @@ import type { CharacterInventoryItem, PartyInventory } from "../types/items"
 import "./authoring/authoring.css"
 import { ReadClosedNotice, ReadFailedNotice } from "./authoring/ReadState"
 import { PanelFrame } from "./DetailPanel"
+import { MembershipClockUnsetNotice } from "./MembershipClockUnsetNotice"
 
 const itemPath = (campaignId: string, itemId: string): string =>
     `/app/${encodeURIComponent(campaignId)}/world/item/${encodeURIComponent(itemId)}`
@@ -100,7 +101,11 @@ export function PartyInventoryPanel({
     return (
         <section aria-labelledby="party-inventory-heading">
             <h2 id="party-inventory-heading">Party inventory</h2>
-            {state.data.members.length === 0 ? <p>No current members.</p> : null}
+            {state.data.clock_unset === true ? (
+                <MembershipClockUnsetNotice campaignId={campaignId} />
+            ) : state.data.members.length === 0 ? (
+                <p>No current members.</p>
+            ) : null}
             {state.data.members.map((member) => (
                 <div key={member.character_id}>
                     <h3>{member.character_name}</h3>

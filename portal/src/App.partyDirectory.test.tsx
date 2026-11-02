@@ -94,3 +94,42 @@ describe("campaign party directory for a campaign.view user", () => {
     expect(server.callsTo("GET", ROSTER)).toHaveLength(0)
   })
 })
+
+describe("party roster for a campaign.view user when the campaign clock is unset", () => {
+  it("says current membership cannot be determined instead of a count or an empty roster", async () => {
+    server.on("GET", ROSTER, {
+      body: { party: party("p1", "The Company"), as_of: null, clock_unset: true, member_count: 0, members: [] },
+    })
+    openApp("/app/mundivita/parties/p1", ["campaign.view"])
+    expect(await screen.findByRole("heading", { level: 2, name: "Current members" })).toBeInTheDocument()
+    expect(screen.getByText(/cannot be determined because the campaign time has not been set/)).toBeInTheDocument()
+    expect(screen.queryByText("No current members.")).toBeNull()
+    expect(screen.queryByText(/Current members \(/)).toBeNull()
+    // Without canon.edit there is no clock-setup route to offer.
+    expect(screen.queryByRole("link", { name: /Set the campaign time/ })).toBeNull()
+    expect(server.calls.filter((c) => c.method !== "GET")).toEqual([])
+  })
+
+  it("names the campaign time the roster was read at when it is set", async () => {
+    server.on("GET", ROSTER, {
+      body: {
+        party: party("p1", "The Company"),
+        as_of: "Year 2",
+        clock_unset: false,
+        member_count: 1,
+        members: [{ character_id: "c1", character_name: "Aldric" }],
+      },
+    })
+    openApp("/app/mundivita/parties/p1", ["campaign.view"])
+    expect(await screen.findByRole("heading", { level: 2, name: "Current members (1)" })).toBeInTheDocument()
+    expect(screen.getByText("As of campaign time Year 2.")).toBeInTheDocument()
+  })
+
+  it("keeps the empty roster message when the clock is set and nobody is current", async () => {
+    server.on("GET", ROSTER, {
+      body: { party: party("p1", "The Company"), as_of: "Year 2", clock_unset: false, member_count: 0, members: [] },
+    })
+    openApp("/app/mundivita/parties/p1", ["campaign.view"])
+    expect(await screen.findByText("No current members.")).toBeInTheDocument()
+  })
+})

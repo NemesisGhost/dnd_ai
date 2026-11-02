@@ -4,6 +4,7 @@ import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { usePageArrival } from "../hooks/usePageArrival"
 import type { PartyRoster } from "../types/parties"
+import { MembershipClockUnsetNotice } from "../components/MembershipClockUnsetNotice"
 import { PartyMembersPage } from "./PartyMembersPage"
 import "../components/authoring/authoring.css"
 
@@ -40,8 +41,18 @@ function PartyRosterPage() {
                 <>
                     {data.party.description !== null ? <p>{data.party.description}</p> : null}
                     <section aria-labelledby="roster-members-heading">
-                        <h2 id="roster-members-heading">Current members ({data.member_count})</h2>
-                        {data.members.length === 0 ? (
+                        {data.clock_unset === true ? (
+                            <>
+                                <h2 id="roster-members-heading">Current members</h2>
+                                <MembershipClockUnsetNotice campaignId={campaignId} />
+                            </>
+                        ) : (
+                            <h2 id="roster-members-heading">Current members ({data.member_count})</h2>
+                        )}
+                        {data.clock_unset === true ? null : data.as_of ? (
+                            <p className="authoring-note">As of campaign time {data.as_of}.</p>
+                        ) : null}
+                        {data.clock_unset === true ? null : data.members.length === 0 ? (
                             <p>No current members.</p>
                         ) : (
                             <ul className="op-list">

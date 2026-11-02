@@ -24,19 +24,35 @@ const TIME = (id: string, display: string) => ({
   display,
 })
 
-const member = (id: string, name: string, current: boolean) => ({
+type Status = "in_effect" | "not_started" | "ended" | "clock_unset"
+
+// A row as the server sends it: `period_status` is the server's classification against the campaign
+// clock, `is_current` is true only for `in_effect`, `left_at` is the stored end (null = open-ended).
+const member = (
+  id: string,
+  name: string,
+  current: boolean,
+  status: Status = current ? "in_effect" : "ended",
+  leftAt: string | null = current ? null : "Year 3",
+) => ({
   party_membership_id: id,
   character_id: `c-${id}`,
   character_name: name,
   joined_at: "Year 1",
-  left_at: current ? null : "Year 3",
+  left_at: leftAt,
   joined_reason: null,
   left_reason: null,
-  is_current: current,
+  is_current: status === "in_effect",
+  period_status: status,
 })
 
-function listing(status = "active", members = [member("m1", "Aldric", true), member("m2", "Bryn", false)]) {
+function listing(
+  status = "active",
+  members = [member("m1", "Aldric", true), member("m2", "Bryn", false)],
+  clock: { as_of: string | null; clock_unset: boolean } = { as_of: "Year 2", clock_unset: false },
+) {
   return {
+    ...clock,
     party: {
       party_id: "p1",
       name: "The Company",
@@ -303,4 +319,117 @@ describe("party members page: recording a time in the picker", () => {
         expect(screen.getByRole("combobox", { name: "Character" })).toHaveValue("Cael")
         expect(server.callsTo("POST", MEMBERS)).toHaveLength(0)
     })
+})
+
+describe("party members page: effective-time groups", () => {
+  const CLOCK_LINK = { name: /Set the campaign time on Campaign Home/ }
+
+  it("groups by the server's classification: current, upcoming and history", async () => {
+    server.on("GET", MEMBERS, {
+      body: listing("active", [
+        member("m1", "Aldric", true),
+        member("m2", "Bryn", false),
+        // Stored open-ended, but not started at the campaign clock: upcoming, never history.
+        member("m3", "Cael", false, "not_started", null),
+        // A finite membership containing the clock: current, with its stored end shown, not endable.
+        member("m4", "Dara", true, "in_effect", "Year 5"),
+      ]),
+    })
+    openApp("/app/mundivita/parties/p1")
+    const current = await screen.findByRole("table", { name: "Current members" })
+    expect(within(current).getByRole("rowheader", { name: "Aldric" })).toBeInTheDocument()
+    expect(within(current).getByRole("rowheader", { name: "Dara" })).toBeInTheDocument()
+    expect(within(current).getByText("Year 5")).toBeInTheDocument()
+    expect(within(current).queryByRole("rowheader", { name: "Cael" })).toBeNull()
+    const upcoming = screen.getByRole("table", { name: "Upcoming members" })
+    expect(within(upcoming).getByRole("rowheader", { name: "Cael" })).toBeInTheDocument()
+    const past = screen.getByRole("table", { name: "Past members" })
+    expect(within(past).getByRole("rowheader", { name: "Bryn" })).toBeInTheDocument()
+    expect(within(past).queryByRole("rowheader", { name: "Cael" })).toBeNull()
+    // The command ends only a membership with no recorded end: Aldric and the upcoming Cael, not
+    // the finite Dara or the ended Bryn.
+    expect(screen.getByRole("button", { name: "End membership of Aldric" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "End membership of Cael" })).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "End membership of Dara" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "End membership of Bryn" })).toBeNull()
+    expect(screen.queryByText(/campaign time has not been set/)).toBeNull()
+  })
+
+  it("lists every membership as undetermined, never as history or upcoming, when the clock is unset", async () => {
+    server.on("GET", MEMBERS, {
+      body: listing(
+        "active",
+        [
+          member("m1", "Aldric", false, "clock_unset", null),
+          member("m2", "Bryn", false, "clock_unset", "Year 3"),
+        ],
+        { as_of: null, clock_unset: true },
+      ),
+    })
+    openApp("/app/mundivita/parties/p1")
+    const all = await screen.findByRole("table", { name: "Members (current status unknown)" })
+    expect(within(all).getByRole("rowheader", { name: "Aldric" })).toBeInTheDocument()
+    expect(within(all).getByRole("rowheader", { name: "Bryn" })).toBeInTheDocument()
+    expect(screen.getByText(/Party membership cannot be determined|Current membership cannot be determined/)).toBeInTheDocument()
+    expect(screen.queryByRole("heading", { name: "History" })).toBeNull()
+    expect(screen.queryByRole("heading", { name: "Upcoming members" })).toBeNull()
+    expect(screen.queryByRole("heading", { name: "Current members" })).toBeNull()
+    expect(screen.queryByText("No current members.")).toBeNull()
+    // The GM may still manage: the open-ended one can be ended, the finite one cannot.
+    expect(screen.getByRole("button", { name: "End membership of Aldric" })).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "End membership of Bryn" })).toBeNull()
+    // The clock-setup route is offered to a user who can edit canon.
+    expect(screen.getByRole("link", CLOCK_LINK)).toHaveAttribute("href", "/app/mundivita")
+  })
+
+  it("says an unset-clock party with no memberships has none recorded, not that nobody is current", async () => {
+    server.on("GET", MEMBERS, { body: listing("active", [], { as_of: null, clock_unset: true }) })
+    server.on("GET", "/campaigns/mundivita/parties/p1/inventory", {
+      body: { party_id: "p1", as_of: null, clock_unset: true, members: [] },
+    })
+    openApp("/app/mundivita/parties/p1")
+    expect(await screen.findByText("No memberships are recorded for this party.")).toBeInTheDocument()
+    expect(screen.queryByText("No current members.")).toBeNull()
+  })
+
+  it("ends an upcoming open-ended membership with the same command and party version", async () => {
+    server.on("GET", MEMBERS, {
+      body: listing("active", [member("m3", "Cael", false, "not_started", null)]),
+    })
+    server.on("POST", `${MEMBERS}/m3/end`, {
+      body: { party_id: "p1", party_membership_id: "m3", row_version: 5, event_id: "ev", created: false, changed: true },
+    })
+    openApp("/app/mundivita/parties/p1")
+    fireEvent.click(await screen.findByRole("button", { name: "End membership of Cael" }))
+    const dialog = await screen.findByRole("dialog", { name: "End this membership?" })
+    fireEvent.change(await within(dialog).findByRole("combobox", { name: /Ends at/ }), { target: { value: "t2" } })
+    fireEvent.click(within(dialog).getByRole("button", { name: "End membership" }))
+    await waitFor(() => expect(server.callsTo("POST", `${MEMBERS}/m3/end`)).toHaveLength(1))
+    expect(server.callsTo("POST", `${MEMBERS}/m3/end`)[0]!.body).toMatchObject({
+      effective_to_world_time_id: "t2",
+      expected_party_row_version: 4,
+    })
+  })
+
+  it("keeps the add form and its draft when the clock is unset", async () => {
+    server.on("GET", MEMBERS, { body: listing("active", [], { as_of: null, clock_unset: true }) })
+    openApp("/app/mundivita/parties/p1")
+    fireEvent.click(await screen.findByRole("button", { name: "Add member" }))
+    fireEvent.focus(screen.getByRole("combobox", { name: "Character" }))
+    fireEvent.click(await screen.findByRole("option", { name: /Cael/ }))
+    expect(screen.getByRole("combobox", { name: "Character" })).toHaveValue("Cael")
+    expect(server.callsTo("POST", MEMBERS)).toHaveLength(0)
+  })
+
+  it("shows the inventory panel's undetermined notice instead of 'No current members' when the clock is unset", async () => {
+    server.on("GET", MEMBERS, { body: listing("active", [], { as_of: null, clock_unset: true }) })
+    server.on("GET", "/campaigns/mundivita/parties/p1/inventory", {
+      body: { party_id: "p1", as_of: null, clock_unset: true, members: [] },
+    })
+    openApp("/app/mundivita/parties/p1")
+    const heading = await screen.findByRole("heading", { name: "Party inventory" })
+    const panel = heading.closest("section")!
+    expect(within(panel).getByText(/cannot be determined because the campaign time has not been set/)).toBeInTheDocument()
+    expect(within(panel).queryByText("No current members.")).toBeNull()
+  })
 })

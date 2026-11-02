@@ -204,17 +204,26 @@ function TravelForm({
         destination === null || routes.state.kind !== "ready" ? [] : routes.state.data.items
     const partyItems = parties.state.kind === "ready" ? parties.state.data.items : []
     const presentIds = new Set(present.map((p) => p.character_id))
+    // The travel command moves a party's open-ended memberships (no recorded leave time) on the
+    // timeline: not "the members at campaign Now" (`is_current`/`period_status`), which can differ
+    // both ways (an upcoming open-ended member moves; a finite member in effect does not). The
+    // stored `left_at` is the command's own condition, so that is what the preview reads. Keep in
+    // step with `commands/travel.py` until a deliberate travel-time policy replaces it (DEF-007 U1).
     const partyMembers =
         party === "" || members.state.kind !== "ready"
             ? []
-            : members.state.data.members.filter((m) => m.is_current)
+            : members.state.data.members.filter((m) => m.left_at === null)
     const partyUnreadable = party !== "" && members.state.kind !== "ready" && members.state.kind !== "loading"
-    // The same union the server computes: the ticked characters and the party's current members.
+    // The union the server computes: the ticked characters and the party's open-ended members.
     const willMove = new Map<string, string>()
     for (const p of present) {
         if (chosen.includes(p.character_id)) willMove.set(p.character_id, p.character_name)
     }
-    for (const m of partyMembers) willMove.set(m.character_id, m.character_name)
+    const startsLater = new Set<string>()
+    for (const m of partyMembers) {
+        willMove.set(m.character_id, m.character_name)
+        if (m.period_status === "not_started") startsLater.add(m.character_id)
+    }
     const clockText =
         clock.state.kind === "ready"
             ? clock.state.data.current === null
@@ -304,7 +313,7 @@ function TravelForm({
                         <SelectField
                             id="travel-party"
                             label="Add a party"
-                            hint="Everyone ticked above and the party's current members travel together."
+                            hint="Everyone ticked above and the party's members with no recorded leave time travel together, whether or not they are current members at the campaign time."
                             value={party}
                             placeholder="No party"
                             options={partyItems
@@ -315,7 +324,7 @@ function TravelForm({
                     ) : null}
                 </fieldset>
                 <div aria-live="polite">
-                    <p id="travel-preview-heading">These characters will move</p>
+                    <p id="travel-preview-heading">Characters this travel will move</p>
                     {willMove.size === 0 ? (
                         <p className="authoring-note">No one selected yet.</p>
                     ) : (
@@ -324,6 +333,7 @@ function TravelForm({
                                 <li key={id}>
                                     {name}
                                     {presentIds.has(id) ? "" : " (not in this session)"}
+                                    {startsLater.has(id) ? " (party membership starts later)" : ""}
                                 </li>
                             ))}
                         </ul>
@@ -331,12 +341,14 @@ function TravelForm({
                     {partyUnreadable ? (
                         <p className="authoring-note">
                             The party&apos;s members could not be listed here. The server still moves all of its
-                            current members.
+                            members with no recorded leave time.
                         </p>
                     ) : null}
                     <p className="authoring-note">
                         A preview only: the server decides who moves when you record, and anyone already at the
-                        destination stays put.
+                        destination stays put. A party adds its members with no recorded leave time; this is not
+                        checked against the campaign time or the travel time, so it can differ from the party&apos;s
+                        current members.
                     </p>
                 </div>
                 {routeItems.length > 0 ? (

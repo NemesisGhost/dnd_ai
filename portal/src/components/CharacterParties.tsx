@@ -1,6 +1,7 @@
 import { Link } from "react-router"
 import { characterPartiesPath } from "../api/parties"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
+import { MembershipClockUnsetNotice } from "./MembershipClockUnsetNotice"
 import type { CharacterParties as CharacterPartiesData } from "../types/parties"
 
 interface CharacterPartiesProps {
@@ -50,6 +51,19 @@ export function CharacterParties({ campaignId, characterId, open }: CharacterPar
   }
 
   const { items, can_open: canOpen } = state.data
+  if (state.data.clock_unset === true) {
+    // Undetermined, not empty: no count, and no "No party memberships".
+    return (
+      <div className="campaign-context-panel__parties">
+        <p className="campaign-context-panel__note">Parties</p>
+        <MembershipClockUnsetNotice
+          campaignId={campaignId}
+          className="campaign-context-panel__note"
+          subject="Party membership"
+        />
+      </div>
+    )
+  }
   return (
     <details className="campaign-context-panel__parties" open={open}>
       <summary>Parties ({items.length})</summary>

@@ -293,7 +293,9 @@ function PermittedShell({
                                 {character === null
                                     ? "Choose a character first"
                                     : character.authorized_parties.length === 0
-                                      ? "No party available"
+                                      ? data.current_time_set === false
+                                          ? "Party membership is undetermined (campaign time not set)"
+                                          : "No party available"
                                       : "All parties"}
                             </option>
                             {(character?.authorized_parties ?? []).map((p) => (

@@ -626,7 +626,9 @@ def test_the_travel_command_still_expands_open_ended_members_regardless_of_the_c
         (r["character_name"], r["period_status"], r["left_at"] is None)
         for r in scene.gm_members().json()["members"]
     ]
-    assert ("Tobin", "not_started", True) in gm_rows  # the portal preview keys on left_at
+    # `left_at is None` is the stored open end, the fact the unchanged command moves. It is not
+    # `period_status`/`is_current`; the portal Travel preview reads it (B1-DEF7b).
+    assert ("Tobin", "not_started", True) in gm_rows
     town = place(s, "Lantern Market Town")
     result = travel(s, town, party_id=scene.party_id)
     assert result.status_code == 200, result.text

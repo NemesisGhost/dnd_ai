@@ -95,6 +95,10 @@ export interface OperationBody {
 
 export interface PartyInventory {
     party_id: string
+    as_of?: string | null
+    // True when no campaign clock is set: current membership is undetermined and no member
+    // inventories are listed.
+    clock_unset?: boolean
     members: {
         character_id: string
         character_name: string

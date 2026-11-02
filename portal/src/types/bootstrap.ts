@@ -24,6 +24,9 @@ export interface CampaignContext {
   timeline_name: string | null
   roles: string[]
   character_perspectives: CharacterPerspective[]
+  // False when the campaign has no effective clock, so party membership (and so the parties in
+  // `authorized_parties`) cannot be determined. Absent from an older server (treated as set).
+  current_time_set?: boolean
   selected_character_id: string | null
   capabilities: string[]
   // The caller's capabilities on this campaign's *world* (ADR 0020), independent of

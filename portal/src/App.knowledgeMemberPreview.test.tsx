@@ -32,6 +32,7 @@ const OVERVIEW_BODY = {
   members: [
     member("m1", "Mira"),
     member("m2", "Tom"),
+    member("m5", "Una"),
     member("m3", "Gone", { status_code: "departed" }),
     member("m4", "Disabled", { account_is_active: false }),
   ],
@@ -56,6 +57,13 @@ const PERSPECTIVES: Record<string, object> = {
     ],
   },
   m2: { display_name: "Tom", roles: ["observer"], character_perspectives: [] },
+  // A campaign with no effective clock: party membership (and so any party perspective) is undetermined.
+  m5: {
+    display_name: "Una",
+    roles: ["player"],
+    current_time_set: false,
+    character_perspectives: [{ character_id: "c9", character_name: "Kes", authorized_parties: [] }],
+  },
 }
 
 const item = (id: string, statement: string, extra: Record<string, unknown> = {}) => ({
@@ -91,10 +99,11 @@ beforeEach(() => {
   lists = {
     m1: { items: [item("k1", "Mira can see this.", { subject: SUBJECT })], next_cursor: null },
     m2: { items: [item("k9", "Tom can see this.")], next_cursor: null },
+    m5: { items: [], next_cursor: null },
   }
   server = installCampaignShellMocks()
   server.on("GET", OVERVIEW, { body: OVERVIEW_BODY })
-  for (const id of ["m1", "m2"]) {
+  for (const id of ["m1", "m2", "m5"]) {
     server.on("GET", `${preview(id)}/perspectives`, { body: PERSPECTIVES[id] })
     server.on("GET", listPath(id), () => ({ body: lists[id] }))
   }
@@ -162,7 +171,7 @@ describe("Knowledge Member preview", () => {
       setup(PREVIEW)
       const select = await screen.findByRole("combobox", { name: "Member" })
       const names = within(select).getAllByRole("option").map((o) => o.textContent)
-      expect(names).toEqual(["Choose a member", "Mira", "Tom"])
+      expect(names).toEqual(["Choose a member", "Mira", "Tom", "Una"])
     })
 
     it("previews the chosen member through the server's preview routes only, and says so in a persistent banner", async () => {
@@ -212,6 +221,14 @@ describe("Knowledge Member preview", () => {
       const banner = screen.getByRole("region", { name: "Preview context" })
       expect(banner).toHaveTextContent("Character perspective: Ixa. Party perspective: Red Company.")
       expect(banner).toHaveTextContent("fictional perspectives")
+    })
+
+    it("says party membership is undetermined, not that no party exists, when campaign time is not set", async () => {
+      setup(`${PREVIEW}?member=m5&character_id=c9`)
+      const party = await screen.findByRole("combobox", { name: "Party to preview" })
+      expect(party).toBeDisabled()
+      expect(within(party).getByRole("option")).toHaveTextContent("undetermined (campaign time not set)")
+      expect(within(party).getByRole("option")).not.toHaveTextContent("No party available")
     })
 
     it("says no party is available for a character without one", async () => {

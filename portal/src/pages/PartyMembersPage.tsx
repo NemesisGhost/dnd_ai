@@ -17,6 +17,7 @@ import { ReferenceCombobox } from "../components/authoring/ReferenceCombobox"
 import type { ReferenceOption } from "../components/authoring/ReferenceCombobox"
 import { WorldTimePicker } from "../components/authoring/WorldTimePicker"
 import { PartyInventoryPanel } from "../components/InventoryPanels"
+import { MembershipClockUnsetNotice } from "../components/MembershipClockUnsetNotice"
 import { StaleReadNotice } from "../components/StaleReadNotice"
 import { TableScroll } from "../components/TableScroll"
 import { useSession } from "../context/SessionContext"
@@ -26,7 +27,12 @@ import type { RefetchOutcome } from "../hooks/useAuthoringResource"
 import { useConfirmedRefresh } from "../hooks/useConfirmedRefresh"
 import { useKept } from "../hooks/useKeptResource"
 import { usePageArrival } from "../hooks/usePageArrival"
-import type { MembershipReceipt, PartyMember, PartyMembers } from "../types/parties"
+import type {
+    MembershipPeriodStatus,
+    MembershipReceipt,
+    PartyMember,
+    PartyMembers,
+} from "../types/parties"
 import "../components/authoring/authoring.css"
 
 const base = (campaignId: string): string => `/app/${encodeURIComponent(campaignId)}`
@@ -41,9 +47,33 @@ const CODE_MESSAGE: Readonly<Record<string, string>> = {
     world_time_id_invalid: "That time is not available. Choose another.",
 }
 
-// /app/:campaignId/parties/:partyId: who is in the party now, and its history.
-// Editors only (the read is a 403 for anyone else). Adding and ending a member
-// each record a campaign event at the time the editor chooses.
+// Which of the four membership groups a table shows. The server classifies each row against the
+// campaign clock (`period_status`); nothing here compares dates. With no clock every row is
+// `clock_unset` and belongs to the undetermined group, never to History or Upcoming.
+type MemberGroup = "current" | "upcoming" | "history" | "undetermined"
+
+const GROUP_STATUS: Readonly<Record<MemberGroup, MembershipPeriodStatus>> = {
+    current: "in_effect",
+    upcoming: "not_started",
+    history: "ended",
+    undetermined: "clock_unset",
+}
+
+const GROUP_TEXT: Readonly<Record<MemberGroup, { heading: string; label: string; empty: string }>> = {
+    current: { heading: "Current members", label: "Current members", empty: "No current members." },
+    upcoming: { heading: "Upcoming members", label: "Upcoming members", empty: "No upcoming members." },
+    history: { heading: "History", label: "Past members", empty: "No past members." },
+    undetermined: {
+        heading: "Members (current status unknown)",
+        label: "Members (current status unknown)",
+        empty: "No memberships are recorded for this party.",
+    },
+}
+
+// /app/:campaignId/parties/:partyId: who is in the party at the campaign's current time, who is
+// upcoming, and its history. Editors only (the read is a 403 for anyone else). Adding and ending a
+// member each record a campaign event at the time the editor chooses. With no campaign clock the
+// current/upcoming/history split cannot be made, so the memberships are listed as undetermined.
 export function PartyMembersPage() {
     const { campaignId = "", partyId = "" } = useParams()
     const membersPath = partyMembersPath(campaignId, partyId)
@@ -53,6 +83,7 @@ export function PartyMembersPage() {
     // not hidden behind an error screen, and the forms keep what was typed.
     const data = useKept(resource.state, membersPath)
     const stale = resource.state.kind === "error" && data !== null
+    const unset = data?.clock_unset === true
 
     return (
         <section className="authoring-page" aria-labelledby="members-heading">
@@ -78,12 +109,13 @@ export function PartyMembersPage() {
                             This party is archived. Members can be ended but not added.
                         </p>
                     ) : null}
+                    {unset ? <MembershipClockUnsetNotice campaignId={campaignId} /> : null}
                     <MemberTable
                         campaignId={campaignId}
                         data={data}
                         refetch={resource.refetch}
                         pageStale={stale}
-                        current
+                        group={unset ? "undetermined" : "current"}
                     />
                     {data.party.lifecycle_status === "active" ? (
                         <AddMemberForm
@@ -93,13 +125,26 @@ export function PartyMembersPage() {
                             pageStale={stale}
                         />
                     ) : null}
-                    <MemberTable
-                        campaignId={campaignId}
-                        data={data}
-                        refetch={resource.refetch}
-                        pageStale={stale}
-                        current={false}
-                    />
+                    {unset ? null : (
+                        <>
+                            {data.members.some((m) => m.period_status === "not_started") ? (
+                                <MemberTable
+                                    campaignId={campaignId}
+                                    data={data}
+                                    refetch={resource.refetch}
+                                    pageStale={stale}
+                                    group="upcoming"
+                                />
+                            ) : null}
+                            <MemberTable
+                                campaignId={campaignId}
+                                data={data}
+                                refetch={resource.refetch}
+                                pageStale={stale}
+                                group="history"
+                            />
+                        </>
+                    )}
                     <PartyInventoryPanel campaignId={campaignId} partyId={partyId} />
                 </>
             )}
@@ -112,7 +157,7 @@ function MemberTable({
     data,
     refetch,
     pageStale,
-    current,
+    group,
 }: {
     campaignId: string
     data: PartyMembers
@@ -120,17 +165,23 @@ function MemberTable({
     // The page's latest read failed and `data` is the last roster that loaded: its party version
     // may be behind, so a version-checked write waits for the read.
     pageStale: boolean
-    current: boolean
+    group: MemberGroup
 }) {
     const { reload } = useSession()
     const announce = useAnnounce()
-    const rows = data.members.filter((m) => m.is_current === current)
+    const text = GROUP_TEXT[group]
+    const rows = data.members.filter((m) => m.period_status === GROUP_STATUS[group])
+    // Ending is a command on a membership that has no recorded end, whatever its temporal status:
+    // an upcoming or undetermined open-ended membership can be ended, a finite one cannot. The
+    // history group only reports.
+    const canEnd = group !== "history"
+    const showLeft = group !== "current" || rows.some((m) => m.left_at !== null)
     const [target, setTarget] = useState<PartyMember | null>(null)
     const [timeId, setTimeId] = useState("")
     const [reason, setReason] = useState("")
     const [timeError, setTimeError] = useState<string | null>(null)
     const mutation = useAuthoringMutation<PartyMember, MembershipReceipt>({
-        scopeKey: `end-membership:${data.party.party_id}`,
+        scopeKey: `end-membership:${data.party.party_id}:${group}`,
         request: (member, ctx) =>
             endPartyMembership(
                 campaignId,
@@ -163,26 +214,24 @@ function MemberTable({
     const writesHeld = refreshed.held || pageStale
     const error = mutation.status.kind === "error" ? mutation.status.error : null
     const message = error?.code ? (CODE_MESSAGE[error.code] ?? null) : null
-    const headingId = current ? "current-members-heading" : "member-history-heading"
+    const headingId = group === "history" ? "member-history-heading" : `${group}-members-heading`
 
     return (
         <section aria-labelledby={headingId}>
-            <h2 id={headingId}>{current ? "Current members" : "History"}</h2>
-            {current ? refreshed.notice : null}
+            <h2 id={headingId}>{text.heading}</h2>
+            {canEnd ? refreshed.notice : null}
             {rows.length === 0 ? (
-                <p>{current ? "No current members." : "No past members."}</p>
+                <p>{text.empty}</p>
             ) : (
-                <TableScroll label={current ? "Current members" : "Past members"}>
+                <TableScroll label={text.label}>
                 <table className="authoring-table">
-                    <caption className="visually-hidden">
-                        {current ? "Current members" : "Past members"}
-                    </caption>
+                    <caption className="visually-hidden">{text.label}</caption>
                     <thead>
                         <tr>
                             <th scope="col">Character</th>
                             <th scope="col">Joined</th>
-                            {!current ? <th scope="col">Left</th> : null}
-                            {current ? (
+                            {showLeft ? <th scope="col">Left</th> : null}
+                            {canEnd ? (
                                 <th scope="col">
                                     <span className="visually-hidden">Actions</span>
                                 </th>
@@ -194,9 +243,10 @@ function MemberTable({
                             <tr key={member.party_membership_id}>
                                 <th scope="row">{member.character_name}</th>
                                 <td>{member.joined_at}</td>
-                                {!current ? <td>{member.left_at}</td> : null}
-                                {current ? (
+                                {showLeft ? <td>{member.left_at}</td> : null}
+                                {canEnd ? (
                                     <td>
+                                        {member.left_at !== null ? null : (
                                         <button
                                             type="button"
                                             className="authoring-button"
@@ -208,6 +258,7 @@ function MemberTable({
                                         >
                                             End membership of {member.character_name}
                                         </button>
+                                        )}
                                     </td>
                                 ) : null}
                             </tr>
@@ -216,7 +267,7 @@ function MemberTable({
                 </table>
                 </TableScroll>
             )}
-            {current ? (
+            {canEnd ? (
                 <ConfirmDialog
                     open={target !== null}
                     title="End this membership?"

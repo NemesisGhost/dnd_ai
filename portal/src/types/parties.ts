@@ -16,6 +16,11 @@ export interface PartyItem {
 export interface CharacterParties {
     character_id: string
     can_open: boolean
+    // The campaign clock the list was evaluated at. With `clock_unset` there is none: current
+    // membership is undetermined and `items` is empty, which is not "no memberships". Optional
+    // only for an older server.
+    as_of?: string | null
+    clock_unset?: boolean
     items: { party_id: string; name: string }[]
 }
 
@@ -36,6 +41,10 @@ export interface PartyFieldsBody {
     description: string | null
 }
 
+// The server's classification of a membership against the campaign clock (never recomputed here):
+// `in_effect` is current, `not_started` upcoming, `ended` history, `clock_unset` undetermined.
+export type MembershipPeriodStatus = "in_effect" | "not_started" | "ended" | "clock_unset"
+
 export interface PartyMember {
     party_membership_id: string
     character_id: string
@@ -44,11 +53,16 @@ export interface PartyMember {
     left_at: string | null
     joined_reason: string | null
     left_reason: string | null
+    // True only when in effect at the campaign clock (false when the clock is unset).
     is_current: boolean
+    period_status: MembershipPeriodStatus
 }
 
 export interface PartyMembers {
     party: PartyItem
+    // The clock the statuses were classified at; null with `clock_unset` when none is set.
+    as_of?: string | null
+    clock_unset?: boolean
     members: PartyMember[]
 }
 
@@ -56,6 +70,10 @@ export interface PartyMembers {
 // identity and name; `member_count` is the length of what is listed.
 export interface PartyRoster {
     party: PartyItem
+    as_of?: string | null
+    // True when no campaign clock is set: current membership cannot be determined, so an empty
+    // `members` list does not mean the party has no members.
+    clock_unset?: boolean
     member_count: number
     members: { character_id: string; character_name: string }[]
 }
