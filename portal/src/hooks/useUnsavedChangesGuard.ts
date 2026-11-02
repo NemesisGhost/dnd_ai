@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef } from "react"
+import { useCallback, useEffect, useLayoutEffect, useRef } from "react"
 import { useBlocker } from "react-router"
-import { anyNavigationHold, registerPageGuard } from "./navigationHolds"
+import { anyNavigationHold, holdNavigationQuestion, registerPageGuard } from "./navigationHolds"
 
 export interface UnsavedChangesGuard {
     // True while an in-app navigation is held waiting for the user's decision.
@@ -40,6 +40,10 @@ export function useUnsavedChangesGuard(isDirty: boolean): UnsavedChangesGuard {
         ({ currentLocation, nextLocation }) =>
             (dirtyRef.current || anyNavigationHold()) && currentLocation.pathname !== nextLocation.pathname,
     )
+
+    // While the question is on screen, modals of components that hold state (a picker's dialog) step aside.
+    const asking = blocker.state === "blocked"
+    useLayoutEffect(() => (asking ? holdNavigationQuestion() : undefined), [asking])
 
     useEffect(() => {
         if (!isDirty) {

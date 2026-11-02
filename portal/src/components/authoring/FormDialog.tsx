@@ -27,6 +27,9 @@ interface FormDialogProps {
     // (a "Reopen" link that the page removes as it opens the dialog). Returns null when there is nowhere
     // to go, e.g. the page it belongs to has been left; focus is then left alone.
     returnFocusTo?: () => HTMLElement | null
+    // Another modal (a navigation question) has the screen: the dialog is taken down without closing, with
+    // its form and values still mounted, and put back with focus where it was when this ends.
+    suspended?: boolean
     children: ReactNode
 }
 
@@ -74,6 +77,7 @@ export function FormDialog({
     pending = false,
     prompt = null,
     returnFocusTo,
+    suspended = false,
     children,
 }: FormDialogProps) {
     const fallbackRef = useRef(returnFocusTo)
@@ -83,6 +87,12 @@ export function FormDialog({
     const dialogRef = useRef<HTMLDialogElement>(null)
     const keepRef = useRef<HTMLButtonElement>(null)
     const returnFocusRef = useRef<Element | null>(null)
+    // Whether the dialog has been open, and where focus was inside it when it was last taken down.
+    const wasOpen = useRef(false)
+    const resumeFocusRef = useRef<Element | null>(null)
+    const wasSuspended = useRef(false)
+    // The last control focused inside the dialog: another modal may already have taken focus when it steps aside.
+    const lastFocusRef = useRef<Element | null>(null)
     const beforePromptRef = useRef<Element | null>(null)
     const titleId = useId()
     const descriptionId = useId()
@@ -91,16 +101,42 @@ export function FormDialog({
     useEffect(() => {
         const dialog = dialogRef.current
         if (dialog === null) return
+        if (open && suspended) {
+            // Stepping aside: nothing is closed from the page's point of view and no focus is returned.
+            resumeFocusRef.current = lastFocusRef.current
+            wasSuspended.current = true
+            wasOpen.current = true
+            if (typeof dialog.close === "function") {
+                if (dialog.open) dialog.close()
+            } else {
+                dialog.removeAttribute("open")
+            }
+            return
+        }
         if (open) {
-            returnFocusRef.current = document.activeElement
+            const resuming = wasSuspended.current
+            wasSuspended.current = false
+            wasOpen.current = true
+            if (!resuming) {
+                returnFocusRef.current = document.activeElement
+                lastFocusRef.current = null
+            }
             if (typeof dialog.showModal === "function") {
                 if (!dialog.open) dialog.showModal()
             } else {
                 dialog.setAttribute("open", "")
             }
-            dialog.querySelector<HTMLElement>("input, select, textarea")?.focus()
+            const back = resumeFocusRef.current
+            resumeFocusRef.current = null
+            if (resuming && back instanceof HTMLElement && dialog.contains(back) && !back.closest("[hidden], [inert]")) back.focus()
+            else dialog.querySelector<HTMLElement>("input, select, textarea")?.focus()
             return
         }
+        wasSuspended.current = false
+        resumeFocusRef.current = null
+        // Never opened (the first run): there is nothing to close and no focus to give back.
+        if (!wasOpen.current) return
+        wasOpen.current = false
         if (typeof dialog.close === "function") {
             if (dialog.open) dialog.close()
         } else {
@@ -112,7 +148,7 @@ export function FormDialog({
         const active = document.activeElement
         if (active !== null && active !== document.body && !dialog.contains(active)) return
         if (!restoreFocus(target, dialog)) restoreFocus(fallbackRef.current?.(), dialog)
-    }, [open])
+    }, [open, suspended])
 
     // The question takes focus on its safe answer, and the form gets its place back when it is answered.
     useEffect(() => {
@@ -134,6 +170,9 @@ export function FormDialog({
             className="authoring-dialog authoring-dialog--form"
             aria-labelledby={titleId}
             aria-describedby={descriptionId}
+            onFocus={(event) => {
+                lastFocusRef.current = event.target
+            }}
             onCancel={(event) => {
                 // Escape: the page decides (a request may be in flight, or input may be unsaved).
                 event.preventDefault()

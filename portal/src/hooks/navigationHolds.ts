@@ -7,11 +7,19 @@ import { useEffect, useSyncExternalStore } from "react"
 //   - A component with such state calls `useNavigationHold(active)`.
 //   - `useUnsavedChangesGuard` (the page-level guard) counts itself here and also blocks while any
 //     hold is active, so the page's existing question covers the held state.
+//
+// Scope: these registries are module-global, which assumes one router per document (as the app has). Two
+// routers mounted at once would share holds and guard counts; isolating them is a separate limitation.
+// Registration and cleanup are effect-based and balanced, so StrictMode's double mount and several
+// holders at once leave the counts exact.
+//
 //   - When no page-level guard is mounted the holder installs a blocker of its own (`useHostGuard`
 //     tells it whether to), so there is still exactly one blocker.
 
 const holds = new Set<symbol>()
 let pageGuards = 0
+// Page-level guards that are asking "leave this page?" right now.
+let questions = 0
 const listeners = new Set<() => void>()
 
 function notify() {
@@ -22,6 +30,11 @@ function subscribe(listener: () => void) {
     return () => {
         listeners.delete(listener)
     }
+}
+
+// For tests: how many holds and page-level guards are registered now.
+export function navigationRegistryCounts(): { holds: number; pageGuards: number; questions: number } {
+    return { holds: holds.size, pageGuards, questions }
 }
 
 export function anyNavigationHold(): boolean {
@@ -36,6 +49,21 @@ export function registerPageGuard(): () => void {
         pageGuards -= 1
         notify()
     }
+}
+
+// Called by a page-level guard while its question is on screen; returns what ends it.
+export function holdNavigationQuestion(): () => void {
+    questions += 1
+    notify()
+    return () => {
+        questions -= 1
+        notify()
+    }
+}
+
+// Whether a page-level guard is asking its question: a modal of a holder should step aside for it.
+export function useNavigationQuestion(): boolean {
+    return useSyncExternalStore(subscribe, () => questions > 0)
 }
 
 // Whether a page-level guard is mounted and so already owns the blocker.

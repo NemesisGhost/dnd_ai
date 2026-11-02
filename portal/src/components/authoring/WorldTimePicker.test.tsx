@@ -1,11 +1,12 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react"
-import { useState } from "react"
+import { StrictMode, useState } from "react"
 import { Link } from "react-router"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { sessionBootstrapFixture } from "../../fixtures/sessionBootstrap"
 import { useUnsavedChangesGuard } from "../../hooks/useUnsavedChangesGuard"
 import type { MockResponse } from "../../test/authoringHarness"
 import { bootstrapWith, installMockServer, renderAuthoringRoutes } from "../../test/authoringHarness"
+import { navigationRegistryCounts } from "../../hooks/navigationHolds"
 import { ConfirmDialog } from "./ConfirmDialog"
 import { WorldTimePicker } from "./WorldTimePicker"
 
@@ -102,6 +103,9 @@ function Outer({ submit, pageGuard = false, two = false, initialCampaign = CAMPA
             <button type="button" onClick={() => setWhen("t1")}>
                 Caller sets t1
             </button>
+            <button type="button" onClick={() => setWhen("")}>
+                Caller clears
+            </button>
             {pageGuard ? <PageGuard dirty={note !== ""} /> : null}
             <form
                 aria-label="Outer form"
@@ -147,7 +151,7 @@ function PageGuard({ dirty }: { dirty: boolean }) {
 
 function render(props: Partial<OuterProps> = {}) {
     const submit = vi.fn()
-    renderAuthoringRoutes({
+    const view = renderAuthoringRoutes({
         initialEntry: "/pick",
         bootstrap: bootstrapWith(),
         routes: [
@@ -155,7 +159,7 @@ function render(props: Partial<OuterProps> = {}) {
             { path: "/away", element: <p>Away page</p> },
         ],
     })
-    return { submit }
+    return { submit, router: view.router }
 }
 
 function watchAnnouncements(): string[] {
@@ -674,5 +678,224 @@ describe("WorldTimePicker: leaving the page", () => {
         fill()
         fireEvent.click(screen.getByRole("link", { name: "Go away", hidden: true }))
         expect(await screen.findByRole("dialog", { name: "Leave the outer page?" })).toBeInTheDocument()
+    })
+})
+
+// The caller changes the controlled selection away and back: each is a separate observed change.
+const callerAwayAndBack = () => {
+    fireEvent.click(screen.getByRole("button", { name: "Caller sets t1", hidden: true }))
+    fireEvent.click(screen.getByRole("button", { name: "Caller clears", hidden: true }))
+}
+const NOT_CHOSEN = /It was not chosen because the selection was changed while it was being recorded/
+
+describe("WorldTimePicker: selection revisions", () => {
+    it("is withdrawn by a caller change away and back during the request", async () => {
+        const request = deferred()
+        const { server } = setupServer({
+            post: async () => {
+                await request.gate
+                return undefined
+            },
+        })
+        render()
+        await openIt()
+        fill()
+        record()
+        await inDialog().findByRole("button", { name: "Recording…" })
+        callerAwayAndBack()
+        await act(async () => request.release())
+        expect(await screen.findByText(NOT_CHOSEN)).toBeInTheDocument()
+        await waitFor(() => expect(optionNames()).toContain("Year 3, Bloom 5"))
+        expect(chosen()).toHaveTextContent("")
+        expect(posts(server)).toHaveLength(1)
+    })
+
+    it("is withdrawn by a caller change away and back during the read", async () => {
+        const { state } = setupServer()
+        render()
+        await openIt()
+        fill()
+        const read = deferred()
+        state.hold = read.gate
+        record()
+        await waitFor(() => expect(inDialog().getByRole("textbox", { name: /Year/ })).toHaveValue(""))
+        callerAwayAndBack()
+        state.hold = null
+        await act(async () => read.release())
+        expect(await screen.findByText(NOT_CHOSEN)).toBeInTheDocument()
+        expect(chosen()).toHaveTextContent("")
+    })
+
+    it("is not restored by a failed read and its recovery", async () => {
+        const { server, state } = setupServer()
+        render()
+        await openIt()
+        fill()
+        state.readStatus = 500
+        record()
+        await screen.findByText(/could not be loaded/)
+        callerAwayAndBack()
+        state.readStatus = 0
+        fireEvent.click(screen.getByRole("button", { name: "Load latest" }))
+        expect(await screen.findByText(NOT_CHOSEN)).toBeInTheDocument()
+        expect(chosen()).toHaveTextContent("")
+        expect(posts(server)).toHaveLength(1)
+    })
+
+    it("does not invalidate itself when it chooses, and one recording's change does not touch the next", async () => {
+        const { server } = setupServer()
+        render()
+        await openIt()
+        fill()
+        record()
+        await waitFor(() => expect(chosen()).toHaveTextContent("t9"))
+        expect(screen.queryByText(NOT_CHOSEN)).toBeNull()
+        // A later change by the caller; the next recording begins after it and is chosen.
+        fireEvent.click(screen.getByRole("button", { name: "Caller sets t1" }))
+        expect(chosen()).toHaveTextContent("t1")
+        expect(screen.queryByText(NOT_CHOSEN)).toBeNull()
+        await openIt()
+        fill("4")
+        record()
+        await waitFor(() => expect(chosen()).toHaveTextContent("t9"))
+        expect(posts(server)).toHaveLength(2)
+    })
+
+    it("keeps an invalidated recording from choosing, and the next recording is judged on its own", async () => {
+        const { state } = setupServer()
+        render()
+        await openIt()
+        fill()
+        const read = deferred()
+        state.hold = read.gate
+        record()
+        await waitFor(() => expect(inDialog().getByRole("textbox", { name: /Year/ })).toHaveValue(""))
+        callerAwayAndBack()
+        state.hold = null
+        await act(async () => read.release())
+        await screen.findByText(NOT_CHOSEN)
+        expect(chosen()).toHaveTextContent("")
+        // The same time id comes back from a second recording: it is not mistaken for the first.
+        await openIt()
+        fill("4")
+        record()
+        await waitFor(() => expect(chosen()).toHaveTextContent("t9"))
+    })
+})
+
+describe("WorldTimePicker: one modal while the page asks to leave", () => {
+    const openCount = () => document.querySelectorAll("dialog[open]").length
+
+    it("steps the picker dialog aside for the page's question and restores it on Stay", async () => {
+        setupServer()
+        render({ pageGuard: true })
+        await openIt()
+        fill()
+        const year = inDialog().getByRole("textbox", { name: /Year/ })
+        year.focus()
+        fireEvent.click(screen.getByRole("link", { name: "Go away", hidden: true }))
+        const ask = await screen.findByRole("dialog", { name: "Leave the outer page?" })
+        await waitFor(() => expect(openCount()).toBe(1))
+        expect(ask).toHaveAttribute("open")
+        fireEvent.click(within(ask).getByRole("button", { name: "Stay" }))
+        await waitFor(() => expect(screen.queryByRole("dialog", { name: "Leave the outer page?" })).toBeNull())
+        expect(openCount()).toBe(1)
+        expect(dialog()).toHaveAttribute("open")
+        expect(inDialog().getByRole("textbox", { name: /Year/ })).toHaveValue("3")
+        // Focus is back inside the picker dialog, on the control that had it.
+        expect(year).toHaveFocus()
+        expect(inDialog().queryByText(/Discard this time|You have entered a time/)).toBeNull()
+    })
+
+    it("treats Escape on the page's question as Stay, with no further prompt", async () => {
+        setupServer()
+        render({ pageGuard: true })
+        await openIt()
+        fill()
+        fireEvent.click(screen.getByRole("link", { name: "Go away", hidden: true }))
+        const ask = await screen.findByRole("dialog", { name: "Leave the outer page?" })
+        fireEvent(ask, new Event("cancel", { cancelable: true }))
+        await waitFor(() => expect(screen.queryByRole("dialog", { name: "Leave the outer page?" })).toBeNull())
+        expect(openCount()).toBe(1)
+        expect(inDialog().queryByText(/Discard this time|You have entered a time|Leave this page/)).toBeNull()
+        expect(inDialog().getByRole("textbox", { name: /Year/ })).toHaveValue("3")
+        expect(screen.queryByText("Away page")).toBeNull()
+    })
+
+    it("leaves once on Leave, without the picker taking focus back", async () => {
+        setupServer()
+        const { router } = render({ pageGuard: true })
+        const arrivals: string[] = []
+        router.subscribe((state) => arrivals.push(state.location.pathname))
+        await openIt()
+        fill()
+        fireEvent.click(screen.getByRole("link", { name: "Go away", hidden: true }))
+        const ask = await screen.findByRole("dialog", { name: "Leave the outer page?" })
+        fireEvent.click(within(ask).getByRole("button", { name: "Leave" }))
+        expect(await screen.findByText("Away page")).toBeInTheDocument()
+        expect(openCount()).toBe(0)
+        expect(arrivals.filter((path) => path === "/away")).toHaveLength(1)
+        expect(screen.queryByRole("button", { name: "Record a new time" })).toBeNull()
+        expect(screen.queryByRole("textbox", { name: /Year/, hidden: true })).toBeNull()
+    })
+
+    it("keeps an uncertain request mounted and recoverable while the question has the screen", async () => {
+        setupServer({ post: (n) => (n === 1 ? { networkError: true } : undefined) })
+        render({ pageGuard: true })
+        await openIt()
+        fill()
+        record()
+        await inDialog().findByText(/cannot tell whether this was saved/)
+        fireEvent.click(screen.getByRole("link", { name: "Go away", hidden: true }))
+        const ask = await screen.findByRole("dialog", { name: "Leave the outer page?" })
+        fireEvent.click(within(ask).getByRole("button", { name: "Stay" }))
+        await inDialog().findByText(/cannot tell whether this was saved/)
+        fireEvent.click(inDialog().getByRole("button", { name: "Retry" }))
+        await waitFor(() => expect(chosen()).toHaveTextContent("t9"))
+    })
+})
+
+describe("WorldTimePicker: registration and cleanup", () => {
+    it("counts several pickers and guards exactly, under StrictMode, and leaves none behind", async () => {
+        setupServer()
+        const base = navigationRegistryCounts()
+        const submit = vi.fn()
+        const view = renderAuthoringRoutes({
+            initialEntry: "/pick",
+            bootstrap: bootstrapWith(),
+            routes: [
+                {
+                    path: "/pick",
+                    element: (
+                        <StrictMode>
+                            <Outer submit={submit} two pageGuard />
+                        </StrictMode>
+                    ),
+                },
+                { path: "/away", element: <p>Away page</p> },
+            ],
+        })
+        const [first, second] = await screen.findAllByRole("button", { name: "Record a new time" })
+        expect(navigationRegistryCounts()).toEqual({ ...base, pageGuards: base.pageGuards + 1 })
+        fireEvent.click(first!)
+        await screen.findByRole("dialog", { name: "Record a world time" })
+        fill()
+        await waitFor(() => expect(navigationRegistryCounts().holds).toBe(base.holds + 1))
+        fireEvent.click(within(dialog()).getByRole("button", { name: "Cancel" }))
+        fireEvent.click(within(dialog()).getByRole("button", { name: "Discard" }))
+        await waitFor(() => expect(navigationRegistryCounts().holds).toBe(base.holds))
+        fireEvent.click(second!)
+        const dialogs = await screen.findAllByRole("dialog", { name: "Record a world time" })
+        expect(dialogs).toHaveLength(1)
+        fill()
+        await waitFor(() => expect(navigationRegistryCounts().holds).toBe(base.holds + 1))
+        fireEvent.click(screen.getByRole("link", { name: "Go away", hidden: true }))
+        fireEvent.click(
+            within(await screen.findByRole("dialog", { name: "Leave the outer page?" })).getByRole("button", { name: "Leave" }),
+        )
+        await screen.findByText("Away page")
+        expect(navigationRegistryCounts()).toEqual(base)
+        view.unmount()
+        expect(navigationRegistryCounts()).toEqual(base)
     })
 })

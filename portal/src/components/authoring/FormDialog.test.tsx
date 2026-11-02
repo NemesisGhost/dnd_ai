@@ -295,4 +295,12 @@ describe("FormDialog", () => {
             expect(attempt).not.toHaveBeenCalled()
         })
     })
+
+    it("does not move focus to the fallback merely because it was mounted closed", () => {
+        const fallback = document.createElement("button")
+        document.body.appendChild(fallback)
+        render(<Harness returnFocusTo={() => fallback} />)
+        expect(fallback).not.toHaveFocus()
+        fallback.remove()
+    })
 })

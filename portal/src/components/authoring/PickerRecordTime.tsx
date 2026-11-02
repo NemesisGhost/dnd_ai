@@ -7,6 +7,7 @@ import {
     createGuardViewStore,
     useGuardView,
     useHostGuard,
+    useNavigationQuestion,
     useNavigationHold,
 } from "../../hooks/navigationHolds"
 import type { GuardViewStore } from "../../hooks/navigationHolds"
@@ -66,6 +67,8 @@ interface PickerRecordTimeProps {
     held: boolean
     // The write was confirmed: read the list again (a read only) and report how that went.
     onConfirmed: (receipt: WorldTimeReceipt) => Promise<RefreshOutcome>
+    // A request is being sent: `retrying` when it replays an attempt whose outcome was unknown.
+    onBegin: (retrying: boolean) => void
     // Read the list again, for a person who wants to check an uncertain request.
     onReload: () => Promise<unknown>
 }
@@ -73,7 +76,7 @@ interface PickerRecordTimeProps {
 // "Record a new time" for a world-time picker: a trigger and the reviewed form dialog, with the form kept
 // mounted behind it so an uncertain request survives the dialog closing. It never touches the form that
 // surrounds the picker; the picker chooses the confirmed point itself once the list shows it.
-export function PickerRecordTime({ campaignId, calendars, items, held, onConfirmed, onReload }: PickerRecordTimeProps) {
+export function PickerRecordTime({ campaignId, calendars, items, held, onConfirmed, onBegin, onReload }: PickerRecordTimeProps) {
     const announce = useAnnounce()
     const [open, setOpen] = useState(false)
     // The form is first mounted when the dialog is first opened, and then stays (see above).
@@ -100,10 +103,20 @@ export function PickerRecordTime({ campaignId, calendars, items, held, onConfirm
         setDirty(next)
         if (!next) setKeptAfter(null)
     }, [])
-    const handleStatus = useCallback((next: AuthoringMutationStatus) => {
-        setStatus(next)
-        if (next.kind === "pending") setKeptAfter(null)
-    }, [])
+    const previous = useRef<AuthoringMutationStatus>({ kind: "idle" })
+    const handleStatus = useCallback(
+        (next: AuthoringMutationStatus) => {
+            const before = previous.current
+            if (next === before) return
+            previous.current = next
+            setStatus(next)
+            if (next.kind === "pending") {
+                setKeptAfter(null)
+                onBegin(before.kind === "error" && (before.error.kind === "network" || before.error.kind === "server"))
+            }
+        },
+        [onBegin],
+    )
 
     const pending = status.kind === "pending"
     const unresolved = status.kind === "error" && (status.error.kind === "network" || status.error.kind === "server")
@@ -117,6 +130,8 @@ export function PickerRecordTime({ campaignId, calendars, items, held, onConfirm
     }, [hold])
 
     const hostGuarded = useHostGuard()
+    // The page's own question has the screen: this dialog steps aside (its form and request stay mounted).
+    const questioning = useNavigationQuestion()
     const store = useMemo(() => createGuardViewStore(), [])
     const guard = useGuardView(store)
     const blocked = !hostGuarded && guard.blocked
@@ -238,6 +253,7 @@ export function PickerRecordTime({ campaignId, calendars, items, held, onConfirm
                     pending={pending}
                     prompt={prompt}
                     returnFocusTo={() => trigger.current}
+                    suspended={questioning}
                 >
                     {keptAfter !== null ? (
                         <div className="authoring-message authoring-message--success" role="status">
