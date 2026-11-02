@@ -90,6 +90,9 @@ describe("New character breadcrumb", () => {
     ["an external address", "https://example.com/app/mundivita/characters"],
     ["a protocol-relative address", "//evil.example/app/mundivita/characters"],
     ["a sibling prefix", "/app/mundivita/characters-secret"],
+    ["encoded dot segments into another campaign", "/app/mundivita/characters/%2e%2e/%2e%2e/other/characters/all"],
+    ["mixed-case encoded dot segments", "/app/mundivita/characters/%2E%2e/%2e%2E/other/characters/all"],
+    ["an encoded separator", "/app/mundivita/characters%2f..%2f..%2fother/characters/all"],
   ])("ignores a crafted return from %s", async (_name, crafted) => {
     const app = openApp(NEW, ["canon.edit"])
     await screen.findByRole("heading", { level: 1, name: "New character" })
@@ -102,6 +105,25 @@ describe("New character breadcrumb", () => {
     await screen.findByRole("heading", { level: 1, name: "New NPC" })
     expect(app.router.state.location.state).not.toHaveProperty("charactersReturn")
     expect(page().getByRole("link", { name: "World" })).toHaveAttribute("href", "/app/mundivita/world")
+
+    // Where the crafted state would actually have led stays inside the campaign.
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel" }))
+    await screen.findByRole("heading", { level: 1, name: "Campaign World" })
+    expect(app.router.state.location.pathname).toBe("/app/mundivita/world")
+  })
+
+  it.each([
+    ["encoded dot segments", "/app/mundivita/characters/%2e%2e/%2e%2e/other/characters/all"],
+    ["mixed-case encoded dot segments", "/app/mundivita/characters/%2E%2e/%2e%2E/other/characters/all"],
+  ])("never navigates out of the campaign through the chooser breadcrumb (%s)", async (_name, crafted) => {
+    const app = openApp(NEW, ["canon.edit"])
+    await screen.findByRole("heading", { level: 1, name: "New character" })
+    void app.router.navigate(NEW, { state: { charactersReturn: crafted } })
+    await waitFor(() => expect(app.router.state.location.state).toMatchObject({ charactersReturn: crafted }))
+    const href = page().getByRole("link", { name: "Characters" }).getAttribute("href") ?? ""
+    expect(new URL(href, "http://x.invalid").pathname).toBe(ALL)
+    fireEvent.click(page().getByRole("link", { name: "Characters" }))
+    await waitFor(() => expect(app.router.state.location.pathname).toBe(ALL))
   })
 
   it("keeps World as the NPC breadcrumb when reached from World People", async () => {

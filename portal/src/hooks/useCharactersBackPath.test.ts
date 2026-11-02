@@ -18,11 +18,59 @@ describe("readCharactersReturn", () => {
         "/app/c2/characters/all",
         "/app/c1/charactersX",
         "/app/c1/characters/../world",
+        "/app/c1/characters/%2e%2e/%2e%2e/c2/characters/all",
+        "/app/c1/characters/%2E%2e/%2e%2E/c2/characters/all",
+        "/app/c1/characters/.%2e/.%2e/c2/characters/all",
+        "/app/c1/characters/%2e%2e/world",
+        "/app/c1/characters/%2e/%2e%2e/world",
+        "/app/c1/characters/a/%2e%2e/%2e%2e/world",
+        "/app/c1/characters/a%2Fb",
+        "/app/c1/characters/%2fall",
+        "/app/c1/characters%2f..%2fworld",
+        "/app/c1%2fcharacters/all",
+        "/app/c1/characters\\..\\world",
+        "/app/c1\\characters/all",
+        "\\\\evil.example/app/c1/characters",
+        "/\\evil.example/app/c1/characters",
+        "/app/c1/characters/%zz",
+        "/app/c1/characters/%",
+        "/app/c1/characters/all%0a",
+        "/app/c1/characters/new",
+        "/app/c1/characters/npc/new",
+        "/app/c1/characters/a/b/c",
+        "/app/c1/characters/all/extra",
+        "/app/c1/characters/all#frag",
+        "/app/c1/characters/.",
+        "/app/c1/characters/./../world",
+        "/app/c1/characters/all?x=1#/app/c2",
+        "/app/c1/characters/\u0000",
+        " /app/c1/characters/all",
         "/app/c1/world",
         "?type=npc",
         "",
     ])("ignores %s", (value) => {
         expect(readCharactersReturn("c1", { charactersReturn: value })).toBeUndefined()
+    })
+
+    it.each([
+        "/app/c1/characters/a%2520b",
+        "/app/c1/characters/char-1/inventory",
+        "/app/c1/characters/all?type=player_character&q=a%2Fb&cursor=x%3D",
+    ])("honours the supported destination %s unchanged", (value) => {
+        expect(readCharactersReturn("c1", { charactersReturn: value })).toBe(value)
+    })
+
+    it("never accepts a target that resolves outside the campaign's Characters routes", () => {
+        const crafted = [
+            "/app/c1/characters/%2e%2e/%2e%2e/c2/characters/all",
+            "/app/c1/characters/%2E%2E/world",
+            "/app/c1/characters/.%2E/world",
+        ]
+        for (const value of crafted) {
+            const accepted = readCharactersReturn("c1", { charactersReturn: value })
+            if (accepted === undefined) continue
+            expect(new URL(accepted, "http://x.invalid").pathname.startsWith("/app/c1/characters")).toBe(true)
+        }
     })
 
     it("ignores a missing or non-string value", () => {
