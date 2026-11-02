@@ -29,15 +29,19 @@ export interface UseSessionBootstrapResult {
   reload: () => void
   // Re-fetches the authoritative bootstrap and replaces it in place,
   // WITHOUT passing through the "loading" state (which would unmount the
-  // current page). Resolves true when the fresh bootstrap was applied,
-  // false when the session turned out to be unauthenticated (state becomes
-  // "unauthenticated"); rejects on a failed request, leaving the previous
-  // bootstrap untouched. Used after a mutation changes bootstrap-visible
+  // current page). Used after a mutation changes bootstrap-visible
   // state (e.g. a saved startup preference).
   //
-  // `false` also means "not applied": the request was superseded (a reload, an expiry, an unmount
-  // or a newer session request decided first) or aborted. A superseded request never publishes
-  // state and never reports its data as applied, whether it succeeded or failed.
+  //   true     the fresh bootstrap was applied.
+  //   false    NOT APPLIED. It is not a verdict on the caller's write or on access: the session
+  //            turned out to be unauthenticated (state becomes "unauthenticated" and the sign-in
+  //            boundary takes over), or the request was superseded (a reload, an expiry, an unmount
+  //            or a newer session read decided first, so this one's data is not authoritative and
+  //            its failure is ignored), or a fetch that resolved after its own signal was aborted.
+  //   rejects  a read that is still current failed - including one rejected with an AbortError
+  //            because its own signal was aborted. The previous bootstrap is left untouched.
+  //
+  // A superseded request never publishes state and never reports its data as applied.
   refresh: (signal?: AbortSignal) => Promise<boolean>
 }
 
@@ -226,6 +230,8 @@ export function useSessionBootstrap():
     let idleDeadline = idleMs > 0 ? Date.now() + idleMs : Number.NaN
     let timer: ReturnType<typeof setTimeout> | undefined
     let disposed = false
+    // Aborted with the effect so no idle check outlives it; abort is cleanup, ownership decides.
+    const checkController = new AbortController()
 
     const expire = () => {
       if (!disposed) {
@@ -260,9 +266,14 @@ export function useSessionBootstrap():
         expire()
         return
       }
-      void fetchSessionBootstrap()
+      // The idle check is a session read like any other: it takes a ticket, and only while it still
+      // owns its result may it act on it. An obsolete check (a newer read published, or a reload or
+      // an expiry invalidated it) neither expires the session nor renews its deadline nor retries.
+      // A current authoritative expiry (`expire`, above) is different: it invalidates older reads.
+      const ticket = takeTicket()
+      void fetchSessionBootstrap(checkController.signal)
         .then((fresh) => {
-          if (disposed) {
+          if (disposed || !owns(ticket)) {
             return
           }
           if (fresh === null) {
@@ -273,8 +284,9 @@ export function useSessionBootstrap():
           schedule()
         })
         .catch(() => {
-          // Network trouble says nothing about the session; retry later.
-          if (!disposed) {
+          // Network trouble says nothing about the session; retry later. A check that was aborted
+          // (the effect went away) or overtaken says nothing at all.
+          if (!disposed && owns(ticket)) {
             timer = setTimeout(check, 30_000)
           }
         })
@@ -294,13 +306,14 @@ export function useSessionBootstrap():
 
     return () => {
       disposed = true
+      checkController.abort()
       clearTimeout(timer)
       window.removeEventListener(SESSION_EXPIRED_EVENT, expire)
       window.removeEventListener("focus", onWake)
       window.removeEventListener("pageshow", onWake)
       document.removeEventListener("visibilitychange", onWake)
     }
-  }, [authenticatedBootstrap, invalidate])
+  }, [authenticatedBootstrap, invalidate, owns, takeTicket])
 
   return {
     state,

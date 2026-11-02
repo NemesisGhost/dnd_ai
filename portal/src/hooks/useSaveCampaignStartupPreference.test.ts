@@ -75,7 +75,7 @@ describe("useSaveCampaignStartupPreference", () => {
         })
     })
 
-    it("reports denied when the refresh finds the session unauthenticated", async () => {
+    it("keeps a confirmed save as unconfirmed, never denied, when the refresh was not applied (superseded or the session ended)", async () => {
         setPreferenceMock.mockResolvedValue(undefined)
         refreshMock.mockResolvedValue(false)
         const { result } = renderHook(() => useSaveCampaignStartupPreference())
@@ -85,8 +85,48 @@ describe("useSaveCampaignStartupPreference", () => {
         })
 
         await waitFor(() => {
-            expect(result.current.status).toEqual({ kind: "denied" })
+            expect(result.current.status).toEqual({ kind: "unconfirmed" })
         })
+        expect(setPreferenceMock).toHaveBeenCalledTimes(1)
+        expect(refreshMock).toHaveBeenCalledTimes(1)
+    })
+
+    it("sends the PUT once when the refresh after it fails or is not applied", async () => {
+        for (const outcome of [() => Promise.reject(new Error("offline")), () => Promise.resolve(false)]) {
+            setPreferenceMock.mockReset()
+            refreshMock.mockReset()
+            setPreferenceMock.mockResolvedValue(undefined)
+            refreshMock.mockImplementation(outcome)
+            const { result, unmount } = renderHook(() => useSaveCampaignStartupPreference())
+            act(() => {
+                result.current.save("campaign-a")
+            })
+            await waitFor(() => {
+                expect(result.current.status).toEqual({ kind: "unconfirmed" })
+            })
+            expect(setPreferenceMock).toHaveBeenCalledTimes(1)
+            unmount()
+        }
+    })
+
+    it("a deferred refresh that resolves not applied after a confirmed PUT leaves the save unconfirmed", async () => {
+        setPreferenceMock.mockResolvedValue(undefined)
+        let finish!: (applied: boolean) => void
+        refreshMock.mockReturnValue(
+            new Promise<boolean>((resolve) => {
+                finish = resolve
+            }),
+        )
+        const { result } = renderHook(() => useSaveCampaignStartupPreference())
+        act(() => {
+            result.current.save("campaign-a")
+        })
+        await waitFor(() => expect(refreshMock).toHaveBeenCalledTimes(1))
+        expect(result.current.status).toEqual({ kind: "pending" })
+        await act(async () => {
+            finish(false)
+        })
+        expect(result.current.status).toEqual({ kind: "unconfirmed" })
     })
 
     it("does not refresh after a rejected save", async () => {

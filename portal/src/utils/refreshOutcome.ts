@@ -3,8 +3,9 @@ import type { RefetchOutcome } from "../hooks/useAuthoringResource"
 
 // What re-reading the session bootstrap did, for a write whose result the bootstrap carries (a
 // campaign name, its lifecycle). `refresh` resolves true when the fresh bootstrap was applied, false
-// when the session ended (the sign-in boundary takes over, so there is nothing to explain), and
-// rejects when the request failed, leaving the previous bootstrap in place.
+// when it was not applied (the session ended and the sign-in boundary takes over, or a newer session
+// read decided first), and rejects when the current request failed, leaving the previous bootstrap
+// in place. Not applied is never read as a refusal of the write.
 export async function bootstrapRefreshOutcome(refresh: () => Promise<boolean>): Promise<RefreshOutcome> {
     try {
         return (await refresh()) ? "ok" : "superseded"
