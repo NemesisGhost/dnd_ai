@@ -1,6 +1,6 @@
-import { fireEvent, render, screen } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { useState } from "react"
-import { describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { FormDialog } from "./FormDialog"
 import type { FormDialogPrompt } from "./FormDialog"
 
@@ -175,5 +175,124 @@ describe("FormDialog", () => {
         fireEvent.click(screen.getByRole("button", { name: "Open it" }))
         escape(screen.getByRole("dialog", { name: "Record a thing" }))
         expect(onDismiss).toHaveBeenCalledTimes(1)
+    })
+
+    describe("choosing where focus goes on closing", () => {
+        // An opener outside React's tree: focus it, open the dialog without moving focus, let `change` run
+        // (the page changing under the dialog), close, and report where focus is.
+        function closeAfter(
+            make: () => { opener: HTMLElement; mount?: HTMLElement },
+            change: (opener: HTMLElement) => void,
+            fallback: HTMLElement | null,
+        ) {
+            const { opener, mount } = make()
+            document.body.appendChild(mount ?? opener)
+            opener.focus()
+            render(<Harness returnFocusTo={() => fallback} />)
+            fireEvent.click(screen.getByRole("button", { name: "Open it" }))
+            change(opener)
+            fireEvent.click(screen.getByRole("button", { name: "Close it", hidden: true }))
+            return opener
+        }
+        const made: HTMLElement[] = []
+        const element = (tag: string, attributes: Record<string, string> = {}) => {
+            const node = document.createElement(tag)
+            for (const [name, value] of Object.entries(attributes)) node.setAttribute(name, value)
+            made.push(node)
+            return node
+        }
+        const fallbackButton = () => {
+            const button = element("button")
+            document.body.appendChild(button)
+            return button
+        }
+        afterEach(() => {
+            cleanup()
+            while (made.length > 0) made.pop()!.remove()
+        })
+
+        it("uses the fallback for a CSS-hidden opener", () => {
+            const fallback = fallbackButton()
+            closeAfter(() => ({ opener: element("button") }), (opener) => (opener.style.display = "none"), fallback)
+            expect(fallback).toHaveFocus()
+        })
+
+        it("uses the fallback for an opener inside a CSS-hidden ancestor", () => {
+            const fallback = fallbackButton()
+            const wrapper = element("div")
+            const opener = element("button")
+            wrapper.appendChild(opener)
+            closeAfter(() => ({ opener, mount: wrapper }), () => (wrapper.style.display = "none"), fallback)
+            expect(fallback).toHaveFocus()
+        })
+
+        it("uses the fallback for a visibility:hidden opener", () => {
+            const fallback = fallbackButton()
+            closeAfter(() => ({ opener: element("button") }), (opener) => (opener.style.visibility = "hidden"), fallback)
+            expect(fallback).toHaveFocus()
+        })
+
+        it("uses the fallback for an opener inside an inert ancestor", () => {
+            const fallback = fallbackButton()
+            const wrapper = element("div")
+            const opener = element("button")
+            wrapper.appendChild(opener)
+            closeAfter(() => ({ opener, mount: wrapper }), () => wrapper.setAttribute("inert", ""), fallback)
+            expect(fallback).toHaveFocus()
+        })
+
+        it("uses the fallback for an opener that stopped being focusable (tabindex removed)", () => {
+            const fallback = fallbackButton()
+            closeAfter(
+                () => ({ opener: element("div", { tabindex: "0" }) }),
+                (opener) => opener.removeAttribute("tabindex"),
+                fallback,
+            )
+            expect(fallback).toHaveFocus()
+        })
+
+        it("accepts tabindex=-1 as a valid programmatic target, for the opener and for the fallback", () => {
+            const fallback = fallbackButton()
+            const opener = closeAfter(() => ({ opener: element("div", { tabindex: "-1" }) }), () => {}, fallback)
+            expect(opener).toHaveFocus()
+        })
+
+        it("accepts a tabindex=-1 fallback", () => {
+            const target = element("div", { tabindex: "-1" })
+            document.body.appendChild(target)
+            const opener = closeAfter(() => ({ opener: element("button") }), (node) => node.setAttribute("disabled", ""), target)
+            expect(opener).not.toHaveFocus()
+            expect(target).toHaveFocus()
+        })
+
+        it("tries the fallback when focusing the original opener did not take", () => {
+            const fallback = fallbackButton()
+            const opener = element("button")
+            const attempt = vi.fn()
+            opener.focus = attempt
+            closeAfter(() => ({ opener }), () => {}, fallback)
+            expect(attempt).toHaveBeenCalledTimes(1)
+            expect(fallback).toHaveFocus()
+        })
+
+        it("leaves focus where the user deliberately moved it", () => {
+            const fallback = fallbackButton()
+            const elsewhere = fallbackButton()
+            const opener = closeAfter(() => ({ opener: element("button") }), () => elsewhere.focus(), fallback)
+            expect(elsewhere).toHaveFocus()
+            expect(opener).not.toHaveFocus()
+            expect(fallback).not.toHaveFocus()
+        })
+
+        it("never focuses a control inside the closed dialog", () => {
+            render(<Harness returnFocusTo={() => document.querySelector<HTMLElement>("dialog button")} />)
+            const inside = document.querySelector<HTMLElement>("dialog button")!
+            const attempt = vi.spyOn(inside, "focus")
+            const opener = screen.getByRole("button", { name: "Open it" })
+            opener.setAttribute("disabled", "")
+            fireEvent.click(opener)
+            fireEvent.click(screen.getByRole("button", { name: "Close it", hidden: true }))
+            expect(attempt).not.toHaveBeenCalled()
+        })
     })
 })

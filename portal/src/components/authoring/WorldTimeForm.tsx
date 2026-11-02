@@ -1,4 +1,4 @@
-import { useLayoutEffect, useState } from "react"
+import { useLayoutEffect, useRef, useState } from "react"
 import type { ReactNode } from "react"
 import { createWorldTime } from "../../api/worldTime"
 import { useSession } from "../../context/SessionContext"
@@ -40,11 +40,12 @@ interface WorldTimeFormProps {
     times: WorldTimeItem[]
     // The time was recorded. A caller that reads the times again afterwards returns what that read
     // did, so a recorded time whose read-back failed is reported as such (and never recorded twice).
-    // `newerInput` (only with `holdUnresolved`) is the form's own answer, taken when the confirmation
-    // arrived: it holds something other than what was recorded, and it was kept rather than cleared.
+    // `hasUnrecordedInput` reads the form as it is when called, so a caller that waits (for the list to be
+    // read) asks at the moment it decides what to do next, not at the confirmation: values entered while
+    // it waited count, and values put back to an empty form do not.
     onCreated: (
         receipt: WorldTimeReceipt,
-        outcome: { newerInput: boolean },
+        form: { hasUnrecordedInput: () => boolean },
     ) => void | RefreshOutcome | Promise<void | RefreshOutcome>
     onCancel: () => void
     heading?: string
@@ -77,7 +78,17 @@ export function WorldTimeForm({
     holdUnresolved = false,
 }: WorldTimeFormProps) {
     const { reload } = useSession()
-    const [values, setValues] = useState<WorldTimeFormValues>(() => emptyWorldTimeForm(calendars))
+    const [values, setValuesState] = useState<WorldTimeFormValues>(() => emptyWorldTimeForm(calendars))
+    // What the form holds right now. Every change goes through `setValues`, which updates this at once: a
+    // render is not guaranteed to have happened between a change and a callback that asks about it.
+    const valuesRef = useRef(values)
+    const calendarsRef = useRef(calendars)
+    function setValues(next: WorldTimeFormValues) {
+        valuesRef.current = next
+        setValuesState(next)
+    }
+    const isEmptyNow = () =>
+        JSON.stringify(valuesRef.current) === JSON.stringify(emptyWorldTimeForm(calendarsRef.current))
     const [errors, setErrors] = useState<FieldError[]>([])
     const [attempt, setAttempt] = useState(0)
     // The earlier attempt was sent again first because its outcome was unknown (`holdUnresolved`).
@@ -91,12 +102,12 @@ export function WorldTimeForm({
         holdUnresolved,
         onSuccess: (receipt, body) => {
             setResent(false)
-            const newerInput = holdUnresolved && differsFrom(body)
-            if (!newerInput) {
+            // The confirmed attempt's own values leave the form; anything else was entered since and stays.
+            if (!holdUnresolved || !differsFrom(body)) {
                 setValues(emptyWorldTimeForm(calendars))
                 setErrors([])
             }
-            return onCreated(receipt, { newerInput })
+            return onCreated(receipt, { hasUnrecordedInput: () => !isEmptyNow() })
         },
     })
     const pending = mutation.status.kind === "pending"
@@ -104,8 +115,9 @@ export function WorldTimeForm({
     const dirty = JSON.stringify(values) !== JSON.stringify(initial)
     // Mirrored before paint (layout effects), so a caller that decides from them never acts on a stale copy.
     useLayoutEffect(() => {
+        calendarsRef.current = calendars
         onDirtyChange?.(dirty)
-    }, [dirty, onDirtyChange])
+    }, [dirty, onDirtyChange, calendars])
     useLayoutEffect(() => {
         onStatusChange?.(mutation.status)
     }, [mutation.status, onStatusChange])
@@ -122,13 +134,14 @@ export function WorldTimeForm({
     const selected = calendars.find((c) => c.calendar_id === values.calendarId)
 
     function set<K extends keyof WorldTimeFormValues>(key: K) {
-        return (value: WorldTimeFormValues[K]) => setValues((current) => ({ ...current, [key]: value }))
+        return (value: WorldTimeFormValues[K]) => setValues({ ...valuesRef.current, [key]: value })
     }
 
     // Whether the form now holds something other than `sent` (the body of the attempt just confirmed).
     function differsFrom(sent: CreateWorldTimeBody): boolean {
-        if (validateWorldTimeForm(values, calendars).length > 0) return true
-        return JSON.stringify(toWorldTimeBody(values)) !== JSON.stringify(sent)
+        const now = valuesRef.current
+        if (validateWorldTimeForm(now, calendars).length > 0) return true
+        return JSON.stringify(toWorldTimeBody(now)) !== JSON.stringify(sent)
     }
 
     function submit() {

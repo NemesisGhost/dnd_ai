@@ -61,14 +61,15 @@ afterEach(() => {
 
 function setup(options: { post?: (n: number) => MockResponse | Promise<MockResponse | undefined> | undefined } = {}) {
     const server = installMockServer()
-    const state = { items: [] as unknown[], readStatus: 0, posts: 0 }
-    server.on("GET", TIMES, (call) =>
-        call.path.includes(OTHER)
-            ? { body: { items: [OTHER_TIME], next_cursor: null } }
-            : state.readStatus !== 0
-              ? { status: state.readStatus, body: {} }
-              : { body: { items: state.items, next_cursor: null } },
-    )
+    // `hold`: while set, reads of this campaign's list wait for it, then answer with what the state is by then.
+    const state = { items: [] as unknown[], readStatus: 0, posts: 0, hold: null as Promise<void> | null }
+    server.on("GET", TIMES, async (call) => {
+        if (call.path.includes(OTHER)) return { body: { items: [OTHER_TIME], next_cursor: null } }
+        await state.hold
+        return state.readStatus !== 0
+            ? { status: state.readStatus, body: {} }
+            : { body: { items: state.items, next_cursor: null } }
+    })
     server.on("GET", CALENDARS, { body: { calendars: [CALENDAR] } })
     server.on("POST", TIMES, async () => {
         state.posts += 1
@@ -660,5 +661,107 @@ describe("Record a time dialog: where focus goes on closing", () => {
         expect(await screen.findByText("Campaign home page")).toBeInTheDocument()
         expect(screen.queryByRole("button", { name: "Record a time" })).toBeNull()
         expect(document.body.contains(document.activeElement)).toBe(true)
+    })
+})
+
+describe("Record a time dialog: input entered while the list is being read after a confirmation", () => {
+    // The original attempt's outcome is unknown, Retry confirms it (the form empties), and the follow-up
+    // read is held so that the form can be edited before the read finishes.
+    async function confirmedWithReadHeld() {
+        const harness = setup({ post: (n) => (n === 1 ? { networkError: true } : undefined) })
+        await openIt()
+        const spoken = watchAnnouncements()
+        fill("3")
+        record()
+        await inDialog().findByText(/cannot tell whether this was saved/)
+        const read = deferred()
+        harness.state.hold = read.gate
+        fireEvent.click(inDialog().getByRole("button", { name: "Retry" }))
+        // The confirmation arrived and the form emptied; the read has not finished.
+        await waitFor(() => expect(inDialog().getByRole("textbox", { name: /Year/ })).toHaveValue(""))
+        expect(posts(harness.server)).toHaveLength(2)
+        return { ...harness, spoken, read }
+    }
+
+    it("keeps the dialog open and says the entered year is unrecorded, then records it under a new key", async () => {
+        const { server, state, spoken, read } = await confirmedWithReadHeld()
+        fill("4")
+        state.hold = null
+        await act(async () => read.release())
+        await inDialog().findByText(
+            /The time you submitted earlier was recorded: Common Reckoning: Year 3 \(Founding\), Bloom 5\. What is in the form now has not been recorded\./,
+        )
+        expect(dialog()).toBeInTheDocument()
+        expect(inDialog().getByRole("textbox", { name: /Year/ })).toHaveValue("4")
+        expect(spoken).not.toContain("World time recorded")
+
+        // Guarded, and a deliberate recording is a new request.
+        fireEvent.click(screen.getByRole("link", { name: "Go home", hidden: true }))
+        expect(await inDialog().findByText(/You have entered a time that has not been recorded/)).toBeInTheDocument()
+        fireEvent.click(inDialog().getByRole("button", { name: "Stay" }))
+        record()
+        await waitFor(() => noDialog())
+        const [first, retried, third] = posts(server)
+        expect(retried!.headers["Idempotency-Key"]).toBe(first!.headers["Idempotency-Key"])
+        expect(third!.body).toMatchObject({ year: 4 })
+        expect(third!.headers["Idempotency-Key"]).not.toBe(first!.headers["Idempotency-Key"])
+    })
+
+    it("closes onto the page's notice when the read fails, and keeps the draft and its status through recovery and reopening", async () => {
+        const { server, state, spoken, read } = await confirmedWithReadHeld()
+        fill("4")
+        state.hold = null
+        state.readStatus = 500
+        await act(async () => read.release())
+        expect(
+            await screen.findByText(/World time recorded\. The latest world times could not be loaded/),
+        ).toBeInTheDocument()
+        noDialog()
+        expect(spoken).not.toContain("World time recorded")
+        expect(trigger()).toHaveAttribute("aria-disabled", "true")
+        expect(screen.getByText(/What you entered after it is kept in the form/)).toBeInTheDocument()
+
+        // Leaving is still guarded while the draft waits behind the closed dialog.
+        fireEvent.click(screen.getByRole("link", { name: "Go home" }))
+        const ask = await screen.findByRole("dialog", { name: "Leave this page?" })
+        fireEvent.click(within(ask).getByRole("button", { name: "Stay" }))
+        await waitFor(() => noDialog())
+
+        state.readStatus = 0
+        fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+        await within(await screen.findByRole("list")).findByText(/Year 3/)
+        await waitFor(() => expect(trigger()).toHaveAttribute("aria-disabled", "false"))
+        fireEvent.click(trigger())
+        await inDialog().findByText(
+            /The time you submitted earlier was recorded: Common Reckoning: Year 3 \(Founding\), Bloom 5\. What is in the form now has not been recorded\./,
+        )
+        expect(inDialog().getByRole("textbox", { name: /Year/ })).toHaveValue("4")
+        expect(posts(server)).toHaveLength(2)
+    })
+
+    it("treats an input that was edited and put back to empty as no newer input", async () => {
+        const { spoken, state, read } = await confirmedWithReadHeld()
+        const year = inDialog().getByRole("textbox", { name: /Year/ })
+        fireEvent.change(year, { target: { value: "4" } })
+        fireEvent.change(year, { target: { value: "" } })
+        state.hold = null
+        await act(async () => read.release())
+        await waitFor(() => noDialog())
+        expect(screen.queryByText(/has not been recorded/)).toBeNull()
+        await waitFor(() => expect(spoken.filter((x) => x === "World time recorded")).toHaveLength(1))
+        expect(trigger()).toHaveFocus()
+    })
+
+    it("uses the form as it is at the end after repeated edits", async () => {
+        const { state, read } = await confirmedWithReadHeld()
+        const year = inDialog().getByRole("textbox", { name: /Year/ })
+        fireEvent.change(year, { target: { value: "4" } })
+        fireEvent.change(year, { target: { value: "" } })
+        fireEvent.change(year, { target: { value: "5" } })
+        state.hold = null
+        await act(async () => read.release())
+        await inDialog().findByText(/What is in the form now has not been recorded/)
+        expect(dialog()).toBeInTheDocument()
+        expect(inDialog().getByRole("textbox", { name: /Year/ })).toHaveValue("5")
     })
 })

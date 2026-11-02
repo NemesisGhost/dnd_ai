@@ -128,6 +128,14 @@ function WorldTimesContent({ campaignId, page, calendars, refetch, pageStale }: 
     const [keptAfter, setKeptAfter] = useState<string | null>(null)
     // The persistent control that focus returns to when the opener (e.g. "Reopen to retry") has gone.
     const recordButton = useRef<HTMLButtonElement>(null)
+    // Counts forms that have been thrown away (Discard): a confirmation that was started on an earlier one
+    // must not close, classify or announce for the current one.
+    const formEpoch = useRef(0)
+    const handleDirty = useCallback((next: boolean) => {
+        setDirty(next)
+        // Nothing is waiting any more once the form is empty again.
+        if (!next) setKeptAfter(null)
+    }, [])
     const handleStatus = useCallback((next: AuthoringMutationStatus) => {
         setStatus(next)
         // Sending something again ends the notice about the earlier confirmation.
@@ -203,6 +211,7 @@ function WorldTimesContent({ campaignId, page, calendars, refetch, pageStale }: 
                 onConfirm: () => {
                     setConfirming(null)
                     setKeptAfter(null)
+                    formEpoch.current += 1
                     setOpen(false)
                     setFormKey((n) => n + 1)
                 },
@@ -347,9 +356,10 @@ function WorldTimesContent({ campaignId, page, calendars, refetch, pageStale }: 
                         calendars={calendars.calendars}
                         times={shown}
                         holdUnresolved
-                        onDirtyChange={setDirty}
+                        onDirtyChange={handleDirty}
                         onStatusChange={handleStatus}
-                        onCreated={async (receipt, { newerInput }) => {
+                        onCreated={async (receipt, { hasUnrecordedInput }) => {
+                            const epoch = formEpoch.current
                             setLastId(receipt.world_time_id)
                             const outcome = await refetch()
                             if (outcome === "ok") {
@@ -359,11 +369,14 @@ function WorldTimesContent({ campaignId, page, calendars, refetch, pageStale }: 
                                 // Recorded, but the list does not show it yet: said so, not announced as done.
                                 recorded.mark(true)
                             }
+                            if (epoch !== formEpoch.current) return outcome
                             setConfirming(null)
-                            if (newerInput) {
-                                // Newer input stays, unrecorded and guarded. With the list read, the dialog stays open
-                                // and says so in place of an announcement; with it unread, the page's notice and
-                                // held button come first and the draft waits in the form.
+                            // Asked now, after the read: whatever was entered while it ran is part of the answer.
+                            if (hasUnrecordedInput()) {
+                                // That input stays, unrecorded and guarded, with the time that was recorded named
+                                // beside it (also when the dialog is reopened later). With the list read, the dialog
+                                // stays open and says so in place of an announcement; with it unread, the page's
+                                // notice and held button come first and the draft waits in the form.
                                 setKeptAfter(receipt.world_time_id)
                                 if (outcome !== "ok") setOpen(false)
                             } else {
