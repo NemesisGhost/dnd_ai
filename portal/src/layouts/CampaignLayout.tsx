@@ -110,7 +110,11 @@ export function CampaignLayout({ bootstrap }: CampaignLayoutProps) {
   // The last perspective this layout rendered while it was authorized. When the bootstrap stops
   // listing it, the selection reads as none at once and this is what remembers that a clear is due.
   const [committedId, setCommittedId] = useState<string | null>(selectedCharacterId)
-  const revokedId = committedId !== null && !authorized.has(committedId) ? committedId : null
+  // Ownership rule: a revocation owns the selection only while that selection still reads none
+  // because of it. Any selection that is in place (an accepted choice, an adopted URL character)
+  // has superseded the lost one, and the bookkeeping below is brought up to date instead of clearing.
+  const revokedId =
+    committedId !== null && !authorized.has(committedId) && selectedCharacterId === null ? committedId : null
   const staleQuery = revokedId !== null && new URLSearchParams(location.search).get("character_id") === revokedId
   const [noticePath, setNoticePath] = useState<string | null>(null)
 
@@ -178,12 +182,19 @@ export function CampaignLayout({ bootstrap }: CampaignLayoutProps) {
       if (handledKey.current === location.key) return
       handledKey.current = location.key
       setProcessedKey(location.key)
-      if (requested !== undefined && requested !== selectedCharacterId) {
+      if (requested !== undefined && (requested !== selectedCharacterId || revokedId !== null)) {
         // Accepted: commit before anything under the new perspective renders, and revalidate the
         // bootstrap in the background (a ticketed, coalesced read that clears a perspective it no
-        // longer authorizes). The page content stays unrendered until the re-render below.
+        // longer authorizes). The page content stays unrendered until the re-render below. An
+        // accepted location takes ownership of the selection in one step: the selection, the
+        // bookkeeping that remembers the committed one, and (next) the entry's stamp all name the
+        // same perspective, so a revocation of the previous selection that is still outstanding has
+        // nothing left to clear, including when this location and that revocation arrive together.
         setCommittedPerspective({ characterId: requested, defaultCharacterId, authorized })
         selectCharacter(activeCampaignId, requested)
+        // These record the commit just made (see the ownership note above).
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setCommittedId(requested)
         void Promise.resolve(refresh()).catch(() => undefined)
         return
       }
@@ -213,7 +224,6 @@ export function CampaignLayout({ bootstrap }: CampaignLayoutProps) {
       selectCharacter(activeCampaignId, null)
       // These record that the clear has been made; they follow the selection commit just above and
       // cannot be derived during render, where the loss would no longer be visible.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setCommittedId(null)
       setNoticePath(location.pathname)
       return

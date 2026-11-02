@@ -1,5 +1,5 @@
 import { act, configure, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
-import { useState } from "react"
+import { StrictMode, useState } from "react"
 import { Link, Route, RouterProvider, Routes, createMemoryRouter, useLocation, useSearchParams } from "react-router"
 import type { DataRouter } from "react-router"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -140,6 +140,9 @@ function NotesPage() {
       <button type="button" onClick={() => syncCharacterFromUrl?.(campaignId, "char-b")}>
         Sync char-b from URL
       </button>
+      <button type="button" onClick={() => syncCharacterFromUrl?.(campaignId, "char-a")}>
+        Sync char-a from URL
+      </button>
       <ConfirmDialog
         open={guard.blocked}
         title="Leave this page?"
@@ -160,7 +163,7 @@ function HomePage() {
 }
 
 let router: DataRouter
-function renderAt(path: string, state?: unknown) {
+function renderAt(path: string, state?: unknown, { strict = false }: { strict?: boolean } = {}) {
   router = createMemoryRouter(
     [
       {
@@ -174,11 +177,12 @@ function renderAt(path: string, state?: unknown) {
     ],
     { initialEntries: [{ pathname: path.split("?")[0]!, search: path.includes("?") ? `?${path.split("?")[1]}` : "", state }] },
   )
-  return render(
+  const tree = (
     <ThemeProvider>
       <RouterProvider router={router} />
-    </ThemeProvider>,
+    </ThemeProvider>
   )
+  return render(strict ? <StrictMode>{tree}</StrictMode> : tree)
 }
 
 function TestRoutes() {
@@ -740,6 +744,151 @@ describe("a bootstrap default only initializes the selection", () => {
 
     expect(perspectiveSelect()).toHaveValue("char-a")
     expect(screen.getByTestId("mount")).toHaveTextContent("1")
+  })
+})
+
+describe("selection ownership: a newer accepted selection supersedes a pending revocation", () => {
+  // Consecutive repeats collapsed (StrictMode runs effects, and so reads, twice).
+  const readsInOrder = () =>
+    probeRequests()
+      .map((r) => r.replace(/^.*character_id=/, ""))
+      .filter((value, index, all) => index === 0 || value !== all[index - 1])
+
+  // B is selected and its refresh (request 2) is held; that answer revokes B but keeps A.
+  async function bSelectedWithRevokingRefreshPending(strict: boolean) {
+    renderAt("/app/alpha/notes", undefined, { strict })
+    await settled()
+    const gate = deferred()
+    server.sessionGates.set(2, gate.promise)
+    server.campaigns = [campaign("alpha", ["char-a"]), campaign("beta", ["char-c"])]
+    choosePerspective("char-b")
+    await waitFor(() => expect(screen.getByTestId("read")).toHaveTextContent("char-b"))
+    await waitFor(() => expect(sessionRequests()).toBe(2))
+    return gate
+  }
+
+  async function expectFinal(perspective: string) {
+    await waitFor(() => expect(perspectiveSelect()).toHaveValue(perspective))
+    await waitFor(() => expect(screen.getByTestId("read")).toHaveTextContent(`ready:${perspective}`))
+    await waitFor(() =>
+      expect((router.state.location.state as { ctx?: unknown } | null)?.ctx).toEqual({
+        v: 1,
+        characterId: perspective === "" ? null : perspective,
+      }),
+    )
+    expect(perspectiveSelect()).toHaveValue(perspective)
+  }
+
+  it.each([
+    ["plain", false],
+    ["StrictMode", true],
+  ])("A accepted with the revoking answer released together (separate renders) stays A (%s)", async (_name, strict) => {
+    const gate = await bSelectedWithRevokingRefreshPending(strict)
+
+    await act(async () => {
+      choosePerspective("char-a")
+      gate.release()
+    })
+
+    await expectFinal("char-a")
+    expect(readsInOrder()).toEqual(["", "char-b", "char-a"])
+    expect(screen.queryByRole("status")).toBeNull()
+    expect(router.state.location.pathname).toBe("/app/alpha/notes")
+  })
+
+  it("A accepted before the revoking answer arrives stays A, and the answer then changes nothing", async () => {
+    const gate = await bSelectedWithRevokingRefreshPending(false)
+
+    choosePerspective("char-a")
+    await waitFor(() => expect(screen.getByTestId("read")).toHaveTextContent("char-a"))
+    await act(async () => {
+      gate.release()
+    })
+
+    await expectFinal("char-a")
+    expect(readsInOrder()).toEqual(["", "char-b", "char-a"])
+    expect(screen.queryByRole("status")).toBeNull()
+  })
+
+  it("a newer explicit none wins over the pending revocation", async () => {
+    const gate = await bSelectedWithRevokingRefreshPending(false)
+
+    await act(async () => {
+      choosePerspective("")
+      gate.release()
+    })
+
+    await expectFinal("")
+    expect(readsInOrder()).toEqual(["", "char-b", ""])
+    expect(screen.queryByRole("status")).toBeNull()
+  })
+
+  it("with no intervening selection the revocation still clears to explicit none", async () => {
+    const gate = await bSelectedWithRevokingRefreshPending(false)
+
+    await act(async () => {
+      gate.release()
+    })
+
+    await expectFinal("")
+    expect(readsInOrder()).toEqual(["", "char-b", ""])
+    expect(screen.getByRole("status")).toHaveTextContent("no longer available")
+  })
+
+  it("a proposal naming the already-revoked selection never wins", async () => {
+    const gate = await bSelectedWithRevokingRefreshPending(false)
+    await act(async () => {
+      gate.release()
+    })
+    await expectFinal("")
+
+    await act(async () => {
+      await router.navigate({ pathname: "/app/alpha/notes" }, { state: { ctx: { v: 1, characterId: "char-b" } } })
+    })
+
+    await expectFinal("")
+    expect(readsInOrder().filter((r) => r === "char-b")).toHaveLength(1)
+  })
+
+  it("a superseding campaign transition is not undone by the late answer", async () => {
+    const gate = await bSelectedWithRevokingRefreshPending(false)
+
+    fireEvent.change(campaignSelect(), { target: { value: "beta" } })
+    expect(await screen.findByRole("heading", { name: "Home of beta as nobody" })).toBeInTheDocument()
+    await act(async () => {
+      gate.release()
+    })
+
+    expect(router.state.location.pathname).toBe("/app/beta/home")
+    expect(screen.getByRole("heading", { name: "Home of beta as nobody" })).toBeInTheDocument()
+    expect(screen.queryByRole("status")).toBeNull()
+  })
+
+  it("re-authorization after the clearing completed does not resurrect the lost selection", async () => {
+    const gate = await bSelectedWithRevokingRefreshPending(false)
+    await act(async () => {
+      gate.release()
+    })
+    await expectFinal("")
+    const reads = probeRequests().length
+
+    server.campaigns = [campaign("alpha", ["char-a", "char-b"]), campaign("beta", ["char-c"])]
+    fireEvent.click(screen.getByRole("button", { name: "Refresh session" }))
+    await waitFor(() => expect(sessionRequests()).toBe(3))
+
+    expect(perspectiveSelect()).toHaveValue("")
+    expect(probeRequests()).toHaveLength(reads)
+  })
+
+  it("an adopted URL character also supersedes a pending revocation", async () => {
+    const gate = await bSelectedWithRevokingRefreshPending(false)
+
+    fireEvent.click(screen.getByRole("button", { name: "Sync char-a from URL" }))
+    await act(async () => {
+      gate.release()
+    })
+
+    await expectFinal("char-a")
   })
 })
 

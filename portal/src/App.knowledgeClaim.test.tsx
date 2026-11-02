@@ -1,6 +1,14 @@
-import { act, fireEvent, screen, waitFor, within } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import { StrictMode, startTransition, useCallback, useState } from "react"
+import { RouterProvider, createMemoryRouter } from "react-router"
+import type { DataRouter } from "react-router"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { installCampaignShellMocks, openApp } from "./test/campaignRoutes"
+import App from "./App"
+import { RouteSessionProvider } from "./context/RouteSessionProvider"
+import { useSessionBootstrap } from "./hooks/useSessionBootstrap"
+import { ThemeProvider } from "./themes/ThemeProvider"
+import type { SessionBootstrap } from "./types/bootstrap"
+import { bootstrapFor, installCampaignShellMocks, openApp } from "./test/campaignRoutes"
 import type { MockServer } from "./test/authoringHarness"
 import { FULL_RECORD_AUTHORING } from "./test/recordAuthoring"
 
@@ -1661,5 +1669,114 @@ describe("unified knowledge claim page", () => {
       expect(within(card).getByRole("link", { name: "Keep" })).toBeInTheDocument()
       expect(link).not.toContainElement(within(card).getByRole("link", { name: "Keep" }))
     })
+  })
+})
+
+// P02-0a selection ownership on the real page: the answer that revokes the selected perspective and
+// the accepted selection of another one are published in the same React batch (from the router's own
+// location notification). Only the session bootstrap is faked; the shell, layout, perspective state,
+// guards, router and the claim page itself are the production ones, and there is no loader.
+describe("selection ownership on the real claim page", () => {
+  const person = (id: string) => ({ character_id: id, character_name: `Name ${id}`, authorized_parties: [] })
+  const sessionWith = (...ids: string[]): SessionBootstrap =>
+    bootstrapFor(["access.manage", "canon.edit"], { character_perspectives: ids.map(person), selected_character_id: null })
+
+  let publish: (bootstrap: SessionBootstrap) => void = () => undefined
+  let router: DataRouter
+
+  function useStatefulSession() {
+    const [bootstrap, setBootstrap] = useState(() => sessionWith("character-a", "character-b"))
+    publish = setBootstrap
+    const reload = useCallback(() => undefined, [])
+    const refresh = useCallback(async () => true, [])
+    return { state: { status: "authenticated" as const, bootstrap }, reload, refresh }
+  }
+
+  function mount(strict: boolean) {
+    withLifecycle(lifecycle())
+    current = { detail: detail(), view: view() }
+    server.on("GET", DETAIL, () => ({ body: current.detail }))
+    server.on("GET", VIEW_PATH, () => ({ body: current.view }))
+    vi.mocked(useSessionBootstrap).mockImplementation(useStatefulSession)
+    router = createMemoryRouter(
+      [
+        {
+          path: "*",
+          element: (
+            <ThemeProvider>
+              <RouteSessionProvider>
+                <App />
+              </RouteSessionProvider>
+            </ThemeProvider>
+          ),
+        },
+      ],
+      { initialEntries: [CLAIM] },
+    )
+    const tree = <RouterProvider router={router} />
+    return render(strict ? <StrictMode>{tree}</StrictMode> : tree)
+  }
+
+  const select = () => screen.getByRole("combobox", { name: "Character perspective" }) as HTMLSelectElement
+  const choose = (value: string) => fireEvent.change(select(), { target: { value } })
+  const ctx = () => (router.state.location.state as { ctx?: unknown } | null)?.ctx
+  // The perspective each detail read asked as, in order, repeats collapsed (StrictMode reads twice).
+  const detailReads = () =>
+    server
+      .callsTo("GET", DETAIL)
+      .map((call) => /character_id=([^&]*)/.exec(call.path)?.[1] ?? "none")
+      .filter((value, index, all) => index === 0 || value !== all[index - 1])
+
+  it.each([
+    ["plain", false],
+    ["StrictMode", true],
+  ])("B, then A accepted in the same batch as the answer revoking B: A stays A (%s)", async (_name, strict) => {
+    mount(strict)
+    await screen.findByRole("textbox", { name: /^Claim/ })
+    choose("character-b")
+    await waitFor(() => expect(detailReads()).toEqual(["none", "character-b"]))
+
+    let fired = false
+    const unsubscribe = router.subscribe((state) => {
+      const stamp = (state.location.state as { ctx?: { characterId?: string | null } } | null)?.ctx
+      if (!fired && stamp?.characterId === "character-a") {
+        fired = true
+        startTransition(() => publish(sessionWith("character-a")))
+      }
+    })
+    await act(async () => {
+      choose("character-a")
+    })
+    unsubscribe()
+    expect(fired).toBe(true)
+
+    await waitFor(() => expect(select()).toHaveValue("character-a"))
+    await waitFor(() => expect(detailReads()).toEqual(["none", "character-b", "character-a"]))
+    await waitFor(() => expect(ctx()).toEqual({ v: 1, characterId: "character-a" }))
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(select()).toHaveValue("character-a")
+    expect(ctx()).toEqual({ v: 1, characterId: "character-a" })
+    expect(detailReads()).toEqual(["none", "character-b", "character-a"])
+    expect(router.state.location.pathname).toBe(CLAIM)
+    expect(screen.queryByText(/no longer available/)).toBeNull()
+  })
+
+  it("with nothing newer, the same revocation clears to explicit none: one read as B, one with none", async () => {
+    mount(false)
+    await screen.findByRole("textbox", { name: /^Claim/ })
+    choose("character-b")
+    await waitFor(() => expect(detailReads()).toEqual(["none", "character-b"]))
+
+    await act(async () => {
+      startTransition(() => publish(sessionWith("character-a")))
+    })
+
+    await waitFor(() => expect(screen.getByText(/Your selected character is no longer available/)).toBeInTheDocument())
+    await waitFor(() => expect(detailReads()).toEqual(["none", "character-b", "none"]))
+    expect(select()).toHaveValue("")
+    await waitFor(() => expect(ctx()).toEqual({ v: 1, characterId: null }))
+    expect(router.state.location.pathname).toBe(CLAIM)
   })
 })
