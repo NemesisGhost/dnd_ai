@@ -437,3 +437,37 @@ describe("CampaignClockCard optional cause and explanation", () => {
         expect(screen.queryByRole("textbox", { name: "Explanation for members" })).toBeNull()
     })
 })
+
+describe("CampaignClockCard: recording a time in the picker", () => {
+    it("chooses the recorded time in the form and never advances or corrects the clock", async () => {
+        const server = installMockServer()
+        let recorded = false
+        server.on("GET", CLOCK_PATH, () => ({ body: STATE }))
+        server.on("GET", TIMES_PATH, () => ({
+            body: { items: recorded ? [TIME("t9", "Dawn"), TIME("t1", "Year 1")] : [TIME("t1", "Year 1")], next_cursor: null },
+        }))
+        server.on("GET", CALENDARS_PATH, { body: { calendars: [] } })
+        server.on("POST", TIMES_PATH, () => {
+            recorded = true
+            return { status: 201, body: { world_time_id: "t9", created: true, changed: true } }
+        })
+        renderAuthoringRoutes({
+            initialEntry: "/clock",
+            bootstrap: bootstrap(true),
+            routes: [{ path: "/clock", element: <CampaignClockCard campaignId={CAMPAIGN} /> }],
+        })
+        fireEvent.click(await screen.findByRole("button", { name: "Advance time" }))
+        fireEvent.click(await screen.findByRole("button", { name: "Record a new time" }))
+        const dialog = await screen.findByRole("dialog", { name: "Record a world time" })
+        fireEvent.change(within(dialog).getByRole("textbox", { name: /Describe this moment/ }), { target: { value: "Dawn" } })
+        fireEvent.change(within(dialog).getByRole("combobox", { name: /Comes after/ }), { target: { value: "t1" } })
+        fireEvent.click(within(dialog).getByRole("button", { name: "Record time" }))
+        await waitFor(() => expect(screen.getByRole("combobox", { name: /Advance to/ })).toHaveValue("t9"))
+        expect(screen.queryByRole("dialog")).toBeNull()
+        // Recording is not advancing: the clock still reads Year 1 and its own confirmation is still needed.
+        expect(server.callsTo("POST", `${CLOCK_PATH}/advance`)).toHaveLength(0)
+        expect(server.callsTo("POST", `${CLOCK_PATH}/correct`)).toHaveLength(0)
+        expect(screen.getByText("Now: Year 1")).toBeInTheDocument()
+        expect(server.callsTo("POST", TIMES_PATH)).toHaveLength(1)
+    })
+})

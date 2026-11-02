@@ -1481,3 +1481,32 @@ describe("shared roster on the run page", () => {
     expect(screen.queryByRole("button", { name: /Remove/ })).toBeNull()
   })
 })
+
+describe("session run page: recording a time in the picker", () => {
+    // Record a narrative time ("after Year 1") through the picker's dialog.
+    async function recordThroughDialog() {
+        fireEvent.click(await screen.findByRole("button", { name: "Record a new time" }))
+        const dialog = await screen.findByRole("dialog", { name: "Record a world time" })
+        fireEvent.change(within(dialog).getByRole("textbox", { name: /Describe this moment/ }), { target: { value: "Dawn" } })
+        fireEvent.change(within(dialog).getByRole("combobox", { name: /Comes after/ }), { target: { value: "t1" } })
+        fireEvent.click(within(dialog).getByRole("button", { name: "Record time" }))
+        await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+    }
+
+    it("chooses the recorded start time and does not start the session", async () => {
+        let recorded = false
+        server.on("GET", S, { body: session() })
+        server.on("GET", /\/campaigns\/mundivita\/world-times/, () => ({
+            body: { items: recorded ? [TIME("t9", "Dawn"), TIME("t1", "Year 1")] : [TIME("t1", "Year 1")], next_cursor: null },
+        }))
+        server.on("POST", /\/campaigns\/mundivita\/world-times/, () => {
+            recorded = true
+            return { status: 201, body: { world_time_id: "t9", created: true, changed: true } }
+        })
+        openApp(`${RUN}?section=log`)
+        await screen.findByRole("button", { name: "Start session" })
+        await recordThroughDialog()
+        await waitFor(() => expect(screen.getByRole("combobox", { name: /Starts at/ })).toHaveValue("t9"))
+        expect(server.callsTo("POST", `${S}/start`)).toHaveLength(0)
+    })
+})

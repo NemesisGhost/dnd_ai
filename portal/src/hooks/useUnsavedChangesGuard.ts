@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from "react"
 import { useBlocker } from "react-router"
+import { anyNavigationHold, registerPageGuard } from "./navigationHolds"
 
 export interface UnsavedChangesGuard {
     // True while an in-app navigation is held waiting for the user's decision.
@@ -31,9 +32,13 @@ export function useUnsavedChangesGuard(isDirty: boolean): UnsavedChangesGuard {
         dirtyRef.current = isDirty
     }, [isDirty])
 
+    // Counted so a component with state of its own to protect (see navigationHolds) adds to this guard's
+    // question instead of installing a second blocker; its holds block here too.
+    useEffect(() => registerPageGuard(), [])
+
     const blocker = useBlocker(
         ({ currentLocation, nextLocation }) =>
-            dirtyRef.current && currentLocation.pathname !== nextLocation.pathname,
+            (dirtyRef.current || anyNavigationHold()) && currentLocation.pathname !== nextLocation.pathname,
     )
 
     useEffect(() => {

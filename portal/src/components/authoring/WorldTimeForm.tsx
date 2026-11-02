@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react"
+import { useId, useLayoutEffect, useRef, useState } from "react"
 import type { ReactNode } from "react"
 import { createWorldTime } from "../../api/worldTime"
 import { useSession } from "../../context/SessionContext"
@@ -90,6 +90,9 @@ export function WorldTimeForm({
     const isEmptyNow = () =>
         JSON.stringify(valuesRef.current) === JSON.stringify(emptyWorldTimeForm(calendarsRef.current))
     const [errors, setErrors] = useState<FieldError[]>([])
+    // Several of these forms can be mounted at once (one behind each picker's dialog), so no id is fixed.
+    const uid = useId()
+    const fid = (base: string) => `${uid}-${base}`
     const [attempt, setAttempt] = useState(0)
     // The earlier attempt was sent again first because its outcome was unknown (`holdUnresolved`).
     const [resent, setResent] = useState(false)
@@ -169,7 +172,7 @@ export function WorldTimeForm({
     const Shell = nested ? NestedGroup : AuthoringForm
     return (
         <Shell label={label} onSubmit={submit}>
-            <ErrorSummary errors={all} attempt={attempt} />
+            <ErrorSummary errors={all.map((e) => ({ ...e, fieldId: fid(e.fieldId) }))} attempt={attempt} />
             {noBackendMessage}
             {resent && serverError !== null ? (
                 <p role="status">
@@ -193,7 +196,7 @@ export function WorldTimeForm({
             {values.mode === "calendar" ? (
                 <>
                     <SelectField
-                        id="time-calendar"
+                        id={fid("time-calendar")}
                         label="Calendar"
                         value={values.calendarId}
                         placeholder="Choose a calendar"
@@ -203,7 +206,7 @@ export function WorldTimeForm({
                         error={errorFor("time-calendar")}
                     />
                     <TextField
-                        id="time-year"
+                        id={fid("time-year")}
                         label="Year"
                         value={values.year}
                         required
@@ -212,7 +215,7 @@ export function WorldTimeForm({
                         error={errorFor("time-year")}
                     />
                     <SelectField
-                        id="time-month"
+                        id={fid("time-month")}
                         label="Month"
                         value={values.month}
                         placeholder="Not specified"
@@ -224,29 +227,29 @@ export function WorldTimeForm({
                         error={errorFor("time-month")}
                     />
                     <TextField
-                        id="time-day"
+                        id={fid("time-day")}
                         label="Day"
                         value={values.day}
                         onChange={set("day")}
                         error={errorFor("time-day")}
                     />
                     <TextField
-                        id="time-hour"
+                        id={fid("time-hour")}
                         label="Hour (0–23)"
                         value={values.hour}
                         onChange={set("hour")}
                         error={errorFor("time-hour")}
                     />
                     <TextField
-                        id="time-minute"
+                        id={fid("time-minute")}
                         label="Minute (0–59)"
                         value={values.minute}
                         onChange={set("minute")}
                         error={errorFor("time-minute")}
                     />
-                    <label className="authoring-checkbox" htmlFor="time-approximate">
+                    <label className="authoring-checkbox" htmlFor={fid("time-approximate")}>
                         <input
-                            id="time-approximate"
+                            id={fid("time-approximate")}
                             type="checkbox"
                             checked={values.approximate}
                             onChange={(event) => set("approximate")(event.target.checked)}
@@ -254,7 +257,7 @@ export function WorldTimeForm({
                         This date is approximate
                     </label>
                     <TextField
-                        id="time-label"
+                        id={fid("time-label")}
                         label="Label (optional)"
                         value={values.label}
                         onChange={set("label")}
@@ -264,7 +267,7 @@ export function WorldTimeForm({
             ) : (
                 <>
                     <TextField
-                        id="time-label"
+                        id={fid("time-label")}
                         label="Describe this moment"
                         value={values.label}
                         required
@@ -272,7 +275,7 @@ export function WorldTimeForm({
                         error={errorFor("time-label")}
                     />
                     <SelectField
-                        id="time-after"
+                        id={fid("time-after")}
                         label="Comes after"
                         value={values.afterId}
                         placeholder="Choose a time"
@@ -282,7 +285,7 @@ export function WorldTimeForm({
                         error={errorFor("time-after")}
                     />
                     <SelectField
-                        id="time-before"
+                        id={fid("time-before")}
                         label="Comes before (optional)"
                         value={values.beforeId}
                         placeholder="No later limit"

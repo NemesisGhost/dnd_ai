@@ -432,15 +432,18 @@ describe("OrganizationMembers", () => {
         expect(server.callsTo("POST", /authoring\/relationships$/)).toHaveLength(1)
     })
 
-    it("records a new time inside a form without nesting a form in it", async () => {
+    it("records a new time in a dialog outside the form, with no form nested in it", async () => {
         setup()
         fireEvent.click(await screen.findByRole("button", { name: "Add a member" }))
         const form = screen.getByRole("form", { name: "Add a member" })
         fireEvent.click(await within(form).findByRole("button", { name: "Record a new time" }))
-        // A <form> inside a <form> makes a real browser submit the outer one.
-        expect(within(form).getByRole("group", { name: "Record a new world time" })).toBeInTheDocument()
-        expect(form.querySelector("form")).toBeNull()
-        expect(within(form).getByRole("button", { name: "Record time" })).toHaveAttribute("type", "button")
+        // A <form> inside a <form> makes a real browser submit the outer one, and so would a button in the
+        // dialog if the dialog were inside it: the dialog is outside, and holds a group, not a form.
+        const dialog = await screen.findByRole("dialog", { name: "Record a world time" })
+        expect(form.contains(dialog)).toBe(false)
+        expect(within(dialog).getByRole("group", { name: "Record a new world time" })).toBeInTheDocument()
+        expect(dialog.querySelector("form")).toBeNull()
+        expect(within(dialog).getByRole("button", { name: "Record time" })).toHaveAttribute("type", "button")
     })
 
     it("keeps an open row editor and the add form as they were when the status is saved", async () => {

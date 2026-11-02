@@ -272,3 +272,35 @@ describe("party members page", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("does not exist, or you do not have access")
   })
 })
+
+describe("party members page: recording a time in the picker", () => {
+    // Record a narrative time ("after Year 1") through the picker's dialog.
+    async function recordThroughDialog() {
+        fireEvent.click(await screen.findByRole("button", { name: "Record a new time" }))
+        const dialog = await screen.findByRole("dialog", { name: "Record a world time" })
+        fireEvent.change(within(dialog).getByRole("textbox", { name: /Describe this moment/ }), { target: { value: "Dawn" } })
+        fireEvent.change(within(dialog).getByRole("combobox", { name: /Comes after/ }), { target: { value: "t1" } })
+        fireEvent.click(within(dialog).getByRole("button", { name: "Record time" }))
+        await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+    }
+
+    it("keeps the add form's character, chooses the recorded time, and adds nobody", async () => {
+        let recorded = false
+        server.on("GET", MEMBERS, { body: listing("active", []) })
+        server.on("GET", /\/campaigns\/mundivita\/world-times/, () => ({
+            body: { items: recorded ? [TIME("t9", "Dawn"), TIME("t1", "Year 1")] : [TIME("t1", "Year 1")], next_cursor: null },
+        }))
+        server.on("POST", /\/campaigns\/mundivita\/world-times/, () => {
+            recorded = true
+            return { status: 201, body: { world_time_id: "t9", created: true, changed: true } }
+        })
+        openApp("/app/mundivita/parties/p1")
+        fireEvent.click(await screen.findByRole("button", { name: "Add member" }))
+        fireEvent.focus(screen.getByRole("combobox", { name: "Character" }))
+        fireEvent.click(await screen.findByRole("option", { name: /Cael/ }))
+        await recordThroughDialog()
+        await waitFor(() => expect(screen.getByRole("combobox", { name: /Joins at/ })).toHaveValue("t9"))
+        expect(screen.getByRole("combobox", { name: "Character" })).toHaveValue("Cael")
+        expect(server.callsTo("POST", MEMBERS)).toHaveLength(0)
+    })
+})

@@ -341,3 +341,32 @@ describe("event pages", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("do not have permission")
   })
 })
+
+describe("event pages: recording a time in the picker", () => {
+    // Record a narrative time ("after Year 1") through the picker's dialog.
+    async function recordThroughDialog() {
+        fireEvent.click(await screen.findByRole("button", { name: "Record a new time" }))
+        const dialog = await screen.findByRole("dialog", { name: "Record a world time" })
+        fireEvent.change(within(dialog).getByRole("textbox", { name: /Describe this moment/ }), { target: { value: "Dawn" } })
+        fireEvent.change(within(dialog).getByRole("combobox", { name: /Comes after/ }), { target: { value: "t1" } })
+        fireEvent.click(within(dialog).getByRole("button", { name: "Record time" }))
+        await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+    }
+
+    it("keeps what was typed, chooses the recorded time, and records no event", async () => {
+        let recorded = false
+        server.on("GET", /\/campaigns\/mundivita\/world-times/, () => ({
+            body: { items: recorded ? [TIME("t9", "Dawn"), TIME("t1", "Year 1")] : [TIME("t1", "Year 1")], next_cursor: null },
+        }))
+        server.on("POST", /\/campaigns\/mundivita\/world-times/, () => {
+            recorded = true
+            return { status: 201, body: { world_time_id: "t9", created: true, changed: true } }
+        })
+        openApp("/app/mundivita/events/new")
+        fireEvent.change(await screen.findByLabelText(/What happened/), { target: { value: "The door opens" } })
+        await recordThroughDialog()
+        await waitFor(() => expect(screen.getByRole("combobox", { name: /When/ })).toHaveValue("t9"))
+        expect(screen.getByLabelText(/What happened/)).toHaveValue("The door opens")
+        expect(server.callsTo("POST", "/campaigns/mundivita/events")).toHaveLength(0)
+    })
+})
