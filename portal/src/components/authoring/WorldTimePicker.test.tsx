@@ -899,3 +899,110 @@ describe("WorldTimePicker: registration and cleanup", () => {
         expect(navigationRegistryCounts()).toEqual(base)
     })
 })
+
+describe("WorldTimePicker: a recording that completes while the page's question is open", () => {
+    const openCount = () => document.querySelectorAll("dialog[open]").length
+    const year = () => screen.getByRole("textbox", { name: /Year/, hidden: true })
+
+    // Submit with the POST held, ask to leave (the picker dialog steps aside), then let the POST succeed
+    // with the follow-up read held, all while the question stays open.
+    async function postedBehindTheQuestion() {
+        const request = deferred()
+        const read = deferred()
+        const harness = setupServer({
+            post: async () => {
+                await request.gate
+                return undefined
+            },
+        })
+        const view = render({ pageGuard: true })
+        await openIt()
+        const spoken = watchAnnouncements()
+        fill()
+        record()
+        await inDialog().findByRole("button", { name: "Recording…" })
+        fireEvent.click(screen.getByRole("link", { name: "Go away", hidden: true }))
+        const ask = await screen.findByRole("dialog", { name: "Leave the outer page?" })
+        await waitFor(() => expect(openCount()).toBe(1))
+
+        harness.state.hold = read.gate
+        await act(async () => request.release())
+        // The confirmation was processed: the form emptied. The question is still the only open modal.
+        await waitFor(() => expect(year()).toHaveValue(""))
+        return { ...harness, ...view, ask, read, spoken }
+    }
+
+    function expectOnlyTheQuestion(ask: HTMLElement) {
+        expect(openCount()).toBe(1)
+        expect(ask).toHaveAttribute("open")
+        expect(screen.getAllByRole("dialog")).toEqual([ask])
+        expect(ask.contains(document.activeElement)).toBe(true)
+    }
+
+    it("completes behind the question without reopening a modal or taking focus, then Stay shows no finished dialog", async () => {
+        const { server, state, ask, read, spoken, submit } = await postedBehindTheQuestion()
+        expectOnlyTheQuestion(ask)
+        expect(chosen()).toHaveTextContent("")
+
+        // The read answers with the created time; wait until the completion was visibly processed.
+        state.hold = null
+        await act(async () => read.release())
+        await waitFor(() => expect(chosen()).toHaveTextContent("t9"))
+        await waitFor(() => expect(spoken.filter((x) => x === "World time recorded")).toHaveLength(1))
+        expectOnlyTheQuestion(ask)
+        expect(posts(server)).toHaveLength(1)
+        expect(submit).not.toHaveBeenCalled()
+        expect(server.calls.filter((call) => /clock/.test(call.path))).toHaveLength(0)
+
+        fireEvent.click(within(ask).getByRole("button", { name: "Stay" }))
+        await waitFor(() => expect(screen.queryByRole("dialog", { name: "Leave the outer page?" })).toBeNull())
+        // The completed, pristine recording dialog is not brought back.
+        expect(openCount()).toBe(0)
+        expect(screen.queryByRole("dialog")).toBeNull()
+        expect(screen.queryByText("Away page")).toBeNull()
+        expect(chosen()).toHaveTextContent("t9")
+        expect(posts(server)).toHaveLength(1)
+        // And it is an ordinary, empty dialog the next time it is asked for.
+        await openIt()
+        expect(inDialog().getByRole("textbox", { name: /Year/ })).toHaveValue("")
+    })
+
+    it("leaves once after the completion, with no focus returned to the left page", async () => {
+        const { state, ask, read, router } = await postedBehindTheQuestion()
+        const arrivals: string[] = []
+        router.subscribe((next) => arrivals.push(next.location.pathname))
+        state.hold = null
+        await act(async () => read.release())
+        await waitFor(() => expect(chosen()).toHaveTextContent("t9"))
+        expectOnlyTheQuestion(ask)
+
+        fireEvent.click(within(ask).getByRole("button", { name: "Leave" }))
+        expect(await screen.findByText("Away page")).toBeInTheDocument()
+        expect(openCount()).toBe(0)
+        expect(arrivals.filter((path) => path === "/away")).toHaveLength(1)
+        expect(screen.queryByRole("button", { name: "Record a new time" })).toBeNull()
+        expect(document.body.contains(document.activeElement) ? document.activeElement?.tagName !== "BUTTON" : true).toBe(true)
+    })
+
+    it("keeps a newer draft entered meanwhile: Stay restores it, marked unrecorded", async () => {
+        const { server, state, ask, read, spoken } = await postedBehindTheQuestion()
+        // Entered while the dialog is stepped aside and the read is still held.
+        fireEvent.change(year(), { target: { value: "4" } })
+        state.hold = null
+        await act(async () => read.release())
+        // The recorded time is chosen on the form behind; the dialog is kept (not closed), still stepped aside.
+        await waitFor(() => expect(chosen()).toHaveTextContent("t9"))
+        await act(async () => {})
+        expectOnlyTheQuestion(ask)
+        expect(spoken).not.toContain("World time recorded")
+
+        fireEvent.click(within(ask).getByRole("button", { name: "Stay" }))
+        await waitFor(() => expect(screen.queryByRole("dialog", { name: "Leave the outer page?" })).toBeNull())
+        expect(openCount()).toBe(1)
+        expect(dialog()).toHaveAttribute("open")
+        expect(inDialog().getByRole("textbox", { name: /Year/ })).toHaveValue("4")
+        expect(inDialog().getByText(/The time you submitted earlier was recorded: Year 3, Bloom 5\. What is in the form now has not been recorded/)).toBeInTheDocument()
+        expect(posts(server)).toHaveLength(1)
+        expect(chosen()).toHaveTextContent("t9")
+    })
+})
