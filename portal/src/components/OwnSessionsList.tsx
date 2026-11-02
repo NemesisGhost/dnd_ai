@@ -1,3 +1,4 @@
+import { TableScroll } from "./TableScroll"
 import type { OwnBrowserSession } from "../types/accountSessions"
 
 interface OwnSessionsListProps {
@@ -18,6 +19,7 @@ function formatTimestamp(timestamp: string): string {
 // CP 11b).
 export function OwnSessionsList({ sessions, onRevoke, revokingSessionId }: OwnSessionsListProps) {
     return (
+        <TableScroll label="Your browser sessions">
         <table>
             <caption>Your browser sessions</caption>
             <thead>
@@ -41,6 +43,7 @@ export function OwnSessionsList({ sessions, onRevoke, revokingSessionId }: OwnSe
                         <td>
                             <button
                                 type="button"
+                                className="authoring-button"
                                 disabled={revokingSessionId === session.browser_session_id}
                                 onClick={() => onRevoke(session.browser_session_id, session.is_current)}
                             >
@@ -51,5 +54,6 @@ export function OwnSessionsList({ sessions, onRevoke, revokingSessionId }: OwnSe
                 ))}
             </tbody>
         </table>
+        </TableScroll>
     )
 }

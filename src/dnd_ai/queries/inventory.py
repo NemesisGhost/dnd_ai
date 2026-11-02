@@ -79,6 +79,18 @@ class InventoryItemView:
     'fully_identified'` (or the caller is a GM), the identification row's
     own `known_properties_jsonb` when `'partially_identified'`, and `None`
     otherwise."""
+    name: str = ""
+    """The instance's own name (a named sword), as opposed to its definition's `display_name`."""
+    last_event_id: uuid.UUID | None = None
+    """The item's optimistic token (`campaign.item_state.last_event_id`)."""
+    is_published: bool = True
+    """False for a draft or archived instance, which only a GM (`reveal_all_properties`) sees."""
+    is_attuned: bool = False
+    """Whether the holder is currently attuned to this item on the timeline: an open
+    `campaign.item_attunements` row (`broken_world_time_id IS NULL`, the codebase's definition of
+    active, as the attune/end-attunement commands and the item editor read it) for this timeline,
+    this item and this holder. An ended attunement, another character's, and another timeline's
+    all read `False`; nothing is inferred from the definition's attunement requirement."""
 
 
 def get_inventory_view(
@@ -110,17 +122,30 @@ def get_inventory_view(
 
     rows = connection.execute(
         text("""
-            SELECT ii.item_instance_id, idef.display_name, icat.code AS item_category_code,
-                   idef.rarity, idef.properties_jsonb,
+            SELECT ii.item_instance_id, ie_ent.canonical_name AS instance_name,
+                   idef.display_name, icat.code AS item_category_code,
+                   idef.rarity, idef.properties_jsonb, ist.last_event_id,
+                   (ie_cs.code = 'canon' AND ie_ls.code = 'active') AS is_published,
                    COALESCE(ist.quantity, 1) AS quantity, ist.condition_percentage,
                    ist.charges_current, ist.charges_maximum,
                    COALESCE(ist.is_equipped, false) AS is_equipped,
                    COALESCE(ist.is_destroyed, false) AS is_destroyed,
                    io.owner_entity_id,
                    COALESCE(idn.identification_level, :default_level) AS identification_level,
-                   idn.known_properties_jsonb
+                   idn.known_properties_jsonb,
+                   EXISTS (
+                       SELECT 1 FROM campaign.item_attunements att
+                       WHERE att.timeline_id = ie.timeline_id
+                         AND att.item_instance_id = ie.item_instance_id
+                         AND att.character_id = ie.holder_entity_id
+                         AND att.broken_world_time_id IS NULL
+                   ) AS is_attuned
             FROM campaign.inventory_entries ie
             JOIN world.item_instances ii ON ii.item_instance_id = ie.item_instance_id
+            JOIN core.entities ie_ent ON ie_ent.entity_id = ii.item_instance_id
+            JOIN core.canon_statuses ie_cs ON ie_cs.canon_status_id = ie_ent.canon_status_id
+            JOIN core.lifecycle_statuses ie_ls
+                 ON ie_ls.lifecycle_status_id = ie_ent.lifecycle_status_id
             JOIN rules.item_definitions idef ON idef.item_definition_id = ii.item_definition_id
             JOIN rules.item_categories icat ON icat.item_category_id = idef.item_category_id
             LEFT JOIN campaign.item_state ist
@@ -132,12 +157,14 @@ def get_inventory_view(
                   AND idn.item_instance_id = ie.item_instance_id
                   AND idn.knower_entity_id = ie.holder_entity_id
             WHERE ie.timeline_id = :timeline AND ie.holder_entity_id = :holder
-            ORDER BY ii.item_instance_id
+              AND (:gm OR (ie_cs.code = 'canon' AND ie_ls.code = 'active'))
+            ORDER BY lower(ie_ent.canonical_name), ii.item_instance_id
         """),
         {
             "timeline": timeline_id,
             "holder": holder_entity_id,
             "default_level": _DEFAULT_IDENTIFICATION_LEVEL,
+            "gm": reveal_all_properties,
         },
     ).mappings()
 
@@ -166,7 +193,74 @@ def get_inventory_view(
                 owner_entity_id=row["owner_entity_id"],
                 identification_level=identification_level,
                 properties=properties,
+                name=row["instance_name"],
+                last_event_id=row["last_event_id"],
+                is_published=bool(row["is_published"]),
+                is_attuned=bool(row["is_attuned"]),
             )
         )
 
     return tuple(items)
+
+
+@dataclass(frozen=True)
+class RestrictedInventoryItemView:
+    """The `inventory_only` projection of `InventoryItemView` (CP-6 / DR-2): what a reader holding
+    `character.view_inventory` without the full character view may see. This is an allowlist, so a
+    field added to `InventoryItemView` is withheld from this view until it is added here on purpose.
+
+    Attunement (`is_attuned`) is part of the allowlist. Withheld: `condition_percentage`, `charges_current`/`charges_maximum` (item-instance mechanical
+    state), `last_event_id` (the mutation token), `is_published` (a restricted reader never sees an
+    unpublished instance), and `owner_entity_id` (replaced by `ownership`, so the id of an
+    entity the reader may not be able to discover is not disclosed). GM-only instance fields such
+    as `origin_notes` are not part of `InventoryItemView` at all.
+    """
+
+    item_instance_id: uuid.UUID
+    name: str
+    display_name: str
+    item_category_code: str
+    rarity: str
+    quantity: int
+    is_equipped: bool
+    is_destroyed: bool
+    is_attuned: bool
+    ownership: str
+    """`holder` when the legal owner is the character carrying the item, `other` when someone else
+    owns what the character carries (custody without ownership), `none` when it has no owner."""
+    identification_level: str
+    properties: dict[str, Any] | None
+    """Already identification-filtered by `get_inventory_view` (called with
+    `reveal_all_properties=False`)."""
+
+
+def restrict_inventory_view(
+    items: tuple[InventoryItemView, ...], *, holder_entity_id: uuid.UUID
+) -> tuple[RestrictedInventoryItemView, ...]:
+    """Project `items` (read with `reveal_all_properties=False`, so draft/archived instances and
+    unrevealed properties are already absent) onto the `inventory_only` allowlist."""
+    restricted = []
+    for item in items:
+        if item.owner_entity_id is None:
+            ownership = "none"
+        elif item.owner_entity_id == holder_entity_id:
+            ownership = "holder"
+        else:
+            ownership = "other"
+        restricted.append(
+            RestrictedInventoryItemView(
+                item_instance_id=item.item_instance_id,
+                name=item.name,
+                display_name=item.display_name,
+                item_category_code=item.item_category_code,
+                rarity=item.rarity,
+                quantity=item.quantity,
+                is_equipped=item.is_equipped,
+                is_destroyed=item.is_destroyed,
+                is_attuned=item.is_attuned,
+                ownership=ownership,
+                identification_level=item.identification_level,
+                properties=item.properties,
+            )
+        )
+    return tuple(restricted)

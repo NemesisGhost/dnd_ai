@@ -21,6 +21,10 @@ interface ReferenceComboboxProps {
     error?: string | null
     disabled?: boolean
     placeholder?: string
+    // Identifies what the search is scoped to. When it changes, the search in flight is aborted,
+    // the listed options are dropped, and (if the list is open) the search runs again, so a
+    // response that began under the old scope is never shown.
+    searchKey?: string
 }
 
 type Status = "idle" | "loading" | "ready" | "error"
@@ -46,6 +50,7 @@ export function ReferenceCombobox({
     error,
     disabled,
     placeholder,
+    searchKey,
 }: ReferenceComboboxProps) {
     const listboxId = useId()
     const [open, setOpen] = useState(false)
@@ -60,6 +65,28 @@ export function ReferenceCombobox({
     useEffect(() => {
         searchRef.current = search
     })
+
+    const lastKey = useRef(searchKey)
+    useEffect(() => {
+        if (lastKey.current === searchKey) {
+            return
+        }
+        lastKey.current = searchKey
+        if (timer.current !== null) {
+            window.clearTimeout(timer.current)
+            timer.current = null
+        }
+        controller.current?.abort()
+        generation.current += 1
+        setOptions([])
+        setActive(-1)
+        setStatus("idle")
+        if (open) {
+            schedule(text ?? "", true)
+        }
+        // Only a change of scope restarts the search; `open` and `text` are read as they are.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [searchKey])
 
     useEffect(
         () => () => {

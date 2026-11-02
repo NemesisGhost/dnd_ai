@@ -4,7 +4,7 @@ import { humanizeCode } from "../utils/humanize"
 
 const SOURCE_KIND_LABELS: Record<string, string> = {
     role: "Role",
-    character_relationship: "Character relationship",
+    character_relationship: "Character access",
     resource_grant: "Direct grant",
     access_group: "Group grant",
 }

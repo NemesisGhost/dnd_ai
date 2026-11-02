@@ -376,6 +376,100 @@ def test_a_sequential_replay_returns_the_original_response(
     assert hp == 13
 
 
+def _writes_snapshot(engine: Engine, f: Fixture) -> dict[str, int]:
+    """Row counts of every table a character-state command could write to, for the
+    fixture's world/campaign — compared before and after a refused command."""
+    queries = {
+        "entities": "SELECT count(*) FROM core.entities WHERE world_id = :world",
+        "events": (
+            "SELECT count(*) FROM narrative.events ev JOIN core.entities en "
+            "ON en.entity_id = ev.event_id WHERE en.world_id = :world"
+        ),
+        "event_effects": (
+            "SELECT count(*) FROM narrative.event_effects ee JOIN core.entities en "
+            "ON en.entity_id = ee.event_id WHERE en.world_id = :world"
+        ),
+        "change_log": "SELECT count(*) FROM audit.change_log WHERE world_id = :world",
+        "idempotent_requests": (
+            "SELECT count(*) FROM security.idempotent_requests WHERE campaign_id = :campaign"
+        ),
+        "character_state": (
+            "SELECT count(*) FROM campaign.character_state WHERE timeline_id = :timeline"
+        ),
+    }
+    with engine.connect() as verify:
+        return {
+            name: int(
+                verify.execute(
+                    text(sql),
+                    {"world": f.world_id, "campaign": f.campaign_id, "timeline": f.timeline_id},
+                ).scalar()
+                or 0
+            )
+            for name, sql in queries.items()
+        }
+
+
+def test_a_character_with_no_state_row_gets_a_stable_conflict_and_nothing_is_written(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as connection:
+        stateless_id = make_character(connection, f.world_id, name="Stateless")
+    key = f"hp-missing-{uuid.uuid4().hex[:8]}"
+    body = {"world_time_id": str(f.world_time_id), "delta": -3}
+    before = _writes_snapshot(postgres_engine, f)
+    with client_factory(f.gm_user_id) as client:
+        refused = client.post(
+            _hp_url(f.campaign_id, stateless_id), json=body, headers={"Idempotency-Key": key}
+        )
+        refused_again = client.post(
+            _hp_url(f.campaign_id, stateless_id), json=body, headers={"Idempotency-Key": key}
+        )
+    for response in (refused, refused_again):
+        assert response.status_code == 409, response.text
+        error = response.json()["error"]
+        assert error["code"] == "character_state_not_initialized"
+        assert "starting" in error["message"]
+    # No state, event, effect, audit row, idempotency receipt or stranded reservation.
+    assert _writes_snapshot(postgres_engine, f) == before
+
+    # The GM sets the starting state explicitly; the very same key now works.
+    with postgres_engine.begin() as connection:
+        make_character_state(
+            connection, f.timeline_id, stateless_id, current_hit_points=9, maximum_hit_points=12
+        )
+    with client_factory(f.gm_user_id) as client:
+        applied = client.post(
+            _hp_url(f.campaign_id, stateless_id), json=body, headers={"Idempotency-Key": key}
+        )
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["previous_hit_points"] == 9
+    assert applied.json()["new_hit_points"] == 6
+    with postgres_engine.connect() as verify:
+        hp = verify.execute(
+            text(
+                "SELECT current_hit_points FROM campaign.character_state "
+                "WHERE timeline_id = :t AND character_id = :c"
+            ),
+            {"t": f.timeline_id, "c": stateless_id},
+        ).scalar()
+    assert hp == 6
+
+
+def test_an_unauthorized_caller_is_not_told_whether_state_exists(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as connection:
+        stateless_id = make_character(connection, f.world_id, name="Stateless")
+    with client_factory(f.capless_user_id) as client:
+        forbidden = client.post(
+            _hp_url(f.campaign_id, stateless_id),
+            json={"world_time_id": str(f.world_time_id), "delta": 1},
+        )
+    assert forbidden.status_code == 403, forbidden.text
+    assert forbidden.json()["error"]["code"] != "character_state_not_initialized"
+
+
 # ---------------------------------------------------------------------------
 # apply_character_condition / remove_character_condition
 # ---------------------------------------------------------------------------

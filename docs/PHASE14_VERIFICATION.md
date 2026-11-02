@@ -1,5 +1,7 @@
 # Phase 14 Verification
 
+The outstanding navigation/hierarchy manual pass now has detailed steps in [Phase 14 and 15 manual testing guide](PHASE14_15_MANUAL_TESTING.md) (especially TC-01–04 and TC-55). Manual results remain pending until executed and recorded.
+
 Evidence for Phase 14 (shared authoring kernel and campaign setup) on branch `phase14/authoring-kernel`, recorded against [PLAN.md Phase 14](PLAN.md) and [ADR 0014](adr/0014-world-authoring-authority.md). **Status: complete.** Merged as PR #64 (`3046714`); final-head CI run `37227612984` was green. Manual browser verification of the navigation/hierarchy correction is still pending and is carried into the Phase 15 manual matrix (not a Phase 15 gate).
 
 ## What was delivered
@@ -74,6 +76,9 @@ Accepted limitations of the correction:
 - `make_entity` in the test factories now defaults to canon rather than draft.
 
 ## Accepted limitations and remaining work
+
+- **Provenance and history (disclosed 2026-10-05):** safe source/provenance attachment, provenance presentation, and prior-version history/revision comparison are **not provided** by Phase 14 (only the `gm_entry` source and the audit trail exist). They are scheduled in Phase 15 checkpoints 15.2R (revision capture), 15.3C-1 (sources and provenance), and 15.3C-2 (review queues and comparison).
+- **Clean-install access defaults (disclosed 2026-10-05; resolved by Phase 15 checkpoint 15.2A-1):** a clean database had no relationship-type capability mappings; migration `114_relationship_defaults` now seeds them.
 
 - Phase 15 supplies authoring of world content (entity creation/editing per type); only the lifecycle kernel and its portal controls exist now.
 - Invitation delivery and collaboration (Phase 16) are untouched; the scenario adds a player membership directly.

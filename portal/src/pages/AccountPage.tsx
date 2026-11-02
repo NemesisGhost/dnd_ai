@@ -69,7 +69,7 @@ export function AccountPage() {
                 <section aria-labelledby="account-password-heading">
                     <h2 id="account-password-heading">Change password</h2>
                     <form
-                        className="login-form"
+                        className="authoring-form"
                         aria-busy={isChanging}
                         onSubmit={(event) => {
                             event.preventDefault()
@@ -107,15 +107,15 @@ export function AccountPage() {
                             disabled={isChanging}
                         />
 
-                        <p role="status" aria-live="polite" className="login-error">
-                            {changeStatus.kind === "success"
-                                ? "Password changed."
-                                : changeStatus.kind === "idle"
-                                  ? ""
-                                  : changePasswordStatusMessage(changeStatus.kind)}
-                        </p>
+                        <div role="status" aria-live="polite">
+                            {changeStatus.kind === "success" ? (
+                                <p className="form-status form-status--success">Password changed.</p>
+                            ) : changeStatus.kind === "idle" ? null : (
+                                <p className="login-error">{changePasswordStatusMessage(changeStatus.kind)}</p>
+                            )}
+                        </div>
 
-                        <button type="submit" className="login-button" disabled={isChanging}>
+                        <button type="submit" className="authoring-button authoring-button--primary" disabled={isChanging}>
                             {isChanging ? "Changing…" : "Change password"}
                         </button>
                     </form>
@@ -132,7 +132,7 @@ export function AccountPage() {
                     {sessionsState.status === "error" && (
                         <>
                             <p>Sessions could not be loaded.</p>
-                            <button type="button" onClick={retrySessions}>
+                            <button type="button" className="authoring-button" onClick={retrySessions}>
                                 Try again
                             </button>
                         </>

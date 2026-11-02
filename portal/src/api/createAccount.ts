@@ -1,10 +1,12 @@
 import { PlatformAccountsRequestError } from "./platformAccounts"
 import type { CreateAccountResponse } from "../types/platformAccounts"
+import type { SystemRoleCode } from "../utils/systemAccess"
 
 export async function createAccount(
     loginName: string,
     displayName: string,
     email: string | null,
+    systemRoleCodes: readonly SystemRoleCode[],
     csrfToken: string,
     signal?: AbortSignal,
 ): Promise<CreateAccountResponse> {
@@ -22,6 +24,7 @@ export async function createAccount(
             login_name: loginName,
             display_name: displayName,
             email,
+            system_role_codes: systemRoleCodes,
         }),
     })
 

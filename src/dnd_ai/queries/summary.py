@@ -60,6 +60,8 @@ from datetime import datetime
 
 from sqlalchemy import Connection, text
 
+from dnd_ai.domain.world_time import full_display_text
+
 # A fixed, deterministic bound rather than a client-tunable parameter —
 # pagination is a separate concern this first cut does not need.
 _RECENT_EVENTS_LIMIT = 20
@@ -83,6 +85,7 @@ class RecentEventView:
     event_type_code: str
     event_status_code: str
     world_time_id: uuid.UUID
+    world_time_display: str | None
     details: str | None
 
 
@@ -154,12 +157,19 @@ def get_campaign_summary_view(
     event_rows = connection.execute(
         text("""
             SELECT e.event_id, ce.canonical_name AS name, ce.summary, et.code AS event_type_code,
-                   es.code AS event_status_code, e.world_time_id, e.details
+                   es.code AS event_status_code, e.world_time_id, e.details,
+                   wt.label AS time_label, wt.year AS time_year, wt.day AS time_day,
+                   wt.hour AS time_hour, wt.minute AS time_minute,
+                   wt.calendar_id AS time_calendar_id, c.display_name AS time_calendar_name,
+                   cm.name AS time_month_name, c.epoch_label AS time_epoch_label
             FROM narrative.events e
             JOIN core.entities ce ON ce.entity_id = e.event_id
             JOIN narrative.event_types et ON et.event_type_id = e.event_type_id
             JOIN narrative.event_statuses es ON es.event_status_id = e.event_status_id
             JOIN core.world_times wt ON wt.world_time_id = e.world_time_id
+            LEFT JOIN core.calendars c ON c.calendar_id = wt.calendar_id
+            LEFT JOIN core.calendar_months cm
+              ON cm.calendar_id = wt.calendar_id AND cm.month_number = wt.month_number
             WHERE e.campaign_id = :campaign
               AND es.code != 'voided'
               AND (
@@ -191,6 +201,19 @@ def get_campaign_summary_view(
             event_type_code=row["event_type_code"],
             event_status_code=row["event_status_code"],
             world_time_id=row["world_time_id"],
+            # None when the point carries neither a label nor a year, so the
+            # client can say "World time unassigned" rather than a raw id.
+            world_time_display=full_display_text(
+                label=row["time_label"],
+                calendar_name=row["time_calendar_name"],
+                has_calendar=row["time_calendar_id"] is not None,
+                year=row["time_year"],
+                month_name=row["time_month_name"],
+                day=row["time_day"],
+                hour=row["time_hour"],
+                minute=row["time_minute"],
+                epoch_label=row["time_epoch_label"],
+            ),
             details=row["details"],
         )
         for row in event_rows

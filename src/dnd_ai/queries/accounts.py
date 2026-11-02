@@ -58,6 +58,7 @@ class PlatformAccountView:
     login_name: str | None
     lifecycle_status_code: str
     is_platform_administrator: bool
+    system_roles: tuple[str, ...]
     has_local_credential: bool
     has_outstanding_activation: bool
     last_login_at: datetime | None
@@ -70,6 +71,7 @@ def list_platform_accounts(
     requesting_user_id: uuid.UUID,
     query: str | None,
     status_code: str | None,
+    system_role_code: str | None = None,
     limit: int,
     after_name: str | None,
     after_user_id: uuid.UUID | None,
@@ -93,7 +95,21 @@ def list_platform_accounts(
         connection.execute(
             text("""
                 SELECT
-                    u.user_id, u.display_name, u.last_login_at, u.is_platform_administrator,
+                    u.user_id, u.display_name, u.last_login_at,
+                    EXISTS (
+                        SELECT 1
+                        FROM security.user_system_roles usr
+                        JOIN security.system_roles sr ON sr.system_role_id = usr.system_role_id
+                        WHERE usr.user_id = u.user_id AND usr.revoked_at IS NULL
+                          AND sr.code = 'admin' AND sr.is_active
+                    ) AS is_platform_administrator,
+                    ARRAY(
+                        SELECT sr.code
+                        FROM security.user_system_roles usr
+                        JOIN security.system_roles sr ON sr.system_role_id = usr.system_role_id
+                        WHERE usr.user_id = u.user_id AND usr.revoked_at IS NULL
+                        ORDER BY sr.sort_order
+                    ) AS system_roles,
                     cls.code AS lifecycle_status_code,
                     local_ei.subject AS active_login_name,
                     pending_token.login_name AS pending_login_name,
@@ -132,6 +148,16 @@ def list_platform_accounts(
                         CAST(:status_code AS text) IS NULL OR cls.code = CAST(:status_code AS text)
                       )
                   AND (
+                        CAST(:system_role_code AS text) IS NULL OR EXISTS (
+                            SELECT 1
+                            FROM security.user_system_roles fusr
+                            JOIN security.system_roles fsr
+                              ON fsr.system_role_id = fusr.system_role_id
+                            WHERE fusr.user_id = u.user_id AND fusr.revoked_at IS NULL
+                              AND fsr.code = CAST(:system_role_code AS text)
+                        )
+                      )
+                  AND (
                         NOT CAST(:has_cursor AS boolean)
                         OR (lower(u.display_name), u.user_id)
                            > (CAST(:after_name AS text), CAST(:after_user_id AS uuid))
@@ -143,6 +169,7 @@ def list_platform_accounts(
                 "issuer": LOCAL_AUTH_ISSUER,
                 "like_pattern": like_pattern,
                 "status_code": status_code,
+                "system_role_code": system_role_code,
                 "has_cursor": after_name is not None,
                 "after_name": after_name,
                 "after_user_id": after_user_id,
@@ -160,6 +187,7 @@ def list_platform_accounts(
             login_name=row["active_login_name"] or row["pending_login_name"],
             lifecycle_status_code=str(row["lifecycle_status_code"]),
             is_platform_administrator=bool(row["is_platform_administrator"]),
+            system_roles=tuple(str(code) for code in row["system_roles"]),
             has_local_credential=bool(row["has_local_credential"]),
             has_outstanding_activation=bool(row["has_outstanding_activation"]),
             last_login_at=row["last_login_at"],

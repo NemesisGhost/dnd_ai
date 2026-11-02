@@ -35,8 +35,8 @@ export function OneTimeSecretPanel({
     }
 
     return (
-        <section aria-labelledby={headingId} className="access-member-card__body">
-            <h3 id={headingId}>{heading}</h3>
+        <section aria-labelledby={headingId} className="one-time-secret">
+            <h2 id={headingId}>{heading}</h2>
             <p>{description}</p>
             <input type="text" value={secret} readOnly aria-label={secretLabel} />
             <div className="access-role-editor__actions">

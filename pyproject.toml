@@ -127,4 +127,5 @@ markers = [
     "unit: Unit tests with no database",
     "database: Tests requiring PostgreSQL container",
     "scenario: Cross-domain scenario tests",
+    "real_relationship_policy: Use the real Phase 15 relationship-capability policy (no permissive test relaxation)",
 ]

@@ -15,6 +15,7 @@ export type RevokeMembershipRoleStatus =
     | { kind: "pending" }
     | { kind: "success" }
     | { kind: "denied" }
+    | { kind: "last_manager" }
     | { kind: "conflict" }
     | { kind: "error" }
 
@@ -160,6 +161,15 @@ export function useRevokeMembershipRole(
                             setSnapshot({
                                 campaignId: requestCampaignId,
                                 status: { kind: "denied" },
+                            })
+                            return
+                        }
+                        // The only refusal a revoke (which takes no input) gets as a 400 is the
+                        // retention rule: an active campaign keeps at least one access manager.
+                        if (cause.status === 400) {
+                            setSnapshot({
+                                campaignId: requestCampaignId,
+                                status: { kind: "last_manager" },
                             })
                             return
                         }

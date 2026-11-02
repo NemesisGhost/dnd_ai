@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
+import { preferenceWritesSettled } from "./preferenceWrites"
 import {
     recordLastVisitedCampaign,
     setCampaignStartupPreference,
@@ -81,5 +82,53 @@ describe("recordLastVisitedCampaign", () => {
         await expect(recordLastVisitedCampaign("c", "bad")).rejects.toBeInstanceOf(
             UserPreferenceRequestError,
         )
+    })
+})
+
+describe("recordLastVisitedCampaign ordering", () => {
+    it("runs writes one at a time, in issue order, and a bootstrap read waits for them", async () => {
+        const order: string[] = []
+        let releaseFirst: () => void = () => undefined
+        const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+            const id = JSON.parse(String(init?.body)).campaign_id as string
+            order.push(`start ${id}`)
+            if (id === "a") {
+                await new Promise<void>((resolve) => {
+                    releaseFirst = resolve
+                })
+            }
+            order.push(`end ${id}`)
+            return new Response(null, { status: 204 })
+        })
+        vi.stubGlobal("fetch", fetchMock)
+
+        const first = recordLastVisitedCampaign("a", "csrf")
+        const second = recordLastVisitedCampaign("b", "csrf")
+        const settled = preferenceWritesSettled().then(() => order.push("settled"))
+        await Promise.resolve()
+        await Promise.resolve()
+
+        expect(order).toEqual(["start a"])
+
+        releaseFirst()
+        await Promise.all([first, second, settled])
+
+        expect(order).toEqual(["start a", "end a", "start b", "end b", "settled"])
+    })
+
+    it("keeps the queue usable after a failed write", async () => {
+        vi.stubGlobal(
+            "fetch",
+            vi
+                .fn()
+                .mockResolvedValueOnce(new Response(null, { status: 500 }))
+                .mockResolvedValueOnce(new Response(null, { status: 204 })),
+        )
+
+        await expect(recordLastVisitedCampaign("a", "csrf")).rejects.toBeInstanceOf(
+            UserPreferenceRequestError,
+        )
+        await expect(recordLastVisitedCampaign("b", "csrf")).resolves.toBeUndefined()
+        await expect(preferenceWritesSettled()).resolves.toBeUndefined()
     })
 })

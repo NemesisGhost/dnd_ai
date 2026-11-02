@@ -45,7 +45,7 @@ const onCheckSession = vi.fn()
 // Mirrors the real provider: a successful refresh replaces the shared
 // bootstrap with the server's view of what was just saved.
 let serverPreferred: string | null = null
-const refreshOutcome: { fail: boolean } = { fail: false }
+const refreshOutcome: { fail: boolean; unapplied: boolean } = { fail: false, unapplied: false }
 
 function withServerPreference(base: SessionBootstrap): SessionBootstrap {
     return {
@@ -69,6 +69,9 @@ function Harness({ initial }: { initial: SessionBootstrap }) {
     const refresh = async (): Promise<boolean> => {
         if (refreshOutcome.fail) {
             throw new Error("offline")
+        }
+        if (refreshOutcome.unapplied) {
+            return false
         }
         setBootstrap((current) => withServerPreference(current))
         return true
@@ -103,6 +106,7 @@ beforeEach(() => {
     setPreferenceMock.mockReset()
     onCheckSession.mockReset()
     refreshOutcome.fail = false
+    refreshOutcome.unapplied = false
     acceptSaves()
 })
 
@@ -341,5 +345,38 @@ describe("CampaignStartupForm failures", () => {
         expect(saveButton()).toBeEnabled()
         fireEvent.click(screen.getByRole("button", { name: "Check my session" }))
         expect(onCheckSession).toHaveBeenCalledTimes(1)
+    })
+
+    it("says the confirmed save happened, and never that nothing was saved, when the refresh was not applied", async () => {
+        refreshOutcome.unapplied = true
+        acceptSaves()
+        renderForm()
+
+        fireEvent.click(fixedRadio())
+        fireEvent.change(campaignSelect(), { target: { value: "campaign-b" } })
+        fireEvent.click(saveButton())
+
+        const alert = await screen.findByRole("alert")
+        expect(alert).toHaveTextContent("Your preference was saved")
+        expect(alert).toHaveTextContent("could not be confirmed")
+        expect(alert).not.toHaveTextContent("nothing was saved")
+        expect(screen.getByRole("status")).toBeEmptyDOMElement()
+        // The newer draft is kept and the write is not repeated to repair the read.
+        expect(campaignSelect()).toHaveValue("campaign-b")
+        expect(setPreferenceMock).toHaveBeenCalledTimes(1)
+        fireEvent.click(screen.getByRole("button", { name: "Check my session" }))
+        expect(onCheckSession).toHaveBeenCalledTimes(1)
+        expect(setPreferenceMock).toHaveBeenCalledTimes(1)
+    })
+
+    it("still reports a rejected save as refused, with nothing saved", async () => {
+        setPreferenceMock.mockRejectedValue(new UserPreferenceRequestError(403, "no"))
+        renderForm()
+
+        fireEvent.click(fixedRadio())
+        fireEvent.change(campaignSelect(), { target: { value: "campaign-a" } })
+        fireEvent.click(saveButton())
+
+        expect(await screen.findByRole("alert")).toHaveTextContent("nothing was saved")
     })
 })

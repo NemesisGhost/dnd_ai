@@ -12,9 +12,10 @@ import type { SessionBootstrap } from "../types/bootstrap"
 // presentation state and never grants access.
 //
 // Fire-and-forget by design: no reload (that would unmount the page), no
-// retry, no user-visible error. The effect is keyed on the campaign and
-// session, so a stale request from a previous campaign is aborted on
-// change/unmount and can never update state for another campaign.
+// retry, no user-visible error. The write is not aborted when the page is left
+// (an abandoned request may or may not commit, and the next bootstrap read
+// would then report an older campaign); writes are ordered instead, so the
+// latest selection wins, and the response updates no state.
 export function useRecordLastVisitedCampaign(
     campaignId: string | null,
     bootstrap: SessionBootstrap,
@@ -29,16 +30,9 @@ export function useRecordLastVisitedCampaign(
             return
         }
 
-        const controller = new AbortController()
-        recordLastVisitedCampaign(campaignId, csrfToken, controller.signal).catch(
-            () => {
-                // Intentionally ignored.
-            },
-        )
-
-        return () => {
-            controller.abort()
-        }
+        recordLastVisitedCampaign(campaignId, csrfToken).catch(() => {
+            // Intentionally ignored.
+        })
         // browserSessionId re-keys the write when the session changes.
     }, [campaignId, alreadyRecorded, csrfToken, browserSessionId])
 }

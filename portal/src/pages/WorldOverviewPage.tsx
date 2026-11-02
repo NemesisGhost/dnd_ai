@@ -3,20 +3,31 @@ import { Link, useParams } from "react-router"
 import { archiveWorld, restoreWorld, worldPath } from "../api/worlds"
 import { TransitionControls } from "../components/authoring/TransitionControls"
 import { LifecycleBadge } from "../components/authoring/feedback"
+import { StaleReadNotice } from "../components/StaleReadNotice"
 import { TimelineTree } from "../components/TimelineTree"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
+import type { RefetchOutcome } from "../hooks/useAuthoringResource"
+import { useKept } from "../hooks/useKeptResource"
 import { usePageArrival } from "../hooks/usePageArrival"
 import type { WorldDetail } from "../types/worldAuthoring"
 import { ERROR_CODE_MESSAGE } from "../utils/authoringValidation"
+import { worldAccess, worldCan } from "../utils/worldAccess"
 import "../components/authoring/authoring.css"
 
 // A world's overview: details, its timelines as a lineage, the campaigns the
 // caller manages on it, and the actions the *server* says are available. A
 // blocked action is explained with the server's stable reason instead of being
-// hidden or silently disabled.
+// hidden or silently disabled. A world the server returns without
+// `world.manage` (view only) renders read-only: no create, edit, archive,
+// restore, timeline-authoring, or campaign-creation controls or links at all.
 export function WorldOverviewPage() {
     const { worldId = "" } = useParams()
-    const { state, refetch } = useAuthoringResource<WorldDetail>(worldPath(worldId))
+    const url = worldPath(worldId)
+    const { state, refetch } = useAuthoringResource<WorldDetail>(url)
+    // The last world that loaded stays through a failed re-read (after an archive or restore, say),
+    // so the page that reports the save is not replaced by "could not be loaded".
+    const kept = useKept(state, url)
+    const stale = state.kind === "error" && kept !== null
     const headingRef = usePageArrival(state.kind === "ready")
 
     return (
@@ -44,7 +55,7 @@ export function WorldOverviewPage() {
                             <Link to="/worlds">Back to your worlds</Link>
                         </p>
                     </>
-                ) : state.kind === "error" ? (
+                ) : kept === null ? (
                     <>
                         <h1 ref={headingRef} tabIndex={-1}>
                             World
@@ -52,24 +63,110 @@ export function WorldOverviewPage() {
                         <p role="alert">The world could not be loaded. Try reloading the page.</p>
                     </>
                 ) : (
-                    <WorldOverview
-                        world={state.data}
-                        headingRef={headingRef}
-                        refetch={refetch}
-                    />
+                    <>
+                        {stale ? <StaleReadNotice what="world" onRetry={() => void refetch()} /> : null}
+                        {worldAccess(kept) === "edit" ? (
+                            <WorldOverview
+                                world={kept}
+                                headingRef={headingRef}
+                                refetch={refetch}
+                                pageStale={stale}
+                            />
+                        ) : (
+                            <ReadOnlyWorldOverview world={kept} headingRef={headingRef} />
+                        )}
+                    </>
                 )}
             </div>
         </div>
     )
 }
 
+const ROLE_LABEL: Record<string, string> = {
+    world_owner: "Owner",
+    world_viewer: "Viewer",
+    world_editor: "Editor",
+    world_reviewer: "Reviewer",
+    world_reader: "Reader",
+}
+
+interface ReadOnlyWorldOverviewProps {
+    world: WorldDetail
+    headingRef: RefObject<HTMLHeadingElement | null>
+}
+
+function ReadOnlyWorldOverview({ world, headingRef }: ReadOnlyWorldOverviewProps) {
+    // A world role other than Owner, or a permission to host campaigns, opens this limited
+    // overview. What it offers is exactly what the server's capabilities allow (ADR 0020).
+    const base = `/worlds/${encodeURIComponent(world.world_id)}`
+    const canHost = worldCan(world, "campaign.create") && world.lifecycle_status === "active"
+    const canTimeline = worldCan(world, "timeline.manage") && world.lifecycle_status === "active"
+    return (
+        <>
+            <h1 ref={headingRef} tabIndex={-1}>
+                {world.name}
+            </h1>
+            {world.role_codes?.includes("world_owner") && !worldCan(world, "world.manage") ? (
+                <p className="authoring-note">
+                    Managing this world, sharing it and hosting campaigns on it need the game master
+                    system role. Ask an administrator to restore it.
+                </p>
+            ) : null}
+            {world.role_codes && world.role_codes.length > 0 ? (
+                <p>Your role: {world.role_codes.map((code) => ROLE_LABEL[code] ?? code).join(", ")}</p>
+            ) : null}
+            <div className="authoring-actions">
+                {worldCan(world, "world.canon.read") ? (
+                    <Link className="authoring-button" to={`${base}/canon`}>
+                        Published canon
+                    </Link>
+                ) : null}
+                {canTimeline ? (
+                    <Link className="authoring-button" to={`${base}/timelines/new`}>
+                        New timeline
+                    </Link>
+                ) : null}
+                {canHost ? (
+                    <Link className="authoring-button authoring-button--primary" to="/campaigns/new">
+                        Host a campaign here
+                    </Link>
+                ) : null}
+            </div>
+            <p>
+                <span className="authoring-badge">View only</span>{" "}
+                {world.lifecycle_status === "archived" ? <LifecycleBadge status="archived" /> : null}
+            </p>
+            {world.description ? <p>{world.description}</p> : null}
+
+            <section className="authoring-section" aria-labelledby="world-rulesets-heading">
+                <h2 id="world-rulesets-heading">Rulesets</h2>
+                <ul>
+                    {world.allowed_rulesets.map((ruleset) => (
+                        <li key={ruleset.ruleset_id}>
+                            {ruleset.display_name}
+                            {ruleset.is_default ? " (default)" : ""}
+                        </li>
+                    ))}
+                </ul>
+            </section>
+
+            <section className="authoring-section" aria-labelledby="world-timelines-heading">
+                <h2 id="world-timelines-heading">Timelines</h2>
+                <TimelineTree worldId={world.world_id} timelines={world.timelines} linked={false} />
+            </section>
+        </>
+    )
+}
+
 interface WorldOverviewProps {
     world: WorldDetail
     headingRef: RefObject<HTMLHeadingElement | null>
-    refetch: () => Promise<void>
+    refetch: () => Promise<RefetchOutcome>
+    // The page's latest read failed and `world` is the last that loaded.
+    pageStale: boolean
 }
 
-function WorldOverview({ world, headingRef, refetch }: WorldOverviewProps) {
+function WorldOverview({ world, headingRef, refetch, pageStale }: WorldOverviewProps) {
     const available = new Set(world.available_actions)
     // A transition blocked only because the record is in the wrong state is
     // obvious from the state itself; every other reason is worth explaining.
@@ -102,6 +199,24 @@ function WorldOverview({ world, headingRef, refetch }: WorldOverviewProps) {
                         New timeline
                     </Link>
                 ) : null}
+                {available.has("create_calendar") ? (
+                    <Link
+                        className="authoring-button"
+                        to={`/worlds/${world.world_id}/calendars/new`}
+                    >
+                        New calendar
+                    </Link>
+                ) : null}
+                {worldCan(world, "world.share") ? (
+                    <Link className="authoring-button" to={`/worlds/${world.world_id}/sharing`}>
+                        Sharing
+                    </Link>
+                ) : null}
+                {worldCan(world, "world.canon.read") ? (
+                    <Link className="authoring-button" to={`/worlds/${world.world_id}/canon`}>
+                        Published canon
+                    </Link>
+                ) : null}
                 {available.has("create_campaign") ? (
                     <Link
                         className="authoring-button authoring-button--primary"
@@ -120,6 +235,7 @@ function WorldOverview({ world, headingRef, refetch }: WorldOverviewProps) {
                     archive={(body, ctx) => archiveWorld(world.world_id, body, ctx)}
                     restore={(body, ctx) => restoreWorld(world.world_id, body, ctx)}
                     refetch={refetch}
+                    pageStale={pageStale}
                     archiveDescription="An archived world is read-only until it is restored. Its timelines and campaigns are not changed, and it cannot be archived while it has active campaigns."
                     restoreDescription="The world becomes editable again. Its timelines and campaigns are not changed."
                 />

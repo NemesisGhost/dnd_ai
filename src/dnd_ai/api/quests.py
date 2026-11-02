@@ -145,7 +145,12 @@ from dnd_ai.queries.entity_lifecycle import lifecycle_hidden_entity_ids
 from dnd_ai.queries.quest import get_quest_view, list_campaign_quests
 
 from ._shared import timeline_world_id
-from .access import require_campaign_capability, resolve_party_perspective
+from .access import (
+    RecordAuthoringResponse,
+    record_authoring_response,
+    require_campaign_capability,
+    resolve_party_perspective,
+)
 from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
@@ -221,6 +226,9 @@ class QuestStageResponse(BaseModel):
 
 class QuestResponse(BaseModel):
     quest_id: uuid.UUID
+    # What the route's caller may do to this quest's definition (never to its progress, which is
+    # campaign state). Set only by the detail route.
+    authoring: RecordAuthoringResponse | None = None
     name: str
     status_code: str | None
     stages: list[QuestStageResponse]
@@ -322,6 +330,33 @@ def resolve_quest_response(
     character_id: uuid.UUID | None,
     party_id: uuid.UUID | None,
 ) -> QuestResponse | None:
+    """The caller-facing response, carrying what the *caller's* access may do to the definition. A
+    member preview passes the subject's access, so a preview stays byte-identical to the subject's
+    own request."""
+    response = _resolve_quest_response_inner(
+        connection,
+        access=access,
+        campaign_id=campaign_id,
+        quest_id=quest_id,
+        character_id=character_id,
+        party_id=party_id,
+    )
+    if response is not None:
+        response.authoring = record_authoring_response(
+            connection, access=access, entity_type_code="quest"
+        )
+    return response
+
+
+def _resolve_quest_response_inner(
+    connection: Connection,
+    *,
+    access: AccessContext,
+    campaign_id: uuid.UUID,
+    quest_id: uuid.UUID,
+    character_id: uuid.UUID | None,
+    party_id: uuid.UUID | None,
+) -> QuestResponse | None:
     """The exact audience-scoped `QuestResponse` `access` would see for
     `quest_id` in `campaign_id`, or `None` for the identical non-disclosing
     "this caller may not see this quest at all" case `get_quest_endpoint`
@@ -378,6 +413,7 @@ def resolve_quest_response(
         connection,
         world_id=timeline_world_id(connection, access.timeline_id),
         mode="reference",
+        viewer_user_id=access.user_id,
         can_edit_canon=is_gm,
     ):
         return None
@@ -534,6 +570,7 @@ def list_quests_endpoint(
         connection,
         world_id=world_id,
         mode="browse",
+        viewer_user_id=access.user_id,
         can_edit_canon=is_gm,
         include_noncanon=is_gm,
         include_archived=False,

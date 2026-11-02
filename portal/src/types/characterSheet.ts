@@ -1,3 +1,5 @@
+import type { CharacterKind } from "./character"
+
 export interface CharacterSheetClassLevel {
     class_id: string
     class_code: string
@@ -103,6 +105,7 @@ export interface CharacterSheetMovement {
 export interface CharacterSheet {
     character_id: string
     name: string
+    character_kind: CharacterKind
     species_code: string
     species_display_name: string
     size_category: string

@@ -62,6 +62,26 @@ describe("WorldItemDetailPage", () => {
             is_destroyed: null,
         })
 
+        // Origin notes the audience may not see are simply "Not recorded"; the state is said once.
         expect(screen.getAllByText("Not recorded").length).toBeGreaterThan(0)
+        expect(screen.getByText(/Not in play yet/)).toBeInTheDocument()
+        expect(screen.queryByText("Quantity")).not.toBeInTheDocument()
+        expect(screen.queryByText("Condition")).not.toBeInTheDocument()
+    })
+
+    it("words an item with state but no recorded damage without inventing a condition", () => {
+        renderPage({
+            ...itemFixture,
+            condition_percentage: null,
+            charges_current: null,
+            charges_maximum: null,
+            is_equipped: false,
+        })
+
+        expect(screen.getByRole("heading", { level: 2, name: "In play" })).toBeInTheDocument()
+        expect(screen.getByText("No damage recorded")).toBeInTheDocument()
+        expect(screen.queryByText("Charges")).not.toBeInTheDocument()
+        expect(screen.queryByText("Undamaged")).not.toBeInTheDocument()
+        expect(screen.queryByText("100%")).not.toBeInTheDocument()
     })
 })

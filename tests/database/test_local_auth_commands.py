@@ -919,13 +919,13 @@ def test_admin_revoke_all_browser_sessions_is_idempotent(
 def _neutralize_other_active_administrators(
     db_connection: Connection, *, keep: set[uuid.UUID]
 ) -> None:
-    """Marks every `is_platform_administrator` user other than `keep`
+    """Marks every system-`admin` user other than `keep`
     inactive, *on this connection's own uncommitted transaction only* —
     `db_connection` is always rolled back at the end of the test that
     calls this, so this never durably affects the shared `postgres_engine`
     database other tests in the same session rely on. Needed because the
     last-active-administrator invariant is a genuinely global count
-    (`security.users.is_platform_administrator` has no campaign/tenant
+    (a system `admin` assignment has no campaign/tenant
     scoping), and this shared session database routinely already has other
     committed administrators from earlier tests/fixtures by the time any
     one test runs — without neutralizing them first, a test cannot reduce
@@ -933,9 +933,14 @@ def _neutralize_other_active_administrators(
     inactive_status = status_id(db_connection, "lifecycle_statuses", "inactive")
     db_connection.execute(
         text("""
-            UPDATE security.users
+            UPDATE security.users u
             SET lifecycle_status_id = :status
-            WHERE is_platform_administrator AND NOT (user_id = ANY(:keep))
+            WHERE EXISTS (
+                        SELECT 1 FROM security.user_system_roles usr
+                        JOIN security.system_roles sr ON sr.system_role_id = usr.system_role_id
+                        WHERE usr.user_id = u.user_id AND usr.revoked_at IS NULL
+                          AND sr.code = 'admin'
+                    ) AND NOT (u.user_id = ANY(:keep))
         """),
         {"status": inactive_status, "keep": list(keep)},
     )
@@ -947,7 +952,12 @@ def _active_administrator_count(connection: Connection) -> int:
             SELECT count(*)
             FROM security.users u
             JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
-            WHERE u.is_platform_administrator AND ls.code = 'active'
+            WHERE EXISTS (
+                        SELECT 1 FROM security.user_system_roles usr
+                        JOIN security.system_roles sr ON sr.system_role_id = usr.system_role_id
+                        WHERE usr.user_id = u.user_id AND usr.revoked_at IS NULL
+                          AND sr.code = 'admin'
+                    ) AND ls.code = 'active'
         """)
     ).scalar_one()
 
@@ -1085,7 +1095,12 @@ def test_concurrent_disable_cannot_leave_zero_active_administrators(
                     SELECT u.user_id
                     FROM security.users u
                     JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
-                    WHERE u.is_platform_administrator AND ls.code = 'active'
+                    WHERE EXISTS (
+                        SELECT 1 FROM security.user_system_roles usr
+                        JOIN security.system_roles sr ON sr.system_role_id = usr.system_role_id
+                        WHERE usr.user_id = u.user_id AND usr.revoked_at IS NULL
+                          AND sr.code = 'admin'
+                    ) AND ls.code = 'active'
                 """)
             )
         ]
@@ -1132,7 +1147,12 @@ def test_concurrent_disable_cannot_leave_zero_active_administrators(
                     SELECT count(*)
                     FROM security.users u
                     JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
-                    WHERE u.is_platform_administrator AND ls.code = 'active'
+                    WHERE EXISTS (
+                        SELECT 1 FROM security.user_system_roles usr
+                        JOIN security.system_roles sr ON sr.system_role_id = usr.system_role_id
+                        WHERE usr.user_id = u.user_id AND usr.revoked_at IS NULL
+                          AND sr.code = 'admin'
+                    ) AND ls.code = 'active'
                       AND u.user_id IN (:a, :b)
                 """),
                 {"a": admin_a, "b": admin_b},

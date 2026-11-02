@@ -8,6 +8,7 @@ import type {
 interface CampaignQuestsBoundaryProps {
     campaignId: string
     characterId: string | null
+    partyId?: string | null
     children: (
         quests: CampaignQuestListItem[],
     ) => ReactNode
@@ -16,11 +17,13 @@ interface CampaignQuestsBoundaryProps {
 export function CampaignQuestsBoundary({
     campaignId,
     characterId,
+    partyId = null,
     children,
 }: CampaignQuestsBoundaryProps) {
     const { state, retry } = useCampaignQuests(
         campaignId,
         characterId,
+        partyId,
     )
 
     if (state.status === "loading") {

@@ -155,6 +155,7 @@ def _create_fixture(connection: Connection) -> _Fixture:
     assert isinstance(timeline_id, uuid.UUID)
 
     world_time_id = connection.execute(
+        # phase14-direct-insert: allowed (disposable smoke-test world, no acting user)
         text("""
             INSERT INTO core.world_times (world_id, world_time_precision_id, year, sort_key)
             VALUES (
@@ -243,6 +244,7 @@ def _create_fixture(connection: Connection) -> _Fixture:
         assert isinstance(entity_id, uuid.UUID)
         connection.execute(
             text("""
+                -- authored-content-direct-insert: allowed (throwaway smoke-test fixture, not authored content)
                 INSERT INTO character.characters (character_id, species_id, size_category)
                 VALUES (:c, :s, 'medium')
             """),
@@ -255,6 +257,7 @@ def _create_fixture(connection: Connection) -> _Fixture:
 
     party_id = connection.execute(
         text("""
+            -- authored-content-direct-insert: allowed (throwaway smoke-test fixture)
             INSERT INTO campaign.parties (world_id, name)
             VALUES (:world, 'Smoke Test Party')
             RETURNING party_id
@@ -263,6 +266,7 @@ def _create_fixture(connection: Connection) -> _Fixture:
     ).scalar()
     assert isinstance(party_id, uuid.UUID)
     connection.execute(
+        # authored-content-direct-insert: allowed (throwaway smoke-test fixture)
         text(
             "INSERT INTO campaign.campaign_parties (campaign_id, party_id) VALUES (:campaign, :party)"
         ),
@@ -270,12 +274,22 @@ def _create_fixture(connection: Connection) -> _Fixture:
     )
     connection.execute(
         text("""
+            -- authored-content-direct-insert: allowed (throwaway smoke-test fixture)
             INSERT INTO campaign.party_memberships
                 (timeline_id, party_id, member_entity_id, effective_from_world_time_id)
             VALUES (:timeline, :party, :member, :world_time)
         """),
         {"timeline": timeline_id, "party": party_id, "member": pc_id, "world_time": world_time_id},
     )
+    connection.execute(
+        text("""
+            -- authored-content-direct-insert: allowed (throwaway smoke-test fixture)
+            INSERT INTO campaign.timeline_clocks (timeline_id, current_world_time_id)
+            VALUES (:timeline, :world_time)
+            ON CONFLICT (timeline_id) DO NOTHING
+        """),
+        {"timeline": timeline_id, "world_time": world_time_id},
+    )  # B1-DEF7a: membership is current only against the campaign clock
 
     npc_role_id = _lookup_id(connection, "ai", "agent_roles", "agent_role_id", "npc_portrayal")
     npc_agent_id = connection.execute(

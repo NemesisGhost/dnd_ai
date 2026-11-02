@@ -180,7 +180,7 @@ export function CampaignStartupForm({
             )}
             {status.kind === "unconfirmed" && (
                 <p role="alert" className="campaign-startup-form__error">
-                    Your preference may have been saved, but it could not be
+                    Your preference was saved, but the latest settings could not be
                     confirmed.{" "}
                     <button type="button" onClick={onCheckSession}>
                         Check my session

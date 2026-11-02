@@ -124,7 +124,9 @@ def _reveal_knowledge_to_party_impl(
     objective_impl`'s docstring for the composable-implementation/public-
     wrapper pattern this mirrors."""
     validate_session_campaign(connection, campaign_id=campaign_id, session_id=session_id)
-    validate_campaign_party(connection, campaign_id=campaign_id, party_id=party_id)
+    validate_campaign_party(
+        connection, campaign_id=campaign_id, party_id=party_id, require_active=True
+    )
 
     world_id = _lock_knowledge_item(connection, knowledge_item_id)
     require_state_targetable(connection, knowledge_item_id)

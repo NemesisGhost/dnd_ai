@@ -41,7 +41,14 @@ from dnd_ai.api.idempotency import (
     complete_campaign_creation_request,
 )
 from dnd_ai.commands.campaigns import create_campaign, grant_timeline_bootstrap
-from tests.factories import make_ruleset_version_for_world, make_timeline, make_user, make_world
+from dnd_ai.commands.worlds import claim_unowned_world
+from tests.factories import (
+    make_ruleset_version_for_world,
+    make_system_role_assignment,
+    make_timeline,
+    make_user,
+    make_world,
+)
 
 pytestmark = pytest.mark.database
 
@@ -54,6 +61,7 @@ def _make_campaign(connection: Connection, slug: str) -> tuple[uuid.UUID, uuid.U
     timeline_id = make_timeline(connection, world_id, is_primary=True)
     ruleset_version_id = make_ruleset_version_for_world(connection, world_id)
     creator_user_id = make_user(connection, f"{slug} creator")
+    make_system_role_assignment(connection, creator_user_id, "gm")
     grant_timeline_bootstrap(
         connection, timeline_id=timeline_id, granted_to_user_id=creator_user_id
     )
@@ -126,6 +134,7 @@ def test_deleting_a_campaign_a_completed_reservation_still_references_is_rejecte
     timeline_id = make_timeline(db_connection, world_id, is_primary=True)
     ruleset_version_id = make_ruleset_version_for_world(db_connection, world_id)
     creator_user_id = make_user(db_connection, f"{slug} creator")
+    make_system_role_assignment(db_connection, creator_user_id, "gm")
     grant_timeline_bootstrap(
         db_connection, timeline_id=timeline_id, granted_to_user_id=creator_user_id
     )
@@ -136,6 +145,9 @@ def test_deleting_a_campaign_a_completed_reservation_still_references_is_rejecte
         name=f"{slug} first",
         creator_user_id=creator_user_id,
     )
+    # A second campaign on a used timeline needs world authority (`timeline.manage`), not a
+    # borrowed `access.manage` (ADR 0020): the creator becomes the world's owner.
+    claim_unowned_world(db_connection, world_id=world_id, user_id=creator_user_id)
 
     key = f"fk-policy-{uuid.uuid4().hex[:8]}"
     payload = {"timeline_id": str(timeline_id), "name": "reservation payload"}

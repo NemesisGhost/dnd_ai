@@ -61,6 +61,7 @@ from tests.factories import (
     make_role,
     make_role_capability,
     make_timeline,
+    make_timeline_clock,
     make_user,
     make_world,
     make_world_time,
@@ -75,6 +76,8 @@ class Fixture:
         self.world_id = make_world(connection, slug=slug)
         self.timeline_id = make_timeline(connection, self.world_id, is_primary=True)
         self.world_time_id = make_world_time(connection, self.world_id, 100)
+        # Party membership is current only against the effective campaign clock (B1-DEF7a).
+        make_timeline_clock(connection, self.timeline_id, self.world_time_id)
         # "pending" sidesteps the active-campaign access-manager retention
         # invariant (revision 080) — these tests grant campaign.view/
         # canon.edit, not access.manage, and don't otherwise care about

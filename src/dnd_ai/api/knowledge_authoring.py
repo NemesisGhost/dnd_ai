@@ -27,6 +27,7 @@ from dnd_ai.domain.knowledge_authoring import (
     SENSITIVITIES,
     STATEMENT_MAX_LENGTH,
 )
+from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.knowledge_authoring import (
     KnowledgeAuthoringView,
     get_knowledge_authoring,
@@ -44,9 +45,10 @@ from ._content_support import (
     clean_note,
     decode_name_cursor,
     reference_options_page,
+    write_receipt,
 )
 from ._shared import timeline_world_id
-from .access import require_campaign_capability
+from .access import can_create_definitions, require_campaign_capability, restrict_authoring_view
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .errors import NotFoundError
@@ -58,6 +60,13 @@ _BASE = "/campaigns/{campaign_id}/authoring/knowledge"
 _CAPABILITY = "canon.edit"
 
 _Access = Annotated[AccessContext, Depends(require_campaign_capability(_CAPABILITY))]
+# Reads of the private side of shared world canon (drafts, GM-only prep, revisions,
+# provenance, sources, the review queue) also need `world.canon.read_private`
+# (docs/adr/0020-scoped-system-world-and-campaign-roles.md, D6).
+_PrivateRead = Annotated[
+    AccessContext,
+    Depends(require_campaign_capability(_CAPABILITY, world_capability=WORLD_CANON_READ_PRIVATE)),
+]
 _Conn = Annotated[Connection, Depends(get_connection)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
@@ -113,19 +122,15 @@ def _view_json(view: KnowledgeAuthoringView, *, changed: bool | None = None) -> 
 def _response(
     connection: Connection, result: ContentWriteResult, *, changed: bool
 ) -> dict[str, Any]:
-    view = get_knowledge_authoring(
-        connection, world_id=result.world_id, knowledge_item_id=result.entity_id
-    )
-    assert view is not None
-    return _view_json(view, changed=changed)
+    del connection
+    return write_receipt(result, "knowledge_item_id", changed=changed)
 
 
 @router.get(_BASE + "/options")
-def knowledge_options_endpoint(access: _Access, connection: _Conn) -> dict[str, Any]:
-    del access
+def knowledge_options_endpoint(access: _PrivateRead, connection: _Conn) -> dict[str, Any]:
     types, truths = list_knowledge_catalogs(connection)
     return {
-        "can_create": True,
+        "can_create": can_create_definitions(connection, access=access),
         "knowledge_types": [{"value": c, "label": label} for c, label in types],
         "truth_statuses": [{"value": c, "label": label} for c, label in truths],
         "sensitivities": [{"value": c, "label": label} for c, label in SENSITIVITIES],
@@ -138,7 +143,7 @@ def knowledge_options_endpoint(access: _Access, connection: _Conn) -> dict[str, 
 
 @router.get(_BASE + "/subject-options")
 def knowledge_subject_options_endpoint(
-    access: _Access,
+    access: _PrivateRead,
     connection: _Conn,
     q: Annotated[str | None, Query(max_length=200)] = None,
     limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
@@ -203,6 +208,9 @@ def create_knowledge_endpoint(
         access=access,
         correlation_id=correlation_id,
         reason=None,
+        view_loader=lambda: get_knowledge_authoring(
+            connection, world_id=result.world_id, knowledge_item_id=result.entity_id
+        ),
     )
     response = _response(connection, result, changed=True)
     finish_campaign_idempotency(connection, idem, status_code=201, body=response)
@@ -211,7 +219,7 @@ def create_knowledge_endpoint(
 
 @router.get(_BASE + "/{knowledge_item_id}")
 def get_knowledge_authoring_endpoint(
-    knowledge_item_id: uuid.UUID, access: _Access, connection: _Conn
+    knowledge_item_id: uuid.UUID, access: _PrivateRead, connection: _Conn
 ) -> dict[str, Any]:
     view = get_knowledge_authoring(
         connection,
@@ -220,7 +228,7 @@ def get_knowledge_authoring_endpoint(
     )
     if view is None:
         raise NotFoundError()
-    return _view_json(view)
+    return restrict_authoring_view(connection, access=access, body=_view_json(view))
 
 
 @router.post(_BASE + "/{knowledge_item_id}/update")
@@ -265,6 +273,9 @@ def update_knowledge_endpoint(
             access=access,
             correlation_id=correlation_id,
             reason=clean_note(body.change_note),
+            view_loader=lambda: get_knowledge_authoring(
+                connection, world_id=result.world_id, knowledge_item_id=result.entity_id
+            ),
         )
     response = _response(connection, result, changed=result.changed)
     finish_campaign_idempotency(connection, idem, status_code=200, body=response)

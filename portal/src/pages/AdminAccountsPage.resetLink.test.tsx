@@ -33,6 +33,7 @@ function account(id: string, name: string): PlatformAccount {
         login_name: id,
         lifecycle_status_code: "active",
         is_platform_administrator: false,
+        system_roles: ["player"],
         has_local_credential: true,
         has_outstanding_activation: false,
         last_login_at: null,
@@ -44,7 +45,10 @@ const page = {
     items: [account("user-1", "Alice Example"), account("user-2", "Bob Example")],
     next_cursor: null,
 }
-const bootstrap = { ...sessionBootstrapFixture, is_platform_administrator: true }
+const bootstrap = {
+    ...sessionBootstrapFixture,
+    global_capabilities: ["accounts.manage", "system_roles.manage"],
+}
 
 function issued(id: string, token: string) {
     return { user_id: id, raw_reset_token: token, expires_at: "2026-10-01T00:00:00Z" }

@@ -83,7 +83,7 @@ describe("CreateLocationPage", () => {
         const { server } = setup()
         await ready()
         expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1)
-        expect(screen.getByRole("heading", { level: 1, name: "New location" })).toHaveFocus()
+        await waitFor(() => expect(screen.getByRole("heading", { level: 1, name: "New location" })).toHaveFocus())
         expect(server.callsTo("POST", /./)).toEqual([])
     })
 

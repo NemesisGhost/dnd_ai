@@ -1,7 +1,7 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { TEST_CSRF, installMockServer, renderAuthoringRoutes } from "../test/authoringHarness"
-import { CreateKnowledgePage, EditKnowledgePage } from "./KnowledgeAuthoringPages"
+import { CreateKnowledgePage } from "./KnowledgeAuthoringPages"
 
 const OPTIONS = {
     can_create: true,
@@ -38,8 +38,6 @@ const VIEW = {
 
 const OPTIONS_PATH = "/campaigns/c1/authoring/knowledge/options"
 const CREATE_PATH = "/campaigns/c1/authoring/knowledge"
-const VIEW_PATH = "/campaigns/c1/authoring/knowledge/k1"
-const UPDATE_PATH = "/campaigns/c1/authoring/knowledge/k1/update"
 
 function mockSubjects(server: ReturnType<typeof installMockServer>) {
     server.on("GET", /\/authoring\/knowledge\/subject-options/, {
@@ -153,93 +151,5 @@ describe("CreateKnowledgePage", () => {
             routes: [{ path: "/app/:campaignId/knowledge/new", element: <CreateKnowledgePage /> }],
         })
         expect(await screen.findByRole("alert")).toHaveTextContent("do not have permission")
-    })
-})
-
-describe("EditKnowledgePage", () => {
-    function setup(initial: object = VIEW) {
-        const server = installMockServer()
-        let current: object = initial
-        server.on("GET", VIEW_PATH, () => ({ body: current }))
-        server.on("GET", OPTIONS_PATH, { body: OPTIONS })
-        mockSubjects(server)
-        const rendered = renderAuthoringRoutes({
-            initialEntry: "/app/c1/knowledge/k1/edit",
-            routes: [
-                { path: "/app/:campaignId/knowledge/:knowledgeItemId/edit", element: <EditKnowledgePage /> },
-                { path: "/app/:campaignId/knowledge/:knowledgeItemId", element: <p>Knowledge detail page</p> },
-            ],
-        })
-        return { server, setCurrent: (next: object) => (current = next), ...rendered }
-    }
-
-    it("pre-fills the claim", async () => {
-        setup()
-        await screen.findByRole("textbox", { name: /Statement/ })
-        expect(screen.getByRole("textbox", { name: /Statement/ })).toHaveValue("The duke is a vampire.")
-        expect(screen.getByRole("combobox", { name: /Type/ })).toHaveValue("secret")
-        expect(screen.getByRole("combobox", { name: /Truth/ })).toHaveValue("true")
-        expect(screen.getByRole("combobox", { name: "Subject" })).toHaveValue("Keep")
-    })
-
-    it("saves against the loaded version", async () => {
-        const { server } = setup()
-        server.on("POST", UPDATE_PATH, { body: { ...VIEW, row_version: 4 } })
-        await screen.findByRole("textbox", { name: /Statement/ })
-        fireEvent.change(screen.getByRole("combobox", { name: /Truth/ }), { target: { value: "false" } })
-        fireEvent.click(screen.getByRole("button", { name: "Save" }))
-        await screen.findByText("Knowledge detail page")
-        expect(server.callsTo("POST", UPDATE_PATH)[0]!.body).toEqual({
-            expected_row_version: 3,
-            statement: "The duke is a vampire.",
-            knowledge_type: "secret",
-            truth_status: "false",
-            sensitivity: "secret",
-            subject_entity_id: "l1",
-            change_note: null,
-        })
-    })
-
-    it("freezes statement, type, and subject once someone knows the claim", async () => {
-        setup({ ...VIEW, in_use: true, field_locks: ["statement", "knowledge_type", "subject"] })
-        await screen.findByRole("textbox", { name: /Statement/ })
-        expect(screen.getByRole("textbox", { name: /Statement/ })).toBeDisabled()
-        expect(screen.getByRole("combobox", { name: /Type/ })).toBeDisabled()
-        expect(screen.getByRole("combobox", { name: "Subject" })).toBeDisabled()
-        expect(screen.getByRole("combobox", { name: /Truth/ })).toBeEnabled()
-        expect(screen.getByRole("combobox", { name: /Sensitivity/ })).toBeEnabled()
-    })
-
-    it("keeps the user's values across a stale write", async () => {
-        const { server, setCurrent } = setup()
-        server.on("POST", UPDATE_PATH, {
-            status: 409,
-            body: { error: { code: "stale_write", message: "m", correlation_id: "c" } },
-        })
-        await screen.findByRole("textbox", { name: /Statement/ })
-        fireEvent.change(screen.getByRole("textbox", { name: /Statement/ }), { target: { value: "Mine" } })
-        fireEvent.click(screen.getByRole("button", { name: "Save" }))
-        expect(await screen.findByRole("alert")).toHaveTextContent("Someone else changed this record")
-        setCurrent({ ...VIEW, statement: "Theirs", row_version: 6 })
-        fireEvent.click(screen.getByRole("button", { name: "Load latest version" }))
-        await waitFor(() =>
-            expect(screen.getByRole("textbox", { name: /Statement/ })).toHaveValue("Theirs"),
-        )
-        expect(screen.getByRole("region", { name: "Your unsaved changes" })).toHaveTextContent("Mine")
-    })
-
-    it("shows the non-disclosing state for a missing claim", async () => {
-        const server = installMockServer()
-        server.on("GET", VIEW_PATH, { status: 404 })
-        server.on("GET", OPTIONS_PATH, { body: OPTIONS })
-        renderAuthoringRoutes({
-            initialEntry: "/app/c1/knowledge/k1/edit",
-            routes: [
-                { path: "/app/:campaignId/knowledge/:knowledgeItemId/edit", element: <EditKnowledgePage /> },
-            ],
-        })
-        expect(await screen.findByRole("alert")).toHaveTextContent(
-            "This knowledge claim does not exist, or you do not have access to it.",
-        )
     })
 })

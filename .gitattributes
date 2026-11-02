@@ -22,3 +22,7 @@ tests/database/test_api_campaigns.py whitespace=cr-at-eol
 # attribute.
 src/dnd_ai/api/auth.py whitespace=cr-at-eol
 tests/database/test_role_grants.py whitespace=cr-at-eol
+
+# Same rationale: src/dnd_ai/api/character_state.py is stored with CRLF line endings
+# (as on main), so its added lines read as trailing whitespace to `git diff --check`.
+src/dnd_ai/api/character_state.py whitespace=cr-at-eol

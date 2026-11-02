@@ -36,6 +36,7 @@ from dnd_ai.domain.content_authoring import (
     location_category,
     normalize_location_fields,
 )
+from dnd_ai.domain.world_authority import WORLD_CANON_EDIT
 
 from ._content import (
     ContentWriteResult,
@@ -120,7 +121,12 @@ def create_location(
         population=population,
         building_use=building_use,
     )
-    scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_authoring_scope(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        world_capability=WORLD_CANON_EDIT,
+    )
     if parent_location_id is not None:
         _lock_parent(connection, world_id=scope.world_id, parent_location_id=parent_location_id)
 
@@ -237,7 +243,12 @@ def update_location(
     category's typed fields). Category is immutable. An identical resubmission
     is a no-op: nothing is written and `row_version` does not move."""
     normalize_reason(change_note)
-    scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_authoring_scope(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        world_capability=WORLD_CANON_EDIT,
+    )
 
     current_parent_hint = connection.execute(
         text("SELECT parent_location_id FROM world.locations WHERE location_id = :l"),

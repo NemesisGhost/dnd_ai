@@ -23,6 +23,12 @@ itself already performs per campaign:
   a member of one is not thereby proven to still be entitled to see it
   listed, and `resolve_access_context` does not filter on this itself, so
   this module applies it explicitly);
+- only campaigns where the resolved access currently carries
+  `campaign.view` — the same capability every campaign read route requires
+  (`dnd_ai.api.access.require_campaign_capability`). An active membership
+  whose role assignments are all revoked or expired, or that never had one,
+  is not a selectable campaign: offering it would land the portal on routes
+  that each answer 403;
 - roles: only `security.membership_roles` rows currently in force
   (`revoked_at IS NULL`, `expires_at IS NULL OR expires_at > now()`,
   `security.roles.is_active`) for that membership — the same conditions
@@ -48,14 +54,17 @@ itself already performs per campaign:
   no capabilities at all (`security.character_relationship_type_
   capabilities` has no row for it) is not offered as a selectable
   perspective, since there would be nothing authorized to do through it;
-- `authorized_parties` under each character perspective: only populated
-  when the user holds `character.view_knowledge` for that character — the
-  capability `dnd_ai.api.access.resolve_party_perspective` itself requires
-  before it will authorize any party perspective. A character that is
-  merely discoverable (a relationship mapped to only `character.discover`,
-  say) still appears in the perspective list, but with `authorized_parties
-  = ()`, so the portal is never handed a `(character_id, party_id)` pair
-  the resolver would reject.
+- a character is listed as a perspective only when the user holds
+  `character.view_knowledge` for it (Phase 15 checkpoint 15.2A-1) — of the
+  built-in relationship types: owner, primary_controller, co_controller, and
+  portrayer. A viewer-type relationship (or a former_controller one) never makes
+  a character selectable;
+- `authorized_parties` under each character perspective: the parties the character is a member
+  of at the campaign's effective time (B1-DEF7a: the clock lies in the membership's half-open
+  period; a campaign with no clock has `current_time_set=False` and lists none, never falling back
+  to open-ended memberships), which `dnd_ai.api.access.resolve_party_perspective`
+  will accept (it requires the same `character.view_knowledge`), so the portal
+  is never handed a `(character_id, party_id)` pair the resolver would reject.
 
 Campaign startup (docs/UI_DESIGN.md §4.2, §4.7):
 
@@ -78,10 +87,17 @@ Campaign startup (docs/UI_DESIGN.md §4.2, §4.7):
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy import Connection, text
 
-from dnd_ai.domain.access import is_platform_administrator, resolve_access_context
+from dnd_ai.domain.access import AccessContext, resolve_access_context
+from dnd_ai.queries.party_membership_period import (
+    CURRENT_PARTY_MEMBERSHIP_SQL,
+    membership_clock_params,
+    resolve_membership_clock,
+)
+from dnd_ai.queries.world_authority import resolve_world_authority
 
 # The capability `dnd_ai.api.access.resolve_party_perspective` requires the
 # caller to hold for a character before it will authorize *any* party
@@ -90,13 +106,18 @@ from dnd_ai.domain.access import is_platform_administrator, resolve_access_conte
 # advertised under it — see the party-row query below.
 _KNOWLEDGE_PERSPECTIVE_CAPABILITY = "character.view_knowledge"
 
+# The capability every campaign read route requires. A campaign is offered
+# (listed, selected at startup, accepted as a stored preference) only while
+# the caller holds it — never on the strength of a bare membership.
+CAMPAIGN_VIEW_CAPABILITY = "campaign.view"
+
 
 @dataclass(frozen=True)
 class PartyPerspectiveRefView:
     """A party the portal may legitimately request a party-scoped
     knowledge/quest perspective through *for the character this appears
-    under* — the character is a current `campaign.party_memberships` member
-    of it on the campaign's own timeline, and the party is associated with
+    under* — the character is a `campaign.party_memberships` member of it
+    at the campaign's effective time (B1-DEF7a) on the campaign's own timeline, and the party is associated with
     the campaign. Exactly the pair `dnd_ai.api.access.
     resolve_party_perspective` will accept, so the portal never has to
     guess a `party_id` (Phase 13D §4 — "do not expose parties or characters
@@ -125,6 +146,23 @@ class CampaignBootstrapView:
     character_perspectives: tuple[CharacterPerspectiveView, ...]
     selected_character_id: uuid.UUID | None
     capabilities: tuple[str, ...]
+    # The caller's capabilities on this campaign's *world* (docs/adr/0020-scoped-system-
+    # world-and-campaign-roles.md): independent of `capabilities`, which are campaign-
+    # scoped. Lets the portal present shared-canon authoring read-only without inferring
+    # it from a campaign role.
+    world_capabilities: tuple[str, ...] = ()
+    # True when the campaign's timeline has an effective clock. False means current party
+    # membership is undetermined, so no `authorized_parties` are listed (B1-DEF7a).
+    current_time_set: bool = True
+
+
+def _world_capabilities(
+    connection: Connection, user_id: uuid.UUID, world_id: uuid.UUID | None
+) -> tuple[str, ...]:
+    if world_id is None:
+        return ()
+    authority = resolve_world_authority(connection, user_id=user_id, world_id=world_id)
+    return () if authority is None else tuple(sorted(authority.capabilities))
 
 
 STARTUP_MODE_RESUME_LAST_VISITED = "resume_last_visited"
@@ -159,13 +197,6 @@ class SessionBootstrapView:
 
     user_id: uuid.UUID
     display_name: str
-    # Additive Phase 13E checkpoint 9 field: the only server-authoritative
-    # signal the portal has for whether to render an admin surface at all
-    # (CP 10's /admin/accounts page) — campaign-scoped `access.manage`
-    # grants nothing here; this is the same campaign-independent primitive
-    # `dnd_ai.commands.local_auth._create_local_account_impl`/`_issue_
-    # password_reset_token_impl` already gate on.
-    is_platform_administrator: bool
     startup_campaign_id: uuid.UUID | None
     campaign_preferences: CampaignPreferencesView
     campaigns: tuple[CampaignBootstrapView, ...]
@@ -185,30 +216,53 @@ _BOOTSTRAP_SCOPE_FROM_WHERE = """
 """
 
 
+def _campaign_view_access(
+    connection: Connection, *, user_id: uuid.UUID, campaign_id: uuid.UUID
+) -> AccessContext | None:
+    """`resolve_access_context` for `campaign_id`, but only while it carries
+    `campaign.view`; `None` otherwise (no membership, or a membership with no
+    role assignment currently in force that grants it)."""
+    access = resolve_access_context(connection, user_id=user_id, campaign_id=campaign_id)
+    if access is None or not access.has_capability(CAMPAIGN_VIEW_CAPABILITY):
+        return None
+    return access
+
+
+def _scoped_campaign_rows(connection: Connection, *, user_id: uuid.UUID) -> list[Any]:
+    return list(
+        connection.execute(
+            text(
+                "SELECT cm.campaign_membership_id, c.campaign_id, c.name AS campaign_name "
+                + _BOOTSTRAP_SCOPE_FROM_WHERE
+                + " ORDER BY c.name, c.campaign_id"
+            ),
+            {"user_id": user_id},
+        )
+        .mappings()
+        .all()
+    )
+
+
 def list_bootstrap_campaign_ids(connection: Connection, *, user_id: uuid.UUID) -> list[uuid.UUID]:
     """The campaign IDs the session bootstrap would list for `user_id`,
     ordered `(name, campaign_id)` — the single definition of "authorized
     bootstrap campaign scope" shared with `is_campaign_bootstrap_authorized`
     so preference writes can never drift from what the bootstrap offers."""
-    return list(
-        connection.execute(
-            text(
-                "SELECT c.campaign_id "
-                + _BOOTSTRAP_SCOPE_FROM_WHERE
-                + " ORDER BY c.name, c.campaign_id"
-            ),
-            {"user_id": user_id},
-        ).scalars()
-    )
+    return [
+        row["campaign_id"]
+        for row in _scoped_campaign_rows(connection, user_id=user_id)
+        if _campaign_view_access(connection, user_id=user_id, campaign_id=row["campaign_id"])
+        is not None
+    ]
 
 
 def is_campaign_bootstrap_authorized(
     connection: Connection, *, user_id: uuid.UUID, campaign_id: uuid.UUID
 ) -> bool:
     """True only when `campaign_id` is in the same scope the bootstrap lists
-    (active membership in an active campaign) *and* `resolve_access_context`
-    resolves for it — the bootstrap skips a campaign when that returns
-    `None`, so this does too."""
+    (active membership in an active campaign) *and* the resolved access
+    carries `campaign.view` — the bootstrap skips a campaign otherwise, so
+    this does too."""
     in_scope = connection.execute(
         text(
             "SELECT 1 " + _BOOTSTRAP_SCOPE_FROM_WHERE + " AND c.campaign_id = :campaign_id LIMIT 1"
@@ -217,7 +271,7 @@ def is_campaign_bootstrap_authorized(
     ).scalar()
     if in_scope is None:
         return False
-    return resolve_access_context(connection, user_id=user_id, campaign_id=campaign_id) is not None
+    return _campaign_view_access(connection, user_id=user_id, campaign_id=campaign_id) is not None
 
 
 def resolve_startup_campaign_id(
@@ -254,31 +308,20 @@ def get_session_bootstrap(connection: Connection, *, user_id: uuid.UUID) -> Sess
     ).scalar()
     assert isinstance(display_name, str)
 
-    membership_rows = (
-        connection.execute(
-            text(
-                "SELECT cm.campaign_membership_id, c.campaign_id, c.name AS campaign_name "
-                + _BOOTSTRAP_SCOPE_FROM_WHERE
-                + " ORDER BY c.name, c.campaign_id"
-            ),
-            {"user_id": user_id},
-        )
-        .mappings()
-        .all()
-    )
+    membership_rows = _scoped_campaign_rows(connection, user_id=user_id)
 
     campaigns: list[CampaignBootstrapView] = []
     for row in membership_rows:
         campaign_id = row["campaign_id"]
         membership_id = row["campaign_membership_id"]
 
-        access = resolve_access_context(connection, user_id=user_id, campaign_id=campaign_id)
+        # `None` both when resolve_access_context finds no authorizing
+        # membership (should not happen: the scan above uses the same
+        # active/ended_at criteria) and when the membership has no role
+        # currently granting `campaign.view`. Either way the campaign is not
+        # offered, and one such row never breaks the rest of the bootstrap.
+        access = _campaign_view_access(connection, user_id=user_id, campaign_id=campaign_id)
         if access is None:
-            # The membership scan above and resolve_access_context's own
-            # membership check use the same active/ended_at criteria, so
-            # this should not happen in practice; skip defensively rather
-            # than raise, so one inconsistent row cannot break the whole
-            # bootstrap response for every other campaign.
             continue
 
         # World and timeline for the World -> Timeline -> Campaign hierarchy
@@ -323,9 +366,20 @@ def get_session_bootstrap(connection: Connection, *, user_id: uuid.UUID) -> Sess
             ).scalars()
         )
 
+        # A character is a selectable perspective only when the user holds
+        # `character.view_knowledge` for it (Phase 15 checkpoint 15.2A-1): of the
+        # built-in relationship types that is owner, primary_controller,
+        # co_controller, and portrayer; viewer-type relationships and
+        # former_controller grant visibility or nothing, never selection. The
+        # candidates are still characters with a relationship-derived capability.
         character_ids = [
-            character_id for character_id, codes in access.character_capabilities.items() if codes
+            character_id
+            for character_id, codes in access.character_capabilities.items()
+            if codes
+            and access.has_capability(_KNOWLEDGE_PERSPECTIVE_CAPABILITY, character_id=character_id)
         ]
+        # One effective clock per campaign for every membership decision below.
+        membership_clock = resolve_membership_clock(connection, timeline_id=access.timeline_id)
         character_perspectives: tuple[CharacterPerspectiveView, ...] = ()
         if character_ids:
             character_rows = (
@@ -342,10 +396,11 @@ def get_session_bootstrap(connection: Connection, *, user_id: uuid.UUID) -> Sess
                 .all()
             )
             # Party perspectives the portal may legitimately request
-            # through each character: the character is a *current*
-            # (`effective_to_world_time_id IS NULL`) member of the party on
-            # the campaign's own timeline, and the party is associated with
-            # the campaign. This is exactly what `dnd_ai.api.access.
+            # through each character: the character is a member of the party
+            # at the campaign's effective time (the clock lies in the
+            # membership's half-open period; none without a clock) on the
+            # campaign's own timeline, and the party is associated with the
+            # campaign. This is exactly what `dnd_ai.api.access.
             # resolve_party_perspective` re-proves per request — surfacing
             # it here just saves the portal from guessing a `party_id`
             # (Phase 13D §4).
@@ -353,17 +408,11 @@ def get_session_bootstrap(connection: Connection, *, user_id: uuid.UUID) -> Sess
             # `resolve_party_perspective` additionally requires the caller
             # to hold `character.view_knowledge` for the named character
             # (requirement 1 of its own docstring); a character that is only
-            # *discoverable* — a relationship type mapped to, say, just
-            # `character.discover` — reaches this loop (it has *some*
-            # capability) but can never actually be used as a knowledge/
-            # quest perspective. Advertising its parties would hand the
-            # portal a `(character_id, party_id)` pair the resolver rejects
-            # with a fixed 404. So `authorized_parties` is populated only for
-            # characters this membership holds `character.view_knowledge`
-            # for; every other character still appears in the perspective
-            # list (its established contract is unchanged) but with no
-            # parties. A revoked capability or relationship affects the next
-            # bootstrap because `access` is re-resolved every call.
+            # *discoverable* is never listed (the perspective list above already
+            # requires `character.view_knowledge`), so every listed character can
+            # advertise parties. Kept as a re-check of the resolver's own gate.
+            # A revoked capability or relationship affects the next bootstrap
+            # because `access` is re-resolved every call.
             knowledge_perspective_ids = [
                 character_id
                 for character_id in character_ids
@@ -373,7 +422,7 @@ def get_session_bootstrap(connection: Connection, *, user_id: uuid.UUID) -> Sess
             ]
             party_rows = (
                 connection.execute(
-                    text("""
+                    text(f"""
                         SELECT pm.member_entity_id, p.party_id, p.name AS party_name
                         FROM campaign.party_memberships pm
                         JOIN campaign.parties p ON p.party_id = pm.party_id
@@ -381,13 +430,14 @@ def get_session_bootstrap(connection: Connection, *, user_id: uuid.UUID) -> Sess
                           ON cp.party_id = pm.party_id AND cp.campaign_id = :campaign_id
                         WHERE pm.timeline_id = :timeline_id
                           AND pm.member_entity_id = ANY(:ids)
-                          AND pm.effective_to_world_time_id IS NULL
+                          AND {CURRENT_PARTY_MEMBERSHIP_SQL}
                         ORDER BY p.name, p.party_id
                     """),
                     {
                         "campaign_id": campaign_id,
                         "timeline_id": access.timeline_id,
                         "ids": knowledge_perspective_ids,
+                        **membership_clock_params(membership_clock),
                     },
                 )
                 .mappings()
@@ -431,6 +481,8 @@ def get_session_bootstrap(connection: Connection, *, user_id: uuid.UUID) -> Sess
                 character_perspectives=character_perspectives,
                 selected_character_id=selected_character_id,
                 capabilities=tuple(sorted(access.role_capabilities)),
+                world_capabilities=_world_capabilities(connection, user_id, world_id),
+                current_time_set=membership_clock.is_set,
             )
         )
 
@@ -456,7 +508,6 @@ def get_session_bootstrap(connection: Connection, *, user_id: uuid.UUID) -> Sess
     return SessionBootstrapView(
         user_id=user_id,
         display_name=display_name,
-        is_platform_administrator=is_platform_administrator(connection, user_id=user_id),
         startup_campaign_id=resolve_startup_campaign_id(authorized_ids, preferred, last_visited),
         campaign_preferences=CampaignPreferencesView(
             startup_mode=(

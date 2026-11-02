@@ -47,6 +47,7 @@ function renderBoundary() {
         <CampaignQuestsBoundary
             campaignId="campaign-a"
             characterId="character-a"
+            partyId="party-a"
         >
             {(quests) => (
                 <ul>
@@ -94,6 +95,7 @@ describe("CampaignQuestsBoundary", () => {
         ).toHaveBeenCalledWith(
             "campaign-a",
             "character-a",
+            "party-a",
         )
     })
 

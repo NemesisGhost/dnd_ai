@@ -1,4 +1,5 @@
-import type { CreateNpcBody, NpcAuthoringView, UpdateNpcBody } from "../types/npcAuthoring"
+import type { NpcReceipt } from "../types/contentAuthoring"
+import type { CreateNpcBody, UpdateNpcBody } from "../types/npcAuthoring"
 import { apiRequest } from "./http"
 import type { MutationContext } from "./worlds"
 
@@ -15,8 +16,8 @@ export function createNpc(
     campaignId: string,
     body: CreateNpcBody,
     ctx: MutationContext,
-): Promise<NpcAuthoringView> {
-    return apiRequest<NpcAuthoringView>("POST", base(campaignId), { body, ...ctx })
+): Promise<NpcReceipt> {
+    return apiRequest<NpcReceipt>("POST", base(campaignId), { body, ...ctx })
 }
 
 export function updateNpc(
@@ -24,8 +25,8 @@ export function updateNpc(
     npcId: string,
     body: UpdateNpcBody,
     ctx: MutationContext,
-): Promise<NpcAuthoringView> {
-    return apiRequest<NpcAuthoringView>("POST", `${npcAuthoringPath(campaignId, npcId)}/update`, {
+): Promise<NpcReceipt> {
+    return apiRequest<NpcReceipt>("POST", `${npcAuthoringPath(campaignId, npcId)}/update`, {
         body,
         ...ctx,
     })

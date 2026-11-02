@@ -13,8 +13,9 @@ export type SaveCampaignStartupStatus =
     | { kind: "unavailable" }
     // 401/403: session expired or the request was refused.
     | { kind: "denied" }
-    // The PUT succeeded but the authoritative bootstrap could not be
-    // re-fetched, so the new value is not confirmed.
+    // The PUT was CONFIRMED (the server accepted it) but the authoritative bootstrap was not
+    // applied afterwards - the re-read failed, was superseded by a newer session read, or the
+    // session ended - so the new value is not yet shown. Never "denied": the save happened.
     | { kind: "unconfirmed" }
     | { kind: "error" }
 
@@ -75,7 +76,10 @@ export function useSaveCampaignStartupPreference(): UseSaveCampaignStartupPrefer
                     if (controller.signal.aborted) {
                         return
                     }
-                    setStatus(applied ? { kind: "success" } : { kind: "denied" })
+                    // `false` is "not applied" (superseded, or the session ended and the sign-in
+                    // boundary takes over), not a refusal of the save that was just confirmed. The
+                    // PUT is never repeated to repair the read.
+                    setStatus(applied ? { kind: "success" } : { kind: "unconfirmed" })
                 })
                 .catch((cause: unknown) => {
                     if (controller.signal.aborted) {

@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy import Connection, text
 
 from tests.authoring_support import AuthoringHarness, harness_fixture_factory
+from tests.builders import dnd5e_ids
 from tests.content_support import ContentSetup
 from tests.factories import make_character, make_entity_knowledge
 
@@ -218,7 +219,8 @@ def test_update_changes_the_claim_and_keeps_the_name_in_step(s: ContentSetup) ->
     ).scalar()
     assert name == "The duke is a lich."
     diff = s.audit("update_knowledge_item")[0].changed_fields
-    assert diff["statement"] == {"from": "The duke is a vampire.", "to": "The duke is a lich."}
+    assert diff["statement"] == {"from": {"redacted": True}, "to": {"redacted": True}}
+    assert "duke" not in str(diff)
     assert diff["truth_status"] == {"from": "true", "to": "false"}
 
 
@@ -273,6 +275,63 @@ def test_another_worlds_claim_and_non_claims_are_not_found(s: ContentSetup) -> N
         key=s.stranger.fresh_key(),
     ).json()
     assert s.gm.get(s.url(f"knowledge/{foreign['knowledge_item_id']}")).status_code == 404
+
+
+def test_a_claim_is_opened_and_edited_in_each_campaign_that_shares_its_world(
+    s: ContentSetup,
+) -> None:
+    """Claims belong to the world, not to a timeline or campaign: a second campaign on another
+    timeline of the same world reaches the same claim, by its own id, under its own campaign id —
+    and only for someone who may edit canon *there*. A campaign that is not the caller's, or is
+    in another world, stays the non-disclosing 404."""
+    item = create(s)
+    kid = item["knowledge_item_id"]
+    side = s.gm.post(f"/worlds/{s.world_id}/timelines", {"name": "Side", "description": None})
+    assert side.status_code == 201, side.text
+    _, version_id = dnd5e_ids(s.connection)
+    second = s.gm.post(
+        "/campaigns",
+        {
+            "timeline_id": side.json()["timeline_id"],
+            "ruleset_version_id": str(version_id),
+            "name": "Second",
+            "description": None,
+        },
+        key=s.gm.fresh_key(),
+    )
+    assert second.status_code == 201, second.text
+    second_cid = second.json()["campaign_id"]
+
+    # The same claim opens in both campaigns the GM edits in, and an edit through the second
+    # campaign's own address lands on the one claim the first campaign sees.
+    opened = s.gm.get(s.url(f"knowledge/{kid}", second_cid))
+    assert opened.status_code == 200, opened.text
+    assert opened.json()["statement"] == item["statement"]
+    edited = s.gm.post(
+        s.url(f"knowledge/{kid}/update", second_cid),
+        {
+            "expected_row_version": opened.json()["row_version"],
+            "statement": "Edited from the second campaign.",
+            "knowledge_type": item["knowledge_type"],
+            "truth_status": item["truth_status"],
+            "sensitivity": item["sensitivity"],
+            "subject_entity_id": None,
+        },
+        key=s.gm.fresh_key(),
+    )
+    assert edited.status_code == 200, edited.text
+    assert (
+        s.gm.get(s.url(f"knowledge/{kid}")).json()["statement"]
+        == "Edited from the second campaign."
+    )
+
+    # Not a member of the second campaign: the same answer as a claim that does not exist.
+    assert s.player.get(s.url(f"knowledge/{kid}", second_cid)).status_code == 404
+    # Someone who edits only in another world cannot reach it through either campaign.
+    for cid in (s.cid, second_cid):
+        assert s.stranger.get(s.url(f"knowledge/{kid}", cid)).status_code == 404
+    # A claim id that exists nowhere in this world is the identical 404.
+    assert s.gm.get(s.url(f"knowledge/{uuid.uuid4()}", second_cid)).status_code == 404
 
 
 def test_players_cannot_author(s: ContentSetup) -> None:
@@ -373,3 +432,26 @@ def test_responses_are_not_cacheable_and_idempotent_replays_match(s: ContentSetu
     assert first.json()["knowledge_item_id"] == second.json()["knowledge_item_id"]
     assert first.headers["cache-control"] == "no-store"
     assert len(s.audit("create_knowledge_item")) == 1
+
+
+def test_an_approved_claim_with_an_unpublished_subject_offers_only_return_to_draft(
+    s: ContentSetup,
+) -> None:
+    """The input the portal's "Publish its subject first" guidance is derived from."""
+    place = location(s)
+    item = create(s, subject_entity_id=place["location_id"])
+    kid = item["knowledge_item_id"]
+    for action in ("submit-for-review", "approve"):
+        item = s.transition(kid, action, item["row_version"])
+
+    lifecycle = s.gm.get(s.lifecycle(kid)).json()
+    assert lifecycle["canon_status"] == "approved"
+    assert lifecycle["available_actions"] == ["return_to_draft"]
+    assert {"action": "publish", "reason": "reference_not_published"} in lifecycle[
+        "blocked_actions"
+    ]
+    authoring = s.gm.get(s.url(f"knowledge/{kid}")).json()
+    assert "publish" not in authoring["available_actions"]
+    assert {"action": "publish", "reason": "reference_not_published"} in authoring[
+        "blocked_actions"
+    ]

@@ -10,14 +10,16 @@ duplicating every tactical decision"), so this module reassembles one
 encounter's full history directly rather than layering a definition query
 over a state query.
 
-Audience filtering: nothing in this domain distinguishes GM-only from
-player-visible combat detail — a round, a turn, and its combat action are
-each already a *resolved* outcome (a roll already made, damage already
-applied), the same "observations and consequences" every participant in
-an interaction already witnesses (§16). Unlike `dnd_ai.queries.dungeon`'s
-undiscovered secrets or `dnd_ai.queries.quest`'s `gm_only` objectives, no
-caller-supplied party/character perspective or GM bypass is needed here —
-any caller authorized for the campaign at all sees the full encounter.
+Audience filtering: a resolved round, turn and combat action is the
+witnessed outcome of the fight, but the record around it is not uniformly
+visible. ADR 0016 classifies `narrative.encounters.summary` and
+`narrative.encounter_turns.notes` GM_ONLY; a `pending` encounter is unstarted
+GM preparation; and every participant, location, event and item reference is
+an entity id the caller may not be allowed to discover. Callers holding
+`canon.edit` pass no `audience` and get the full record. Any other campaign
+member passes an `EncounterAudience` and gets a projection computed here,
+inside the read-model boundary, so a hidden row, id or count never reaches
+the API layer: see `get_encounter_view`.
 
 Cross-campaign ownership: `narrative.encounters.campaign_id` is a direct
 column (unlike the world-scoped domains `dnd_ai.queries.dungeon`/
@@ -29,13 +31,15 @@ both raise the identical fixed, non-disclosing 404 for the identical
 """
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from sqlalchemy import Connection, text
 
 from dnd_ai.commands.encounters import EncounterNotFoundError
 
-__all__ = ["EncounterNotFoundError", "get_encounter_view"]
+from .world_explorer import WorldEntityVisibility, discoverable_entity_ids
+
+__all__ = ["EncounterAudience", "EncounterNotFoundError", "get_encounter_view"]
 
 
 @dataclass(frozen=True)
@@ -87,14 +91,60 @@ class EncounterView:
     rounds: tuple[EncounterRoundView, ...]
 
 
+# Statuses a member without `canon.edit` may read. `pending` is unstarted GM
+# preparation; `aborted` is readable only when it was started (see
+# `_member_may_read`).
+_MEMBER_READABLE_STATUSES = frozenset({"active", "completed"})
+
+
+@dataclass(frozen=True)
+class EncounterAudience:
+    """Who a member-safe encounter is for: the World Explorer's resolved
+    discoverability bundle plus the caller's validated world and timeline."""
+
+    visibility: WorldEntityVisibility
+    world_id: uuid.UUID
+    timeline_id: uuid.UUID
+
+
+def _member_may_read(status: str, resulting_event_id: uuid.UUID | None) -> bool:
+    """`aborted` records an event only when the encounter was `active`
+    (`commands.encounter_operations.abort_encounter`; no other writer sets the
+    status), so an aborted row with no `resulting_event_id` never started. The
+    column is `ON DELETE SET NULL`, so a started encounter whose abort event
+    was physically removed also reads as unstarted: that fails closed."""
+    return status in _MEMBER_READABLE_STATUSES or (
+        status == "aborted" and resulting_event_id is not None
+    )
+
+
 def get_encounter_view(
-    connection: Connection, *, encounter_id: uuid.UUID, campaign_id: uuid.UUID
+    connection: Connection,
+    *,
+    encounter_id: uuid.UUID,
+    campaign_id: uuid.UUID,
+    audience: EncounterAudience | None = None,
 ) -> EncounterView:
-    """The full current record of one encounter: its participants and
-    every round/turn/combat action so far. Raises `EncounterNotFoundError`
-    for a nonexistent encounter or one belonging to a different campaign
-    than `campaign_id` (always the URL's own already-authorized campaign)
-    — identically, so a caller can never distinguish the two."""
+    """The current record of one encounter: its participants and every
+    round/turn/combat action so far. Raises `EncounterNotFoundError` for a
+    nonexistent encounter or one belonging to a different campaign than
+    `campaign_id` (always the URL's own already-authorized campaign) —
+    identically, so a caller can never distinguish the two.
+
+    With no `audience` this is the unfiltered view, for `canon.edit` holders
+    only (the route decides). With an `audience` (a member without
+    `canon.edit`):
+
+    - a `pending` encounter, or one aborted before it started, raises the same
+      `EncounterNotFoundError`;
+    - `summary` and every turn's `notes` (GM_ONLY) are `None`;
+    - only participants whose entity the audience may discover are returned,
+      and only the turns they took, with `turn_order` re-ranked densely per
+      round in the established order so gaps cannot reveal a hidden turn;
+    - `location_id`, `resulting_event_id` and a combat action's
+      `item_instance_id` are `None` unless discoverable.
+
+    All candidate ids are checked with one `discoverable_entity_ids` call."""
     row = (
         connection.execute(
             text("""
@@ -109,6 +159,10 @@ def get_encounter_view(
         .one_or_none()
     )
     if row is None:
+        raise EncounterNotFoundError(
+            f"encounter {encounter_id} does not exist in campaign {campaign_id}"
+        )
+    if audience is not None and not _member_may_read(row["status"], row["resulting_event_id"]):
         raise EncounterNotFoundError(
             f"encounter {encounter_id} does not exist in campaign {campaign_id}"
         )
@@ -192,7 +246,7 @@ def get_encounter_view(
         for r in round_rows
     )
 
-    return EncounterView(
+    view = EncounterView(
         encounter_id=row["encounter_id"],
         status=row["status"],
         current_round=row["current_round"],
@@ -203,3 +257,61 @@ def get_encounter_view(
         participants=participants,
         rounds=rounds,
     )
+    if audience is None:
+        return view
+    return _project_for_audience(connection, view, audience)
+
+
+def _project_for_audience(
+    connection: Connection, view: EncounterView, audience: EncounterAudience
+) -> EncounterView:
+    candidates = {p.participant_entity_id for p in view.participants}
+    for reference in (view.location_id, view.resulting_event_id):
+        if reference is not None:
+            candidates.add(reference)
+    for round_view in view.rounds:
+        for turn in round_view.turns:
+            if turn.combat_action is not None and turn.combat_action.item_instance_id is not None:
+                candidates.add(turn.combat_action.item_instance_id)
+    visible = discoverable_entity_ids(
+        connection,
+        sorted(candidates),
+        world_id=audience.world_id,
+        timeline_id=audience.timeline_id,
+        visibility=audience.visibility,
+    )
+
+    participants = tuple(p for p in view.participants if p.participant_entity_id in visible)
+    visible_participant_ids = {p.encounter_participant_id for p in participants}
+    rounds = []
+    for round_view in view.rounds:
+        kept = sorted(
+            (t for t in round_view.turns if t.participant_id in visible_participant_ids),
+            key=lambda t: (t.turn_order, t.encounter_turn_id),
+        )
+        turns = tuple(
+            replace(
+                t,
+                turn_order=rank,
+                notes=None,
+                combat_action=_project_combat_action(t.combat_action, visible),
+            )
+            for rank, t in enumerate(kept)
+        )
+        rounds.append(replace(round_view, turns=turns))
+    return replace(
+        view,
+        summary=None,
+        location_id=view.location_id if view.location_id in visible else None,
+        resulting_event_id=view.resulting_event_id if view.resulting_event_id in visible else None,
+        participants=participants,
+        rounds=tuple(rounds),
+    )
+
+
+def _project_combat_action(
+    action: CombatActionView | None, visible: frozenset[uuid.UUID]
+) -> CombatActionView | None:
+    if action is None or action.item_instance_id is None or action.item_instance_id in visible:
+        return action
+    return replace(action, item_instance_id=None)

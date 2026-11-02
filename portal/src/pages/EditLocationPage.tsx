@@ -4,6 +4,7 @@ import {
     updateLocation,
 } from "../api/locationAuthoring"
 import { ContentEditPage } from "../components/authoring/ContentEditPage"
+import { worldEditNavigation } from "../components/world/editNavigation"
 import type { ContentEditConfig } from "../components/authoring/ContentEditPage"
 import { LocationFields } from "../components/authoring/LocationFields"
 import type {
@@ -34,6 +35,7 @@ const config: ContentEditConfig<
     worldPath: (campaignId) => `/app/${encodeURIComponent(campaignId)}/world`,
     detailPath: (campaignId, id) =>
         `/app/${encodeURIComponent(campaignId)}/world/location/${encodeURIComponent(id)}`,
+    navigation: worldEditNavigation("location"),
     viewPath: locationAuthoringPath,
     optionsPath: locationOptionsPath,
     name: (view) => view.name,

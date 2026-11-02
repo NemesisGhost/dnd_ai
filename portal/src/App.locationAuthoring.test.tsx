@@ -7,6 +7,7 @@ import { sessionBootstrapFixture } from "./fixtures/sessionBootstrap"
 import { useSessionBootstrap } from "./hooks/useSessionBootstrap"
 import { installMockServer } from "./test/authoringHarness"
 import type { MockServer } from "./test/authoringHarness"
+import { FULL_RECORD_AUTHORING } from "./test/recordAuthoring"
 import { ThemeProvider } from "./themes/ThemeProvider"
 import type { SessionBootstrap } from "./types/bootstrap"
 
@@ -47,6 +48,7 @@ const AUTHORING_VIEW = {
 }
 
 const LOCATION_DETAIL = {
+  authoring: FULL_RECORD_AUTHORING,
   location_id: "l1",
   name: "Hollow",
   summary: null,
@@ -133,6 +135,7 @@ beforeEach(() => {
       lifecycle_status: "active",
       row_version: 1,
       primary_timeline_id: "timeline-primary",
+      capabilities: ["campaign.create", "timeline.manage", "world.manage", "world.view"],
       allowed_rulesets: [],
       timelines: [
         {
@@ -218,7 +221,7 @@ describe("location authoring routes", () => {
     editor.unmount()
 
     open("/app/mundivita/world", ["campaign.view"])
-    await screen.findByRole("heading", { level: 1, name: "World" })
+    await screen.findByRole("heading", { level: 1, name: "Campaign World" })
     expect(screen.queryByRole("link", { name: "New location" })).toBeNull()
   })
 

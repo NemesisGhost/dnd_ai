@@ -354,7 +354,10 @@ def test_identifying_with_an_invalid_level_is_rejected(
 def _event_effect_count(postgres_engine: Engine, item_instance_id: uuid.UUID) -> int:
     with postgres_engine.connect() as verify:
         return verify.execute(
-            text("SELECT count(*) FROM narrative.event_effects WHERE target_entity_id = :i"),
+            text(
+                "SELECT count(*) FROM narrative.event_effects WHERE target_entity_id = :i "
+                "AND target_component <> 'item_state'"
+            ),
             {"i": item_instance_id},
         ).scalar_one()
 

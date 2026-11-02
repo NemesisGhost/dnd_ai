@@ -1,10 +1,11 @@
 import { useState } from "react"
 import type { ReactNode } from "react"
-import { Link, useNavigate, useParams } from "react-router"
+import { Link, useLocation, useNavigate, useParams } from "react-router"
 import { useSession } from "../../context/SessionContext"
 import { useAuthoringMutation } from "../../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../../hooks/useAuthoringResource"
 import { usePageArrival } from "../../hooks/usePageArrival"
+import { useWorldCapability, WORLD_CANON_EDIT } from "../../hooks/useWorldCapability"
 import { useUnsavedChangesGuard } from "../../hooks/useUnsavedChangesGuard"
 import type { MutationContext } from "../../api/worlds"
 import { ERROR_CODE_MESSAGE, fieldForErrorCode } from "../../utils/authoringValidation"
@@ -33,8 +34,17 @@ export interface ContentCreateConfig<TOptions, TValues, TBody, TResult> {
     lead: string
     breadcrumbLabel: string
     worldPath: (campaignId: string) => string
+    // Optional: the collection the person came from (the router state names it), when it differs
+    // from `worldPath`; and the state the new record's page should start with.
+    listPath?: (campaignId: string, state: unknown) => string
+    resultState?: (state: unknown) => object | undefined
+    // Optional: the breadcrumb text, when it depends on where the person came from.
+    breadcrumbLabelFor?: (campaignId: string, state: unknown) => string
     optionsPath: (campaignId: string) => string
     canCreate: (options: TOptions) => boolean
+    // Records that are campaign-originated (player-character identity, ADR 0020 E3) need no
+    // world Editor role; every other definition is shared world canon and does.
+    campaignOriginated?: boolean
     initialValues: (options: TOptions) => TValues
     isDirty: (values: TValues, initial: TValues) => boolean
     validate: (values: TValues, options: TOptions) => FieldError[]
@@ -56,8 +66,12 @@ export function ContentCreatePage<TOptions, TValues, TBody, TResult>({
 }: Props<TOptions, TValues, TBody, TResult>) {
     const { campaignId = "" } = useParams()
     const { state } = useAuthoringResource<TOptions>(config.optionsPath(campaignId))
-    const headingRef = usePageArrival(state.kind === "ready")
+    const hasWorldEdit = useWorldCapability(campaignId, WORLD_CANON_EDIT)
+    const needsWorldEdit = config.campaignOriginated !== true && !hasWorldEdit
+    const headingRef = usePageArrival(state.kind === "ready" || needsWorldEdit)
     const headingId = `create-${config.noun.replace(/\s+/g, "-")}-heading`
+    const arrival = useLocation().state
+    const listPath = config.listPath?.(campaignId, arrival) ?? config.worldPath(campaignId)
     const denied = (
         <p role="alert">You do not have permission to create {config.noun}s in this campaign.</p>
     )
@@ -65,12 +79,16 @@ export function ContentCreatePage<TOptions, TValues, TBody, TResult>({
     return (
         <section className="authoring-page" aria-labelledby={headingId}>
             <p className="authoring-page__breadcrumb">
-                <Link to={config.worldPath(campaignId)}>{config.breadcrumbLabel}</Link>
+                <Link to={listPath}>
+                    {config.breadcrumbLabelFor?.(campaignId, arrival) ?? config.breadcrumbLabel}
+                </Link>
             </p>
             <h1 id={headingId} ref={headingRef} tabIndex={-1}>
                 {config.heading}
             </h1>
-            {state.kind === "loading" ? (
+            {needsWorldEdit ? (
+                <p role="alert">Editing shared world content requires the world Editor role. Ask the world owner.</p>
+            ) : state.kind === "loading" ? (
                 <p role="status">Loading…</p>
             ) : state.kind === "denied" || state.kind === "unavailable" ? (
                 denied
@@ -79,7 +97,13 @@ export function ContentCreatePage<TOptions, TValues, TBody, TResult>({
             ) : !config.canCreate(state.data) ? (
                 denied
             ) : (
-                <CreateForm key={campaignId} campaignId={campaignId} options={state.data} config={config} />
+                <CreateForm
+                    key={campaignId}
+                    campaignId={campaignId}
+                    options={state.data}
+                    config={config}
+                    listPath={listPath}
+                />
             )}
         </section>
     )
@@ -89,12 +113,15 @@ function CreateForm<TOptions, TValues, TBody, TResult>({
     campaignId,
     options,
     config,
+    listPath,
 }: {
     campaignId: string
     options: TOptions
     config: ContentCreateConfig<TOptions, TValues, TBody, TResult>
+    listPath: string
 }) {
     const navigate = useNavigate()
+    const arrivalState = useLocation().state
     const { reload } = useSession()
     const [initial] = useState(() => config.initialValues(options))
     const [values, setValues] = useState<TValues>(initial)
@@ -110,7 +137,7 @@ function CreateForm<TOptions, TValues, TBody, TResult>({
             // Replace, so Back never returns to a form that was already submitted.
             void navigate(config.resultPath(campaignId, created), {
                 replace: true,
-                state: { announce: config.announce },
+                state: { ...config.resultState?.(arrivalState), announce: config.announce },
             })
         },
     })
@@ -148,7 +175,7 @@ function CreateForm<TOptions, TValues, TBody, TResult>({
                     pending={pending}
                     saveLabel={config.saveLabel}
                     pendingLabel={config.pendingLabel}
-                    onCancel={() => void navigate(config.worldPath(campaignId))}
+                    onCancel={() => void navigate(listPath)}
                 />
             </AuthoringForm>
             <ConfirmDialog

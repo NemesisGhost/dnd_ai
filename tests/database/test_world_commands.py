@@ -23,7 +23,7 @@ from dnd_ai.domain.authoring import (
     WorldHasActiveCampaignsError,
     WorldNotAuthorizedError,
 )
-from tests.builders import dnd5e_ids, make_authored_world
+from tests.builders import dnd5e_ids, make_authored_world, make_world_creator
 from tests.factories import (
     make_campaign,
     make_timeline,
@@ -44,7 +44,7 @@ def _create(connection: Connection, owner: uuid.UUID, name: str = "My World") ->
 def test_create_world_builds_world_allowlist_owner_and_primary_timeline(
     db_connection: Connection,
 ) -> None:
-    owner = make_user(db_connection)
+    owner = make_world_creator(db_connection, make_user(db_connection))
     ruleset_id, _ = dnd5e_ids(db_connection)
     result = create_world(
         db_connection,
@@ -129,7 +129,7 @@ def test_a_slug_colliding_with_a_legacy_world_is_resolved_silently(
     ["empty_list", "default_outside", "duplicates", "unknown", "non_canon", "no_version"],
 )
 def test_ruleset_selection_is_validated(db_connection: Connection, case: str) -> None:
-    owner = make_user(db_connection)
+    owner = make_world_creator(db_connection, make_user(db_connection))
     ruleset_id, _ = dnd5e_ids(db_connection)
     ids = [ruleset_id]
     default = ruleset_id
@@ -183,7 +183,7 @@ def test_ruleset_selection_is_validated(db_connection: Connection, case: str) ->
 def test_a_failure_inside_create_world_leaves_no_partial_world(
     db_connection: Connection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    owner = make_user(db_connection)
+    owner = make_world_creator(db_connection, make_user(db_connection))
     ruleset_id, _ = dnd5e_ids(db_connection)
 
     def boom(*args: object, **kwargs: object) -> None:
@@ -223,7 +223,7 @@ def test_world_name_is_bounded(db_connection: Connection, name: str) -> None:
     with pytest.raises(AuthoringValidationError):
         create_world(
             db_connection,
-            creator_user_id=make_user(db_connection),
+            creator_user_id=make_world_creator(db_connection, make_user(db_connection)),
             name=name,
             description=None,
             ruleset_ids=[ruleset_id],

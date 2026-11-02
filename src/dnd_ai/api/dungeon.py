@@ -43,10 +43,11 @@ UUID. `dnd_ai.api.access.resolve_party_perspective` closes this: `party_id`
 is trusted only after proving the caller holds `character.view_knowledge`
 for the named `character_id` (`AccessContext.has_capability`, covering
 role capabilities, the caller's own resolved character relationship, and
-any resource-grant override) *and* that character is currently a member of
-that exact party on the campaign's own timeline
-(`campaign.party_memberships`, the "still a member" open-ended-interval
-contract migration 009 already establishes — never guessed, and never
+any resource-grant override) *and* that character is a member of
+that exact party on the campaign's own timeline at the campaign's
+effective time (`campaign.party_memberships`: the effective clock lies in
+the stored half-open period, B1-DEF7a; no clock means no membership is
+current — never guessed, and never
 derived from `character_id` alone, since a character may belong to several
 parties at once). Supplying only one of `character_id`/`party_id` is
 treated identically to supplying neither (no perspective, non-hidden
@@ -85,6 +86,7 @@ from sqlalchemy import Connection
 
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.queries.dungeon import get_dungeon_area_view
+from dnd_ai.queries.entity_lifecycle import lifecycle_hidden_entity_ids
 
 from ._shared import timeline_world_id
 from .access import require_campaign_capability, resolve_party_perspective
@@ -197,6 +199,18 @@ def get_dungeon_area_endpoint(
     # get_dungeon_area_view's own core.entities join), so it is a valid
     # security.resource_grants.entity_id target.
     include_hidden = access.has_capability(_DUNGEON_MANAGE_CAPABILITY, entity_id=dungeon_area_id)
+    # Phase 15.3A-1 draft/published separation: an unpublished area (or one under an
+    # unpublished dungeon) is the same "not found" for a caller without `canon.edit`.
+    world_id = timeline_world_id(connection, access.timeline_id)
+    unpublished = lifecycle_hidden_entity_ids(
+        connection,
+        world_id=world_id,
+        mode="reference",
+        viewer_user_id=access.user_id,
+        can_edit_canon=access.has_capability(_DUNGEON_MANAGE_CAPABILITY),
+    )
+    if dungeon_area_id in unpublished:
+        raise NotFoundError()
     # A GM never needs an authorized party perspective — every structural
     # child is already returned regardless of is_hidden, so
     # character_id/party_id are left unresolved for that caller.
@@ -216,10 +230,14 @@ def get_dungeon_area_endpoint(
         connection,
         dungeon_area_id=dungeon_area_id,
         timeline_id=access.timeline_id,
-        expected_world_id=timeline_world_id(connection, access.timeline_id),
+        expected_world_id=world_id,
         party_id=authorized_party_id,
         include_hidden=include_hidden,
     )
+    # A connection to an area the caller may not see is not shown either.
+    visible_connections = [
+        c for c in view.connections if c.other_dungeon_area_id not in unpublished
+    ]
 
     return DungeonAreaResponse(
         dungeon_area_id=view.dungeon_area_id,
@@ -274,6 +292,6 @@ def get_dungeon_area_endpoint(
                 description=c.description,
                 connection_status_code=c.connection_status_code,
             )
-            for c in view.connections
+            for c in visible_connections
         ],
     )

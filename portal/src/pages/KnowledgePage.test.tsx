@@ -29,9 +29,12 @@ interface RenderOverrides {
     query?: string
     partyId?: string | null
     parties?: AuthorizedParty[]
+    partiesUndetermined?: boolean
+    includePublic?: boolean
     onViewChange?: (view: KnowledgeView) => void
     onQueryChange?: (query: string) => void
     onPartyChange?: (partyId: string | null) => void
+    onIncludePublicChange?: (includePublic: boolean) => void
     children?: React.ReactNode
 }
 
@@ -53,9 +56,11 @@ function renderPage(overrides: RenderOverrides = {}) {
         query: "",
         partyId: null,
         parties: authorizedParties,
+        includePublic: true,
         onViewChange: vi.fn(),
         onQueryChange: vi.fn(),
         onPartyChange: vi.fn(),
+        onIncludePublicChange: vi.fn(),
         children: <p>Knowledge results go here.</p>,
         ...overrides,
     }
@@ -113,7 +118,7 @@ describe("KnowledgePage", () => {
             "Party shared",
             "Character private",
             "Recent",
-            "Public",
+            "Public only",
         ])
     })
 
@@ -266,6 +271,8 @@ describe("KnowledgePage", () => {
                 onViewChange={vi.fn()}
                 onQueryChange={vi.fn()}
                 onPartyChange={vi.fn()}
+                includePublic
+                onIncludePublicChange={vi.fn()}
             >
                 <p>Loading knowledge results.</p>
             </KnowledgePage>,
@@ -289,6 +296,8 @@ describe("KnowledgePage", () => {
                 onViewChange={vi.fn()}
                 onQueryChange={vi.fn()}
                 onPartyChange={vi.fn()}
+                includePublic
+                onIncludePublicChange={vi.fn()}
             >
                 <p>Knowledge results go here.</p>
             </KnowledgePage>,
@@ -306,8 +315,8 @@ describe("KnowledgePage", () => {
     })
 })
 
-describe("KnowledgePage — audience preview (Phase 13E-B manual-acceptance fix)", () => {
-    it("shows 'Preview as member' to a GM/admin campaign membership", () => {
+describe("KnowledgePage — no per-page member preview", () => {
+    it("offers no 'Preview as member' control, even to someone who can manage access (it lives in Knowledge > Member preview)", () => {
         accessOverviewStateRef.current = {
             status: "success",
             overview: {
@@ -352,13 +361,15 @@ describe("KnowledgePage — audience preview (Phase 13E-B manual-acceptance fix)
                     onViewChange={vi.fn()}
                     onQueryChange={vi.fn()}
                     onPartyChange={vi.fn()}
+                    includePublic
+                    onIncludePublicChange={vi.fn()}
                 >
                     <p>Knowledge results go here.</p>
                 </KnowledgePage>
             </SessionContext.Provider>,
         )
 
-        expect(screen.getByRole("button", { name: "Preview as member" })).toBeInTheDocument()
+        expect(screen.queryByRole("button", { name: "Preview as member" })).toBeNull()
     })
 
     it("does not show 'Preview as member' without access.manage", () => {
@@ -367,5 +378,74 @@ describe("KnowledgePage — audience preview (Phase 13E-B manual-acceptance fix)
         expect(
             screen.queryByRole("button", { name: "Preview as member" }),
         ).not.toBeInTheDocument()
+    })
+
+    it("includes public knowledge by default and reports an explicit opt-out", () => {
+        const { onIncludePublicChange } = renderPage()
+
+        const checkbox = screen.getByRole("checkbox", {
+            name: "Include public knowledge",
+        })
+
+        expect(checkbox).toBeChecked()
+        expect(checkbox).toBeEnabled()
+
+        fireEvent.click(checkbox)
+
+        expect(onIncludePublicChange).toHaveBeenLastCalledWith(false)
+    })
+
+    it("locks public knowledge on for the public-only view", () => {
+        renderPage({ view: "public", includePublic: false })
+
+        const checkbox = screen.getByRole("checkbox", {
+            name: "Include public knowledge",
+        })
+
+        expect(checkbox).toBeChecked()
+        expect(checkbox).toBeDisabled()
+    })
+})
+
+describe("KnowledgePage party notice without an effective clock", () => {
+    const NOTICE = /Party membership cannot be determined because the campaign time has not been set/
+
+    it("shows the undetermined notice in a view that uses a party perspective", () => {
+        renderPage({ parties: [], view: "party_shared", partiesUndetermined: true })
+        expect(screen.getByText(NOTICE)).toBeInTheDocument()
+        expect(screen.getByRole("option", { name: "Party membership undetermined" })).toBeInTheDocument()
+    })
+
+    it("shows no membership warning in the public-only view, and restores it when leaving that view", () => {
+        const view = renderPage({ parties: [], view: "public", partiesUndetermined: true })
+        expect(screen.queryByText(NOTICE)).toBeNull()
+        expect(screen.queryByRole("option", { name: "Party membership undetermined" })).toBeNull()
+        // The public view itself, and its controls, are untouched.
+        expect(screen.getByText("Knowledge results go here.")).toBeInTheDocument()
+        expect(screen.getByRole("checkbox", { name: /public/i })).toBeDisabled()
+
+        view.rerender(
+            <KnowledgePage
+                campaignId={view.campaignId}
+                view="character_private"
+                query=""
+                partyId={null}
+                parties={[]}
+                partiesUndetermined
+                includePublic
+                onViewChange={vi.fn()}
+                onQueryChange={vi.fn()}
+                onPartyChange={vi.fn()}
+                onIncludePublicChange={vi.fn()}
+            >
+                <p>Knowledge results go here.</p>
+            </KnowledgePage>,
+        )
+        expect(screen.getByText(NOTICE)).toBeInTheDocument()
+    })
+
+    it("does not remove a genuine 'No party available' from the public view when the clock is set", () => {
+        renderPage({ parties: [], view: "public" })
+        expect(screen.getByRole("option", { name: "No party available" })).toBeInTheDocument()
     })
 })

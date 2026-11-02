@@ -1,3 +1,4 @@
+import { RecentEventsSection } from "../components/RecentEventsSection"
 import type { CampaignSummary } from "../types/campaignSummary"
 
 interface HomePageProps {
@@ -9,7 +10,7 @@ export function HomePage({
 }: HomePageProps) {
     return (
         <section
-            className="placeholder-page"
+            className="placeholder-page placeholder-page--wide"
             aria-labelledby="home-heading">
             <h1 id="home-heading">Campaign Home</h1>
             <section aria-labelledby="latest-session-heading">
@@ -33,34 +34,7 @@ export function HomePage({
                 )}
             </section>
 
-            <section aria-labelledby="recent-events-heading">
-                <h2 id="recent-events-heading">
-                    Recent events
-                </h2>
-
-                {summary.recent_events.length === 0 ? (
-                    <p>No recent events are available.</p>
-                ) : (
-                    <ul className="recent-events__list">
-                        {summary.recent_events.map((event) => (
-                            <li
-                                key={event.event_id}
-                                className="recent-events__item"
-                            >
-                                <article>
-                                    <h3>{event.name}</h3>
-
-                                    <p>
-                                        {event.summary ??
-                                            event.details ??
-                                            "No event description is available."}
-                                    </p>
-                                </article>
-                            </li>
-                        ))}
-                    </ul>
-                )}
-            </section>
+            <RecentEventsSection events={summary.recent_events} />
         </section>
     )
 }

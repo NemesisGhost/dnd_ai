@@ -162,6 +162,17 @@ Added:
   scoped by `session_id` instead of "most recent for the campaign."
 - `GET /campaigns/{campaign_id}/sessions` and `GET /campaigns/
   {campaign_id}/sessions/{session_id}` in `dnd_ai.api.sessions`.
+- Session travel fix (additive): each event carries `world_time` (in-world display
+  text) and the detail adds `travel[]` (`event_id`, `world_time_id`, `world_time`,
+  `note`, `legs[]`; a leg is `traveler{entity_id,name}`, `from`, `to` with
+  `state` `named`/`unrecorded`/`unavailable`). `travel[]` is built by
+  `dnd_ai.queries.session_travel` from the events already returned (so draft, voided
+  and denied-session filtering is inherited); travelers and places pass the caller's
+  entity discoverability (an undiscoverable traveler's leg is omitted, with no count;
+  an undiscoverable place is `unavailable`); `note` is the GM note, `canon.edit` only.
+  Limits: no pagination (bounded by 50 travelers per event); the existence, not the
+  content, of a hidden-traveler travel event stays visible as a bare entry, like any
+  other session event.
 
 ### 4.2 Quests had no way to enumerate a campaign's tracked quests
 
@@ -506,6 +517,7 @@ detail; the tier decisions themselves are unchanged.
 |---|---|---|
 | `GET /auth/session` | +`campaigns[].world_id`/`world_name`; +`campaigns[].character_perspectives[].authorized_parties[]` (`party_id`,`party_name`) — additive, all prior fields/behavior preserved | `dnd_ai.queries.bootstrap.get_session_bootstrap` |
 | `GET /campaigns/{campaign_id}/world/search` | Unified type-filtered text search / browse across `location`, `character`, `organization`, `religion`, `item`, `event` | `dnd_ai.queries.world_explorer.search_world_entities` |
+| `GET /campaigns/{campaign_id}/world/search/counts` | Complete per-category totals (all six categories, zeros included) plus their sum for the same `q` and `canon.edit`-only preview flags, under the identical visibility filter (one shared SQL fragment) — not affected by `category`, `limit` or `cursor` | `dnd_ai.queries.world_explorer.count_world_entities` |
 | `GET /campaigns/{campaign_id}/world/relationships` | Relationship list | `.list_world_relationships` |
 | `GET /campaigns/{campaign_id}/world/locations/{location_id}` | Location detail (any `world.locations` row) + containment breadcrumbs | `.get_location_view` |
 | `GET /campaigns/{campaign_id}/world/religions/{religion_id}` | Religion detail | `.get_religion_view` |
@@ -578,7 +590,9 @@ generic entity DTO for detail.
   six), `q` (≤200 chars, case-insensitive substring over
   `core.entities.canonical_name` + `summary` — never `core.entity_names`
   aliases, some of which are themselves a disclosure), `limit` (1–100,
-  default 25), `cursor`.
+  default 25), `cursor`, `character_type` (`npc` or `player_character`; accepted only when `character` is
+  the only `category`, otherwise a fixed 422; it narrows the type codes before paging and changes no
+  visibility rule).
 - **`/world/relationships`** params: `q` (over `description`), `type`
   (`world.relationship_types.code`), `related_entity_id`, `limit`,
   `cursor`.
@@ -674,8 +688,10 @@ perspective every discovery on the timeline is in scope; with one, only
 that party's/character's. For `known`/`rumors` a GM with no perspective
 sees `knowledge.knowledge_items` in the world; `party_shared`/
 `character_private` still require the GM to supply an authorized
-party/character perspective and return an empty page without one. A non-GM
-never receives `truth_status`/`sensitivity`.
+party/character perspective for their audience-specific records; without
+one they carry only public knowledge (see §10.6). A non-GM never receives
+`truth_status`/`sensitivity` unless a targeted `canon.edit` allow grants it
+for that item.
 
 ### 10.6 Perspective resolution (Phase 13D §4)
 
@@ -697,6 +713,17 @@ never receives `truth_status`/`sensitivity`.
 - `character_private` needs only `character_id` (with
   `character.view_knowledge` held for it). `recent` accepts either or
   both. `public` needs neither.
+- **Public knowledge is additive** (2026-10-06 correction — it was
+  originally a mutually exclusive view, so a player with no perspective got
+  an empty default `known` page despite public lore existing). Every view
+  includes the timeline's `knowledge.public_knowledge` items that fit it,
+  with or without a perspective; a perspective only adds its audience's
+  records. `include_public=false` is the explicit opt-out and `view=public`
+  the public-only filter. An item both public and audience-known is listed
+  once, in the audience's own projection (party/character belief, or the
+  canonical projection for a caller with ground truth) — the same
+  precedence the detail route applies — resolved before `q` and the cursor.
+  See `dnd_ai.queries.knowledge_browse`.
 - The existing `GET .../knowledge/{id}` detail route is unchanged for its
   GM and `(character_id, party_id)` callers, and additionally: a non-GM
   who supplies **only** `character_id` and holds `character.view_knowledge`
@@ -942,6 +969,18 @@ redacted id is `null`; the knowledge item itself stays visible with its
 own content. The DTO docstrings previously implied these ids were safe to
 return because a caller "re-authorizes them later" — corrected: returning
 the id is itself the disclosure.
+
+*Phase 15 follow-up (subject forward links).* The list and the detail now
+both return an optional `subject` summary (id, name, category, entity type)
+for display and navigation, under one decision
+(`dnd_ai.api.knowledge.resolve_subject_summaries`): a World subject must be
+discoverable as above; a quest subject — previously always redacted, as a
+non-browsable type — is returned when the quest detail route would show it
+to the same audience (no per-quest deny, lifecycle-visible, tracked on the
+timeline for the caller's authorized party or campaign-wide; any party for
+a GM). The list's `subject_entity_id` now equals `subject.entity_id`, so it
+too names an authorized quest. Anything else is `null`, indistinguishable
+from no subject. See docs/UI_DESIGN.md §5.6.
 
 ### 11.2 Bootstrap advertised unusable party perspectives
 

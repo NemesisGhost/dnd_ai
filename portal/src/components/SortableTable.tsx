@@ -1,6 +1,7 @@
 import type { ReactNode } from "react"
 import { useState } from "react"
 import type { SortDirection } from "../utils/sorting"
+import { TableScroll } from "./TableScroll"
 
 export interface SortableTableColumn<T> {
     key: string
@@ -65,6 +66,7 @@ export function SortableTable<T>({
     })()
 
     return (
+        <TableScroll label={caption}>
         <table className="sortable-table">
             <caption>{caption}</caption>
             <thead>
@@ -116,5 +118,6 @@ export function SortableTable<T>({
                 ))}
             </tbody>
         </table>
+        </TableScroll>
     )
 }

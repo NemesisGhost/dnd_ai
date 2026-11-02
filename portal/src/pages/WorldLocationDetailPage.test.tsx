@@ -92,6 +92,15 @@ describe("WorldLocationDetailPage", () => {
         expect(screen.getAllByText("Not recorded").length).toBeGreaterThan(0)
     })
 
+    it("shows the danger level when the server sent it and omits the row when it is null", () => {
+        const { unmount } = renderPage(locationFixture)
+        expect(screen.getByText("Danger level")).toBeInTheDocument()
+        unmount()
+
+        renderPage({ ...locationFixture, danger_level: null })
+        expect(screen.queryByText("Danger level")).not.toBeInTheDocument()
+    })
+
     it("never renders raw location ids as visible text", () => {
         renderPage(locationFixture)
 

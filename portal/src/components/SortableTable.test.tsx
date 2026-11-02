@@ -236,4 +236,19 @@ describe("SortableTable with a nullable date column", () => {
             "Not recorded",
         ])
     })
+
+    it("scrolls inside a named, keyboard-focusable region and keeps its caption", () => {
+        render(
+            <SortableTable
+                caption="People"
+                columns={sortableColumns}
+                rows={rows}
+                getRowKey={(row) => row.id}
+            />,
+        )
+
+        const region = screen.getByRole("region", { name: "People" })
+        expect(region).toHaveAttribute("tabindex", "0")
+        expect(region).toContainElement(screen.getByRole("table", { name: "People" }))
+    })
 })

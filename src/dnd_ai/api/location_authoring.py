@@ -33,6 +33,7 @@ from dnd_ai.domain.content_authoring import (
     SHORT_TEXT_MAX_LENGTH,
     LocationCategory,
 )
+from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.location_authoring import (
     LocationAuthoringView,
     get_location_authoring,
@@ -45,9 +46,9 @@ from ._authoring import (
     finish_campaign_idempotency,
     start_campaign_idempotency,
 )
-from ._content_support import audit_content_write, clean_note
+from ._content_support import audit_content_write, clean_note, write_receipt
 from ._shared import timeline_world_id
-from .access import require_campaign_capability
+from .access import can_create_definitions, require_campaign_capability, restrict_authoring_view
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .errors import InvalidCursorError, NotFoundError
@@ -60,6 +61,13 @@ _PARENT_KEYSET = "location_parent_options"
 _CAPABILITY = "canon.edit"
 
 _Access = Annotated[AccessContext, Depends(require_campaign_capability(_CAPABILITY))]
+# Reads of the private side of shared world canon (drafts, GM-only prep, revisions,
+# provenance, sources, the review queue) also need `world.canon.read_private`
+# (docs/adr/0020-scoped-system-world-and-campaign-roles.md, D6).
+_PrivateRead = Annotated[
+    AccessContext,
+    Depends(require_campaign_capability(_CAPABILITY, world_capability=WORLD_CANON_READ_PRIVATE)),
+]
 _Conn = Annotated[Connection, Depends(get_connection)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
@@ -131,10 +139,9 @@ def _view_json(view: LocationAuthoringView, *, changed: bool | None = None) -> d
 
 
 @router.get(_BASE + "/options")
-def location_options_endpoint(access: _Access) -> dict[str, Any]:
-    del access  # authorization is the dependency's job
+def location_options_endpoint(access: _PrivateRead, connection: _Conn) -> dict[str, Any]:
     return {
-        "can_create": True,
+        "can_create": can_create_definitions(connection, access=access),
         "categories": [_category_json(c) for c in list_location_categories()],
         "limits": {
             "name_max_length": NAME_MAX_LENGTH,
@@ -146,7 +153,7 @@ def location_options_endpoint(access: _Access) -> dict[str, Any]:
 
 @router.get(_BASE + "/parent-options")
 def location_parent_options_endpoint(
-    access: _Access,
+    access: _PrivateRead,
     connection: _Conn,
     for_location: Annotated[uuid.UUID | None, Query(alias="for")] = None,
     q: Annotated[str | None, Query(max_length=200)] = None,
@@ -224,6 +231,9 @@ def create_location_endpoint(
         access=access,
         correlation_id=correlation_id,
         reason=None,
+        view_loader=lambda: get_location_authoring(
+            connection, world_id=result.world_id, location_id=result.entity_id
+        ),
     )
     response = _response(connection, result, changed=True)
     finish_campaign_idempotency(connection, idem, status_code=201, body=response)
@@ -232,13 +242,13 @@ def create_location_endpoint(
 
 @router.get(_BASE + "/{location_id}")
 def get_location_authoring_endpoint(
-    location_id: uuid.UUID, access: _Access, connection: _Conn
+    location_id: uuid.UUID, access: _PrivateRead, connection: _Conn
 ) -> dict[str, Any]:
     world_id = timeline_world_id(connection, access.timeline_id)
     view = get_location_authoring(connection, world_id=world_id, location_id=location_id)
     if view is None:
         raise NotFoundError()
-    return _view_json(view)
+    return restrict_authoring_view(connection, access=access, body=_view_json(view))
 
 
 @router.post(_BASE + "/{location_id}/update")
@@ -283,6 +293,9 @@ def update_location_endpoint(
             access=access,
             correlation_id=correlation_id,
             reason=clean_note(body.change_note),
+            view_loader=lambda: get_location_authoring(
+                connection, world_id=result.world_id, location_id=result.entity_id
+            ),
         )
     response = _response(connection, result, changed=result.changed)
     finish_campaign_idempotency(connection, idem, status_code=200, body=response)
@@ -292,8 +305,5 @@ def update_location_endpoint(
 def _response(
     connection: Connection, result: ContentWriteResult, *, changed: bool
 ) -> dict[str, Any]:
-    view = get_location_authoring(
-        connection, world_id=result.world_id, location_id=result.entity_id
-    )
-    assert view is not None
-    return _view_json(view, changed=changed)
+    del connection
+    return write_receipt(result, "location_id", changed=changed)

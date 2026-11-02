@@ -14,38 +14,21 @@ is not part of the bounded adapter-facing surface in any case — the
 legacy `FoundrySystem` credential this reasoning originally covered is
 now rejected unconditionally before it can reach any route at all, per
 `dnd_ai.api.auth`'s own docstring).
-`dnd_ai.commands.campaigns.
-create_campaign` itself is where the real authorization now lives:
-`_authorize_timeline_reuse()` (that module's own docstring has the full
-policy and the High/Critical defect history behind it, including a second
-Critical defect found and closed immediately after the first) requires
-the caller to already hold `access.manage` in an existing campaign before
-a *second* campaign may attach to an already-used `timeline_id`, and a
-live, positively-issued `security.timeline_bootstrap_grants` row naming
-both the timeline and the caller before a genuinely unclaimed one may be
-created on at all — nothing about a `timeline_id` being unclaimed is
-itself authorization; a real deployment issues that grant through trusted
-world-authoring/import infrastructure, never through this route. A
-rejected attempt surfaces as `dnd_ai.commands.campaigns.
-TimelineNotAuthorizedError`, a fixed non-disclosing 404 indistinguishable
-from a nonexistent `timeline_id` or an expired/revoked/already-consumed
-grant, handled by the existing generic `SafeMessageError` mapping — no
-per-route error handling needed here. Once authorized, the caller becomes
-the campaign's first `campaign_owner` (the system-template role migration
-085 seeded with the full functional-owner capability set — `access.
-manage`, `campaign.view`, `canon.edit` — after migration 080 seeded it
-with `access.manage` alone) by construction. This mirrors the "no invented
-capability" scoping every other Phase 10 workstream's first cut already
-chose (e.g. `dnd_ai.api.memberships`'s own docstring), applied here to the
-one action that structurally cannot be gated by `require_campaign_
-capability` itself, since no campaign exists yet at the time the route is
-entered.
-
-Phase 14 adds a third authorization path to `create_campaign`: an active
-world owner (world capability `campaign.create`) may create a campaign on any
-of that world's active timelines with no bootstrap grant; paths B and C above
-are unchanged. World and timeline lifecycle are checked only after
-authorization. The same module now also hosts campaign settings, archive, and
+`dnd_ai.commands.campaigns.create_campaign` itself is where the real
+authorization lives (docs/adr/0020-scoped-system-world-and-campaign-roles.md):
+the creator must hold the system `campaign.host` capability (the system `gm`
+role; 403 `system_gm_required` otherwise), and then either the world capability
+`campaign.create` on the timeline's world (an Owner; plus `timeline.manage` when
+the timeline already hosts a campaign) or a live, positively-issued
+`security.timeline_bootstrap_grants` row naming both the timeline and the caller
+for a genuinely unclaimed one. Holding `access.manage` in another campaign on
+the timeline confers nothing. A rejected attempt surfaces as
+`dnd_ai.commands.campaigns.TimelineNotAuthorizedError`, a fixed non-disclosing
+404 indistinguishable from a nonexistent `timeline_id` or an expired/revoked/
+already-consumed grant, handled by the existing generic `SafeMessageError`
+mapping. Once authorized, the creator receives both the `campaign_owner` and the
+`gm` template roles. World and timeline lifecycle are checked only after
+authorization. The same module also hosts campaign settings, archive, and
 reactivate (below the creation endpoint).
 
 Idempotency: durable, PostgreSQL-backed, like every other Phase 10 write —
@@ -56,8 +39,8 @@ NULL` and this is the one write in this codebase with no existing campaign
 to key a reservation against yet. Migration 087's single-use bootstrap
 grant stops a *different* user from claiming the first campaign, but does
 nothing on its own to stop the successful creator's own dropped-response
-retry from reusing the timeline it just claimed (via the `access.manage`
-that retry's own creator now holds) and minting a second campaign,
+retry from reusing the timeline it just claimed (an Owner stays entitled) and
+minting a second campaign,
 membership, owner role, and audit row — the defect this idempotency
 mechanism closes. When a client supplies an `Idempotency-Key` header, the
 route reserves `(actor_user_id, idempotency_key)` via `dnd_ai.api.

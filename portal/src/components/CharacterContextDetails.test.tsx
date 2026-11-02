@@ -20,6 +20,7 @@ vi.mock("../hooks/useCharacter", () => ({
 const baseCharacter: CharacterDetail = {
   character_id: "character-secret-id",
   name: "Ixamarra",
+  character_kind: "character",
   species_code: "elf",
   size_category: "medium",
   current_hit_points: 9,

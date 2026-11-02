@@ -50,6 +50,7 @@ and detail therefore never disagree on which quests an audience may see.
 """
 
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from sqlalchemy import Connection, text
@@ -64,12 +65,53 @@ from dnd_ai.domain.errors import DomainAuthorizationError
 # already-authorized party perspective (`party_id = :party`), or the caller
 # sees canonical truth across every party (`:include_all_parties` — a GM).
 # `{alias}` is the `campaign.quest_state` alias in the surrounding query;
-# both call sites bind the identical `:party`/`:include_all_parties`
+# every call site binds the identical `:party`/`:include_all_parties`
 # parameters, so list and detail can never disagree on which quests an
 # audience may see (docs/PHASE13D_BACKEND_READINESS.md §4.2/§5).
 _QUEST_STATE_MATCHES_AUDIENCE = (
     "(:include_all_parties OR {alias}.party_id IS NULL OR {alias}.party_id = :party)"
 )
+
+
+def audience_tracked_quest_ids(
+    connection: Connection,
+    candidate_ids: Sequence[uuid.UUID],
+    *,
+    timeline_id: uuid.UUID,
+    world_id: uuid.UUID,
+    party_id: uuid.UUID | None,
+    include_all_parties: bool,
+) -> frozenset[uuid.UUID]:
+    """The subset of `candidate_ids` that are quests in `world_id` tracked on
+    `timeline_id` for this audience — the batched form of `get_quest_view(...,
+    require_campaign_tracking=True)`'s world and tracking checks, under the
+    same `_QUEST_STATE_MATCHES_AUDIENCE` rule. Used where a quest is a
+    *related* resource (a knowledge item's subject) and naming it must agree
+    with the quest detail route. Per-quest `campaign.view` denies and
+    lifecycle gating are the caller's concern, exactly as for that route."""
+    if not candidate_ids:
+        return frozenset()
+    rows = connection.execute(
+        text(f"""
+            SELECT DISTINCT q.quest_id
+            FROM narrative.quests q
+            JOIN core.entities e ON e.entity_id = q.quest_id
+            JOIN campaign.quest_state qst_audience
+              ON qst_audience.quest_id = q.quest_id
+             AND qst_audience.timeline_id = :timeline
+            WHERE q.quest_id = ANY(CAST(:candidates AS uuid[]))
+              AND e.world_id = :world
+              AND {_QUEST_STATE_MATCHES_AUDIENCE.format(alias="qst_audience")}
+        """),
+        {
+            "candidates": list(candidate_ids),
+            "timeline": timeline_id,
+            "world": world_id,
+            "party": party_id,
+            "include_all_parties": include_all_parties,
+        },
+    ).scalars()
+    return frozenset(rows)
 
 
 class QuestNotFoundError(DomainAuthorizationError):

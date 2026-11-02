@@ -17,15 +17,17 @@ import {
 import { characterSheetFixture } from "../fixtures/characterSheet"
 import type { CharacterDetail } from "../types/character"
 import type { CharacterSheet } from "../types/characterSheet"
-import { CampaignCharactersPage } from "./CampaignCharactersPage"
+import { CampaignCharactersBrowsePage, CampaignCharactersPage } from "./CampaignCharactersPage"
 
 const {
+    canEditMock,
     characterRetryMock,
     characterSheetRetryMock,
     getSelectedCharacterIdMock,
     useCharacterMock,
     useCharacterSheetMock,
 } = vi.hoisted(() => ({
+    canEditMock: vi.fn(() => false),
     characterRetryMock: vi.fn(),
     characterSheetRetryMock: vi.fn(),
     getSelectedCharacterIdMock: vi.fn(),
@@ -43,6 +45,16 @@ vi.mock(
     }),
 )
 
+vi.mock("../hooks/useCampaignCapability", () => ({
+    useCampaignCapability: () => canEditMock(),
+}))
+
+vi.mock("../components/CharactersBrowser", () => ({
+    CharactersBrowser: ({ campaignId }: { campaignId: string }) => (
+        <p>Browser for {campaignId}</p>
+    ),
+}))
+
 vi.mock("../hooks/useCharacter", () => ({
     useCharacter: useCharacterMock,
 }))
@@ -54,6 +66,7 @@ vi.mock("../hooks/useCharacterSheet", () => ({
 const characterFixture: CharacterDetail = {
     character_id: "character-a",
     name: "Character A",
+    character_kind: "character",
     species_code: "human",
     size_category: "medium",
     current_hit_points: 6,
@@ -72,6 +85,7 @@ const sheetFixture = {
     ...characterSheetFixture,
     character_id: "character-a",
     name: "Character A",
+    character_kind: "character",
 } satisfies CharacterSheet
 
 function renderAt(
@@ -83,7 +97,11 @@ function renderAt(
             <Routes>
                 <Route
                     path={routePath}
-                    element={<CampaignCharactersPage />}
+                    element={
+                        routePath.endsWith("/all")
+                            ? <CampaignCharactersBrowsePage />
+                            : <CampaignCharactersPage />
+                    }
                 />
             </Routes>
         </MemoryRouter>,
@@ -91,6 +109,8 @@ function renderAt(
 }
 
 beforeEach(() => {
+    canEditMock.mockReset()
+    canEditMock.mockReturnValue(false)
     characterRetryMock.mockReset()
     characterSheetRetryMock.mockReset()
     getSelectedCharacterIdMock.mockReset()
@@ -121,7 +141,7 @@ describe("CampaignCharactersPage", () => {
         ).not.toHaveBeenCalled()
     })
 
-    it("shows an empty state without requesting character data", () => {
+    it("shows the character browser, not an empty placeholder, when no perspective is selected", () => {
         getSelectedCharacterIdMock.mockReturnValue(null)
 
         renderAt(
@@ -129,17 +149,14 @@ describe("CampaignCharactersPage", () => {
             "/app/:campaignId/characters",
         )
 
-        expect(
-            screen.getByRole("heading", {
-                name: "No character selected",
-            }),
-        ).toBeInTheDocument()
-
-        expect(
-            screen.getByText(
-                "Select an available character perspective to view character information.",
-            ),
-        ).toBeInTheDocument()
+        expect(screen.getByText("Browser for campaign-a")).toBeInTheDocument()
+        expect(screen.queryByText("No character selected")).not.toBeInTheDocument()
+        // Only the browser link: there is no selected character to go back to.
+        expect(screen.queryByRole("link", { name: "Selected character" })).not.toBeInTheDocument()
+        expect(screen.getByRole("link", { name: "All characters" })).toHaveAttribute(
+            "href",
+            "/app/campaign-a/characters/all",
+        )
 
         expect(
             getSelectedCharacterIdMock,
@@ -152,6 +169,71 @@ describe("CampaignCharactersPage", () => {
         expect(
             useCharacterSheetMock,
         ).not.toHaveBeenCalled()
+    })
+
+    it("offers both views when a perspective is selected, and keeps the sheet as the default", () => {
+        getSelectedCharacterIdMock.mockReturnValue("character-a")
+        useCharacterMock.mockReturnValue({
+            state: { status: "success", character: characterFixture },
+            retry: characterRetryMock,
+        })
+        useCharacterSheetMock.mockReturnValue({
+            state: { status: "success", sheet: sheetFixture },
+            retry: characterSheetRetryMock,
+        })
+
+        renderAt("/app/campaign-a/characters", "/app/:campaignId/characters")
+
+        expect(screen.getByRole("link", { name: "Selected character" })).toHaveAttribute(
+            "aria-current",
+            "page",
+        )
+        expect(screen.getByRole("link", { name: "All characters" })).toHaveAttribute(
+            "href",
+            "/app/campaign-a/characters/all",
+        )
+        expect(screen.getByRole("heading", { level: 1, name: "Character A" })).toBeInTheDocument()
+        expect(screen.queryByText("Browser for campaign-a")).not.toBeInTheDocument()
+    })
+
+    it("offers New PC to editors only, carrying the view to return to", () => {
+        getSelectedCharacterIdMock.mockReturnValue(null)
+        canEditMock.mockReturnValue(true)
+
+        renderAt("/app/campaign-a/characters", "/app/:campaignId/characters")
+
+        expect(screen.getByRole("link", { name: "New PC" })).toHaveAttribute(
+            "href",
+            "/app/campaign-a/characters/pc/new",
+        )
+        expect(screen.queryByRole("link", { name: "New character" })).not.toBeInTheDocument()
+        expect(screen.queryByRole("link", { name: "New NPC" })).not.toBeInTheDocument()
+    })
+
+    it("hides New PC without canon.edit", () => {
+        getSelectedCharacterIdMock.mockReturnValue(null)
+
+        renderAt("/app/campaign-a/characters", "/app/:campaignId/characters")
+
+        expect(screen.queryByRole("link", { name: "New PC" })).not.toBeInTheDocument()
+    })
+
+    it("shows the browser at /characters/all even with a perspective, marking it current", () => {
+        getSelectedCharacterIdMock.mockReturnValue("character-a")
+
+        renderAt("/app/campaign-a/characters/all", "/app/:campaignId/characters/all")
+
+        expect(screen.getByText("Browser for campaign-a")).toBeInTheDocument()
+        expect(screen.getByRole("link", { name: "All characters" })).toHaveAttribute(
+            "aria-current",
+            "page",
+        )
+        expect(screen.getByRole("link", { name: "Selected character" })).toHaveAttribute(
+            "href",
+            "/app/campaign-a/characters",
+        )
+        // Browsing requests no character data.
+        expect(useCharacterMock).not.toHaveBeenCalled()
     })
 
     it("does not request the sheet while the character is loading", () => {

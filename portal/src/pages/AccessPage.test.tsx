@@ -270,7 +270,7 @@ describe("AccessPage", () => {
         ).toBeInTheDocument()
 
         expect(
-            screen.getAllByText("No character relationships.").length,
+            screen.getAllByText("No character access.").length,
         ).toBeGreaterThan(0)
 
         expect(
@@ -523,9 +523,9 @@ describe("AccessPage", () => {
             "Remove role",
             "Add campaign member",
             "Remove member",
-            "Change type",
-            "Revoke relationship",
-            "Add character relationship",
+            "Change access type",
+            "Remove access",
+            "Give access to a character",
             "Add direct resource access",
             "Revoke access",
             "Create access group",
@@ -886,7 +886,7 @@ describe("AccessPage — add character relationship (character-relationship-mana
 
         expect(
             screen.getAllByRole("button", {
-                name: "Add character relationship",
+                name: "Give access to a character",
             }),
         ).toHaveLength(3)
     })
@@ -899,7 +899,7 @@ describe("AccessPage — add character relationship (character-relationship-mana
 
         expect(
             screen.queryByRole("button", {
-                name: "Add character relationship",
+                name: "Give access to a character",
             }),
         ).not.toBeInTheDocument()
     })
@@ -909,12 +909,12 @@ describe("AccessPage — add character relationship (character-relationship-mana
 
         fireEvent.click(
             screen.getAllByRole("button", {
-                name: "Add character relationship",
+                name: "Give access to a character",
             })[0],
         )
 
         const characterSelect = screen.getByLabelText(
-            `Add a character relationship for Aria the GM in ${campaignName}`,
+            `Give Aria the GM access to a character in ${campaignName}`,
         )
         const characterOptions = Array.from(
             characterSelect.querySelectorAll("option"),
@@ -927,7 +927,7 @@ describe("AccessPage — add character relationship (character-relationship-mana
         // Aria already holds Primary Controller for Kestrel Vane (the
         // default-selected character) — only the remaining two assignable
         // types are offered, never the already-active one.
-        const typeSelect = screen.getByLabelText("Relationship type")
+        const typeSelect = screen.getByLabelText("Access type")
         const typeOptions = Array.from(
             typeSelect.querySelectorAll("option"),
         ).map((option) => option.textContent)
@@ -945,7 +945,7 @@ describe("AccessPage — add character relationship (character-relationship-mana
 
         fireEvent.click(
             screen.getAllByRole("button", {
-                name: "Add character relationship",
+                name: "Give access to a character",
             })[0],
         )
 
@@ -960,7 +960,7 @@ describe("AccessPage — add character relationship (character-relationship-mana
 
         fireEvent.click(
             screen.getAllByRole("button", {
-                name: "Add character relationship",
+                name: "Give access to a character",
             })[0],
         )
         fireEvent.click(
@@ -969,7 +969,7 @@ describe("AccessPage — add character relationship (character-relationship-mana
 
         expect(fetchMock).not.toHaveBeenCalled()
         expect(
-            screen.queryByLabelText("Relationship type"),
+            screen.queryByLabelText("Access type"),
         ).not.toBeInTheDocument()
     })
 
@@ -987,14 +987,14 @@ describe("AccessPage — add character relationship (character-relationship-mana
 
         fireEvent.click(
             screen.getAllByRole("button", {
-                name: "Add character relationship",
+                name: "Give access to a character",
             })[0],
         )
         fireEvent.click(screen.getByRole("button", { name: "Add" }))
 
         await waitFor(() => {
             expect(
-                screen.getByText("Adding character relationship…"),
+                screen.getByText("Giving character access…"),
             ).toBeInTheDocument()
         })
         expect(onChanged).not.toHaveBeenCalled()
@@ -1014,11 +1014,11 @@ describe("AccessPage — add character relationship (character-relationship-mana
 
         await waitFor(() => {
             expect(
-                screen.getByText("Character relationship added."),
+                screen.getByText("Character access added."),
             ).toBeInTheDocument()
         })
         expect(onChanged).toHaveBeenCalledWith(
-            "Character relationship added.",
+            "Character access added.",
         )
     })
 
@@ -1032,7 +1032,7 @@ describe("AccessPage — add character relationship (character-relationship-mana
 
         fireEvent.click(
             screen.getAllByRole("button", {
-                name: "Add character relationship",
+                name: "Give access to a character",
             })[0],
         )
         fireEvent.click(screen.getByRole("button", { name: "Add" }))
@@ -1051,7 +1051,7 @@ describe("AccessPage — change relationship type (character-relationship-manage
 
         // Only Aria the GM holds one active character relationship.
         expect(
-            screen.getAllByRole("button", { name: "Change type" }),
+            screen.getAllByRole("button", { name: "Change access type" }),
         ).toHaveLength(1)
     })
 
@@ -1059,11 +1059,11 @@ describe("AccessPage — change relationship type (character-relationship-manage
         renderPage(fullOverview)
 
         fireEvent.click(
-            screen.getByRole("button", { name: "Change type" }),
+            screen.getByRole("button", { name: "Change access type" }),
         )
 
         const select = screen.getByLabelText(
-            `Change Aria the GM's Kestrel Vane relationship type in ${campaignName}`,
+            `Change Aria the GM's Kestrel Vane access type in ${campaignName}`,
         )
         const options = Array.from(
             select.querySelectorAll("option"),
@@ -1079,7 +1079,7 @@ describe("AccessPage — change relationship type (character-relationship-manage
         renderPage(fullOverview)
 
         fireEvent.click(
-            screen.getByRole("button", { name: "Change type" }),
+            screen.getByRole("button", { name: "Change access type" }),
         )
 
         const saveButton = screen.getByRole("button", { name: "Save" })
@@ -1100,7 +1100,7 @@ describe("AccessPage — change relationship type (character-relationship-manage
         renderPage(fullOverview)
 
         fireEvent.click(
-            screen.getByRole("button", { name: "Change type" }),
+            screen.getByRole("button", { name: "Change access type" }),
         )
         fireEvent.click(
             screen.getByRole("button", { name: "Cancel" }),
@@ -1125,7 +1125,7 @@ describe("AccessPage — change relationship type (character-relationship-manage
         renderPage(fullOverview, onChanged)
 
         fireEvent.click(
-            screen.getByRole("button", { name: "Change type" }),
+            screen.getByRole("button", { name: "Change access type" }),
         )
         fireEvent.change(screen.getByRole("combobox"), {
             target: {
@@ -1136,7 +1136,7 @@ describe("AccessPage — change relationship type (character-relationship-manage
 
         await waitFor(() => {
             expect(
-                screen.getByText("Saving relationship type change…"),
+                screen.getByText("Saving access type change…"),
             ).toBeInTheDocument()
         })
         expect(onChanged).not.toHaveBeenCalled()
@@ -1156,7 +1156,7 @@ describe("AccessPage — change relationship type (character-relationship-manage
 
         await waitFor(() => {
             expect(
-                screen.getByText("Relationship type updated."),
+                screen.getByText("Access type updated."),
             ).toBeInTheDocument()
         })
         expect(onChanged).toHaveBeenCalledTimes(1)
@@ -1171,7 +1171,7 @@ describe("AccessPage — change relationship type (character-relationship-manage
         renderPage(fullOverview)
 
         fireEvent.click(
-            screen.getByRole("button", { name: "Change type" }),
+            screen.getByRole("button", { name: "Change access type" }),
         )
         fireEvent.change(screen.getByRole("combobox"), {
             target: {
@@ -1194,7 +1194,7 @@ describe("AccessPage — revoke character relationship (character-relationship-m
 
         expect(
             screen.getAllByRole("button", {
-                name: "Revoke relationship",
+                name: "Remove access",
             }),
         ).toHaveLength(1)
     })
@@ -1207,13 +1207,13 @@ describe("AccessPage — revoke character relationship (character-relationship-m
 
         fireEvent.click(
             screen.getByRole("button", {
-                name: "Revoke relationship",
+                name: "Remove access",
             }),
         )
 
         expect(
             screen.getByText(
-                /Revoke Aria the GM's Primary Controller relationship to Kestrel Vane\?/,
+                /Remove Aria the GM's Primary Controller access to Kestrel Vane\?/,
             ),
         ).toBeInTheDocument()
         expect(
@@ -1236,7 +1236,7 @@ describe("AccessPage — revoke character relationship (character-relationship-m
         renderPage(fullOverview)
 
         const trigger = screen.getByRole("button", {
-            name: "Revoke relationship",
+            name: "Remove access",
         })
         fireEvent.click(trigger)
         fireEvent.click(
@@ -1251,7 +1251,7 @@ describe("AccessPage — revoke character relationship (character-relationship-m
         await waitFor(() => {
             expect(
                 screen.getByRole("button", {
-                    name: "Revoke relationship",
+                    name: "Remove access",
                 }),
             ).toHaveFocus()
         })
@@ -1271,7 +1271,7 @@ describe("AccessPage — revoke character relationship (character-relationship-m
 
         fireEvent.click(
             screen.getByRole("button", {
-                name: "Revoke relationship",
+                name: "Remove access",
             }),
         )
         fireEvent.click(
@@ -1280,7 +1280,7 @@ describe("AccessPage — revoke character relationship (character-relationship-m
 
         await waitFor(() => {
             expect(
-                screen.getByText("Revoking character relationship…"),
+                screen.getByText("Removing character access…"),
             ).toBeInTheDocument()
         })
         expect(
@@ -1305,11 +1305,11 @@ describe("AccessPage — revoke character relationship (character-relationship-m
 
         await waitFor(() => {
             expect(
-                screen.getByText("Character relationship revoked."),
+                screen.getByText("Character access removed."),
             ).toBeInTheDocument()
         })
         expect(onChanged).toHaveBeenCalledWith(
-            "Character relationship revoked.",
+            "Character access removed.",
         )
     })
 
@@ -1323,7 +1323,7 @@ describe("AccessPage — revoke character relationship (character-relationship-m
 
         fireEvent.click(
             screen.getByRole("button", {
-                name: "Revoke relationship",
+                name: "Remove access",
             }),
         )
         fireEvent.click(
@@ -1342,7 +1342,7 @@ describe("AccessPage — revoke character relationship (character-relationship-m
 
         fireEvent.click(
             screen.getByRole("button", {
-                name: "Revoke relationship",
+                name: "Remove access",
             }),
         )
 
@@ -1351,7 +1351,7 @@ describe("AccessPage — revoke character relationship (character-relationship-m
         expect(
             uuidPattern.test(
                 screen.getByText(
-                    /Revoke Aria the GM's Primary Controller relationship/,
+                    /Remove Aria the GM's Primary Controller access/,
                 ).textContent ?? "",
             ),
         ).toBe(false)

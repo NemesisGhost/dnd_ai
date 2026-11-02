@@ -26,17 +26,17 @@ function statusMessage(
 ): string {
     switch (kind) {
         case "pending":
-            return "Saving relationship type change…"
+            return "Saving access type change…"
         case "success":
-            return "Relationship type updated."
+            return "Access type updated."
         case "denied":
             return "You do not have permission to make this change."
         case "conflict":
-            return "This character relationship changed elsewhere. Reload the page to see the current state."
+            return "This character access changed elsewhere. Reload the page to see the current state."
         case "validation":
-            return "That relationship type can no longer be assigned. Reload the page to see the current choices."
+            return "That access type can no longer be assigned. Reload the page to see the current choices."
         case "error":
-            return "The relationship type change could not be saved. Try again."
+            return "The access type change could not be saved. Try again."
     }
 }
 
@@ -69,7 +69,7 @@ export function CharacterRelationshipEditor({
 
     const { status, submit, reset } = useChangeCharacterRelationship(
         campaignId,
-        () => onChanged("Relationship type updated."),
+        () => onChanged("Access type updated."),
     )
 
     const isPending = status.kind === "pending"
@@ -97,7 +97,7 @@ export function CharacterRelationshipEditor({
                     setIsEditing(true)
                 }}
             >
-                Change type
+                Change access type
             </button>
         )
     }
@@ -119,7 +119,7 @@ export function CharacterRelationshipEditor({
         >
             <label htmlFor={selectId}>
                 Change {memberDisplayName}'s{" "}
-                {relationship.character_display_name} relationship type in{" "}
+                {relationship.character_display_name} access type in{" "}
                 {campaignName}
             </label>
 

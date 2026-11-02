@@ -5,6 +5,8 @@ interface CharacterPerspectiveContextValue {
     campaignId: string,
   ) => string | null
 
+  /** Commits a perspective whose navigation has already been accepted. A user
+   * request goes through the campaign layout's guarded transition instead. */
   selectCharacter: (
     campaignId: string,
     characterId: string | null,
@@ -12,8 +14,8 @@ interface CharacterPerspectiveContextValue {
 
   /** Synchronizes an authorized-looking character id carried in a URL
    * (e.g. a Knowledge detail link's `character_id` query parameter) into
-   * the visible selected perspective, without the bootstrap reload
-   * `selectCharacter` triggers for an explicit user selection. No-ops for
+   * the visible selected perspective, without the guarded navigation an
+   * explicit user selection goes through. No-ops for
    * an id that isn't in the current bootstrap's authorized
    * `character_perspectives` — the request itself stays server-authorized
    * regardless of what this updates. Optional because most consumers of

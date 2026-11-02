@@ -58,6 +58,25 @@ function buildKnowledgePath(
         )
     }
 
+    // Public knowledge is additive by default server-side; the parameter is
+    // sent only for the explicit opt-out.
+    if (parameters.includePublic === false) {
+        searchParameters.set(
+            "include_public",
+            "false",
+        )
+    }
+
+    if (
+        parameters.lifecycle !== undefined &&
+        parameters.lifecycle !== "active"
+    ) {
+        searchParameters.set(
+            "lifecycle",
+            parameters.lifecycle,
+        )
+    }
+
     if (parameters.cursor) {
         searchParameters.set(
             "cursor",

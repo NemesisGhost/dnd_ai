@@ -40,9 +40,11 @@ from dnd_ai.domain.quest_authoring import (
     OBJECTIVE_TARGET_TYPE_CODES,
     STRUCTURAL_OBJECTIVE_FIELDS,
     STRUCTURAL_STAGE_FIELDS,
+    normalize_gm_notes,
     normalize_objective_fields,
     normalize_stage_fields,
 )
+from dnd_ai.domain.world_authority import WORLD_CANON_EDIT
 
 from ._content import (
     AuthoringScope,
@@ -59,6 +61,13 @@ from ._content import (
 )
 
 _QUEST = frozenset({"quest"})
+
+
+class _Unset:
+    """Marks an optional argument as not supplied (`None` means clear)."""
+
+
+UNSET = _Unset()
 MAX_STAGES = 100
 MAX_OBJECTIVES_PER_STAGE = 100
 
@@ -68,8 +77,9 @@ MAX_OBJECTIVES_PER_STAGE = 100
 
 def quest_has_progress(connection: Connection, quest_id: uuid.UUID) -> bool:
     """Whether recorded state or history refers to this quest or its objectives,
-    in any timeline: quest or objective progress, event effects that target an
-    objective, or objective dependencies."""
+    in any timeline: quest or objective progress, or event effects that target an
+    objective. (Objective dependencies are definition since checkpoint 15.2E-2a, so
+    they no longer count as progress.)"""
     return bool(
         connection.execute(
             text("""
@@ -84,9 +94,6 @@ def quest_has_progress(connection: Connection, quest_id: uuid.UUID) -> bool:
                                       WHERE os.quest_objective_id = qo.quest_objective_id)
                               OR EXISTS (SELECT 1 FROM narrative.event_effects ee
                                          WHERE ee.target_quest_objective_id = qo.quest_objective_id)
-                              OR EXISTS (SELECT 1 FROM narrative.objective_dependencies od
-                                         WHERE od.objective_id = qo.quest_objective_id
-                                            OR od.depends_on_objective_id = qo.quest_objective_id)
                           )
                     )
             """),
@@ -104,7 +111,12 @@ def _lock_quest(
     expected_row_version: int,
     target_ids: tuple[uuid.UUID | None, ...] = (),
 ) -> tuple[AuthoringScope, LockedContent, dict[uuid.UUID, LockedContent]]:
-    scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_authoring_scope(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        world_capability=WORLD_CANON_EDIT,
+    )
     locked = lock_entities(
         connection,
         world_id=scope.world_id,
@@ -212,7 +224,12 @@ def create_quest(
 ) -> ContentWriteResult:
     clean_name = normalize_name(name)
     clean_summary = normalize_description(summary)
-    scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_authoring_scope(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        world_capability=WORLD_CANON_EDIT,
+    )
     source_id = insert_gm_source(connection, world_id=scope.world_id, actor_user_id=actor_user_id)
     entity_id, row_version = insert_draft_entity(
         connection,
@@ -248,6 +265,7 @@ def update_quest(
     name: str | None,
     summary: str | None,
     change_note: str | None = None,
+    gm_notes: str | None | _Unset = UNSET,
 ) -> ContentWriteResult:
     normalize_reason(change_note)
     scope, quest, _ = _lock_quest(
@@ -259,15 +277,25 @@ def update_quest(
     )
     clean_name = normalize_name(name)
     clean_summary = normalize_description(summary)
+    current_notes = connection.execute(
+        text("SELECT gm_notes FROM narrative.quests WHERE quest_id = :q"), {"q": quest_id}
+    ).scalar()
+    # An omitted `gm_notes` keeps the current notes (older clients never send it).
+    clean_notes = current_notes if isinstance(gm_notes, _Unset) else normalize_gm_notes(gm_notes)
     changed = diff_fields(
-        {"name": quest.canonical_name, "summary": quest.summary},
-        {"name": clean_name, "summary": clean_summary},
+        {"name": quest.canonical_name, "summary": quest.summary, "gm_notes": current_notes},
+        {"name": clean_name, "summary": clean_summary, "gm_notes": clean_notes},
     )
     if not changed:
         return _noop(quest, scope)
     new_version = touch_entity(
         connection, entity_id=quest_id, name=clean_name, summary=clean_summary
     )
+    if "gm_notes" in changed:
+        connection.execute(
+            text("UPDATE narrative.quests SET gm_notes = :n WHERE quest_id = :q"),
+            {"n": clean_notes, "q": quest_id},
+        )
     return ContentWriteResult(
         entity_id=quest_id,
         world_id=scope.world_id,

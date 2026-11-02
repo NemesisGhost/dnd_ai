@@ -72,7 +72,7 @@ export function InvitationOnboardingConfirm({
                 account to the campaign.
             </p>
 
-            <div className="access-role-editor__actions">
+            <div className="access-role-editor__actions invitation-onboarding__actions">
                 <button
                     type="button"
                     className="login-button"
@@ -93,7 +93,12 @@ export function InvitationOnboardingConfirm({
                 </button>
             </div>
 
-            <p id={statusId} className="login-error" role="alert" aria-live="polite">
+            <p
+                id={statusId}
+                className="login-error invitation-onboarding__message"
+                role="alert"
+                aria-live="polite"
+            >
                 {status.kind === "unavailable" &&
                     "This invitation is no longer available. It may have expired, been revoked, or already been used."}
                 {status.kind === "error" && "Something went wrong. Try again."}

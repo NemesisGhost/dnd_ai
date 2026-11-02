@@ -85,7 +85,6 @@ const campaign = {
 const bootstrap: SessionBootstrap = {
   ...sessionBootstrapFixture,
   browser_session_id: "session-a",
-  is_platform_administrator: false,
   startup_campaign_id: "campaign-a",
   campaign_preferences: {
     startup_mode: "resume_last_visited",
@@ -154,7 +153,8 @@ describe("SessionProvider perspective integration", () => {
       },
     )
 
-    expect(reload).toHaveBeenCalledTimes(1)
+    // Committing a perspective never reloads the session (that would unmount the page).
+    expect(reload).not.toHaveBeenCalled()
 
     useSessionBootstrapMock.mockReturnValue({
       state: {
@@ -203,7 +203,7 @@ describe("SessionProvider perspective integration", () => {
     ).toBeInTheDocument()
   })
 
-  it("removes a revoked perspective and displays the authorized server default", () => {
+  it("removes a revoked perspective and shows none, never the authorized server default", () => {
     const { rerender } = render(<TestPortal />)
 
     fireEvent.change(
@@ -217,7 +217,8 @@ describe("SessionProvider perspective integration", () => {
       },
     )
 
-    expect(reload).toHaveBeenCalledTimes(1)
+    // Committing a perspective never reloads the session (that would unmount the page).
+    expect(reload).not.toHaveBeenCalled()
 
     useSessionBootstrapMock.mockReturnValue({
       state: {
@@ -258,11 +259,11 @@ describe("SessionProvider perspective integration", () => {
       screen.getByRole("combobox", {
         name: "Character perspective",
       }),
-    ).toHaveValue("character-a")
+    ).toHaveValue("")
 
     expect(
       screen.getByText(
-        "Campaign context: Mundivita — Viewing as Character A",
+        "Campaign context: Mundivita — Viewing as No character perspective selected",
         { selector: "summary" },
       ),
     ).toBeInTheDocument()

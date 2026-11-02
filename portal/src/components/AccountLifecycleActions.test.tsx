@@ -56,6 +56,7 @@ const activeAccount: PlatformAccount = {
     login_name: "active.account",
     lifecycle_status_code: "active",
     is_platform_administrator: false,
+    system_roles: ["player"],
     has_local_credential: true,
     has_outstanding_activation: false,
     last_login_at: null,

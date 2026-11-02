@@ -1,3 +1,5 @@
+import type { RecordAuthoring } from "../utils/recordAuthoring"
+
 export interface EntityBlockedAction {
     action: string
     reason: string
@@ -14,6 +16,8 @@ export interface EntityLifecycleView {
     superseded_by: { entity_id: string; canonical_name: string } | null
     available_actions: string[]
     blocked_actions: EntityBlockedAction[]
+    // The server's per-record eligibility for this caller (see utils/recordAuthoring).
+    authoring?: RecordAuthoring
 }
 
 export interface ReplacementCandidate {

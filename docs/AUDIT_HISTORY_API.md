@@ -88,6 +88,8 @@ never blocks or errors the page itself.
   allowlist (e.g. a quest, item, or narrative-event change) is never
   attempted and never surfaced — see §6.
 
+> **`sensitive_read` rows (Phase 15 checkpoint 15.2A-3).** Audience-preview requests write metadata-only `audit.change_log` rows with action `sensitive_read` (commands `preview_quest`/`preview_knowledge`). They are deliberately **not** in this module's command allowlist, so they never appear in the campaign audit-history list; surfacing them is a later product decision.
+
 ## 2. Category / command allowlist
 
 | `category` | `command_name` values | Source table |

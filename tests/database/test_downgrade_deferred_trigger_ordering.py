@@ -52,6 +52,7 @@ from tests.factories import (
     make_campaign_membership,
     make_membership_role,
     make_ruleset_version_for_world,
+    make_system_role_assignment,
     make_timeline,
     make_user,
     make_world,
@@ -240,6 +241,7 @@ def _populate_full_head_state(connection: Connection) -> None:
     reservation_timeline_id = make_timeline(connection, world_id)
     ruleset_version_id = make_ruleset_version_for_world(connection, world_id)
     reservation_creator_id = make_user(connection, "downgrade reservation creator")
+    make_system_role_assignment(connection, reservation_creator_id, "gm")
     grant_timeline_bootstrap(
         connection, timeline_id=reservation_timeline_id, granted_to_user_id=reservation_creator_id
     )
@@ -400,6 +402,7 @@ def _assert_retention_invariant_still_enforced(engine: Engine) -> None:
         timeline_id = make_timeline(conn, world_id, is_primary=True)
         ruleset_version_id = make_ruleset_version_for_world(conn, world_id)
         creator_user_id = make_user(conn, f"{slug} creator")
+        make_system_role_assignment(conn, creator_user_id, "gm")
         grant_timeline_bootstrap(conn, timeline_id=timeline_id, granted_to_user_id=creator_user_id)
         result = create_campaign(
             conn,
@@ -410,8 +413,9 @@ def _assert_retention_invariant_still_enforced(engine: Engine) -> None:
         )
         membership_role_id = conn.execute(
             text(
-                "SELECT membership_role_id FROM security.membership_roles "
-                "WHERE campaign_membership_id = :m"
+                "SELECT mr.membership_role_id FROM security.membership_roles mr "
+                "JOIN security.roles r ON r.role_id = mr.role_id "
+                "WHERE mr.campaign_membership_id = :m AND r.code = 'campaign_owner'"
             ),
             {"m": result.campaign_membership_id},
         ).scalar_one()

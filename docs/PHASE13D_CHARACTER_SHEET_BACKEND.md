@@ -20,7 +20,10 @@ enlarged or reshaped by this workstream.
 The response (`CharacterSheetResponse`, explicit nested Pydantic models,
 no `dict[str, Any]` anywhere in the response shape) contains:
 
-- **Character and build identity**: `character_id`, `name`, `species_code`,
+- **Character and build identity**: `character_id`, `name`, `character_kind` (`npc`, `player_character`, or
+  `character` for a bare character row; also on `GET .../characters/{character_id}`, both tiers: not new
+  disclosure, the World search card already returns the entity type to anyone who may discover the
+  character), `species_code`,
   `species_display_name`, `size_category`, `character_build_id` (nullable),
   `build_label` (nullable), `ruleset_code`/`ruleset_display_name`/
   `ruleset_version_id`/`ruleset_version_label` (all nullable together with

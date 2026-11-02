@@ -50,6 +50,7 @@ from dnd_ai.domain.authoring import (
     SupersessionTargetInvalidError,
     normalize_reason,
 )
+from dnd_ai.domain.dungeon_authoring import DungeonHasActiveAreasError
 from dnd_ai.domain.entity_lifecycle import (
     APPROVE,
     ARCHIVE,
@@ -66,7 +67,12 @@ from dnd_ai.domain.entity_lifecycle import (
     require_transition,
     target_canon_status,
 )
+from dnd_ai.domain.record_authoring import (
+    LIFECYCLE_ACTION_CAPABILITIES,
+    lifecycle_world_capability,
+)
 from dnd_ai.queries.content_preconditions import (
+    DUNGEON_HAS_ACTIVE_AREAS,
     archive_blocked_reason,
     publish_blocked_reason,
     publish_reference_ids,
@@ -96,6 +102,14 @@ ENTITY_REFERENCE_CLASSIFICATION: dict[tuple[str, str, str], str] = {
     # --- owned: the definition's own rows -----------------------------------
     ("core", "entity_names", "entity_id"): OWNED_CASCADE,
     ("core", "entity_tags", "entity_id"): OWNED_CASCADE,
+    # Canonical revision history (Phase 15, revision 117): removed with a deleted draft.
+    ("core", "entity_revisions", "entity_id"): OWNED_CASCADE,
+    ("core", "entity_source_links", "entity_id"): OWNED_CASCADE,
+    ("character", "npc_portrayal_profiles", "npc_id"): OWNED_CASCADE,
+    # An item instance's own subtype and container rows go with a draft; its timeline state,
+    # custody, attunement, identification and combat records block deletion.
+    ("world", "item_instances", "item_instance_id"): OWNED_CASCADE,
+    ("world", "item_containers", "container_id"): OWNED_CASCADE,
     ("world", "locations", "location_id"): OWNED_CASCADE,
     ("world", "settlements", "settlement_id"): OWNED_CASCADE,
     ("world", "buildings", "building_id"): OWNED_CASCADE,
@@ -105,12 +119,22 @@ ENTITY_REFERENCE_CLASSIFICATION: dict[tuple[str, str, str], str] = {
     ("world", "military_units", "military_unit_id"): OWNED_CASCADE,
     ("world", "political_factions", "political_faction_id"): OWNED_CASCADE,
     ("world", "religions", "religion_id"): OWNED_CASCADE,
+    # Dungeon structure (Phase 15.3A-1): the aggregate's own definition rows, which exist
+    # only while the dungeon is a draft that can be deleted (state and knowledge point at
+    # them from other tables and block earlier).
+    ("world", "area_connections", "from_dungeon_area_id"): OWNED_CASCADE,
+    ("world", "area_connections", "to_dungeon_area_id"): OWNED_CASCADE,
+    ("world", "area_features", "dungeon_area_id"): OWNED_CASCADE,
+    ("world", "area_hazards", "dungeon_area_id"): OWNED_CASCADE,
+    ("world", "area_interactables", "dungeon_area_id"): OWNED_CASCADE,
     ("world", "religious_organizations", "religious_organization_id"): OWNED_CASCADE,
     # --- blocking: references to core.entities -------------------------------
     ("ai", "agent_assignments", "entity_id"): BLOCKING,
     ("campaign", "inventory_entries", "holder_entity_id"): BLOCKING,
     ("campaign", "item_ownership", "owner_entity_id"): BLOCKING,
     ("campaign", "party_memberships", "member_entity_id"): BLOCKING,
+    # A character that has taken part in a session keeps that history (15.2D-2).
+    ("campaign", "session_participants", "character_id"): BLOCKING,
     ("campaign", "relationship_state", "perspective_holder_entity_id"): BLOCKING,
     ("integration", "external_identifiers", "entity_id"): BLOCKING,
     ("integration", "sync_jobs", "target_entity_id"): BLOCKING,
@@ -130,10 +154,15 @@ ENTITY_REFERENCE_CLASSIFICATION: dict[tuple[str, str, str], str] = {
     ("narrative", "events", "event_id"): BLOCKING,
     ("narrative", "quest_objectives", "target_entity_id"): BLOCKING,
     ("narrative", "quest_participants", "participant_entity_id"): BLOCKING,
+    ("campaign", "inventory_entries", "item_instance_id"): BLOCKING,
+    ("campaign", "item_attunements", "item_instance_id"): BLOCKING,
+    ("campaign", "item_ownership", "item_instance_id"): BLOCKING,
+    ("campaign", "item_state", "item_instance_id"): BLOCKING,
+    ("interaction", "combat_actions", "item_instance_id"): BLOCKING,
+    ("knowledge", "item_identification", "item_instance_id"): BLOCKING,
     ("security", "resource_grants", "entity_id"): BLOCKING,
     ("world", "employment_relationships", "employee_entity_id"): BLOCKING,
     ("world", "employment_relationships", "employer_entity_id"): BLOCKING,
-    ("world", "item_instances", "item_instance_id"): BLOCKING,
     ("world", "organization_memberships", "member_entity_id"): BLOCKING,
     ("world", "ownership_relationships", "owned_entity_id"): BLOCKING,
     ("world", "ownership_relationships", "owner_entity_id"): BLOCKING,
@@ -196,7 +225,8 @@ ENTITY_REFERENCE_CLASSIFICATION: dict[tuple[str, str, str], str] = {
     ("campaign", "item_attunements", "character_id"): BLOCKING,
     ("character", "character_builds", "character_id"): BLOCKING,
     ("character", "character_religious_affiliations", "character_id"): BLOCKING,
-    ("character", "player_characters", "player_character_id"): BLOCKING,
+    # A player character's marker row is part of its identity (Phase 15.2B-1).
+    ("character", "player_characters", "player_character_id"): OWNED_CASCADE,
     ("knowledge", "character_expertise", "character_id"): BLOCKING,
     ("security", "membership_character_relationships", "character_id"): BLOCKING,
     ("security", "resource_grants", "character_id"): BLOCKING,
@@ -244,6 +274,30 @@ def _publish_reference_ids(
     return publish_reference_ids(connection, entity_id=entity_id, entity_type_code=type_code)
 
 
+def _lifecycle_world_capability(
+    connection: Connection, *, entity_id: uuid.UUID, action: str
+) -> str | None:
+    """The world capability `action` needs on `entity_id`, or `None` for the
+    campaign-originated exceptions (`dnd_ai.domain.record_authoring`, which the
+    read models and the per-record eligibility fields share). The entity type is
+    read without a lock: it can never change (entity-type-change protection), and
+    an unknown entity falls through to the strict capability and then to the
+    normal not-found error."""
+    type_code = connection.execute(
+        text("""
+            SELECT et.code FROM core.entities e
+            JOIN core.entity_types et ON et.entity_type_id = e.entity_type_id
+            WHERE e.entity_id = :e
+        """),
+        {"e": entity_id},
+    ).scalar()
+    return (
+        lifecycle_world_capability(str(type_code), action)
+        if type_code is not None
+        else (LIFECYCLE_ACTION_CAPABILITIES[action])
+    )
+
+
 def _prepare(
     connection: Connection,
     *,
@@ -251,12 +305,19 @@ def _prepare(
     entity_id: uuid.UUID,
     actor_user_id: uuid.UUID,
     expected_row_version: int,
-    action: str | None = None,
+    action: str,
 ) -> tuple[uuid.UUID, LockedContent]:
     """Lock and authorize (scope, then entities in `entity_id` order: the target
     `FOR UPDATE`, and for publish the records it refers to `FOR SHARE`), bind the
     target to the campaign's world, and compare the version."""
-    scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_authoring_scope(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        world_capability=_lifecycle_world_capability(
+            connection, entity_id=entity_id, action=action
+        ),
+    )
     world_id = scope.world_id
     reference_ids = (
         _publish_reference_ids(connection, world_id=world_id, entity_id=entity_id)
@@ -534,7 +595,14 @@ def supersede_entity(
     Nonexistent, other-world, wrong-type, and wrong-status replacements are the
     same `SupersessionTargetInvalidError`. References to the old entity keep
     resolving: nothing is moved, deleted, or rewritten."""
-    scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_authoring_scope(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        world_capability=_lifecycle_world_capability(
+            connection, entity_id=entity_id, action=SUPERSEDE
+        ),
+    )
     # The replacement may be published by this call, so the records it refers to
     # are locked `FOR SHARE` together with the pair, in ascending id order, exactly
     # as an ordinary publish does (read unlocked first, then any the read missed).
@@ -661,14 +729,15 @@ def archive_entity(
         entity_id=entity_id,
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
+        action=ARCHIVE,
     )
     require_transition(ARCHIVE, entity.canon_status, entity.lifecycle_status)
-    if (
-        archive_blocked_reason(
-            connection, entity_id=entity_id, entity_type_code=entity.entity_type_code
-        )
-        is not None
-    ):
+    blocked = archive_blocked_reason(
+        connection, entity_id=entity_id, entity_type_code=entity.entity_type_code
+    )
+    if blocked == DUNGEON_HAS_ACTIVE_AREAS:
+        raise DungeonHasActiveAreasError(f"dungeon {entity_id} has active areas")
+    if blocked is not None:
         raise CharacterHasUserRelationshipsError(f"entity {entity_id} is linked to a user")
     new_version = _set_lifecycle(connection, entity_id, "archived", archived=True)
     return _result(
@@ -698,6 +767,7 @@ def restore_entity(
         entity_id=entity_id,
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
+        action=RESTORE,
     )
     require_transition(RESTORE, entity.canon_status, entity.lifecycle_status)
     _require_subtype_complete(connection, entity_id=entity_id, entity_type_id=entity.entity_type_id)
@@ -728,6 +798,7 @@ def delete_draft_entity(
         entity_id=entity_id,
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
+        action=DELETE_DRAFT,
     )
     require_transition(DELETE_DRAFT, entity.canon_status, entity.lifecycle_status)
     if _has_blocking_references(connection, entity_id=entity_id):

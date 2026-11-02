@@ -15,7 +15,6 @@ interface CampaignHomeNavGroupProps {
   // aria-current on its list entry. Never a fallback-resolved campaign.
   authorizedRouteCampaignId: string | undefined
   collapsed: boolean
-  onSelectCampaign: (campaignId: string) => void
   onNavigate: () => void
 }
 
@@ -28,7 +27,6 @@ export function CampaignHomeNavGroup({
   resolvedCampaign,
   authorizedRouteCampaignId,
   collapsed,
-  onSelectCampaign,
   onNavigate,
 }: CampaignHomeNavGroupProps) {
   const location = useLocation()
@@ -175,7 +173,6 @@ export function CampaignHomeNavGroup({
                   : undefined
               }
               onClick={() => {
-                onSelectCampaign(campaign.campaign_id)
                 setOpen(false)
                 onNavigate()
               }}

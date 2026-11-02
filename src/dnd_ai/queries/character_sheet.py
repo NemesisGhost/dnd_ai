@@ -80,6 +80,7 @@ from dnd_ai.domain.character_calculations import (
     total_level as calculate_total_level,
 )
 from dnd_ai.domain.errors import DomainAuthorizationError
+from dnd_ai.queries.character import character_kind_for_type_code
 from dnd_ai.queries.character_build_resolution import resolve_effective_character_build_id
 
 
@@ -217,6 +218,7 @@ class MovementView:
 class CharacterSheetView:
     character_id: uuid.UUID
     name: str
+    character_kind: str
     species_code: str
     species_display_name: str
     size_category: str
@@ -319,9 +321,11 @@ def get_character_sheet_view(
         connection.execute(
             text("""
                 SELECT c.character_id, e.world_id, e.canonical_name, sp.code AS species_code,
-                       sp.display_name AS species_display_name, c.size_category
+                       sp.display_name AS species_display_name, c.size_category,
+                       et.code AS entity_type_code
                 FROM character.characters c
                 JOIN core.entities e ON e.entity_id = c.character_id
+                JOIN core.entity_types et ON et.entity_type_id = e.entity_type_id
                 JOIN rules.species sp ON sp.species_id = c.species_id
                 WHERE c.character_id = :character
             """),
@@ -349,6 +353,7 @@ def get_character_sheet_view(
         return CharacterSheetView(
             character_id=identity_row["character_id"],
             name=identity_row["canonical_name"],
+            character_kind=character_kind_for_type_code(identity_row["entity_type_code"]),
             species_code=identity_row["species_code"],
             species_display_name=identity_row["species_display_name"],
             size_category=identity_row["size_category"],
@@ -717,6 +722,7 @@ def get_character_sheet_view(
     return CharacterSheetView(
         character_id=identity_row["character_id"],
         name=identity_row["canonical_name"],
+        character_kind=character_kind_for_type_code(identity_row["entity_type_code"]),
         species_code=identity_row["species_code"],
         species_display_name=identity_row["species_display_name"],
         size_category=identity_row["size_category"],

@@ -23,7 +23,7 @@ class Setup:
     def __init__(self, harness: AuthoringHarness, connection: Connection) -> None:
         self.harness = harness
         self.connection = connection
-        self.gm: Actor = harness.new_actor("GM")
+        self.gm: Actor = harness.new_actor("GM", world_creator=True)
         ruleset_id, ruleset_version_id = dnd5e_ids(connection)
         created = self.gm.post(
             "/worlds",

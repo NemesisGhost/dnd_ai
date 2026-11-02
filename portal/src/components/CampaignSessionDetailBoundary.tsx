@@ -10,6 +10,7 @@ interface CampaignSessionDetailBoundaryProps {
     sessionId: string
     children: (
         session: CampaignSessionDetail,
+        refresh: () => Promise<boolean>,
     ) => ReactNode
 }
 
@@ -18,7 +19,7 @@ export function CampaignSessionDetailBoundary({
     sessionId,
     children,
 }: CampaignSessionDetailBoundaryProps) {
-    const { state, retry } = useCampaignSession(
+    const { state, retry, refresh } = useCampaignSession(
         campaignId,
         sessionId,
     )
@@ -66,5 +67,5 @@ export function CampaignSessionDetailBoundary({
         )
     }
 
-    return <>{children(state.session)}</>
+    return <>{children(state.session, refresh)}</>
 }

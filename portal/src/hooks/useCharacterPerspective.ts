@@ -9,10 +9,7 @@ interface CharacterSelection {
     characterId: string | null
 }
 
-export function useCharacterPerspective({
-    state,
-    reload,
-}: UseSessionBootstrapResult) {
+export function useCharacterPerspective({ state }: UseSessionBootstrapResult) {
     const [selection, setSelection] =
         useState<CharacterSelection | null>(null)
 
@@ -46,12 +43,27 @@ export function useCharacterPerspective({
                 ? selection.characterId
                 : undefined
 
+        // A selection the bootstrap no longer authorizes (revoked) is never replaced by the server
+        // default: it reads as no perspective until the campaign layout commits that as an explicit
+        // choice, so re-authorization alone cannot bring it back (UI_DESIGN §4.5).
+        if (
+            typeof requestedCharacterId === "string" &&
+            !campaign.character_perspectives.some(
+                (character) =>
+                    character.character_id === requestedCharacterId,
+            )
+        ) {
+            return null
+        }
+
         return resolveSelectedCharacterId(
             campaign,
             requestedCharacterId,
         )
     }
 
+    // Commits a perspective the user's navigation has already been accepted for (the campaign layout
+    // calls this from the accepted location). It starts nothing: no session reload, and no refresh.
     function selectCharacter(
         campaignId: string,
         characterId: string | null,
@@ -82,17 +94,24 @@ export function useCharacterPerspective({
             return
         }
 
-        setSelection({
-            userId: bootstrap.user.user_id,
-            browserSessionId: bootstrap.browser_session_id,
-            campaignId,
-            characterId,
-        })
-
-        reload()
+        // Idempotent: committing what is already committed changes nothing (and renders nothing).
+        setSelection((current) =>
+            current !== null &&
+            current.userId === bootstrap.user.user_id &&
+            current.browserSessionId === bootstrap.browser_session_id &&
+            current.campaignId === campaignId &&
+            current.characterId === characterId
+                ? current
+                : {
+                      userId: bootstrap.user.user_id,
+                      browserSessionId: bootstrap.browser_session_id,
+                      campaignId,
+                      characterId,
+                  },
+        )
     }
 
-    // Unlike selectCharacter, this never reloads the bootstrap: it exists
+    // Unlike an explicit user selection, this never navigates: it exists
     // to reconcile the visible perspective with a character id a route
     // already trusts the server to authorize (e.g. from a URL), not to
     // perform a new user-driven selection.

@@ -1,13 +1,16 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
-import { Link, MemoryRouter, Route, Routes } from "react-router"
+import { Link, MemoryRouter, Route, Routes, useLocation } from "react-router"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { CharacterPerspectiveContext } from "../context/CharacterPerspectiveContext"
+import { KnowledgeRequestError } from "../api/knowledge"
 import type { KnowledgeDetail } from "../types/knowledge"
 import { CampaignKnowledgeDetailPage } from "./CampaignKnowledgeDetailPage"
 
-const { fetchKnowledgeDetailMock, reloadMock } = vi.hoisted(() => ({
+const { fetchKnowledgeDetailMock, reloadMock, refreshMock, sessionRef } = vi.hoisted(() => ({
     fetchKnowledgeDetailMock: vi.fn(),
     reloadMock: vi.fn(),
+    refreshMock: vi.fn(),
+    sessionRef: { state: undefined as unknown },
 }))
 
 vi.mock("../api/knowledge", async (importOriginal) => {
@@ -26,7 +29,7 @@ vi.mock("../context/SessionContext", async (importOriginal) => {
     const actual = await importOriginal<typeof import("../context/SessionContext")>()
     return {
         ...actual,
-        useSession: () => ({ reload: reloadMock }),
+        useSession: () => ({ reload: reloadMock, refresh: refreshMock, state: sessionRef.state }),
     }
 })
 
@@ -69,6 +72,7 @@ function renderAt(
             }}
         >
             <MemoryRouter initialEntries={[path]}>
+                <AddressProbe />
                 <Routes>
                     <Route
                         path="/app/:campaignId/knowledge/:knowledgeItemId"
@@ -87,7 +91,15 @@ function renderAt(
 beforeEach(() => {
     fetchKnowledgeDetailMock.mockReset()
     reloadMock.mockReset()
+    refreshMock.mockReset()
+    refreshMock.mockResolvedValue(true)
+    sessionRef.state = undefined
 })
+
+function AddressProbe() {
+    const here = useLocation()
+    return <output data-testid="address">{here.pathname + here.search}</output>
+}
 
 describe("CampaignKnowledgeDetailPage", () => {
     it("prefers a character_id carried in the URL over the selected/default character", async () => {
@@ -109,10 +121,7 @@ describe("CampaignKnowledgeDetailPage", () => {
         })
 
         expect(
-            screen.getByRole("heading", {
-                level: 1,
-                name: itemFixture.statement,
-            }),
+            await screen.findByRole("heading", { level: 1, name: itemFixture.statement }),
         ).toBeInTheDocument()
     })
 
@@ -411,5 +420,79 @@ describe("CampaignKnowledgeDetailPage", () => {
 
             expect(syncCharacterFromUrl).toHaveBeenCalledTimes(1)
         })
+    })
+
+    it("forwards the URL's party perspective to a quest subject link", async () => {
+        fetchKnowledgeDetailMock.mockResolvedValue({
+            ...itemFixture,
+            subject: {
+                entity_id: "quest-a",
+                name: "Clear the Old Mill",
+                category: "quest",
+                entity_type_code: "quest",
+            },
+        })
+
+        renderAt(
+            "/app/campaign-a/knowledge/knowledge-a?character_id=character-a&party_id=party-a",
+            "character-a",
+        )
+
+        expect(
+            await screen.findByRole("link", { name: "Clear the Old Mill" }),
+        ).toHaveAttribute(
+            "href",
+            "/app/campaign-a/quests/quest-a?character_id=character-a&party_id=party-a",
+        )
+    })
+})
+
+describe("CampaignKnowledgeDetailPage: a party that stops being authorized", () => {
+    const authorized = (partyIds: string[]) => ({
+        status: "authenticated",
+        bootstrap: {
+            campaigns: [
+                {
+                    campaign_id: "campaign-a",
+                    character_perspectives: [
+                        {
+                            character_id: "character-a",
+                            character_name: "Aria",
+                            authorized_parties: partyIds.map((id) => ({ party_id: id, party_name: id })),
+                        },
+                    ],
+                },
+            ],
+        },
+    })
+
+    it("drops only the party from the address, reads the record once without it, and never retries the old party", async () => {
+        sessionRef.state = authorized(["p2"])
+        fetchKnowledgeDetailMock.mockImplementation(
+            (_c: string, _k: string, _ch: string | null, party: string | null) =>
+                party === null ? Promise.resolve(itemFixture) : Promise.reject(new KnowledgeRequestError(404)),
+        )
+        renderAt("/app/campaign-a/knowledge/knowledge-a?character_id=character-a&party_id=p1")
+
+        expect(
+            await screen.findByRole("heading", { level: 1, name: itemFixture.statement }),
+        ).toBeInTheDocument()
+        expect(screen.getByTestId("address")).toHaveTextContent(
+            "/app/campaign-a/knowledge/knowledge-a?character_id=character-a",
+        )
+        expect(screen.getByTestId("address").textContent).not.toContain("party_id")
+        expect(refreshMock).toHaveBeenCalledTimes(1)
+        expect(fetchKnowledgeDetailMock.mock.calls.map((call) => call[3])).toEqual(["p1", null])
+    })
+
+    it("keeps the address and a plain 'unavailable' while the party is still authorized (a missing record)", async () => {
+        sessionRef.state = authorized(["p1"])
+        fetchKnowledgeDetailMock.mockRejectedValue(new KnowledgeRequestError(404))
+        renderAt("/app/campaign-a/knowledge/knowledge-a?character_id=character-a&party_id=p1")
+
+        expect(await screen.findByText("Knowledge unavailable")).toBeInTheDocument()
+        expect(screen.getByTestId("address").textContent).toContain("party_id=p1")
+        expect(fetchKnowledgeDetailMock).toHaveBeenCalledTimes(1)
+        expect(refreshMock).toHaveBeenCalledTimes(1)
     })
 })

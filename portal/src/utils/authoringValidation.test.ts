@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import { describeBlockedReason } from "./blockedReason"
 import {
     DESCRIPTION_MAX,
     NAME_MAX,
@@ -52,5 +53,13 @@ describe("authoring validation mirrors", () => {
         expect(fieldForErrorCode("supersession_target_invalid")).toBe("replacement")
         expect(fieldForErrorCode("stale_write")).toBeNull()
         expect(fieldForErrorCode(null)).toBeNull()
+    })
+})
+
+describe("blocked reasons", () => {
+    it("explains an archive blocked by active areas", () => {
+        expect(describeBlockedReason("dungeon_has_active_areas")).toBe(
+            "the dungeon still has active areas. Archive its areas first.",
+        )
     })
 })

@@ -141,6 +141,7 @@ class LockedEncounter:
 
     timeline_id: uuid.UUID
     campaign_id: uuid.UUID | None
+    current_round: int = 0
 
 
 @dataclass(frozen=True)
@@ -321,7 +322,7 @@ def _lock_encounter(
     `resulting_event_id`."""
     row = connection.execute(
         text(
-            "SELECT timeline_id, status, campaign_id FROM narrative.encounters "
+            "SELECT timeline_id, status, campaign_id, current_round FROM narrative.encounters "
             "WHERE encounter_id = :e FOR UPDATE"
         ),
         {"e": encounter_id},
@@ -339,7 +340,11 @@ def _lock_encounter(
         )
     assert isinstance(row.timeline_id, uuid.UUID)
     assert row.campaign_id is None or isinstance(row.campaign_id, uuid.UUID)
-    return LockedEncounter(timeline_id=row.timeline_id, campaign_id=row.campaign_id)
+    return LockedEncounter(
+        timeline_id=row.timeline_id,
+        campaign_id=row.campaign_id,
+        current_round=int(row.current_round),
+    )
 
 
 def _get_or_create_round(
@@ -405,8 +410,8 @@ def _resolve_combat_turn_impl(
     connection: Connection,
     *,
     encounter_id: uuid.UUID,
-    round_number: int,
-    turn_order: int,
+    round_number: int | None,
+    turn_order: int | None,
     actor_entity_id: uuid.UUID,
     world_time_id: uuid.UUID,
     action_kind: str = "attack",
@@ -473,8 +478,32 @@ def _resolve_combat_turn_impl(
     locked = _lock_encounter(connection, encounter_id, expected_campaign_id=campaign_id)
     timeline_id = locked.timeline_id
     _validate_session_campaign(connection, campaign_id=locked.campaign_id, session_id=session_id)
+    # Phase 15.3B-2b: an omitted round is the current one (the first, when none was started),
+    # and an omitted turn order is the next free one in that round, both read under the lock.
+    if round_number is None:
+        round_number = locked.current_round or 1
+    if turn_order is None:
+        turn_order = int(
+            connection.execute(
+                text("""
+                    SELECT COALESCE(max(t.turn_order) + 1, 0)
+                    FROM narrative.encounter_turns t
+                    JOIN narrative.encounter_rounds r ON r.encounter_round_id = t.encounter_round_id
+                    WHERE r.encounter_id = :e AND r.round_number = :n
+                """),
+                {"e": encounter_id, "n": round_number},
+            ).scalar()
+            or 0
+        )
     encounter_round_id = _get_or_create_round(
         connection, encounter_id=encounter_id, round_number=round_number
+    )
+    connection.execute(
+        text(
+            "UPDATE narrative.encounters SET current_round = GREATEST(current_round, :n), "
+            "updated_at = now() WHERE encounter_id = :e"
+        ),
+        {"n": round_number, "e": encounter_id},
     )
     participant_id = _participant_id(
         connection, encounter_id=encounter_id, participant_entity_id=actor_entity_id
@@ -607,7 +636,8 @@ def _resolve_combat_turn_impl(
     if previous_hit_points is not None:
         assert target_entity_id is not None
         assert damage_amount is not None
-        new_hit_points = previous_hit_points - damage_amount
+        # Hit points never go below zero (the state's own check); the effect records the result.
+        new_hit_points = max(0, previous_hit_points - damage_amount)
 
         event_id = _insert_event_row(
             connection,

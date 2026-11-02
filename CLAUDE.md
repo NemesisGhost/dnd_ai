@@ -10,7 +10,7 @@ A persistent-world simulation platform for tabletop RPGs (initially D&D 5e 2024)
 
 This repository is a restart of the platform architecture around a single supported implementation model. Legacy material from the previous iteration has been removed rather than revived, and new work is expected to follow the current design under `docs/` and the self-hosted Docker deployment path.
 
-The rules in this file are intentionally product-focused: use current architecture and schema documentation for implementation behavior, and consult the plan only for delivery status or future scope.
+The rules in this file are intentionally product-focused: use current architecture and schema documentation for implementation behavior, and consult the plan only for delivery status or future scope. The authoritative roadmap is [docs/PLANv2.md](docs/PLANv2.md); [docs/PLAN.md](docs/PLAN.md) is the detailed architectural record and carries the Phase 15 completion checkpoint list.
 
 ## 3. Technology stack
 

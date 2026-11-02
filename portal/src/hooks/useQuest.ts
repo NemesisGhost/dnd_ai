@@ -8,6 +8,7 @@ import {
     QuestRequestError,
 } from "../api/quests"
 import { useSession } from "../context/SessionContext"
+import { usePartyNotFoundEpisodes } from "./usePartyScopeRecovery"
 import type {
     QuestDetail,
 } from "../types/quest"
@@ -37,6 +38,7 @@ interface QuestSnapshot {
     campaignId: string
     questId: string
     characterId: string | null
+    partyId: string | null
     requestVersion: number
     state: QuestState
 }
@@ -49,8 +51,10 @@ export function useQuest(
     campaignId: string,
     questId: string,
     characterId: string | null,
+    partyId: string | null = null,
 ): UseQuestResult {
     const { reload } = useSession()
+    const partyEpisode = usePartyNotFoundEpisodes()
 
     const [requestVersion, setRequestVersion] =
         useState(0)
@@ -60,6 +64,7 @@ export function useQuest(
             campaignId,
             questId,
             characterId,
+            partyId,
             requestVersion: 0,
             state: initialState,
         }))
@@ -74,6 +79,7 @@ export function useQuest(
         snapshot.campaignId === campaignId &&
         snapshot.questId === questId &&
         snapshot.characterId === characterId &&
+        snapshot.partyId === partyId &&
         snapshot.requestVersion === requestVersion
 
     const state = snapshotMatchesRequest
@@ -87,6 +93,7 @@ export function useQuest(
             campaignId,
             questId,
             characterId,
+            partyId,
             controller.signal,
         )
             .then((quest) => {
@@ -98,6 +105,7 @@ export function useQuest(
                     campaignId,
                     questId,
                     characterId,
+                    partyId,
                     requestVersion,
                     state: {
                         status: "success",
@@ -125,6 +133,44 @@ export function useQuest(
                     return
                 }
 
+                // See useCampaignQuests: a party-scoped 404 is rechecked once per episode and the
+                // party's content is never kept while that happens.
+                if (
+                    error instanceof QuestRequestError &&
+                    error.status === 404 &&
+                    characterId !== null &&
+                    partyId !== null
+                ) {
+                    setSnapshot({
+                        campaignId,
+                        questId,
+                        characterId,
+                        partyId,
+                        requestVersion,
+                        state: initialState,
+                    })
+                    void partyEpisode(
+                        [campaignId, questId, characterId, partyId, requestVersion].join("|"),
+                    ).then((outcome) => {
+                        if (controller.signal.aborted) {
+                            return
+                        }
+
+                        setSnapshot({
+                            campaignId,
+                            questId,
+                            characterId,
+                            partyId,
+                            requestVersion,
+                            state:
+                                outcome === "failed"
+                                    ? { status: "error", error }
+                                    : { status: "unavailable" },
+                        })
+                    })
+                    return
+                }
+
                 if (
                     error instanceof QuestRequestError &&
                     (error.status === 403 ||
@@ -134,6 +180,7 @@ export function useQuest(
                         campaignId,
                         questId,
                         characterId,
+                        partyId,
                         requestVersion,
                         state: {
                             status: "unavailable",
@@ -146,6 +193,7 @@ export function useQuest(
                     campaignId,
                     questId,
                     characterId,
+                    partyId,
                     requestVersion,
                     state: {
                         status: "error",
@@ -161,6 +209,8 @@ export function useQuest(
         campaignId,
         questId,
         characterId,
+        partyId,
+        partyEpisode,
         reload,
         requestVersion,
     ])

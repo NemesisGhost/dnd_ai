@@ -61,7 +61,7 @@ describe("EffectiveAccessPanel", () => {
         expect(screen.getByText(/Why Player One can see this/)).toBeInTheDocument()
         expect(screen.getByText("View Campaign")).toBeInTheDocument()
         expect(screen.getByText(/Role: Player/)).toBeInTheDocument()
-        expect(screen.getByText(/Character relationship: Controls \(Aria\)/)).toBeInTheDocument()
+        expect(screen.getByText(/Character access: Controls \(Aria\)/)).toBeInTheDocument()
         expect(screen.getByText(/canon.edit — Character \(Bram\)/)).toBeInTheDocument()
     })
 

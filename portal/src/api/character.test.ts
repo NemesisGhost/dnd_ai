@@ -8,6 +8,7 @@ import {
 const characterFixture: CharacterDetail = {
   character_id: "1",
   name: "Test Character",
+  character_kind: "character",
   species_code: "human",
   size_category: "medium",
   current_hit_points: 10,

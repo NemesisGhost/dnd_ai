@@ -287,6 +287,29 @@ class KnowledgeSubjectInvalidError(SafeMessageError):
     safe_message = "The selected subject is not valid."
 
 
+class WorldCreationNotAuthorizedError(SafeMessageError):
+    """The caller does not hold the system `gm` role (docs/adr/0020-scoped-
+    system-world-and-campaign-roles.md, which supersedes ADR 0018). A 403, not a 404: creation names no existing resource,
+    so refusing it discloses nothing beyond the caller's own eligibility,
+    which the session bootstrap already reports as `world.create`."""
+
+    safe_status_code = 403
+    safe_error_code = "forbidden"
+    safe_message = "You do not have permission to perform this action."
+
+
+class WorldAuthorityRequiredError(SafeMessageError):
+    """The caller holds the campaign capability (`canon.edit`) but not the world
+    capability the operation needs (docs/adr/0020-scoped-system-world-and-campaign-
+    roles.md, decision D6): shared world canon belongs to the world, not to any one
+    campaign. A 403 rather than a 404, because the caller can already see the
+    record and the portal needs to explain why it is read-only."""
+
+    safe_status_code = 403
+    safe_error_code = "world_authority_required"
+    safe_message = "Changing shared world content requires a role on the world."
+
+
 class WorldNotAuthorizedError(DomainAuthorizationError):
     """No world authority, or no such world — indistinguishable (fixed 404)."""
 
@@ -306,6 +329,14 @@ class WorldAlreadyClaimedError(ValueError):
     """`claim_unowned_world` refused: the world has (or ever had) a
     membership row. Raised only to trusted infrastructure (a script), never
     over HTTP."""
+
+
+class WorldMembershipChangeRefusedError(ValueError):
+    """A trusted-infrastructure world-membership change
+    (`dnd_ai.commands.world_memberships`) was refused before writing anything:
+    unknown world, inactive account, unknown role, an ineligible new owner, no
+    open membership to end, or a change that would leave the world without an
+    active owner. Raised only to a script, never over HTTP."""
 
 
 def _normalize(value: str | None, *, field: str, max_length: int, required: bool) -> str | None:

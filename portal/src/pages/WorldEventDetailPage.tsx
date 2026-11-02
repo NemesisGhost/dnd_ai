@@ -1,5 +1,7 @@
+import { useWorldBackPath } from "../hooks/useWorldBackPath"
 import { Link } from "react-router"
 import { DetailPanel } from "../components/DetailPanel"
+import { EventExplanation } from "../components/events/EventExplanation"
 import { FactGrid } from "../components/FactGrid"
 import type { EventDetail } from "../types/world"
 import { humanizeCode } from "../utils/humanize"
@@ -13,17 +15,18 @@ interface WorldEventDetailPageProps {
 // role code with no authorized display label for the referenced entity —
 // the contract does not let this page invent a name, so those sections are
 // omitted entirely rather than shown with a raw UUID (UI_STYLE_GUIDE.md
-// §10.2, §15 — see this workstream's backend contract limitation report).
-// world_time_id and session_id are identifiers with no display label
-// either and are also never rendered.
+// §10.2, §15). What happened, to whom and when comes from the server's
+// audience-safe `explanation`; world_time_id and session_id are identifiers
+// with no display label and are never rendered.
 export function WorldEventDetailPage({
     campaignId,
     event,
 }: WorldEventDetailPageProps) {
+    const worldBackPath = useWorldBackPath(campaignId)
     return (
         <section aria-labelledby="world-event-heading">
             <p>
-                <Link to={`/app/${encodeURIComponent(campaignId)}/world`}>
+                <Link to={worldBackPath}>
                     Back to World
                 </Link>
             </p>
@@ -38,6 +41,16 @@ export function WorldEventDetailPage({
             )}
 
             <div className="world-detail__panel-grid">
+                {event.explanation ? (
+                    <DetailPanel title="What happened">
+                        <EventExplanation
+                            explanation={event.explanation}
+                            density="detail"
+                            campaignId={campaignId}
+                            eventHref={(id) => `/app/${encodeURIComponent(campaignId)}/world/event/${encodeURIComponent(id)}`}
+                        />
+                    </DetailPanel>
+                ) : null}
                 <DetailPanel title="Overview">
                     <FactGrid
                         items={[

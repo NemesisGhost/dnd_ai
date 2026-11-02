@@ -267,6 +267,15 @@ entity_knowledge = Table(
             "common case — most beliefs reference the item directly."
         ),
     ),
+    Column(
+        "last_event_id",
+        UUID(),
+        ForeignKey("narrative.events.event_id", ondelete="SET NULL"),
+        comment=(
+            "The event that last wrote this row (same timeline); NULL for rows created "
+            "before revision 127 or written administratively."
+        ),
+    ),
     UniqueConstraint(
         "timeline_id", "knowledge_item_id", "knower_entity_id", name="ux_entity_knowledge_current"
     ),
@@ -596,6 +605,15 @@ public_knowledge = Table(
         UUID(),
         ForeignKey("core.world_times.world_time_id", ondelete="SET NULL"),
     ),
+    Column(
+        "last_event_id",
+        UUID(),
+        ForeignKey("narrative.events.event_id", ondelete="SET NULL"),
+        comment=(
+            "The event that last wrote this row (same timeline); NULL for rows created "
+            "before revision 127 or written administratively."
+        ),
+    ),
     *_timestamps(),
     UniqueConstraint(
         "timeline_id",
@@ -621,4 +639,14 @@ Index(
     "ix_public_knowledge_known_since_world_time_id",
     public_knowledge.c.known_since_world_time_id,
     postgresql_where=public_knowledge.c.known_since_world_time_id.isnot(None),
+)
+Index(
+    "ix_entity_knowledge_last_event_id",
+    entity_knowledge.c.last_event_id,
+    postgresql_where=entity_knowledge.c.last_event_id.isnot(None),
+)
+Index(
+    "ix_public_knowledge_last_event_id",
+    public_knowledge.c.last_event_id,
+    postgresql_where=public_knowledge.c.last_event_id.isnot(None),
 )

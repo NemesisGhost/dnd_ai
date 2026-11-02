@@ -15,15 +15,15 @@ function statusMessage(
 ): string {
     switch (kind) {
         case "pending":
-            return "Revoking character relationship…"
+            return "Removing character access…"
         case "success":
-            return "Character relationship revoked."
+            return "Character access removed."
         case "denied":
             return "You do not have permission to make this change."
         case "conflict":
-            return "This character relationship changed elsewhere. Reload the page to see the current state."
+            return "This character access changed elsewhere. Reload the page to see the current state."
         case "error":
-            return "The character relationship could not be revoked. Try again."
+            return "The character access could not be removed. Try again."
     }
 }
 
@@ -50,7 +50,7 @@ export function RevokeCharacterRelationship({
 
     const { status, submit, reset } = useRevokeCharacterRelationship(
         campaignId,
-        () => onChanged("Character relationship revoked."),
+        () => onChanged("Character access removed."),
     )
 
     const isPending = status.kind === "pending"
@@ -84,7 +84,7 @@ export function RevokeCharacterRelationship({
                     setIsConfirming(true)
                 }}
             >
-                Revoke relationship
+                Remove access
             </button>
         )
     }
@@ -93,11 +93,11 @@ export function RevokeCharacterRelationship({
         <span
             className="access-role-editor"
             role="group"
-            aria-label={`Revoke ${relationship.character_display_name} relationship from ${memberDisplayName}`}
+            aria-label={`Remove ${relationship.character_display_name} access from ${memberDisplayName}`}
         >
             <span className="access-role-editor__confirm-text">
-                Revoke {memberDisplayName}'s{" "}
-                {relationship.relationship_type_display_name} relationship
+                Remove {memberDisplayName}'s{" "}
+                {relationship.relationship_type_display_name} access
                 to {relationship.character_display_name}? The character
                 perspective will no longer be available to{" "}
                 {memberDisplayName}.
@@ -116,7 +116,7 @@ export function RevokeCharacterRelationship({
                         )
                     }}
                 >
-                    {isPending ? "Revoking…" : "Confirm"}
+                    {isPending ? "Removing…" : "Confirm"}
                 </button>
 
                 <button

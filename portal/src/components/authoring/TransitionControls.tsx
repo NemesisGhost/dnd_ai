@@ -2,6 +2,8 @@ import { useState } from "react"
 import type { MutationContext } from "../../api/worlds"
 import { useSession } from "../../context/SessionContext"
 import { useAuthoringMutation } from "../../hooks/useAuthoringMutation"
+import type { RefetchOutcome } from "../../hooks/useAuthoringResource"
+import { useConfirmedRefresh, useUnreadWrite } from "../../hooks/useConfirmedRefresh"
 import type { TransitionRequest } from "../../types/worldAuthoring"
 import { validateReason } from "../../utils/authoringValidation"
 import { useAnnounce } from "./announcer"
@@ -21,8 +23,12 @@ interface TransitionControlsProps {
     availableActions: readonly string[]
     archive: (body: TransitionRequest, ctx: MutationContext) => Promise<unknown>
     restore: (body: TransitionRequest, ctx: MutationContext) => Promise<unknown>
-    // Authoritative refetch of the record; awaited before the success announcement.
-    refetch: () => Promise<void>
+    // Authoritative refetch of the record; awaited before the success announcement, and its outcome
+    // decides whether the change is announced as done or reported as saved but not yet read.
+    refetch: () => Promise<RefetchOutcome>
+    // The page's latest read of the record failed and it shows the last one that loaded: its version
+    // may be behind, so the transition waits for the read.
+    pageStale?: boolean
     archiveDescription: string
     restoreDescription: string
 }
@@ -39,12 +45,16 @@ export function TransitionControls({
     archive,
     restore,
     refetch,
+    pageStale = false,
     archiveDescription,
     restoreDescription,
 }: TransitionControlsProps) {
     const announce = useAnnounce()
     const { reload } = useSession()
     const [pendingAction, setPendingAction] = useState<Pending>(null)
+    // What was saved without the record being read back. The mutation's own status cannot carry it:
+    // its scope names the open dialog, and the dialog closes once the change is saved.
+    const unread = useUnreadWrite<string>()
     const [reason, setReason] = useState("")
     const [reasonError, setReasonError] = useState<string | null>(null)
     const available = new Set(availableActions)
@@ -56,14 +66,31 @@ export function TransitionControls({
             pendingAction === "restore" ? restore(body, ctx) : archive(body, ctx),
         onSuccess: async () => {
             const message = pendingAction === "restore" ? `${capitalized} restored` : `${capitalized} archived`
-            await refetch()
+            const outcome = await refetch()
             setPendingAction(null)
             setReason("")
-            announce(message)
+            if (outcome === "ok") {
+                announce(message)
+            } else {
+                // Saved, but the record on screen is the one from before: it still offers the same
+                // transition at the old version, so it is held until the record is read again.
+                unread.mark(message)
+            }
+            return outcome
         },
     })
+    const refreshed = useConfirmedRefresh({
+        status: unread.status,
+        reset: unread.end,
+        what: noun,
+        message: unread.value,
+        read: refetch,
+        pageStale,
+    })
+    const writesHeld = refreshed.held || pageStale
 
     function open(action: Exclude<Pending, null>) {
+        if (writesHeld) return
         mutation.reset()
         setReason("")
         setReasonError(null)
@@ -88,15 +115,16 @@ export function TransitionControls({
     return (
         <>
             {available.has("archive") ? (
-                <button type="button" className="authoring-button" onClick={() => open("archive")}>
+                <button type="button" className="authoring-button" disabled={writesHeld} onClick={() => open("archive")}>
                     Archive {noun}
                 </button>
             ) : null}
             {available.has("restore") ? (
-                <button type="button" className="authoring-button" onClick={() => open("restore")}>
+                <button type="button" className="authoring-button" disabled={writesHeld} onClick={() => open("restore")}>
                     Restore {noun}
                 </button>
             ) : null}
+            {refreshed.notice}
 
             <ConfirmDialog
                 open={pendingAction !== null}

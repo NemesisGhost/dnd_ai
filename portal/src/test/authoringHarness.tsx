@@ -103,7 +103,7 @@ export function bootstrapWith(overrides: Partial<SessionBootstrap> = {}): Sessio
     return {
         ...sessionBootstrapFixture,
         csrf_token: TEST_CSRF,
-        global_capabilities: ["world.create"],
+        global_capabilities: ["world.create", "campaign.host", "world.administer"],
         ...overrides,
     }
 }
@@ -143,7 +143,8 @@ function Shell({
 }
 
 export interface RenderOptions {
-    initialEntry: string
+    // An address, or an address with the router state it was opened with.
+    initialEntry: string | { pathname: string; search?: string; state?: unknown }
     routes: { path: string; element: ReactNode }[]
     bootstrap?: SessionBootstrap
     reload?: () => void

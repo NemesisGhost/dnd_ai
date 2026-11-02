@@ -21,6 +21,8 @@ export const WORLD_BODY = {
     lifecycle_status: "active",
     row_version: 1,
     primary_timeline_id: "timeline-primary",
+    // The fixture user owns this world (world_owner's server-computed set).
+    capabilities: ["campaign.create", "timeline.manage", "world.manage", "world.view"],
     allowed_rulesets: [],
     timelines: [
         {
@@ -39,11 +41,14 @@ export const WORLD_BODY = {
     blocked_actions: [],
 }
 
-export function bootstrapFor(capabilities: string[]): SessionBootstrap {
+export function bootstrapFor(
+    capabilities: string[],
+    campaign: Partial<SessionBootstrap["campaigns"][number]> = {},
+): SessionBootstrap {
     return {
         ...sessionBootstrapFixture,
         csrf_token: "csrf-from-session",
-        campaigns: [{ ...sessionBootstrapFixture.campaigns[0]!, capabilities }],
+        campaigns: [{ ...sessionBootstrapFixture.campaigns[0]!, capabilities, ...campaign }],
     }
 }
 
@@ -56,12 +61,21 @@ export function installCampaignShellMocks(): MockServer {
     server.on("GET", /^\/campaigns\/mundivita\/summary/, { body: {} })
     server.on("GET", /^\/worlds\?/, { body: { items: [], next_cursor: null } })
     server.on("GET", "/worlds/world-mundivita", { body: WORLD_BODY })
+    // The Info Box's party memberships for whichever character a page selects: none by default.
+    server.on("GET", /^\/campaigns\/mundivita\/characters\/[^/]+\/parties$/, {
+        body: { character_id: "any", can_open: false, items: [] },
+    })
     return server
 }
 
-export function openApp(entry: string, capabilities: string[] = ["access.manage", "canon.edit"]) {
+// `campaign` overrides the fixture campaign's own fields, e.g. no character perspectives.
+export function openApp(
+    entry: string,
+    capabilities: string[] = ["access.manage", "canon.edit"],
+    campaign: Partial<SessionBootstrap["campaigns"][number]> = {},
+) {
     vi.mocked(useSessionBootstrap).mockReturnValue({
-        state: { status: "authenticated", bootstrap: bootstrapFor(capabilities) },
+        state: { status: "authenticated", bootstrap: bootstrapFor(capabilities, campaign) },
         reload: vi.fn(),
         refresh: vi.fn(),
     })

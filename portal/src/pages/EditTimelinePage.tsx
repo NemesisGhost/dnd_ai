@@ -79,7 +79,7 @@ interface FormProps {
     refreshing: boolean
     kept: Values | null
     onKeep: (values: Values | null) => void
-    refetch: () => Promise<void>
+    refetch: () => Promise<unknown>
 }
 
 function EditTimelineForm({ worldId, timeline, refreshing, kept, onKeep, refetch }: FormProps) {

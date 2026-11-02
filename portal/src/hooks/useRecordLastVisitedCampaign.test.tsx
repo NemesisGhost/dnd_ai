@@ -35,7 +35,6 @@ describe("useRecordLastVisitedCampaign", () => {
         expect(record).toHaveBeenCalledWith(
             "campaign-a",
             sessionBootstrapFixture.csrf_token,
-            expect.any(AbortSignal),
         )
     })
 
@@ -51,30 +50,32 @@ describe("useRecordLastVisitedCampaign", () => {
         expect(record).not.toHaveBeenCalled()
     })
 
-    it("aborts the in-flight request on unmount", () => {
+    it("does not abandon the write when the page is left", () => {
         const { unmount } = renderHook(() =>
             useRecordLastVisitedCampaign("campaign-a", bootstrapWith(null)),
         )
-        const signal = record.mock.calls[0]![2] as AbortSignal
-        expect(signal.aborted).toBe(false)
 
         unmount()
 
-        expect(signal.aborted).toBe(true)
+        // The call carries no signal to abort: an abandoned request may not
+        // commit, and the next bootstrap read would report an older campaign.
+        expect(record).toHaveBeenCalledTimes(1)
+        expect(record.mock.calls[0]).toHaveLength(2)
     })
 
-    it("aborts the previous campaign request when the campaign changes", () => {
+    it("records each campaign in order when the campaign changes", () => {
         const { rerender } = renderHook(
             ({ id }) => useRecordLastVisitedCampaign(id, bootstrapWith(null)),
             { initialProps: { id: "campaign-a" as string | null } },
         )
-        const first = record.mock.calls[0]![2] as AbortSignal
 
         rerender({ id: "campaign-b" })
 
-        expect(first.aborted).toBe(true)
         expect(record).toHaveBeenCalledTimes(2)
-        expect(record.mock.calls[1]![0]).toBe("campaign-b")
+        expect(record.mock.calls.map((call) => call[0])).toEqual([
+            "campaign-a",
+            "campaign-b",
+        ])
     })
 
     it("swallows request failures", async () => {

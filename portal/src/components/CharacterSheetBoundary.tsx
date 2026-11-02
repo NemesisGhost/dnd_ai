@@ -7,12 +7,16 @@ interface CharacterSheetBoundaryProps {
     campaignId: string
     characterId: string
     children: (sheet: CharacterSheet) => ReactNode
+    // What to show when the sheet is not available to this caller (a summary-tier reader gets the
+    // same non-disclosing refusal as a missing sheet). Without it, the generic placeholder shows.
+    fallback?: () => ReactNode
 }
 
 export function CharacterSheetBoundary({
     campaignId,
     characterId,
     children,
+    fallback,
 }: CharacterSheetBoundaryProps) {
     const { state, retry } = useCharacterSheet(
         campaignId,
@@ -29,6 +33,10 @@ export function CharacterSheetBoundary({
     }
 
     if (state.status === "unavailable") {
+        if (fallback !== undefined) {
+            return <>{fallback()}</>
+        }
+
         return (
             <PlaceholderPage
                 title="Character sheet unavailable"

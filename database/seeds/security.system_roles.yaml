@@ -1,0 +1,25 @@
+# Platform-level (system-scope) roles a user can hold (security.user_system_roles).
+# See docs/adr/0020-scoped-system-world-and-campaign-roles.md. The capabilities each
+# role carries are a closed mapping in dnd_ai.domain.system_authority, not rows
+# here, and no role implies another.
+
+- code: admin
+  display_name: Administrator
+  description: Manages accounts and system role assignments. Grants no world or campaign access and no eligibility to create worlds or campaigns.
+  sort_order: 10
+  is_active: true
+- code: gm
+  display_name: Game master
+  description: May create worlds, host campaigns, and manage the worlds the user owns or is authorized to manage. Confers no campaign role and no authority over anyone else's world.
+  sort_order: 20
+  is_active: true
+- code: player
+  display_name: Player
+  description: Account classification with no platform capabilities. Campaign access always comes from campaign membership.
+  sort_order: 30
+  is_active: true
+- code: observer
+  display_name: Observer
+  description: Account classification with no platform capabilities. Campaign access always comes from campaign membership.
+  sort_order: 40
+  is_active: true

@@ -33,7 +33,9 @@ verbatim (same columns, same `include_draft_events`/
 inventing a second one — see that module's docstring for the full
 rationale. This module does not re-aggregate session participants,
 locations visited, or encounter/quest/character-state changes; those
-remain deferred (see docs/PHASE13D_BACKEND_READINESS.md).
+remain deferred (see docs/PHASE13D_BACKEND_READINESS.md). Each event also carries its in-world
+time as display text; travel entries (names, origins, destinations) are built from these events
+by `dnd_ai.queries.session_travel`, which owns that audience filtering.
 
 This module is framework-free and performs no authorization decisions of
 its own: `denied_session_ids`, `include_draft_events`, and the two
@@ -48,6 +50,11 @@ from datetime import datetime
 from sqlalchemy import Connection, text
 
 from dnd_ai.domain.errors import DomainAuthorizationError
+from dnd_ai.domain.session_authoring import derive_play_status
+
+from .campaign_clock import clock_display
+from .character import character_kind_for_type_code
+from .world_explorer import CharacterVisibility
 
 
 class SessionNotFoundError(DomainAuthorizationError):
@@ -68,6 +75,10 @@ class SessionListItemView:
     status_code: str
     started_at: datetime | None
     ended_at: datetime | None
+    # Phase 15.2D-1: the planned start, the version, and the derived play status.
+    scheduled_for: datetime | None = None
+    row_version: int = 1
+    play_status: str = "unscheduled"
 
 
 @dataclass(frozen=True)
@@ -79,6 +90,8 @@ class SessionEventView:
     event_status_code: str
     world_time_id: uuid.UUID
     details: str | None
+    # In-world time as display text (the campaign clock's formatter); never a real-world timestamp.
+    world_time: str = ""
 
 
 @dataclass(frozen=True)
@@ -93,6 +106,9 @@ class SessionView:
     start_world_time_id: uuid.UUID | None
     end_world_time_id: uuid.UUID | None
     events: tuple[SessionEventView, ...]
+    scheduled_for: datetime | None = None
+    row_version: int = 1
+    play_status: str = "unscheduled"
 
 
 def list_campaign_sessions(
@@ -100,6 +116,7 @@ def list_campaign_sessions(
     *,
     campaign_id: uuid.UUID,
     denied_session_ids: frozenset[uuid.UUID] = frozenset(),
+    include_archived: bool = True,
 ) -> tuple[SessionListItemView, ...]:
     """Every session for `campaign_id`, most recent first, excluding any
     `denied_session_ids` (a per-session `campaign.view` deny — see this
@@ -113,14 +130,19 @@ def list_campaign_sessions(
     rows = connection.execute(
         text("""
             SELECT s.session_id, s.session_number, s.title, ls.code AS status_code,
-                   s.started_at, s.ended_at
+                   s.started_at, s.ended_at, s.scheduled_for, s.row_version
             FROM campaign.sessions s
             JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = s.lifecycle_status_id
             WHERE s.campaign_id = :campaign
               AND NOT (s.session_id = ANY(CAST(:denied AS uuid[])))
+              AND (CAST(:inc AS boolean) OR ls.code <> 'archived')
             ORDER BY s.session_number DESC
         """),
-        {"campaign": campaign_id, "denied": list(denied_session_ids)},
+        {
+            "campaign": campaign_id,
+            "denied": list(denied_session_ids),
+            "inc": include_archived,
+        },
     ).mappings()
     return tuple(
         SessionListItemView(
@@ -130,6 +152,13 @@ def list_campaign_sessions(
             status_code=row["status_code"],
             started_at=row["started_at"],
             ended_at=row["ended_at"],
+            scheduled_for=row["scheduled_for"],
+            row_version=int(row["row_version"]),
+            play_status=derive_play_status(
+                scheduled_for=row["scheduled_for"],
+                started_at=row["started_at"],
+                ended_at=row["ended_at"],
+            ),
         )
         for row in rows
     )
@@ -143,6 +172,7 @@ def get_session_view(
     include_draft_events: bool,
     denied_draft_event_ids: frozenset[uuid.UUID] = frozenset(),
     allowed_draft_event_ids: frozenset[uuid.UUID] = frozenset(),
+    include_archived: bool = True,
 ) -> SessionView:
     """One session's own fields plus its linked `narrative.events` rows
     (`narrative.events.session_id`), filtered by the same draft/voided
@@ -156,7 +186,8 @@ def get_session_view(
             text("""
                 SELECT s.session_id, s.campaign_id, s.session_number, s.title,
                        ls.code AS status_code, s.started_at, s.ended_at, s.summary,
-                       s.start_world_time_id, s.end_world_time_id
+                       s.start_world_time_id, s.end_world_time_id, s.scheduled_for,
+                       s.row_version
                 FROM campaign.sessions s
                 JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = s.lifecycle_status_id
                 WHERE s.session_id = :session
@@ -166,6 +197,14 @@ def get_session_view(
         .mappings()
         .one_or_none()
     )
+    if (
+        session_row is not None
+        and session_row["status_code"] == "archived"
+        and not include_archived
+    ):
+        # An archived session is hidden from people who cannot edit canon, with the
+        # same 404 as a missing one.
+        session_row = None
     if session_row is None or session_row["campaign_id"] != campaign_id:
         raise SessionNotFoundError(
             f"session {session_id} does not exist in campaign {campaign_id} "
@@ -202,6 +241,11 @@ def get_session_view(
             "allowed_draft_events": list(allowed_draft_event_ids),
         },
     ).mappings()
+    event_list = list(event_rows)
+    time_text = {
+        time_id: clock_display(connection, time_id)
+        for time_id in {row["world_time_id"] for row in event_list}
+    }
     events = tuple(
         SessionEventView(
             event_id=row["event_id"],
@@ -211,8 +255,9 @@ def get_session_view(
             event_status_code=row["event_status_code"],
             world_time_id=row["world_time_id"],
             details=row["details"],
+            world_time=time_text[row["world_time_id"]],
         )
-        for row in event_rows
+        for row in event_list
     )
 
     return SessionView(
@@ -226,4 +271,93 @@ def get_session_view(
         start_world_time_id=session_row["start_world_time_id"],
         end_world_time_id=session_row["end_world_time_id"],
         events=events,
+        scheduled_for=session_row["scheduled_for"],
+        row_version=int(session_row["row_version"]),
+        play_status=derive_play_status(
+            scheduled_for=session_row["scheduled_for"],
+            started_at=session_row["started_at"],
+            ended_at=session_row["ended_at"],
+        ),
+    )
+
+
+@dataclass(frozen=True)
+class SessionParticipantView:
+    session_participant_id: uuid.UUID
+    character_id: uuid.UUID
+    character_name: str
+    # `npc`, `player_character` or `character`, from the entity type (never from the role).
+    character_kind: str
+    participation_role: str
+    added_at: datetime
+    removed_at: datetime | None
+
+
+@dataclass(frozen=True)
+class MemberRosterAudience:
+    """Who a member-safe roster is for: the World Explorer's resolved character
+    visibility plus the entity-level `campaign.view` denies (and lifecycle-hidden
+    definitions) that route applies to every character it names."""
+
+    character_visibility: CharacterVisibility
+    denied_entity_ids: frozenset[uuid.UUID]
+
+
+def list_session_participants(
+    connection: Connection,
+    *,
+    session_id: uuid.UUID,
+    audience: MemberRosterAudience | None = None,
+) -> tuple[SessionParticipantView, ...]:
+    """Present participants first (by name), then those who left; every stint is a row.
+
+    With no `audience` this is the unfiltered GM roster, for `canon.edit` holders only
+    (the route decides): presence names characters the viewer might not otherwise be
+    allowed to see. With an `audience` (a campaign member without `canon.edit`) the
+    rows are filtered in SQL to the characters whom that caller may discover (every
+    stint of each, present or left, so a rejoin reads as two rows), by the World Explorer's own rule: not entity-denied, and either
+    discoverable as a baseline and not force-hidden, or force-visible. A hidden
+    participant never reaches Python, so no id, name or count of one can be serialized."""
+    rows = connection.execute(
+        text("""
+            SELECT sp.session_participant_id, sp.character_id, e.canonical_name,
+                   et.code AS entity_type_code,
+                   sp.participation_role, sp.added_at, sp.removed_at
+            FROM campaign.session_participants sp
+            JOIN core.entities e ON e.entity_id = sp.character_id
+            JOIN core.entity_types et ON et.entity_type_id = e.entity_type_id
+            WHERE sp.session_id = :s
+              AND (
+                NOT CAST(:member AS boolean)
+                OR (
+                  NOT (sp.character_id = ANY(CAST(:denied AS uuid[])))
+                  AND (
+                    (CAST(:discover_all AS boolean)
+                     AND NOT (sp.character_id = ANY(CAST(:char_hidden AS uuid[]))))
+                    OR sp.character_id = ANY(CAST(:char_visible AS uuid[]))
+                  )
+                )
+              )
+            ORDER BY (sp.removed_at IS NOT NULL), lower(e.canonical_name), sp.added_at
+        """),
+        {
+            "s": session_id,
+            "member": audience is not None,
+            "denied": list(audience.denied_entity_ids) if audience else [],
+            "discover_all": audience.character_visibility.discover_all if audience else False,
+            "char_hidden": list(audience.character_visibility.force_hidden) if audience else [],
+            "char_visible": list(audience.character_visibility.force_visible) if audience else [],
+        },
+    ).all()
+    return tuple(
+        SessionParticipantView(
+            session_participant_id=row.session_participant_id,
+            character_id=row.character_id,
+            character_name=str(row.canonical_name),
+            character_kind=character_kind_for_type_code(str(row.entity_type_code)),
+            participation_role=str(row.participation_role),
+            added_at=row.added_at,
+            removed_at=row.removed_at,
+        )
+        for row in rows
     )

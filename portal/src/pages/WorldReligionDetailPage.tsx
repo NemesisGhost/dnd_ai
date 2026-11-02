@@ -1,3 +1,4 @@
+import { useWorldBackPath } from "../hooks/useWorldBackPath"
 import { Link } from "react-router"
 import { religionAuthoringPath } from "../api/organizationAuthoring"
 import { AuthoringEditLink } from "../components/AuthoringEditLink"
@@ -11,20 +12,41 @@ interface WorldReligionDetailPageProps {
     religion: ReligionDetail
 }
 
-// Religion detail. serving_organization_ids carries no authorized display
+// The reading panels of a religion. serving_organization_ids carries no authorized display
 // label in the current contract — deliberately never rendered as a raw
 // UUID; the section is omitted rather than shown empty or with an id
 // (UI_STYLE_GUIDE.md §10.2, §15 — see the Phase 13D backend contract
-// limitation noted in this workstream's report).
+// limitation noted in this workstream's report). Shared by the reader and the editors' workspace.
+export function ReligionPanels({ religion }: { religion: ReligionDetail }) {
+    return (
+        <div className="world-detail__panel-grid">
+            <DetailPanel title="Overview">
+                <FactGrid
+                    items={[
+                        {
+                            key: "pantheon",
+                            label: "Pantheon structure",
+                            value: religion.pantheon_structure ?? "Not recorded",
+                        },
+                    ]}
+                />
+            </DetailPanel>
+        </div>
+    )
+}
+
+// Religion detail. The reader everyone sees; editors get the workspace instead, which reuses the
+// panels.
 export function WorldReligionDetailPage({
     campaignId,
     religion,
 }: WorldReligionDetailPageProps) {
+    const worldBackPath = useWorldBackPath(campaignId)
     const headingRef = usePageArrival(true)
     return (
         <section aria-labelledby="world-religion-heading">
             <p>
-                <Link to={`/app/${encodeURIComponent(campaignId)}/world`}>
+                <Link to={worldBackPath}>
                     Back to World
                 </Link>
             </p>
@@ -46,19 +68,7 @@ export function WorldReligionDetailPage({
                 <p className="world-detail__summary">{religion.summary}</p>
             )}
 
-            <div className="world-detail__panel-grid">
-                <DetailPanel title="Overview">
-                    <FactGrid
-                        items={[
-                            {
-                                key: "pantheon",
-                                label: "Pantheon structure",
-                                value: religion.pantheon_structure ?? "Not recorded",
-                            },
-                        ]}
-                    />
-                </DetailPanel>
-            </div>
+            <ReligionPanels religion={religion} />
         </section>
     )
 }
