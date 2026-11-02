@@ -153,7 +153,8 @@ describe("SessionProvider perspective integration", () => {
       },
     )
 
-    expect(reload).toHaveBeenCalledTimes(1)
+    // Committing a perspective never reloads the session (that would unmount the page).
+    expect(reload).not.toHaveBeenCalled()
 
     useSessionBootstrapMock.mockReturnValue({
       state: {
@@ -216,7 +217,8 @@ describe("SessionProvider perspective integration", () => {
       },
     )
 
-    expect(reload).toHaveBeenCalledTimes(1)
+    // Committing a perspective never reloads the session (that would unmount the page).
+    expect(reload).not.toHaveBeenCalled()
 
     useSessionBootstrapMock.mockReturnValue({
       state: {

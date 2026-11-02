@@ -1,4 +1,5 @@
 import { useEffect, useSyncExternalStore } from "react"
+import type { Location, NavigationType } from "react-router"
 
 // Lets a component that owns state a transition would dispose (a world-time picker's open recording,
 // say) take part in the page's one "leave this page?" question. react-router asks only the last
@@ -80,6 +81,57 @@ export function useNavigationHold(active: boolean): void {
             holds.delete(key)
         }
     }, [active])
+}
+
+// The character perspective the campaign workspace is committed to, readable synchronously by both
+// blockers. A perspective change is a context transition: it keeps the pathname, so the departure
+// guard has to compare the perspective an entry runs under with the committed one (UI_DESIGN §5.11).
+// Written only by the campaign layout (after a navigation is accepted, or when authorization changes
+// what is selected); null outside a campaign workspace, where there is no perspective to compare.
+export interface CommittedPerspective {
+    characterId: string | null
+    // What an entry with no valid stamp resolves to when it is returned to by Back/Forward.
+    defaultCharacterId: string | null
+    // Perspectives the bootstrap authorizes: a stamp naming any other is treated as no stamp.
+    authorized: ReadonlySet<string>
+}
+let committedPerspective: CommittedPerspective | null = null
+
+export function setCommittedPerspective(next: CommittedPerspective | null): void {
+    committedPerspective = next
+}
+
+// The perspective an entry's `state.ctx` records: `undefined` when the entry carries no valid stamp
+// (direct entry, an older entry, tampered state). Shape and version only, plus authorization when known.
+export function readEntryPerspective(state: unknown, authorized?: ReadonlySet<string>): string | null | undefined {
+    if (typeof state !== "object" || state === null) return undefined
+    const ctx = (state as { ctx?: unknown }).ctx
+    if (typeof ctx !== "object" || ctx === null) return undefined
+    const { v, characterId } = ctx as { v?: unknown; characterId?: unknown }
+    if (v !== 1) return undefined
+    if (characterId === null) return null
+    if (typeof characterId !== "string") return undefined
+    return authorized !== undefined && !authorized.has(characterId) ? undefined : characterId
+}
+
+// Whether a transition needs the departure guard's question (when the page is dirty or a hold is
+// active): a pathname change, or a change of committed perspective at the same path. The comparison is
+// of recorded context, never of a transient marker, so Back/Forward between same-path entries is
+// guarded long after the transition that created them. A PUSH or REPLACE with no stamp (an ordinary
+// link, a query-only change, the stamping replace itself) keeps the committed perspective; only a
+// Back/Forward to an unstamped entry resolves to the default.
+export function isGuardedTransition(args: {
+    currentLocation: Location
+    nextLocation: Location
+    historyAction: NavigationType
+}): boolean {
+    const { currentLocation, nextLocation, historyAction } = args
+    if (currentLocation.pathname !== nextLocation.pathname) return true
+    if (committedPerspective === null) return false
+    const stamped = readEntryPerspective(nextLocation.state, committedPerspective.authorized)
+    if (stamped === undefined && historyAction !== "POP") return false
+    const effective = stamped === undefined ? committedPerspective.defaultCharacterId : stamped
+    return effective !== committedPerspective.characterId
 }
 
 // What a holder with its own blocker shows its question from.

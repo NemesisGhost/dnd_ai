@@ -6,6 +6,7 @@ import {
     NO_GUARD_VIEW,
     createGuardViewStore,
     useGuardView,
+    isGuardedTransition,
     useHostGuard,
     useNavigationQuestion,
     useNavigationHold,
@@ -40,9 +41,7 @@ function OwnBlocker({ hold, view }: { hold: boolean; view: GuardViewStore }) {
     useLayoutEffect(() => {
         holdRef.current = hold
     }, [hold])
-    const blocker = useBlocker(
-        ({ currentLocation, nextLocation }) => holdRef.current && currentLocation.pathname !== nextLocation.pathname,
-    )
+    const blocker = useBlocker((transition) => holdRef.current && isGuardedTransition(transition))
     useLayoutEffect(() => {
         view.set({
             blocked: blocker.state === "blocked",

@@ -368,13 +368,13 @@ describe("HierarchyContextPanel cascade", () => {
     expect(character()).toBeDisabled()
   })
 
-  it("choosing a campaign opens its home and clears the previous campaign's perspective", async () => {
+  it("choosing a campaign only navigates to its home: it selects and clears nothing first", async () => {
     renderAt("/worlds/world-a/timelines/timeline-b")
     await waitFor(() => expect(level("Campaign")).toBeEnabled())
 
     fireEvent.change(level("Campaign"), { target: { value: "c2" } })
 
-    expect(selectCharacter).toHaveBeenCalledWith("c2", null)
+    expect(selectCharacter).not.toHaveBeenCalled()
     expect(screen.getByTestId("location")).toHaveTextContent("/app/c2/home")
   })
 

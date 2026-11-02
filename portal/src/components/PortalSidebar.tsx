@@ -18,7 +18,6 @@ import {
 } from "lucide-react"
 import { useSession } from "../context/SessionContext"
 import { useWorkspaceHierarchy } from "../context/WorkspaceHierarchyContext"
-import { useSelectCampaign } from "../hooks/useSelectCampaign"
 import { useSidebarCollapsed } from "../hooks/useSidebarCollapsed"
 import type { NavigationDrawerControl } from "../hooks/useNavigationDrawer"
 import { resolveNavigationCampaign } from "../utils/resolveNavigationCampaign"
@@ -93,7 +92,6 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
   const routeMatch = useMatch("/app/:campaignId/*")
   const routeCampaignId = routeMatch?.params.campaignId
   const [collapsed, toggleCollapsed] = useSidebarCollapsed()
-  const selectCampaign = useSelectCampaign(routeCampaignId)
   // World and timeline context come from the route-derived hierarchy, which
   // confirms them against server data (WorkspaceHierarchyProvider) — never a
   // raw route ID.
@@ -261,7 +259,6 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
                 resolvedCampaign={resolvedCampaign}
                 authorizedRouteCampaignId={authorizedRouteCampaignId}
                 collapsed={collapsed}
-                onSelectCampaign={selectCampaign}
                 onNavigate={close}
               />
 

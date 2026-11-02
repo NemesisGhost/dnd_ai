@@ -432,13 +432,13 @@ describe("PortalSidebar campaign submenu", () => {
         ).not.toHaveAttribute("aria-current")
     })
 
-    it("navigates to the chosen campaign Home and clears that campaign perspective", () => {
+    it("navigates to the chosen campaign Home without selecting or clearing a perspective first", () => {
         renderSidebar("/app/campaign-a/quests/quest-7")
         fireEvent.click(within(nav()).getByRole("button", { name: "Choose campaign" }))
 
         fireEvent.click(within(nav()).getByRole("link", { name: "Beta Campaign" }))
 
-        expect(selectCharacter).toHaveBeenCalledWith("campaign-b", null)
+        expect(selectCharacter).not.toHaveBeenCalled()
         expect(screen.getByTestId("location")).toHaveTextContent(
             "/app/campaign-b/home",
         )

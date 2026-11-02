@@ -4,7 +4,6 @@ import { worldsListPath } from "../api/worlds"
 import { useSession } from "../context/SessionContext"
 import { useWorkspaceHierarchy } from "../context/WorkspaceHierarchyContext"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
-import { useSelectCampaign } from "../hooks/useSelectCampaign"
 import type { CampaignContext } from "../types/bootstrap"
 import type { WorldListResponse } from "../types/worldAuthoring"
 import { buildWorldChoices, worldAccess } from "../utils/worldAccess"
@@ -102,7 +101,6 @@ export function HierarchyContextPanel({
   const worlds = useAuthoringResource<WorldListResponse>(
     `${worldsListPath("all")}&limit=100`,
   )
-  const selectCampaign = useSelectCampaign(campaign?.campaign_id)
 
   const bootstrapCampaigns =
     state.status === "authenticated" ? state.bootstrap.campaigns : []
@@ -247,10 +245,9 @@ export function HierarchyContextPanel({
             value={campaign?.campaign_id ?? ""}
             options={campaignOptions}
             enabled={campaignOptions.length > 0}
-            onSelect={(campaignId) => {
-              selectCampaign(campaignId)
+            onSelect={(campaignId) =>
               navigate(`/app/${encodeURIComponent(campaignId)}/home`)
-            }}
+            }
           />
 
           {campaign !== null && (

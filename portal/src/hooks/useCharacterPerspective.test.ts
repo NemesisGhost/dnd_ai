@@ -63,7 +63,7 @@ function makeSession(
 }
 
 describe("useCharacterPerspective", () => {
-    it("selects an authorized character and requests a refresh", () => {
+    it("commits an authorized character without reloading or refreshing", () => {
         const session = makeSession()
 
         const { result } = renderHook(
@@ -82,7 +82,8 @@ describe("useCharacterPerspective", () => {
             )
         })
 
-        expect(session.reload).toHaveBeenCalledTimes(1)
+        expect(session.reload).not.toHaveBeenCalled()
+        expect(session.refresh).not.toHaveBeenCalled()
 
         expect(
             result.current.getSelectedCharacterId("campaign-a"),
@@ -286,7 +287,8 @@ describe("useCharacterPerspective", () => {
             )
         })
 
-        expect(session.reload).toHaveBeenCalledTimes(1)
+        expect(session.reload).not.toHaveBeenCalled()
+        expect(session.refresh).not.toHaveBeenCalled()
 
         expect(
             result.current.getSelectedCharacterId(

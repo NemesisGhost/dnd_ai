@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef } from "react"
 import { useBlocker } from "react-router"
-import { anyNavigationHold, holdNavigationQuestion, registerPageGuard } from "./navigationHolds"
+import { anyNavigationHold, holdNavigationQuestion, isGuardedTransition, registerPageGuard } from "./navigationHolds"
 
 export interface UnsavedChangesGuard {
     // True while an in-app navigation is held waiting for the user's decision.
@@ -20,6 +20,9 @@ export interface UnsavedChangesGuard {
 //   (this needs a data router, which main.tsx provides); the page renders a
 //   ConfirmDialog from `blocked`/`discard`/`stay`.
 // - Closing or reloading the tab sets a `beforeunload` prompt while dirty.
+// - A change of character perspective keeps the path but is a context
+//   transition: it is held the same way (see isGuardedTransition), including
+//   Back/Forward between same-path entries recorded under different perspectives.
 // - A query-string-only change (the setup wizard moving between steps) is not
 //   a departure and is never blocked.
 //
@@ -37,8 +40,7 @@ export function useUnsavedChangesGuard(isDirty: boolean): UnsavedChangesGuard {
     useEffect(() => registerPageGuard(), [])
 
     const blocker = useBlocker(
-        ({ currentLocation, nextLocation }) =>
-            (dirtyRef.current || anyNavigationHold()) && currentLocation.pathname !== nextLocation.pathname,
+        (transition) => (dirtyRef.current || anyNavigationHold()) && isGuardedTransition(transition),
     )
 
     // While the question is on screen, modals of components that hold state (a picker's dialog) step aside.

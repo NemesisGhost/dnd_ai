@@ -1,12 +1,12 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react"
 import { StrictMode, useState } from "react"
 import { Link } from "react-router"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { sessionBootstrapFixture } from "../../fixtures/sessionBootstrap"
 import { useUnsavedChangesGuard } from "../../hooks/useUnsavedChangesGuard"
 import type { MockResponse } from "../../test/authoringHarness"
 import { bootstrapWith, installMockServer, renderAuthoringRoutes } from "../../test/authoringHarness"
-import { navigationRegistryCounts } from "../../hooks/navigationHolds"
+import { navigationRegistryCounts, setCommittedPerspective } from "../../hooks/navigationHolds"
 import { ConfirmDialog } from "./ConfirmDialog"
 import { WorldTimePicker } from "./WorldTimePicker"
 
@@ -97,6 +97,9 @@ function Outer({ submit, pageGuard = false, two = false, initialCampaign = CAMPA
     return (
         <>
             <Link to="/away">Go away</Link>
+            <Link to="/pick" state={{ ctx: { v: 1, characterId: "char-b" } }}>
+                Switch perspective
+            </Link>
             <button type="button" onClick={() => setCampaign(OTHER)}>
                 Switch campaign
             </button>
@@ -780,6 +783,44 @@ describe("WorldTimePicker: selection revisions", () => {
         fill("4")
         record()
         await waitFor(() => expect(chosen()).toHaveTextContent("t9"))
+    })
+})
+
+describe("WorldTimePicker: a perspective change at the same path", () => {
+    beforeEach(() => {
+        setCommittedPerspective({ characterId: null, defaultCharacterId: null, authorized: new Set(["char-b"]) })
+    })
+    afterEach(() => setCommittedPerspective(null))
+
+    it("is held by the picker's own blocker as one question; Stay keeps the draft and the path", async () => {
+        setupServer()
+        const { router } = render()
+        await openIt()
+        fill()
+        const before = router.state.location
+        fireEvent.click(screen.getByRole("link", { name: "Switch perspective", hidden: true }))
+        expect(await inDialog().findByText(/You have entered a time that has not been recorded/)).toBeInTheDocument()
+        expect(screen.getAllByRole("dialog")).toHaveLength(1)
+        expect(router.state.location).toBe(before)
+        fireEvent.click(inDialog().getByRole("button", { name: "Stay" }))
+        await waitFor(() => expect(inDialog().queryByText(/You have entered a time/)).toBeNull())
+        expect(inDialog().getByRole("textbox", { name: /Year/ })).toHaveValue("3")
+        expect(router.state.location).toBe(before)
+    })
+
+    it("is held by the page's guard as the one question when the page has one", async () => {
+        setupServer()
+        render({ pageGuard: true })
+        fireEvent.change(outer().getByRole("textbox", { name: "Note" }), { target: { value: "dirty outer" } })
+        await openIt()
+        fill()
+        fireEvent.click(screen.getByRole("link", { name: "Switch perspective", hidden: true }))
+        const ask = await screen.findByRole("dialog", { name: "Leave the outer page?" })
+        expect(screen.queryByRole("dialog", { name: "Leave this page?" })).toBeNull()
+        expect(screen.queryByText(/You have entered a time that has not been recorded/)).toBeNull()
+        fireEvent.click(within(ask).getByRole("button", { name: "Stay" }))
+        await waitFor(() => expect(screen.queryByRole("dialog", { name: "Leave the outer page?" })).toBeNull())
+        expect(inDialog().getByRole("textbox", { name: /Year/ })).toHaveValue("3")
     })
 })
 

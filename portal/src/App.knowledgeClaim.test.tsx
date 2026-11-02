@@ -302,6 +302,9 @@ describe("unified knowledge claim page", () => {
       await waitFor(() => expect(server.callsTo("GET", AUDIENCE).length).toBeGreaterThan(0))
       await waitFor(() => expect(server.callsTo("GET", "/campaigns/mundivita/sources").length).toBeGreaterThan(0))
       await waitFor(() => expect(router.state.location.search).toContain("section=claim"))
+      // The campaign layout records the committed perspective on the entry (a replacement); links
+      // are followed once that has settled.
+      await waitFor(() => expect(router.state.location.state).toMatchObject({ ctx: { v: 1 } }))
       const before = server.calls.length
 
       fireEvent.click(stageLink(2))
