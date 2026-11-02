@@ -34,6 +34,10 @@ export interface UseSessionBootstrapResult {
   // "unauthenticated"); rejects on a failed request, leaving the previous
   // bootstrap untouched. Used after a mutation changes bootstrap-visible
   // state (e.g. a saved startup preference).
+  //
+  // `false` also means "not applied": the request was superseded (a reload, an expiry, an unmount
+  // or a newer session request decided first) or aborted. A superseded request never publishes
+  // state and never reports its data as applied, whether it succeeded or failed.
   refresh: (signal?: AbortSignal) => Promise<boolean>
 }
 
@@ -48,59 +52,113 @@ export function useSessionBootstrap():
 
   const [requestVersion, setRequestVersion] = useState(0)
 
+  // Request ownership. Every session read (the initial load, a reload, a refresh) takes a ticket in
+  // the order it STARTS. A read may publish its result only if
+  //   - no reload, expiry or unmount has invalidated it (its ticket is at least `floor`), and
+  //   - nothing that started after it has already published (its ticket is above `applied`).
+  // So an older read that finishes late - authenticated or unauthenticated, successful or failed -
+  // can neither restore a session that a newer result or an expiry ended, nor end one that a newer
+  // result established. Aborting a request is only cleanup; it is not what guarantees freshness.
+  const issued = useRef(0)
+  const floor = useRef(1)
+  const applied = useRef(0)
+
+  const takeTicket = useCallback((): number => {
+    issued.current += 1
+    return issued.current
+  }, [])
+
+  const owns = useCallback(
+    (ticket: number): boolean => ticket >= floor.current && ticket > applied.current,
+    [],
+  )
+
+  // Invalidate every read started so far (reload, expiry, sign-out, unmount).
+  const invalidate = useCallback(() => {
+    floor.current = issued.current + 1
+  }, [])
+
+  const publish = useCallback(
+    (ticket: number, next: SessionBootstrapState): boolean => {
+      if (!owns(ticket)) {
+        return false
+      }
+      applied.current = ticket
+      setState(next)
+      return true
+    },
+    [owns],
+  )
+
   const reload = useCallback(() => {
+    invalidate()
+
     setState({
       status: "loading",
     })
 
     setRequestVersion((currentVersion) => currentVersion + 1)
-  }, [])
+  }, [invalidate])
 
   // Argument-free refreshes (eligibility after a confirmed write, or after a party-scoped
-  // not-found) share one request while it is in flight, so several callers cause one read.
-  const inFlight = useRef<Promise<boolean> | null>(null)
+  // not-found) share one request while it is still the owner of its result, so several callers
+  // cause one read. A request that has been invalidated or overtaken is never joined: the next
+  // caller starts a fresh one. A request clears only its own entry when it settles.
+  const inFlight = useRef<{ ticket: number; promise: Promise<boolean> } | null>(null)
 
   const refresh = useCallback(
     (signal?: AbortSignal): Promise<boolean> => {
-      if (signal === undefined && inFlight.current !== null) {
-        return inFlight.current
+      if (signal === undefined && inFlight.current !== null && owns(inFlight.current.ticket)) {
+        return inFlight.current.promise
       }
 
+      const ticket = takeTicket()
+
       const run = async (): Promise<boolean> => {
-        const bootstrap = await fetchSessionBootstrap(signal)
+        let bootstrap: SessionBootstrap | null
+        try {
+          bootstrap = await fetchSessionBootstrap(signal)
+        } catch (cause) {
+          // An obsolete failure is not news: it is ignored, not thrown.
+          if (!owns(ticket)) {
+            return false
+          }
+          throw cause
+        }
 
         if (signal?.aborted) {
           return false
         }
 
         if (bootstrap === null) {
-          setState({ status: "unauthenticated" })
+          publish(ticket, { status: "unauthenticated" })
           return false
         }
 
-        setState({ status: "authenticated", bootstrap })
-        return true
+        return publish(ticket, { status: "authenticated", bootstrap })
       }
 
-      const request = run()
+      const promise = run()
 
       if (signal === undefined) {
-        inFlight.current = request
+        const entry = { ticket, promise }
+        inFlight.current = entry
         const clear = () => {
-          if (inFlight.current === request) {
+          if (inFlight.current === entry) {
             inFlight.current = null
           }
         }
-        request.then(clear, clear)
+        promise.then(clear, clear)
       }
 
-      return request
+      return promise
     },
-    [],
+    [owns, publish, takeTicket],
   )
 
   useEffect(() => {
     const controller = new AbortController()
+    const ticket = takeTicket()
 
     void fetchSessionBootstrap(controller.signal)
       .then((bootstrap) => {
@@ -109,13 +167,13 @@ export function useSessionBootstrap():
         }
 
         if (bootstrap === null) {
-          setState({
+          publish(ticket, {
             status: "unauthenticated",
           })
           return
         }
 
-        setState({
+        publish(ticket, {
           status: "authenticated",
           bootstrap,
         })
@@ -130,7 +188,7 @@ export function useSessionBootstrap():
             ? cause
             : new Error("Session bootstrap request failed")
 
-        setState({
+        publish(ticket, {
           status: "error",
           error,
         })
@@ -139,7 +197,14 @@ export function useSessionBootstrap():
     return () => {
       controller.abort()
     }
-  }, [requestVersion])
+  }, [requestVersion, takeTicket, publish])
+
+  // Nothing started before the hook goes away may publish afterwards.
+  useEffect(() => {
+    return () => {
+      invalidate()
+    }
+  }, [invalidate])
 
   // Leave the signed-in UI the moment the session lapses, rather than on
   // the next failing request. The idle window slides server-side, so when
@@ -164,6 +229,8 @@ export function useSessionBootstrap():
 
     const expire = () => {
       if (!disposed) {
+        // The session is over: no read that started before now may bring it back.
+        invalidate()
         setState({ status: "unauthenticated" })
       }
     }
@@ -233,7 +300,7 @@ export function useSessionBootstrap():
       window.removeEventListener("pageshow", onWake)
       document.removeEventListener("visibilitychange", onWake)
     }
-  }, [authenticatedBootstrap])
+  }, [authenticatedBootstrap, invalidate])
 
   return {
     state,

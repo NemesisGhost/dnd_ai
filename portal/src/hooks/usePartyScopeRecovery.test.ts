@@ -168,13 +168,13 @@ describe("party-scoped not-found recovery: quest list", () => {
         expect(mocks.refresh).not.toHaveBeenCalled()
     })
 
-    it("a sign-out during the recheck changes nothing here", async () => {
+    it("a refresh that was not applied (superseded, or the session ended) is uncertainty: a retry, never a fallback or a verdict on the party", async () => {
         mocks.refresh.mockResolvedValue(false)
         mocks.fetchCampaignQuests.mockRejectedValue(new QuestRequestError(404))
         const { result } = render({ party: "p1" })
-        await waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(1))
-        await act(async () => undefined)
-        expect(result.current.state).toEqual({ status: "loading" })
+        await waitFor(() => expect(result.current.state.status).toBe("error"))
+        expect(mocks.fetchCampaignQuests).toHaveBeenCalledTimes(1)
+        expect(mocks.refresh).toHaveBeenCalledTimes(1)
     })
 
     it("a different campaign or character is a different scope and a different episode", async () => {

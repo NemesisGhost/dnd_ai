@@ -200,7 +200,7 @@ export function useKnowledgeDetail(
                     void partyEpisode(
                         [campaignId, knowledgeItemId, characterId, partyId, requestVersion].join("|"),
                     ).then((outcome) => {
-                        if (controller.signal.aborted || outcome === "signed_out") {
+                        if (controller.signal.aborted) {
                             return
                         }
 

@@ -340,3 +340,212 @@ describe("useSessionBootstrap refresh coalescing", () => {
         })
     })
 })
+
+describe("useSessionBootstrap request ownership", () => {
+    type Bootstrap = typeof sessionBootstrapFixture
+    const fresh: Bootstrap = { ...sessionBootstrapFixture, startup_campaign_id: "fresh-campaign" }
+    const other: Bootstrap = { ...sessionBootstrapFixture, startup_campaign_id: "another" }
+
+    interface Gate<T> {
+        promise: Promise<T>
+        resolve: (value: T) => void
+        reject: (error: unknown) => void
+    }
+
+    function gate<T>(): Gate<T> {
+        let resolve!: (value: T) => void
+        let reject!: (error: unknown) => void
+        const promise = new Promise<T>((res, rej) => {
+            resolve = res
+            reject = rej
+        })
+        return { promise, resolve, reject }
+    }
+
+    async function authenticatedHook() {
+        fetchSessionBootstrapMock.mockResolvedValueOnce(sessionBootstrapFixture)
+        const hook = renderHook(() => useSessionBootstrap())
+        await waitFor(() => {
+            expect(hook.result.current.state.status).toBe("authenticated")
+        })
+        return hook
+    }
+
+    it("an older authenticated refresh cannot restore a session that a newer reload found unauthenticated", async () => {
+        const { result } = await authenticatedHook()
+        const a = gate<Bootstrap | null>()
+        const b = gate<Bootstrap | null>()
+        fetchSessionBootstrapMock.mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise)
+
+        let aResult: Promise<boolean> = Promise.resolve(true)
+        act(() => {
+            aResult = result.current.refresh()
+        })
+        act(() => result.current.reload())
+        await act(async () => b.resolve(null))
+        await waitFor(() => expect(result.current.state).toEqual({ status: "unauthenticated" }))
+
+        await act(async () => a.resolve(fresh))
+        expect(await aResult).toBe(false)
+        expect(result.current.state).toEqual({ status: "unauthenticated" })
+    })
+
+    it("an older authenticated refresh cannot restore a session that expired while it was pending", async () => {
+        const { result } = await authenticatedHook()
+        const a = gate<Bootstrap | null>()
+        fetchSessionBootstrapMock.mockReturnValueOnce(a.promise)
+
+        let aResult: Promise<boolean> = Promise.resolve(true)
+        act(() => {
+            aResult = result.current.refresh()
+        })
+        act(() => {
+            window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT))
+        })
+        expect(result.current.state).toEqual({ status: "unauthenticated" })
+
+        await act(async () => a.resolve(fresh))
+        expect(await aResult).toBe(false)
+        expect(result.current.state).toEqual({ status: "unauthenticated" })
+    })
+
+    it("an older unauthenticated result cannot end a session that a newer read established", async () => {
+        const { result } = await authenticatedHook()
+        const a = gate<Bootstrap | null>()
+        const b = gate<Bootstrap | null>()
+        fetchSessionBootstrapMock.mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise)
+
+        let aResult: Promise<boolean> = Promise.resolve(true)
+        let bResult: Promise<boolean> = Promise.resolve(false)
+        act(() => {
+            aResult = result.current.refresh()
+            // A newer read that carries its own signal never joins A.
+            bResult = result.current.refresh(new AbortController().signal)
+        })
+        await act(async () => b.resolve(other))
+        expect(await bResult).toBe(true)
+        expect(result.current.state).toEqual({ status: "authenticated", bootstrap: other })
+
+        await act(async () => a.resolve(null))
+        expect(await aResult).toBe(false)
+        expect(result.current.state).toEqual({ status: "authenticated", bootstrap: other })
+    })
+
+    it("an older authenticated result cannot replace a newer authenticated one", async () => {
+        const { result } = await authenticatedHook()
+        const a = gate<Bootstrap | null>()
+        const b = gate<Bootstrap | null>()
+        fetchSessionBootstrapMock.mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise)
+
+        let aResult: Promise<boolean> = Promise.resolve(true)
+        act(() => {
+            aResult = result.current.refresh()
+            void result.current.refresh(new AbortController().signal)
+        })
+        await act(async () => b.resolve(other))
+        await act(async () => a.resolve(fresh))
+        expect(await aResult).toBe(false)
+        expect(result.current.state).toEqual({ status: "authenticated", bootstrap: other })
+    })
+
+    it("an obsolete failure is ignored, not thrown and not shown", async () => {
+        const { result } = await authenticatedHook()
+        const a = gate<Bootstrap | null>()
+        fetchSessionBootstrapMock.mockReturnValueOnce(a.promise).mockResolvedValue(fresh)
+
+        let aResult: Promise<boolean> = Promise.resolve(true)
+        act(() => {
+            aResult = result.current.refresh()
+        })
+        act(() => result.current.reload())
+        await waitFor(() => expect(result.current.state).toEqual({ status: "authenticated", bootstrap: fresh }))
+
+        await act(async () => a.reject(new Error("late failure")))
+        expect(await aResult).toBe(false)
+        expect(result.current.state).toEqual({ status: "authenticated", bootstrap: fresh })
+    })
+
+    it("a refresh made after an invalidation does not join the old request", async () => {
+        const { result } = await authenticatedHook()
+        const a = gate<Bootstrap | null>()
+        fetchSessionBootstrapMock.mockReturnValueOnce(a.promise).mockResolvedValue(fresh)
+
+        act(() => {
+            void result.current.refresh()
+        })
+        const callsBefore = fetchSessionBootstrapMock.mock.calls.length
+        act(() => {
+            window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT))
+        })
+        let second = false
+        await act(async () => {
+            second = await result.current.refresh()
+        })
+        expect(fetchSessionBootstrapMock.mock.calls.length).toBe(callsBefore + 1)
+        expect(second).toBe(true)
+        expect(result.current.state).toEqual({ status: "authenticated", bootstrap: fresh })
+        await act(async () => a.resolve(other))
+        expect(result.current.state).toEqual({ status: "authenticated", bootstrap: fresh })
+    })
+
+    it("an old request settling does not clear a newer in-flight request, which later callers still join", async () => {
+        const { result } = await authenticatedHook()
+        const a = gate<Bootstrap | null>()
+        const c = gate<Bootstrap | null>()
+        fetchSessionBootstrapMock.mockReturnValueOnce(a.promise).mockReturnValueOnce(c.promise)
+
+        act(() => {
+            void result.current.refresh()
+        })
+        act(() => {
+            window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT))
+        })
+        // C is the newer in-flight request.
+        let cResult: Promise<boolean> = Promise.resolve(false)
+        act(() => {
+            cResult = result.current.refresh()
+        })
+        const callsWithC = fetchSessionBootstrapMock.mock.calls.length
+
+        // A settles (late): it must not clear C's entry.
+        await act(async () => a.resolve(other))
+        let dResult: Promise<boolean> = Promise.resolve(false)
+        act(() => {
+            dResult = result.current.refresh()
+        })
+        expect(fetchSessionBootstrapMock.mock.calls.length).toBe(callsWithC)
+
+        await act(async () => c.resolve(fresh))
+        expect(await cResult).toBe(true)
+        expect(await dResult).toBe(true)
+        expect(result.current.state).toEqual({ status: "authenticated", bootstrap: fresh })
+    })
+
+    it("a result arriving after unmount is not applied and is reported as not applied", async () => {
+        const { result, unmount } = await authenticatedHook()
+        const a = gate<Bootstrap | null>()
+        fetchSessionBootstrapMock.mockReturnValueOnce(a.promise)
+        let aResult: Promise<boolean> = Promise.resolve(true)
+        act(() => {
+            aResult = result.current.refresh()
+        })
+        unmount()
+        await act(async () => a.resolve(fresh))
+        expect(await aResult).toBe(false)
+    })
+
+    it("an aborted signal-bearing refresh still resolves not applied and does not disturb a newer read", async () => {
+        const { result } = await authenticatedHook()
+        const a = gate<Bootstrap | null>()
+        fetchSessionBootstrapMock.mockReturnValueOnce(a.promise)
+        const controller = new AbortController()
+        let aResult: Promise<boolean> = Promise.resolve(true)
+        act(() => {
+            aResult = result.current.refresh(controller.signal)
+        })
+        controller.abort()
+        await act(async () => a.resolve(fresh))
+        expect(await aResult).toBe(false)
+        expect(result.current.state).toEqual({ status: "authenticated", bootstrap: sessionBootstrapFixture })
+    })
+})

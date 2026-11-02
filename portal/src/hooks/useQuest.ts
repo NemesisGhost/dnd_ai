@@ -152,7 +152,7 @@ export function useQuest(
                     void partyEpisode(
                         [campaignId, questId, characterId, partyId, requestVersion].join("|"),
                     ).then((outcome) => {
-                        if (controller.signal.aborted || outcome === "signed_out") {
+                        if (controller.signal.aborted) {
                             return
                         }
 

@@ -212,3 +212,18 @@ describe("Quests: a selected party that stops being authorized", () => {
         expect(mocks.fetchCampaignQuests.mock.calls.map(partyOf)).toEqual(["p1", "p2"])
     })
 })
+
+describe("Quests: a superseded eligibility refresh", () => {
+    it("is not an authoritative snapshot: no fallback, the party stays selected, and Try again is offered", async () => {
+        // `false` is what the session hook resolves for a refresh that was superseded or not applied.
+        refresh.mockResolvedValue(false)
+        mocks.fetchCampaignQuests.mockRejectedValue(new QuestRequestError(404))
+        renderQuests(bootstrap([PARTY, OTHER, THIRD]))
+
+        expect(await screen.findByRole("heading", { name: "Quest information unavailable" })).toBeInTheDocument()
+        expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument()
+        expect(mocks.fetchCampaignQuests).toHaveBeenCalledTimes(1)
+        expect(probe.location).toContain("party_id=p1")
+        expect(refresh).toHaveBeenCalledTimes(1)
+    })
+})

@@ -4,9 +4,10 @@ import { useSession } from "../context/SessionContext"
 // What a refresh of the authoritative eligibility (the session bootstrap) did.
 //   refreshed   the fresh bootstrap was applied; whatever it says about `authorized_parties` is now
 //               what the page derives its party selection from.
-//   failed      the read failed. Nothing is known about the party, so it is never treated as revoked.
-//   signed_out  the session is gone; the session provider already leaves the signed-in UI.
-export type EligibilityOutcome = "refreshed" | "failed" | "signed_out"
+//   failed      nothing was applied: the read failed, or it was superseded (a reload, an expiry or a
+//               newer session read decided first, so its data is not authoritative) or the session
+//               ended. Nothing is known about the party, so it is never treated as revoked.
+export type EligibilityOutcome = "refreshed" | "failed"
 
 // Re-reads the bootstrap through the existing session mechanism (no second store, no remount, and
 // concurrent calls share one request), after a *confirmed* write that can change who may take a
@@ -17,8 +18,9 @@ export function useEligibilityRefresh(): () => Promise<EligibilityOutcome> {
     const { refresh } = useSession()
     return useCallback(async () => {
         try {
-            const applied = await refresh()
-            return applied === false ? "signed_out" : "refreshed"
+            // `false` is "not applied" (see UseSessionBootstrapResult.refresh): only an applied
+            // bootstrap may drive a decision about the party.
+            return (await refresh()) ? "refreshed" : "failed"
         } catch {
             return "failed"
         }
