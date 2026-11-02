@@ -585,6 +585,164 @@ describe("revocation is an explicit, lasting clear", () => {
   })
 })
 
+describe("permission loss completes over a guarded page", () => {
+  async function openAddressedPage() {
+    renderAt("/app/alpha/notes?character_id=char-b&party_id=p1&section=x", { ctx: { v: 1, characterId: "char-b" } })
+    await settled()
+    expect(perspectiveSelect()).toHaveValue("char-b")
+    type("draft that belongs to the lost perspective")
+  }
+  function revokeB() {
+    server.campaigns = [campaign("alpha", ["char-a"]), campaign("beta", ["char-c"])]
+    fireEvent.click(screen.getByRole("button", { name: "Refresh session" }))
+  }
+  async function expectSafePage() {
+    await waitFor(() => expect(router.state.location.search).toBe("?section=x"))
+    await waitFor(() => expect(screen.getByTestId("read")).toHaveTextContent(/^ready:$/))
+    expect(screen.getByRole("status")).toHaveTextContent("Your selected character is no longer available.")
+    expect(perspectiveSelect()).toHaveValue("")
+    expect(screen.getByLabelText("Draft")).toHaveValue("")
+    expect(question()).toBeNull()
+    expect(router.state.location.pathname).toBe("/app/alpha/notes")
+    expect((router.state.location.state as { ctx?: unknown } | null)?.ctx).toEqual({ v: 1, characterId: null })
+  }
+
+  it("A: revocation while the page's own question is open completes, without approving that departure", async () => {
+    await openAddressedPage()
+    choosePerspective("char-a")
+    expect(await screen.findByText("Leave this page?")).toBeInTheDocument()
+
+    revokeB()
+
+    await expectSafePage()
+    // The blocked departure was cancelled, not approved: still on b's former address, on the same path.
+    expect(router.state.historyAction).toBe("REPLACE")
+    expect(probeRequests().filter((r) => r.endsWith("character_id=char-a"))).toHaveLength(0)
+  })
+
+  it("B: revocation of a dirty addressed page with no question yet completes the cleanup", async () => {
+    await openAddressedPage()
+
+    revokeB()
+
+    await expectSafePage()
+  })
+
+  it("dirty work entered afterwards is guarded again by ordinary navigation", async () => {
+    await openAddressedPage()
+    revokeB()
+    await expectSafePage()
+    type("new work")
+
+    choosePerspective("char-a")
+    expect(await screen.findByText("Leave this page?")).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Stay" }))
+    expect(screen.getByLabelText("Draft")).toHaveValue("new work")
+    fireEvent.click(screen.getByRole("link", { name: "Section two" }))
+    await waitFor(() => expect(router.state.location.search).toBe("?section=2"))
+    expect(question()).toBeNull()
+  })
+})
+
+describe("permission loss: ownership and the held departure", () => {
+  it("a newer navigation supersedes the cleanup, and its own address is validated in turn", async () => {
+    renderAt("/app/alpha/notes?character_id=char-b&section=x", { ctx: { v: 1, characterId: "char-b" } })
+    await settled()
+    type("draft")
+    const gate = deferred()
+    server.sessionGates.set(2, gate.promise)
+    server.campaigns = [campaign("alpha", ["char-a"]), campaign("beta", ["char-c"])]
+    fireEvent.click(screen.getByRole("button", { name: "Refresh session" }))
+
+    // While that answer is pending the person follows a link that still names the lost character.
+    await act(async () => {
+      await router.navigate({ search: "?character_id=char-b&section=9" }, { state: { ctx: { v: 1, characterId: "char-b" } } })
+    })
+    expect(question()).toBeNull()
+    await act(async () => {
+      gate.release()
+    })
+
+    await waitFor(() => expect(router.state.location.search).toBe("?section=9"))
+    await waitFor(() => expect(screen.getByTestId("read")).toHaveTextContent(/^ready:$/))
+    expect(perspectiveSelect()).toHaveValue("")
+    expect(screen.getByRole("status")).toHaveTextContent("no longer available")
+    expect(question()).toBeNull()
+  })
+
+  it("the held departure is cancelled, not approved: nothing navigates and no question returns", async () => {
+    renderAt("/app/alpha/notes?character_id=char-b&section=x", { ctx: { v: 1, characterId: "char-b" } })
+    await settled()
+    type("draft")
+    choosePerspective("char-a")
+    expect(await screen.findByText("Leave this page?")).toBeInTheDocument()
+    server.campaigns = [campaign("alpha", ["char-a"]), campaign("beta", ["char-c"])]
+    fireEvent.click(screen.getByRole("button", { name: "Refresh session" }))
+
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("no longer available"))
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(question()).toBeNull()
+    expect(perspectiveSelect()).toHaveValue("")
+    expect(router.state.location.pathname).toBe("/app/alpha/notes")
+    expect([...router.state.blockers.values()].some((b) => b.state === "blocked" || b.state === "proceeding")).toBe(false)
+  })
+})
+
+describe("a bootstrap default only initializes the selection", () => {
+  it("default A revoked while B becomes the new default: read as A, then with no perspective, never as B", async () => {
+    server.campaigns = [{ ...campaign("alpha", ["char-a"]), selected_character_id: "char-a" }, campaign("beta", ["char-c"])]
+    renderAt("/app/alpha/notes")
+    await settled()
+    expect(perspectiveSelect()).toHaveValue("char-a")
+    expect(probeRequests().map((r) => r.replace(/^.*character_id=/, ""))).toEqual(["char-a"])
+
+    server.campaigns = [{ ...campaign("alpha", ["char-b"]), selected_character_id: "char-b" }, campaign("beta", ["char-c"])]
+    fireEvent.click(screen.getByRole("button", { name: "Refresh session" }))
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("no longer available"))
+    await waitFor(() => expect(screen.getByTestId("read")).toHaveTextContent(/^ready:$/))
+
+    expect(perspectiveSelect()).toHaveValue("")
+    expect(probeRequests().map((r) => r.replace(/^.*character_id=/, ""))).toEqual(["char-a", ""])
+    expect(router.state.location.pathname).toBe("/app/alpha/notes")
+    expect((router.state.location.state as { ctx?: unknown } | null)?.ctx).toEqual({ v: 1, characterId: null })
+  })
+
+  it("re-authorization, and a default that comes back, cannot resurrect the lost selection", async () => {
+    server.campaigns = [{ ...campaign("alpha", ["char-a"]), selected_character_id: "char-a" }, campaign("beta", ["char-c"])]
+    renderAt("/app/alpha/notes")
+    await settled()
+    server.campaigns = [{ ...campaign("alpha", ["char-b"]), selected_character_id: "char-b" }, campaign("beta", ["char-c"])]
+    fireEvent.click(screen.getByRole("button", { name: "Refresh session" }))
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("no longer available"))
+    type("new work")
+    const reads = probeRequests().length
+
+    server.campaigns = [{ ...campaign("alpha", ["char-a", "char-b"]), selected_character_id: "char-a" }, campaign("beta", ["char-c"])]
+    fireEvent.click(screen.getByRole("button", { name: "Refresh session" }))
+    await waitFor(() => expect(sessionRequests()).toBe(3))
+
+    expect(perspectiveSelect()).toHaveValue("")
+    expect(screen.getByLabelText("Draft")).toHaveValue("new work")
+    expect(probeRequests()).toHaveLength(reads)
+  })
+
+  it("an uninitialized start still uses the authorized default, and a later default does not replace it", async () => {
+    server.campaigns = [{ ...campaign("alpha", ["char-a", "char-b"]), selected_character_id: "char-a" }, campaign("beta", ["char-c"])]
+    renderAt("/app/alpha/notes")
+    await settled()
+    expect(perspectiveSelect()).toHaveValue("char-a")
+
+    server.campaigns = [{ ...campaign("alpha", ["char-a", "char-b"]), selected_character_id: "char-b" }, campaign("beta", ["char-c"])]
+    fireEvent.click(screen.getByRole("button", { name: "Refresh session" }))
+    await waitFor(() => expect(sessionRequests()).toBe(2))
+
+    expect(perspectiveSelect()).toHaveValue("char-a")
+    expect(screen.getByTestId("mount")).toHaveTextContent("1")
+  })
+})
+
 describe("initial entry and stamp ownership", () => {
   it("honors an authorized initial stamp before anything reads under the default", async () => {
     renderAt("/app/alpha/notes", { ctx: { v: 1, characterId: "char-b" } })

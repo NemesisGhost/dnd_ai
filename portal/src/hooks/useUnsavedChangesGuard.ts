@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef } from "react"
 import { useBlocker } from "react-router"
+import type { Blocker } from "react-router"
 import { anyNavigationHold, holdNavigationQuestion, isGuardedTransition, registerPageGuard } from "./navigationHolds"
 
 export interface UnsavedChangesGuard {
@@ -39,9 +40,27 @@ export function useUnsavedChangesGuard(isDirty: boolean): UnsavedChangesGuard {
     // question instead of installing a second blocker; its holds block here too.
     useEffect(() => registerPageGuard(), [])
 
+    // When the page goes away with its question still open (permission loss removes it), the held
+    // navigation is cancelled through the blocker's own reset, which also tells the router's
+    // subscribers that the blocker is gone; the departure is never approved. Declared before
+    // useBlocker so it runs before that hook's cleanup deletes the blocker.
+    const blockerRef = useRef<Blocker | null>(null)
+    // Set when the person chose to leave: the blocker then proceeds, and is not reset on the way out.
+    const leaving = useRef(false)
+    useEffect(
+        () => () => {
+            if (!leaving.current && blockerRef.current?.state === "blocked") blockerRef.current.reset()
+        },
+        [],
+    )
+
     const blocker = useBlocker(
         (transition) => (dirtyRef.current || anyNavigationHold()) && isGuardedTransition(transition),
     )
+
+    useLayoutEffect(() => {
+        blockerRef.current = blocker
+    })
 
     // While the question is on screen, modals of components that hold state (a picker's dialog) step aside.
     const asking = blocker.state === "blocked"
@@ -69,6 +88,7 @@ export function useUnsavedChangesGuard(isDirty: boolean): UnsavedChangesGuard {
     const discard = useCallback(() => {
         dirtyRef.current = false
         if (blocker.state === "blocked") {
+            leaving.current = true
             blocker.proceed()
         }
     }, [blocker])

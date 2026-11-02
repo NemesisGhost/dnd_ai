@@ -94,12 +94,21 @@ export function useCharacterPerspective({ state }: UseSessionBootstrapResult) {
             return
         }
 
-        setSelection({
-            userId: bootstrap.user.user_id,
-            browserSessionId: bootstrap.browser_session_id,
-            campaignId,
-            characterId,
-        })
+        // Idempotent: committing what is already committed changes nothing (and renders nothing).
+        setSelection((current) =>
+            current !== null &&
+            current.userId === bootstrap.user.user_id &&
+            current.browserSessionId === bootstrap.browser_session_id &&
+            current.campaignId === campaignId &&
+            current.characterId === characterId
+                ? current
+                : {
+                      userId: bootstrap.user.user_id,
+                      browserSessionId: bootstrap.browser_session_id,
+                      campaignId,
+                      characterId,
+                  },
+        )
     }
 
     // Unlike an explicit user selection, this never navigates: it exists

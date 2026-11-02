@@ -12,7 +12,7 @@ import {
 import { WorkspaceFrame } from "../components/WorkspaceFrame"
 import { usePerspective } from "../context/CharacterPerspectiveContext"
 import { useSession } from "../context/SessionContext"
-import { readEntryPerspective, setCommittedPerspective } from "../hooks/navigationHolds"
+import { readEntryPerspective, runPermissionLossCleanup, setCommittedPerspective } from "../hooks/navigationHolds"
 import { useRecordLastVisitedCampaign } from "../hooks/useRecordLastVisitedCampaign"
 import PlaceholderPage from "../pages/PlaceholderPage"
 import type { SessionBootstrap } from "../types/bootstrap"
@@ -125,7 +125,17 @@ export function CampaignLayout({ bootstrap }: CampaignLayoutProps) {
     // newer location exists (which stamps itself), so it can never overwrite a newer PUSH, REPLACE
     // or POP, or cut across a blocked one. State and the rest of the query are carried over from the
     // router's own copy of the entry.
-    function replaceOwnEntry(entryKey: string, next: (current: Location) => { search: string; state: unknown }) {
+    //
+    // Permission loss is the one case that does not wait for a blocked transition: the page whose
+    // question that is has just been removed, nothing will say so, and the loss may not wait for an
+    // answer. Its replacement runs under the narrow exemption in `runPermissionLossCleanup`, which
+    // covers exactly this entry and this call; the held navigation is cancelled by its owner as it
+    // goes away, never approved.
+    function replaceOwnEntry(
+      entryKey: string,
+      next: (current: Location) => { search: string; state: unknown },
+      permissionLoss = false,
+    ) {
       if (dataRouter === null) {
         const { search, state } = next(location)
         navigate({ pathname: location.pathname, search, hash: location.hash }, { replace: true, state })
@@ -146,14 +156,17 @@ export function CampaignLayout({ bootstrap }: CampaignLayoutProps) {
         }
         const waiting =
           current.navigation.state !== "idle" ||
-          [...current.blockers.values()].some((blocker) => blocker.state === "blocked")
+          (!permissionLoss && [...current.blockers.values()].some((blocker) => blocker.state === "blocked"))
         if (waiting) return
         finish()
         const { search, state } = next(current.location)
-        void router.navigate(
-          { pathname: current.location.pathname, search, hash: current.location.hash },
-          { replace: true, state, preventScrollReset: true },
-        )
+        const apply = () =>
+          void router.navigate(
+            { pathname: current.location.pathname, search, hash: current.location.hash },
+            { replace: true, state, preventScrollReset: true },
+          )
+        if (permissionLoss) runPermissionLossCleanup(entryKey, apply)
+        else apply()
       }
       const unsubscribe = router.subscribe(attempt)
       attempt()
@@ -178,13 +191,22 @@ export function CampaignLayout({ bootstrap }: CampaignLayoutProps) {
 
     setCommittedPerspective({ characterId: selectedCharacterId, defaultCharacterId, authorized })
 
+    // The bootstrap default only initializes the selection. Once a perspective is in use, however it
+    // was reached, it is stored as the selection (idempotently), so a later bootstrap that names a
+    // different default can never replace it: losing it leaves no perspective, not the new default.
+    if (revokedId === null && selectedCharacterId !== null) selectCharacter(activeCampaignId, selectedCharacterId)
+
     if (revokedId !== null) {
       // First the address: the page must not read as the perspective that was just lost.
       if (staleQuery) {
-        return replaceOwnEntry(location.key, (current) => ({
-          search: withoutPerspectiveQuery(current.search),
-          state: { ...asRecord(current.state), ctx: { v: 1, characterId: null } },
-        }))
+        return replaceOwnEntry(
+          location.key,
+          (current) => ({
+            search: withoutPerspectiveQuery(current.search),
+            state: { ...asRecord(current.state), ctx: { v: 1, characterId: null } },
+          }),
+          true,
+        )
       }
       // Then the explicit clear: stored as a choice of no perspective, so neither the server default
       // nor a later re-authorization brings the lost one (or any other) back.

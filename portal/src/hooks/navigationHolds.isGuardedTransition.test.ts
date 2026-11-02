@@ -1,7 +1,7 @@
 import { NavigationType } from "react-router"
 import type { Location } from "react-router"
 import { afterEach, describe, expect, it } from "vitest"
-import { isGuardedTransition, readEntryPerspective, setCommittedPerspective } from "./navigationHolds"
+import { isGuardedTransition, readEntryPerspective, runPermissionLossCleanup, setCommittedPerspective } from "./navigationHolds"
 
 function at(pathname: string, state?: unknown, search = ""): Location {
     return { pathname, search, hash: "", state, key: pathname + search }
@@ -55,5 +55,38 @@ describe("isGuardedTransition", () => {
 
     it("never guards on perspective outside a campaign workspace", () => {
         expect(isGuardedTransition({ currentLocation: at("/p"), nextLocation: at("/p", stamp("a")), historyAction: NavigationType.Pop })).toBe(false)
+    })
+})
+
+describe("runPermissionLossCleanup", () => {
+    const guarded = (current: Location, next: Location, action: NavigationType) =>
+        isGuardedTransition({ currentLocation: current, nextLocation: next, historyAction: action })
+
+    it("exempts only a same-path REPLACE of the named entry, only while it runs", () => {
+        setCommittedPerspective(committedB)
+        const entry = at("/p", { ctx: { v: 1, characterId: "zzz" } })
+        const stale = at("/p", { ctx: { v: 1, characterId: "a" } })
+        expect(guarded(entry, stale, NavigationType.Replace)).toBe(true)
+        runPermissionLossCleanup(entry.key, () => {
+            expect(guarded(entry, stale, NavigationType.Replace)).toBe(false)
+            // Not another entry, not another path, not a PUSH or POP.
+            expect(guarded(at("/other"), stale, NavigationType.Replace)).toBe(true)
+            expect(guarded(entry, at("/elsewhere"), NavigationType.Replace)).toBe(true)
+            expect(guarded(entry, stale, NavigationType.Push)).toBe(true)
+            expect(guarded(entry, stale, NavigationType.Pop)).toBe(true)
+        })
+        expect(guarded(entry, stale, NavigationType.Replace)).toBe(true)
+    })
+
+    it("releases the exemption when the cleanup throws", () => {
+        setCommittedPerspective(committedB)
+        const entry = at("/p")
+        const stale = at("/p", { ctx: { v: 1, characterId: "a" } })
+        expect(() =>
+            runPermissionLossCleanup(entry.key, () => {
+                throw new Error("boom")
+            }),
+        ).toThrow("boom")
+        expect(guarded(entry, stale, NavigationType.Replace)).toBe(true)
     })
 })

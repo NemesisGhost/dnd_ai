@@ -1,5 +1,6 @@
 import { useEffect, useSyncExternalStore } from "react"
-import type { Location, NavigationType } from "react-router"
+import { NavigationType } from "react-router"
+import type { Location } from "react-router"
 
 // Lets a component that owns state a transition would dispose (a world-time picker's open recording,
 // say) take part in the page's one "leave this page?" question. react-router asks only the last
@@ -114,6 +115,22 @@ export function readEntryPerspective(state: unknown, authorized?: ReadonlySet<st
     return authorized !== undefined && !authorized.has(characterId) ? undefined : characterId
 }
 
+// Permission loss is not a departure the person chose, so it never waits for a decision and the
+// disappearing page's dirty state cannot hold it. The exemption is as narrow as it can be: it exists
+// only while `run` executes (the navigation it starts is evaluated synchronously, inside it), it covers
+// only a REPLACE of the entry named by `entryKey` that keeps its path, and it is gone when `run` returns,
+// so no other navigation, before or after, bypasses a guard. It approves nothing that was held: a
+// blocked navigation is neither proceeded nor otherwise touched here.
+let permissionLossEntry: string | null = null
+export function runPermissionLossCleanup(entryKey: string, run: () => void): void {
+    permissionLossEntry = entryKey
+    try {
+        run()
+    } finally {
+        permissionLossEntry = null
+    }
+}
+
 // Whether a transition needs the departure guard's question (when the page is dirty or a hold is
 // active): a pathname change, or a change of committed perspective at the same path. The comparison is
 // of recorded context, never of a transient marker, so Back/Forward between same-path entries is
@@ -126,6 +143,15 @@ export function isGuardedTransition(args: {
     historyAction: NavigationType
 }): boolean {
     const { currentLocation, nextLocation, historyAction } = args
+    // The one exemption: permission loss completing its own cleanup (see runPermissionLossCleanup).
+    if (
+        permissionLossEntry !== null &&
+        currentLocation.key === permissionLossEntry &&
+        nextLocation.pathname === currentLocation.pathname &&
+        historyAction === NavigationType.Replace
+    ) {
+        return false
+    }
     if (currentLocation.pathname !== nextLocation.pathname) return true
     if (committedPerspective === null) return false
     const stamped = readEntryPerspective(nextLocation.state, committedPerspective.authorized)

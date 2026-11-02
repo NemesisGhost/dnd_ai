@@ -298,7 +298,9 @@ describe("HierarchyContextPanel party memberships", () => {
     ).toBeTruthy()
     // The rest of the Character area is still there.
     expect(useCharacterMock).toHaveBeenCalledWith("c1", "c1-hero")
-    // Expanding changes no selection and asks for nothing else.
+    // Expanding changes no selection and asks for nothing else (the layout's own commit of the shown
+    // perspective on mount is not part of that).
+    selectCharacter.mockClear()
     fireEvent.click(summary)
     expect(selectCharacter).not.toHaveBeenCalled()
     expect(server.callsTo("GET", /\/parties$/)).toHaveLength(1)

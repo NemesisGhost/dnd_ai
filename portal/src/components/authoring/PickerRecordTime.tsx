@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { ReactNode } from "react"
 import { createPortal } from "react-dom"
 import { useBlocker } from "react-router"
+import type { Blocker } from "react-router"
 import {
     NO_GUARD_VIEW,
     createGuardViewStore,
@@ -41,7 +42,19 @@ function OwnBlocker({ hold, view }: { hold: boolean; view: GuardViewStore }) {
     useLayoutEffect(() => {
         holdRef.current = hold
     }, [hold])
+    // Cancels a held navigation if this goes away with its question open (see useUnsavedChangesGuard).
+    const blockerRef = useRef<Blocker | null>(null)
+    const leaving = useRef(false)
+    useEffect(
+        () => () => {
+            if (!leaving.current && blockerRef.current?.state === "blocked") blockerRef.current.reset()
+        },
+        [],
+    )
     const blocker = useBlocker((transition) => holdRef.current && isGuardedTransition(transition))
+    useLayoutEffect(() => {
+        blockerRef.current = blocker
+    })
     useLayoutEffect(() => {
         view.set({
             blocked: blocker.state === "blocked",
@@ -50,7 +63,10 @@ function OwnBlocker({ hold, view }: { hold: boolean; view: GuardViewStore }) {
             },
             discard: () => {
                 holdRef.current = false
-                if (blocker.state === "blocked") blocker.proceed()
+                if (blocker.state === "blocked") {
+                    leaving.current = true
+                    blocker.proceed()
+                }
             },
         })
     }, [blocker, view])
