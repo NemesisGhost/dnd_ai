@@ -218,7 +218,12 @@ def test_a_gm_sets_up_and_runs_a_campaign(
         },
         status=200,
     )
-    assert s.gm.get(members).json()["members"][0]["is_current"] is False
+    # B1-DEF7a: ending a membership at "After the siege" does not make it ended while the campaign
+    # clock still reads "Opening" (the join boundary is in the past, the leave boundary is not
+    # reached); `left_at` records the end, `period_status` the position against the clock.
+    (ended_row,) = s.gm.get(members).json()["members"]
+    assert ended_row["left_at"] is not None
+    assert ended_row["is_current"] is True and ended_row["period_status"] == "in_effect"
     assert s.player.get(members).status_code == 403
 
     # --- Step 10 (15.2D-1): schedule a session, edit it, and see its derived status ----

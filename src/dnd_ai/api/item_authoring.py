@@ -54,6 +54,7 @@ from dnd_ai.queries.item_authoring import (
 from dnd_ai.queries.item_definitions import list_item_definitions
 from dnd_ai.queries.parties import get_campaign_party
 from dnd_ai.queries.party_members import list_party_members
+from dnd_ai.queries.party_membership_period import resolve_membership_clock
 
 from ._authoring import (
     BaseAuthoringRequest,
@@ -545,13 +546,20 @@ def party_inventory_endpoint(party_id: uuid.UUID, access: _Access, connection: _
     if party is None:
         raise NotFoundError()
     world_id = timeline_world_id(connection, access.timeline_id)
+    # Members in effect at the campaign's effective time (B1-DEF7a); with no clock membership is
+    # undetermined and none is listed.
+    clock = resolve_membership_clock(connection, timeline_id=access.timeline_id)
     members = [
         m
-        for m in list_party_members(connection, timeline_id=access.timeline_id, party_id=party_id)
+        for m in list_party_members(
+            connection, timeline_id=access.timeline_id, party_id=party_id, membership_clock=clock
+        )
         if m.is_current
     ]
     return {
         "party_id": str(party_id),
+        "as_of": clock.display,
+        "clock_unset": not clock.is_set,
         "members": [
             {
                 "character_id": str(member.character_id),

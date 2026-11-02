@@ -116,6 +116,12 @@ from dnd_ai.domain.record_authoring import (
     record_authoring,
     restrict_view_actions,
 )
+from dnd_ai.queries.party_membership_period import (
+    CURRENT_PARTY_MEMBERSHIP_SQL,
+    MembershipClock,
+    membership_clock_params,
+    resolve_membership_clock,
+)
 from dnd_ai.queries.world_authority import resolve_world_authority
 
 from ._shared import timeline_world_id
@@ -347,6 +353,7 @@ def resolve_party_perspective(
     character_id: uuid.UUID | None,
     party_id: uuid.UUID | None,
     capability_code: str = "character.view_knowledge",
+    membership_clock: MembershipClock | None = None,
 ) -> uuid.UUID | None:
     """Authorizes `party_id` as the specific party perspective a
     query may filter hidden knowledge through, or returns `None` — the safe
@@ -374,16 +381,17 @@ def resolve_party_perspective(
     2. `party_id` is actually associated with `campaign_id`
        (`dnd_ai.commands._shared.validate_campaign_party`);
     3. `character_id` is *currently* a member of `party_id` on the
-       caller's own resolved timeline (`access.timeline_id`) — a
-       `campaign.party_memberships` row with `effective_to_world_time_id
-       IS NULL`, this table's own documented "the single representation of
-       'still a member'" (migration 009), used here as the trusted,
-       time-independent perspective contract rather than guessing or
-       requiring a fictional "now" this API has no other source for. A
-       character may belong to several parties at once (the same table's
-       own comment), so `party_id` is never derived/guessed from
-       `character_id` alone — the caller must name both, and both must
-       agree.
+       caller's own resolved timeline (`access.timeline_id`): a
+       `campaign.party_memberships` row whose half-open `effective_period`
+       contains the timeline's effective campaign clock (B1-DEF7a — join
+       included, leave excluded, a future join not current). With no
+       effective clock current membership is undetermined and nothing is
+       accepted; an open end is never read as "current". `membership_clock`
+       lets a request share one clock across several calls; it is resolved
+       here when omitted. Membership stays timeline-scoped. A character may
+       belong to several parties at once (the same table's own comment), so
+       `party_id` is never derived/guessed from `character_id` alone — the
+       caller must name both, and both must agree.
 
     Any failure among the three raises `PartyPerspectiveNotAuthorizedError`
     (a fixed, non-disclosing 404) rather than returning `None` — a caller
@@ -409,20 +417,26 @@ def resolve_party_perspective(
 
     validate_campaign_party(connection, campaign_id=campaign_id, party_id=party_id)
 
+    clock = membership_clock or resolve_membership_clock(connection, timeline_id=access.timeline_id)
     current_membership = connection.execute(
-        text("""
-            SELECT 1 FROM campaign.party_memberships
-            WHERE timeline_id = :timeline
-              AND party_id = :party
-              AND member_entity_id = :character
-              AND effective_to_world_time_id IS NULL
+        text(f"""
+            SELECT 1 FROM campaign.party_memberships pm
+            WHERE pm.timeline_id = :timeline
+              AND pm.party_id = :party
+              AND pm.member_entity_id = :character
+              AND {CURRENT_PARTY_MEMBERSHIP_SQL}
         """),
-        {"timeline": access.timeline_id, "party": party_id, "character": character_id},
+        {
+            "timeline": access.timeline_id,
+            "party": party_id,
+            "character": character_id,
+            **membership_clock_params(clock),
+        },
     ).scalar()
     if current_membership is None:
         raise PartyPerspectiveNotAuthorizedError(
             f"character {character_id} is not currently a member of party {party_id} "
-            f"on timeline {access.timeline_id}"
+            f"on timeline {access.timeline_id}" + ("" if clock.is_set else " (no effective clock)")
         )
 
     return party_id

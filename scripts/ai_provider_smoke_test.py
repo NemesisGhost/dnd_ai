@@ -281,6 +281,15 @@ def _create_fixture(connection: Connection) -> _Fixture:
         """),
         {"timeline": timeline_id, "party": party_id, "member": pc_id, "world_time": world_time_id},
     )
+    connection.execute(
+        text("""
+            -- authored-content-direct-insert: allowed (throwaway smoke-test fixture)
+            INSERT INTO campaign.timeline_clocks (timeline_id, current_world_time_id)
+            VALUES (:timeline, :world_time)
+            ON CONFLICT (timeline_id) DO NOTHING
+        """),
+        {"timeline": timeline_id, "world_time": world_time_id},
+    )  # B1-DEF7a: membership is current only against the campaign clock
 
     npc_role_id = _lookup_id(connection, "ai", "agent_roles", "agent_role_id", "npc_portrayal")
     npc_agent_id = connection.execute(

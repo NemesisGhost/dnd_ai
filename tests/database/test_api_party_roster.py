@@ -10,7 +10,13 @@ from dnd_ai.queries.bootstrap import get_session_bootstrap
 from tests.authoring_support import AuthoringHarness, harness_fixture_factory
 from tests.content_support import ContentSetup
 from tests.database.test_api_campaign_clock import Times
-from tests.database.test_api_party_members import add, new_party, parties_url, published_pc
+from tests.database.test_api_party_members import (
+    add,
+    new_party,
+    parties_url,
+    published_pc,
+    set_clock,
+)
 from tests.factories import make_resource_grant
 
 pytestmark = pytest.mark.database
@@ -34,7 +40,9 @@ def test_a_viewer_with_no_membership_lists_and_opens_every_active_party(s: Conte
     times = Times(s)
     first, second = new_party(s, "Alpha"), new_party(s, "Beta")
     pc = published_pc(s, "Aldric")
-    assert add(s, first["party_id"], pc, times.at(1), reason="SECRET REASON").status_code == 201
+    y1 = times.at(1)
+    assert add(s, first["party_id"], pc, y1, reason="SECRET REASON").status_code == 201
+    set_clock(s, y1)  # B1-DEF7a: current membership is judged against the campaign clock
     listing = s.player.get(parties_url(s)).json()
     assert [p["name"] for p in listing["items"]] == ["Alpha", "Beta"]
     assert listing["can_create"] is False
@@ -48,7 +56,10 @@ def test_a_viewer_with_no_membership_lists_and_opens_every_active_party(s: Conte
         "party": body_party(s, second["party_id"]),
         "member_count": 0,
         "members": [],
+        "as_of": body["as_of"],
+        "clock_unset": False,
     }
+    assert body["as_of"] is not None and body["clock_unset"] is False
 
 
 def body_party(s: ContentSetup, party_id: str) -> dict:
@@ -140,6 +151,7 @@ def test_only_current_members_are_listed(s: ContentSetup) -> None:
         key=s.gm.fresh_key(),
     )
     assert ended.status_code == 200, ended.text
+    set_clock(s, times.at(3))  # the leave boundary is excluded, so Leaver is no longer current
     body = roster(s, party["party_id"]).json()
     assert [m["character_name"] for m in body["members"]] == ["Stayer"]
     assert body["member_count"] == 1
@@ -148,7 +160,9 @@ def test_only_current_members_are_listed(s: ContentSetup) -> None:
 def test_a_member_the_viewer_cannot_open_is_left_out_and_not_counted(s: ContentSetup) -> None:
     times = Times(s)
     party, pc = new_party(s), published_pc(s, "Hidden")
-    add(s, party["party_id"], pc, times.at(1))
+    y1 = times.at(1)
+    add(s, party["party_id"], pc, y1)
+    set_clock(s, y1)
     s.connection.execute(
         text(
             "UPDATE core.entities SET canon_status_id = "
@@ -169,7 +183,9 @@ def test_a_member_is_named_without_character_access_and_nothing_else_opens(
 ) -> None:
     times = Times(s)
     party, pc = new_party(s), published_pc(s, "Aldric")
-    add(s, party["party_id"], pc, times.at(1))
+    y1 = times.at(1)
+    add(s, party["party_id"], pc, y1)
+    set_clock(s, y1)
     tables = ("campaign.party_memberships", "narrative.events", "security.resource_grants")
     before = {t: s.count(t) for t in tables}
     body = roster(s, party["party_id"]).json()
@@ -186,8 +202,10 @@ def test_a_member_is_named_without_character_access_and_nothing_else_opens(
 def test_a_member_under_an_entity_level_campaign_view_deny_is_left_out(s: ContentSetup) -> None:
     times = Times(s)
     party, shown, denied = new_party(s), published_pc(s, "Shown"), published_pc(s, "Denied")
-    add(s, party["party_id"], shown, times.at(1))
-    add(s, party["party_id"], denied, times.at(1))
+    y1 = times.at(1)
+    add(s, party["party_id"], shown, y1)
+    add(s, party["party_id"], denied, y1)
+    set_clock(s, y1)
     membership = s.connection.execute(
         text(
             "SELECT campaign_membership_id FROM security.campaign_memberships "

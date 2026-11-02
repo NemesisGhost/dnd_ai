@@ -35,6 +35,7 @@ from tests.factories import (
     make_role,
     make_role_capability,
     make_timeline,
+    make_timeline_clock,
     make_user,
     make_world,
     make_world_time,
@@ -448,6 +449,8 @@ def test_character_perspective_exposes_only_its_authorized_current_parties(
     make_party_membership(
         db_connection, timeline_id, left_party, character_id, wt, effective_to_world_time_id=later
     )
+    # B1-DEF7a: the clock at the (excluded) leave boundary — Old Crew has ended, Current Crew has not.
+    make_timeline_clock(db_connection, timeline_id, later)
 
     # A campaign party the character was never in — must NOT be offered.
     unrelated_party = make_party(db_connection, world_id, name="Strangers")
@@ -707,6 +710,7 @@ def test_a_discover_only_character_is_not_a_selectable_perspective(
     party = make_party(db_connection, world_id, name="A Party It Is In")
     make_campaign_party(db_connection, campaign_id, party)
     make_party_membership(db_connection, timeline_id, party, character_id, wt)
+    make_timeline_clock(db_connection, timeline_id, wt)  # B1-DEF7a: membership is in effect
 
     assert (
         get_session_bootstrap(db_connection, user_id=user_id).campaigns[0].character_perspectives
@@ -730,6 +734,7 @@ def test_revoking_character_view_knowledge_stops_advertising_parties_next_call(
     party = make_party(db_connection, world_id, name="The Trusted Circle")
     make_campaign_party(db_connection, campaign_id, party)
     make_party_membership(db_connection, timeline_id, party, character_id, wt)
+    make_timeline_clock(db_connection, timeline_id, wt)  # B1-DEF7a: membership is in effect
 
     before = get_session_bootstrap(db_connection, user_id=user_id).campaigns[0]
     assert [p.party_id for p in before.character_perspectives[0].authorized_parties] == [party]
@@ -766,6 +771,7 @@ def test_a_party_not_associated_with_the_campaign_is_not_advertised(
     # `validate_campaign_party` would reject it.
     orphan_party = make_party(db_connection, world_id, name="Not In This Campaign")
     make_party_membership(db_connection, timeline_id, orphan_party, character_id, wt)
+    make_timeline_clock(db_connection, timeline_id, wt)  # in effect; still not a campaign party
 
     (perspective,) = (
         get_session_bootstrap(db_connection, user_id=user_id).campaigns[0].character_perspectives
@@ -789,6 +795,7 @@ def test_every_advertised_party_resolves_through_the_real_perspective_resolver(
         relationship_type_code="owner",
     )
     wt = make_world_time(db_connection, world_id, 100)
+    make_timeline_clock(db_connection, timeline_id, wt)  # B1-DEF7a: memberships in effect
     for name in ("Crew One", "Crew Two"):
         party = make_party(db_connection, world_id, name=name)
         make_campaign_party(db_connection, campaign_id, party)

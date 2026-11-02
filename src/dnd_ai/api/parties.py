@@ -45,6 +45,7 @@ from dnd_ai.domain.data_classification import content_receipt
 from dnd_ai.queries.entity_lifecycle import lifecycle_hidden_entity_ids
 from dnd_ai.queries.parties import PartyView, get_campaign_party, list_campaign_parties
 from dnd_ai.queries.party_members import list_party_members
+from dnd_ai.queries.party_membership_period import resolve_membership_clock
 
 from ._authoring import (
     BaseAuthoringRequest,
@@ -155,9 +156,12 @@ def get_party_roster_endpoint(
         viewer_user_id=access.user_id,
         can_edit_canon=editor,
     )
+    clock = resolve_membership_clock(connection, timeline_id=access.timeline_id)
     members = [
         m
-        for m in list_party_members(connection, timeline_id=access.timeline_id, party_id=party_id)
+        for m in list_party_members(
+            connection, timeline_id=access.timeline_id, party_id=party_id, membership_clock=clock
+        )
         if m.is_current
         and m.character_id not in hidden
         and access.has_capability("campaign.view", entity_id=m.character_id)
@@ -169,6 +173,8 @@ def get_party_roster_endpoint(
             {"character_id": str(m.character_id), "character_name": m.character_name}
             for m in members
         ],
+        "as_of": clock.display,
+        "clock_unset": not clock.is_set,
     }
 
 
@@ -361,9 +367,14 @@ def list_members_endpoint(party_id: uuid.UUID, access: _Edit, connection: _Conn)
     )
     if party is None:
         raise NotFoundError()
-    members = list_party_members(connection, timeline_id=access.timeline_id, party_id=party_id)
+    clock = resolve_membership_clock(connection, timeline_id=access.timeline_id)
+    members = list_party_members(
+        connection, timeline_id=access.timeline_id, party_id=party_id, membership_clock=clock
+    )
     return {
         "party": _json(party, editor=True),
+        "as_of": clock.display,
+        "clock_unset": not clock.is_set,
         "members": [
             {
                 "party_membership_id": str(m.party_membership_id),
@@ -374,6 +385,7 @@ def list_members_endpoint(party_id: uuid.UUID, access: _Edit, connection: _Conn)
                 "joined_reason": m.joined_reason,
                 "left_reason": m.left_reason,
                 "is_current": m.is_current,
+                "period_status": m.period_status,
             }
             for m in members
         ],

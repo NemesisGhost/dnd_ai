@@ -5668,6 +5668,18 @@ def _ensure_world_and_knowledge_fixtures(
     membership_start = _wk_world_time(
         connection, summary, world_id=world_id, suffix="party membership start", offset=10
     )
+    # Party membership is current only against the effective campaign clock (B1-DEF7a). Give the
+    # fixture timeline a clock at the membership start only when it has none; an existing clock
+    # is never moved.
+    connection.execute(
+        text("""
+            -- phase14-direct-insert: allowed (fixture clock at the membership start, no event)
+            INSERT INTO campaign.timeline_clocks (timeline_id, current_world_time_id)
+            VALUES (:t, :w)
+            ON CONFLICT (timeline_id) DO NOTHING
+        """),
+        {"t": timeline_a_id, "w": membership_start},
+    )
     _ensure_party_membership(
         connection,
         summary,

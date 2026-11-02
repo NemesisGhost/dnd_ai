@@ -8,6 +8,7 @@ from sqlalchemy import Connection, text
 
 from dnd_ai.queries.bootstrap import get_session_bootstrap
 from dnd_ai.queries.party_members import list_party_members
+from dnd_ai.queries.party_membership_period import MembershipClock
 from tests.authoring_support import AuthoringHarness, harness_fixture_factory
 from tests.content_support import ContentSetup
 from tests.database.test_api_campaign_clock import Times, _branch_campaign
@@ -82,6 +83,19 @@ def members(s: ContentSetup, party_id: str) -> dict:
     return response.json()
 
 
+def set_clock(s: ContentSetup, time_id: str) -> None:
+    """Put the campaign's own timeline clock at `time_id` (B1-DEF7a: membership is current only
+    against the effective clock). Moves an existing row, as an advance would."""
+    s.connection.execute(
+        text("""
+            INSERT INTO campaign.timeline_clocks (timeline_id, current_world_time_id)
+            SELECT timeline_id, :t FROM campaign.campaigns WHERE campaign_id = :c
+            ON CONFLICT (timeline_id) DO UPDATE SET current_world_time_id = EXCLUDED.current_world_time_id
+        """),
+        {"t": time_id, "c": s.cid},
+    )
+
+
 def event_of(s: ContentSetup, event_id: str) -> dict:
     row = s.connection.execute(
         text("""
@@ -118,6 +132,8 @@ def test_adding_a_member_records_an_event_an_effect_and_bumps_the_party(s: Conte
     assert event["event_type"] == "party_member_joined" and event["participants"] == 1
     assert str(event["world_time_id"]) == y1 and str(event["campaign_id"]) == s.cid
     assert event["effects"] == f'party_membership:null>"{party["party_id"]}"'
+    # Joined at y1: current from the join boundary on, so the clock is set there.
+    set_clock(s, y1)
     listed = members(s, party["party_id"])
     (row,) = listed["members"]
     assert row["is_current"] is True and row["character_name"] == "Aldric"
@@ -210,6 +226,9 @@ def test_overlapping_memberships_are_a_clean_conflict_and_adjacent_ones_are_fine
     # Another party takes the same character at the same time.
     other = new_party(s, "The Second Company")
     assert add(s, other["party_id"], pc, y5).status_code == 201
+    # The first stint ended at y5 (excluded) and the rejoin starts at y5, so the clock at y5 sees
+    # only the rejoin as current.
+    set_clock(s, y5)
     listed = members(s, party["party_id"])["members"]
     assert [m["is_current"] for m in listed] == [True, False]
     assert y7  # unused anchor keeps the times ordered for readers of the test
@@ -380,10 +399,21 @@ def test_membership_belongs_to_one_timeline_and_a_branch_starts_without_it(
         {"c": branch_cid},
     ).scalar()
     party_id = uuid.UUID(party["party_id"])
+    clock = MembershipClock(sort_key=0, display=None)
     assert (
-        len(list_party_members(s.connection, timeline_id=parent_timeline, party_id=party_id)) == 1
+        len(
+            list_party_members(
+                s.connection, timeline_id=parent_timeline, party_id=party_id, membership_clock=clock
+            )
+        )
+        == 1
     )
-    assert list_party_members(s.connection, timeline_id=branch_timeline, party_id=party_id) == []
+    assert (
+        list_party_members(
+            s.connection, timeline_id=branch_timeline, party_id=party_id, membership_clock=clock
+        )
+        == []
+    )
 
 
 @pytest.mark.real_relationship_policy
@@ -419,8 +449,12 @@ def test_the_party_perspective_appears_when_a_member_joins_and_goes_when_they_le
 
     assert parties_for_player() == []
     joined = add(s, party["party_id"], pc, y1).json()
+    set_clock(s, y1)
     assert parties_for_player() == [party["party_id"]]
     assert end(s, party["party_id"], joined["party_membership_id"], y3).status_code == 200
+    # Still in effect until the clock reaches the (excluded) leave boundary.
+    assert parties_for_player() == [party["party_id"]]
+    set_clock(s, y3)
     assert parties_for_player() == []
 
 

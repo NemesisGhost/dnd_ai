@@ -53,6 +53,7 @@ from tests.factories import (
     make_role,
     make_role_capability,
     make_timeline,
+    make_timeline_clock,
     make_user,
     make_world,
     make_world_time,
@@ -68,6 +69,8 @@ class Fixture:
         self.timeline_a_id = make_timeline(connection, self.world_id, is_primary=True)
         self.timeline_b_id = make_timeline(connection, self.world_id, name="Timeline B")
         self.world_time_id = make_world_time(connection, self.world_id, 100)
+        # Party membership is current only against the effective campaign clock (B1-DEF7a).
+        make_timeline_clock(connection, self.timeline_a_id, self.world_time_id)
 
         self.campaign_a_id = make_campaign(
             connection, self.timeline_a_id, lifecycle_status_code="pending"

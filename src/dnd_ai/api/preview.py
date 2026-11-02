@@ -405,6 +405,8 @@ class PreviewPerspectivesResponse(BaseModel):
     display_name: str
     roles: list[str]
     character_perspectives: list[PreviewCharacterPerspective]
+    # The subject's campaign has an effective clock (their parties are clock-based; B1-DEF7a).
+    current_time_set: bool = True
 
 
 # Declared before the `{knowledge_item_id}` route so the fixed segment is never read as an id.
@@ -437,6 +439,7 @@ def preview_knowledge_perspectives_endpoint(
             response = PreviewPerspectivesResponse(
                 display_name=subject.display_name,
                 roles=list(campaign.roles),
+                current_time_set=campaign.current_time_set,
                 character_perspectives=[
                     PreviewCharacterPerspective(
                         character_id=perspective.character_id,

@@ -655,6 +655,21 @@ def make_world_time(connection: Connection, world_id: uuid.UUID, sort_key: int) 
     return value
 
 
+def make_timeline_clock(
+    connection: Connection, timeline_id: uuid.UUID, world_time_id: uuid.UUID
+) -> None:
+    """Set a timeline's own `campaign.timeline_clocks` row (the effective campaign clock). Party
+    membership is current only relative to this clock (B1-DEF7a); a fixture that omits it leaves
+    membership undetermined, which dedicated no-clock tests rely on."""
+    connection.execute(
+        text(
+            "INSERT INTO campaign.timeline_clocks (timeline_id, current_world_time_id) "
+            "VALUES (:t, :w)"
+        ),
+        {"t": timeline_id, "w": world_time_id},
+    )
+
+
 def make_timeline(
     connection: Connection,
     world_id: uuid.UUID,
@@ -746,10 +761,12 @@ def make_party_membership(
     """A `campaign.party_memberships` row (migration 009) — the timeline-
     scoped, temporal record of a character belonging to a party. Leaving
     `effective_to_world_time_id` unset (the default) produces an
-    open-ended membership, this table's own documented "the single
-    representation of 'still a member'" — the exact contract
-    `dnd_ai.api.access.resolve_party_perspective` relies on to authorize a
-    party perspective."""
+    open-ended membership (storage only: open-ended is NOT "current").
+    Whether a membership is current is decided against the timeline's
+    effective clock (`queries.party_membership_period`, B1-DEF7a), so a test
+    that relies on a party perspective must also set a clock
+    (`make_timeline_clock`) at or after the join, or the membership is
+    undetermined and nothing is authorized."""
     value = connection.execute(
         text("""
             INSERT INTO campaign.party_memberships

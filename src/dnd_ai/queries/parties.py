@@ -12,6 +12,12 @@ from sqlalchemy import Connection, text
 
 from dnd_ai.domain.party_authoring import PARTY_ACTIVE
 
+from .party_membership_period import (
+    CURRENT_PARTY_MEMBERSHIP_SQL,
+    MembershipClock,
+    membership_clock_params,
+)
+
 
 @dataclass(frozen=True)
 class PartyView:
@@ -76,18 +82,19 @@ def list_character_parties(
     timeline_id: uuid.UUID,
     character_id: uuid.UUID,
     include_archived: bool,
+    membership_clock: MembershipClock,
 ) -> list[PartyView]:
     """The parties `character_id` currently belongs to on `timeline_id`, among those attached to
     `campaign_id` — every one, in a stable name order, never paged.
 
-    "Currently" is the table's own "still a member" representation
-    (`effective_to_world_time_id IS NULL`, migration 009), and the party must be attached to the
-    campaign: exactly the pair rule `dnd_ai.api.access.resolve_party_perspective` accepts and the
+    "Currently" means the effective campaign clock (`membership_clock`, resolved once by the
+    caller) lies in the membership's half-open period (B1-DEF7a); with no clock the list is empty
+    (membership is undetermined, not open-ended). The party must be attached to the campaign: exactly the pair rule `dnd_ai.api.access.resolve_party_perspective` accepts and the
     session bootstrap's `authorized_parties` lists. Archived parties are hidden unless the caller
     may see them (editors), like every other party read. This performs no authorization of its
     own: the character's perspective must already have been authorized by the caller."""
     rows = connection.execute(
-        text("""
+        text(f"""
             SELECT p.party_id, p.name, p.description, p.row_version, ls.code AS lifecycle_status
             FROM campaign.party_memberships pm
             JOIN campaign.parties p ON p.party_id = pm.party_id
@@ -95,7 +102,7 @@ def list_character_parties(
             JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = p.lifecycle_status_id
             WHERE pm.timeline_id = :t
               AND pm.member_entity_id = :ch
-              AND pm.effective_to_world_time_id IS NULL
+              AND {CURRENT_PARTY_MEMBERSHIP_SQL}
               AND (CAST(:inc AS boolean) OR ls.code = :active)
             ORDER BY lower(p.name), p.party_id
         """),
@@ -105,6 +112,7 @@ def list_character_parties(
             "ch": character_id,
             "inc": include_archived,
             "active": PARTY_ACTIVE,
+            **membership_clock_params(membership_clock),
         },
     ).all()
     return [_view(row) for row in rows]

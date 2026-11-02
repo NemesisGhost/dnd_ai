@@ -43,10 +43,11 @@ UUID. `dnd_ai.api.access.resolve_party_perspective` closes this: `party_id`
 is trusted only after proving the caller holds `character.view_knowledge`
 for the named `character_id` (`AccessContext.has_capability`, covering
 role capabilities, the caller's own resolved character relationship, and
-any resource-grant override) *and* that character is currently a member of
-that exact party on the campaign's own timeline
-(`campaign.party_memberships`, the "still a member" open-ended-interval
-contract migration 009 already establishes — never guessed, and never
+any resource-grant override) *and* that character is a member of
+that exact party on the campaign's own timeline at the campaign's
+effective time (`campaign.party_memberships`: the effective clock lies in
+the stored half-open period, B1-DEF7a; no clock means no membership is
+current — never guessed, and never
 derived from `character_id` alone, since a character may belong to several
 parties at once). Supplying only one of `character_id`/`party_id` is
 treated identically to supplying neither (no perspective, non-hidden

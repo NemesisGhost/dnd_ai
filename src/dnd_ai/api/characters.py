@@ -128,6 +128,7 @@ from dnd_ai.queries.entity_lifecycle import (
 )
 from dnd_ai.queries.inventory import get_inventory_view, restrict_inventory_view
 from dnd_ai.queries.parties import list_character_parties
+from dnd_ai.queries.party_membership_period import resolve_membership_clock
 
 from ._shared import timeline_world_id
 from .access import (
@@ -574,6 +575,11 @@ class CharacterPartiesResponse(BaseModel):
     # here, once, so the portal never guesses it.
     can_open: bool
     items: list[CharacterPartyResponse]
+    # The effective campaign clock reading the list was judged at (B1-DEF7a), or null when the
+    # campaign has none; `clock_unset` then means current membership is undetermined and `items`
+    # is empty whether or not memberships exist. Additive.
+    as_of: str | None = None
+    clock_unset: bool = False
 
 
 @router.get(
@@ -609,17 +615,23 @@ def list_character_parties_endpoint(
     if in_world is None:
         raise NotFoundError()
     editor = access.has_capability(_CHARACTER_MANAGE_CAPABILITY)
+    # Authorization above runs before the clock is consulted, so an unauthorized caller learns
+    # nothing about the clock or memberships.
+    clock = resolve_membership_clock(connection, timeline_id=access.timeline_id)
     parties = list_character_parties(
         connection,
         campaign_id=access.campaign_id,
         timeline_id=access.timeline_id,
         character_id=character_id,
         include_archived=editor,
+        membership_clock=clock,
     )
     return CharacterPartiesResponse(
         character_id=character_id,
         can_open=editor,
         items=[CharacterPartyResponse(party_id=p.party_id, name=p.name) for p in parties],
+        as_of=clock.display,
+        clock_unset=not clock.is_set,
     )
 
 

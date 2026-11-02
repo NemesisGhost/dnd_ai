@@ -26,8 +26,8 @@ those fields, it never hides an item the caller could otherwise see
 (`dnd_ai.queries.knowledge_browse` documents the split). Anyone without
 ground truth for an item must hold `character.view_knowledge` for the
 named character; a party then counts only as an authorized pair
-(`dnd_ai.api.access.resolve_party_perspective` — current membership in a
-party of this campaign), named explicitly or, with no party filter, each
+(`dnd_ai.api.access.resolve_party_perspective` — membership in effect at the
+campaign's effective time in a party of this campaign), named explicitly or, with no party filter, each
 such eligible party. A party with no character is ignored. An omitted perspective
 contributes no audience-specific records to a list page, or — for the
 detail route — yields the identical fixed, non-disclosing 404 a nonexistent
@@ -68,6 +68,12 @@ from dnd_ai.queries.knowledge_browse import (
     RECENT_KEYSET,
     KnowledgeListItem,
     list_knowledge,
+)
+from dnd_ai.queries.party_membership_period import (
+    CURRENT_PARTY_MEMBERSHIP_SQL,
+    MembershipClock,
+    membership_clock_params,
+    resolve_membership_clock,
 )
 from dnd_ai.queries.quest import audience_tracked_quest_ids
 from dnd_ai.queries.world_authority import resolve_world_authority
@@ -461,25 +467,32 @@ def _eligible_party_ids(
     access: AccessContext,
     campaign_id: uuid.UUID,
     character_id: uuid.UUID,
+    membership_clock: MembershipClock,
 ) -> tuple[uuid.UUID, ...]:
     """The parties `character_id` is currently a member of on the caller's
-    timeline and that belong to `campaign_id` — the per-party checks of
-    `resolve_party_perspective`, and the session bootstrap's
-    `authorized_parties` derivation, for every party at once. The caller has
-    already proven `character.view_knowledge` for the character."""
+    timeline (the effective campaign clock lies in the membership's half-open
+    period; no clock means none) and that belong to `campaign_id` — the
+    per-party checks of `resolve_party_perspective`, and the session
+    bootstrap's `authorized_parties` derivation, for every party at once. The
+    caller has already proven `character.view_knowledge` for the character."""
     return tuple(
         connection.execute(
-            text("""
+            text(f"""
                 SELECT DISTINCT pm.party_id
                 FROM campaign.party_memberships pm
                 JOIN campaign.campaign_parties cp
                   ON cp.party_id = pm.party_id AND cp.campaign_id = :campaign
                 WHERE pm.timeline_id = :timeline
                   AND pm.member_entity_id = :character
-                  AND pm.effective_to_world_time_id IS NULL
+                  AND {CURRENT_PARTY_MEMBERSHIP_SQL}
                 ORDER BY pm.party_id
             """),
-            {"campaign": campaign_id, "timeline": access.timeline_id, "character": character_id},
+            {
+                "campaign": campaign_id,
+                "timeline": access.timeline_id,
+                "character": character_id,
+                **membership_clock_params(membership_clock),
+            },
         ).scalars()
     )
 
@@ -491,6 +504,7 @@ def resolve_member_knowledge_perspective(
     campaign_id: uuid.UUID,
     character_id: uuid.UUID | None,
     party_id: uuid.UUID | None,
+    membership_clock: MembershipClock | None = None,
 ) -> MemberKnowledgePerspective:
     """The player Knowledge perspective: the selected character is the
     perspective and a party only *filters* its party-derived part.
@@ -506,6 +520,9 @@ def resolve_member_knowledge_perspective(
       an omitted perspective."""
     if character_id is None:
         return _NO_MEMBER_PERSPECTIVE
+    # One effective clock for every membership decision of this call (and of the caller's, when
+    # it passes one in).
+    clock = membership_clock or resolve_membership_clock(connection, timeline_id=access.timeline_id)
     if party_id is not None:
         authorized_party_id = resolve_party_perspective(
             connection,
@@ -513,6 +530,7 @@ def resolve_member_knowledge_perspective(
             campaign_id=campaign_id,
             character_id=character_id,
             party_id=party_id,
+            membership_clock=clock,
         )
         return MemberKnowledgePerspective(authorized_party_id, (), character_id)
     if not access.has_capability(_CHARACTER_KNOWLEDGE_CAPABILITY, character_id=character_id):
@@ -520,7 +538,11 @@ def resolve_member_knowledge_perspective(
     return MemberKnowledgePerspective(
         None,
         _eligible_party_ids(
-            connection, access=access, campaign_id=campaign_id, character_id=character_id
+            connection,
+            access=access,
+            campaign_id=campaign_id,
+            character_id=character_id,
+            membership_clock=clock,
         ),
         character_id,
     )
@@ -961,6 +983,8 @@ def _character_knowledge(
     if character_id is None:
         return None
     if include_ground_truth:
+        # One effective clock for both resolutions below.
+        clock = resolve_membership_clock(connection, timeline_id=access.timeline_id)
         try:
             perspective = resolve_member_knowledge_perspective(
                 connection,
@@ -968,6 +992,7 @@ def _character_knowledge(
                 campaign_id=campaign_id,
                 character_id=character_id,
                 party_id=party_id,
+                membership_clock=clock,
             )
         except PartyPerspectiveNotAuthorizedError:
             perspective = resolve_member_knowledge_perspective(
@@ -976,6 +1001,7 @@ def _character_knowledge(
                 campaign_id=campaign_id,
                 character_id=character_id,
                 party_id=None,
+                membership_clock=clock,
             )
         if perspective.knower_id is None:
             return None

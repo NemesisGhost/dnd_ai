@@ -113,6 +113,7 @@ from tests.factories import (
     make_skill,
     make_system_role_assignment,
     make_timeline,
+    make_timeline_clock,
     make_user,
     make_world,
     make_world_time,
@@ -208,6 +209,10 @@ class Fixture:
         make_party_membership(
             connection, self.timeline_id, self.party_id, self.character_second_id, self.wt_before
         )
+
+        # B1-DEF7a: party membership is current against the campaign clock; the party joined at
+        # wt_before, so the clock reads there.
+        make_timeline_clock(connection, self.timeline_id, self.wt_before)
 
         # Step 3: a GM and three prospective members, provisioned as
         # security.users (OIDC login/provisioning is a separate concern

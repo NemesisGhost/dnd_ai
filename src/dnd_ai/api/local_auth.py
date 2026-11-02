@@ -553,6 +553,9 @@ class CampaignBootstrapResponse(BaseModel):
     capabilities: list[str]
     # Capabilities on the campaign's world (D6), independent of `capabilities`.
     world_capabilities: list[str] = Field(default_factory=list)
+    # False when the campaign has no effective clock: current party membership is then
+    # undetermined and `authorized_parties` are empty (B1-DEF7a). Additive.
+    current_time_set: bool = True
 
 
 class SessionFeaturesResponse(BaseModel):
@@ -708,6 +711,7 @@ def session_bootstrap_endpoint(
                 selected_character_id=campaign.selected_character_id,
                 capabilities=list(campaign.capabilities),
                 world_capabilities=list(campaign.world_capabilities),
+                current_time_set=campaign.current_time_set,
             )
             for campaign in bootstrap.campaigns
         ],

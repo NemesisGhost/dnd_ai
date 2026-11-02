@@ -59,6 +59,7 @@ from tests.factories import (
     make_role,
     make_role_capability,
     make_timeline,
+    make_timeline_clock,
     make_user,
     make_world,
     make_world_time,
@@ -73,6 +74,8 @@ class Fixture:
         self.world_id = make_world(connection, slug=slug)
         self.timeline_id = make_timeline(connection, self.world_id, is_primary=True)
         self.world_time_id = make_world_time(connection, self.world_id, 100)
+        # Party membership is current only against the effective campaign clock (B1-DEF7a).
+        make_timeline_clock(connection, self.timeline_id, self.world_time_id)
         self.campaign_id = make_campaign(
             connection, self.timeline_id, lifecycle_status_code="pending"
         )
@@ -642,6 +645,15 @@ def test_perspective_revocation_takes_effect_on_the_next_request(
                     "WHERE party_id = :p AND member_entity_id = :c"
                 ),
                 {"t": later, "p": f.party_id, "c": f.character_id},
+            )
+            # B1-DEF7a: ending the membership revokes the perspective once the clock reaches the
+            # (excluded) leave boundary, so move the clock there.
+            revoke.execute(
+                text(
+                    "UPDATE campaign.timeline_clocks SET current_world_time_id = :t "
+                    "WHERE timeline_id = :tl"
+                ),
+                {"t": later, "tl": f.timeline_id},
             )
         else:
             revoke.execute(

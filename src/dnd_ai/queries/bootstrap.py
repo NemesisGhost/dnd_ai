@@ -59,8 +59,10 @@ itself already performs per campaign:
   built-in relationship types: owner, primary_controller, co_controller, and
   portrayer. A viewer-type relationship (or a former_controller one) never makes
   a character selectable;
-- `authorized_parties` under each character perspective: the user's current
-  parties for that character, which `dnd_ai.api.access.resolve_party_perspective`
+- `authorized_parties` under each character perspective: the parties the character is a member
+  of at the campaign's effective time (B1-DEF7a: the clock lies in the membership's half-open
+  period; a campaign with no clock has `current_time_set=False` and lists none, never falling back
+  to open-ended memberships), which `dnd_ai.api.access.resolve_party_perspective`
   will accept (it requires the same `character.view_knowledge`), so the portal
   is never handed a `(character_id, party_id)` pair the resolver would reject.
 
@@ -90,6 +92,11 @@ from typing import Any
 from sqlalchemy import Connection, text
 
 from dnd_ai.domain.access import AccessContext, resolve_access_context
+from dnd_ai.queries.party_membership_period import (
+    CURRENT_PARTY_MEMBERSHIP_SQL,
+    membership_clock_params,
+    resolve_membership_clock,
+)
 from dnd_ai.queries.world_authority import resolve_world_authority
 
 # The capability `dnd_ai.api.access.resolve_party_perspective` requires the
@@ -109,8 +116,8 @@ CAMPAIGN_VIEW_CAPABILITY = "campaign.view"
 class PartyPerspectiveRefView:
     """A party the portal may legitimately request a party-scoped
     knowledge/quest perspective through *for the character this appears
-    under* — the character is a current `campaign.party_memberships` member
-    of it on the campaign's own timeline, and the party is associated with
+    under* — the character is a `campaign.party_memberships` member of it
+    at the campaign's effective time (B1-DEF7a) on the campaign's own timeline, and the party is associated with
     the campaign. Exactly the pair `dnd_ai.api.access.
     resolve_party_perspective` will accept, so the portal never has to
     guess a `party_id` (Phase 13D §4 — "do not expose parties or characters
@@ -144,6 +151,9 @@ class CampaignBootstrapView:
     # scoped. Lets the portal present shared-canon authoring read-only without inferring
     # it from a campaign role.
     world_capabilities: tuple[str, ...] = ()
+    # True when the campaign's timeline has an effective clock. False means current party
+    # membership is undetermined, so no `authorized_parties` are listed (B1-DEF7a).
+    current_time_set: bool = True
 
 
 def _world_capabilities(
@@ -368,6 +378,8 @@ def get_session_bootstrap(connection: Connection, *, user_id: uuid.UUID) -> Sess
             if codes
             and access.has_capability(_KNOWLEDGE_PERSPECTIVE_CAPABILITY, character_id=character_id)
         ]
+        # One effective clock per campaign for every membership decision below.
+        membership_clock = resolve_membership_clock(connection, timeline_id=access.timeline_id)
         character_perspectives: tuple[CharacterPerspectiveView, ...] = ()
         if character_ids:
             character_rows = (
@@ -384,10 +396,11 @@ def get_session_bootstrap(connection: Connection, *, user_id: uuid.UUID) -> Sess
                 .all()
             )
             # Party perspectives the portal may legitimately request
-            # through each character: the character is a *current*
-            # (`effective_to_world_time_id IS NULL`) member of the party on
-            # the campaign's own timeline, and the party is associated with
-            # the campaign. This is exactly what `dnd_ai.api.access.
+            # through each character: the character is a member of the party
+            # at the campaign's effective time (the clock lies in the
+            # membership's half-open period; none without a clock) on the
+            # campaign's own timeline, and the party is associated with the
+            # campaign. This is exactly what `dnd_ai.api.access.
             # resolve_party_perspective` re-proves per request — surfacing
             # it here just saves the portal from guessing a `party_id`
             # (Phase 13D §4).
@@ -409,7 +422,7 @@ def get_session_bootstrap(connection: Connection, *, user_id: uuid.UUID) -> Sess
             ]
             party_rows = (
                 connection.execute(
-                    text("""
+                    text(f"""
                         SELECT pm.member_entity_id, p.party_id, p.name AS party_name
                         FROM campaign.party_memberships pm
                         JOIN campaign.parties p ON p.party_id = pm.party_id
@@ -417,13 +430,14 @@ def get_session_bootstrap(connection: Connection, *, user_id: uuid.UUID) -> Sess
                           ON cp.party_id = pm.party_id AND cp.campaign_id = :campaign_id
                         WHERE pm.timeline_id = :timeline_id
                           AND pm.member_entity_id = ANY(:ids)
-                          AND pm.effective_to_world_time_id IS NULL
+                          AND {CURRENT_PARTY_MEMBERSHIP_SQL}
                         ORDER BY p.name, p.party_id
                     """),
                     {
                         "campaign_id": campaign_id,
                         "timeline_id": access.timeline_id,
                         "ids": knowledge_perspective_ids,
+                        **membership_clock_params(membership_clock),
                     },
                 )
                 .mappings()
@@ -468,6 +482,7 @@ def get_session_bootstrap(connection: Connection, *, user_id: uuid.UUID) -> Sess
                 selected_character_id=selected_character_id,
                 capabilities=tuple(sorted(access.role_capabilities)),
                 world_capabilities=_world_capabilities(connection, user_id, world_id),
+                current_time_set=membership_clock.is_set,
             )
         )
 
