@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef } from "react"
 import { useBlocker } from "react-router"
 import type { Blocker } from "react-router"
 import { anyNavigationHold, holdNavigationQuestion, isGuardedTransition, registerPageGuard } from "./navigationHolds"
+import type { GuardedTransitionOptions } from "./navigationHolds"
 
 export interface UnsavedChangesGuard {
     // True while an in-app navigation is held waiting for the user's decision.
@@ -24,13 +25,22 @@ export interface UnsavedChangesGuard {
 // - A change of character perspective keeps the path but is a context
 //   transition: it is held the same way (see isGuardedTransition), including
 //   Back/Forward between same-path entries recorded under different perspectives.
-// - A query-string-only change (the setup wizard moving between steps) is not
-//   a departure and is never blocked.
+// - A query-string-only change is not a departure and is not blocked by default (a staged
+//   workspace moving between sections keeps its editors mounted). A page whose query change
+//   would dispose its editor, change the data scope or perspective, or strand an unresolved
+//   operation declares it with `disposingQuery`, and that change is held like any departure.
+//   No option means none, so a caller that passes nothing behaves as before. Each caller's
+//   classification: docs/PHASE14_15_P02_NAVIGATION_ROUTE_AND_GUARD_AUDIT.md.
 //
 // Entered values are deliberately never written to browser storage, so an
 // expired session loses them; that is an accepted limitation, not an oversight.
-export function useUnsavedChangesGuard(isDirty: boolean): UnsavedChangesGuard {
+export function useUnsavedChangesGuard(isDirty: boolean, options?: GuardedTransitionOptions): UnsavedChangesGuard {
     const dirtyRef = useRef(isDirty)
+    // Read when a transition is evaluated, so an inline predicate is never stale and never re-registers the blocker.
+    const optionsRef = useRef(options)
+    useLayoutEffect(() => {
+        optionsRef.current = options
+    })
 
     useEffect(() => {
         dirtyRef.current = isDirty
@@ -55,7 +65,7 @@ export function useUnsavedChangesGuard(isDirty: boolean): UnsavedChangesGuard {
     )
 
     const blocker = useBlocker(
-        (transition) => (dirtyRef.current || anyNavigationHold()) && isGuardedTransition(transition),
+        (transition) => (dirtyRef.current || anyNavigationHold()) && isGuardedTransition(transition, optionsRef.current),
     )
 
     useLayoutEffect(() => {

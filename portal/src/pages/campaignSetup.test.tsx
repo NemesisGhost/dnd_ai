@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react"
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import {
@@ -187,6 +187,79 @@ describe("CampaignSetupPage", () => {
         fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
         fireEvent.click(await screen.findByRole("button", { name: "Discard changes" }))
         await screen.findByText("Campaigns list")
+    })
+
+    // P02-1 guard audit: the wizard's step lives in the query and each step is another component, so a
+    // query-only change of worldId/timelineId unmounts the details form. It is a declared disposing query.
+    describe("query-only step changes while the details form has input", () => {
+        const WIZARD = "/campaigns/new?worldId=w1&timelineId=t1"
+
+        it("asks before 'Back to timeline choice' drops typed input, and Stay keeps address and input", async () => {
+            const { router } = setup(WIZARD)
+            const name = await screen.findByRole("textbox", { name: /Campaign name/ })
+            fireEvent.change(name, { target: { value: "Half typed" } })
+
+            fireEvent.click(screen.getByRole("link", { name: "Back to timeline choice" }))
+            expect(await screen.findByRole("heading", { name: "Discard unsaved changes?" })).toBeInTheDocument()
+            expect(router.state.location.search).toBe("?worldId=w1&timelineId=t1")
+
+            fireEvent.click(screen.getByRole("button", { name: "Keep editing" }))
+            await waitFor(() => expect(screen.queryByRole("heading", { name: "Discard unsaved changes?" })).toBeNull())
+            expect(router.state.location.search).toBe("?worldId=w1&timelineId=t1")
+            expect(screen.getByRole("textbox", { name: /Campaign name/ })).toHaveValue("Half typed")
+        })
+
+        it("Discard completes the step change and shows the timeline choice", async () => {
+            const { router } = setup(WIZARD)
+            fireEvent.change(await screen.findByRole("textbox", { name: /Campaign name/ }), { target: { value: "x" } })
+            fireEvent.click(screen.getByRole("link", { name: "Back to timeline choice" }))
+            fireEvent.click(await screen.findByRole("button", { name: "Discard changes" }))
+            expect(await screen.findByRole("radio", { name: "Main (primary)" })).toBeInTheDocument()
+            expect(router.state.location.search).toBe("?worldId=w1")
+        })
+
+        it("does not ask when nothing was typed", async () => {
+            const { router } = setup(WIZARD)
+            await screen.findByRole("textbox", { name: /Campaign name/ })
+            fireEvent.click(screen.getByRole("link", { name: "Back to timeline choice" }))
+            expect(await screen.findByRole("radio", { name: "Main (primary)" })).toBeInTheDocument()
+            expect(screen.queryByRole("heading", { name: "Discard unsaved changes?" })).toBeNull()
+            expect(router.state.location.search).toBe("?worldId=w1")
+        })
+
+        it("keeps the in-flight create with its owner when the step change is refused, and the outcome still lands", async () => {
+            const { server, router } = setup(WIZARD)
+            let release: (response: { status: number; body: unknown }) => void = () => {}
+            server.on("POST", "/campaigns", () => new Promise((resolve) => (release = resolve)))
+            fireEvent.change(await screen.findByRole("textbox", { name: /Campaign name/ }), { target: { value: "Fresh" } })
+            fireEvent.click(screen.getByRole("button", { name: "Create campaign" }))
+            await waitFor(() => expect(server.callsTo("POST", "/campaigns")).toHaveLength(1))
+
+            fireEvent.click(screen.getByRole("link", { name: "Back to timeline choice" }))
+            expect(await screen.findByRole("heading", { name: "Discard unsaved changes?" })).toBeInTheDocument()
+            fireEvent.click(screen.getByRole("button", { name: "Keep editing" }))
+            await waitFor(() => expect(screen.queryByRole("heading", { name: "Discard unsaved changes?" })).toBeNull())
+            expect(router.state.location.search).toBe("?worldId=w1&timelineId=t1")
+            expect(server.callsTo("POST", "/campaigns")).toHaveLength(1)
+
+            await act(async () => {
+                release({ status: 201, body: { campaign_id: "c-new", campaign_membership_id: "m" } })
+            })
+            await screen.findByText("Campaign home page")
+            expect(router.state.location.pathname).toBe("/app/c-new/home")
+            expect(server.callsTo("POST", "/campaigns")).toHaveLength(1)
+        })
+
+        it("leaves a query key the page does not declare unguarded", async () => {
+            const { router } = setup(WIZARD)
+            fireEvent.change(await screen.findByRole("textbox", { name: /Campaign name/ }), { target: { value: "kept" } })
+            await act(async () => {
+                await router.navigate(`${WIZARD}&utm=1`)
+            })
+            expect(router.state.location.search).toBe("?worldId=w1&timelineId=t1&utm=1")
+            expect(screen.queryByRole("heading", { name: "Discard unsaved changes?" })).toBeNull()
+            expect(screen.getByRole("textbox", { name: /Campaign name/ })).toHaveValue("kept")
+        })
     })
 })
 

@@ -1,6 +1,8 @@
 import { useEffect, useSyncExternalStore } from "react"
 import { NavigationType } from "react-router"
 import type { Location } from "react-router"
+import { readEntryContext } from "../navigation/contexts"
+import type { EntryContextRead } from "../navigation/contexts"
 
 // Lets a component that owns state a transition would dispose (a world-time picker's open recording,
 // say) take part in the page's one "leave this page?" question. react-router asks only the last
@@ -84,35 +86,41 @@ export function useNavigationHold(active: boolean): void {
     }, [active])
 }
 
-// The character perspective the campaign workspace is committed to, readable synchronously by both
-// blockers. A perspective change is a context transition: it keeps the pathname, so the departure
-// guard has to compare the perspective an entry runs under with the committed one (UI_DESIGN §5.11).
-// Written only by the campaign layout (after a navigation is accepted, or when authorization changes
-// what is selected); null outside a campaign workspace, where there is no perspective to compare.
-export interface CommittedPerspective {
+// The context the workspace is committed to, readable synchronously by both blockers. A change of
+// context is a transition even when the pathname stays, so the departure guard compares what an entry
+// records with what is committed (UI_DESIGN §4.8, §5.11).
+//
+// Today only the campaign layout writes it, and only the perspective: `campaignId`, `worldId` and
+// `timelineId` are optional so that an owner which does not yet commit a level is never compared on it
+// (`undefined` is "not committed", which is different from `null`, "nothing selected"). Written after a
+// navigation is accepted or when authorization changes what is selected; null outside a campaign
+// workspace, where there is nothing to compare.
+export interface CommittedContext {
     characterId: string | null
     // What an entry with no valid stamp resolves to when it is returned to by Back/Forward.
     defaultCharacterId: string | null
     // Perspectives the bootstrap authorizes: a stamp naming any other is treated as no stamp.
     authorized: ReadonlySet<string>
+    campaignId?: string | null
+    worldId?: string | null
+    timelineId?: string | null
 }
-let committedPerspective: CommittedPerspective | null = null
+// P02-0a's name for the same thing, kept so the perspective-only owner and its tests read unchanged.
+export type CommittedPerspective = CommittedContext
+let committedContext: CommittedContext | null = null
 
-export function setCommittedPerspective(next: CommittedPerspective | null): void {
-    committedPerspective = next
+export function setCommittedContext(next: CommittedContext | null): void {
+    committedContext = next
 }
+export const setCommittedPerspective = setCommittedContext
 
 // The perspective an entry's `state.ctx` records: `undefined` when the entry carries no valid stamp
-// (direct entry, an older entry, tampered state). Shape and version only, plus authorization when known.
+// (direct entry, an older entry, tampered state), the id or `null` (explicitly none) otherwise. Reads
+// the versioned stamp and the P02-0a `{ v: 1, characterId }` stamp alike (see readEntryContext).
 export function readEntryPerspective(state: unknown, authorized?: ReadonlySet<string>): string | null | undefined {
-    if (typeof state !== "object" || state === null) return undefined
-    const ctx = (state as { ctx?: unknown }).ctx
-    if (typeof ctx !== "object" || ctx === null) return undefined
-    const { v, characterId } = ctx as { v?: unknown; characterId?: unknown }
-    if (v !== 1) return undefined
-    if (characterId === null) return null
-    if (typeof characterId !== "string") return undefined
-    return authorized !== undefined && !authorized.has(characterId) ? undefined : characterId
+    const read = readEntryContext(state, authorized)
+    if (read.kind === "absent") return undefined
+    return read.kind === "v1" ? read.context.characterId : read.characterId
 }
 
 // Permission loss is not a departure the person chose, so it never waits for a decision and the
@@ -131,17 +139,44 @@ export function runPermissionLossCleanup(entryKey: string, run: () => void): voi
     }
 }
 
+// Whether the context an entry would run under differs from the committed one. Levels the stamp does
+// not record (the P02-0a stamp records only the perspective) and levels the owner does not commit
+// (`undefined`) are not compared.
+function entryChangesContext(read: EntryContextRead, committed: CommittedContext, action: NavigationType): boolean {
+    if (read.kind === "absent") {
+        // A PUSH or REPLACE with no stamp (an ordinary link, a query-only change, the stamping replace
+        // itself) keeps the committed context; only Back/Forward to an unstamped entry resolves to the default.
+        return action === NavigationType.Pop && committed.defaultCharacterId !== committed.characterId
+    }
+    const characterId = read.kind === "v1" ? read.context.characterId : read.characterId
+    if (characterId !== committed.characterId) return true
+    if (read.kind === "legacy-perspective") return false
+    const context = read.context
+    return (["campaignId", "worldId", "timelineId"] as const).some((key) => {
+        const recorded = committed[key]
+        return recorded !== undefined && context[key] !== recorded
+    })
+}
+
+export interface GuardedTransitionOptions {
+    // A query-only change (same path, same context) is unguarded unless this says it disposes state: the
+    // editor or dialog would unmount, the data scope or perspective changes, or an unresolved operation
+    // would lose its owner. No option means never, which is the behavior before it existed (UI_DESIGN §5.11).
+    disposingQuery?: (currentLocation: Location, nextLocation: Location) => boolean
+}
+
 // Whether a transition needs the departure guard's question (when the page is dirty or a hold is
-// active): a pathname change, or a change of committed perspective at the same path. The comparison is
-// of recorded context, never of a transient marker, so Back/Forward between same-path entries is
-// guarded long after the transition that created them. A PUSH or REPLACE with no stamp (an ordinary
-// link, a query-only change, the stamping replace itself) keeps the committed perspective; only a
-// Back/Forward to an unstamped entry resolves to the default.
-export function isGuardedTransition(args: {
-    currentLocation: Location
-    nextLocation: Location
-    historyAction: NavigationType
-}): boolean {
+// active): a pathname change, a change of committed context at the same path, or a query-only change
+// the caller declares disposing. The comparison is of recorded context, never of a transient marker, so
+// Back/Forward between same-path entries is guarded long after the transition that created them.
+export function isGuardedTransition(
+    args: {
+        currentLocation: Location
+        nextLocation: Location
+        historyAction: NavigationType
+    },
+    options?: GuardedTransitionOptions,
+): boolean {
     const { currentLocation, nextLocation, historyAction } = args
     // The one exemption: permission loss completing its own cleanup (see runPermissionLossCleanup).
     if (
@@ -153,11 +188,14 @@ export function isGuardedTransition(args: {
         return false
     }
     if (currentLocation.pathname !== nextLocation.pathname) return true
-    if (committedPerspective === null) return false
-    const stamped = readEntryPerspective(nextLocation.state, committedPerspective.authorized)
-    if (stamped === undefined && historyAction !== "POP") return false
-    const effective = stamped === undefined ? committedPerspective.defaultCharacterId : stamped
-    return effective !== committedPerspective.characterId
+    if (committedContext !== null) {
+        const read = readEntryContext(nextLocation.state, committedContext.authorized)
+        if (entryChangesContext(read, committedContext, historyAction)) return true
+    }
+    return (
+        currentLocation.search !== nextLocation.search &&
+        options?.disposingQuery?.(currentLocation, nextLocation) === true
+    )
 }
 
 // What a holder with its own blocker shows its question from.

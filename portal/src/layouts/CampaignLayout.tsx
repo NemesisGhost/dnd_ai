@@ -13,6 +13,9 @@ import { WorkspaceFrame } from "../components/WorkspaceFrame"
 import { usePerspective } from "../context/CharacterPerspectiveContext"
 import { useSession } from "../context/SessionContext"
 import { readEntryPerspective, runPermissionLossCleanup, setCommittedPerspective } from "../hooks/navigationHolds"
+// A perspective change must not leave the old character/party query pair in the address: pages prefer
+// it to the selection, and syncCharacterFromUrl would otherwise turn the accepted change back.
+import { PERSPECTIVE_QUERY_KEYS } from "../navigation/queryKeys"
 import { useRecordLastVisitedCampaign } from "../hooks/useRecordLastVisitedCampaign"
 import PlaceholderPage from "../pages/PlaceholderPage"
 import type { SessionBootstrap } from "../types/bootstrap"
@@ -20,11 +23,6 @@ import type { SessionBootstrap } from "../types/bootstrap"
 interface CampaignLayoutProps {
   bootstrap: SessionBootstrap
 }
-
-// The query parameters that carry a character perspective (and the party chosen under it). A
-// perspective change must not leave the old pair in the address: pages prefer it to the selection,
-// and syncCharacterFromUrl would otherwise turn the accepted change back.
-const PERSPECTIVE_QUERY_KEYS = ["character_id", "party_id"] as const
 
 const REVOKED_NOTICE = "Your selected character is no longer available."
 

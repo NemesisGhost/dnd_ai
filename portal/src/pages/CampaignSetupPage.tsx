@@ -16,6 +16,7 @@ import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { usePageArrival } from "../hooks/usePageArrival"
 import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard"
+import { queryKeysChanged } from "../navigation/queryKeys"
 import type { CreateCampaignRequest, CreateCampaignResponse } from "../types/campaignSettings"
 import type { WorldDetail, WorldListResponse } from "../types/worldAuthoring"
 import { DESCRIPTION_MAX, NAME_MAX, validateDescription, validateName } from "../utils/authoringValidation"
@@ -272,7 +273,11 @@ function DetailsForm({
     const [createdId, setCreatedId] = useState<string | null>(null)
     const [refreshFailed, setRefreshFailed] = useState(false)
     const version = versionState ?? (versions.length === 1 ? versions[0]!.value : "")
-    const guard = useUnsavedChangesGuard(createdId === null && (name !== "" || description !== ""))
+    // The wizard's step and its world and timeline live in the query, and a step is a different component:
+    // changing either key (for example "Back to timeline choice") unmounts this form, so it is a departure.
+    const guard = useUnsavedChangesGuard(createdId === null && (name !== "" || description !== ""), {
+        disposingQuery: queryKeysChanged("worldId", "timelineId"),
+    })
 
     const mutation = useAuthoringMutation<CreateCampaignRequest, CreateCampaignResponse>({
         scopeKey: `create-campaign:${timelineId}`,
