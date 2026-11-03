@@ -20,6 +20,7 @@ import { useSession } from "../context/SessionContext"
 import { useWorkspaceHierarchy } from "../context/WorkspaceHierarchyContext"
 import { useSidebarCollapsed } from "../hooks/useSidebarCollapsed"
 import type { NavigationDrawerControl } from "../hooks/useNavigationDrawer"
+import { selectionFor, useSelectedContextSnapshot } from "../navigation/selectedContextStore"
 import { resolveNavigationCampaign } from "../utils/resolveNavigationCampaign"
 import { navTaskState } from "../navigation/navStart"
 import type { NavRoot } from "../navigation/routeMeta"
@@ -90,11 +91,14 @@ interface PortalSidebarProps {
 //   unauthenticated   nothing (the boundary is redirecting to /login);
 //   authenticated     full content.
 //
-// Campaign-specific links target the *resolved* authorized campaign (route
-// campaign; else, on a world route, a campaign of that world; else last
-// visited, else startup) — never a guessed or stale ID.
+// Campaign-specific links target the *resolved* authorized campaign: the
+// route campaign; else, on a world route, the selected campaign if it belongs
+// to that world; else the selected campaign. With nothing selected they are
+// disabled; the last-visited and startup campaigns are never used as a guess
+// (UI_DESIGN §4.5, §4.8).
 export function PortalSidebar({ drawer }: PortalSidebarProps) {
   const { state } = useSession()
+  const retained = useSelectedContextSnapshot()
   const routeMatch = useMatch("/app/:campaignId/*")
   const routeCampaignId = routeMatch?.params.campaignId
   const [collapsed, toggleCollapsed] = useSidebarCollapsed()
@@ -188,12 +192,17 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
   const resolvedCampaign =
     bootstrap === null
       ? null
-      : resolveNavigationCampaign(bootstrap, routeCampaignId, {
-          routeNamesWorld,
-          routeNamesTimeline,
-          activeWorldId,
-          activeTimelineId,
-        })
+      : resolveNavigationCampaign(
+          bootstrap,
+          routeCampaignId,
+          {
+            routeNamesWorld,
+            routeNamesTimeline,
+            activeWorldId,
+            activeTimelineId,
+          },
+          selectionFor(retained, bootstrap).campaignId,
+        )
   const authorizedRouteCampaignId =
     bootstrap?.campaigns.some(
       (campaign) => campaign.campaign_id === routeCampaignId,

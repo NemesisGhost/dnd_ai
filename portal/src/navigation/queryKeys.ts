@@ -20,3 +20,11 @@ export function queryKeysChanged(...keys: readonly string[]): (current: Location
         })
     }
 }
+
+/**
+ * A deliberate change of the character or party perspective in the address. For a page that holds
+ * drafts or unresolved operations under that perspective: it is a context transition, held like a
+ * departure. A page's own cleanup of a perspective that is no longer authorized must not go through
+ * this question: it runs under `runPermissionLossCleanup` (hooks/navigationHolds).
+ */
+export const PERSPECTIVE_QUERY_CHANGED = queryKeysChanged(...PERSPECTIVE_QUERY_KEYS)

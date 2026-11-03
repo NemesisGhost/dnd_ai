@@ -6,6 +6,8 @@ import { useWorkspaceHierarchy } from "../context/WorkspaceHierarchyContext"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import type { CampaignContext } from "../types/bootstrap"
 import type { WorldListResponse } from "../types/worldAuthoring"
+import { selectionFor, useSelectedContextSnapshot } from "../navigation/selectedContextStore"
+import { resolveNavigationCampaign } from "../utils/resolveNavigationCampaign"
 import { buildWorldChoices, worldAccess } from "../utils/worldAccess"
 import { CharacterContextDetails } from "./CharacterContextDetails"
 import { CharacterParties } from "./CharacterParties"
@@ -97,7 +99,8 @@ export function HierarchyContextPanel({
   const characterHeadingId = useId()
   const navigate = useNavigate()
   const { state } = useSession()
-  const { activeWorldId, activeTimelineId, world } = useWorkspaceHierarchy()
+  const { activeWorldId, activeTimelineId, routeNamesWorld, routeNamesTimeline, world } = useWorkspaceHierarchy()
+  const retained = useSelectedContextSnapshot()
   const worlds = useAuthoringResource<WorldListResponse>(
     `${worldsListPath("all")}&limit=100`,
   )
@@ -105,6 +108,19 @@ export function HierarchyContextPanel({
   const bootstrapCampaigns =
     state.status === "authenticated" ? state.bootstrap.campaigns : []
   const worldDetail = world?.kind === "ready" ? world.data : null
+
+  // On a page with no campaign of its own (a World or Timeline page), a campaign this tab retained is
+  // shown only as the selected campaign, and only while it belongs to the world and timeline the route
+  // confirmed. It is not the page's scope: the page reads nothing under it.
+  const selectedCampaign =
+    campaign !== null || state.status !== "authenticated"
+      ? null
+      : resolveNavigationCampaign(
+          state.bootstrap,
+          undefined,
+          { routeNamesWorld, routeNamesTimeline, activeWorldId, activeTimelineId },
+          selectionFor(retained, state.bootstrap).campaignId,
+        )
 
   // World: the same deduplicated choices All worlds shows — explicit world
   // authority from GET /worlds, plus every world visible through an
@@ -168,14 +184,23 @@ export function HierarchyContextPanel({
       ? campaign.roles.join(", ")
       : "Not available"
 
+  const campaignOptionsShown = withCurrent(
+    campaignOptions,
+    selectedCampaign === null
+      ? null
+      : { id: selectedCampaign.campaign_id, label: selectedCampaign.campaign_name },
+  )
+
   const summaryParts = [worldName, timelineName, campaign?.campaign_name ?? null].filter(
     (part): part is string => part !== null,
   )
   const summary =
     campaign === null
       ? summaryParts.length > 0
-        ? `Context: ${summaryParts.join(" › ")}`
-        : "Context: nothing selected"
+        ? `Context: ${summaryParts.join(" › ")}${selectedCampaign === null ? "" : ` · Selected campaign: ${selectedCampaign.campaign_name}`}`
+        : selectedCampaign === null
+          ? "Context: nothing selected"
+          : `Context: Selected campaign: ${selectedCampaign.campaign_name}`
       : `Campaign context: ${summaryParts.join(" › ")} — Viewing as ${selectedCharacter?.character_name ?? "No character perspective selected"}`
 
   return (
@@ -238,13 +263,13 @@ export function HierarchyContextPanel({
             id={campaignHeadingId}
             className="campaign-context-panel__section-heading"
           >
-            Campaign
+            {selectedCampaign === null ? "Campaign" : "Selected campaign"}
           </h3>
           <LevelSelect
             headingId={campaignHeadingId}
-            value={campaign?.campaign_id ?? ""}
-            options={campaignOptions}
-            enabled={campaignOptions.length > 0}
+            value={campaign?.campaign_id ?? selectedCampaign?.campaign_id ?? ""}
+            options={campaignOptionsShown}
+            enabled={campaignOptionsShown.length > 0}
             onSelect={(campaignId) =>
               navigate(`/app/${encodeURIComponent(campaignId)}/home`)
             }

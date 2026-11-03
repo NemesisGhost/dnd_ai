@@ -61,6 +61,7 @@ import { humanizeCode } from "../utils/humanize"
 import { canonStatusLabel } from "../utils/lifecycleNextStep"
 import { FIELD, STATEMENT_MAX, fromView, same, toBody, validate } from "../utils/knowledgeForm"
 import type { KnowledgeFormValues } from "../utils/knowledgeForm"
+import { PERSPECTIVE_QUERY_CHANGED } from "../navigation/queryKeys"
 import { knowledgeSubjectHref } from "../utils/knowledgeSubject"
 import { statusDetail } from "../utils/locationForm"
 import "../components/authoring/authoring.css"
@@ -470,7 +471,10 @@ export function KnowledgeClaimPage({
 // a knowledge entry): leaving the page asks first, and so does closing the tab
 // (docs/UI_DESIGN.md §5.11). Only mounted for editors; a reader has nothing to lose.
 function UnsavedInputGuard({ unsaved }: { unsaved: string[] }) {
-    const guard = useUnsavedChangesGuard(unsaved.length > 0)
+    // A deliberate change of character or party in the address would re-read the claim under another
+    // perspective with the editor mounted: it asks like a departure. The page's own cleanup of a party
+    // that is no longer authorized does not (CampaignKnowledgeDetailPage runs it as permission loss).
+    const guard = useUnsavedChangesGuard(unsaved.length > 0, { disposingQuery: PERSPECTIVE_QUERY_CHANGED })
     return (
         <ConfirmDialog
             open={guard.blocked}

@@ -112,3 +112,36 @@ export function entryContextStamp(context: SelectedContext): EntryContextV1 {
         characterId: context.characterId,
     }
 }
+
+/** The levels a route's execution scope fixes. A level left out (`undefined`) is not compared. */
+export interface EntryScope {
+    campaignId?: string | null
+    worldId?: string | null
+    timelineId?: string | null
+}
+
+/**
+ * A versioned stamp that names a different campaign, world or timeline than the route it sits on was
+ * not made under this route's scope (foreign, tampered or stale), so it is no stamp at all: the route
+ * scope governs and the default applies. The P02-0a perspective-only stamp records no scope and is kept.
+ */
+export function entryContextWithinScope(read: EntryContextRead, scope: EntryScope): EntryContextRead {
+    if (read.kind !== "v1") return read
+    const { context } = read
+    const levels = ["campaignId", "worldId", "timelineId"] as const
+    return levels.every((key) => scope[key] === undefined || context[key] === scope[key]) ? read : { kind: "absent" }
+}
+
+/** The perspective a (scope-validated) stamp records: `undefined` when there is none. */
+export function perspectiveOfRead(read: EntryContextRead): string | null | undefined {
+    if (read.kind === "absent") return undefined
+    return read.kind === "v1" ? read.context.characterId : read.characterId
+}
+
+/** Whether the stamp is the full current form for exactly this context (nothing to re-stamp). */
+export function stampEquals(read: EntryContextRead, context: SelectedContext): boolean {
+    return (
+        read.kind === "v1" &&
+        SELECTED_CONTEXT_KEYS.every((key) => read.context[key] === context[key])
+    )
+}

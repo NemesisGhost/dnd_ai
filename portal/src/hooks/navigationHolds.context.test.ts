@@ -173,3 +173,30 @@ describe("queryKeysChanged", () => {
         expect(queryKeysChanged()(loc("?a=1"), loc("?a=2"))).toBe(false)
     })
 })
+
+describe("a route-scoped owner (the campaign layout)", () => {
+    const scoped: CommittedContext = { ...committed, routeScoped: true }
+
+    it("treats a versioned stamp naming another campaign, world or timeline as no stamp", () => {
+        setCommittedContext(scoped)
+        for (const over of [{ campaignId: "c2" }, { worldId: "w2" }, { timelineId: "t2" }]) {
+            // PUSH/REPLACE with no valid stamp keeps the committed context; POP resolves to the default (a ≠ b).
+            expect(guarded(at("/p", stamp(over)), Push)).toBe(false)
+            expect(guarded(at("/p", stamp(over)), Replace)).toBe(false)
+            expect(guarded(at("/p", stamp(over)), Pop)).toBe(true)
+        }
+    })
+
+    it("still compares a stamp made under this scope, and the perspective-only stamp", () => {
+        setCommittedContext(scoped)
+        expect(guarded(at("/p", stamp({ characterId: "a" })), Push)).toBe(true)
+        expect(guarded(at("/p", stamp()), Pop)).toBe(false)
+        expect(guarded(at("/p", { ctx: { v: 1, characterId: "a" } }), Pop)).toBe(true)
+        expect(guarded(at("/p", { ctx: { v: 1, characterId: "b" } }), Pop)).toBe(false)
+    })
+
+    it("an owner that is not route-scoped compares the levels as before", () => {
+        setCommittedContext(committed)
+        expect(guarded(at("/p", stamp({ campaignId: "c2" })), Push)).toBe(true)
+    })
+})

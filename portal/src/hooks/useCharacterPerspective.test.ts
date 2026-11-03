@@ -367,3 +367,57 @@ describe("useCharacterPerspective", () => {
         })
     })
 })
+describe("useCharacterPerspective over the selected-context store (P02-3)", () => {
+    const other = { ...campaign, campaign_id: "campaign-b", selected_character_id: "character-x", character_perspectives: [
+        { character_id: "character-x", character_name: "X", authorized_parties: [] },
+    ] } satisfies CampaignContext
+    const two: SessionBootstrap = { ...bootstrap, campaigns: [campaign, other] }
+
+    it("never reads a perspective chosen under another campaign", () => {
+        const { result } = renderHook(useCharacterPerspective, { initialProps: makeSession(two) })
+        act(() => result.current.selectCharacter("campaign-a", "character-b"))
+        expect(result.current.getSelectedCharacterId("campaign-a")).toBe("character-b")
+        expect(result.current.getSelectedCharacterId("campaign-b")).toBe("character-x")
+    })
+
+    it("adopting the route campaign replaces another campaign's selection and leaves the new one uninitialized", () => {
+        const { result } = renderHook(useCharacterPerspective, { initialProps: makeSession(two) })
+        act(() => result.current.selectCharacter("campaign-a", "character-b"))
+        act(() => result.current.adoptRouteCampaign("campaign-b"))
+        // The server default of campaign-b applies; campaign-a's choice is gone, not parked.
+        expect(result.current.getSelectedCharacterId("campaign-b")).toBe("character-x")
+        expect(result.current.getSelectedCharacterId("campaign-a")).toBeNull()
+        act(() => result.current.adoptRouteCampaign("campaign-a"))
+        expect(result.current.getSelectedCharacterId("campaign-a")).toBeNull()
+    })
+
+    it("adopting the same campaign keeps its choice, including an explicit none", () => {
+        const { result } = renderHook(useCharacterPerspective, { initialProps: makeSession(two) })
+        act(() => result.current.selectCharacter("campaign-b", null))
+        act(() => result.current.adoptRouteCampaign("campaign-b"))
+        expect(result.current.getSelectedCharacterId("campaign-b")).toBeNull()
+        act(() => result.current.selectCharacter("campaign-a", "character-a"))
+        act(() => result.current.adoptRouteCampaign("campaign-a"))
+        expect(result.current.getSelectedCharacterId("campaign-a")).toBe("character-a")
+    })
+
+    it("adopts nothing for a campaign the bootstrap does not list or without an authenticated session", () => {
+        const { result } = renderHook(useCharacterPerspective, { initialProps: makeSession(two) })
+        act(() => result.current.selectCharacter("campaign-a", "character-b"))
+        act(() => result.current.adoptRouteCampaign("ghost"))
+        expect(result.current.getSelectedCharacterId("campaign-a")).toBe("character-b")
+
+        const loading = renderHook(useCharacterPerspective, {
+            initialProps: { state: { status: "loading" }, reload: vi.fn(), refresh: vi.fn() } as UseSessionBootstrapResult,
+        })
+        act(() => loading.result.current.adoptRouteCampaign("campaign-a"))
+        expect(loading.result.current.getSelectedCharacterId("campaign-a")).toBeNull()
+    })
+
+    it("does not hand a perspective to a different user or browser session", () => {
+        const { result, rerender } = renderHook(useCharacterPerspective, { initialProps: makeSession(two) })
+        act(() => result.current.selectCharacter("campaign-a", "character-b"))
+        rerender(makeSession({ ...two, browser_session_id: "session-b" }))
+        expect(result.current.getSelectedCharacterId("campaign-a")).toBeNull()
+    })
+})

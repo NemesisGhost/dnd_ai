@@ -359,7 +359,7 @@ describe("history and stamping", () => {
     renderAt("/app/alpha/notes")
     await settled()
     type("draft")
-    await waitFor(() => expect((router.state.location.state as { ctx?: unknown } | null)?.ctx).toEqual({ v: 1, characterId: null }))
+    await waitFor(() => expect((router.state.location.state as { ctx?: unknown } | null)?.ctx).toMatchObject({ v: 1, campaignId: "alpha", worldId: "w1", timelineId: "t1", characterId: null }))
     expect(router.state.historyAction).toBe("REPLACE")
     expect(question()).toBeNull()
     expect(screen.getByTestId("mount")).toHaveTextContent("1")
@@ -373,7 +373,7 @@ describe("history and stamping", () => {
     choosePerspective("char-b")
     await waitFor(() => expect(screen.getByTestId("read")).toHaveTextContent("char-b"))
     await waitFor(() =>
-      expect((router.state.location.state as { ctx?: unknown } | null)?.ctx).toEqual({ v: 1, characterId: "char-b" }),
+      expect((router.state.location.state as { ctx?: unknown } | null)?.ctx).toMatchObject({ v: 1, campaignId: "alpha", worldId: "w1", timelineId: "t1", characterId: "char-b" }),
     )
     type("draft")
     const sessionsBefore = sessionRequests()
@@ -526,7 +526,7 @@ describe("revocation is an explicit, lasting clear", () => {
   it("the history entry agrees: it records no perspective, and Back to a stamped older entry is an ordinary guarded return", async () => {
     await selectBThenRevoke()
     await waitFor(() =>
-      expect((router.state.location.state as { ctx?: unknown } | null)?.ctx).toEqual({ v: 1, characterId: null }),
+      expect((router.state.location.state as { ctx?: unknown } | null)?.ctx).toMatchObject({ v: 1, campaignId: "alpha", worldId: "w1", timelineId: "t1", characterId: null }),
     )
     expect(router.state.historyAction).toBe("REPLACE")
   })
@@ -564,7 +564,7 @@ describe("revocation is an explicit, lasting clear", () => {
     expect(readsAsB()).toBe(before)
     expect(probeRequests().filter((r) => r.endsWith("character_id="))).toHaveLength(1)
     await waitFor(() =>
-      expect((router.state.location.state as { ctx?: unknown } | null)?.ctx).toEqual({ v: 1, characterId: null }),
+      expect((router.state.location.state as { ctx?: unknown } | null)?.ctx).toMatchObject({ v: 1, campaignId: "alpha", worldId: "w1", timelineId: "t1", characterId: null }),
     )
     expect(router.state.historyAction).toBe("REPLACE")
   })
@@ -608,7 +608,7 @@ describe("permission loss completes over a guarded page", () => {
     expect(screen.getByLabelText("Draft")).toHaveValue("")
     expect(question()).toBeNull()
     expect(router.state.location.pathname).toBe("/app/alpha/notes")
-    expect((router.state.location.state as { ctx?: unknown } | null)?.ctx).toEqual({ v: 1, characterId: null })
+    expect((router.state.location.state as { ctx?: unknown } | null)?.ctx).toMatchObject({ v: 1, campaignId: "alpha", worldId: "w1", timelineId: "t1", characterId: null })
   }
 
   it("A: revocation while the page's own question is open completes, without approving that departure", async () => {
@@ -710,7 +710,7 @@ describe("a bootstrap default only initializes the selection", () => {
     expect(perspectiveSelect()).toHaveValue("")
     expect(probeRequests().map((r) => r.replace(/^.*character_id=/, ""))).toEqual(["char-a", ""])
     expect(router.state.location.pathname).toBe("/app/alpha/notes")
-    expect((router.state.location.state as { ctx?: unknown } | null)?.ctx).toEqual({ v: 1, characterId: null })
+    expect((router.state.location.state as { ctx?: unknown } | null)?.ctx).toMatchObject({ v: 1, campaignId: "alpha", worldId: "w1", timelineId: "t1", characterId: null })
   })
 
   it("re-authorization, and a default that comes back, cannot resurrect the lost selection", async () => {
@@ -771,8 +771,11 @@ describe("selection ownership: a newer accepted selection supersedes a pending r
     await waitFor(() => expect(perspectiveSelect()).toHaveValue(perspective))
     await waitFor(() => expect(screen.getByTestId("read")).toHaveTextContent(`ready:${perspective}`))
     await waitFor(() =>
-      expect((router.state.location.state as { ctx?: unknown } | null)?.ctx).toEqual({
+      expect((router.state.location.state as { ctx?: unknown } | null)?.ctx).toMatchObject({
         v: 1,
+        campaignId: "alpha",
+        worldId: "w1",
+        timelineId: "t1",
         characterId: perspective === "" ? null : perspective,
       }),
     )
@@ -909,7 +912,7 @@ describe("initial entry and stamp ownership", () => {
     choosePerspective("char-b")
     await waitFor(() => expect(screen.getByTestId("read")).toHaveTextContent("char-b"))
     await waitFor(() =>
-      expect((router.state.location.state as { ctx?: unknown } | null)?.ctx).toEqual({ v: 1, characterId: "char-b" }),
+      expect((router.state.location.state as { ctx?: unknown } | null)?.ctx).toMatchObject({ v: 1, campaignId: "alpha", worldId: "w1", timelineId: "t1", characterId: "char-b" }),
     )
 
     fireEvent.change(campaignSelect(), { target: { value: "beta" } })
@@ -936,7 +939,7 @@ describe("initial entry and stamp ownership", () => {
     await settled()
     expect(perspectiveSelect()).toHaveValue("")
     await waitFor(() =>
-      expect((router.state.location.state as { ctx?: unknown } | null)?.ctx).toEqual({ v: 1, characterId: null }),
+      expect((router.state.location.state as { ctx?: unknown } | null)?.ctx).toMatchObject({ v: 1, campaignId: "alpha", worldId: "w1", timelineId: "t1", characterId: null }),
     )
   })
 
@@ -949,7 +952,7 @@ describe("initial entry and stamp ownership", () => {
     expect(router.state.location.search).toBe("?section=2")
 
     await waitFor(() =>
-      expect((router.state.location.state as { ctx?: unknown } | null)?.ctx).toEqual({ v: 1, characterId: null }),
+      expect((router.state.location.state as { ctx?: unknown } | null)?.ctx).toMatchObject({ v: 1, campaignId: "alpha", worldId: "w1", timelineId: "t1", characterId: null }),
     )
     expect(router.state.location.search).toBe("?section=2")
     expect(question()).toBeNull()
@@ -995,7 +998,7 @@ describe("syncCharacterFromUrl", () => {
     expect(sessionRequests()).toBe(sessionsBefore)
     // The entry is re-stamped, never turned back: the old stamp is not a request.
     await waitFor(() =>
-      expect((router.state.location.state as { ctx?: unknown } | null)?.ctx).toEqual({ v: 1, characterId: "char-b" }),
+      expect((router.state.location.state as { ctx?: unknown } | null)?.ctx).toMatchObject({ v: 1, campaignId: "alpha", worldId: "w1", timelineId: "t1", characterId: "char-b" }),
     )
     expect(router.state.location.key).not.toBe(locationKey)
     expect(router.state.historyAction).toBe("REPLACE")
@@ -1015,7 +1018,7 @@ describe("a replacement never asks for a perspective", () => {
     })
 
     await waitFor(() =>
-      expect((router.state.location.state as { ctx?: unknown } | null)?.ctx).toEqual({ v: 1, characterId: "char-b" }),
+      expect((router.state.location.state as { ctx?: unknown } | null)?.ctx).toMatchObject({ v: 1, campaignId: "alpha", worldId: "w1", timelineId: "t1", characterId: "char-b" }),
     )
     expect(perspectiveSelect()).toHaveValue("char-b")
     expect(router.state.location.search).toBe("?x=1")

@@ -1752,12 +1752,12 @@ describe("selection ownership on the real claim page", () => {
 
     await waitFor(() => expect(select()).toHaveValue("character-a"))
     await waitFor(() => expect(detailReads()).toEqual(["none", "character-b", "character-a"]))
-    await waitFor(() => expect(ctx()).toEqual({ v: 1, characterId: "character-a" }))
+    await waitFor(() => expect(ctx()).toMatchObject({ v: 1, characterId: "character-a" }))
     await act(async () => {
       await Promise.resolve()
     })
     expect(select()).toHaveValue("character-a")
-    expect(ctx()).toEqual({ v: 1, characterId: "character-a" })
+    expect(ctx()).toMatchObject({ v: 1, characterId: "character-a" })
     expect(detailReads()).toEqual(["none", "character-b", "character-a"])
     expect(router.state.location.pathname).toBe(CLAIM)
     expect(screen.queryByText(/no longer available/)).toBeNull()
@@ -1776,7 +1776,96 @@ describe("selection ownership on the real claim page", () => {
     await waitFor(() => expect(screen.getByText(/Your selected character is no longer available/)).toBeInTheDocument())
     await waitFor(() => expect(detailReads()).toEqual(["none", "character-b", "none"]))
     expect(select()).toHaveValue("")
-    await waitFor(() => expect(ctx()).toEqual({ v: 1, characterId: null }))
+    await waitFor(() => expect(ctx()).toMatchObject({ v: 1, characterId: null }))
     expect(router.state.location.pathname).toBe(CLAIM)
+  })  // F-2. A deliberate change of `character_id` or `party_id` in the address makes the page read the
+  // claim under another perspective, which unmounts the editor while the read is pending. It asks like a
+  // departure when the claim has unsent input. The page's own clean-up of a party that is no longer
+  // authorized is permission loss and never waits for that question. Other keys never ask.
+  describe("a perspective query change with unsent claim input (F-2)", () => {
+    const typed = async () => {
+      fireEvent.change(await screen.findByRole("textbox", { name: /^Claim/ }), { target: { value: "Draft kept" } })
+    }
+    // The address the person sees, without the section the page fills in for itself.
+    const address = () => {
+      const params = new URLSearchParams(router.state.location.search)
+      params.delete("section")
+      return `${router.state.location.pathname}${params.size === 0 ? "" : `?${params.toString()}`}`
+    }
+    const question = () => screen.queryByRole("dialog", { name: "Discard unsaved changes?" })
+
+    it.each([
+      ["character_id", "?character_id=character-b"],
+      ["party_id", "?party_id=party-x"],
+      ["both", "?character_id=character-b&party_id=party-x"],
+    ])("asks before a deliberate %s change; Keep editing keeps the draft, the address and the reads", async (_name, search) => {
+      mount(false)
+      await typed()
+      const before = detailReads()
+      void router.navigate({ pathname: CLAIM, search })
+      const dialog = await screen.findByRole("dialog", { name: "Discard unsaved changes?" })
+      expect(dialog).toHaveTextContent("the claim")
+      fireEvent.click(within(dialog).getByRole("button", { name: "Keep editing" }))
+      await waitFor(() => expect(question()).toBeNull())
+      expect(address()).toBe(CLAIM)
+      expect(screen.getByRole("textbox", { name: /^Claim/ })).toHaveValue("Draft kept")
+      expect(detailReads()).toEqual(before)
+    })
+
+    it("Discard completes the change and reads the claim under the new perspective", async () => {
+      mount(false)
+      await typed()
+      void router.navigate({ pathname: CLAIM, search: "?character_id=character-b" })
+      fireEvent.click(within(await screen.findByRole("dialog", { name: "Discard unsaved changes?" })).getByRole("button", { name: "Discard changes" }))
+      await waitFor(() => expect(address()).toBe(`${CLAIM}?character_id=character-b`))
+      await waitFor(() => expect(detailReads()).toEqual(["none", "character-b"]))
+      expect(screen.queryByText("Draft kept")).toBeNull()
+    })
+
+    it.each([["a section", "?section=claim"], ["an unrelated key", "?q=1"]])(
+      "does not ask for %s change: the editor stays mounted",
+      async (_name, search) => {
+        mount(false)
+        await typed()
+        await act(async () => {
+          await router.navigate({ pathname: CLAIM, search })
+        })
+        expect(question()).toBeNull()
+        expect(router.state.location.search).toContain(search.slice(1))
+        expect(screen.getByRole("textbox", { name: /^Claim/ })).toHaveValue("Draft kept")
+        expect(detailReads()).toEqual(["none"])
+      },
+    )
+
+    it("the page's own clean-up of a party that is no longer authorized stays live", async () => {
+      withLifecycle(lifecycle())
+      current = { detail: detail(), view: view() }
+      server.on("GET", DETAIL, (call) =>
+        /party_id=party-gone/.test(call.path) ? { status: 404 } : { body: current.detail },
+      )
+      server.on("GET", VIEW_PATH, () => ({ body: current.view }))
+      vi.mocked(useSessionBootstrap).mockImplementation(useStatefulSession)
+      router = createMemoryRouter(
+        [
+          {
+            path: "*",
+            element: (
+              <ThemeProvider>
+                <RouteSessionProvider>
+                  <App />
+                </RouteSessionProvider>
+              </ThemeProvider>
+            ),
+          },
+        ],
+        { initialEntries: [`${CLAIM}?character_id=character-a&party_id=party-gone`] },
+      )
+      render(<RouterProvider router={router} />)
+      await waitFor(() => expect(address()).toBe(`${CLAIM}?character_id=character-a`))
+      expect(question()).toBeNull()
+      expect(await screen.findByRole("textbox", { name: /^Claim/ })).toBeInTheDocument()
+      expect(detailReads()).toEqual(["character-a"])
+      expect(router.state.historyAction).toBe("REPLACE")
+    })
   })
 })

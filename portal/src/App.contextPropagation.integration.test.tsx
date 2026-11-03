@@ -6,10 +6,11 @@ import { RouteSessionProvider } from "./context/RouteSessionProvider"
 import { ThemeProvider } from "./themes/ThemeProvider"
 import type { CampaignContext, SessionBootstrap } from "./types/bootstrap"
 
-// World / Campaign context propagation (docs/UI_DESIGN.md §4.5): a newer
+// World / Campaign context propagation (docs/UI_DESIGN.md §4.5, §4.8.2): a newer
 // explicit selection (route campaign, or the world the route selects) always
-// beats the saved last-visited / startup fallbacks, and a fallback is only
-// ever a campaign of the selected world. The server is faked at the fetch
+// wins, the campaign this tab retained follows the person only while it
+// belongs to the world the route confirmed, and the saved last-visited /
+// startup preferences are never a fallback (P02-3, PD-2). The server is faked at the fetch
 // boundary so the real session provider, sidebar, hierarchy panel and routes
 // run together.
 
@@ -353,18 +354,21 @@ describe("Access follows the selected campaign", () => {
   })
 })
 
-describe("world routes keep saved defaults out of the selected context", () => {
-  it("Info Box world change, then Access", async () => {
+describe("world routes keep saved defaults out of the selected context (P02-3: only the retained selection counts)", () => {
+  it("Info Box world change clears the incompatible campaign: nothing is guessed, not even the world's only campaign", async () => {
     server.lastVisited = "a"
     const router = renderAt("/app/a/home")
 
     await chooseInfoBoxWorld("w2")
     await waitFor(() => expect(router.state.location.pathname).toBe("/worlds/w2"))
-    await waitFor(() => expect(accessButton()).not.toBeNull())
-    await openAccess()
+    await expectAccessSlotRendered()
+    await waitFor(() => expect(server.requests).toContain("GET /api/worlds/w2"))
+    await sleep(150)
 
-    await waitFor(() => expect(router.state.location.pathname).toBe("/app/c/access"))
+    expect(accessButton()).toBeNull()
+    expect(within(sidebar()).queryByRole("link", { name: "Characters" })).not.toBeInTheDocument()
     expect(server.requests).not.toContain("GET /api/campaigns/a/access-overview")
+    expect(server.requests).not.toContain("GET /api/campaigns/c/access-overview")
   })
 
   it("Info Box world change, then a valid campaign of that world, then Access", async () => {
@@ -402,29 +406,46 @@ describe("world routes keep saved defaults out of the selected context", () => {
     ).not.toBeInTheDocument()
 
     gate.release()
-    await waitFor(() => expect(accessButton()).not.toBeNull())
-    await openAccess()
-    await waitFor(() => expect(router.state.location.pathname).toBe("/app/c/access"))
+    await waitFor(() => expect(server.requests).toContain("GET /api/worlds/w2"))
+    await sleep(150)
+    // Confirmed, but the retained campaign (a) belongs to the other world and w2's only campaign is not a choice.
+    expect(accessButton()).toBeNull()
+    expect(router.state.location.pathname).toBe("/worlds/w2")
   })
 
-  it("keeps a saved campaign that belongs to the selected world", async () => {
-    server.lastVisited = "b"
-    const router = renderAt("/worlds/w1")
+  it("keeps the selected campaign when it belongs to the selected world", async () => {
+    server.lastVisited = "a"
+    const router = renderAt("/app/b/home")
+    await screen.findByLabelText("Campaign", { selector: "select" })
 
-    await waitFor(() => expect(accessButton()).not.toBeNull())
-    await openAccess()
+    await router.navigate("/worlds/w1")
+    await waitFor(() => expect(router.state.location.pathname).toBe("/worlds/w1"))
+    await sleep(400)
+    await openAccess("b")
 
     await waitFor(() => expect(router.state.location.pathname).toBe("/app/b/access"))
   })
 
-  it("does not use a campaign of another world on a direct world link", async () => {
+  it("uses no saved campaign on a direct world link, even one that belongs to that world", async () => {
+    server.lastVisited = "b"
+    server.startup = "b"
+    renderAt("/worlds/w1")
+
+    await expectAccessSlotRendered()
+    await waitFor(() => expect(server.requests).toContain("GET /api/worlds/w1"))
+    await sleep(150)
+    expect(accessButton()).toBeNull()
+  })
+
+  it("does not use a campaign of another world, or the only campaign of this one, on a direct world link", async () => {
     server.lastVisited = "a"
-    const router = renderAt("/worlds/w2")
+    renderAt("/worlds/w2")
 
-    await waitFor(() => expect(accessButton()).not.toBeNull())
-    await openAccess()
-
-    await waitFor(() => expect(router.state.location.pathname).toBe("/app/c/access"))
+    await expectAccessSlotRendered()
+    await waitFor(() => expect(server.requests).toContain("GET /api/worlds/w2"))
+    await sleep(150)
+    expect(accessButton()).toBeNull()
+    expect(within(sidebar()).queryByRole("link", { name: "Characters" })).not.toBeInTheDocument()
   })
 
   it("does not choose between several campaigns of the world when no saved one belongs to it", async () => {
@@ -472,10 +493,14 @@ describe("world routes keep saved defaults out of the selected context", () => {
     expect(within(sidebar()).queryByRole("link", { name: "Characters" })).not.toBeInTheDocument()
   })
 
-  it("still resolves a campaign for a valid timeline of the world", async () => {
-    server.lastVisited = "b"
-    const router = renderAt("/worlds/w1/timelines/t1")
+  it("still resolves the selected campaign for a valid timeline of its world", async () => {
+    server.lastVisited = "a"
+    const router = renderAt("/app/b/home")
+    await screen.findByLabelText("Campaign", { selector: "select" })
 
+    await router.navigate("/worlds/w1/timelines/t1")
+    await waitFor(() => expect(router.state.location.pathname).toBe("/worlds/w1/timelines/t1"))
+    await sleep(400)
     await openAccess("b")
     await waitFor(() => expect(router.state.location.pathname).toBe("/app/b/access"))
   })
@@ -487,7 +512,10 @@ describe("world routes keep saved defaults out of the selected context", () => {
 
     await chooseInfoBoxWorld("w2")
     await waitFor(() => expect(router.state.location.pathname).toBe("/worlds/w2"))
-    await waitFor(() => expect(accessButton()).not.toBeNull())
+    await waitFor(() => expect(server.requests).toContain("GET /api/worlds/w2"))
+    await sleep(150)
+    // The retained campaign (a) is not in w2 and was cleared: no campaign links on that world's page.
+    expect(accessButton()).toBeNull()
 
     await router.navigate(-1)
     await waitFor(() => expect(router.state.location.pathname).toBe("/app/a/home"))
@@ -497,13 +525,14 @@ describe("world routes keep saved defaults out of the selected context", () => {
     await openAccess("a")
     await waitFor(() => expect(router.state.location.pathname).toBe("/app/a/access"))
 
-    await router.navigate("/worlds/w2")
-    await waitFor(() => expect(router.state.location.pathname).toBe("/worlds/w2"))
+    // Back to campaign a re-selected it (the route wins); its own world keeps it.
+    await router.navigate("/worlds/w1")
+    await waitFor(() => expect(router.state.location.pathname).toBe("/worlds/w1"))
     // A history navigation outside act() remounts the scope-keyed session;
     // give it a moment to settle before reading the sidebar.
     await sleep(400)
-    await openAccess("c")
-    await waitFor(() => expect(router.state.location.pathname).toBe("/app/c/access"))
+    await openAccess("a")
+    await waitFor(() => expect(router.state.location.pathname).toBe("/app/a/access"))
   })
 })
 
@@ -566,13 +595,15 @@ describe("a newer selection survives lagging or stale saved state", () => {
     expect(server.requests.some((r) => r.includes("ghost"))).toBe(false)
   })
 
-  it("ignores a saved campaign that is no longer authorized", async () => {
+  it("ignores a saved campaign that is no longer authorized, and the startup campaign does not stand in for it", async () => {
     server.lastVisited = "gone"
     renderAt("/campaigns")
 
     await screen.findByRole("heading", { name: "Campaign a" })
-    // Falls through to the server's startup campaign.
-    await waitFor(() => expect(accessButton()).not.toBeNull())
+    await expectAccessSlotRendered()
+    await sleep(150)
+    // Nothing was selected in this tab: neither the stale preference nor the startup campaign is a link target.
+    expect(accessButton()).toBeNull()
     expect(document.querySelector('a[href*="gone"]')).toBeNull()
   })
 })

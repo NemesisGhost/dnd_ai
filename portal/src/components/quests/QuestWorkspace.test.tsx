@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react"
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { CampaignQuestDetailPage } from "../../pages/CampaignQuestDetailPage"
 import { QuestSectionRedirect } from "../../pages/QuestSectionRedirect"
@@ -170,6 +170,26 @@ describe("Quest workspace: navigation changes nothing", () => {
         expect(dialog).toHaveTextContent("quest details")
         fireEvent.click(within(dialog).getByRole("button", { name: "Keep editing" }))
         expect(router.state.location.pathname).toBe("/app/c1/quests/q1")
+    })
+})
+
+// F-2, inspected. The editor neither reads nor sends `character_id` or `party_id` (it only carries them to its
+// back link), and every section stays mounted, so a change of those keys disposes none of its input and is
+// not guarded. The perspective-dependent quest reader is a different component with its own reads.
+describe("Quest workspace: a perspective query change", () => {
+    it("keeps unsent input, asks nothing and sends no extra read for the quest definition", async () => {
+        const { router, server } = setupQuestWorkspace({ section: "details" })
+        fireEvent.change(await screen.findByRole("textbox", { name: /^Name/ }), { target: { value: "Renamed" } })
+        const definitionReads = () => server.callsTo("GET", `${AUTHORING}/q1`).length
+        const before = definitionReads()
+        await act(async () => {
+            await router.navigate({ search: "?section=details&character_id=c9&party_id=p9" })
+        })
+        expect(screen.queryByRole("dialog")).toBeNull()
+        expect(screen.getByRole("textbox", { name: /^Name/ })).toHaveValue("Renamed")
+        expect(router.state.location.search).toBe("?section=details&character_id=c9&party_id=p9")
+        expect(definitionReads()).toBe(before)
+        expect(writes(server)).toHaveLength(0)
     })
 })
 

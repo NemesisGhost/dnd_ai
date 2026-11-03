@@ -1,7 +1,7 @@
 import { useEffect, useSyncExternalStore } from "react"
 import { NavigationType } from "react-router"
 import type { Location } from "react-router"
-import { readEntryContext } from "../navigation/contexts"
+import { entryContextWithinScope, readEntryContext } from "../navigation/contexts"
 import type { EntryContextRead } from "../navigation/contexts"
 
 // Lets a component that owns state a transition would dispose (a world-time picker's open recording,
@@ -104,6 +104,10 @@ export interface CommittedContext {
     campaignId?: string | null
     worldId?: string | null
     timelineId?: string | null
+    // The owner's route fixes campaign, world and timeline (a campaign route), so a versioned stamp that
+    // names other ones was not made under this scope and counts as no stamp. Leave unset for an owner
+    // whose levels are free to differ between entries of one path.
+    routeScoped?: boolean
 }
 // P02-0a's name for the same thing, kept so the perspective-only owner and its tests read unchanged.
 export type CommittedPerspective = CommittedContext
@@ -189,7 +193,15 @@ export function isGuardedTransition(
     }
     if (currentLocation.pathname !== nextLocation.pathname) return true
     if (committedContext !== null) {
-        const read = readEntryContext(nextLocation.state, committedContext.authorized)
+        // A stamp that names another campaign, world or timeline than the committed scope is no stamp.
+        const stamp = readEntryContext(nextLocation.state, committedContext.authorized)
+        const read = committedContext.routeScoped
+            ? entryContextWithinScope(stamp, {
+                  campaignId: committedContext.campaignId,
+                  worldId: committedContext.worldId,
+                  timelineId: committedContext.timelineId,
+              })
+            : stamp
         if (entryChangesContext(read, committedContext, historyAction)) return true
     }
     return (

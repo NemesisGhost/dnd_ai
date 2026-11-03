@@ -17,6 +17,7 @@ import { SIDEBAR_COLLAPSED_STORAGE_KEY } from "../hooks/useSidebarCollapsed"
 import { useNavigationDrawer } from "../hooks/useNavigationDrawer"
 import type { SessionBootstrapState } from "../hooks/useSessionBootstrap"
 import type { CampaignContext, SessionBootstrap } from "../types/bootstrap"
+import { createSelectedContextStore, selectionOwner, SelectedContextStoreContext } from "../navigation/selectedContextStore"
 import { PortalSidebar } from "./PortalSidebar"
 
 const first: CampaignContext = {
@@ -77,8 +78,21 @@ function renderSidebar(
         status: "authenticated",
         bootstrap: makeBootstrap(),
     },
+    selectedCampaignId: string | null = null,
 ) {
+    // The person's explicit selection, retained by the tab (never a last-visited or startup guess).
+    const store = createSelectedContextStore()
+    if (selectedCampaignId !== null && state.status === "authenticated") {
+        store.commit({
+            owner: selectionOwner(state.bootstrap),
+            campaignId: selectedCampaignId,
+            worldId: null,
+            timelineId: null,
+            characterId: undefined,
+        })
+    }
     return render(
+        <SelectedContextStoreContext.Provider value={store}>
         <SessionContext.Provider value={{ state, reload: vi.fn(), refresh: vi.fn() }}>
             <CharacterPerspectiveContext.Provider
                 value={{
@@ -95,7 +109,8 @@ function renderSidebar(
                     </WorkspaceHierarchyProvider>
                 </MemoryRouter>
             </CharacterPerspectiveContext.Provider>
-        </SessionContext.Provider>,
+        </SessionContext.Provider>
+        </SelectedContextStoreContext.Provider>,
     )
 }
 
@@ -271,7 +286,7 @@ describe("PortalSidebar destinations", () => {
 })
 
 describe("PortalSidebar campaign resolution", () => {
-    it("shows on global routes and targets last visited", () => {
+    it("shows on global routes and targets the selected campaign", () => {
         renderSidebar(
             "/settings",
             authenticated(
@@ -279,10 +294,11 @@ describe("PortalSidebar campaign resolution", () => {
                     campaign_preferences: {
                         startup_mode: "resume_last_visited",
                         preferred_campaign_id: null,
-                        last_visited_campaign_id: "campaign-b",
+                        last_visited_campaign_id: "campaign-a",
                     },
                 }),
             ),
+            "campaign-b",
         )
 
         expect(within(nav()).getByRole("link", { name: "Quests" })).toHaveAttribute(
@@ -294,16 +310,44 @@ describe("PortalSidebar campaign resolution", () => {
         ).not.toHaveAttribute("aria-current")
     })
 
-    it("falls back to the startup campaign", () => {
+    it("targets the selected campaign, not the startup campaign", () => {
         renderSidebar(
             "/account",
             authenticated(makeBootstrap({ startup_campaign_id: "campaign-a" })),
+            "campaign-b",
         )
 
         openWorlds()
         expect(
             within(nav()).getByRole("link", { name: "Campaign world" }),
-        ).toHaveAttribute("href", "/app/campaign-a/world")
+        ).toHaveAttribute("href", "/app/campaign-b/world")
+    })
+
+    it("never guesses a campaign from the last-visited or startup preference when none is selected", () => {
+        renderSidebar(
+            "/settings",
+            authenticated(
+                makeBootstrap({
+                    startup_campaign_id: "campaign-a",
+                    campaign_preferences: {
+                        startup_mode: "resume_last_visited",
+                        preferred_campaign_id: null,
+                        last_visited_campaign_id: "campaign-b",
+                    },
+                }),
+            ),
+        )
+
+        expect(within(nav()).queryByRole("link", { name: "Quests" })).not.toBeInTheDocument()
+        expect(disabledEntry("Quests")).toBeInTheDocument()
+        for (const name of ["Characters", "Parties", "Sessions", "Knowledge", "Ask"]) {
+            expect(within(nav()).queryByRole("link", { name })).not.toBeInTheDocument()
+        }
+    })
+
+    it("ignores a retained campaign the session no longer lists", () => {
+        renderSidebar("/settings", authenticated(makeBootstrap()), "campaign-gone")
+        expect(within(nav()).queryByRole("link", { name: "Quests" })).not.toBeInTheDocument()
     })
 
     it("never builds a link from an unauthorized route campaign", () => {
@@ -520,7 +564,8 @@ describe("PortalSidebar Access group", () => {
     it("targets the resolved campaign on a global route", () => {
         renderSidebar(
             "/settings",
-            authenticated(makeBootstrap({ startup_campaign_id: "campaign-b" })),
+            authenticated(makeBootstrap({ startup_campaign_id: "campaign-a" })),
+            "campaign-b",
         )
         fireEvent.click(screen.getByRole("button", { name: "Access" }))
 

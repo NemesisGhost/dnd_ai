@@ -9,8 +9,8 @@ import { navTaskState } from "../navigation/navStart"
 
 interface CampaignHomeNavGroupProps {
   campaigns: CampaignContext[]
-  // The campaign the campaign-specific links target (route campaign, else
-  // last visited, else startup), or null when none resolves.
+  // The campaign the campaign-specific links target (route campaign, else the
+  // selected campaign; never a last-visited or startup guess), or null when none resolves.
   resolvedCampaign: CampaignContext | null
   // The route's campaign, only when it is in the current bootstrap — drives
   // aria-current on its list entry. Never a fallback-resolved campaign.

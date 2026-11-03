@@ -189,10 +189,10 @@ describe.each([
 
     await waitFor(() => expect(select()).toHaveValue("char-a"))
     await waitFor(() => expect(screen.getByTestId("read")).toHaveTextContent("ready:char-a"))
-    await waitFor(() => expect(ctx()).toEqual({ v: 1, characterId: "char-a" }))
+    await waitFor(() => expect(ctx()).toMatchObject({ v: 1, campaignId: "alpha", worldId: "w1", timelineId: "t1", characterId: "char-a" }))
     await settle()
     expect(select()).toHaveValue("char-a")
-    expect(ctx()).toEqual({ v: 1, characterId: "char-a" })
+    expect(ctx()).toMatchObject({ v: 1, campaignId: "alpha", worldId: "w1", timelineId: "t1", characterId: "char-a" })
     expect(readOrder()).toEqual(["", "char-b", "char-a"])
     expect(reads().at(-1)).toBe("char-a")
     expect(screen.queryByRole("status")).toBeNull()
@@ -203,7 +203,7 @@ describe.each([
     await selectBThenTargetWithRevocationInTheSameBatch("", ["char-a"])
 
     await waitFor(() => expect(screen.getByTestId("read")).toHaveTextContent("ready:"))
-    await waitFor(() => expect(ctx()).toEqual({ v: 1, characterId: null }))
+    await waitFor(() => expect(ctx()).toMatchObject({ v: 1, campaignId: "alpha", worldId: "w1", timelineId: "t1", characterId: null }))
     await settle()
     expect(select()).toHaveValue("")
     expect(readOrder()).toEqual(["", "char-b", ""])
@@ -221,7 +221,7 @@ describe.each([
     })
 
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("no longer available"))
-    await waitFor(() => expect(ctx()).toEqual({ v: 1, characterId: null }))
+    await waitFor(() => expect(ctx()).toMatchObject({ v: 1, campaignId: "alpha", worldId: "w1", timelineId: "t1", characterId: null }))
     expect(select()).toHaveValue("")
     expect(readOrder()).toEqual(["", "char-b", ""])
   })
@@ -245,7 +245,7 @@ describe.each([
     await settle()
 
     expect(select()).toHaveValue("")
-    expect(ctx()).toEqual({ v: 1, characterId: null })
+    expect(ctx()).toMatchObject({ v: 1, campaignId: "alpha", worldId: "w1", timelineId: "t1", characterId: null })
     expect(screen.getByTestId("mount").textContent).toBe(mountBefore)
     expect(reads()).toHaveLength(before)
   })

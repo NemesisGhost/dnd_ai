@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
-import { entryContextStamp, isIdShaped, readEntryContext } from "./contexts"
+import { entryContextStamp, entryContextWithinScope, isIdShaped, perspectiveOfRead, readEntryContext, stampEquals } from "./contexts"
+import type { EntryContextRead, EntryContextV1 } from "./contexts"
 
 const full = { v: 1, campaignId: "c1", worldId: "w1", timelineId: "t1", characterId: "ch1" }
 
@@ -77,5 +78,46 @@ describe("entryContextStamp", () => {
         const stamp = entryContextStamp({ ...full, extra: "label" } as never)
         expect(stamp).toEqual(full)
         expect(Object.keys(stamp).sort()).toEqual(["campaignId", "characterId", "timelineId", "v", "worldId"])
+    })
+})
+
+describe("entry scope validation (P02-3)", () => {
+    const v1 = (over: Partial<EntryContextV1> = {}): EntryContextRead => ({
+        kind: "v1",
+        context: { v: 1, campaignId: "c1", worldId: "w1", timelineId: "t1", characterId: "a", ...over },
+    })
+
+    it("keeps a stamp made under the route scope and ignores levels the route does not fix", () => {
+        expect(entryContextWithinScope(v1(), { campaignId: "c1", worldId: "w1", timelineId: "t1" })).toEqual(v1())
+        expect(entryContextWithinScope(v1(), {})).toEqual(v1())
+        expect(entryContextWithinScope(v1(), { campaignId: "c1" })).toEqual(v1())
+    })
+
+    it("treats a stamp naming another campaign, world or timeline as absent", () => {
+        for (const scope of [{ campaignId: "c2" }, { worldId: "w2" }, { timelineId: "t2" }, { campaignId: null }]) {
+            expect(entryContextWithinScope(v1(), scope)).toEqual({ kind: "absent" })
+        }
+    })
+
+    it("passes absent and perspective-only stamps through", () => {
+        expect(entryContextWithinScope({ kind: "absent" }, { campaignId: "c1" })).toEqual({ kind: "absent" })
+        const legacy: EntryContextRead = { kind: "legacy-perspective", characterId: "a" }
+        expect(entryContextWithinScope(legacy, { campaignId: "c1" })).toBe(legacy)
+    })
+
+    it("reads the perspective of every form, with none distinct from absent", () => {
+        expect(perspectiveOfRead(v1())).toBe("a")
+        expect(perspectiveOfRead(v1({ characterId: null }))).toBeNull()
+        expect(perspectiveOfRead({ kind: "legacy-perspective", characterId: "b" })).toBe("b")
+        expect(perspectiveOfRead({ kind: "legacy-perspective", characterId: null })).toBeNull()
+        expect(perspectiveOfRead({ kind: "absent" })).toBeUndefined()
+    })
+
+    it("recognizes only a full stamp of exactly this context as current", () => {
+        const context = { campaignId: "c1", worldId: "w1", timelineId: "t1", characterId: "a" }
+        expect(stampEquals(v1(), context)).toBe(true)
+        expect(stampEquals(v1({ characterId: "b" }), context)).toBe(false)
+        expect(stampEquals({ kind: "legacy-perspective", characterId: "a" }, context)).toBe(false)
+        expect(stampEquals({ kind: "absent" }, context)).toBe(false)
     })
 })
