@@ -10,23 +10,40 @@ import type { SelectedContextSnapshot, SelectedContextState } from "./selectedCo
 // campaign layout owns both on a campaign route. Nothing here is authority: an entry only ever asks, and
 // what it names is accepted only if the current bootstrap still says so.
 
+/** What an entry's stamp asks to restore. Nothing in it is authority. */
+export type Restorable =
+    // Fully validated by the bootstrap: the selection can be committed now.
+    | { kind: "selection"; selection: SelectedContextState }
+    // A World with no campaign. The bootstrap cannot say whether this session may read the World, so it
+    // is only a request: it is committed after the session's own World read confirms it.
+    | { kind: "world"; worldId: string; timelineId: string | null }
+
 /**
- * The selection an entry's stamp may restore, or null when the entry carries no usable stamp.
+ * What an entry's stamp may restore, or null when the entry carries no usable stamp.
  *
  *   - Only the versioned stamp counts. The older perspective-only stamp names no campaign, so it
  *     cannot say what its perspective belonged to and restores nothing.
- *   - A stamp of no campaign restores an empty selection (it recorded "nothing selected").
+ *   - A stamp of nothing (no campaign, World, timeline or perspective) restores an empty selection.
+ *   - A stamp with no campaign but a World is a World-only selection, which stays a valid shape: it is
+ *     returned as a request to verify (`kind: "world"`), never committed from history alone. A timeline
+ *     needs its World, and a perspective needs its campaign; anything else ignores the stamp whole.
  *   - A campaign must be in the bootstrap, and the stamp's world and timeline must be that campaign's
  *     own; otherwise the stamp is foreign or tampered and is ignored whole.
  *   - A perspective is an id the campaign authorizes, or `null`, an explicit none, which is kept apart
  *     from an unrecorded one. Anything else ignores the stamp whole.
  */
-export function restorableSelection(state: unknown, bootstrap: SessionBootstrap): SelectedContextState | null {
+export function restorableSelection(state: unknown, bootstrap: SessionBootstrap): Restorable | null {
     const read = readEntryContext(state)
     if (read.kind !== "v1") return null
     const { context } = read
     const owner = selectionOwner(bootstrap)
-    if (context.campaignId === null) return { ...EMPTY_SELECTION, owner }
+    if (context.campaignId === null) {
+        if (context.characterId !== null) return null
+        if (context.worldId === null) {
+            return context.timelineId === null ? { kind: "selection", selection: { ...EMPTY_SELECTION, owner } } : null
+        }
+        return { kind: "world", worldId: context.worldId, timelineId: context.timelineId }
+    }
     const campaign = bootstrap.campaigns.find((candidate) => candidate.campaign_id === context.campaignId)
     if (campaign === undefined) return null
     if (context.worldId !== campaign.world_id || context.timelineId !== campaign.timeline_id) return null
@@ -37,11 +54,14 @@ export function restorableSelection(state: unknown, bootstrap: SessionBootstrap)
         return null
     }
     return {
-        owner,
-        campaignId: campaign.campaign_id,
-        worldId: campaign.world_id,
-        timelineId: campaign.timeline_id,
-        characterId: context.characterId,
+        kind: "selection",
+        selection: {
+            owner,
+            campaignId: campaign.campaign_id,
+            worldId: campaign.world_id,
+            timelineId: campaign.timeline_id,
+            characterId: context.characterId,
+        },
     }
 }
 

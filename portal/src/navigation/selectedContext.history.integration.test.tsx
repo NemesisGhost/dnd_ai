@@ -77,6 +77,10 @@ function bootstrapOf(over: { alphaDefault?: string | null; withAlpha?: boolean; 
 }
 
 const requests: string[] = []
+// Worlds the session cannot read (a non-disclosing 404), and reads parked until the test answers them.
+const unreadableWorlds = new Set<string>()
+let parkWorlds = false
+const parkedWorlds: Array<{ id: string; answer: () => Promise<void> }> = []
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } })
 const world = (id: string) => ({
@@ -175,6 +179,9 @@ const mount = (entry: Entry) => render(tree(entry))
 
 beforeEach(() => {
   requests.length = 0
+  unreadableWorlds.clear()
+  parkWorlds = false
+  parkedWorlds.length = 0
   control.bootstrap = bootstrapOf()
   vi.stubGlobal(
     "fetch",
@@ -184,7 +191,22 @@ beforeEach(() => {
       const probe = /\/probe\?character_id=([^&]*)/.exec(url)
       if (probe !== null) return json({ who: decodeURIComponent(probe[1]!) })
       const worldMatch = /\/worlds\/(w\d)$/.exec(url)
-      if (worldMatch !== null) return json(world(worldMatch[1]!))
+      if (worldMatch !== null) {
+        const id = worldMatch[1]!
+        const answer = () => (unreadableWorlds.has(id) ? json({ detail: "not found" }, 404) : json(world(id)))
+        if (!parkWorlds) return answer()
+        return new Promise<Response>((resolve) => {
+          parkedWorlds.push({
+            id,
+            answer: async () => {
+              await act(async () => {
+                resolve(answer())
+                await Promise.resolve()
+              })
+            },
+          })
+        })
+      }
       if (/\/worlds\?/.test(url)) return json({ items: [], next_cursor: null })
       return json({ detail: "not found" }, 404)
     }),
@@ -435,3 +457,161 @@ describe("stamping itself", () => {
 })
 
 const NOTHING_WITH_WORLD = { v: 1, campaignId: null, worldId: "w1", timelineId: null, characterId: null }
+
+// A valid no-campaign selection may retain a World. History ids are not authority: the session's own
+// World read (GET /worlds/{id}, the one a World route uses) must confirm it before it is selected again.
+const WORLD_ONLY = (worldId: string, timelineId: string | null = null) => ({
+  v: 1,
+  campaignId: null,
+  worldId,
+  timelineId,
+  characterId: null,
+})
+const worldReads = (id: string) => requests.filter((url) => new RegExp(`/worlds/${id}$`).test(url))
+
+describe("a World selected without a campaign (World-only context)", () => {
+  it("survives Select World → unscoped route → reload, verified by the session, with the same corrected stamp", async () => {
+    mount("/worlds/w2")
+    await screen.findByRole("heading", { name: "World page" })
+    await stamped(WORLD_ONLY("w2"))
+    await go("/campaigns")
+    await screen.findByRole("heading", { name: "Campaigns" })
+    await stamped(WORLD_ONLY("w2"))
+
+    reload()
+    await screen.findByRole("heading", { name: "Campaigns" })
+    // Verified through the existing World read, not trusted from history.
+    await waitFor(() => expect(worldReads("w2")).toHaveLength(1))
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(ctx()).toEqual(WORLD_ONLY("w2"))
+    expect(worldReads("w2")).toHaveLength(1)
+    // No campaign or perspective was inferred to fill the missing levels.
+    expect(quests()).toBeNull()
+  })
+
+  it("restores an initial World-only stamp on an unscoped route once the World is read, and not before", async () => {
+    parkWorlds = true
+    mount({ pathname: "/campaigns", state: { ctx: WORLD_ONLY("w2") } })
+    await screen.findByRole("heading", { name: "Campaigns" })
+    await waitFor(() => expect(parkedWorlds).toHaveLength(1))
+    // Unverified: the entry still records it (it is not repaired to nothing) and nothing is governed by it.
+    expect(ctx()).toEqual(WORLD_ONLY("w2"))
+    expect(quests()).toBeNull()
+    await parkedWorlds[0]!.answer()
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(ctx()).toEqual(WORLD_ONLY("w2"))
+    expect(worldReads("w2")).toHaveLength(1)
+  })
+
+  it("drops a World the session cannot read, and repairs the entry to record nothing", async () => {
+    unreadableWorlds.add("w2")
+    mount({ pathname: "/campaigns", state: { ctx: WORLD_ONLY("w2") } })
+    await screen.findByRole("heading", { name: "Campaigns" })
+    await stamped(NOTHING)
+    await act(async () => control.publish!(bootstrapOf()))
+    expect(ctx()).toEqual(NOTHING)
+  })
+
+  it("ignores a verification that answers after newer navigation", async () => {
+    parkWorlds = true
+    mount({ pathname: "/campaigns", state: { ctx: WORLD_ONLY("w2") } })
+    await waitFor(() => expect(parkedWorlds).toHaveLength(1))
+    parkWorlds = false
+    await go("/app/alpha/notes")
+    await ready("alpha", "")
+    await stamped(stamp("alpha", null))
+    await parkedWorlds[0]!.answer()
+    await act(async () => {
+      await Promise.resolve()
+    })
+    // The route campaign governs and the late answer changed nothing.
+    expect(ctx()).toEqual(stamp("alpha", null))
+    await go("/campaigns")
+    await stamped(stamp("alpha", null))
+    expect(quests()).toHaveAttribute("href", "/app/alpha/quests")
+  })
+
+  it("ignores a verification that answers after the user or session changed", async () => {
+    parkWorlds = true
+    mount({ pathname: "/campaigns", state: { ctx: WORLD_ONLY("w2") } })
+    await waitFor(() => expect(parkedWorlds).toHaveLength(1))
+    await act(async () => control.publish!(bootstrapOf({ user: "u2" })))
+    await parkedWorlds[0]!.answer()
+    await act(async () => {
+      await Promise.resolve()
+    })
+    await stamped(NOTHING)
+  })
+
+  it("keeps a fully empty selection empty, with no World read", async () => {
+    mount({ pathname: "/campaigns", state: { ctx: NOTHING } })
+    await screen.findByRole("heading", { name: "Campaigns" })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(ctx()).toEqual(NOTHING)
+    expect(requests.filter((url) => /\/worlds\/w\d$/.test(url))).toEqual([])
+    expect(quests()).toBeNull()
+  })
+
+  it("Back and Forward through World-only and campaign-selected entries", async () => {
+    await selectedAlphaThen("/campaigns") // entry A: alpha/a2
+    await stamped(stamp("alpha", "a2"))
+    await go("/worlds/w2") // entry B: World-only (alpha is not in w2)
+    await screen.findByRole("heading", { name: "World page" })
+    await stamped(WORLD_ONLY("w2"))
+    await go("/campaigns") // entry C: World-only
+    await stamped(WORLD_ONLY("w2"))
+    expect(quests()).toBeNull()
+
+    await go(-1)
+    await screen.findByRole("heading", { name: "World page" })
+    await stamped(WORLD_ONLY("w2"))
+    await go(-1) // back to alpha/a2
+    await screen.findByRole("heading", { name: "Campaigns" })
+    await waitFor(() => expect(quests()).toHaveAttribute("href", "/app/alpha/quests"))
+    await stamped(stamp("alpha", "a2"))
+
+    await go(1)
+    await screen.findByRole("heading", { name: "World page" })
+    await waitFor(() => expect(quests()).toBeNull())
+    await stamped(WORLD_ONLY("w2"))
+    await go(1)
+    await screen.findByRole("heading", { name: "Campaigns" })
+    await stamped(WORLD_ONLY("w2"))
+  })
+
+  it.each([
+    ["a timeline of that World", WORLD_ONLY("w2", "t-w2"), WORLD_ONLY("w2", "t-w2")],
+    ["a timeline the World does not list: kept as the World alone, never guessed", WORLD_ONLY("w2", "t-zzz"), WORLD_ONLY("w2")],
+    ["a timeline with no World", { ...WORLD_ONLY("w2"), worldId: null, timelineId: "t-w2" }, NOTHING],
+    ["a perspective with no campaign", { ...WORLD_ONLY("w2"), characterId: "a2" }, NOTHING],
+    ["a malformed World id", { ...WORLD_ONLY("w2"), worldId: "../x" }, NOTHING],
+  ])("timeline and shape policy: %s", async (_name, recorded, expected) => {
+    mount({ pathname: "/campaigns", state: { ctx: recorded } })
+    await screen.findByRole("heading", { name: "Campaigns" })
+    await stamped(expected)
+  })
+
+  it("a dirty World editor still Stays and Leaves with the World-only context intact", async () => {
+    mount("/worlds/w2/edit")
+    await screen.findByRole("heading", { name: "World editor" })
+    await stamped(WORLD_ONLY("w2"))
+    fireEvent.change(screen.getByLabelText("Draft"), { target: { value: "half" } })
+    void router.navigate("/campaigns")
+    const dialog = await screen.findByRole("dialog", { name: "Discard your draft?" })
+    fireEvent.click(within(dialog).getByRole("button", { name: "Stay" }))
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+    expect(router.state.location.pathname).toBe("/worlds/w2/edit")
+    expect(screen.getByLabelText("Draft")).toHaveValue("half")
+    expect(ctx()).toEqual(WORLD_ONLY("w2"))
+    void router.navigate("/campaigns")
+    fireEvent.click(within(await screen.findByRole("dialog", { name: "Discard your draft?" })).getByRole("button", { name: "Leave" }))
+    await screen.findByRole("heading", { name: "Campaigns" })
+    await stamped(WORLD_ONLY("w2"))
+  })
+})
