@@ -1,9 +1,8 @@
 import { useContext, useLayoutEffect, useRef, useState } from "react"
 import { UNSAFE_DataRouterContext, useLocation, useMatch, useNavigate, useNavigationType } from "react-router"
-import { worldPath } from "../api/worlds"
+import { fetchWorld } from "../api/worlds"
 import { useSession } from "../context/SessionContext"
 import { useWorkspaceHierarchy } from "../context/WorkspaceHierarchyContext"
-import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import type { WorldDetail } from "../types/worldAuthoring"
 import { entryContextStamp, readEntryContext, stampEquals } from "./contexts"
 import { restorableSelection, selectionToRecord } from "./entryRestore"
@@ -23,12 +22,16 @@ import { selectionOwner, useSelectedContextSnapshot, useSelectedContextStore } f
 //      brings it back. A confirmed World route commits its world (and timeline) and keeps a retained
 //      campaign only if it belongs to them.
 //      A World-only stamp (a World with no campaign) is a request, not a fact: history ids are not
-//      authority and the bootstrap carries no World list to check them against. It is held as pending
-//      while the session's own World read (the one a World route uses) confirms it. Until then it
-//      governs nothing, nothing is mirrored over the entry's record of it, and no campaign, timeline or
-//      perspective is inferred. A readable World is committed with its timeline only if that World lists
-//      it; an unreadable one, or any answer that arrives after newer navigation, a newer selection or a
-//      change of user or session, is dropped and the entry is repaired to record what the shell holds.
+//      authority and the bootstrap carries no World list to check them against. Each such restoration is
+//      one *attempt* with its own request and its own result (`fetchWorld`, the read a World route uses;
+//      never a shared or retained read). An attempt records the history entry it was made for (key and
+//      state), the selection revision it was made against, and the user and session; its result is
+//      applied only while all of that still holds, judged by one predicate (`owns`). Same address, same
+//      World id and an empty selection prove none of it. Until it answers the attempt governs nothing,
+//      nothing is mirrored over the entry's record of it, and no campaign, timeline or perspective is
+//      inferred. A readable World is committed, with its timeline only if that World lists it; a refused
+//      or failed read drops the attempt and, as it still owns the revision, clears a World-only selection
+//      of that World (fail closed). Abort assists cleanup but is never the freshness check.
 //   3. Mirror. When nothing above changed this pass, the validated selection is recorded on the current
 //      entry by a same-entry REPLACE (replaceOwnEntry): no question, no remount, no new entry, no
 //      session refresh, scroll kept, unrelated state and the task descriptor carried over, and dropped the
@@ -36,12 +39,15 @@ import { selectionOwner, useSelectedContextSnapshot, useSelectedContextStore } f
 //
 // It reads the store fresh, so it never acts on a snapshot an earlier step replaced. The selection is
 // ids only, in memory and in each entry's history state; nothing is stored in the browser or a URL.
-interface PendingWorld {
+// One restoration of a World-only stamp: its identity is the object itself.
+interface Attempt {
     worldId: string
     timelineId: string | null
-    // The address the request was made on: newer navigation supersedes it.
-    address: string
+    entryKey: string
+    entryState: unknown
+    revision: number
     owner: string
+    controller: AbortController
 }
 
 export function SelectedContextReconciler() {
@@ -57,19 +63,79 @@ export function SelectedContextReconciler() {
     const { routeNamesWorld, routeNamesTimeline, activeWorldId, activeTimelineId } = useWorkspaceHierarchy()
     const routeCampaignId = campaignMatch?.params.campaignId ?? null
     const routeWorldId = worldMatch?.params.worldId ?? null
-    const address = `${location.pathname}${location.search}`
 
-    // The World a history entry asked for, while the session's own read of it is outstanding.
-    const [pending, setPending] = useState<PendingWorld | null>(null)
-    const worldRead = useAuthoringResource<WorldDetail>(pending === null ? null : worldPath(pending.worldId))
+    // The outstanding restoration attempt, if any, and what it is judged against right now.
+    const attempt = useRef<Attempt | null>(null)
+    const live = useRef<{ mounted: boolean; owner: string | null; location: typeof location }>({
+        mounted: false,
+        owner: null,
+        location,
+    })
+    // Lets the pass run again once an attempt settles, to mirror what the shell now holds.
+    const [settled, setSettled] = useState(0)
     const bootstrap = state.status === "authenticated" ? state.bootstrap : null
     const unauthenticated = state.status === "unauthenticated"
+
+    useLayoutEffect(() => {
+        const current = live.current
+        current.mounted = true
+        return () => {
+            current.mounted = false
+        }
+    }, [])
+    useLayoutEffect(() => {
+        live.current.owner = bootstrap === null ? null : selectionOwner(bootstrap)
+        live.current.location = location
+    })
+
+    // Whether `a` may still act: the same history entry (key and state, so a newer entry on the same
+    // address, or an unrelated REPLACE, never inherits it), the same selection revision (a deliberate
+    // change invalidates it even if the values later return), the same user and session, and a mounted
+    // shell. The router's own copy of the entry is used because a render can lag it.
+    const owns = (a: Attempt): boolean => {
+        const entry = dataRouter?.state.location ?? live.current.location
+        return (
+            live.current.mounted &&
+            entry.key === a.entryKey &&
+            entry.state === a.entryState &&
+            store.getSnapshot().revision === a.revision &&
+            live.current.owner === a.owner
+        )
+    }
+
+    // The one place an attempt's result is applied.
+    const settle = (a: Attempt, data: WorldDetail | null): void => {
+        if (attempt.current !== a) return
+        attempt.current = null
+        if (owns(a)) {
+            if (data !== null && data.world_id === a.worldId) {
+                store.commit({
+                    owner: a.owner,
+                    campaignId: null,
+                    worldId: a.worldId,
+                    timelineId: data.timelines.some((timeline) => timeline.timeline_id === a.timelineId) ? a.timelineId : null,
+                    characterId: undefined,
+                })
+            } else {
+                const held = store.getSnapshot()
+                if (held.campaignId === null && held.worldId === a.worldId) {
+                    store.commit({ owner: a.owner, campaignId: null, worldId: null, timelineId: null, characterId: undefined })
+                }
+            }
+        }
+        setSettled((count) => count + 1)
+    }
 
     // The location whose stamp was last considered for restoration, and whether this shell has seen one.
     const restoredFor = useRef<string | null>(null)
     const seenFirst = useRef(false)
 
     useLayoutEffect(() => {
+        // An attempt that no longer owns its entry, revision, user or session is over.
+        if (attempt.current !== null && (unauthenticated || !owns(attempt.current))) {
+            attempt.current.controller.abort()
+            attempt.current = null
+        }
         if (unauthenticated) {
             store.reset()
             return
@@ -83,14 +149,6 @@ export function SelectedContextReconciler() {
             current = store.getSnapshot()
             changed = true
         }
-        // A request made on another address, or under another user or session, is superseded.
-        if (pending !== null && (pending.address !== address || pending.owner !== owner)) {
-            // The request belongs to a state that no longer exists; this is its end, not a derivation.
-            // eslint-disable-next-line react-hooks/set-state-in-effect
-            setPending(null)
-            return undefined
-        }
-
         const onCampaignRoute = routeCampaignId !== null
 
         // 1. Restore.
@@ -106,8 +164,22 @@ export function SelectedContextReconciler() {
                     changed = true
                 } else if (restored?.kind === "world" && restored.worldId !== routeWorldId) {
                     // (A World route confirms its own World; asking again would only repeat that read.)
-                     
-                    setPending({ worldId: restored.worldId, timelineId: restored.timelineId, address, owner })
+                    const entryNow = dataRouter?.state.location ?? location
+                    attempt.current?.controller.abort()
+                    const made: Attempt = {
+                        worldId: restored.worldId,
+                        timelineId: restored.timelineId,
+                        entryKey: entryNow.key,
+                        entryState: entryNow.state,
+                        revision: store.getSnapshot().revision,
+                        owner,
+                        controller: new AbortController(),
+                    }
+                    attempt.current = made
+                    fetchWorld(made.worldId, made.controller.signal).then(
+                        (data) => settle(made, data),
+                        () => settle(made, null),
+                    )
                     changed = true
                 }
             }
@@ -149,29 +221,9 @@ export function SelectedContextReconciler() {
             }
         }
 
-        // The outstanding World request, once the session has answered it.
-        if (pending !== null && !changed) {
-            const empty = current.campaignId === null && current.worldId === null
-            if (worldRead.state.kind === "loading") return undefined
-            if (worldRead.state.kind === "ready" && worldRead.state.data.world_id === pending.worldId && empty && !onCampaignRoute) {
-                const timelines = worldRead.state.data.timelines
-                store.commit({
-                    owner,
-                    campaignId: null,
-                    worldId: pending.worldId,
-                    timelineId: timelines.some((timeline) => timeline.timeline_id === pending.timelineId) ? pending.timelineId : null,
-                    characterId: undefined,
-                })
-            }
-            // Confirmed, refused, failed or superseded: the request is over either way.
-             
-            setPending(null)
-            return undefined
-        }
-
         // 3. Mirror. A change above re-runs this pass with the settled selection; an outstanding request
         // leaves the entry's record of it alone.
-        if (onCampaignRoute || changed || pending !== null) return undefined
+        if (onCampaignRoute || changed || attempt.current !== null) return undefined
         // The router's own copy of the entry, not the rendered one: a render can lag a replacement that has
         // already landed, and stamping from the stale copy would repeat or contradict it.
         const entryNow = dataRouter?.state.location ?? location
@@ -187,6 +239,8 @@ export function SelectedContextReconciler() {
                 state: { ...asRecord(entry.state), ctx: entryContextStamp(recorded) },
             }),
         })
+    // `owns` and `settle` read refs and the store at call time; they are not inputs of the pass.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [
         activeTimelineId,
         activeWorldId,
@@ -195,11 +249,9 @@ export function SelectedContextReconciler() {
         location,
         navigate,
         navigationType,
-        address,
-        pending,
         routeCampaignId,
         routeWorldId,
-        worldRead.state,
+        settled,
         routeNamesTimeline,
         routeNamesWorld,
         snapshot,

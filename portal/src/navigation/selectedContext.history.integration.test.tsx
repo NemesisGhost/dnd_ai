@@ -1,5 +1,5 @@
 import { act, cleanup, configure, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
-import { useState } from "react"
+import { StrictMode, useLayoutEffect, useState } from "react"
 import { Link, Route, RouterProvider, Routes, createMemoryRouter, useLocation } from "react-router"
 import type { DataRouter } from "react-router"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -11,6 +11,8 @@ import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard"
 import { AuthenticatedAppLayout } from "../layouts/AuthenticatedAppLayout"
 import { CampaignSessionBoundary } from "../layouts/CampaignSessionBoundary"
 import { WorldWorkspaceLayout } from "../layouts/WorldWorkspaceLayout"
+import { selectionOwner, useSelectedContextStore } from "./selectedContextStore"
+import type { SelectedContextStore } from "./selectedContextStore"
 import { ThemeProvider } from "../themes/ThemeProvider"
 import type { CampaignContext, SessionBootstrap } from "../types/bootstrap"
 
@@ -80,7 +82,10 @@ const requests: string[] = []
 // Worlds the session cannot read (a non-disclosing 404), and reads parked until the test answers them.
 const unreadableWorlds = new Set<string>()
 let parkWorlds = false
-const parkedWorlds: Array<{ id: string; answer: () => Promise<void> }> = []
+type Answer = "ok" | "deny" | "fail"
+const parkedWorlds: Array<{ id: string; answer: (kind?: Answer) => Promise<void> }> = []
+// Worlds whose read fails for a transient reason (a 500), apart from the ones the session may not read.
+const failingWorlds = new Set<string>()
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } })
 const world = (id: string) => ({
@@ -132,6 +137,16 @@ function WorldEditor() {
   )
 }
 
+// Hands the tab's real store to the test, to read the selection and to make a deliberate change to it.
+let storeRef: SelectedContextStore
+function StoreProbe() {
+  const store = useSelectedContextStore()
+  useLayoutEffect(() => {
+    storeRef = store
+  }, [store])
+  return null
+}
+
 type Entry = string | { pathname: string; search?: string; state?: unknown }
 let router: DataRouter
 // Every location the router ever published, to prove what a stamp is and is not.
@@ -146,7 +161,8 @@ function tree(entry: Entry) {
           <RouteSessionProvider>
             <Routes>
               <Route element={<AuthenticatedAppLayout />}>
-                <Route path="/campaigns" element={<main><h1>Campaigns</h1><Link to="/app/beta/notes">to beta</Link></main>} />
+                <Route path="/campaigns" element={<main><h1>Campaigns</h1><StoreProbe /><Link to="/app/beta/notes">to beta</Link></main>} />
+                <Route path="/other" element={<main><h1>Other</h1><StoreProbe /></main>} />
                 <Route element={<WorldWorkspaceLayout />}>
                   <Route path="/worlds/:worldId" element={<h1>World page</h1>} />
                   <Route path="/worlds/:worldId/edit" element={<WorldEditor />} />
@@ -176,10 +192,12 @@ function tree(entry: Entry) {
 }
 
 const mount = (entry: Entry) => render(tree(entry))
+const mountStrict = (entry: Entry) => render(<StrictMode>{tree(entry)}</StrictMode>)
 
 beforeEach(() => {
   requests.length = 0
   unreadableWorlds.clear()
+  failingWorlds.clear()
   parkWorlds = false
   parkedWorlds.length = 0
   control.bootstrap = bootstrapOf()
@@ -193,14 +211,19 @@ beforeEach(() => {
       const worldMatch = /\/worlds\/(w\d)$/.exec(url)
       if (worldMatch !== null) {
         const id = worldMatch[1]!
-        const answer = () => (unreadableWorlds.has(id) ? json({ detail: "not found" }, 404) : json(world(id)))
+        const answer = (kind?: Answer) =>
+          kind === "deny" || (kind === undefined && unreadableWorlds.has(id))
+            ? json({ detail: "not found" }, 404)
+            : kind === "fail" || (kind === undefined && failingWorlds.has(id))
+              ? json({ detail: "boom" }, 500)
+              : json(world(id))
         if (!parkWorlds) return answer()
         return new Promise<Response>((resolve) => {
           parkedWorlds.push({
             id,
-            answer: async () => {
+            answer: async (kind) => {
               await act(async () => {
-                resolve(answer())
+                resolve(answer(kind))
                 await Promise.resolve()
               })
             },
@@ -613,5 +636,183 @@ describe("a World selected without a campaign (World-only context)", () => {
     fireEvent.click(within(await screen.findByRole("dialog", { name: "Discard your draft?" })).getByRole("button", { name: "Leave" }))
     await screen.findByRole("heading", { name: "Campaigns" })
     await stamped(WORLD_ONLY("w2"))
+  })
+})
+
+// One restoration attempt owns exactly one request and one result, and may select or repair only while it
+// still owns the history entry it was made for, the selection revision it was made against, and the user
+// and session it was made under. Same address, same World id and an empty selection prove none of that.
+const OWNER = selectionOwner(bootstrapOf())
+const T1 = { v: 1, root: "world", scope: { worldId: "w2" }, trail: [] }
+const T2 = { v: 1, root: "world", scope: { worldId: "w1" }, trail: [] }
+const taskOf = () => (router.state.location.state as { task?: unknown } | null)?.task
+const selectedWorld = () => storeRef.getSnapshot().worldId
+const flush = () =>
+  act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+describe.each([
+  ["plain", false],
+  ["StrictMode", true],
+])("a restoration attempt owns its history entry (%s)", (_name, strict) => {
+  const open = () => {
+    parkWorlds = true
+    const state = { task: T1, ctx: WORLD_ONLY("w2") }
+    return strict ? mountStrict({ pathname: "/campaigns", state }) : mount({ pathname: "/campaigns", state })
+  }
+
+  it.each([
+    ["a newer same-path entry (PUSH) with other task state", false],
+    ["an unrelated REPLACE of the same path with other task state", true],
+  ])("%s supersedes it: the late answer neither selects, clears nor repairs the newer entry", async (_label, replace) => {
+    open()
+    await waitFor(() => expect(parkedWorlds.length).toBeGreaterThan(0))
+    const requestsMade = parkedWorlds.length
+    await act(async () => {
+      await router.navigate("/campaigns", { replace, state: { task: T2 } })
+    })
+    await stamped({ ...NOTHING })
+    expect(taskOf()).toEqual(T2)
+
+    // The first attempt's own answer, long after the newer entry stamped itself.
+    await parkedWorlds[0]!.answer("ok")
+    await flush()
+    expect(ctx()).toEqual(NOTHING)
+    expect(taskOf()).toEqual(T2)
+    expect(selectedWorld()).toBeNull()
+    expect(quests()).toBeNull()
+    // The newer entry asked for nothing, so nothing else was verified.
+    expect(parkedWorlds).toHaveLength(requestsMade)
+  })
+
+  it("a refusal for the superseded attempt does not clear or repair the newer entry either", async () => {
+    open()
+    await waitFor(() => expect(parkedWorlds.length).toBeGreaterThan(0))
+    await act(async () => {
+      await router.navigate("/campaigns", { replace: true, state: { task: T2, ctx: stamp("alpha", "a2") } })
+    })
+    await stamped(NOTHING)
+    await parkedWorlds[0]!.answer("deny")
+    await flush()
+    expect(ctx()).toEqual(NOTHING)
+    expect(taskOf()).toEqual(T2)
+  })
+})
+
+describe("a restoration attempt owns the selection revision it was made against", () => {
+  const open = async () => {
+    parkWorlds = true
+    mount({ pathname: "/campaigns", state: { ctx: WORLD_ONLY("w2") } })
+    await waitFor(() => expect(parkedWorlds).toHaveLength(1))
+  }
+
+  it("a deliberate select-then-clear invalidates it, even though the store ends where it began", async () => {
+    await open()
+    await act(async () => {
+      storeRef.commit({ owner: OWNER, campaignId: "alpha", worldId: "w1", timelineId: "t-w1", characterId: "a2" })
+    })
+    await act(async () => {
+      storeRef.commit({ owner: OWNER, campaignId: null, worldId: null, timelineId: null, characterId: undefined })
+    })
+    await parkedWorlds[0]!.answer("ok")
+    await flush()
+    // The cleared choice is not resurrected, and the entry does not record the obsolete World.
+    expect(selectedWorld()).toBeNull()
+    await stamped(NOTHING)
+    expect(quests()).toBeNull()
+  })
+
+  it("A → B → A back to identical values is still a deliberate change", async () => {
+    await selectedAlphaThen("/campaigns")
+    await stamped(stamp("alpha", "a2"))
+    await go("/worlds/w2")
+    await screen.findByRole("heading", { name: "World page" })
+    await stamped(WORLD_ONLY("w2"))
+    await go("/campaigns")
+    await stamped(WORLD_ONLY("w2"))
+    await go(-2) // the entry that recorded alpha/a2
+    await waitFor(() => expect(quests()).toHaveAttribute("href", "/app/alpha/quests"))
+    await stamped(stamp("alpha", "a2"))
+
+    parkWorlds = true
+    parkedWorlds.length = 0
+    await go(2) // a World-only entry: an attempt, made while alpha/a2 is selected
+    await waitFor(() => expect(parkedWorlds).toHaveLength(1))
+    await act(async () => {
+      storeRef.commit({ owner: OWNER, campaignId: "beta", worldId: "w1", timelineId: "t-w1", characterId: "b1" })
+    })
+    await act(async () => {
+      storeRef.commit({ owner: OWNER, campaignId: "alpha", worldId: "w1", timelineId: "t-w1", characterId: "a2" })
+    })
+    await parkedWorlds[0]!.answer("ok")
+    await flush()
+    expect(storeRef.getSnapshot()).toMatchObject({ campaignId: "alpha", characterId: "a2" })
+    expect(selectedWorld()).toBe("w1")
+    await stamped(stamp("alpha", "a2"))
+  })
+})
+
+describe("a restoration attempt owns its own request and result", () => {
+  it("is not settled by an earlier attempt's response: each entry gets its own verification", async () => {
+    parkWorlds = true
+    mount({ pathname: "/campaigns", state: { ctx: WORLD_ONLY("w2") } })
+    await waitFor(() => expect(parkedWorlds).toHaveLength(1))
+    await go("/campaigns") // a newer entry on the same address
+    await go(-1) // back to the first entry: a new attempt
+    await waitFor(() => expect(parkedWorlds).toHaveLength(2))
+    expect(worldReads("w2")).toHaveLength(2)
+
+    await parkedWorlds[0]!.answer("ok") // the first attempt's result
+    await flush()
+    expect(selectedWorld()).toBeNull()
+    expect(ctx()).toEqual(WORLD_ONLY("w2"))
+
+    await parkedWorlds[1]!.answer("ok") // its own
+    await waitFor(() => expect(selectedWorld()).toBe("w2"))
+    expect(ctx()).toEqual(WORLD_ONLY("w2"))
+  })
+
+  it("a prior success never confirms a current denial: the retained World is dropped", async () => {
+    mount({ pathname: "/campaigns", state: { ctx: WORLD_ONLY("w2") } })
+    await waitFor(() => expect(selectedWorld()).toBe("w2"))
+    await go("/campaigns") // same address, another entry
+    unreadableWorlds.add("w2")
+    await go(-1) // a new attempt for the first entry
+    await waitFor(() => expect(worldReads("w2")).toHaveLength(2))
+    await stamped(NOTHING)
+    expect(selectedWorld()).toBeNull()
+  })
+
+  it("a prior transient failure never denies a current success", async () => {
+    failingWorlds.add("w2")
+    mount({ pathname: "/campaigns", state: { ctx: WORLD_ONLY("w2") } })
+    await stamped(NOTHING) // failed closed, repaired
+    failingWorlds.clear()
+    await go("/worlds/w2")
+    await screen.findByRole("heading", { name: "World page" })
+    await stamped(WORLD_ONLY("w2"))
+    await go("/campaigns")
+    await stamped(WORLD_ONLY("w2"))
+    await go(-2) // the repaired first entry: nothing selected
+    await waitFor(() => expect(selectedWorld()).toBeNull())
+    const before = worldReads("w2").length
+    await go(2) // a World-only entry: its own attempt, its own request
+    await waitFor(() => expect(worldReads("w2")).toHaveLength(before + 1))
+    await waitFor(() => expect(selectedWorld()).toBe("w2"))
+    expect(ctx()).toEqual(WORLD_ONLY("w2"))
+  })
+
+  it("never settles a pending attempt before its own response arrives", async () => {
+    parkWorlds = true
+    mount({ pathname: "/campaigns", state: { ctx: WORLD_ONLY("w2") } })
+    await waitFor(() => expect(parkedWorlds).toHaveLength(1))
+    await flush()
+    await flush()
+    expect(ctx()).toEqual(WORLD_ONLY("w2"))
+    expect(selectedWorld()).toBeNull()
+    await parkedWorlds[0]!.answer("ok")
+    await waitFor(() => expect(selectedWorld()).toBe("w2"))
   })
 })
