@@ -2,8 +2,8 @@
 // tab memory only so an ancestor in a breadcrumb can show a name instead of a generic noun.
 //
 // One registry instance belongs to one authority (navigation/labelAuthority.ts). When the authority
-// changes, the provider makes a NEW registry and closes the old one for good. Registrants capture the
-// registry that was current when they mounted and only ever write to that one, so
+// changes, the provider makes a NEW registry and closes the old one for good. A label is published by the read that produced it, which captured the
+// registry in force when its request STARTED (useAuthoringResource) and writes only to that one, so
 //   - a late write from an earlier authority reaches a closed registry and is ignored, including after
 //     the authority changes and then returns to its earlier value (the returned-to value is a new
 //     registry, not the old one); and
@@ -46,7 +46,7 @@ export class LabelRegistry {
         this.listeners.forEach((listener) => listener())
     }
 
-    /** Accepts a label from a mounted registrant of this registry's authority. False when ignored. */
+    /** Accepts a label from a read that started under this registry's authority. False when ignored. */
     register(key: string, name: unknown): boolean {
         if (!this.accepting) return false
         const label = cleanLabel(name)

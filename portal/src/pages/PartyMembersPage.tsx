@@ -93,7 +93,9 @@ export function PartyMembersPage() {
     useBreadcrumbLabel({
         route: "parties.detail",
         params: { campaignId, partyId },
-        name: data?.party.name,
+        // Only the name of a read that answered: never data kept from an earlier read through a failure.
+        name: resource.state.kind === "ready" ? resource.state.data.party.name : null,
+        authority: resource.authority,
         denied: resource.state.kind === "denied" || resource.state.kind === "unavailable",
     })
 

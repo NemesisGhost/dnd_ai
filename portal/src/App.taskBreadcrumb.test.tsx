@@ -1,7 +1,8 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { installCampaignShellMocks, openApp } from "./test/campaignRoutes"
-import type { MockServer } from "./test/authoringHarness"
+import { bootstrapFor, installCampaignShellMocks, openApp } from "./test/campaignRoutes"
+import type { MockResponse, MockServer } from "./test/authoringHarness"
+import { useSessionBootstrap } from "./hooks/useSessionBootstrap"
 import { FULL_RECORD_AUTHORING } from "./test/recordAuthoring"
 import { installRecordReads } from "./test/worldWorkspaceMocks"
 
@@ -274,6 +275,92 @@ describe("the Navbar starts a task, applied only when the navigation is accepted
     expect(app.router.state.location.pathname).toBe(`${base}/parties/new`)
     expect(screen.getByLabelText(/Name/)).toHaveValue("The Crew")
     expect(state(app).task?.trail.map((entry) => entry.route)).toEqual(["parties.list"])
+  })
+})
+
+// The label of a party in a breadcrumb belongs to the authority generation under which the read that
+// supplied it STARTED. These drive the real Edit party page (it reads the party itself and shows its name
+// as an ancestor crumb) with deferred answers while it stays mounted across authority changes.
+describe("Parties breadcrumb names: read ownership on the real Edit page", () => {
+  const EDIT = `${base}/parties/p1/edit`
+  const CAPS = ["access.manage", "canon.edit"]
+  let parked: Array<(response: MockResponse) => Promise<void>>
+
+  // An authority change that leaves the page mounted: a refreshed bootstrap with different capabilities
+  // (the label authority input), then a query-only REPLACE so the layout re-renders with it.
+  async function setAuthority(app: ReturnType<typeof openApp>, extra: string[]) {
+    const current = vi.mocked(useSessionBootstrap)()
+    vi.mocked(useSessionBootstrap).mockReturnValue({
+      ...current,
+      state: { status: "authenticated", bootstrap: bootstrapFor([...CAPS, ...extra]) },
+    })
+    await act(() => app.router.navigate(`${EDIT}?r=${Math.random()}`, { replace: true }))
+  }
+
+  const answer = (index: number, name: string) =>
+    act(async () => {
+      await parked[index]!({ body: party("p1", name) })
+    })
+
+  beforeEach(() => {
+    parked = []
+    server.on("GET", `${LIST}/p1`, () => {
+      return new Promise<MockResponse>((resolve) => {
+        parked.push(async (response) => resolve(response))
+      })
+    })
+    server.on("POST", `${LIST}/p1/update`, {
+      status: 409,
+      body: { error: { code: "stale_write", message: "m", correlation_id: "c" } },
+    })
+  })
+
+  const crumbText = () => within(screen.getByRole("navigation", { name: "Breadcrumb" })).getAllByRole("listitem").map((li) => li.textContent)
+
+  // Saving a change gets a stale-write answer; "Load latest version" is the page's own re-read.
+  async function reloadLatest() {
+    fireEvent.change(await screen.findByLabelText(/Name/), { target: { value: "Edited" } })
+    fireEvent.click(screen.getByRole("button", { name: "Save party" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Load latest version" }))
+    await waitFor(() => expect(parked.length).toBeGreaterThan(1))
+  }
+
+  it("an answer to a read started under the old authority never names the party; the page's own re-read under the new one does", async () => {
+    const app = openApp(EDIT, CAPS)
+    await waitFor(() => expect(parked).toHaveLength(1))
+    await setAuthority(app, ["extra.capability"])
+    await answer(0, "Old Name")
+    await screen.findByLabelText(/Name/)
+    expect(crumbText()).toEqual(["Parties", "Party", "Edit"])
+    expect(screen.queryByText("Old Name", { selector: "nav *" })).toBeNull()
+
+    await reloadLatest()
+    await answer(1, "New Name")
+    await waitFor(() => expect(crumbText()).toEqual(["Parties", "New Name", "Edit"]))
+    expect(JSON.stringify(app.router.state.location.state ?? null)).not.toContain("Name")
+  })
+
+  it("A to B to A: the first generation's answer stays stale", async () => {
+    const app = openApp(EDIT, CAPS)
+    await waitFor(() => expect(parked).toHaveLength(1))
+    await setAuthority(app, ["extra.capability"])
+    await setAuthority(app, [])
+    await answer(0, "First Generation")
+    await screen.findByLabelText(/Name/)
+    expect(crumbText()).toEqual(["Parties", "Party", "Edit"])
+  })
+
+  it("a refused re-read drops the name, and an older answer cannot bring it back", async () => {
+    openApp(EDIT, CAPS)
+    await waitFor(() => expect(parked).toHaveLength(1))
+    await answer(0, "The Company")
+    await waitFor(() => expect(crumbText()).toEqual(["Parties", "The Company", "Edit"]))
+    await reloadLatest()
+    await act(async () => {
+      await parked[1]!({ status: 404, body: { error: { code: "not_found", message: "m", correlation_id: "c" } } })
+    })
+    await waitFor(() => expect(crumbText()).toEqual(["Parties", "Party", "Edit"]))
+    expect(screen.queryByText("The Company")).toBeNull()
   })
 })
 

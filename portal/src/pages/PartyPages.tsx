@@ -461,6 +461,7 @@ export function EditPartyPage() {
         route: "parties.detail",
         params: { campaignId, partyId },
         name: data?.name,
+        authority: party.authority,
         denied: party.state.kind === "denied" || party.state.kind === "unavailable",
     })
     return (

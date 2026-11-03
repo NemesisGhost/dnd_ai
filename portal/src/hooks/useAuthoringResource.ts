@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { apiRequest } from "../api/http"
 import { useSession } from "../context/SessionContext"
+import { BreadcrumbLabelContext } from "../navigation/BreadcrumbLabelContext"
+import type { LabelRegistry } from "../navigation/labelRegistry"
 import { classifyApiError } from "../types/apiError"
 
 export type AuthoringResourceState<T> =
@@ -26,11 +28,16 @@ export interface UseAuthoringResourceResult<T> {
     // Whether the latest `refetch` that completed read the record. `refetch` never rejects, so a
     // caller that must tell a successful write whose re-read failed reads this once it resolves.
     refreshOk: { readonly current: boolean }
+    // The breadcrumb-label authority generation under which the read behind `state` STARTED, or null
+    // (loading, no label registry, or a read begun without one). Only breadcrumb label publication reads
+    // it (navigation/BreadcrumbLabelContext). Callers that ignore it are unaffected.
+    authority: LabelRegistry | null
 }
 
 interface Snapshot<T> {
     path: string | null
     state: AuthoringResourceState<T>
+    authority: LabelRegistry | null
 }
 
 type Outcome<T> =
@@ -71,18 +78,27 @@ export function useAuthoringResource<T>(
     path: string | null,
 ): UseAuthoringResourceResult<T> {
     const { reload } = useSession()
-    const [snapshot, setSnapshot] = useState<Snapshot<T>>({ path, state: LOADING })
+    const [snapshot, setSnapshot] = useState<Snapshot<T>>({ path, state: LOADING, authority: null })
     const refetchController = useRef<AbortController | null>(null)
+    const loadController = useRef<AbortController | null>(null)
+    // The label authority now in force, read when a request starts. A ref, not a dependency: an authority
+    // change must not start a read.
+    const registry = useContext(BreadcrumbLabelContext)
+    const currentAuthority = useRef(registry)
+    useLayoutEffect(() => {
+        currentAuthority.current = registry
+    })
     const refreshOk = useRef(true)
 
     const apply = useCallback(
-        (forPath: string, outcome: Outcome<T>) => {
+        (forPath: string, outcome: Outcome<T>, authority: LabelRegistry | null) => {
             if (outcome.kind === "expired") {
                 reload()
                 return
             }
             setSnapshot({
                 path: forPath,
+                authority,
                 state:
                     outcome.kind === "ready"
                         ? { kind: "ready", data: outcome.data, refreshing: false }
@@ -97,9 +113,11 @@ export function useAuthoringResource<T>(
             return
         }
         const controller = new AbortController()
+        loadController.current = controller
+        const authority = currentAuthority.current
         void load<T>(path, controller.signal).then((outcome) => {
             if (!controller.signal.aborted) {
-                apply(path, outcome)
+                apply(path, outcome, authority)
             }
         })
         return () => {
@@ -113,11 +131,15 @@ export function useAuthoringResource<T>(
             return "superseded"
         }
         refetchController.current?.abort()
+        // A read that starts later owns the record: the first load, if still in flight, is superseded
+        // and can no longer be applied over it.
+        loadController.current?.abort()
         const controller = new AbortController()
         refetchController.current = controller
+        const authority = currentAuthority.current
         setSnapshot((current) =>
             current.path === path && current.state.kind === "ready"
-                ? { path, state: { ...current.state, refreshing: true } }
+                ? { ...current, path, state: { ...current.state, refreshing: true } }
                 : current,
         )
         const outcome = await load<T>(path, controller.signal)
@@ -125,10 +147,10 @@ export function useAuthoringResource<T>(
             return "superseded"
         }
         refreshOk.current = outcome.kind === "ready"
-        apply(path, outcome)
+        apply(path, outcome, authority)
         return outcome.kind === "ready" ? "ok" : "failed"
     }, [path, apply])
 
     const state = snapshot.path === path ? snapshot.state : LOADING
-    return { state, refetch, refreshOk }
+    return { state, refetch, refreshOk, authority: snapshot.path === path ? snapshot.authority : null }
 }

@@ -29,6 +29,7 @@ function PartyRosterPage() {
         route: "parties.detail",
         params: { campaignId, partyId },
         name: data?.party.name,
+        authority: resource.authority,
         denied: resource.state.kind === "denied" || resource.state.kind === "unavailable",
     })
 

@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react"
+import { useContext } from "react"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { RouterProvider, createMemoryRouter, useLocation } from "react-router"
@@ -7,7 +8,7 @@ import { SessionContext } from "../../context/SessionContext"
 import { sessionBootstrapFixture } from "../../fixtures/sessionBootstrap"
 import type { SessionBootstrap } from "../../types/bootstrap"
 import { BreadcrumbLabelProvider } from "../../navigation/BreadcrumbLabelProvider"
-import { useBreadcrumbLabel } from "../../navigation/BreadcrumbLabelContext"
+import { BreadcrumbLabelContext, useBreadcrumbLabel } from "../../navigation/BreadcrumbLabelContext"
 import { continuedState } from "../../navigation/breadcrumbModel"
 import { TaskBreadcrumb } from "./TaskBreadcrumb"
 
@@ -147,7 +148,9 @@ describe("TaskBreadcrumb names", () => {
     }
 
     function Registrant({ name }: { name: string | null }) {
-        useBreadcrumbLabel({ route: "parties.detail", params: { campaignId: C, partyId: P }, name })
+        // A read started under the registry now in force.
+        const authority = useContext(BreadcrumbLabelContext)
+        useBreadcrumbLabel({ route: "parties.detail", params: { campaignId: C, partyId: P }, name, authority })
         return null
     }
 

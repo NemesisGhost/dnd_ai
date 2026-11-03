@@ -1,15 +1,24 @@
-import { render, screen } from "@testing-library/react"
+import { act, fireEvent, render, screen } from "@testing-library/react"
+import { useContext } from "react"
 import type { ReactNode } from "react"
-import { describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { SessionContext } from "../context/SessionContext"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
+import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import type { SessionBootstrapState } from "../hooks/useSessionBootstrap"
+import { installMockServer } from "../test/authoringHarness"
+import type { MockServer, MockResponse } from "../test/authoringHarness"
 import type { SessionBootstrap } from "../types/bootstrap"
 import { BreadcrumbLabelProvider } from "./BreadcrumbLabelProvider"
-import { useBreadcrumbLabel, useBreadcrumbLabelReader } from "./BreadcrumbLabelContext"
+import { BreadcrumbLabelContext, useBreadcrumbLabel, useBreadcrumbLabelReader } from "./BreadcrumbLabelContext"
 
-const PARAMS = { campaignId: "mundivita", partyId: "p1" }
+// Label ownership runs from the start of a read to the label: the read layer captures the authority
+// generation (the registry in force) when a request STARTS, and only that generation can be published
+// into. These tests drive the real read hook (useAuthoringResource) with deferred responses, through a
+// page that stays mounted while the authority changes.
+
 const ROUTE = "parties.detail"
+const CAMPAIGN = "mundivita"
 const CHARACTER = "character-ixamarra"
 
 const bootstrap = (change: (b: SessionBootstrap) => void = () => undefined): SessionBootstrap => {
@@ -21,15 +30,38 @@ const authenticated = (b: SessionBootstrap = bootstrap()): SessionBootstrapState
     status: "authenticated",
     bootstrap: b,
 })
+// Two authorities that differ only in what the labels depend on.
+const A = () => authenticated()
+const B = () => authenticated(bootstrap((b) => void b.campaigns[0]!.capabilities.push("canon.edit")))
 
-function Registrant({ name, denied = false }: { name: string | null; denied?: boolean }) {
-    useBreadcrumbLabel({ route: ROUTE, params: PARAMS, name, denied })
-    return null
+// Stable, as the real session functions are: a new function each render would restart the page's read.
+const RELOAD = vi.fn()
+const REFRESH = vi.fn()
+
+interface Thing {
+    name: string
 }
 
-function Reader() {
+// An adopted page's pattern: a real authoring read, whose answer and authority generation feed the label.
+function Page({ id = "p1" }: { id?: string }) {
+    const resource = useAuthoringResource<Thing>(`/things/${id}`)
+    useBreadcrumbLabel({
+        route: ROUTE,
+        params: { campaignId: CAMPAIGN, partyId: id },
+        name: resource.state.kind === "ready" ? resource.state.data.name : null,
+        denied: resource.state.kind === "denied" || resource.state.kind === "unavailable",
+        authority: resource.authority,
+    })
+    return (
+        <button type="button" onClick={() => void resource.refetch()}>
+            reload
+        </button>
+    )
+}
+
+function Reader({ id = "p1" }: { id?: string }) {
     const labelFor = useBreadcrumbLabelReader()
-    return <p data-testid="label">{labelFor(ROUTE, PARAMS) ?? "generic"}</p>
+    return <p data-testid={`label-${id}`}>{labelFor(ROUTE, { campaignId: CAMPAIGN, partyId: id }) ?? "generic"}</p>
 }
 
 function Tree({
@@ -42,180 +74,243 @@ function Tree({
     children: ReactNode
 }) {
     return (
-        <SessionContext.Provider value={{ state, reload: vi.fn(), refresh: vi.fn() }}>
-            <BreadcrumbLabelProvider campaignId="mundivita" characterId={characterId}>
+        <SessionContext.Provider value={{ state, reload: RELOAD, refresh: REFRESH }}>
+            <BreadcrumbLabelProvider campaignId={CAMPAIGN} characterId={characterId}>
                 {children}
+                <Reader />
             </BreadcrumbLabelProvider>
         </SessionContext.Provider>
     )
 }
 
-const label = () => screen.getByTestId("label").textContent
-
-interface Update {
-    state?: SessionBootstrapState
-    characterId?: string | null
-    name?: string | null
-    denied?: boolean
+// Each GET of the record is parked until the test answers it, in the order the requests were made.
+interface Parked {
+    answer: (response: MockResponse) => Promise<void>
 }
+let server: MockServer
+let reads: Parked[]
 
-// One registrant page and one reader, rendered under the provider. `update` re-renders the SAME tree
-// positions with new props, so the registrant stays mounted across an authority change, as a page does.
-function setup(initialName: string | null = "Lantern Company") {
-    const page = (name: string | null, denied = false) => (
-        <>
-            <Registrant name={name} denied={denied} />
-            <Reader />
-        </>
+beforeEach(() => {
+    server = installMockServer()
+    reads = []
+    server.on("GET", "/things/p1", () => {
+        return new Promise<MockResponse>((resolve) => {
+            reads.push({
+                answer: async (response) => {
+                    await act(async () => {
+                        resolve(response)
+                        await Promise.resolve()
+                    })
+                },
+            })
+        })
+    })
+})
+
+afterEach(() => {
+    vi.unstubAllGlobals()
+})
+
+const label = () => screen.getByTestId("label-p1").textContent
+const named = (name: string): MockResponse => ({ body: { name } })
+const NOT_FOUND: MockResponse = { status: 404, body: { error: { code: "not_found", message: "m", correlation_id: "c" } } }
+const reload = () => fireEvent.click(screen.getByRole("button", { name: "reload" }))
+const settle = () => act(async () => void (await new Promise((resolve) => setTimeout(resolve, 0))))
+
+function mount(state: SessionBootstrapState = A()) {
+    const view = render(
+        <Tree state={state}>
+            <Page />
+        </Tree>,
     )
-    const view = render(<Tree state={authenticated()}>{page(initialName)}</Tree>)
-    const update = (props: Update) =>
+    // The same page instance stays mounted across authority changes.
+    const change = (props: { state?: SessionBootstrapState; characterId?: string | null }) =>
         view.rerender(
             <Tree
-                state={props.state ?? authenticated()}
+                state={props.state ?? A()}
                 characterId={props.characterId === undefined ? CHARACTER : props.characterId}
             >
-                {page(props.name === undefined ? initialName : props.name, props.denied)}
+                <Page />
             </Tree>,
         )
-    return { ...view, update }
+    return { ...view, change }
 }
 
-describe("label registration from an authorized read", () => {
-    it("shows a name only after a page registered it, and the generic fallback before", () => {
-        const { update } = setup(null)
+describe("a label belongs to the authority under which its read started", () => {
+    it("1. an old read answered after the authority changed leaves the name absent", async () => {
+        const { change } = mount(A())
+        await settle()
+        expect(reads).toHaveLength(1)
+        change({ state: B() })
+        await reads[0]!.answer(named("Old Name"))
         expect(label()).toBe("generic")
-        update({ name: "Lantern Company" })
-        expect(label()).toBe("Lantern Company")
     })
 
-    it("keeps the label after the registering page has gone, for pages that follow", () => {
-        const { rerender } = setup()
-        expect(label()).toBe("Lantern Company")
-        rerender(
-            <Tree state={authenticated()}>
-                <Reader />
-            </Tree>,
-        )
-        expect(label()).toBe("Lantern Company")
+    it("2. a new read started under the new authority publishes its authorized name on the page that stayed mounted", async () => {
+        const { change } = mount(A())
+        await settle()
+        change({ state: B() })
+        await reads[0]!.answer(named("Old Name"))
+        expect(label()).toBe("generic")
+        reload()
+        await settle()
+        expect(reads).toHaveLength(2)
+        await reads[1]!.answer(named("New Name"))
+        expect(label()).toBe("New Name")
     })
 
-    it("falls back to the generic label with no provider at all", () => {
-        render(
-            <>
-                <Registrant name="Lantern Company" />
-                <Reader />
-            </>,
-        )
+    it("3. a new answer arriving before the old one is not overwritten by it", async () => {
+        const { change } = mount(A())
+        await settle()
+        change({ state: B() })
+        reload()
+        await settle()
+        expect(reads).toHaveLength(2)
+        await reads[1]!.answer(named("New Name"))
+        expect(label()).toBe("New Name")
+        await reads[0]!.answer(named("Old Name"))
+        expect(label()).toBe("New Name")
+    })
+
+    it("3b. two reads under the same authority: the later start wins whatever order they answer in", async () => {
+        mount(A())
+        await settle()
+        reload()
+        await settle()
+        await reads[1]!.answer(named("Later"))
+        await reads[0]!.answer(named("Earlier"))
+        expect(label()).toBe("Later")
+    })
+
+    it("4. A to B to A does not revive the first generation of A", async () => {
+        const { change } = mount(A())
+        await settle()
+        change({ state: B() })
+        change({ state: A() })
+        await reads[0]!.answer(named("First A"))
         expect(label()).toBe("generic")
+        // A read started in the new generation of A publishes.
+        reload()
+        await settle()
+        await reads[1]!.answer(named("Second A"))
+        expect(label()).toBe("Second A")
+    })
+
+    it("a perspective commit and a cleared selection are generations too", async () => {
+        const { change } = mount(A())
+        await settle()
+        change({ characterId: "character-other" })
+        await reads[0]!.answer(named("Old Name"))
+        expect(label()).toBe("generic")
+        reload()
+        await settle()
+        await reads[1]!.answer(named("Now"))
+        expect(label()).toBe("Now")
+        change({ characterId: null })
+        expect(label()).toBe("generic")
+    })
+
+    it("a name already published is dropped when the authority changes, and the page's held data does not republish it", async () => {
+        const { change } = mount(A())
+        await settle()
+        await reads[0]!.answer(named("Aldric's Band"))
+        expect(label()).toBe("Aldric's Band")
+        change({ state: B() })
+        await settle()
+        expect(label()).toBe("generic")
+        expect(reads).toHaveLength(1)
     })
 })
 
-describe("invalidation by authority change", () => {
-    it.each<[string, (b: SessionBootstrap) => void]>([
-        ["capabilities", (b) => void b.campaigns[0]!.capabilities.push("canon.edit")],
-        ["roles", (b) => void (b.campaigns[0]!.roles = ["player"])],
-        ["world capabilities", (b) => void (b.campaigns[0]!.world_capabilities = ["world.view"])],
-        ["available perspectives", (b) => void (b.campaigns[0]!.character_perspectives = [])],
-        ["the clock-set state", (b) => void (b.campaigns[0]!.current_time_set = false)],
-        ["the signed-in user", (b) => void (b.user.user_id = "another-user")],
-        ["the browser session", (b) => void (b.browser_session_id = "another-session")],
-    ])("clears every label when %s change in a refreshed bootstrap, without a remount", (_name, change) => {
-        const { update } = setup()
-        expect(label()).toBe("Lantern Company")
-        update({ state: authenticated(bootstrap(change)), name: null })
-        expect(label()).toBe("generic")
-    })
-
-    it("does not clear on a refresh that changes nothing the labels depend on", () => {
-        const { update } = setup()
-        update({ state: authenticated(bootstrap((b) => void (b.csrf_token = "rotated"))) })
-        expect(label()).toBe("Lantern Company")
-    })
-
-    it("clears when the committed perspective changes and is not restored by returning to it", () => {
-        const { update } = setup()
-        update({ characterId: "character-other", name: null })
-        expect(label()).toBe("generic")
-        update({ characterId: CHARACTER, name: null })
-        expect(label()).toBe("generic")
-    })
-
-    it("clears when the selection is cleared", () => {
-        const { update } = setup()
-        expect(label()).toBe("Lantern Company")
-        update({ characterId: null, name: null })
-        expect(label()).toBe("generic")
-    })
-})
-
-describe("session loss", () => {
+describe("session loss and record denial", () => {
     it.each<[string, SessionBootstrapState]>([
         ["loading", { status: "loading" }],
         ["unauthenticated", { status: "unauthenticated" }],
         ["error", { status: "error", error: new Error("down") }],
-    ])("drops every label when the session becomes %s, and does not bring them back on re-authentication", (_n, lost) => {
-        const { update } = setup()
-        expect(label()).toBe("Lantern Company")
-        update({ state: lost, name: null })
+    ])("5. a read answered after the session became %s publishes nothing, and re-authentication does not restore it", async (_n, lost) => {
+        const { change } = mount(A())
+        await settle()
+        change({ state: lost })
+        await reads[0]!.answer(named("Late Name"))
         expect(label()).toBe("generic")
-        update({ state: authenticated(), name: null })
+        change({ state: A() })
+        expect(label()).toBe("generic")
+    })
+
+    it("5. a read started after session loss has no authority and publishes nothing", async () => {
+        const { change } = mount(A())
+        await settle()
+        await reads[0]!.answer(named("Aldric's Band"))
+        change({ state: { status: "loading" } })
+        reload()
+        await settle()
+        await reads[1]!.answer(named("While Lost"))
+        expect(label()).toBe("generic")
+    })
+
+    it("5. a refused record drops its name, and an older read answered later cannot restore it", async () => {
+        mount(A())
+        await settle()
+        await reads[0]!.answer(named("Aldric's Band"))
+        expect(label()).toBe("Aldric's Band")
+        reload()
+        await settle()
+        reload()
+        await settle()
+        expect(reads).toHaveLength(3)
+        await reads[2]!.answer(NOT_FOUND)
+        expect(label()).toBe("generic")
+        await reads[1]!.answer(named("Stale Name"))
         expect(label()).toBe("generic")
     })
 })
 
-describe("late registrations from an obsolete authority", () => {
-    it("ignores a registration from a page that mounted before a context change, even after the context returns to its earlier value", () => {
-        const { update } = setup(null)
-        // The page began its read under authority A, then the authority became B...
-        update({ characterId: "character-other", name: null })
-        // ...then returned to A. The read answers now.
-        update({ characterId: CHARACTER, name: "Late Name" })
-        expect(label()).toBe("generic")
-    })
-
-    it("ignores a registration after a same-scope refresh changed capabilities", () => {
-        const { update } = setup(null)
-        update({
-            state: authenticated(bootstrap((b) => void b.campaigns[0]!.capabilities.push("canon.edit"))),
-            name: "Late Name",
-        })
-        expect(label()).toBe("generic")
-    })
-
-    it("ignores a registration while there is no session", () => {
-        const { update } = setup(null)
-        update({ state: { status: "loading" }, name: "Late Name" })
-        expect(label()).toBe("generic")
-    })
-
-    it("accepts a registration from a page opened under the current authority", () => {
-        const { update, rerender } = setup(null)
-        update({ characterId: "character-other", name: null })
-        // A page opened after the change (a new mount) is bound to the new registry.
-        rerender(
-            <Tree state={authenticated()} characterId="character-other">
-                <Reader />
+describe("registrations", () => {
+    it("6. an older registration going away does not remove a newer one", () => {
+        function Direct({ name }: { name: string }) {
+            const registry = useContext(BreadcrumbLabelContext)
+            useBreadcrumbLabel({ route: ROUTE, params: { campaignId: CAMPAIGN, partyId: "p1" }, name, authority: registry })
+            return null
+        }
+        const view = render(
+            <Tree state={A()}>
+                <Direct name="Older" />
+            </Tree>,
+        )
+        expect(label()).toBe("Older")
+        view.rerender(
+            <Tree state={A()}>
+                <Direct name="Older" />
                 <section>
-                    <Registrant name="Fresh Name" />
+                    <Direct name="Newer" />
                 </section>
             </Tree>,
         )
-        expect(label()).toBe("Fresh Name")
+        expect(label()).toBe("Newer")
+        // The older page goes away: the newer label stays.
+        view.rerender(
+            <Tree state={A()}>
+                <section>
+                    <Direct name="Newer" />
+                </section>
+            </Tree>,
+        )
+        expect(label()).toBe("Newer")
     })
-})
 
-describe("record denial", () => {
-    it("drops the label of a record whose read is refused or unavailable", () => {
-        const { update } = setup()
-        expect(label()).toBe("Lantern Company")
-        update({ denied: true })
-        expect(label()).toBe("generic")
-    })
-
-    it("a denied page never registers its name", () => {
-        const { update } = setup(null)
-        update({ name: "Lantern Company", denied: true })
-        expect(label()).toBe("generic")
+    it("a page with no label registry in force registers nothing and the fallback is generic", async () => {
+        render(
+            <SessionContext.Provider value={{ state: A(), reload: RELOAD, refresh: REFRESH }}>
+                <Page />
+            </SessionContext.Provider>,
+        )
+        await settle()
+        await reads[0]!.answer(named("Aldric's Band"))
+        function Bare() {
+            const labelFor = useBreadcrumbLabelReader()
+            return <p data-testid="bare">{labelFor(ROUTE, { campaignId: CAMPAIGN, partyId: "p1" }) ?? "generic"}</p>
+        }
+        render(<Bare />)
+        expect(screen.getByTestId("bare").textContent).toBe("generic")
     })
 })

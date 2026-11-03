@@ -328,7 +328,7 @@ A detail page visually continues the selected card while becoming an independent
 
 Recommended order:
 
-1. Back/breadcrumb navigation to the authorized collection
+1. Back/breadcrumb navigation to the authorized collection (the shared `TaskBreadcrumb`, §10a.1; a page that is the top of its task has none)
 2. Record title and category
 3. Short authorized summary or description
 4. Primary facts or stat cards
@@ -495,7 +495,7 @@ Non-linear workflows stay non-linear. Phases are numbered for orientation and ev
 
 **Parts of the page.**
 
-- **Page breadcrumb.** `<nav aria-label="Breadcrumb">` with an ordered list: parent list, the record (by its title, never an identifier), and the current page (`aria-current="page"`, not a link). A workspace may use a single "Back to …" link above the header instead. It is separate from the campaign context panel (world, timeline, campaign, perspective).
+- **Page breadcrumb.** `<nav aria-label="Breadcrumb">` with an ordered list: parent list, the record (by its title, never an identifier), and the current page (`aria-current="page"`, not a link). From P02-2 the one renderer is the shared `TaskBreadcrumb` (`components/navigation/TaskBreadcrumb.tsx`): the trail follows the task the person started from the Navbar (never inferred containment), ancestors are ordinary links, the current page is text with `aria-current="page"`, a page that is the top of its task renders none, and the list wraps rather than scrolling sideways. An ancestor shows a record's name only when a page registered it from its own authorized read under the same authority (otherwise the generic noun, e.g. "Party"), and a name is never put in a link's state or URL. It is adopted on the Parties pages and the New-character pages; other families keep their current single back link or `RunBreadcrumb` until their checkpoints migrate them. Real-browser keyboard, focus, 320 px / 400% zoom and screen-reader checks of it are pending. A workspace may use a single "Back to …" link above the header instead. It is separate from the campaign context panel (world, timeline, campaign, perspective).
 - **Phase navigation.** A numbered row of links, wrapping at narrow widths. The current phase is marked by weight and a heavier border, not colour alone.
 - **Section menu.** Links for the current phase's sections only (`aria-label="<Phase> sections"`).
 - **Section panel.** One panel visible at a time: a bordered surface with an `h2`, a one-line purpose, then the content.
