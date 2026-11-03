@@ -24,6 +24,7 @@ import {
 // A perspective change must not leave the old character/party query pair in the address: pages prefer
 // it to the selection, and syncCharacterFromUrl would otherwise turn the accepted change back.
 import { PERSPECTIVE_QUERY_KEYS } from "../navigation/queryKeys"
+import { perspectiveRequest } from "../navigation/selectionTransitions"
 import { BreadcrumbLabelProvider } from "../navigation/BreadcrumbLabelProvider"
 import { useRecordLastVisitedCampaign } from "../hooks/useRecordLastVisitedCampaign"
 import PlaceholderPage from "../pages/PlaceholderPage"
@@ -290,15 +291,11 @@ export function CampaignLayout({ bootstrap }: CampaignLayoutProps) {
     if (characterId !== null && !authorized.has(characterId)) {
       return
     }
-    navigate(
-      { pathname: location.pathname, search: withoutPerspectiveQuery(location.search), hash: location.hash },
-      {
-        state: {
-          ...asRecord(location.state),
-          ctx: entryContextStamp({ campaignId: activeCampaign.campaign_id, worldId, timelineId, characterId }),
-        },
-      },
-    )
+    // A deliberate perspective change is a departure to that character's Characters details (PD-6), even
+    // when the pathname would not change: the same blocker decides, nothing is written first, and the
+    // selection, task and entry are committed from the accepted location (a fresh task, no carried state).
+    const request = perspectiveRequest(activeCampaign.campaign_id, characterId, { campaignId: activeCampaign.campaign_id, worldId, timelineId })
+    navigate(request.to, { state: request.state })
   }
 
   const showNotice = noticePath === location.pathname && selectedCharacterId === null

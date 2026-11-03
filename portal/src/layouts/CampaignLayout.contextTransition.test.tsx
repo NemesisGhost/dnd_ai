@@ -192,6 +192,9 @@ function TestRoutes() {
         <Route path="/app/:campaignId" element={<CampaignSessionBoundary />}>
           <Route path="home" element={<HomePage />} />
           <Route path="notes" element={<NotesPage />} />
+                  {/* Where a deliberate perspective change lands (PD-6); the same probe page reads under it. */}
+                  <Route path="characters/:characterId" element={<NotesPage />} />
+                  <Route path="characters/all" element={<NotesPage />} />
         </Route>
       </Route>
     </Routes>
@@ -279,7 +282,8 @@ describe("CTX-1: perspective change (guard before side effects)", () => {
     expect(screen.queryByText("Loading portal")).not.toBeInTheDocument()
     expect(screen.getByRole("navigation", { name: "Main" })).toBeInTheDocument()
     await waitFor(() => expect(sessionRequests()).toBe(sessionsBefore + 1))
-    expect(router.state.location.pathname).toBe("/app/alpha/notes")
+    // The deliberate change is a departure to the character's Characters details (PD-6).
+    expect(router.state.location.pathname).toBe("/app/alpha/characters/char-b")
   })
 
   it("a pristine page changes perspective at once, without the portal loading state", async () => {
@@ -796,7 +800,7 @@ describe("selection ownership: a newer accepted selection supersedes a pending r
     await expectFinal("char-a")
     expect(readsInOrder()).toEqual(["", "char-b", "char-a"])
     expect(screen.queryByRole("status")).toBeNull()
-    expect(router.state.location.pathname).toBe("/app/alpha/notes")
+    expect(router.state.location.pathname).toBe("/app/alpha/characters/char-a")
   })
 
   it("A accepted before the revoking answer arrives stays A, and the answer then changes nothing", async () => {
@@ -923,7 +927,7 @@ describe("initial entry and stamp ownership", () => {
 
     await waitFor(() => expect(perspectiveSelect()).toHaveValue("char-b"))
     await waitFor(() => expect(screen.getByTestId("read")).toHaveTextContent("char-b"))
-    expect(router.state.location.pathname).toBe("/app/alpha/notes")
+    expect(router.state.location.pathname).toBe("/app/alpha/characters/char-b")
   })
 
   it.each([
@@ -1027,14 +1031,15 @@ describe("a replacement never asks for a perspective", () => {
 })
 
 describe("query-carried perspective", () => {
-  it("drops the old character_id/party_id from the target so the query cannot reverse the transition", async () => {
+  it("starts the character's details with none of the page's query, so nothing can reverse the transition", async () => {
     renderAt("/app/alpha/notes?character_id=char-a&party_id=p1&section=x")
     await settled()
 
     choosePerspective("char-b")
 
-    await waitFor(() => expect(router.state.location.search).toBe("?section=x"))
+    await waitFor(() => expect(router.state.location.pathname).toBe("/app/alpha/characters/char-b"))
+    // Neither the old pair nor the page-specific `section` is carried into the new task.
+    expect(router.state.location.search).toBe("")
     expect(perspectiveSelect()).toHaveValue("char-b")
-    expect(router.state.location.pathname).toBe("/app/alpha/notes")
   })
 })

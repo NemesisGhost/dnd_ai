@@ -6,6 +6,7 @@ import { useWorkspaceHierarchy } from "../context/WorkspaceHierarchyContext"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import type { CampaignContext } from "../types/bootstrap"
 import type { WorldListResponse } from "../types/worldAuthoring"
+import { scopeRequest } from "../navigation/selectionTransitions"
 import { selectionFor, useSelectedContextSnapshot } from "../navigation/selectedContextStore"
 import { resolveNavigationCampaign } from "../utils/resolveNavigationCampaign"
 import { buildWorldChoices, worldAccess } from "../utils/worldAccess"
@@ -84,7 +85,8 @@ function withCurrent(
 // The World → Timeline → Campaign → Character context for every page of the
 // authenticated World and Campaign workspace. Selection is route-derived (the
 // hierarchy provider and the route campaign); choosing an option only
-// navigates, so lower levels clear because their routes unmount. Option lists
+// asks the router for the destination with a new task (navigation/selectionTransitions), so the
+// departure guard decides first and lower levels clear because their routes unmount. Option lists
 // come from authoritative responses only: the worlds list, the selected
 // world's timelines, and the session's authorized campaigns. A level without
 // such a list stays visible and disabled.
@@ -226,7 +228,8 @@ export function HierarchyContextPanel({
             onSelect={(worldId) => {
               const choice = worldChoices.find((item) => item.world_id === worldId)
               if (choice !== undefined) {
-                navigate(choice.to)
+                const request = scopeRequest(choice.to, "world")
+                navigate(request.to, { state: request.state })
               }
             }}
           />
@@ -247,11 +250,13 @@ export function HierarchyContextPanel({
             value={activeTimelineId ?? ""}
             options={timelineOptions}
             enabled={timelineListReady && timelineOptions.length > 0}
-            onSelect={(timelineId) =>
-              navigate(
+            onSelect={(timelineId) => {
+              const request = scopeRequest(
                 `/worlds/${encodeURIComponent(activeWorldId ?? "")}/timelines/${encodeURIComponent(timelineId)}`,
+                "world",
               )
-            }
+              navigate(request.to, { state: request.state })
+            }}
           />
         </section>
 
@@ -270,9 +275,10 @@ export function HierarchyContextPanel({
             value={campaign?.campaign_id ?? selectedCampaign?.campaign_id ?? ""}
             options={campaignOptionsShown}
             enabled={campaignOptionsShown.length > 0}
-            onSelect={(campaignId) =>
-              navigate(`/app/${encodeURIComponent(campaignId)}/home`)
-            }
+            onSelect={(campaignId) => {
+              const request = scopeRequest(`/app/${encodeURIComponent(campaignId)}/home`, "campaign")
+              navigate(request.to, { state: request.state })
+            }}
           />
 
           {campaign !== null && (

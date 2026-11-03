@@ -169,6 +169,9 @@ function tree(entry: Entry) {
                 </Route>
                 <Route path="/app/:campaignId" element={<CampaignSessionBoundary />}>
                   <Route path="notes" element={<NotesPage />} />
+                  {/* Where a deliberate perspective change lands (PD-6); the same probe page reads under it. */}
+                  <Route path="characters/:characterId" element={<NotesPage />} />
+                  <Route path="characters/all" element={<NotesPage />} />
                 </Route>
               </Route>
             </Routes>

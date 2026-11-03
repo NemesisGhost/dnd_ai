@@ -181,6 +181,9 @@ function tree(entry: string | { pathname: string; state?: unknown }) {
                 </Route>
                 <Route path="/app/:campaignId" element={<CampaignSessionBoundary />}>
                   <Route path="notes" element={<NotesPage />} />
+                  {/* Where a deliberate perspective change lands (PD-6); the same probe page reads under it. */}
+                  <Route path="characters/:characterId" element={<NotesPage />} />
+                  <Route path="characters/all" element={<NotesPage />} />
                   <Route path="other" element={<h1>Other</h1>} />
                 </Route>
               </Route>
@@ -443,7 +446,8 @@ describe("a retained selection and a guarded departure", () => {
     const dialog = await screen.findByRole("dialog", { name: "Discard your draft?" })
     fireEvent.click(within(dialog).getByRole("button", { name: "Stay" }))
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
-    expect(router.state.location.pathname).toBe("/app/alpha/notes")
+    // (choosing a2 is a departure to a2's Characters details, PD-6; Stay keeps the page it was on.)
+    expect(router.state.location.pathname).toBe("/app/alpha/characters/a2")
     expect(select()).toHaveValue("a2")
     expect(screen.getByLabelText("Draft")).toHaveValue("half a thought")
     expect(requests.filter((url) => url.includes("/beta/"))).toEqual([])

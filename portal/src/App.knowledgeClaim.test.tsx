@@ -1726,6 +1726,11 @@ describe("selection ownership on the real claim page", () => {
       .callsTo("GET", DETAIL)
       .map((call) => /character_id=([^&]*)/.exec(call.path)?.[1] ?? "none")
       .filter((value, index, all) => index === 0 || value !== all[index - 1])
+  // A deliberate perspective change leaves the claim page for that character's Characters details (PD-6),
+  // so what this block proves is the selection, the entry's record of it and the route, not claim reads
+  // (read ordering under a perspective is covered on a probe page in CampaignLayout.contextTransition).
+  const detailsOf = (id: string) => `${CLAIM.split("/").slice(0, 3).join("/")}/characters/${id}`
+  const arrivedAt = (id: string) => waitFor(() => expect(router.state.location.pathname).toBe(detailsOf(id)))
 
   it.each([
     ["plain", false],
@@ -1734,7 +1739,7 @@ describe("selection ownership on the real claim page", () => {
     mount(strict)
     await screen.findByRole("textbox", { name: /^Claim/ })
     choose("character-b")
-    await waitFor(() => expect(detailReads()).toEqual(["none", "character-b"]))
+    await arrivedAt("character-b")
 
     let fired = false
     const unsubscribe = router.subscribe((state) => {
@@ -1751,33 +1756,31 @@ describe("selection ownership on the real claim page", () => {
     expect(fired).toBe(true)
 
     await waitFor(() => expect(select()).toHaveValue("character-a"))
-    await waitFor(() => expect(detailReads()).toEqual(["none", "character-b", "character-a"]))
+    await arrivedAt("character-a")
     await waitFor(() => expect(ctx()).toMatchObject({ v: 1, characterId: "character-a" }))
     await act(async () => {
       await Promise.resolve()
     })
     expect(select()).toHaveValue("character-a")
     expect(ctx()).toMatchObject({ v: 1, characterId: "character-a" })
-    expect(detailReads()).toEqual(["none", "character-b", "character-a"])
-    expect(router.state.location.pathname).toBe(CLAIM)
+    expect(router.state.location.pathname).toBe(detailsOf("character-a"))
     expect(screen.queryByText(/no longer available/)).toBeNull()
   })
 
-  it("with nothing newer, the same revocation clears to explicit none: one read as B, one with none", async () => {
+  it("with nothing newer, the same revocation clears to explicit none and stays on the page it left to", async () => {
     mount(false)
     await screen.findByRole("textbox", { name: /^Claim/ })
     choose("character-b")
-    await waitFor(() => expect(detailReads()).toEqual(["none", "character-b"]))
+    await arrivedAt("character-b")
 
     await act(async () => {
       startTransition(() => publish(sessionWith("character-a")))
     })
 
     await waitFor(() => expect(screen.getByText(/Your selected character is no longer available/)).toBeInTheDocument())
-    await waitFor(() => expect(detailReads()).toEqual(["none", "character-b", "none"]))
     expect(select()).toHaveValue("")
     await waitFor(() => expect(ctx()).toMatchObject({ v: 1, characterId: null }))
-    expect(router.state.location.pathname).toBe(CLAIM)
+    expect(router.state.location.pathname).toBe(detailsOf("character-b"))
   })  // F-2. A deliberate change of `character_id` or `party_id` in the address makes the page read the
   // claim under another perspective, which unmounts the editor while the read is pending. It asks like a
   // departure when the claim has unsent input. The page's own clean-up of a party that is no longer

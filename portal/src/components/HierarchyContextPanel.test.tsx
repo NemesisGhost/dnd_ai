@@ -105,6 +105,8 @@ function renderAt(
               <Route path="/app/:campaignId" element={<CampaignLayout bootstrap={session} />}>
                 <Route path="home" element={<h1>Campaign home</h1>} />
                 <Route path="world" element={<h1>Campaign world</h1>} />
+                <Route path="characters/:characterId" element={<h1>Character details</h1>} />
+                <Route path="characters/all" element={<h1>All characters</h1>} />
               </Route>
             </Routes>
             <LocationProbe />
@@ -253,12 +255,13 @@ describe("HierarchyContextPanel placement and levels", () => {
     expect(screen.queryByText(/Hero of c3/)).toBeNull()
   })
 
-  it("keeps character perspective Campaign-scoped: reports changes for the route campaign only", () => {
+  it("keeps character perspective Campaign-scoped: a change opens the route campaign's character details (PD-6)", async () => {
     renderAt("/app/c1/home", "c1-hero")
 
     expect(character()).toHaveValue("c1-hero")
     fireEvent.change(character(), { target: { value: "c1-ally" } })
-    expect(selectCharacter).toHaveBeenCalledWith("c1", "c1-ally")
+    await screen.findByRole("heading", { name: "Character details" })
+    expect(screen.getByTestId("location")).toHaveTextContent("/app/c1/characters/c1-ally")
   })
 
   it("shows character detail only when a perspective is selected", () => {

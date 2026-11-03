@@ -120,7 +120,15 @@ function tree(entry: string) {
                   { path: "parties", element: <Page title="Parties" /> },
                   { path: "quests", loader: gated, element: <Page title="Quests" /> },
                   { path: "world", loader: gated, element: <Page title="Campaign world" /> },
-                  { path: "sessions", loader: () => redirect("/app/alpha/parties"), element: <Page title="Sessions" /> },
+                  {
+                    path: "sessions",
+                    // Waits for its gate when a test holds one, then redirects (the click's own redirect).
+                    loader: async ({ request }: { request: Request }) => {
+                      await gates.get(new URL(request.url).pathname)?.promise
+                      return redirect("/app/alpha/parties")
+                    },
+                    element: <Page title="Sessions" />,
+                  },
                   {
                     path: "knowledge",
                     loader: () => {
@@ -380,6 +388,34 @@ describe("completion belongs to the navigation the click started", () => {
       await screen.findByRole("heading", { name: "Quests" })
 
       expect(here()).toBe("/app/alpha/quests")
+      expect(drawerOpen()).toBe(true)
+    })
+
+    it("competing work that starts after the click and settles without redirecting still makes the owned redirect ambiguous", async () => {
+      // The conservative policy, unchanged: the router offers no way to tell whose redirect a marked
+      // location is once other work has been seen, even after that work has finished and redirected nothing.
+      await start("/app/alpha/quests", "Quests")
+      fireEvent.click(drawerToggle())
+      expect(drawerOpen()).toBe(true)
+      const sessions = hold("/app/alpha/sessions")
+      fireEvent.click(inNav().getByRole("link", { name: "Sessions" }))
+      await waitFor(() => expect(router.state.navigation.state).toBe("loading"))
+
+      // After the click: an independent fetcher loads and settles, with no redirect of its own.
+      const world = hold("/app/alpha/world")
+      await act(async () => {
+        void router.fetch("independent", "world", "/app/alpha/world")
+      })
+      await waitFor(() => expect(router.state.fetchers.get("independent")?.state).toBe("loading"))
+      world.release()
+      await waitFor(() => expect(router.state.fetchers.get("independent")?.state ?? "idle").toBe("idle"))
+      expect(router.state.navigation.state).toBe("loading")
+
+      // Now the click's own loader redirects.
+      sessions.release()
+      await screen.findByRole("heading", { name: "Parties" })
+
+      expect(here()).toBe("/app/alpha/parties")
       expect(drawerOpen()).toBe(true)
     })
 
