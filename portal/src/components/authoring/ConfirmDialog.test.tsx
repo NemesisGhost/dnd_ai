@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { describe, expect, it, vi } from "vitest"
+import { registerFocusFallback } from "../../hooks/navigationHolds"
 import { ConfirmDialog } from "./ConfirmDialog"
 
 function Harness({ onConfirm = vi.fn(), error }: { onConfirm?: () => void; error?: string }) {
@@ -46,6 +47,92 @@ describe("ConfirmDialog", () => {
         fireEvent.click(opener)
         fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
         expect(opener).toHaveFocus()
+    })
+
+    describe("when the control that had focus is no longer usable (navigation focus fallbacks)", () => {
+        function Fallbacks({ candidates }: { candidates: Array<[number, () => HTMLElement | null]> }) {
+            useEffect(() => {
+                const releases = candidates.map(([priority, resolve]) => registerFocusFallback(priority, resolve))
+                return () => releases.forEach((release) => release())
+            }, [candidates])
+            return null
+        }
+
+        it("tries the candidates nearest first, and skips hidden or removed ones", () => {
+            const near = document.createElement("button")
+            near.hidden = true
+            const opener = document.createElement("button")
+            const far = document.createElement("button")
+            document.body.append(near, opener, far)
+            render(
+                <>
+                    <Fallbacks
+                        candidates={[
+                            [2, () => far],
+                            [0, () => near],
+                            [1, () => opener],
+                        ]}
+                    />
+                    <Harness />
+                </>,
+            )
+            // Nothing usable holds focus when the dialog opens (the opener never took it).
+            fireEvent.click(screen.getByRole("button", { name: "Archive world" }))
+            ;(document.activeElement as HTMLElement).blur()
+            // The control that opened it is gone from the user's reach too.
+            screen.getByRole("button", { name: "Archive world" }).hidden = true
+
+            fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
+
+            // The hidden nearest candidate is skipped; the next usable one takes focus; the farther is untouched.
+            expect(opener).toHaveFocus()
+            expect(far).not.toHaveFocus()
+            near.remove()
+            opener.remove()
+            far.remove()
+        })
+
+        it("leaves focus alone when its first choice is usable, whatever candidates exist", () => {
+            const candidate = document.createElement("button")
+            document.body.append(candidate)
+            render(
+                <>
+                    <Fallbacks candidates={[[0, () => candidate]]} />
+                    <Harness />
+                </>,
+            )
+            const opener = screen.getByRole("button", { name: "Archive world" })
+            opener.focus()
+            fireEvent.click(opener)
+            fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
+            expect(opener).toHaveFocus()
+            candidate.remove()
+        })
+
+        it("uses the candidates it saw when it opened, even if they are released as it closes", () => {
+            const candidate = document.createElement("button")
+            document.body.append(candidate)
+            const candidates: Array<[number, () => HTMLElement | null]> = [[0, () => candidate]]
+            const { rerender } = render(
+                <>
+                    <Fallbacks candidates={candidates} />
+                    <Harness />
+                </>,
+            )
+            fireEvent.click(screen.getByRole("button", { name: "Archive world" }))
+            ;(document.activeElement as HTMLElement).blur()
+            screen.getByRole("button", { name: "Archive world" }).hidden = true
+            // The owner of the candidate releases it (its navigation was answered Stay) before the dialog closes.
+            rerender(
+                <>
+                    {null}
+                    <Harness />
+                </>,
+            )
+            fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
+            expect(candidate).toHaveFocus()
+            candidate.remove()
+        })
     })
 
     it("cancels on Escape", () => {

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react"
 import type { KeyboardEvent as ReactKeyboardEvent } from "react"
-import { NavLink, useMatch } from "react-router"
+import { NavLink, useLocation, useMatch } from "react-router"
 import type { LucideIcon } from "lucide-react"
 import {
   BookOpen,
@@ -13,7 +13,6 @@ import {
   PanelLeftOpen,
   ScrollText,
   ShieldCheck,
-  Users,
   UsersRound,
 } from "lucide-react"
 import { useSession } from "../context/SessionContext"
@@ -23,11 +22,21 @@ import type { NavigationDrawerControl } from "../hooks/useNavigationDrawer"
 import { selectionFor, useSelectedContextSnapshot } from "../navigation/selectedContextStore"
 import { resolveNavigationCampaign } from "../utils/resolveNavigationCampaign"
 import { navTaskState } from "../navigation/navStart"
+import {
+  campaignAction,
+  charactersAction,
+  selectedCharacter,
+  worldAction,
+} from "../navigation/navbarDestinations"
+import { resolveTask } from "../navigation/resolveTask"
 import type { NavRoot } from "../navigation/routeMeta"
+import { navigationQuestionActive, registerFocusFallback } from "../hooks/navigationHolds"
 import { canCreateWorlds } from "../utils/worldAccess"
 import { AccessNavGroup } from "./AccessNavGroup"
 import { CampaignHomeNavGroup } from "./CampaignHomeNavGroup"
+import { CharactersNavGroup } from "./CharactersNavGroup"
 import { DisabledNavItem } from "./DisabledNavItem"
+import { FALLBACK_DRAWER_TOGGLE, useAcceptedNavigation } from "./useSidebarMenu"
 import { ItemsNavGroup } from "./ItemsNavGroup"
 import { KnowledgeNavGroup } from "./KnowledgeNavGroup"
 import { NEEDS_WORLD_ROLE, SELECT_CAMPAIGN_FIRST } from "./navigationReasons"
@@ -46,10 +55,9 @@ interface NavigationItem {
   worldCapability?: string
 }
 
-// Campaign Home is rendered by CampaignHomeNavGroup; the campaign world page
-// lives under the Worlds group (WorldsNavGroup).
+// Campaign is rendered by CampaignHomeNavGroup, World by WorldsNavGroup and Characters by
+// CharactersNavGroup (each a split control); the campaign world page lives under the World menu.
 const campaignNavigationItems: NavigationItem[] = [
-  { path: "characters", label: "Characters", root: "characters", icon: Users },
   { path: "parties", label: "Parties", root: "parties", icon: UsersRound },
   { path: "quests", label: "Quests", root: "quests", icon: ScrollText },
   { path: "sessions", label: "Sessions", root: "sessions", icon: CalendarDays },
@@ -119,7 +127,12 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
   const worldHas = (capability: string): boolean =>
     world?.kind === "ready" && world.data.capabilities.includes(capability)
   const navigationRef = useRef<HTMLElement>(null)
-  const { open: drawerOpen, closeAndFocusToggle, close } = drawer
+  const { open: drawerOpen, closeAndFocusToggle, close, toggleElement } = drawer
+  const location = useLocation()
+  // The drawer closes when a navigation made from it is *accepted* (the location reaches what was
+  // asked for), not on the click: the page's unsaved-changes question may still refuse it, and Stay
+  // leaves the drawer as it was (CTX-4). The groups do the same for their menus.
+  const plainLinks = useAcceptedNavigation({ onAccepted: close, opener: () => null })
 
   useEffect(() => {
     if (!drawerOpen) {
@@ -132,17 +145,21 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
       ?.focus()
 
     function handleKeyDown(event: KeyboardEvent): void {
-      if (event.key === "Escape") {
+      // While the navigation question is open its dialog owns Escape (it means Stay): the drawer stays.
+      if (event.key === "Escape" && !navigationQuestionActive()) {
         closeAndFocusToggle()
       }
     }
 
     document.addEventListener("keydown", handleKeyDown)
+    // The last place a Stay may put focus when nothing nearer is usable.
+    const releaseFallback = registerFocusFallback(FALLBACK_DRAWER_TOGGLE, toggleElement)
 
     return () => {
       document.removeEventListener("keydown", handleKeyDown)
+      releaseFallback()
     }
-  }, [drawerOpen, closeAndFocusToggle])
+  }, [drawerOpen, closeAndFocusToggle, toggleElement])
 
   if (state.status === "unauthenticated") {
     return null
@@ -217,6 +234,53 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
   const worldRoleHas = (capability: string): boolean =>
     resolvedCampaign?.world_capabilities?.includes(capability) === true
 
+  // The explicit selection this tab retains, for this user only; and the task the shown page belongs to.
+  const selection = selectionFor(retained, bootstrap)
+  const situation = {
+    pathname: location.pathname,
+    currentRoot: resolveTask(location.pathname, location.state)?.task.root ?? null,
+  }
+
+  // The selected world. A world the route confirms is the route's own scope. Otherwise it is the retained
+  // selection, and only while it is compatible with the retained campaign: a campaign that is gone or
+  // belongs to another world makes it no selection at all.
+  const routeWorldId = authoringWorldAccess === "none" ? null : authoringWorldId
+  const retainedCampaign =
+    bootstrap === null || selection.campaignId === null
+      ? null
+      : (bootstrap.campaigns.find((campaign) => campaign.campaign_id === selection.campaignId) ?? null)
+  const retainedWorldId =
+    selection.worldId === null
+      ? null
+      : selection.campaignId === null
+        ? selection.worldId
+        : retainedCampaign?.world_id === selection.worldId
+          ? selection.worldId
+          : null
+  const selectedWorldId = routeWorldId ?? retainedWorldId
+  // The campaign of that world the person can act in: the one the links already resolve, else the retained one.
+  const worldCampaign =
+    selectedWorldId === null
+      ? null
+      : [resolvedCampaign, retainedCampaign].find((campaign) => campaign?.world_id === selectedWorldId) ?? null
+  // What the caller may do on it: the server's own read of the world when the page has one, else the
+  // capabilities the bootstrap lists for a campaign of that world. Unknown means unavailable, never guessed.
+  const selectedWorldCapabilities: readonly string[] | null =
+    selectedWorldId === null
+      ? null
+      : world?.kind === "ready" && world.data.world_id === selectedWorldId
+        ? world.data.capabilities
+        : (worldCampaign?.world_capabilities ?? null)
+  const selectedWorldName =
+    selectedWorldId === null
+      ? null
+      : world?.kind === "ready" && world.data.world_id === selectedWorldId
+        ? world.data.name
+        : (worldCampaign?.world_name ?? null)
+  const worldHasSelected = (capability: string): boolean =>
+    selectedWorldCapabilities?.includes(capability) === true
+  const selectedCharacterRecord = selectedCharacter(resolvedCampaign, selection)
+
   const toggleLabel = collapsed ? "Expand navigation" : "Collapse navigation"
   const CollapseIcon = collapsed ? PanelLeftOpen : PanelLeftClose
 
@@ -255,7 +319,7 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
                   className={linkClassName}
                   to="/campaigns"
                   title={collapsed ? "All campaigns" : undefined}
-                  onClick={close}
+                  onClick={(event) => plainLinks.begin(event, "/campaigns")}
                 >
                   <LayoutList
                     className="portal-sidebar__icon"
@@ -273,22 +337,53 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
                 campaigns={bootstrap.campaigns}
                 resolvedCampaign={resolvedCampaign}
                 authorizedRouteCampaignId={authorizedRouteCampaignId}
+                action={campaignAction(resolvedCampaign, situation)}
+                sectionActive={situation.currentRoot === "campaign"}
                 collapsed={collapsed}
                 onNavigate={close}
               />
 
               <WorldsNavGroup
-                activeWorldId={
-                  authoringWorldAccess === "none" ? null : authoringWorldId
+                activeWorldId={selectedWorldId}
+                activeTimelineId={routeWorldId === null ? null : authoringTimelineId}
+                canAuthorWorld={
+                  routeWorldId === null
+                    ? worldHasSelected("timeline.manage")
+                    : authoringWorldAccess === "edit" || worldHas("timeline.manage")
                 }
-                activeTimelineId={authoringTimelineId}
-                canAuthorWorld={authoringWorldAccess === "edit" || worldHas("timeline.manage")}
-                canShareWorld={worldHas("world.share")}
-                canReadCanon={worldHas("world.canon.read")}
+                canShareWorld={
+                  routeWorldId === null ? worldHasSelected("world.share") : worldHas("world.share")
+                }
+                canReadCanon={
+                  routeWorldId === null
+                    ? worldHasSelected("world.canon.read")
+                    : worldHas("world.canon.read")
+                }
+                canViewWorld={routeWorldId !== null || worldHasSelected("world.view")}
+                action={worldAction(
+                  selectedWorldId === null
+                    ? null
+                    : {
+                        worldId: selectedWorldId,
+                        name: selectedWorldName,
+                        canView: worldHasSelected("world.view"),
+                        campaignId: worldCampaign?.campaign_id ?? null,
+                      },
+                  situation,
+                )}
                 campaignWorldPath={
                   campaignPath === null ? null : `${campaignPath}/world`
                 }
                 canCreateWorld={canCreateWorlds(bootstrap)}
+                collapsed={collapsed}
+                onNavigate={close}
+              />
+
+              <CharactersNavGroup
+                campaignPath={campaignPath}
+                character={selectedCharacterRecord}
+                action={charactersAction(resolvedCampaign, selectedCharacterRecord, situation)}
+                sectionActive={situation.currentRoot === "characters"}
                 collapsed={collapsed}
                 onNavigate={close}
               />
@@ -355,7 +450,9 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
                         to={`${campaignPath}/${item.path}`}
                         state={navTaskState(`${campaignPath}/${item.path}`, item.root)}
                         title={collapsed ? item.label : undefined}
-                        onClick={close}
+                        onClick={(event) =>
+                          plainLinks.begin(event, `${campaignPath}/${item.path}`)
+                        }
                       >
                         <Icon
                           className="portal-sidebar__icon"
@@ -384,7 +481,7 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
                     to={`${campaignPath}/ask`}
                     state={navTaskState(`${campaignPath}/ask`, "campaign")}
                     title={collapsed ? "Ask" : undefined}
-                    onClick={close}
+                    onClick={(event) => plainLinks.begin(event, `${campaignPath}/ask`)}
                   >
                     <MessageCircleQuestion
                       className="portal-sidebar__icon"

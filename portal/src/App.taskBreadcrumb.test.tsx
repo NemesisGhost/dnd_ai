@@ -201,7 +201,8 @@ describe("the Navbar starts a task, applied only when the navigation is accepted
     ["Parties", `${base}/parties`, "parties"],
     ["Quests", `${base}/quests`, "quests"],
     ["Sessions", `${base}/sessions`, "sessions"],
-    ["Characters", `${base}/characters`, "characters"],
+    // Characters is a split control: its main control opens the selected perspective's record shell.
+    ["Open character Ixamarra", `${base}/characters/character-ixamarra`, "characters"],
   ])("%s starts a task rooted there, with no trail and no list state", async (name, path, root) => {
     const app = openApp(`${base}/parties/p1/members`.replace("/members", ""))
     await screen.findByRole("heading", { level: 1, name: "The Company" })
@@ -213,7 +214,7 @@ describe("the Navbar starts a task, applied only when the navigation is accepted
   it("Campaign Home starts a campaign task", async () => {
     const app = openApp(`${base}/parties`)
     await screen.findByRole("heading", { level: 1, name: "Parties" })
-    fireEvent.click(navbar().getByRole("link", { name: "Campaign Home" }))
+    fireEvent.click(navbar().getByRole("link", { name: /^Open campaign / }))
     await waitFor(() => expect(app.router.state.location.pathname).toBe(`${base}/home`))
     expect(state(app).task).toMatchObject({ root: "campaign", trail: [] })
   })
@@ -221,7 +222,7 @@ describe("the Navbar starts a task, applied only when the navigation is accepted
   it("a destination outside any campaign or world starts no task", async () => {
     const app = openApp(`${base}/parties`)
     await screen.findByRole("heading", { level: 1, name: "Parties" })
-    fireEvent.click(navbar().getByRole("button", { name: "Worlds" }))
+    fireEvent.click(navbar().getByRole("button", { name: "Show world menu" }))
     fireEvent.click(navbar().getByRole("link", { name: "All worlds" }))
     await waitFor(() => expect(app.router.state.location.pathname).toBe("/worlds"))
     expect(state(app)?.task).toBeUndefined()

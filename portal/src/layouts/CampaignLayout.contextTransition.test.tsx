@@ -344,7 +344,7 @@ describe("CTX-2: campaign switch (guard before side effects)", () => {
     await settled()
     type("draft")
     const nav = screen.getByRole("navigation", { name: "Main" })
-    fireEvent.click(within(nav).getByRole("button", { name: "Choose campaign" }))
+    fireEvent.click(within(nav).getByRole("button", { name: "Show campaign menu" }))
     fireEvent.click(within(nav).getByRole("link", { name: "Campaign beta" }))
 
     expect(await screen.findByText("Leave this page?")).toBeInTheDocument()

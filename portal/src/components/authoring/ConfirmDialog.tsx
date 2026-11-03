@@ -1,5 +1,7 @@
 import { useEffect, useId, useRef } from "react"
 import type { ReactNode } from "react"
+import { snapshotFocusFallbacks } from "../../hooks/navigationHolds"
+import { restoreFocus } from "../../utils/focusEligibility"
 import { TextAreaField } from "./fields"
 import "./authoring.css"
 
@@ -53,6 +55,7 @@ export function ConfirmDialog({
     const dialogRef = useRef<HTMLDialogElement>(null)
     const cancelRef = useRef<HTMLButtonElement>(null)
     const returnFocusRef = useRef<Element | null>(null)
+    const fallbacksRef = useRef<Array<() => HTMLElement | null>>([])
     const titleId = useId()
     const descriptionId = useId()
 
@@ -63,6 +66,7 @@ export function ConfirmDialog({
         }
         if (open) {
             returnFocusRef.current = document.activeElement
+            fallbacksRef.current = snapshotFocusFallbacks()
             if (typeof dialog.showModal === "function") {
                 if (!dialog.open) {
                     dialog.showModal()
@@ -81,9 +85,18 @@ export function ConfirmDialog({
             dialog.removeAttribute("open")
         }
         const target = returnFocusRef.current
+        const fallbacks = fallbacksRef.current
         returnFocusRef.current = null
-        if (target instanceof HTMLElement && target.isConnected) {
-            target.focus()
+        fallbacksRef.current = []
+        if (restoreFocus(target, dialog)) {
+            return
+        }
+        // The control that had focus is gone or unusable (the menu that held it closed): the navigation in
+        // progress offers where to go instead, nearest control first.
+        for (const resolve of fallbacks) {
+            if (restoreFocus(resolve(), dialog)) {
+                return
+            }
         }
     }, [open])
 

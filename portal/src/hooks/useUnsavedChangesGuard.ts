@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useLayoutEffect, useRef } from "react"
 import { useBlocker } from "react-router"
 import type { Blocker } from "react-router"
-import { anyNavigationHold, holdNavigationQuestion, isGuardedTransition, registerPageGuard } from "./navigationHolds"
+import {
+    anyNavigationHold,
+    holdNavigationQuestion,
+    isGuardedTransition,
+    registerPageGuard,
+    reportQuestionAnswer,
+} from "./navigationHolds"
 import type { GuardedTransitionOptions } from "./navigationHolds"
 
 export interface UnsavedChangesGuard {
@@ -99,12 +105,14 @@ export function useUnsavedChangesGuard(isDirty: boolean, options?: GuardedTransi
         dirtyRef.current = false
         if (blocker.state === "blocked") {
             leaving.current = true
+            reportQuestionAnswer("leave")
             blocker.proceed()
         }
     }, [blocker])
 
     const stay = useCallback(() => {
         if (blocker.state === "blocked") {
+            reportQuestionAnswer("stay")
             blocker.reset()
         }
     }, [blocker])

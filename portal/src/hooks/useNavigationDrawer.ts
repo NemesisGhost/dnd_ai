@@ -11,6 +11,8 @@ export interface NavigationDrawerControl {
     close: () => void
     // Close and return focus to the header toggle (Escape/backdrop).
     closeAndFocusToggle: () => void
+    // The header toggle, as a last place to put focus when nothing nearer is usable.
+    toggleElement: () => HTMLElement | null
 }
 
 export interface NavigationDrawer {
@@ -31,8 +33,10 @@ export function useNavigationDrawer(): NavigationDrawer {
         toggleRef.current?.focus()
     }, [])
 
+    const toggleElement = useCallback(() => toggleRef.current, [])
+
     return {
-        control: { open, toggle, close, closeAndFocusToggle },
+        control: { open, toggle, close, closeAndFocusToggle, toggleElement },
         toggleRef,
     }
 }

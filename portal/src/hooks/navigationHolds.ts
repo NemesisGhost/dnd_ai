@@ -70,6 +70,65 @@ export function useNavigationQuestion(): boolean {
     return useSyncExternalStore(subscribe, () => questions > 0)
 }
 
+// The same fact, read at call time. An event handler that must decide *now* (a blur caused by the
+// question's own dialog taking focus) cannot wait for a re-render to learn that the question is open.
+export function navigationQuestionActive(): boolean {
+    return questions > 0 || holderQuestions > 0
+}
+
+// A holder with a blocker of its own (a picker on a page with no page-level guard) is asking its question.
+// It is counted apart from `questions`: that count makes other modals step aside, and the holder's own
+// question lives inside its own dialog. Both mean the same to the navigation controls: a question owns the screen.
+let holderQuestions = 0
+export function holdHolderQuestion(): () => void {
+    holderQuestions += 1
+    return () => {
+        holderQuestions -= 1
+    }
+}
+
+// The answer a navigation question received. Only the blockers know it: when the person leaves, the question
+// is over one render before the location changes, so "the question ended and the location did not move"
+// cannot tell Stay from Leave. Whoever receives the answer reports it; a navigation control that is waiting
+// on the question listens (see useAcceptedNavigation). A question that simply goes away unanswered (its
+// page was removed) reports nothing.
+const answerListeners = new Set<(answer: "stay" | "leave") => void>()
+
+export function reportQuestionAnswer(answer: "stay" | "leave"): void {
+    answerListeners.forEach((listener) => listener(answer))
+}
+
+export function onQuestionAnswer(listener: (answer: "stay" | "leave") => void): () => void {
+    answerListeners.add(listener)
+    return () => {
+        answerListeners.delete(listener)
+    }
+}
+
+// Where focus may go when a navigation question is answered Stay and the control it came from is no longer
+// usable (the menu that held it closed, the item was removed). A control that is part of the navigation in
+// progress registers a candidate for as long as that navigation is pending; the dialog reads them, in
+// ascending `priority`, only when its first choice is not eligible. Candidates are evaluated lazily, so they
+// reflect the page as it is when the dialog closes.
+interface FocusFallback {
+    priority: number
+    resolve: () => HTMLElement | null
+}
+const focusFallbacks = new Set<FocusFallback>()
+
+export function registerFocusFallback(priority: number, resolve: () => HTMLElement | null): () => void {
+    const entry: FocusFallback = { priority, resolve }
+    focusFallbacks.add(entry)
+    return () => {
+        focusFallbacks.delete(entry)
+    }
+}
+
+// A snapshot taken when a dialog opens, so a candidate unregistered while the dialog is closing still counts.
+export function snapshotFocusFallbacks(): Array<() => HTMLElement | null> {
+    return [...focusFallbacks].sort((left, right) => left.priority - right.priority).map((entry) => entry.resolve)
+}
+
 // Whether a page-level guard is mounted and so already owns the blocker.
 export function useHostGuard(): boolean {
     return useSyncExternalStore(subscribe, () => pageGuards > 0)

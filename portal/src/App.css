@@ -678,6 +678,13 @@ a.app-header__title:focus-visible {
   overflow-wrap: anywhere;
 }
 
+/* A record's own name shown beside a fixed menu label ("Selected character" + the name). */
+.portal-sidebar__detail {
+  display: block;
+  font-size: 0.85em;
+  opacity: 0.85;
+}
+
 .portal-sidebar__note {
   padding: 0.5rem 0.75rem;
   color: var(--color-chrome-muted);
@@ -706,6 +713,23 @@ a.app-header__title:focus-visible {
 
 .portal-sidebar--collapsed .portal-sidebar__chevron {
   display: none;
+}
+
+/* Collapsed rail, split controls (Campaign, World, Characters): the main icon and the disclosure stay
+   two separate controls, stacked, with the disclosure's chevron kept visible so expanding the flyout
+   is still directly usable. */
+.portal-sidebar--collapsed .portal-sidebar__split-group .portal-sidebar__row {
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.portal-sidebar--collapsed .portal-sidebar__split-group .portal-sidebar__link--icon-only {
+  width: auto;
+  min-height: 1.75rem;
+}
+
+.portal-sidebar--collapsed .portal-sidebar__split-group .portal-sidebar__chevron {
+  display: block;
 }
 
 /* Collapsed rail: the Access children have no icon, so their
@@ -773,6 +797,16 @@ a.app-header__title:focus-visible {
 
   .portal-sidebar--collapsed .portal-sidebar__chevron {
     display: block;
+  }
+
+  .portal-sidebar--collapsed .portal-sidebar__split-group .portal-sidebar__row {
+    flex-direction: row;
+    gap: 0.25rem;
+  }
+
+  .portal-sidebar--collapsed .portal-sidebar__split-group .portal-sidebar__link--icon-only {
+    width: 2.75rem;
+    min-height: 0;
   }
 
   .portal-sidebar--collapsed .portal-sidebar__access-group {

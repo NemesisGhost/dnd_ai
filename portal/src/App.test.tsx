@@ -550,10 +550,12 @@ describe("portal routing", () => {
       }),
     ).toBeInTheDocument()
 
+    // On Campaign Home the Campaign control is a button; Home is its menu's current entry.
     expect(
-      screen.getByRole("link", {
-        name: "Campaign Home",
-      }),
+      screen.getByRole("button", { name: "Campaign menu" }),
+    ).toHaveAttribute("aria-expanded", "false")
+    expect(
+      screen.getByRole("link", { name: "Campaign Home", hidden: true }),
     ).toHaveAttribute("aria-current", "page")
 
     expect(
@@ -597,7 +599,7 @@ describe("portal routing", () => {
     renderAppAt("/app/mundivita/quests")
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Choose campaign" }),
+      screen.getByRole("button", { name: "Show campaign menu" }),
     )
     expect(
       screen.getByRole("link", { name: "View all campaigns" }),
@@ -643,11 +645,10 @@ describe("portal routing", () => {
   it("routes Characters to the selected character workspace", () => {
     renderAppAt("/app/mundivita/characters")
 
+    // In a Characters task the Characters control is the button that toggles its menu, shown as current.
     expect(
-      screen.getByRole("link", {
-        name: "Characters",
-      }),
-    ).toHaveAttribute("aria-current", "page")
+      screen.getByRole("button", { name: "Characters menu" }),
+    ).toHaveClass("portal-sidebar__link--active")
 
     expect(
       useCharacterMock,

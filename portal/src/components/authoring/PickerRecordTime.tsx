@@ -6,6 +6,8 @@ import type { Blocker } from "react-router"
 import {
     NO_GUARD_VIEW,
     createGuardViewStore,
+    holdHolderQuestion,
+    reportQuestionAnswer,
     useGuardView,
     isGuardedTransition,
     useHostGuard,
@@ -55,16 +57,23 @@ function OwnBlocker({ hold, view }: { hold: boolean; view: GuardViewStore }) {
     useLayoutEffect(() => {
         blockerRef.current = blocker
     })
+    // While its question is on screen, the navigation controls that waited on it leave their menus alone.
+    const asking = blocker.state === "blocked"
+    useLayoutEffect(() => (asking ? holdHolderQuestion() : undefined), [asking])
     useLayoutEffect(() => {
         view.set({
             blocked: blocker.state === "blocked",
             stay: () => {
-                if (blocker.state === "blocked") blocker.reset()
+                if (blocker.state === "blocked") {
+                    reportQuestionAnswer("stay")
+                    blocker.reset()
+                }
             },
             discard: () => {
                 holdRef.current = false
                 if (blocker.state === "blocked") {
                     leaving.current = true
+                    reportQuestionAnswer("leave")
                     blocker.proceed()
                 }
             },

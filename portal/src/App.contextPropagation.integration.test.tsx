@@ -334,9 +334,14 @@ describe("Access follows the selected campaign", () => {
         .getAllByRole("link")
         .map((link) => link.getAttribute("href"))
       expect(hrefs).toContain("/app/b/quests")
-      expect(hrefs).toContain("/app/b/characters")
       expect(hrefs).not.toContain("/app/a/quests")
     })
+    // Characters is a split control: its menu's destinations follow the chosen campaign as well.
+    fireEvent.click(within(sidebar()).getByRole("button", { name: "Show characters menu" }))
+    expect(within(sidebar()).getByRole("link", { name: "All characters" })).toHaveAttribute(
+      "href",
+      "/app/b/characters/all",
+    )
   })
 
   it("Info Box world change to a campaign-visible world", async () => {
