@@ -1,6 +1,7 @@
 # ADR 0022: Creature templates, encounter combatants, and promotion
 
 - **Status**: Proposed. R19-P0 architecture deliverable, corrected after independent review (finding R19-07). Not accepted. It implements owner Decision 3 (hybrid creature representation) and is the creature-model ADR that [PLANv2.md](../PLANv2.md) 19.3 and §18 item 8 require.
+- **Owner decisions applied (Owner-approved 2026-11-03)**: OD-5 (no delegation for creating and publishing a promoted character, §6) and OD-11 (no promotion during an active encounter, §6). These are policy approvals, not acceptance of this ADR.
 - **Date**: 2026-11-02
 - **Extends**: [ADR 0005](0005-separate-rules-definitions-from-world-instances.md). A creature template is a rules definition; a persistent creature is a world instance.
 - **Depends on**: [ADR 0021](0021-shared-actor-identity-control-and-authoring-responsibility.md) (actor identity, control, build scope, campaign-aware active build); [ADR 0023](0023-rules-engine-calculation-validation-and-source-authorization.md) (adapters, payload validation, provenance, validation and review).
@@ -158,11 +159,12 @@ A combatant may be re-pinned to a newer template version only while its encounte
 
 ### 6. Promotion to a persistent character (R19-P4b)
 
-`promote_encounter_combatant(encounter_participant_id, name, idempotency_key)` is allowed when the encounter is `completed` or `aborted`. Active-encounter promotion is OD-11.
+`promote_encounter_combatant(encounter_participant_id, name, idempotency_key)` is allowed only after the encounter has ended (`completed` or `aborted`). **OD-11 (Owner-approved 2026-11-03):** promotion of a lightweight combatant to a persistent character is not permitted during an active encounter. The command refuses in every other status.
 
 The caller must hold the authority to create **and publish** the character on that world:
-- world `world.canon.edit` and `world.canon.review`, plus route-campaign `canon.edit`, under ADR 0021 §4;
-- or a delegation that covers creation and publication, if OD-5 permits it.
+- world `world.canon.edit` and `world.canon.review`, plus route-campaign `canon.edit`, under ADR 0021 §4.
+
+OD-5 (Owner-approved 2026-11-03) provides no delegation for creating **and** publishing a new character. Delegations attach to an existing character, and publication into world canon follows world-authorized review (ADR 0021 §4.3, §4.4).
 
 Otherwise the command refuses. It never leaves a half-promoted actor. Steps, in one transaction:
 

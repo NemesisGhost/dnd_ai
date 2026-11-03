@@ -5,16 +5,17 @@
   - **OD-20, Owner-approved:** shared narrative ownership and location; campaign-specific mechanical possession (§3.1.1).
   - **OD-21, Owner-approved:** separately authorized lineage seeding and cross-campaign copy, both disabled until enablement acceptance (§3.6).
 
-  No other owner acceptance is recorded.
-- **Acceptance prerequisites**: These owner decisions in [R19_FOUNDATION_IMPLEMENTATION_PLAN.md §9](../R19_FOUNDATION_IMPLEMENTATION_PLAN.md#9-decision-register) must be recorded before this ADR can be accepted and before the P03-B/P03-C/P03-S contracts freeze:
-  - OD-2: co-controller authority;
-  - OD-4: who may assign control;
-  - OD-5: authoring delegation;
-  - OD-14: no-clock control;
-  - OD-17: revelation audiences;
-  - OD-19: intentional legacy-access reductions.
-
-  OD-3 (initial operation allow-list) blocks only P03-B implementation of operations.
+  Owner decisions recorded 2026-11-03 (policy approvals only, not acceptance of this ADR):
+  - **OD-2:** co-controller authority (§2.5);
+  - **OD-3:** the initial controller operation allow-list (§2.5a);
+  - **OD-4:** who may assign control (§2.7);
+  - **OD-5:** authoring delegation and new player characters (§4.3, §4.4);
+  - **OD-14:** ongoing and dated control, with and without a clock (§2.4);
+  - **OD-17:** revelation audiences and release semantics (§6);
+  - **OD-18:** the campaign-scoped player profile (§4.7, §7);
+  - **OD-19:** legacy-access reductions only by per-character reviewed disposition (§4.1, §4.5);
+  - **OD-22:** no world-shared record of an unheld item's whereabouts (§3.1.1).
+- **Acceptance prerequisites**: Every owner decision this ADR depends on is now recorded in [R19_FOUNDATION_IMPLEMENTATION_PLAN.md §9](../R19_FOUNDATION_IMPLEMENTATION_PLAN.md#9-decision-register). Acceptance still needs independent review and a **separate ADR acceptance decision**; the P03-B/P03-C/P03-S contracts freeze only after it. One open owner question remains in scope (plan §9, OD-4a): who may delegate `character.assign_control` to an assistant GM. It blocks only that delegation path (§2.7), not the contract freeze.
 - **Date**: 2026-11-02
 - **Would amend, once accepted**: [ADR 0020](0020-scoped-system-world-and-campaign-roles.md) decision 6, for player-character identity only (§4.6). ADR 0020 remains fully in force until this ADR is accepted *and* the P03-C cutover for each character has completed.
 - **Implemented by**: Phase 15 checkpoints P03-A, P03-B, P03-C, and **P03-S** (campaign mechanical-state isolation, §3). The P03-S name is provisional; Phase 15 may fold it into P03-B/C, but it must precede controller operations that write state ([PLANv2.md](../PLANv2.md) §8, 15H). Phase 19 consumes the contracts ([R19_FOUNDATION_IMPLEMENTATION_PLAN.md §5.1](../R19_FOUNDATION_IMPLEMENTATION_PLAN.md#51-actor-contract-owner-phase-15)) and implements none of them.
@@ -102,7 +103,7 @@ Non-human operators are not controllers:
 1. **One request clock.** Each request resolves `resolve_effective_clock(campaign timeline)` once. This is the same resolver the party-membership predicate uses, including its bounded branch fallback. Every control decision in the request uses that value.
 2. **Dated assignment.** It is in effect when the clock is set and `effective_period @> clock`. The interval is half-open: the start is included and the end excluded. A dated assignment whose start is after the clock is upcoming, not in effect.
 3. **Ongoing assignment.** It is in effect from creation until revoked, regardless of the clock. "Ongoing" is an **explicitly chosen** kind recorded on the row. It is never inferred from absent endpoints.
-4. **No clock.** With no effective clock, a dated assignment is *undetermined* and confers nothing. An ongoing assignment is unaffected. Whether undated ongoing control is permitted at all, and whether it should be the default kind, is **owner decision OD-14**. DEF-007's party rule ("no clock, nothing current") is evidence for a consistent choice. It is **not** silently applied to the control domain, which is distinct.
+4. **No clock.** With no effective clock, a dated assignment is *undetermined* and confers nothing. An ongoing assignment is unaffected. **OD-14 (Owner-approved 2026-11-03):** both kinds are supported, and each assignment states its kind explicitly; there is **no default kind**. Ongoing control works without a world clock. A dated assignment stays undetermined without a usable clock, and ongoing status is never inferred from it. DEF-007's party rule ("no clock, nothing current") is precedent only and is not applied to the control domain.
 5. **Branches.** Assignments belong to campaigns, and campaigns are fixed to one timeline, so nothing is inherited across branches. A campaign on a branch makes its own assignments. A branch without its own clock reads its parent's clock bounded at the branch point, per the resolver.
 6. **Legacy rows** keep today's effectiveness rule (open `effective_to`) unchanged. P03-B does not alter legacy semantics.
 7. **History.** "Who controlled the actor at world time T" is answered from dated assignments' periods. Ongoing assignments carry real-time `granted_at` / `revoked_at` only. Read models label them "ongoing since …" and never fabricate fictional dates.
@@ -113,14 +114,36 @@ Non-human operators are not controllers:
 2. Assignment rows resolve **exclusively** through a new closed matrix, `CONTROL_ASSIGNMENT_CAPABILITIES`, keyed by role:
    - `discover`, `view_summary`, `view_full` (the controller mechanical projection), `view_inventory`;
    - `character.control`;
-   - `character.edit_mechanical_state`, limited to the P03-B operation allow-list (OD-3).
+   - `character.edit_mechanical_state`, limited to the OD-3 operation allow-list (§2.5a);
+   - `character.view_player_profile`: read-only access to the campaign-scoped player profile (OD-18, §7).
 3. It never includes:
    - `canon.edit`, world capabilities, `access.manage`;
    - `view_private`, `view_knowledge` (perspective);
-   - build proposals, portrayal or revelation.
-4. The co-controller set is fixed by OD-2.
+   - build proposals, GM portrayal (`npc_portrayal_profiles`), authoring of the player profile (§4.7), or revelation;
+   - `character.assign_control` (§2.7).
+4. **Co-controllers (OD-2, Owner-approved 2026-11-03).**
+   - Primary and co-controllers receive the same matrix entries and the same bounded operations.
+   - Neither role manages assignments.
+   - Revoking or replacing a primary leaves every co-controller assignment unchanged and never promotes a co-controller to primary. A new primary exists only through an explicit assignment command (§2.7). Co-controllers may therefore hold control while no primary exists.
 5. **Legacy relationship rows keep their existing capabilities**, including `view_private` and `view_knowledge`, through their own matrix. Creating, revoking or replacing an assignment never alters, revokes or promotes a legacy row.
 6. A knowledge perspective for an assigned controller is a separate, explicitly created grant: a legacy-matrix relationship row or a resource grant, with its own revocation.
+
+#### 2.5a Controller operations (OD-3, Owner-approved 2026-11-03)
+
+`CONTROLLER_OPERATIONS` is closed. Each operation is a named controller intent (§2.8) on the controlled character, writing only the route campaign's mechanical state (P03-S), with an `authorized_at_write` event attribution (§3.3).
+
+| Allowed | Bounds |
+|---|---|
+| Hit points and temporary hit points | Adjust current HP within `0..maximum`; set or clear temporary HP. Never maxima, death-save rules or builds |
+| Named resources | Expend and recover within the resource's bounds. Never create or delete a resource or change its maximum |
+| Self-manageable conditions | Apply and remove only conditions **explicitly designated** self-manageable for the route campaign. The designation is a campaign-specific rule managed under OD-10 (campaign `canon.edit`). With no designation, no condition is self-manageable |
+| Equipment and attunement | Equip, unequip, attune and end attunement for items the controlled character possesses in the route campaign. Attunement follows the attunement limit and ED-12 (`item_definition_version_mismatch`). Ownership never changes (OD-20) |
+
+**Never granted through control:**
+- encounter commands (initiative, turns, encounter damage, combat sync);
+- shared narrative changes (location, ownership, quests, relationships, knowledge);
+- ownership transfers, possession transfers and `assign_to_holder`;
+- canon authoring, builds, maxima, or any operation on another actor.
 
 #### 2.6 GM default
 
@@ -129,7 +152,8 @@ With no live, in-effect player assignment, the actor is GM-operated under existi
 #### 2.7 Assignment management
 
 - Commands `assign_character_control`, `replace_primary_controller` and `revoke_character_control` are idempotent and audited.
-- They require a new campaign capability, `character.assign_control`, separate from `access.manage` and `canon.edit`. Its holders are OD-4. **No default holder is encoded until OD-4 is decided.**
+- They require a new campaign capability, `character.assign_control`, separate from `access.manage` and `canon.edit`.
+- **Holders (OD-4, Owner-approved 2026-11-03):** the built-in campaign roles `campaign_owner` and `gm`. `assistant_gm` does not hold it by default. An assistant GM may assign or revoke control only through an **explicit, revocable, audited delegation** of `character.assign_control` to that membership. The decision does not say who may make that delegation (plan §9, OD-4a). Until that is decided, no delegation path is enabled and assistant GMs cannot assign control. Control assignments never confer it (OD-2).
 - The assignee must be an active membership of the campaign.
 
 #### 2.8 Common locking protocol (R19-02)
@@ -254,7 +278,7 @@ P03-S changes every boundary:
 
 **Mechanical use never changes ownership.** Equip, unequip, consume, charge use, damage, repair, attune, end attunement, and campaign "destroyed" write campaign rows only.
 
-**Where an unheld item lies (OD-22, UNRESOLVED, non-blocking).** `inventory_entries.location_id` and `container_id` record where an unheld item lies. Under OD-20 that becomes part of each campaign's possession, so an item may lie in different places in different campaigns. **No shared record of item whereabouts exists today or is planned.** OD-22 only asks whether the owner wants one. No design is proposed or approved.
+**Where an unheld item lies (OD-22, Owner-approved 2026-11-03).** `inventory_entries.location_id` and `container_id` record where an unheld item lies. Under OD-20 that becomes part of each campaign's possession, so an item may lie in different places in different campaigns. **No shared record of item whereabouts exists today or is planned.** OD-22 decides that none is introduced at this stage: an unheld item's whereabouts stay campaign-specific under OD-20. A future canonical-placement feature needs a separate proposal and owner approval.
 
 #### 3.2 Campaign-keyed storage (Phase 15, checkpoint P03-S)
 
@@ -536,7 +560,7 @@ OD-21's approval does not satisfy item 4. **Ordinary P03-S isolation does not de
 | Possession: award, transfer, place; ownership (narrative); `change_item_ownership` | **Allowed.** Version-neutral state of a world object |
 | Equip and unequip; quantity consume; damage, repair, destroy | **Allowed** as campaign mechanical state. The flags are version-neutral |
 | **Attune**; any operation that **creates or interprets** definition mechanics (charges maximum, attunement requirement) | **Refused** with `item_definition_version_mismatch` (400, non-disclosing about other campaigns), because the definition's rules belong to another version |
-| **End attunement** (`end_item_attunement`) | **Allowed** (R19-16). Ending removes a campaign row and interprets no mechanics. It uses the normal campaign authorization (`canon.edit`, or a controller intent if OD-3 includes it), the campaign token and an event |
+| **End attunement** (`end_item_attunement`) | **Allowed** (R19-16). Ending removes a campaign row and interprets no mechanics. It uses the normal campaign authorization (`canon.edit`, or the controller intent for end attunement under OD-3, §2.5a), the campaign token and an event |
 | Calculation (ADR 0023) | The item's equipment facts are `incompatible_ruleset_version`: they contribute nothing and raise a warning. No implicit mapping to a same-code definition in C's version. Any mapping is a separate future design |
 
 A campaign whose pin equals the definition's version behaves as today.
@@ -729,7 +753,7 @@ Character P is a published player character on world W, used by campaigns A and 
 
 A world Editor with no campaign role has no route to edit P. Authoring routes are campaign-scoped (ADR 0020 decision 6).
 
-So a single campaign delegation, for example "P is delegated to A", would **remove** B's and C's GMs. It does not preserve current access. Any reduction is an intentional decision (OD-19), never a side effect.
+So a single campaign delegation, for example "P is delegated to A", would **remove** B's and C's GMs. It does not preserve current access. Under **OD-19 (Owner-approved 2026-11-03)**, existing authoring access is preserved until an explicit, **per-character** reviewed disposition authorizes its replacement or reduction, recording the reason and the affected principals. A reduction is never a side effect.
 
 #### 4.2 Three separate concepts
 
@@ -744,15 +768,28 @@ So a single campaign delegation, for example "P is delegated to A", would **remo
 
 #### 4.3 Authority to grant and revoke
 
-This is **OD-5, owner decision**. No default is encoded.
-
-The recommended rule is that granting or revoking a delegation requires world `world.canon.review` on W plus campaign `canon.edit` on the route campaign. Delegating a lifecycle operation requires that the granter hold the matching world capability. Nobody delegates more than they hold.
+**OD-5 (Owner-approved 2026-11-03):** canonical character authoring delegation is governed by world-authorized review and appropriate campaign authority.
+- Granting or revoking a delegation requires world `world.canon.review` on W **and** campaign `canon.edit` on the route campaign.
+- Delegating a lifecycle operation also requires the granter to hold the matching world capability. Nobody delegates more than they hold.
+- Campaign GMs cannot grant themselves world-canon rights. A caller without the world capability cannot grant any delegation, including to their own campaign.
+- Campaign GM status, campaign ownership and control assignment never confer world-canon authority.
 
 Delegations are never created by campaign creation, world-use grants (`campaign.create` / hosting permission), control assignment, character creation, subtype, first campaign, or audit history.
 
 #### 4.4 New characters
 
-Whether a character created through a campaign route without a world role is allowed, and with which delegation, is **OD-5**. Until decided, P03-C must preserve current behavior for new player characters. Each new player character gets a legacy exception row (`pending`), so behavior is unchanged and the record is explicit.
+**OD-5 (Owner-approved 2026-11-03):** a new player character may begin as a **campaign-scoped pending record** without a world role, and its publication into world canon follows authorized review. After the P03-C cutover:
+- **The record.** A new player character created through a campaign route by a caller without the world capability is the character's own `core.entities` row, in canon status `draft`. It is not a campaign-owned copy (§4.8). P03-C records its immutable origin in `character.character_authoring_origins` (`character_id` PK, `origin_campaign_id`, `created_by_user_id`, `created_at`).
+- **Before first publication:**
+  - only the origin campaign's `canon.edit` holders may read it, edit it while `draft`, and submit it for review;
+  - world reviewers see it under the existing lifecycle review rules once it is submitted;
+  - other campaigns on the world neither see nor edit it.
+- **Publication** into world canon needs world `world.canon.review` plus route-campaign `canon.edit`, as for any world definition (stewardship).
+- **After publication,** the character is governed by stewardship and delegations (§4.2, §4.3). The origin record grants nothing further.
+- **No legacy exception** is written for it. §4.5 applies only to characters that exist at the cutover.
+- A caller who holds the world capability creates player characters under stewardship.
+
+Until the P03-C cutover, ADR 0020 governs unchanged. A player character created before the cutover is an existing character at the cutover, and §4.5 applies to it.
 
 #### 4.5 Migration
 
@@ -762,10 +799,10 @@ The P03-C manifest:
 3. shows evidence: relationships, sessions, events, audit, each cited only as evidence;
 4. offers dispositions:
    - **keep** the exception;
-   - **replace** it with explicit delegations to named campaigns. This is an access reduction for unnamed campaigns and needs an OD-19 record per world or per character;
+   - **replace** it with explicit delegations to named campaigns. This is an access reduction for unnamed campaigns and needs an **OD-19 per-character reviewed disposition** recording the reason and the affected principals: the campaigns and users whose access is reduced;
    - **steward only.**
 
-Ambiguous characters stay `pending`, with unchanged access, until reviewed. Creator, subtype, first campaign and audit history are never used to infer a disposition.
+Ambiguous characters stay `pending`, with unchanged access, until reviewed. A per-world or bulk reduction without a per-character disposition is not permitted (OD-19). Creator, subtype, first campaign and audit history are never used to infer a disposition.
 
 #### 4.6 ADR 0020 amendment and timing
 
@@ -777,7 +814,7 @@ Ambiguous characters stay `pending`, with unchanged access, until reviewed. Crea
 #### 4.7 Delegated player authoring
 
 Delegated player authoring uses resource grants (`security.resource_grants`, character target) for:
-- `character.edit_narrative`, limited to the player-editable profile fields that OD-18 defines;
+- `character.edit_narrative`, which edits only the campaign-scoped player profile (§7, OD-18), never world-canon fields;
 - `character.propose_build`, a new capability (ADR 0023 §7).
 
 A grant is campaign-scoped, revocable and audited. The granter must hold `access.manage` **and** the delegated authority for that character in that campaign. Direct build commit is not delegable.
@@ -810,7 +847,10 @@ This ADR adopts the investigation's recommended contract (§D6.3–D6.5, supplem
 - legacy background kept restricted until reviewed;
 - one discovery and profile predicate for every consumer.
 
-**Audiences** (selected members, groups, campaign-wide including future members or not) and **release semantics** (whether a reveal follows later releases) are **OD-17, owner decision**, required before the P03-A schema.
+**Audiences and release semantics (OD-17, Owner-approved 2026-11-03).**
+- **Audiences.** A revelation names a specific member, an access group, or the whole campaign. A campaign-wide revelation records explicitly whether it covers **current members only** (members at release time) or **current and future members**. There is no default.
+- **Release semantics.** An audience receives only **deliberately published** versions of the public profile. A reveal follows later deliberate releases. It never exposes unpublished edits, GM-private fields, the GM view, restricted legacy background, the player profile's unpublished fields or derived mechanics.
+- **Revocation.** Revoking a revelation is independent of every other capability source (§2.9).
 
 Four projections are distinct server DTOs:
 1. public profile;
@@ -829,7 +869,11 @@ P03-C re-keys `npc_portrayal_profiles` to `character_id`:
 
 The `npc_id` dependency is dropped only after verification, with a backup. Portrayal remains a GM authoring surface (`canon.edit`).
 
-**Player-authored portrayal guidance** for a controlled character (PLANv2 16A) is a separate, campaign-scoped, controller-owned profile. It is not `npc_portrayal_profiles` and grants no GM portrayal access. Its fields and review are **OD-18**.
+**Player-authored portrayal and profile (OD-18, Owner-approved 2026-11-03).** Guidance for a controlled character (PLANv2 16A) is a separate, **campaign-scoped** player profile:
+- It is distinct from world canon (`character.character_descriptions`) and from GM-private portrayal (`npc_portrayal_profiles`). It grants no GM portrayal access and never reads GM-private fields.
+- It is authored through the explicit `character.edit_narrative` grant (§4.7). Control alone grants reading, not authoring.
+- It is readable by that campaign's GMs (`canon.edit`) and by the character's live, in-effect controllers in that campaign (`character.view_player_profile`, §2.5), and by nobody else.
+- A field is published only when explicitly selected, through the existing workflow for its destination: to campaign audiences by an OD-17 revelation of a released version, or into world canon only through OD-5 world-authorized review. Nothing is published automatically.
 
 ### 8. Migration, compatibility and rollback
 
@@ -844,7 +888,7 @@ The `npc_id` dependency is dropped only after verification, with a backup. Portr
    - legacy timeline-scoped mechanical rows and their §3.8 classification.
 
    Audit is evidence only. The mechanical-state migration itself follows §3.8.
-2. **Additive first.** New columns, tables and indexes ship with code that still honours legacy paths. Old and new effective access are compared on the restored copy, and every difference is recorded with its OD-19 decision.
+2. **Additive first.** New columns, tables and indexes ship with code that still honours legacy paths. Old and new effective access are compared on the restored copy, and every difference is recorded with its OD-19 per-character disposition (reason and affected principals).
 3. **Preserve.**
    - Keep: UUIDs, entity rows, builds and their children, active-state history, events and effects, Knowledge, relationship and inventory references, portrayal versions, historical session roles.
    - No automatic control or revelation.

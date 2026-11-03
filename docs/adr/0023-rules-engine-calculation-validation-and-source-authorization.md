@@ -5,6 +5,7 @@
 - **Owner decisions applied**: OD-20 and OD-21 (Owner-approved, 2026-11-02).
   - **OD-20:** equipment inputs come from the route campaign's **possession**, item state and attunement. Fictional/legal ownership (`campaign.item_ownership`, shared narrative) is **not** a mechanical input and never changes because of a calculation (ADR 0021 §3.1.1).
   - **OD-21:** the engine's only cross-campaign truth read is inside the separately authorized, disabled seeding and copy commands (ADR 0021 §3.6).
+- **Owner decisions applied (Owner-approved 2026-11-03)**: OD-7 (seed provenance, §4), OD-9 (rules exceptions and legacy builds, §7.4, §7.6), OD-10 (rules authority, §6) and OD-12 (player-registered sources, §9). These are policy approvals, not acceptance of this ADR.
 - **Date**: 2026-11-02
 - **Extends**: [ADR 0005](0005-separate-rules-definitions-from-world-instances.md) and the identity-immutability policy of `DATABASE_MODEL.md` §8 (revisions 033/036). It does not replace the `rules` schema.
 - **Related**: [ADR 0006](0006-ai-proposes-but-does-not-own-canon.md), [ADR 0016](0016-data-classification-and-private-data-handling.md), [ADR 0021](0021-shared-actor-identity-control-and-authoring-responsibility.md), [ADR 0022](0022-creature-templates-combatants-and-promotion.md).
@@ -141,7 +142,12 @@ These are core types. **None of them names classes, levels, proficiency, armor c
   - `checksum`, `installed_at`, `status`.
 
   Ruleset-wide definition tables gain a nullable, immutable `content_package_id`. World homebrew uses `owning_world_id` and an optional `source_id`. No definition must cite a commercial sourcebook.
-- **The seed stays unreviewed.** The revision-022 content is backfilled into one package with `license_code = 'unknown'` and `review_status = 'unreviewed'`. This ADR makes **no legal determination** and claims no license. Owner decision OD-7 decides who reviews the seed's origin. The review is due **before the next distributed artifact that contains the seed**: any release image, packaged installer or public repository publication, and at the latest the Phase 17 packaging gate. The seed is already in the repository, so the owner should confirm the repository's current distribution status as part of OD-7.
+- **The seed stays unreviewed.** The revision-022 content is backfilled into one package with `license_code = 'unknown'` and `review_status = 'unreviewed'`. This ADR makes **no legal determination** and claims no license. **OD-7 (Owner-approved 2026-11-03):**
+  - The seed's provenance stays `unknown` / `unreviewed` until an evidence inventory is complete.
+  - Before distribution, documented rights clearance, or replacement of uncleared content, is required.
+  - The approval is **not** licensing clearance.
+
+  The requirement applies before the next distributed artifact that contains the seed: any release image, packaged installer or public repository publication, and at the latest the Phase 17 packaging gate. The repository is currently publicly visible and already contains the seed. Whether that existing publication is distribution under OD-7 is an open owner question (plan §9, OD-7a). This ADR does not answer it.
 - **Stable lineage.** `(family, definition table, code)` across ruleset versions.
 - **Mutable existing fields.** Mechanically relevant columns that are mutable today stay mutable, because changing their editability is a behavior change. They are covered by content hashing in the manifest (§10). New mechanical payload columns introduced by R19 (template, item and house-rule mechanics, structured prerequisites) are mutable only while `draft` and immutable once `canon`.
 - **Structured prerequisites and exclusions** (schema later, used in R19-P4c) are typed rows. A prerequisite the adapter cannot evaluate is `unsupported`, never treated as satisfied.
@@ -196,11 +202,12 @@ Semantics:
 - `unevaluated` rules are recorded and shown, and any key they name is at most "Calculated, not rules-validated".
 - Changes never rewrite builds, reviews, events or combat outcomes.
 
-**Authority to author, publish and adopt is OD-10, an owner decision**, because it is authority policy. The recommendation:
-- campaign rules: campaign `canon.edit`;
-- world rules: `world.canon.edit` / `world.canon.review` plus route `canon.edit`.
+**Authority to author, publish and adopt (OD-10, Owner-approved 2026-11-03):**
+- **Campaign rules.** Campaign canon editors (campaign `canon.edit` on the route campaign) manage campaign-specific rules, house-rule adoption and allowed options.
+- **Shared-world rules.** These need the matching world authority (`world.canon.edit` to author, `world.canon.review` to publish) plus route-campaign `canon.edit`.
+- **Versioning.** Rules and overrides stay versioned: house-rule versions are append-only, and option policy changes advance the configuration version.
 
-Commands that write house rules or option policy **do not merge enabled** until OD-10 is recorded. Read paths and schema may merge first.
+Read paths and schema may merge first. Commands that write house rules or option policy enforce this authority. They enable through their checkpoint's tests and review; no owner-decision gate remains.
 
 ### 7. Validation, drafts, review and effective use (owner Decision 6)
 
@@ -239,7 +246,7 @@ Failed validation never deletes or rewrites draft content.
 
 `activate_character_build` additionally requires one of:
 1. the build has a review (any approval decision); or
-2. the build is a legacy build (`not_evaluated`, created before P3d-2). Whether legacy builds stay exempt is part of **OD-9**. The recommendation is exempt, with a visible "not evaluated" label.
+2. the build is a legacy build (`not_evaluated`, created before P3d-2). **OD-9 (Owner-approved 2026-11-03):** legacy builds stay usable, with a visible "not evaluated" label, until they are explicitly reviewed under this activation policy. Once a review is recorded, item 1 governs.
 
 An **unreviewed** build cannot be activated until an authorized reviewer records a review through `review_character_build`. That reviewer holds the same authority as approval.
 
@@ -254,11 +261,16 @@ The build has **no FK dependency on the draft**. Every referenced definition mus
 
 #### 7.6 Rules exceptions
 
-`approved_as_rules_exception`:
+**OD-9 (Owner-approved 2026-11-03):** campaign canon editors may approve supported rules exceptions with a recorded reason. Exceptions never override integrity or authorization constraints. `approved_as_rules_exception`:
 - waives only **mechanical legality findings**: prerequisites, choice limits, rule-defined bounds;
-- **never** waives authorization, world/campaign/ruleset-version scope, referential integrity (every FK, same-version and same-world trigger and canon requirement still applies), or payload safety (schema validation, size bounds);
-- requires a reason;
-- is available only to `canon.edit` holders, never to a delegated proposer.
+- **never** waives:
+  - authorization;
+  - world, campaign or ruleset-version scope;
+  - referential integrity (every FK, same-version and same-world trigger and canon requirement still applies);
+  - payload safety (schema validation, size bounds);
+  - provenance: the effective-input manifest, the content-package and source records, and the review record itself;
+- requires a reason, which is recorded with the review;
+- is available only to holders of campaign `canon.edit` on the route campaign, never to a delegated proposer or a controller.
 
 Approval never changes a finding's outcome.
 
@@ -273,7 +285,7 @@ Approval never changes a finding's outcome.
 
 | Decision | Question | Data and check | Never implies |
 |---|---|---|---|
-| 1. Source access | May this user read this `core.source_documents` document or passage? | `visibility`, `ai.reference_source_campaigns`, corpus capabilities. A future `contributor_private` visibility (OD-12) | Any of 2–5 |
+| 1. Source access | May this user read this `core.source_documents` document or passage? | `visibility`, `ai.reference_source_campaigns`, corpus capabilities. `contributor_private` visibility (OD-12, Owner-approved 2026-11-03) | Any of 2–5 |
 | 2. Source retrieval and use | May this purpose use it (player read, GM prep, AI context, export)? | The `allow_*` flags plus purpose audience rules | 1, 3–5 |
 | 3. Permitted campaign option | May characters in this campaign choose this definition? | `campaign.campaign_rule_option_policies` / `campaign_rule_option_entries` (deny wins) via `rules_catalog.py` | 1, 2, 4, 5 |
 | 4. Mechanical validation | Is it rules-legal under the effective configuration? | The adapter plus the eligible catalog | 5 |
@@ -292,7 +304,12 @@ Approval never changes a finding's outcome.
   3. reviewers see flags in the review queue.
 - **Limitations:** paraphrase, sources outside the corpus and short phrases are not detected. The check is an aid, not a guarantee, and makes no legal determination.
 
-**A player's contributed material** keeps the visibility its contributor chooses. Deriving a homebrew definition from it never widens access to its text.
+**A player's contributed material (OD-12, Owner-approved 2026-11-03):**
+- Players may register reference sources they are entitled to use.
+- A registered source starts `contributor_private`.
+- GM access requires an explicit grant. The decision does not say who may make the grant (plan §9, OD-12a). That is settled before the Phase 18 intake design.
+- Citations (decision 1, and the typed citation link) and AI retrieval (decision 2) enforce the source's permissions. A reader who fails them sees nothing about the source or the citation.
+- Deriving a homebrew definition from the material never widens access to its text.
 
 **Catalog eligibility:**
 1. the same version as the campaign pin;
