@@ -32,9 +32,10 @@ interface KeyContract {
 
 /**
  * The most characters a persisted list query may have in total. It is a resource bound for tampered
- * history, not a paging limit: 512 KiB holds a trail of about 300 maximum-length (2048) encoded cursors,
- * far beyond what a page trail reaches in practice, and well under the structured-clone limits of
- * `history.state`. A query over it is rejected (the return falls back to the route default), never truncated.
+ * history: 524,288 UTF-16 code units (JavaScript `string.length`, not bytes). A trail of maximum-length
+ * (2048-character) cursors fits about 250 pages once percent-encoding of the key is counted. It is finite on
+ * purpose: a query over it is rejected (the return falls back to the route default), never truncated, so
+ * browse position is preserved up to this bound and not beyond. No browser limit is assumed or inferred.
  */
 export const MAX_LIST_SEARCH = 512 * 1024
 
@@ -111,7 +112,11 @@ function valueAccepted(rule: Rule, value: string): boolean {
         case "text":
             return value.length <= rule.max && !hasControl(value)
         case "token":
-            return /^[A-Za-z0-9_\-.=~+/]+$/.test(value) && value.length <= rule.max
+            // The backend emits unpadded Base64url (`base64.urlsafe_b64encode(...).rstrip("=")` in
+            // api/pagination.py): only [A-Za-z0-9_-]. Padding and the standard-alphabet characters
+            // (. = ~ + /) are never emitted. This is a structural check; the backend's decode_cursor
+            // stays authoritative for signature-free payload, keyset and freshness.
+            return /^[A-Za-z0-9_-]+$/.test(value) && value.length <= rule.max
         case "name":
             return /^[A-Za-z0-9][A-Za-z0-9 _-]*$/.test(value) && value.length <= rule.max
     }

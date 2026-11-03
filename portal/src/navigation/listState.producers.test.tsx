@@ -16,13 +16,24 @@ import { matchRouteMeta } from "./routeMeta"
 const CAMPAIGN = "c1"
 const UUID = "0f8fad5b-d9cb-469f-a165-0c0b0d6c1b3e"
 
-// A backend-shaped cursor: URL-safe base64 of a JSON keyset envelope, padded, of exactly `length` characters.
+// A backend-shaped cursor: unpadded Base64url (only A-Z a-z 0-9 _ -) of exactly `length` characters, as
+// `encode_cursor` emits it. Synthetic filler, not a decodable keyset; structural validation does not decode.
 function cursorOf(index: number, length: number): string {
     const head = `n${index}-`
     const body = "AbCd_-0123456789".repeat(Math.ceil(length / 16))
-    const raw = (head + body).slice(0, length - 2)
-    return `${raw}==`
+    return (head + body).slice(0, length)
 }
+
+// Produced by the real backend encoder (src/dnd_ai/api/pagination.py `encode_cursor`, run with the repository
+// interpreter on 2026-11-02; no database, no secret, no user data):
+//   encode_cursor("world_entities", ["???>>>" * 3, uuid.UUID("0f8fad5b-d9cb-469f-a165-0c0b0d6c1b3e")])
+// The sort-key text is chosen so the Base64url output contains both "_" and "-". It is a fixed literal here so
+// the portal test command needs no Python. If the encoder's format ever changes, regenerate it the same way.
+const BACKEND_CURSOR =
+    "WzEsIndvcmxkX2VudGl0aWVzIixbIj8_Pz4-Pj8_Pz4-Pj8_Pz4-PiIsIjBmOGZhZDViLWQ5Y2ItNDY5Zi1hMTY1LTBjMGIwZDZjMWIzZSJdXQ"
+//   encode_cursor("world_entities", ["Old Mill", uuid.UUID("0f8fad5b-...")])
+const BACKEND_CURSOR_PLAIN =
+    "WzEsIndvcmxkX2VudGl0aWVzIixbIk9sZCBNaWxsIiwiMGY4ZmFkNWItZDljYi00NjlmLWExNjUtMGMwYjBkNmMxYjNlIl1d"
 
 function CharactersProbe({ cursors }: { cursors: readonly string[] }) {
     const state = useCharactersBrowseState()
@@ -200,5 +211,68 @@ describe("endpoint-aligned name bounds", () => {
     it("Item definition category: 100 accepted, 101 rejected (item_definition_authoring.py max_length=100)", () => {
         expect(isValidListSearch("itemDefinitions.list", `?category=${"c".repeat(100)}`)).toBe(true)
         expect(isValidListSearch("itemDefinitions.list", `?category=${"c".repeat(101)}`)).toBe(false)
+    })
+})
+
+describe("cursor alphabet (unpadded Base64url)", () => {
+    const CAMPAIGN_ID = "c1"
+    const worldPage = matchRouteMeta(`/app/${CAMPAIGN_ID}/world/location/e1`)!
+    const sheet = matchRouteMeta(`/app/${CAMPAIGN_ID}/characters/${UUID}`)!
+    const withCursor = (value: string) => `?cursor=${encodeURIComponent(value)}`
+    const taskWith = (route: string, search: string) => ({
+        task: { v: 1, root: route === "campaign.world" ? "world" : "characters", scope: { campaignId: CAMPAIGN_ID }, trail: [], list: { route, search } },
+    })
+
+    it("the real backend tokens are base64url, contain - and _, and are accepted unchanged on every path", () => {
+        expect(BACKEND_CURSOR).toMatch(/^[A-Za-z0-9_-]+$/)
+        expect(BACKEND_CURSOR).toContain("_")
+        expect(BACKEND_CURSOR).toContain("-")
+        for (const token of [BACKEND_CURSOR, BACKEND_CURSOR_PLAIN]) {
+            const search = withCursor(token)
+            // history / task descriptor
+            const fromState = resolveTask(`/app/${CAMPAIGN_ID}/world/location/e1`, taskWith("campaign.world", search))
+            expect(fromState?.source).toBe("state")
+            expect(new URLSearchParams(fromState!.task.list!.search).get("cursor")).toBe(token)
+            // legacy return paths
+            expect(adaptLegacyReturn(worldPage, { worldSearch: search })?.task?.list?.search).toBe(search)
+            const characters = adaptLegacyReturn(sheet, { charactersReturn: `/app/${CAMPAIGN_ID}/characters/all${search}` })
+            expect(new URLSearchParams(characters!.task!.list!.search).get("cursor")).toBe(token)
+        }
+    })
+
+    it("accepts - and _ anywhere in a cursor", () => {
+        for (const token of ["-", "_", "a-b_c", "-leading", "trailing_", "A".repeat(2047) + "_"]) {
+            expect(isValidListSearch("campaign.world", withCursor(token)), token.slice(0, 12)).toBe(true)
+        }
+    })
+
+    // Each character the standard (padded) Base64 alphabet adds, and the review's dot-insertion case.
+    it.each([
+        ["padding =", BACKEND_CURSOR + "=="],
+        ["a single =", BACKEND_CURSOR + "="],
+        ["= in the middle", "abc=def"],
+        ["a dot inserted into a real token", BACKEND_CURSOR.slice(0, 20) + "." + BACKEND_CURSOR.slice(20)],
+        ["a trailing dot", BACKEND_CURSOR + "."],
+        ["~", BACKEND_CURSOR + "~"],
+        ["+", "ab+cd"],
+        ["/", "ab/cd"],
+        ["a space", "ab cd"],
+        ["a percent sign", "ab%cd"],
+    ])("rejects %s on every path", (_label, token) => {
+        const search = withCursor(token)
+        for (const route of ["campaign.world", "characters.browse"]) {
+            expect(isValidListSearch(route, search), route).toBe(false)
+        }
+        // history / task descriptor: the whole task falls back to the route default
+        const fromState = resolveTask(`/app/${CAMPAIGN_ID}/world/location/e1`, taskWith("campaign.world", search))
+        expect(fromState?.source).toBe("default")
+        // legacy return paths: the key is ignored
+        expect(adaptLegacyReturn(worldPage, { worldSearch: search })).toBeNull()
+        expect(adaptLegacyReturn(sheet, { charactersReturn: `/app/${CAMPAIGN_ID}/characters/all${search}` })).toBeNull()
+    })
+
+    it("keeps the 2048-character bound with the narrower alphabet", () => {
+        expect(isValidListSearch("campaign.world", withCursor(cursorOf(0, 2048)))).toBe(true)
+        expect(isValidListSearch("campaign.world", withCursor(cursorOf(0, 2049)))).toBe(false)
     })
 })
