@@ -1,182 +1,220 @@
 # ADR 0022: Creature templates, encounter combatants, and promotion
 
-- **Status**: Proposed (R19-P0 architecture deliverable, 2026-11-02; awaiting independent architecture review and owner acceptance). It implements owner Decision 3 (hybrid creature representation) and settles the creature-model decision that [PLANv2.md](../PLANv2.md) 19.3 and §18 item 8 require before implementation.
+- **Status**: Proposed. R19-P0 architecture deliverable, corrected after independent review (finding R19-07). Not accepted. It implements owner Decision 3 (hybrid creature representation) and is the creature-model ADR that [PLANv2.md](../PLANv2.md) 19.3 and §18 item 8 require.
 - **Date**: 2026-11-02
 - **Extends**: [ADR 0005](0005-separate-rules-definitions-from-world-instances.md). A creature template is a rules definition; a persistent creature is a world instance.
-- **Depends on**: [ADR 0021](0021-shared-actor-identity-control-and-authoring-responsibility.md) (actor identity, control, build scope), [ADR 0023](0023-rules-engine-calculation-validation-and-source-authorization.md) (ruleset adapters, mechanics payload validation, provenance).
+- **Depends on**: [ADR 0021](0021-shared-actor-identity-control-and-authoring-responsibility.md) (actor identity, control, build scope, campaign-aware active build); [ADR 0023](0023-rules-engine-calculation-validation-and-source-authorization.md) (adapters, payload validation, provenance, validation and review).
+- **Implementation gate**: Template definitions are R19-P2d. **Every encounter-integration change in this ADR (§4–§7) is R19-P4b**. That work happens after the Phase 17 gate, under Phase 15 encounter-command owner review. Nothing in §4–§7 is implemented by an early checkpoint.
 
 ## Context
 
-PLANv2 19.3 asked whether creatures should be character-based monsters with detail levels, or separate templates plus world instances. The owner has chosen a hybrid of three concepts:
+The owner chose three concepts:
+1. a reusable creature template;
+2. a lightweight encounter combatant;
+3. a persistent creature, which is a Character.
 
-1. a reusable **creature template** with mechanical definitions;
-2. a **lightweight encounter combatant** that needs no permanent world identity;
-3. a **persistent creature**, which is a Character.
+### What exists (verified at `10a1a4e`)
 
-What exists today:
-
-- `rules.creature_types` is a seeded lookup (aberration, beast, …). There is no template, stat block, creature instance or spawn model anywhere in the schema (`DATABASE_MODEL.md` §9.2 notes that `world.area_spawn_definitions` was never built).
-- `narrative.encounter_participants` (`src/dnd_ai/persistence/tables/encounters.py`) has:
+- **Templates.** `rules.creature_types` is a seeded lookup. No template, stat-block, creature-instance or spawn model exists.
+- **Encounters.** `narrative.encounters`.
+- **Participants.** `narrative.encounter_participants` has:
   - `encounter_participant_id` (PK);
-  - `participant_entity_id`, `NOT NULL`, FK `core.entities` `ON DELETE CASCADE`;
+  - `participant_entity_id`, NOT NULL, FK `core.entities` `ON DELETE CASCADE`;
   - `side`, `initiative`, `outcome`;
   - `UNIQUE (encounter_id, participant_entity_id)`.
-- Preparation accepts only existing published characters of the world (15.3B-2a). `narrative.encounter_turns.participant_id` references `encounter_participant_id`, not the entity. `interaction.targets.target_entity_id` targets entities.
-- Many APIs and commands address participants by `participant_entity_id`: turn recording, outcomes, the Foundry combat sync (`api/encounters.py`, `commands/encounters.py`, `commands/encounter_operations.py`). A hit lowers `campaign.character_state.current_hit_points` for a character with timeline state.
-- The member encounter projection (B1-1, `67f80de`) withholds GM summaries and turn notes and filters hidden participants.
+- **Turns.** `narrative.encounter_turns.participant_id` references the participant id.
+- **Interactions.**
+  - `interaction.actions.actor_entity_id` is NOT NULL (entity FK).
+  - `interaction.check_requests.actor_entity_id` is NOT NULL.
+  - `interaction.targets` has at-most-one `target_entity_id` or dungeon-feature targets.
+  - `interaction.combat_actions` references a target row.
+- **Events.** `narrative.event_participants.participant_entity_id` is an entity.
+- **Damage.** Combat damage to a character with timeline state updates `campaign.character_state.current_hit_points` and records an event with `event_causes.cause_encounter_id` and a `current_hit_points` effect (`commands/encounters.py`). This path does **not** set `character_state.last_event_id`.
 
-Representing every goblin as a persistent world character would create `core.entities`, `character.characters`, lifecycle, discovery and audit rows for actors nobody will reference again. It would also inflate World Explorer lists, discovery predicates, counts and the review queue. Representing a named monster as anything other than a Character would break ADR 0021's one-actor rule.
+### Every entity assumption a combatant breaks
+
+| # | Component (source) | Assumption | Required change (P4b) |
+|---|---|---|---|
+| E1 | `narrative.encounter_participants` | The entity is NOT NULL and unique per encounter. | The entity becomes nullable; add combatant columns (§4.1). |
+| E2 | Preparation `add`/`update` participant (`commands/encounter_preparation.py`, `api/encounter_preparation.py`) | Participants are published characters of the world, addressed by entity. | Keep the entity path. Add `add_encounter_combatants` and participant-id addressing. |
+| E3 | `start_prepared_encounter` (`commands/encounter_operations.py`) | It selects `participant_entity_id` and requires every participant still published. | Per participant kind: an entity participant must still be published; a combatant's template version must still be canon and usable by the world and version. |
+| E4 | Turn recording (`commands/encounters._participant_id`, `resolve_combat_turn`) | The actor is addressed by entity and must be a participant. | Accept `actor_encounter_participant_id`. The entity form remains for entity participants. |
+| E5 | `interaction.actions.actor_entity_id` NOT NULL | The actor is an entity. | Add `actor_encounter_participant_id`. Exactly one actor is set (§4.3). |
+| E6 | `interaction.check_requests.actor_entity_id` NOT NULL | The check actor is an entity. | Combatant checks are **unsupported in P4b**: the command refuses with `combatant_checks_unsupported`. A later checkpoint adds a participant-actor column. |
+| E7 | `interaction.targets` | The target is an entity or a dungeon feature. | Add `target_encounter_participant_id` in the at-most-one pattern. |
+| E8 | `narrative.event_participants` | Event participants are entities. | Combatants are never event participants. They appear through causes and effects and the action record (§4.4). |
+| E9 | Outcomes at encounter end (`commands/encounters`, `outcomes` by entity) | Outcomes are keyed by entity. | Accept participant-id outcomes. Entity outcomes keep working. |
+| E10 | Readers `queries/encounter_preparation.py` | `JOIN core.entities` for the participant (line 93) and the turn actor (line 111) would silently **drop** combatants. | LEFT JOIN plus a combatant branch. A reader test fails if a combatant row is missing. |
+| E11 | Member projection (`queries/encounter.py`, B1-1) | Visibility is computed over the participant entity set. | Combatants are visible to members as label, side and public outcome only. The template identity, mechanics and overrides are GM-only. |
+| E12 | Response schemas (`api/encounters.py`, `api/encounter_preparation.py`, portal types) | `participant_entity_id` is always present. | Additive fields: `encounter_participant_id` (present today in the readers), `participant_kind`, `combatant_label`. `participant_entity_id` is NULL for combatants. The portal and typed clients update in the same checkpoint. |
+| E13 | Foundry sync (`commands/integration.py` → `_resolve_combat_turn_impl`) | Actors and targets map to entities. | A sync payload naming a combatant participant is **refused explicitly** (`combatant_not_supported_by_integration`), never skipped. Token mapping to combatants is Phase 21. |
+| E14 | Damage to character state (`commands/encounters.py`) | The attacker is an entity. | §4.4 |
 
 ## Decision
 
 ### 1. Three concepts, one identity rule
 
-| Concept | What it is | Identity | Mechanics | State |
-|---|---|---|---|---|
-| **Creature template** | A reusable mechanical definition: "Goblin", "Wolf", "Young Red Dragon" | `rules.creature_templates`, a rules definition (no world entity) | Immutable `rules.creature_template_versions` | None |
-| **Encounter combatant** | One unnamed creature inside one encounter: "Goblin 3" | `narrative.encounter_participants.encounter_participant_id`, stable for the encounter's life | Pinned template version plus recorded overrides | Encounter-scoped combatant state |
-| **Persistent creature** | An individual: "Grishnak the goblin boss", a companion wolf, a summoned familiar the GM keeps | `core.entities` + `character.characters` (ADR 0021), never a separate creature identity | A build whose basis is a template version plus overrides (§3), or an ordinary build, or none | Ordinary timeline state, inventory, knowledge, relationships, control |
+| Concept | Identity | Mechanics | State |
+|---|---|---|---|
+| **Creature template** ("Goblin") | `rules.creature_templates`, a rules definition with no world entity | Immutable published `rules.creature_template_versions` | None |
+| **Encounter combatant** ("Goblin 3") | `encounter_participant_id`, stable for the encounter's life and kept forever as history | A pinned template version plus recorded overrides | Encounter-scoped combatant state |
+| **Persistent creature** ("Grishnak", a companion wolf, a kept familiar) | `core.entities` + `character.characters` (ADR 0021), never a separate identity | A template-basis build (§3), another build, or none | Ordinary timeline state, inventory, knowledge, relationships, control |
 
-A persistent creature *is* a Character. Named monsters, animals, companions, summons the GM keeps, and player-controlled creatures all use ADR 0021's identity, control assignments, projections and authoring responsibility. Species and creature type are attributes, not identity.
+### 2. Creature templates (R19-P2d)
 
-### 2. Creature templates (rules definitions)
-
-- `rules.creature_templates` is the template's stable identity:
+- **`rules.creature_templates`** is the stable identity:
   - `creature_template_id`, `ruleset_id`;
-  - `owning_world_id` (NULL = ruleset-wide content-package template; set = world homebrew, the `rules.item_definitions` precedent), immutable;
-  - `code` (unique per ruleset for ruleset-wide templates, per owning world for homebrew), `display_name`;
-  - `creature_type_id`, nullable because not every system has creature types;
-  - `content_package_id` / `source_id` and `canon_status_id` (ADR 0023 §4);
-  - `created_by_user_id`, `row_version`.
-- `rules.creature_template_versions` is append-only:
-  - `creature_template_version_id`, `creature_template_id`, `version_number`;
-  - `ruleset_version_id`, which pins the template version to one ruleset version;
-  - `mechanics_schema_code` + `mechanics_schema_version`, naming the adapter schema;
-  - `mechanics_jsonb`;
-  - `canon_status_id`, `change_note`, `supersedes_version_id`, `created_by_user_id`, `created_at`.
+  - `owning_world_id`: required in P2d (world homebrew); NULL is allowed only for content-package templates from R19-P4d;
+  - `code` (unique per owning world, or per ruleset for packages), `display_name`;
+  - `creature_type_id`, nullable;
+  - `content_package_id`, `source_id` (ADR 0023 §4);
+  - `canon_status_id`, `created_by_user_id`, `row_version`.
+- **`rules.creature_template_versions`** is append-only:
+  - `version_number`, `ruleset_version_id` (pinned);
+  - `mechanics_schema_code` and `mechanics_schema_version`, plus `mechanics_jsonb`, validated by the adapter on every write;
+  - `canon_status_id`, `change_note`, `supersedes_version_id`, `created_by_user_id`, `created_at`, `row_version`.
 
-  While a version's canon status is `draft` it may be edited. Once it is `canon` it is immutable (trigger): a change is a new version.
-- **Why JSONB for mechanics.** A stat block's shape is ruleset-specific. A 5e block has armor class, hit dice, challenge rating and legendary actions; a skill-based system has none of these. `DATABASE_CONVENTIONS.md` §5.7 permits JSONB for ruleset-specific properties, and §18.4 requires a schema version. The universal tables therefore carry no 5e columns. The payload is validated on every write by the ruleset adapter's registered schema (ADR 0023 §3). An unknown schema or a version the adapter does not support is stored only as a draft and is reported `unsupported`; it is never silently accepted as validated.
-- **Referential integrity for definitions.** References from a template to other rules definitions (abilities, skills, conditions, damage types, languages, features, spells, item definitions) live in `rules.creature_template_version_references`. This is a typed table with at-most-one-typed-target columns per row (the `knowledge_items` pattern), FKs, and a same-ruleset-version trigger. The JSONB never holds the only copy of a reference that needs integrity. The adapter validates that every reference in the payload appears in that table.
-- **Template update behavior.** Publishing a new version never changes existing pinned users. Combatants and template-based builds keep the version they pinned until a deliberate operation moves them. Moving them creates a new build or records a combatant re-pin, which is allowed only while the encounter is `pending`. Read models show "a newer template version exists".
+  A version is editable while `draft` and immutable once `canon` (trigger). Publication follows ADR 0023 §7 for validation and review.
+- **Typed references.** `rules.creature_template_version_references` uses at-most-one-typed-target FKs: ability, skill, condition, damage type, language, feature, spell, item definition. A same-version trigger applies, and the adapter requires every reference in the payload to appear here.
+- **Template updates** never change pinned users. Combatants and template-basis builds keep their version until a deliberate re-pin or rebuild (§5).
 
-### 3. Persistent creatures use the build model
+### 3. Persistent creatures use the build model (R19-P4a)
 
-A persistent creature derived from a template gets a **template-basis build**. This is a normal `character.character_builds` row (immutable, ruleset-version-pinned, scoped per ADR 0021 §4) plus a typed child, `character.character_build_template_bases`:
+A persistent creature derived from a template has a **template-basis build**: an ordinary immutable `character.character_builds` row (scoped per ADR 0021 §5) plus `character.character_build_template_bases`:
 - `character_build_id` (PK);
 - `creature_template_version_id`;
-- `overrides_schema_version`, `overrides_jsonb`, validated by the adapter;
+- `overrides_schema_version`, `overrides_jsonb` (adapter-validated);
 - `override_note`.
 
-Consequences:
-- creation, activation, timeline scoping, history, validation (ADR 0023) and authority all reuse `create_character_build` / `activate_character_build`, so there is no second mechanical write path;
-- a template update affects a creature only when someone creates and activates a new build from the new version;
-- overrides are explicit, recorded and attributable. They are declared values, distinguishable from derived values in every calculation trace;
-- a creature that later gains class levels (or the equivalent in another system) gets a different build. A build has exactly one basis (template-basis, or the ordinary typed children); the adapter reports a build that mixes them as `conflicting`.
+Creation, activation, history, validation and review reuse `create_character_build`, `activate_character_build` and ADR 0023 §7. A build has exactly one basis: either a template basis or the ordinary typed children. The adapter reports a mixed build as `conflicting`. Overrides are declared values in every trace.
 
-### 4. Lightweight encounter combatants
+### 4. Lightweight encounter combatants (R19-P4b)
 
-Additive changes to `narrative.encounter_participants` (R19-P4b):
+#### 4.1 Participant columns
 
-1. `participant_entity_id` becomes nullable.
-2. New columns:
-   - `combatant_template_version_id` (FK, nullable);
-   - `combatant_label` (TEXT, nullable);
-   - `combatant_overrides_schema_version`, `combatant_overrides_jsonb` (nullable);
-   - `spawn_group_id` (UUID, nullable), shared by combatants created together;
-   - `promoted_character_id` (FK `character.characters`, nullable, immutable once set).
-3. CHECK: exactly one of `participant_entity_id` or `combatant_template_version_id` is set. `combatant_label` is required when the template version is set.
-4. The existing `UNIQUE (encounter_id, participant_entity_id)` is kept unchanged. PostgreSQL treats NULLs as distinct, so many combatants coexist and every existing row still satisfies it. A partial unique index on `(encounter_id, combatant_label) WHERE participant_entity_id IS NULL` keeps labels unique.
-5. The template version must be canon and usable by the encounter's world: ruleset-wide, or homebrew owned by the same world. Its ruleset version must equal the campaign's (trigger plus command check).
+On `narrative.encounter_participants`:
+- `participant_entity_id` becomes nullable.
+- New columns:
+  - `combatant_template_version_id` (FK);
+  - `combatant_label` (TEXT);
+  - `combatant_overrides_schema_version`, `combatant_overrides_jsonb`;
+  - `spawn_group_id` (UUID);
+  - `promoted_character_id` (FK `character.characters`, immutable once set).
+- A CHECK requires exactly one of `participant_entity_id` or `combatant_template_version_id`, and requires a label for combatants.
+- The existing `UNIQUE (encounter_id, participant_entity_id)` stays. NULLs are distinct in PostgreSQL, so existing rows remain valid.
+- A partial unique index covers `(encounter_id, combatant_label) WHERE participant_entity_id IS NULL`.
+- A trigger requires the template version to be canon, usable by the encounter's world (same-world homebrew or a package), and on the version of the encounter campaign's pin.
 
-Combatant runtime state (R19-P4b):
-- `narrative.encounter_combatant_state` (`encounter_participant_id` PK, current, maximum and temporary hit points or the adapter's equivalent, `last_combat_action_id`);
-- `narrative.encounter_combatant_conditions`.
+#### 4.2 Combatant state
 
-This is tactical encounter-log state, consistent with `DATABASE_MODEL.md` §12 ("high-volume tactical actions live in encounter logs"). Every change references the `interaction.combat_actions` row or turn that caused it. Combatants never get `campaign.*_state` rows. Meaningful outcomes still become narrative events through the existing "Encounter ended" path.
+- `narrative.encounter_combatant_state`:
+  - `encounter_participant_id` (PK);
+  - adapter-schema `state_jsonb` (for 5e: current, maximum and temporary hit points);
+  - `state_schema_version`, `row_version`;
+  - `last_combat_action_id` (FK).
+- `narrative.encounter_combatant_conditions` (participant, condition, `applied_by_combat_action_id`, `removed_by_combat_action_id`).
 
-Targeting: `interaction.targets` gains `target_encounter_participant_id` (nullable FK) in the at-most-one-typed-target pattern.
+This is tactical encounter-log state (`DATABASE_MODEL.md` §12). Every change cites the combat action that caused it. Combatants never get `campaign.*_state` rows.
 
-API compatibility:
-- every existing request and response that addresses participants by `participant_entity_id` keeps working for entity participants;
-- new requests may address any participant by `encounter_participant_id`;
-- responses add `encounter_participant_id` and `combatant_label`;
-- the Foundry combat sync continues to map character actors as today. Mapping Foundry tokens to combatants is Phase 21 work, and until then combatants are portal-only.
+#### 4.3 Participant-addressed actors and targets, with integrity
 
-The member projection treats a combatant like any participant: label, side and public outcome only. The template identity, mechanics and overrides are GM data.
+- `interaction.actions` adds `actor_encounter_participant_id`. A CHECK requires exactly one of `actor_entity_id` or `actor_encounter_participant_id`.
+- `interaction.targets` adds `target_encounter_participant_id`, extending the at-most-one-target CHECK.
+- A trigger on both requires the referenced participant's encounter to be the encounter that owns the action's interaction. That interaction is the one `resolve_combat_turn` creates for the encounter; the link is recorded on the interaction or through its event cause. The trigger also requires the same world and timeline.
+- An entity participant should still be addressed by entity, to keep existing rows and the Foundry path unchanged. Addressing an entity participant by participant id is also accepted and normalized to the entity column.
 
-### 5. Spawning and duplication
+#### 4.4 Causal damage across the boundary
 
-`add_encounter_combatants(encounter, template_version, count, label_prefix, side, overrides?, initiative_mode)` creates `count` participants in one transaction, sharing a `spawn_group_id`, with labels `"{prefix} {n}"` numbered after the highest existing label for that prefix. Constraints:
-- `count` is bounded per call;
-- the encounter's total participant count is bounded, with limits in the plan;
-- the encounter must be `pending`;
-- adding to an active encounter mid-combat (reinforcements) is the same command, allowed for `active` too, recorded as a turn-independent action.
+- **Combatant damages a character.** This uses the existing character-damage path:
+  - a `narrative.events` row;
+  - `event_causes.cause_encounter_id`;
+  - the `current_hit_points` effect;
+  - **and the state row's `last_event_id` set to that event**. This fixes the existing omission for both paths; it is an R19-P4b change with Phase 15 owner review.
 
-Duplication copies the template version and overrides, never state. Initiative may be one roll per spawn group or per combatant (adapter-defined).
+  Under OD-1 (ADR 0021 §3) the write targets the **encounter campaign's** `campaign.campaign_character_state` row once P03-S has cut over, and the event carries that `campaign_id`. Another campaign's state for the same character is never touched. A campaign-less encounter cannot apply mechanical damage.
 
-**Summons and companions.**
-- A temporary summon (a conjured creature that lasts one fight) is a combatant added to the active encounter through this command.
-- A summon or companion that persists (a familiar, an animal companion, a bound servant) is a persistent creature, created directly or by promotion (§6), and may be player-controlled through ADR 0021.
-- Automatic summon workflows (a spell that creates its creature) are out of the initial scope. When built, they call these same commands.
+  Event participants list the damaged character only. The attacker is recorded on `interaction.actions.actor_encounter_participant_id` and the combat action. The event `details` may carry the combatant's label as a display snapshot.
+- **Character damages a combatant.** The combatant's state changes with `last_combat_action_id`. No narrative event is written unless an outcome is promoted at encounter end.
+- **Combatant damages a combatant.** Combat actions and state only.
 
-### 6. Promotion to a persistent character
+#### 4.5 Spawning
 
-`promote_encounter_combatant(encounter_participant_id, name, …)` is an explicit, audited, idempotent command, allowed when the encounter is `completed` or `aborted`. Promotion during an `active` encounter is deferred (OD-11). In one transaction it:
+`add_encounter_combatants(encounter, template_version, count, label_prefix, side, overrides?, initiative_mode)`:
+- creates `count` participants and their initial state, derived by the engine from the template and overrides, in one idempotent transaction under the encounter lock, with one `spawn_group_id`;
+- numbers labels `"{prefix} {n}"` after the highest existing number for that prefix;
+- is allowed when the encounter is **`pending`** (preparation) or **`active`** (reinforcements and temporary summons). An active-encounter spawn is recorded as an encounter-log entry for the current round with no turn. A completed or aborted encounter refuses it;
+- enforces limits per call and per encounter (engineering decision ED-3);
+- copies the template version and overrides, never state.
 
-1. creates the character through the normal character-creation command: draft or published per the caller's authority, with authoring responsibility per ADR 0021, and legacy marker `npc` only while P03-C adapters still need one;
-2. creates a template-basis build from the combatant's pinned version and overrides, and activates it on the campaign's timeline;
-3. initializes `campaign.character_state` from the combatant's final encounter state with a `combatant_promoted` event, whose effects record the encounter, participant and copied values;
-4. sets `promoted_character_id` on the participant row (immutable), and records nothing else on historical turns or actions.
+#### 4.6 Summons and companions
 
-Historical turns, combat actions, targets and outcomes keep pointing at the `encounter_participant_id`. Read models resolve "Goblin 3, later Grishnak". Neither the encounter nor its history is rewritten. Promotion does not reveal the new character, assign control, or grant any audience. Those remain ADR 0021 operations.
+- A temporary summon is a combatant spawned into the active encounter.
+- A persistent summon or companion is a persistent creature, created directly or by promotion.
+- Automatic summon workflows are out of the initial scope.
 
-### 7. Controller assignment
+### 5. Template re-pin
 
-A persistent creature is controlled through ADR 0021 assignments like any character. A player-controlled monster needs no class or level, only a character, optionally a template-basis build, and an assignment. Player control of an unpromoted combatant is not supported initially. If needed later, it is an encounter-scoped operation authority on the participant, never a control assignment, because combatants are not actors in the world model.
+A combatant may be re-pinned to a newer template version only while its encounter is `pending`. Its state is re-derived. A persistent creature moves to a newer version only by a new build plus activation.
+
+### 6. Promotion to a persistent character (R19-P4b)
+
+`promote_encounter_combatant(encounter_participant_id, name, idempotency_key)` is allowed when the encounter is `completed` or `aborted`. Active-encounter promotion is OD-11.
+
+The caller must hold the authority to create **and publish** the character on that world:
+- world `world.canon.edit` and `world.canon.review`, plus route-campaign `canon.edit`, under ADR 0021 §4;
+- or a delegation that covers creation and publication, if OD-5 permits it.
+
+Otherwise the command refuses. It never leaves a half-promoted actor. Steps, in one transaction:
+
+1. Lock the encounter, then the participant row `FOR UPDATE`. If `promoted_character_id` is already set, return the existing character (the idempotent replay).
+2. Create the character identity through the normal character command, then publish it through the normal lifecycle command. Authoring responsibility follows ADR 0021 §4. A legacy `npc` marker is written only while P03-C adapters require one.
+3. Create the template-basis build through `create_character_build`, from the combatant's pinned version and overrides. It is campaign-scoped to the encounter's campaign by default, or world-shared when the caller holds world authority (ADR 0021 §5, §3.7). OD-6 is reconciled: campaign-scoped builds are permitted.
+4. **Initialize campaign mechanical state before activation.** `activate_character_build` requires an existing state row. After P03-S that is the encounter campaign's `campaign_character_state` row; before P03-S it is the timeline row. Initialize it with the combatant's final values through a `combatant_promoted` event, whose effects record the encounter, the participant and the copied values, with `last_event_id` set.
+5. Activate the build through `activate_character_build`. The state row now has an event, so activation records a `character_build_activated` event.
+6. Set `promoted_character_id`. The trigger makes it immutable.
+
+Historical participants, turns, actions, targets and outcomes are never rewritten.
+
+Read models show "Goblin 3 (later: Grishnak)" **only to viewers who may discover the promoted character** (ADR 0021 §6). Everyone else sees the label alone, with no name, link or id. Promotion reveals nothing and assigns no control.
+
+### 7. Control
+
+- A persistent creature is controlled through ADR 0021 assignments. A player-controlled monster needs no class or level.
+- Player control of an unpromoted combatant is not supported. If it is ever needed, it would be an encounter-scoped operation authority on the participant, not a control assignment.
 
 ### 8. Read projections
 
-- **Templates:** a GM authoring read, and a player read only where the campaign's rules policy publishes a creature's stat block (default: none).
-- **Persistent creature:** ADR 0021's four projections.
-- **Combatant:** an encounter projection only.
+- **Templates:** GM authoring reads only by default.
+- **Persistent creatures:** ADR 0021 §6.
+- **Combatants:** the encounter projection (E11).
 
-Derived mechanics for any of them come from ADR 0023 and follow the projection of their inputs.
+Derived mechanics follow ADR 0023 §9.
 
-### 9. What ships when
+### 9. Delivery
 
-| Component | Checkpoint | Notes |
+| Component | Checkpoint | Gate |
 |---|---|---|
-| ADR acceptance, interface definitions | R19-P0 | This document |
-| `rules.creature_templates`, versions, references, adapter schema validation, GM homebrew authoring API (no portal) | R19-P2d | Additive rules definitions. May merge before Phase 17. No user-facing claim |
-| Template mechanics evaluated by the calculation service (5e subset) | R19-P3 (after P2d) | Informational results |
-| Template-basis builds, persistent creature authoring and player-controlled creatures | R19-P4a | Needs the P03-C build scope and actor contracts, plus Phase 17 |
-| Encounter combatants, combatant state, spawning, targeting, promotion | R19-P4b | Needs Phase 17. Touches Phase 15 encounter commands under coordinated ownership |
-| Creature catalog content packages, generators, summon workflows | R19-P4 or later | Generators and automatic summons are out of the initial scope |
+| This ADR | R19-P0 | Review and owner acceptance |
+| Template tables, versions, references, adapter validation, GM homebrew API | R19-P2d | May merge before Phase 17 (category 2). No user-facing claim |
+| Template evaluation by the engine (informational) | R19-P3c or later | Category 2 |
+| Template-basis builds, persistent creatures, player-controlled creatures | R19-P4a | After Phase 17 and the P03-B/C contracts |
+| E1–E14 combatant integration, spawning, promotion, the damage-token fix | R19-P4b | After Phase 17, with Phase 15 encounter-owner review |
+| Catalog packages, generators, automatic summons | R19-P4d or later | After Phase 17 |
 
 ### 10. Migration and rollback
 
-- **Schema.** Every change is additive. Making `participant_entity_id` nullable is backward compatible for every existing row. Rollback of R19-P4b is possible while no combatant rows exist; after that, the downgrade refuses, and restore from backup is the rollback.
-- **Existing encounters** are untouched. No data migration is required. Existing participants remain entity participants.
-- **Commands.** Entity-addressed commands keep their contracts. New participant-addressed variants are added alongside. A command that receives a combatant where only entities are supported (for example the Foundry sync) refuses it explicitly; it never silently skips it.
+All schema changes are additive or relax a NOT NULL, so existing encounters need no data migration. The R19-P4b downgrade works while no combatant rows exist; after that, restore from backup is the rollback. Entity-addressed commands keep their contracts. A command or integration that cannot handle a combatant refuses it explicitly.
 
 ## Consequences
 
-- **Easier.** Four goblins cost four participant rows, not four world entities. A named or recurring creature is a normal character with history, control and knowledge. Template edits are safe, because nothing changes until it is deliberately re-pinned or rebuilt. Historical encounters stay reproducible from the pinned version, the overrides and the recorded actions.
-- **Harder.** Encounter queries must handle two participant shapes. Every participant-addressing command and read model needs combatant tests. Adapter schema validation must keep pace with template payload versions.
-- **Foreclosed.**
-  - A separate monster identity table.
-  - Templates that mutate pinned instances.
-  - Combatants holding `campaign.*_state`.
-  - Promotion that rewrites encounter history.
-- **Risks.**
-  - Large encounters: bounded spawn counts and indexed participant reads.
-  - JSONB drift: versioned schemas and adapter validation on write.
-  - Leakage of template stats to players: GM-only projection plus negative tests.
+- **Easier.** Four goblins are four participant rows, not four world entities. Recurring creatures are ordinary characters. Template edits are safe. Historical encounters keep their pinned versions and recorded actions.
+- **Harder.** Every encounter reader and command needs both participant shapes and tests (E1–E14). Adapter schemas must version their payloads.
+- **Foreclosed.** A monster identity table. Templates mutating pinned users. Combatants in `campaign.*_state`. Promotion rewriting history. Silent skipping of combatants by integrations.
+- **Risks.** Large encounters (ED-3 limits, indexed reads). JSONB drift (versioned schemas). Template leakage to players (GM-only projection plus negative tests).
 
 ## References
 
-- [PLANv2.md](../PLANv2.md) 19.0, 19.3, 19.4, §6.1 (encounter records ownership)
+- [PLANv2.md](../PLANv2.md) 19.0, 19.3, 19.4, §6.1
 - [DATABASE_MODEL.md](../architecture/DATABASE_MODEL.md) §9.2, §12, §13; [DATABASE_CONVENTIONS.md](../DATABASE_CONVENTIONS.md) §5.7, §18, §34
-- Code: `src/dnd_ai/persistence/tables/encounters.py`, `src/dnd_ai/persistence/tables/interaction.py`, `src/dnd_ai/commands/encounters.py`, `src/dnd_ai/commands/encounter_operations.py`, `src/dnd_ai/api/encounters.py`
-- [R19_FOUNDATION_IMPLEMENTATION_PLAN.md](../R19_FOUNDATION_IMPLEMENTATION_PLAN.md) §5.3 (creature contract), §6 (checkpoints P2d, P4a, P4b)
+- Code: `src/dnd_ai/persistence/tables/{encounters,interaction,narrative}.py`, `src/dnd_ai/commands/{encounters,encounter_operations,encounter_preparation,integration}.py`, `src/dnd_ai/queries/{encounter,encounter_preparation}.py`, `src/dnd_ai/api/{encounters,encounter_preparation}.py`
+- [R19_FOUNDATION_IMPLEMENTATION_PLAN.md](../R19_FOUNDATION_IMPLEMENTATION_PLAN.md) §5.3, §6 (P2d, P4a, P4b)

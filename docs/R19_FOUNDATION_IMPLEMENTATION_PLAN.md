@@ -1,940 +1,896 @@
 # Phase 19 foundation implementation plan (R19-P0 to R19-P4)
 
-**Status:** Proposed. This is the R19-P0 planning deliverable, dated 2026-11-02, prepared for independent architecture review. Nothing in it is implemented, and no checkpoint is complete.
+**Status:** Proposed. This is the R19-P0 planning deliverable, first drafted at `10a1a4e` and corrected after independent review (findings R19-01 to R19-09; see §13). Nothing here is implemented or accepted. **One owner decision is recorded: OD-1 is Owner-approved (2026-11-02). Campaigns sharing a world or timeline maintain independent mechanical character state** (ADR 0021 §3). As instructed, OD-6 is reconciled to permit campaign-scoped builds. Every other owner choice is marked **UNRESOLVED** in §9, together with the gates it blocks.
 
 **Branch:** `planning/r19-p0-architecture`, from `main` at `defe3f7`.
 
-**Governing documents:** [PLANv2.md](PLANv2.md) §6.1, §8 (15H) and §12 (19.0–19.8), and the ADRs below.
+**Governing documents:** [PLANv2.md](PLANv2.md) §6.1, §8 (15H), §12 (19.0–19.8) and three Proposed ADRs:
 
-**Architecture decisions (Proposed):**
+- [ADR 0021](adr/0021-shared-actor-identity-control-and-authoring-responsibility.md): actor identity, control, authoring responsibility. Phase 15 owns it.
+- [ADR 0022](adr/0022-creature-templates-combatants-and-promotion.md): creature templates, combatants, promotion.
+- [ADR 0023](adr/0023-rules-engine-calculation-validation-and-source-authorization.md): rules engine, validation, sources.
 
-- [ADR 0021](adr/0021-shared-actor-identity-control-and-authoring-responsibility.md): shared actor identity, campaign control and authoring responsibility. Phase 15 owns implementation through P03-A/B/C.
-- [ADR 0022](adr/0022-creature-templates-combatants-and-promotion.md): creature templates, encounter combatants and promotion.
-- [ADR 0023](adr/0023-rules-engine-calculation-validation-and-source-authorization.md): rules engine, calculation, validation and source authorization.
+**Evidence.** Claims about the repository were verified in code at `10a1a4e`; application code is unchanged since `defe3f7`. Several Phase 14/15 documents served as **supplementary evidence only**: the app-interaction investigation (§D6, P03-A/B/C), the DEF-007 effective-time plan, the P02 navigation plan and audit, the Batch 1 repair plan, and the 2026-11-02 handoff. They are **untracked on this branch and not committed**. Where this plan relies on one of them, the claim was checked against source. For example, B1-1 `67f80de` and DEF7 `bcc0e16`/`cb26462`/`4ce9187` are ancestors of this branch, and `queries/party_membership_period.py` implements DEF-007's no-clock rule.
 
 **Labels used throughout:**
 
-- **Existing** means verified in code at `defe3f7`.
-- **Planned** means named in an earlier plan, but not built.
-- **New** means proposed here.
+- **Existing:** verified in code at the stated commit.
+- **Planned:** named in an earlier plan but not built.
+- **New:** proposed here.
 
-**Audience:** independent reviewers, the owner, and the Claude Sonnet implementers of each checkpoint. Each checkpoint below is written so an implementer needs no further major architectural decision. Where a product policy is still open, the checkpoint names the register entry (§9) and its recommended default.
+**Audience:** independent reviewers, the owner, and the Sonnet implementers. Implementers must not encode any UNRESOLVED owner default. A checkpoint blocked by an owner decision says so in its gates.
 
 ---
 
-## 1. Decision traceability
+## 1. Decision traceability and verified discrepancies
 
-| Owner decision | Where it is realised | Implementing checkpoint |
+| Owner decision | Realised in | Implementing checkpoint |
 |---|---|---|
-| 1. Campaign-based character control | ADR 0021 §2 (assignment rows in `security.membership_character_relationships`; `character.character_controllers` retired) | P03-B (Phase 15) = R19-P1 |
-| 2. World authority owns canonical characters | ADR 0021 §3 (authoring responsibility, delegated authoring) and §4 (build scope and activation authority) | P03-C (Phase 15) = R19-P1; activation guard (Phase 15) |
-| 3. Hybrid creature representation | ADR 0022 | R19-P2d (templates), R19-P4a (persistent creatures), R19-P4b (combatants and promotion) |
-| 4. Rules-engine-neutral architecture | ADR 0023 §2 and §13 | R19-P3a, R19-P3f |
-| 5. Versioned house-rule overrides and extensions | ADR 0023 §6 | R19-P2b, R19-P2c, R19-P3c |
-| 6. Drafts with unsupported mechanics flagged | ADR 0023 §7 | R19-P3d |
+| 1. Campaign primary and co-control | ADR 0021 §2–3 | P03-B (= R19-P1) |
+| 2. World-authoritative canon with delegated authoring | ADR 0021 §4–5 | P03-C (= R19-P1); Phase 15 version guard |
+| 3. Hybrid creatures | ADR 0022 | R19-P2d, R19-P4a, R19-P4b |
+| 4. Neutral engine core | ADR 0023 §2–3, §13 | R19-P3a (including the percentile fixture), R19-P3f |
+| 5. Versioned house rules | ADR 0023 §6 | R19-P2b, R19-P2c, R19-P3c |
+| 6. Unsupported drafts, honest validation, authorized review | ADR 0023 §5, §7 | R19-P3d-1, R19-P3d-2 |
 
-### 1.1 Discrepancies found during the investigation
-
-These were found while reviewing documentation against code. None of them is fixed by this plan; each is assigned to an owner.
+**Discrepancies found during verification:**
 
 | # | Discrepancy | Evidence | Disposition |
 |---|---|---|---|
-| X1 | `character.character_controllers` is documented as a table but was never built. | `DATABASE_MODEL.md` §7.3 and `DOMAIN_MODEL.md` §8.4. No table exists in `src/dnd_ai/persistence/tables/` or the migrations. | ADR 0021 §2.1 retires it. The docs are corrected with P03-B. |
-| X2 | ADR 0020 decision 6 keeps player-character identity on campaign `canon.edit`, which conflicts with owner Decision 2. | `domain/record_authoring.py`, `CAMPAIGN_ORIGINATED_TYPES` | ADR 0021 §3.4 amends ADR 0020 through a compatibility migration. Owner decision OD-5 governs new characters. |
-| X3 | Two campaigns may share a timeline and pin different ruleset versions, yet share one active build and one runtime state. | `campaign.campaigns.timeline_id` comment ("Not unique"); `campaign.character_state` is keyed by `(timeline_id, character_id)` | ADR 0021 §4 adds an activation guard. The engine reports `incompatible_ruleset_version`. OD-1 is open. |
-| X4 | `activate_character_build` does not check that the build's ruleset version matches the activating campaign's. | `commands/character_builds.py` (`activate_character_build`) | Phase 15 adds a small guard; see §5.2. |
-| X5 | Version-blind calculation: `supports_ruleset` gates on the family code only, so 2024 formulas would apply to a 2014 version. | `domain/character_calculations.py` | R19-P3a adds a per-version registry. |
-| X6 | Seeded rules content records no license or origin. | `database/seeds/rules.*.yaml`, revision 022 | R19-P2a adds a provenance audit. OD-7. |
-| X7 | PLANv2 19.5 lists an "initial subset" (ability modifiers, proficiency, skills, passives, spell DC/attack) that already exists as un-traced sheet formulas. | `queries/character_sheet.py` | R19-P3a ports these into the engine with parity tests. They are not new behaviour. |
-| X8 | `maximum_hit_points` is an entered state value, not a derived one. | `campaign.character_state` | It is kept as authoritative state. The engine reports `declared_value_differs` and never overwrites it. |
-| X9 | The P03 planning sources (the investigation and handoff) are untracked on this PC and not on `main`. | Working tree at `defe3f7` | PLANv2 §18 item 19. This plan cites them by file name only. |
+| X1 | `character.character_controllers` is documented, never built. | DATABASE_MODEL §7.3, DOMAIN_MODEL §8.4; no table exists | ADR 0021 §2.1 retires it. |
+| X2 | Player-character identity and lifecycle bypass world authority; any campaign `canon.edit` holder on the world qualifies. | `npcs._identity_world_capability`, `record_authoring.CAMPAIGN_ORIGINATED_TYPES` | ADR 0021 §4 (OD-5, OD-19). The ADR 0020 note points to the proposal. |
+| X3 | Shared-timeline campaigns share the active build and runtime state across different pins. | `campaign.character_state` key; `campaigns.timeline_id` is not unique; `campaigns.timeline_id` is immutable (revision 030) | **OD-1 (Owner-approved):** mechanical state becomes campaign-scoped. Phase 15 P03-S adds campaign-keyed tables, lineage seeding and a manifest migration (ADR 0021 §3). |
+| X4 | `activate_character_build` has no ruleset-version check. | `commands/character_builds.py` | Phase 15 guard (§6, R19-P1). |
+| X5 | Calculation support is gated by family, not version. | `character_calculations.supports_ruleset` | R19-P3a registry. |
+| X6 | The seed records no origin or license. | `database/seeds/rules.*.yaml`, revision 022 | R19-P2a records it as unreviewed (OD-7). |
+| X7 | The PLANv2 19.5 "initial subset" already exists as untraced sheet formulas. | `queries/character_sheet.py` | R19-P3a ports it with parity tests. |
+| X8 | `maximum_hit_points` is an entered value. | `campaign.character_state` | Reported with `declared_value_differs`; never overwritten. |
+| X9 | The P03 sources are untracked. | Working tree | PLANv2 §18 item 19. |
+| X10 | Live uniqueness is per `(membership, character, type)`, so a legacy row and an assignment of the same type would collide. Nothing enforces one primary per campaign. | `ux_membership_character_relationships_active_type` | ADR 0021 §2.3 index replacement. |
+| X11 | `effective_period` is NULL when no start endpoint is supplied. | Revision 080 trigger | ADR 0021 §2.3 (`ongoing` and `dated` kinds). |
+| X12 | Relationship effectiveness ignores the campaign clock, and its docstring says no clock exists. | `domain/access.py` | ADR 0021 §2.4 (OD-14); docstring follow-up. |
+| X13 | `last_event_id` is not reliable: encounter damage omits it, the baseline is administrative, branch rows are inherited. | `commands/encounters.py`, `commands/character_builds.py`, `queries/character_build_resolution.py` | ADR 0023 §10 hashes loaded values; R19-P4b fixes the damage token. |
+| X14 | Mechanically relevant rules columns stay mutable (`hit_die`, associations; homebrew item fields). | Revisions 033/036; `commands/item_definitions.py` | ADR 0023 §4 and §10 content hashes. |
+| X15 | Encounter readers inner-join participant entities; interaction actors require entities. | `queries/encounter_preparation.py` lines 93 and 111; `interaction.actions`, `check_requests` | ADR 0022 E1–E14 (R19-P4b). |
+| X16 | `core.sources` (citations) and `core.source_documents` (rights-bearing corpus) are unrelated. | `persistence/tables/core.py` | ADR 0023 §9 citation link (ED-8). |
 
 ---
 
 ## 2. Subsystem inventory
 
-For each subsystem the table records what exists today, what is reused unchanged, what is extended additively, what is eventually migrated or retired, which checkpoint owns the change, and what consumes the resulting contract.
-
-| Subsystem | Exists (verified) | Reuse unchanged | Additive extension | Migration or retirement | Owner checkpoint | Downstream consumers |
+| Subsystem | Existing | Reused unchanged | Additive extension | Migration or retirement | Owner | Consumers |
 |---|---|---|---|---|---|---|
-| Actor identity | `core.entities` → `character.characters`; `npcs` (`detail_level`) and `player_characters` (`player_user_id`) markers | Entity and character rows, UUIDs, CTI | — | Markers become compatibility hints; their optional retirement comes last (ADR 0021 §7) | P03-C | Every character consumer; Phase 16; Phase 19 creatures |
-| Builds | Immutable `character_builds` plus 5e children; `create_character_build` / `activate_character_build`; active build in `campaign.character_state` | The immutability model, the timeline activation model, and the event on activation | `build_scope`, `origin_campaign_id`, `created_by_user_id` (P03-C); custom-mechanics, review and template-basis children (R19-P3d, P4a) | Backfill `legacy_unscoped`; `_BUILDABLE` kind list replaced by capability eligibility | P03-C (scope, authority); R19-P3d (drafts, reviews); R19-P4a (template basis) | Phase 16 editor; R19 engine; creatures |
-| Runtime state | `campaign.character_state`, `character_conditions`, `character_resources` keyed by `(timeline_id, character_id)` | All of it | — | — | — | Engine (inputs); P03-B bounded operations |
-| Relationships and access | `security.membership_character_relationships` (typed, fictional period, real-time revoke and expiry); `BUILTIN_RELATIONSHIP_CAPABILITIES`; `security.resource_grants`; reserved capability codes `character.control`, `edit_mechanical_state`, `edit_narrative`, `interact` | Table, resolver freshness, deny-over-allow | `is_control_assignment`, `campaign_id`, revocation provenance, primary-uniqueness exclusion; `CONTROL_ASSIGNMENT_CAPABILITIES`; new codes `character.assign_control`, `character.propose_build`, `character.reveal` | Legacy controller rows stay read-only; manifest-confirmed promotion only | P03-A (reveal), P03-B (control), P03-C (delegation) | Phase 16; R19 projection; encounters |
-| Authoring authority | `record_authoring.py` with the `CAMPAIGN_ORIGINATED_TYPES` exception; world authority (ADR 0020) | World/campaign two-key rule | `character.character_authoring_responsibilities` | `player_character` removed from the exception via manifest | P03-C | All character authoring; R19-P3d approvals |
-| Discovery and projection | Role, relationship and grant discovery; summary/full tiers; B1-1 encounter member projection | Tier resolver, B1-1 projection | Revelation record, public profile, controller view (investigation D6) | Legacy background quarantine | P03-A | R19 derived-value projection (ADR 0023 §9) |
-| Portrayal | `npc_portrayal_profiles` → `npcs.npc_id` `ON DELETE CASCADE` | Append-only versions | `character_id` column | FK re-key, then drop the `npc_id` dependency | P03-C | Phase 20 |
-| Session participation | `PARTICIPANT_KINDS = (player_character, npc)`; stored roles | Stored historical roles | — | Kind list replaced by capability eligibility | P03-C | Session UI; Phase 16 |
-| Rules definitions | `rules.*` typed per-version tables, immutable identity, `source_id`, `canon_status_id`; 5e 2024 sample seed | Every table and its identity | `content_package_id` (P2a); prerequisites and exclusions (P2a schema, P4c use); creature templates (P2d) | Mechanical immutability for new mechanical fields | R19-P2 | Engine, Phase 16, Phase 18 |
-| Rulesets and campaign pin | `rulesets`, `ruleset_versions`, `world_rulesets`; `campaigns.ruleset_version_id` | All of it | Option policy and configuration version (P2b) | — | R19-P2b | Catalog, engine |
-| Item definitions and inventory | `rules.item_definitions` (`owning_world_id`, `row_version`, descriptive fields); `world.item_instances`; `campaign.item_state` / `inventory_entries` / `item_attunements`; `knowledge.item_identification` | All of it | Item mechanics payload and modifier references (P3e) | — | R19-P3e | Engine (equipment) |
-| Calculations | `domain/character_calculations.py` (5e formulas, family gate); used by `queries/character_sheet.py` | Kept in place during the port; parity oracle | `domain/rules_engine/` core and 5e adapter (P3a) | The shim is retired after the sheet moves to the engine, after P03-A | R19-P3a/b | Sheet, previews, analysis, AI |
-| Encounters | `narrative.encounters`, `encounter_participants` (entity NOT NULL, unique per encounter), rounds, turns (by participant id), `interaction.combat_actions` and `targets`; Foundry sync by entity | Rows, commands, Foundry contract, B1-1 projection | Combatant columns, combatant state, target participant column (P4b) | `participant_entity_id` nullable | R19-P4b (with Phase 15 encounter-owner review) | Encounter analysis; Phase 21 Foundry |
-| Reference corpus | `core.source_documents` (rights flags, `general` / `campaign_restricted`), `ai.reference_source_campaigns`, `rules_source.manage` | All of it | `contributor_private` visibility and owner (OD-12; Phase 18 or 20) | — | Phase 18/20 (not R19-P2) | Phase 20 retrieval |
-| Proposals | `ai.proposed_changes` / `ai.change_reviews` (AI only) | Unchanged | Build drafts use their own table (ADR 0023 §7); AI later proposes drafts | — | R19-P3d | Phase 18, Phase 20 |
-| Migrations and tests | Alembic `NNN_name.py` (latest `140_clock_advance_details`); `tests/unit`, `tests/database`, `tests/scenario` | Conventions | — | — | Every checkpoint | — |
+| Actor identity | `core.entities` → `character.characters`; NPC and PC markers | UUIDs, entity and character rows | — | Markers become hints; optional retirement last | P03-C | All |
+| Relationships and control | `membership_character_relationships`; `BUILTIN_RELATIONSHIP_CAPABILITIES`; reserved capability codes | Legacy rows and their capabilities, resolver freshness, lock chain | `is_control_assignment`, `campaign_id`, `is_primary`, `assignment_period_kind`, revocation columns; replaced and new unique indexes; `CONTROL_ASSIGNMENT_CAPABILITIES`; `character.assign_control` | Manifest-confirmed assignment creation only | P03-B | Phase 16, R19 projection, encounters |
+| Authoring responsibility | `record_authoring` with the PC exception | World two-key rule | Delegations table; legacy-exception table | Per-character disposition (OD-5, OD-19) | P03-C | All character authoring |
+| Discovery and projection | Role, relationship and grant discovery; summary and full tiers; B1-1 | Tier resolver, B1-1 | Revelation, public profile, controller view (OD-17) | Legacy background quarantine | P03-A | R19 audience mode |
+| Portrayal | `npc_portrayal_profiles` → `npcs`, cascade; writes need `canon.edit` | Append-only versions | `character_id`; a separate player-guidance profile (OD-18) | FK re-key | P03-C (Phase 16 for player guidance) | Phase 20 |
+| Builds | Immutable builds; `create_character_build` / `activate_character_build`; branch-effective resolution | Immutability, timeline activation, branch resolution | Scope columns (P03-C); version guard (Phase 15); drafts, reviews, custom mechanics, activation gate (R19-P3d); template basis (R19-P4a) | `legacy_unscoped` backfill; kind list replaced | Phase 15 owns the command contract; R19 extends under sign-off | Phase 16, R19 |
+| Mechanical runtime state | Character, condition, resource, item, inventory and attunement state, keyed by **timeline** | Legacy rows (read-only after cutover; never dropped in Phase 15) | **OD-1:** campaign-keyed tables, `campaign_mechanical_lineages`, migration records, `campaign.mechanical_components` (ADR 0021 §3.2) | Reviewed manifest; dual-read; writer cutover per consumer family (ADR 0021 §3.8) | **Phase 15 P03-S** (schema, commands, resolvers, APIs). No R19 writer changes; the damage-token fix is R19-P4b | Engine (route-campaign facts, hashed values) |
+| Rules definitions | `rules.*` with identity immutability; mutable associations and descriptions | All | `content_package_id` (P2a); prerequisites and exclusions schema (later); creature templates (P2d) | None to existing columns | R19-P2 | Engine, Phase 16/18 |
+| Campaign rules configuration | Campaign version pin | Pin | Option policy, configuration version (P2b-1); house rules (P2c) | — | R19-P2b/c | Catalog, engine |
+| Items | Item definitions (homebrew editable), instances, state, inventory, attunements, identification | All | Mechanics payload columns (P3e-T) | — | R19-P3e under item-owner sign-off | Engine |
+| Calculations | `character_calculations.py` (5e, family gate), sheet | Kept as the parity oracle | `domain/rules_engine/` (P3a) | Shim retired after P03-A | R19-P3 | Sheet, previews, AI |
+| Encounters | Encounters, participants (entity NOT NULL), turns, interactions, events, Foundry | All existing contracts | E1–E14 (ADR 0022) | Participant entity becomes nullable | R19-P4b with the Phase 15 encounter owner | Analysis, Phase 21 |
+| Reference corpus | `core.source_documents`, campaign grants | All | `contributor_private` (OD-12); typed citation link (ED-8) | — | Phase 18/20; ED-8 before private citation | Phase 20 |
+| Proposals | `ai.proposed_changes` (AI only) | Unchanged | Build drafts are separate | — | R19-P3d | Phase 18/20 |
 
 ---
 
-## 3. Sequencing and parallel-work categories
+## 3. Gates
 
-The categories are those of PLANv2 §6.1:
+The four gates are applied in the sense of PLANv2 §6.1:
 
-- **Category 1:** may begin now.
-- **Category 2:** may merge as isolated, compatible infrastructure.
-- **Category 3:** cannot ship or be accepted until its dependencies are met.
+- **Begin:** work may start (category 1).
+- **Merge:** the change may merge to `main` (category 2 when isolated).
+- **Enable:** exposure as a usable feature through the portal, a non-GM API, or a behavior change to an existing command (category 3).
+- **Accept:** counted as delivered.
 
-```text
-R19-P0 (this plan + ADRs 0021–0023) ── review/acceptance
-   │
-   ├─ R19-P2a provenance ─┐
-   ├─ R19-P3a engine core ┼─ R19-P3b context/catalog ─ R19-P2b options ─ R19-P2c house rules ─ R19-P3c conditions/overrides
-   │                      └─ R19-P2d creature templates ──────────────────────────────────────────────┐
-   │                                                                                                   │
-   │   Phase 15: P03-A ── P03-B ── P03-C (= R19-P1)                                                     │
-   │                          │        │                                                               │
-   │                          │        └── R19-P3d drafts/reviews (merge needs build-command owner sign-off; rebase after P03-C)
-   │                          └────────── R19-P3e equipment + audience mode (audience path needs P03-A projections)
-   │                                       R19-P3f contract freeze + neutrality fake adapter
-   │
-   Phase 16 (consumes P03-B/C, R19-P3d/P3f) ── Phase 17 gate ── R19-P4a–g
-```
+A hook that changes an existing command's behavior is category 3 even if its default preserves behavior.
 
-### 3.1 Safe to start now, while P03 is underway
+| Checkpoint | Begin | Merge | Enable | Accept |
+|---|---|---|---|---|
+| R19-P0 | Now | After independent review | n/a | After owner acceptance of the ADRs, with OD-2/4/5/14/17/19/20/21 recorded (OD-1 is already Owner-approved) |
+| R19-P1 (P03-A/B/C/S) | Phase 15 | Phase 15 | Phase 15. P03-S writer cutover per consumer family | PLANv2 15.9 |
+| P2a provenance | ADR 0023 §4 reviewed | Isolated (cat. 2) | Package metadata read API: merge = enable (non-sensitive) | With R19-P4g; OD-7 before distribution |
+| P3a engine and fixtures | ADR 0023 §2–3 reviewed | Cat. 2 | n/a (pure) | With P3f |
+| P3b loader and GM endpoints | P3a | Cat. 2 (GM `canon.edit` only, no portal) | Non-GM exposure only via P3e-A | With P3f |
+| P2b-1 policy tables and reads | P3b | Cat. 2 (read paths); **commands merge disabled until OD-10** | After OD-10, GM API only | With R19-P4f |
+| P2b-2 build-command enforcement | P2b-1 | **Cat. 3:** merge needs build-command owner sign-off; after P03-C if `character_builds.py` is in flight | Allow-list mode exposed only after OD-10 and owner acceptance of the behavior change | With R19-P4f |
+| P2c house rules | P3a, P2b-1 | Schema and reads cat. 2; **commands disabled until OD-10** | After OD-10 | With R19-P4f |
+| P3c conditions and overrides | P3b, P2c (reads) | Cat. 2 | GM endpoint only | With P3f |
+| P2d creature templates | P3a, P2a | Cat. 2 (GM API); **independent of P2b** | No portal before R19-P4 | R19-P4g |
+| P2d-x option target for templates | P2b-1 and P2d merged | Cat. 2 | With P2b-2 | R19-P4g |
+| P3d-1 drafts (create, validate, submit, withdraw, reject) | P3b; ADR 0021 accepted | Cat. 2 (GM drafts, no materialization) | Player drafting after P03-B/C and Phase 16 | Phase 16 / P3f |
+| P3d-2 approval, materialization, direct-create review, activation gate | P3d-1, **P03-C build scope merged**, OD-9 | **Cat. 3:** build-command owner sign-off | Activation-gate behavior change enabled only after owner acceptance (OD-9) | Phase 16 / P3f |
+| P3e-T equipment (truth) | P3c | Cat. 2 with item-domain owner sign-off | GM endpoint | P3f |
+| P3e-A audience mode | P3e-T; **P03-A projection tier accepted**; for controllers, **P03-B accepted** | Cat. 3 | Non-GM mechanics reads | P3f |
+| P3f contract freeze | P3d-2, P3e-A | Cat. 2 | Phase 16 consumption | Phase 16 consumer review |
+| R19-P4a–g | Design any time | After Phase 17 (PLANv2 §6, 17.4) | After Phase 17 | R19-P4g (PLANv2 19.8) |
 
-These are category 1, and category 2 once merged. Each touches no file that P03 is expected to touch.
+**Safe to implement immediately (while P03 runs):** P2a and P3a. P3b follows P3a. P2d may follow. None of them touches a file P03 is expected to change.
 
-- R19-P2a: content provenance and packages. New `rules` tables and columns only.
-- R19-P3a: engine core and 5e adapter port. Pure new modules; no existing file is modified.
-- R19-P3b: context loader, catalog resolver, a GM-only explanation endpoint and the support endpoint. New query and API modules; `character_sheet.py` is not modified.
-- R19-P2b: option policy. New tables, with one guarded change to build validation that needs build-command owner sign-off.
-- R19-P2c: house rules.
-- R19-P3c: conditions and override evaluation.
-- R19-P2d: creature template definitions.
+**Waits for owner decisions:** P2b-1 and P2c commands (OD-10); P3d-2 (OD-9); every P03 contract freeze (OD-2, 4, 5, 14, 17, 19). The P03-S contract freeze and the cross-campaign copy and lineage seeding commands (OD-20, OD-21). OD-1 is Owner-approved and blocks nothing.
 
-### 3.2 Waits for P03-A, P03-B or P03-C
+**Waits for P03:** P2b-2 (sign-off, sequencing), P3d-2 (P03-C), P3e-A (P03-A/B), R19-P4a/b.
 
-- **R19-P3d (build drafts, reviews and custom mechanics).** Design and implementation may start. Merge needs build-command owner sign-off and must rebase onto P03-C's `character_builds.py` changes if those are in flight. Delegated *player* drafting is enabled only after P03-B/C (`character.propose_build`); until then drafts are GM-only.
-- **R19-P3e audience mode.** It needs P03-A's projection contract. The truth-mode equipment work may merge earlier.
-- **Moving the character sheet onto the engine** (shim retirement) waits for P03-A to settle the sheet projection.
-- **Every R19-P4 item** that reads control, authoring responsibility or build scope.
-
-### 3.3 Waits for Phase 17
-
-All of R19-P4: template-basis persistent creatures, encounter combatants and promotion, advancement, expanded open-content packages, encounter analysis, Phase 19 portal workflows and end-to-end acceptance. PLANv2 §6 and 17.4 still apply.
+**Waits for Phase 17:** all of R19-P4.
 
 ---
 
-## 4. Conventions every checkpoint follows
+## 4. Conventions, migration ownership and shared commands
 
-- **Layering.** Pure domain lives in `src/dnd_ai/domain/rules_engine/`. Queries go in `src/dnd_ai/queries/`, commands in `src/dnd_ai/commands/` (the only writers) and thin routers in `src/dnd_ai/api/` (`SYSTEM_ARCHITECTURE.md` §5).
-- **Migrations.** Use the next free `NNN_` number at merge time; never reuse a number. If the primary PC has merged migrations meanwhile, rebase and renumber before merge. Every revision follows `DATABASE_CONVENTIONS.md` §25 (docstring with purpose, rollback, data implications, locking) and §19 (an index for every FK) and §20 (constraints), uses lookup tables over enums, and is schema-qualified with no `public`.
-- **Commands.** They follow PLANv2 §3.1 and §17: actor and capability, scope binding, lock order, durable idempotency for retryable creates and transitions, audit through `audit_initial` / `audit_change` (never narrative content), and non-disclosing errors (`SafeMessageError` subclasses).
-- **Tests.**
-  - `tests/unit/` holds pure policy and engine tests.
-  - `tests/database/` holds command and query, constraint, migration and API tests.
-  - `tests/scenario/` holds cross-domain flows.
-  - Every checkpoint runs `ruff format`, `ruff check`, `mypy src`, its focused tests, the full suites (or the `verify-local` skill), migration up/down/up, and final-head CI. Test the smallest production invariant (CLAUDE.md §7.9).
-- **Documentation.** Each checkpoint updates `DATABASE_MODEL.md`, `DOMAIN_MODEL.md` and `ENTITY_LIFECYCLE.md` for what it builds, marking items **Built** only when merged.
-- **Review.** Each checkpoint is one reviewable PR to `main` (or to an integration branch the owner names), with the exact parent and target SHAs, scope, contracts, known limits and evidence.
+- **Layering, migrations, commands, tests, docs and review** follow the first draft:
+  - `NNN_` migration numbers are claimed at merge and renumbered on rebase.
+  - Commands follow PLANv2 §3.1 and §17.
+  - Each checkpoint runs `ruff`, `mypy`, its focused tests, the full suites and final-head CI.
+  - Each PR names its parent and target SHAs.
+- **No unresolved owner default may be encoded.** Where an OD is open, the command or path ships disabled (it refuses with `feature_policy_unresolved`, a 404-equivalent for clients) or is not merged.
+
+### Migration ownership
+
+| Schema change | Owner | Sign-off |
+|---|---|---|
+| Relationship assignment columns, indexes, capability matrix | P03-B | — |
+| Authoring delegations, legacy exceptions, build scope columns, portrayal re-key | P03-C | — |
+| **Campaign mechanical-state isolation (OD-1):** campaign-keyed character state, condition, resource, item-state, inventory and attunement tables; `campaign_mechanical_lineages`; `mechanical_state_migration_records`; `mechanical_components`; the mechanical-event campaign trigger; extending the ruleset-dependency guard; legacy read-only triggers | **Phase 15 P03-S** | — (no campaign-creation restriction: the earlier refusal proposal is withdrawn) |
+| `rules.content_packages` and its columns | R19-P2a | — |
+| Option policy and configuration tables (rows created lazily: a missing row means `all_canon`, version 0, so **campaign creation is not touched**) | R19-P2b-1 | — |
+| House-rule tables | R19-P2c | — |
+| Creature template tables | R19-P2d | — |
+| Drafts, reviews, custom mechanics | R19-P3d-1/2 | Build-command owner |
+| Item-definition mechanics columns | R19-P3e-T | Item-domain owner (Phase 15, 15F) |
+| Encounter, participant and interaction actor/target columns; combatant state | R19-P4b | Encounter owner (Phase 15) |
+| **State-writer token changes** (setting `last_event_id` anywhere) | Phase 15 writers; the encounter-damage fix in R19-P4b | Phase 15 owner. **No early R19 checkpoint changes state writers.** |
+
+### Shared commands
+
+| Command | Owner | R19 extension |
+|---|---|---|
+| `create_character_build` | Phase 15 (P03-C adds `build_scope`) | P3d-2: `custom_mechanics`, review linkage. **No reference-check waivers.** P4a: `template_basis` |
+| `activate_character_build`, `initialize_character_state`; `character_state`, `encounters` damage, `event_corrections`, `item_operations`, `items`, Foundry sync writers | Phase 15 (X4 guard; **P03-S moves every mechanical writer to the route campaign's tables**) | P3d-2: activation gate (ADR 0023 §7.4). R19 never writes mechanical state |
+| `_validate_rules` / `build_options_endpoint` | Phase 15 | P2b-2 option enforcement |
+| Item definition commands | Phase 15 (15F) | P3e-T mechanics payload |
+| Encounter preparation and operation commands; Foundry sync | Phase 15 / Phase 11 | P4b (E1–E14) |
 
 ---
 
 ## 5. Integration contracts
 
-Each contract below is a stable boundary that other phases consume without knowing its implementation. Its owner changes it only by an ADR amendment or a reviewed contract-version bump.
-
-### 5.1 Character and actor contract (owner: Phase 15, P03-A/B/C)
-
-**Dependencies:** ADR 0020 and ADR 0021.
-
-**Boundary:** a domain function and query module, proposed as `dnd_ai.domain.actor_contract` plus `dnd_ai.queries.actor_contract`. Exact names are P03's choice; R19 code depends only on these signatures.
+### 5.1 Actor contract (owner: Phase 15)
 
 | Element | Contract |
 |---|---|
-| Stable identity | `actor_id: UUID` (= `character_id`), world id, lifecycle status. Never changes through control, kind, promotion or template. |
-| Optional build | `active_build(timeline_id, character_id) -> BuildRef \| None` with `ruleset_version_id`, `build_scope`, `origin_campaign_id`. `None` is a supported state. |
-| Campaign control | `control_state(campaign_id, character_id, at=effective clock) -> ControlState` with `primary`, `co_controllers[]` and `gm_operated: bool`. `may_operate(access, character_id, operation_code) -> bool`, rechecked under the caller's lock. |
-| Authoring responsibility | `authoring_responsibility(character_id) -> {kind, campaign_id?}`; `record_authoring(...)` extended to consult it. |
-| Eligible operations | A closed `CONTROLLER_OPERATIONS` allow-list (P03-B, OD-3); each operation names its capability and its lock. |
-| Visibility and projection | `projection_tier(access, character_id) -> {none, public_profile, controller, gm}` (P03-A). It feeds ADR 0023 `mode` selection. |
-| Runtime state references | State row tokens (`last_event_id`) for `character_state`, `character_conditions` and `character_resources` on the campaign timeline. |
+| Identity | `actor_id` (= `character_id`), world id, lifecycle. Stable through control, kind, promotion and template. |
+| Campaign-aware build | `resolve_campaign_active_build(campaign_id, character_id) -> {usable \| incompatible_ruleset_version \| out_of_scope \| none, build_ref?}` (ADR 0021 §3.4) |
+| Campaign mechanical state | `resolve_campaign_mechanical_state(campaign_id, character_id, component)` gives the local campaign row, or none. Lineage is materialized by seeding, and there is no live cross-campaign read (ADR 0021 §3.4). Each row carries its `origin`, or `legacy_shared_state` during dual-read |
+| Control | `control_state(campaign_id, character_id, clock) -> {primary?, co_controllers[], gm_operated, undetermined}`; `may_operate(access, character_id, operation_code)`, rechecked after the anchor lock (ADR 0021 §2.8) |
+| Authoring | `authoring_rights(access, character_id) -> {stewardship, delegated_operations[], legacy_exception}` |
+| Operations | The closed `CONTROLLER_OPERATIONS` (OD-3) |
+| Projection | `projection_tier(access, character_id) -> {none, public_profile, controller, gm}` |
+| Runtime facts | Loaded state values (hashed by R19), plus advisory tokens |
 
-**Compatibility:** legacy `/npcs` and `/player-characters` payloads keep working through adapters, and legacy relationship rows keep their current capabilities.
+**Compatibility boundary for early R19 work.** `queries/rules_context.py` depends on a narrow port, `ActorContractPort`, with two implementations:
 
-**Acceptance tests:**
+- **(a) current schema (pre-P03):**
+  - identity is the character row;
+  - the active build comes from `character_build_resolution`. It is classified `usable` when its version equals the route campaign's pin and `incompatible_ruleset_version` otherwise. There is no `out_of_scope` until build scope exists;
+  - mechanical state is read from the legacy **timeline** tables. When the route campaign's timeline hosts more than one campaign (including archived ones), every fact and result is labeled `legacy_shared_state` and is never shown as rules-validated. The manifest records `state_scope = legacy_shared_state`. After P03-S, implementation (b) reads only the route campaign's tables;
+  - the projection tier is `gm` for `canon.edit` callers and `none` otherwise;
+  - control is not consulted.
+- **(b) the P03 implementation**, swapped in when the P03 contracts are accepted.
 
-- One UUID through control change, multi-campaign control, a monster with no build, co-controller revocation, independent-grant survival, whole-character deny, and mechanics not leaking for a hidden character.
-- All of the above for scenarios T1–T7 in §8.
-- Old-route compatibility tests.
+R19 code and tests target the port, never subtype tables or campaign-owned characters.
 
-### 5.2 Character authoring and validation contract (owners: Phase 15 for the build command family; Phase 16 for player submission; Phase 19 for drafts, validation and review)
-
-**Dependencies:** ADR 0021 §3–4, ADR 0023 §7, the R19-P3a engine and P03-C build scope.
+### 5.2 Authoring and validation contract (Phase 15 command family; Phase 16 player submission; Phase 19 drafts, validation, review)
 
 | Element | Contract |
 |---|---|
-| Build draft | `create_build_draft`, `update_build_draft(expected_row_version)`, `withdraw_build_draft` over `character.character_build_drafts`. The payload is the adapter-schema JSON (`build_payload.v1` for 5e mirrors `BuildInput`). |
-| Proposed change | A draft in status `submitted`. The proposer is GM (`canon.edit`) or delegated player (`character.propose_build`, after P03-B/C). |
-| Preview | `POST /campaigns/{c}/characters/{ch}/build-drafts/{d}/validate` and `POST /campaigns/{c}/characters/{ch}/mechanics/preview` (unsaved payload). Both return a `ValidationReport` plus an `EvaluationResult`, with `authority: informational`. They make no write, except storing `last_validation_jsonb` on the draft when the draft is validated. |
-| Mechanical validation | ADR 0023 statuses `valid` / `invalid` / `incomplete` / `unsupported` / `conflicting`; legacy builds are `not_evaluated`. |
-| Approval | `approve_build_draft(decision, adjudications[], reason?)`. It re-validates under lock, records `character.character_build_reviews`, and calls `create_character_build` in the same transaction. `reject_build_draft(reason)`. |
-| Activation | `activate_character_build` only. It gains the ruleset-version guard (X4) and the build-scope rule (ADR 0021 §4). |
-| Audit and history | Draft creation, submission, decision and activation are audited. Reviews are append-only. Drafts are never deleted by validation. |
-
-**Compatibility:**
-
-- `create_character_build`'s existing signature and behaviour stay valid. The new optional parameters are `custom_mechanics`, `adjudicated_refs` and `build_scope`, all defaulting to today's behaviour.
-- The existing GM direct-create route (`POST …/builds`) stays.
-
-**Acceptance tests:**
-
-- T15, T16 and T20 (§8).
-- A GM direct-create parity test.
-- Invalid builds cannot be approved without `approved_as_rules_exception` and a reason.
-- A delegated player cannot approve.
+| Draft | `create_build_draft`, `update_build_draft(expected_row_version)`, `withdraw_build_draft`, `reject_build_draft` (P3d-1) |
+| Validate | `POST …/build-drafts/{d}/validate` and `POST …/mechanics/preview` return the three axes (ADR 0023 §5). No write except the draft's validation snapshot. |
+| Approve | `approve_build_draft(decision, adjudications[], reason?)` (P3d-2) re-validates under lock and materializes immutably (ADR 0023 §7.5) |
+| Direct create | `POST …/builds` is preserved. After P3d-2 it records a review only when valid; otherwise the build is created unreviewed (ADR 0023 §7.2) |
+| Review an existing build | `review_character_build(build, decision, adjudications, reason)` (P3d-2) |
+| Activate | `activate_character_build` only: writes the route campaign's state (OD-1), plus the per-campaign version guard, plus the activation gate |
+| Audit | Every transition is audited without payload content. Reviews are append-only. |
 
 ### 5.3 Creature contract (owner: Phase 19)
 
-**Dependencies:** ADR 0022, the P2d schema, P03-C build scope, and the Phase 15 encounter commands.
+As described in ADR 0022:
 
-| Element | Contract |
-|---|---|
-| Template definition | `rules.creature_templates`, with world homebrew or a content package. Commands: `create_creature_template`, `archive_creature_template`. |
-| Template version | `create_template_version(draft)`, `update_template_version(draft, expected_row_version)`, `publish_template_version` (draft → canon, which makes it immutable). Adapter-validated `mechanics_jsonb` plus typed references. |
-| Lightweight combatant | `add_encounter_combatants(encounter, template_version, count, label_prefix, side, overrides?)` (P4b); addressed by `encounter_participant_id`. |
-| Persistent instance | A character with a template-basis build (`create_character_build(template_basis=…)`), P4a. |
-| Overrides | Adapter-schema JSON recorded on the combatant or the template-basis build; trace status `declared`. |
-| Promotion | `promote_encounter_combatant` (P4b), with the ADR 0022 §6 semantics. |
+- template and versions (P2d);
+- template-basis builds (P4a);
+- combatants, spawning, participant-addressed actors and targets, promotion (P4b).
 
-**Compatibility:** entity-addressed encounter APIs are unchanged, and the Foundry sync refuses combatants explicitly.
+Entity-addressed encounter APIs are unchanged. The Foundry sync refuses combatants explicitly.
 
-**Acceptance tests:** T9–T12 (§8), plus the B1-1 member-projection negative tests extended to combatants.
+### 5.4 Calculation contract (owner: Phase 19)
 
-### 5.4 Rules calculation contract (owner: Phase 19)
+ADR 0023 §2, §3, §5 and §10:
 
-**Dependencies:** ADR 0023 §2–5 and §10.
+- `InputBundle`, adapter protocol, registry, composition, three-axis result, `rules_result.v1`, `rules_manifest.v1`;
+- versioned JSON schemas. Additive changes stay within `v1`; renames require `v2`.
 
-| Element | Contract |
-|---|---|
-| Evaluation context | `RulesContext`, `EvaluationRequest` (ADR 0023 §5). |
-| Ruleset-specific adapter | `RulesAdapter` protocol plus the closed `registry.py`; `support(ruleset_version)`. |
-| Inputs and dependency resolution | `queries.rules_context.load_bundle(connection, request, access)` returns a projection-scoped `InputBundle`; `queries.rules_catalog.eligible_catalog(...)`. |
-| Structured results | `EvaluationResult` / `DerivedValue` / `Finding`, serialized as `rules_result.v1` JSON. |
-| Derivation trace | `TraceStep` with `DefinitionRef` (id plus version token). |
-| Unsupported or incomplete | Explicit statuses; never omitted, never zero. |
+### 5.5 Source and permission contract (shared)
 
-**Compatibility:** the JSON schema is versioned (`rules_result.v1`). Additive fields are allowed; renames need `v2`.
+ADR 0023 §9: five independent decisions; citations to `core.sources` only until ED-8 is built; the bounded copied-text aid. Option eligibility goes through `rules_catalog.option_permitted`.
 
-**Acceptance tests:** determinism (shuffled inputs give an identical result and fingerprint), the neutrality guard (§6, R19-P3f), parity with `character_calculations.py`, T13, T14, T18, T19 and T20.
-
-### 5.5 Source and permission contract (shared coordination: Phase 19 for option policy and catalog; Phase 18/20 for the corpus; Phase 15 for authority)
-
-**Dependencies:** ADR 0023 §9, ADR 0020 and ADR 0021.
-
-| Decision | API and domain boundary |
-|---|---|
-| Source access | The existing corpus endpoints and capability `rules_source.manage` / `campaign.view`; the future `contributor_private` visibility (OD-12) |
-| Retrieval and use | Existing `allow_*` flags, and Phase 20 purpose rules |
-| Campaign option eligibility | `queries.rules_catalog.option_permitted(campaign, ref)`; commands `set_campaign_option_policy` and `add_option_entry` / `remove_option_entry` (P2b) |
-| Validation authority | Adapter support level plus the catalog |
-| Approval | Review records plus ADR 0021 authority |
-
-**Compatibility:** the default option mode is `all_canon`, which is today's behaviour.
-
-**Acceptance tests:**
-
-- T17, a player-owned source whose text is not shared.
-- A permitted option exposes no source text.
-- A denied option is refused at draft validation with `option_not_permitted`, and at direct create with the existing non-disclosing `build_option_not_available`.
-- Each decision is tested with the other four held fixed.
+**Acceptance tests for every contract:** §8.
 
 ---
 
 ## 6. Checkpoints
 
-Each checkpoint lists the same 16 fields:
+Every checkpoint covers the same 16 fields:
 
-1. Objective and outcome
+1. Objective
 2. Prerequisites
 3. Existing modules
 4. New or modified modules
-5. Schema changes
-6. API and command contracts
+5. Schema
+6. API and commands
 7. Authorization
-8. Migration strategy
-9. Backward compatibility
+8. Migration
+9. Compatibility
 10. Automated tests
 11. Manual acceptance
 12. Performance
 13. Rollback
 14. Branch dependencies
 15. Completion criteria
-16. Start / merge / ship
+16. Gates (§3)
 
-### R19-P0 — Architecture and contracts (this deliverable)
+Fields that are unchanged from the first draft are stated briefly.
 
-1. **Objective and outcome:** accepted ADRs 0021–0023 and this plan. Implementers then make no further major architectural decision.
-2. **Prerequisites:** PLANv2 `defe3f7`.
-3. **Existing modules:** none modified.
-4. **New or modified modules:** three ADRs and this plan.
-5. **Schema changes:** none.
-6. **API and command contracts:** §5 of this plan.
+### R19-P0 — Architecture and contracts
+
+1. **Objective:** accepted ADRs 0021–0023 and this plan.
+2. **Prerequisites:** none.
+3. **Existing modules:** none.
+4. **New or modified modules:** three ADRs, this plan, an ADR 0020 pointer note, a PLANv2 cross-reference.
+5. **Schema:** none.
+6. **API and commands:** §5.
 7. **Authorization:** none.
-8. **Migration strategy:** none.
-9. **Backward compatibility:** not applicable.
-10. **Automated tests:** none. Run the documentation link and table check.
-11. **Manual acceptance:** independent architecture review, then owner decisions on OD-1 to OD-16.
+8. **Migration:** none.
+9. **Compatibility:** not applicable.
+10. **Automated tests:** documentation link and table checks.
+11. **Manual acceptance:** independent review; owner decisions OD-2, 4, 5, 14, 17, 19, 20 and 21 recorded in the ADR status lines (OD-1 is recorded as Owner-approved).
 12. **Performance:** not applicable.
-13. **Rollback:** revert the documentation commit.
+13. **Rollback:** revert the documentation.
 14. **Branch dependencies:** none.
-15. **Completion criteria:**
-    - The ADRs are accepted, or amended per review.
-    - Owner decisions are recorded in each ADR's status line.
-    - The planning branch is merged to `main` by the owner.
-    - The primary PC acknowledges ADR 0021.
-16. **Start / merge / ship:** start now; merge after review.
+15. **Completion criteria:** the ADRs are Accepted (or amended), and the primary PC acknowledges ADR 0021.
+16. **Gates:** §3.
 
-### R19-P1 — Shared actor foundation (Phase 15 P03-A/B/C; listed here only as Phase 19's dependency)
+### R19-P1 — Shared actor foundation (Phase 15 P03-A/B/C)
 
-1. **Objective and outcome:** ADR 0021 is implemented, so Phase 19 can rely on the §5.1 contract.
-2. **Prerequisites:** ADR 0021 accepted; P02 navigation; DEF-007 no-clock decision (OD-14).
-3. **Existing modules:** see ADR 0021 Context.
-4. **New or modified modules (owned by P03):**
-   - **P03-A:** revelation record, public-profile release, the shared discovery predicate, B1-1 follow-ups.
-   - **P03-B:** assignment columns, exclusion constraint, `CONTROL_ASSIGNMENT_CAPABILITIES`, `assign_character_control` / `revoke_character_control`, the bounded operations allow-list.
-   - **P03-C:** authoring responsibilities table, the `record_authoring` change, build scope columns, portrayal re-key, kind-to-capability eligibility, manifest, adapters.
-5. **Schema changes:** as listed in ADR 0021 §2.2–2.3, §3.3, §4 and §6.
-6. **API and command contracts:** §5.1.
-7. **Authorization:** ADR 0021 §2.7–2.10 and §3.5.
-8. **Migration strategy:** ADR 0021 §7 (manifest, additive first, compare effective access on a restored copy).
-9. **Backward compatibility:** legacy routes, payloads and relationship capabilities are preserved.
-10. **Automated tests:** T1–T7 and T21 (§8), plus P03's own matrix (investigation D6.4/D6.8).
-11. **Manual acceptance:** the corrected Sella/F4 scenario; a player-controlled monster; the same actor under two controllers in two campaigns.
-12. **Performance:** discovery predicates must stay SQL-filtered before counting and pagination.
-13. **Rollback:** additive migrations have working downgrades until marker or portrayal FK retirement, which is backup-gated.
-14. **Branch dependencies:** the primary PC's Phase 14/15 stream.
-15. **Completion criteria:** PLANv2 15.9's 15H criterion.
-16. **Start / merge / ship:** Phase 15 owns the timing. R19 must not implement any of it.
+The obligations are those of ADR 0021:
 
-**Small Phase 15 fix that R19 needs early (X4):** in `activate_character_build`, reject a build whose `ruleset_version_id` ≠ the activating campaign's pinned version. Use a new `SafeMessageError` such as `build_ruleset_mismatch` (400). Add a database test: create campaigns A (2024) and B (a different version) on one timeline, then show that activating A's build from B is refused. Phase 15 owns it; it may land with P03-C or earlier.
+- **P03-A:** revelation (OD-17), public profile, projection tiers, discovery predicate.
+- **P03-B:** assignment columns, index replacement, `CONTROL_ASSIGNMENT_CAPABILITIES`, the locking protocol, clock rules (OD-14), operations (OD-3) that write the route campaign's state (P03-S), assignment authority (OD-4), co-controller rules (OD-2).
+- **P03-C:** delegations and legacy exceptions (OD-5, OD-19), build scope (OD-6, reconciled: campaign-scoped builds permitted), portrayal re-key, capability eligibility, manifest, adapters.
+- **P03-S (OD-1, Owner-approved):** campaign-keyed mechanical-state tables, lineage seeding, the mechanical-event campaign trigger, the reviewed migration manifest, dual-read, per-family writer cutover, and every table, command, resolver and API in ADR 0021 §3.9. P03-S must precede any P03-B operation that writes state. Cross-campaign copy and lineage seeding stay disabled until OD-21; the item-ownership and location classification follows OD-20.
+
+**Also Phase 15, early:** the X4 activation version guard (`build_ruleset_mismatch`, 400), with a database test. Campaigns A and B pin different versions on one timeline; activating A's build from B is refused.
+
+**Tests:** T1–T7, T21–T26 (§8).
+
+R19 implements none of this.
 
 ### R19-P2a — Rules content provenance and packages
 
-1. **Objective and outcome:** every rules definition can state its origin and license, and Phase 17 gains a concept for optional content packages. Developers can answer "where did this definition come from, and may we redistribute it?" from data.
-2. **Prerequisites:** ADR 0023 accepted (§4). OD-7 is answered for the baseline package's license; until then the backfill uses license `unreviewed`.
-3. **Existing modules:**
-   - `src/dnd_ai/persistence/tables/rules.py`
-   - `database/migrations/versions/022_seed_initial_ruleset.py`, `033_*`, `036_*`
-   - `src/dnd_ai/persistence/seeds.py`
-   - `tests/database/test_ruleset_provenance.py`
+1. **Objective:** each ruleset-wide definition names its content package, origin, license status and review status. The seed is recorded as **unreviewed** with license `unknown`.
+2. **Prerequisites:** ADR 0023 §4 reviewed.
+3. **Existing modules:** `persistence/tables/rules.py`, revisions 022/033/036, `persistence/seeds.py`, `tests/database/test_ruleset_provenance.py`.
 4. **New or modified modules:**
-   - New migration `NNN_rules_content_packages.py`.
-   - Table metadata in `persistence/tables/rules.py`.
-   - Seed lookups `database/seeds/rules.content_origins.yaml` and `rules.content_licenses.yaml`.
-   - New query `queries/rules_provenance.py`.
-   - Read endpoint in `api/rulesets.py`: `GET /rulesets/{rv}/content-packages`, authenticated (`campaign.view` in any campaign on that version) or system admin.
-   - An audit report `docs/R19_SEED_CONTENT_PROVENANCE_AUDIT.md`, which records what the seed contains and why its origin is believed to be what it is.
-5. **Schema changes:**
-   - Lookups `rules.content_origins` (`open_content`, `system_baseline`, `homebrew_world`, `gm_custom`, `licensed`) and `rules.content_licenses` (`unreviewed`, `cc_by_4_0`, `ogl_1_0a`, `proprietary_licensed`, `homebrew_private`, `public_domain`), each with code, name and description.
-   - `rules.content_packages`, as in ADR 0023 §4; unique `(ruleset_version_id, code)`.
-   - Nullable `content_package_id UUID` FK (`ON DELETE RESTRICT`), with an index, on `rules.abilities`, `skills`, `species`, `classes`, `subclasses`, `features`, `feats`, `spells`, `conditions`, `creature_types`, `damage_types`, `languages`, `proficiency_types`, `resource_definitions` and `item_definitions`.
-   - It is immutable once set, using the existing `core.enforce_immutable_columns()`.
-   - A trigger enforces that the package's `ruleset_version_id` equals the row's version, or the version of its class or subclass parent for subclasses and features.
-6. **API and command contracts:** read-only in this checkpoint. Package installation commands come with Phase 17 packaging (§7.3).
-7. **Authorization:** reading package metadata is non-sensitive (titles, licenses), so any authenticated user with a campaign on that ruleset version may read it. No writes.
-8. **Migration strategy:**
-   - Create the lookups and the table.
-   - Insert one package `dnd5e-2024-baseline` (origin `system_baseline`, license `unreviewed`).
-   - Backfill `content_package_id` on every existing ruleset-wide row of that version.
-   - World-owned homebrew item definitions stay NULL.
-   - The migration is idempotent and runs in one transaction. Tables are small, so there is no batching.
-9. **Backward compatibility:** columns are nullable, and no reader requires them. Build and sheet behaviour is unchanged.
-10. **Automated tests:**
-    - Migration up/down/up.
-    - Backfill counts equal row counts per table.
-    - The version-mismatch trigger refuses a cross-version package.
-    - The column is immutable.
-    - A homebrew item definition is allowed with NULL.
-    - The seeds unit test covers the new lookups.
-    - The endpoint is denied to an outsider and returns the baseline package.
-11. **Manual acceptance:** an operator reads the baseline package and its license `unreviewed` from the API. The owner reviews the provenance audit document.
-12. **Performance:** negligible; one indexed FK per table.
-13. **Rollback:** the downgrade drops the columns, table and lookups. No data loss beyond the provenance itself.
-14. **Branch dependencies:** none. It touches no P03 file.
-15. **Completion criteria:** every ruleset-wide definition has a package. The audit document is reviewed. `DATABASE_MODEL.md` §8 is updated to mark these **Built**.
-16. **Start / merge / ship:** start now (category 1) and merge independently (category 2). There is no user-facing feature.
-
-### R19-P3a — Engine contracts, registry and the 5e adapter (pure)
-
-1. **Objective and outcome:** the neutral core types and the deterministic composition exist, and a 5e adapter reproduces today's sheet formulas with a full trace and per-version support. Developers get a tested, pure API for later checkpoints.
-2. **Prerequisites:** ADR 0023 accepted (§2, §3, §5, §10).
-3. **Existing modules:**
-   - `domain/character_calculations.py` (the parity oracle; **not modified**)
-   - `queries/character_sheet.py` (read only, to understand inputs)
-4. **New or modified modules:**
-   - `src/dnd_ai/domain/rules_engine/__init__.py`
-   - `contracts.py`: dataclasses, enums and protocols
-   - `composition.py`: ordering, conflict detection, application
-   - `validation.py`: `Finding` and `ValidationReport` aggregation
-   - `fingerprint.py`: canonical JSON and SHA-256
-   - `registry.py`: closed registry and support per version
-   - `adapters/__init__.py`
-   - `adapters/dnd5e.py`: keys `ability_modifier.<code>`, `total_level`, `proficiency_bonus`, `skill.<code>`, `passive.<code>`, `saving_throw.<code>`, `spell_attack_bonus.<profile>`, `spell_save_dc.<profile>`. Override points are declared but unused until P3c.
-   - `adapters/schemas/dnd5e_build_payload_v1.py`, a Pydantic model mirroring `BuildInput`.
-5. **Schema changes:** none.
-6. **API and command contracts:** Python API only (§5.4). Serialization `rules_result.v1` lives in `contracts.py` (`to_json()`).
-7. **Authorization:** none. The engine is pure, and callers authorize.
-8. **Migration strategy:** none.
-9. **Backward compatibility:** no existing file changes. The sheet is unchanged.
-10. **Automated tests (`tests/unit/`):**
-    - `test_rules_engine_composition.py`: layer order, stable sort, `set` conflicts produce `conflicting` with no value, and `declared` handling.
-    - `test_rules_engine_determinism.py`: 200 random permutations of the same contributions give an identical result and fingerprint.
-    - `test_rules_engine_fingerprint.py`: canonical JSON is key-order independent, and a changed token changes the fingerprint.
-    - `test_rules_engine_registry.py`: `dnd5e`/2024 is `calculating`; `dnd5e`/2014 and an unknown family are `none`; an unknown version produces no values.
-    - `test_dnd5e_adapter_parity.py`: table-driven against `character_calculations` across scores 1–30, levels 1–20, and proficiency/expertise combinations.
-    - `test_dnd5e_adapter_missing_inputs.py`: no class levels gives `proficiency_bonus` the status `missing_input`, and a missing ability makes dependants `missing_input`.
-    - `test_rules_engine_neutrality.py` (the neutrality guard): a static check that no file under `rules_engine/` outside `adapters/` contains the tokens `proficien`, `armor_class`, `class_level`, `spell_slot`, `challenge_rating`, `hit_die` or `dnd5e`; and that `contracts.py` imports nothing from `adapters`.
-11. **Manual acceptance:** a reviewer reads one trace JSON for a fixture build and confirms that each value cites its build rows.
-12. **Performance:** the pure functions run in microseconds. The fingerprint uses `hashlib` only.
-13. **Rollback:** delete the new package. Nothing depends on it yet.
+   - migration `NNN_rules_content_packages.py`;
+   - lookups `rules.content_origins`, `rules.content_licenses` (includes `unknown`), `rules.content_review_statuses`;
+   - `queries/rules_provenance.py`;
+   - `GET /rulesets/{rv}/content-packages`;
+   - `docs/R19_SEED_CONTENT_PROVENANCE_AUDIT.md`, a factual inventory of what the seed contains and what evidence exists. It makes **no legal conclusion**.
+5. **Schema:** ADR 0023 §4. Nullable, immutable `content_package_id` on the 15 ruleset-wide tables, with a version-agreement trigger.
+6. **API and commands:** read-only.
+7. **Authorization:** any authenticated member of a campaign on that version, or a system admin.
+8. **Migration:** create one package for revision 022's version (`system_baseline`, `unknown`, `unreviewed`) and backfill. Homebrew items stay NULL.
+9. **Compatibility:** nullable columns; no reader changes.
+10. **Automated tests:** migration up/down/up, backfill counts, the trigger, immutability, seeds, endpoint authorization.
+11. **Manual acceptance:** the owner reads the audit document (input to OD-7).
+12. **Performance:** negligible.
+13. **Rollback:** drop the objects.
 14. **Branch dependencies:** none.
-15. **Completion criteria:**
-    - The tests above pass and `mypy` is strict-clean for the package.
-    - Parity is 100% over the table.
-    - ADR 0023 is marked "P3a built" in its status line.
-16. **Start / merge / ship:** start now; merge independently. There is no user-facing feature.
+15. **Completion criteria:** tests pass; documentation is updated; OD-7 is scheduled before the next distributed artifact.
+16. **Gates:** §3.
 
-### R19-P3b — Context loader, catalog resolver, explanation and support endpoints
+### R19-P3a — Engine core, the 5e adapter port, and the neutrality fixture (pure)
 
-1. **Objective and outcome:** given a campaign and a character, the server loads a batched, authorized input bundle, evaluates it, and returns values with an explanation to GMs. Every member can see the campaign's rules support level, so UIs can stop guessing.
-2. **Prerequisites:** P3a. P2a is optional; package refs are included when present.
-3. **Existing modules:**
-   - `queries/character_build_resolution.py` (active build resolution)
-   - `queries/character_sheet.py` (input query patterns; **not modified**)
-   - `api/access.py` (`require_campaign_capability`)
-   - `api/character_builds.py` (for route style)
+1. **Objective:**
+   - the neutral types (ADR 0023 §2), deterministic composition (§3), the manifest and fingerprint (§10) and the three-axis result;
+   - a 5e adapter reproducing today's sheet formulas with traces and per-version support;
+   - **a small percentile fixture adapter (test-only)** proving the core needs no 5e concepts.
+2. **Prerequisites:** ADR 0023 §2, §3, §5 and §10 reviewed.
+3. **Existing modules:** `character_calculations.py` (parity oracle, **unmodified**).
 4. **New or modified modules:**
-   - `queries/rules_context.py`: `load_bundle()`, one round trip per family, covering build children, state and condition rows with tokens, and the ruleset version.
-   - `queries/rules_catalog.py`: `eligible_catalog()` (version, canon, world homebrew); the option-policy hook is a no-op until P2b.
+   - `domain/rules_engine/{__init__,contracts,composition,validation,manifest,fingerprint,registry}.py`;
+   - `adapters/dnd5e.py`, `adapters/schemas/dnd5e_build_payload_v1.py`;
+   - `tests/unit/rules_engine_fixtures/percentile_adapter.py`, registered only through a test registry fixture.
+5. **Schema:** none.
+6. **API and commands:** the Python API only.
+7. **Authorization:** none (pure).
+8. **Migration:** none.
+9. **Compatibility:** no existing file changes.
+10. **Automated tests (`tests/unit/`):**
+    - Ordering:
+      - two contributions from one source with different ordinals sort deterministically;
+      - 200 random permutations give an identical result and fingerprint.
+    - Duplicates:
+      - an identical duplicate collapses with a warning;
+      - a conflicting duplicate yields `adapter_contract_violation` and an `unsupported` key.
+    - Dependencies:
+      - topological evaluation;
+      - a registry cycle fails the registry validation test;
+      - missing ability gives `missing_input` on dependants, with `blocked_by`;
+      - an optional dependency with a default is traced `default_applied`.
+    - Conflicts: `set`/`set` conflicts produce `conflicting` and no value.
+    - Manifest:
+      - unequal preview payloads produce unequal fingerprints;
+      - equal payloads produce equal fingerprints;
+      - changing a definition `content_hash` changes the fingerprint;
+      - an audience-mode manifest excludes non-included refs.
+    - 5e parity table against `character_calculations` (scores 1–30, levels 1–20, proficiency and expertise).
+    - Support per version: 2024 is `calculating`; 2014 and unknown are `none`.
+    - Build-choice traces cite `build_component` refs.
+    - **Percentile fixture:**
+      - evaluates `pct.skill.*`, `pct.hit_points`, a dice-valued `pct.damage_bonus` and an advancement offer with no level;
+      - core modules accept it unchanged.
+    - **Neutrality guard (scoped):**
+      - `contracts.py`, `composition.py`, `validation.py`, `manifest.py` and `fingerprint.py` contain none of the tokens `proficien`, `armor_class`, `class_level`, `spell_slot`, `challenge_rating`, `hit_die`, `dnd5e`, and import nothing from `adapters`;
+      - `registry.py` is **explicitly allowed** to import and register adapters by id.
+11. **Manual acceptance:** a reviewer reads one 5e trace and one percentile trace.
+12. **Performance:** microseconds.
+13. **Rollback:** delete the package.
+14. **Branch dependencies:** none.
+15. **Completion criteria:** all tests pass; `mypy` strict-clean; 100% parity.
+16. **Gates:** §3.
+
+### R19-P3b — Context loader, catalog, GM explanation and support endpoints
+
+1. **Objective:** load an authorized, batched `InputBundle` through `ActorContractPort` implementation (a), the current schema (§5.1), then evaluate. GMs get explanations; members get the support level.
+2. **Prerequisites:** P3a.
+3. **Existing modules:** `character_build_resolution.py`, the sheet query patterns (**the sheet itself is unmodified**), `api/access.py`.
+4. **New or modified modules:**
+   - `queries/rules_context.py` (envelope, port);
+   - `queries/rules_context_dnd5e.py` (loader);
+   - `queries/rules_catalog.py`;
    - `api/rules_mechanics.py`:
-     - `GET /campaigns/{c}/characters/{ch}/mechanics?keys=` requires `canon.edit` and uses `mode=truth`. It returns `rules_result.v1`; 404 when the character is not visible to the caller (existing non-disclosing resolution).
-     - `GET /campaigns/{c}/rules/support` requires `campaign.view` and returns `{ruleset_code, version_label, support_level, adapter_version, outputs[]}`.
-   - Register the router in `api/app.py`.
-5. **Schema changes:** none.
-6. **API and command contracts:** as above. The responses are versioned JSON.
-7. **Authorization:** mechanics require `canon.edit`. This is deliberately GM-only until P03-A's projection tiers exist; P3e adds the audience mode. Support data is campaign-level metadata.
-8. **Migration strategy:** none.
-9. **Backward compatibility:** these are new routes only.
-10. **Automated tests (`tests/database/`):**
-    - `test_rules_context_loader.py`: correct tokens; a character with no active build returns `missing_input` for build-dependent keys and is not an error; a character on a different timeline cannot be loaded through this campaign.
-    - `test_api_rules_mechanics.py`:
-      - a GM gets values and a trace;
-      - a player gets 403/404 (non-disclosing);
-      - another campaign's character gets 404;
-      - an archived character follows existing lifecycle reads;
-      - the result equals the sheet's derived fields for the same fixture (parity);
-      - an unsupported ruleset version returns `support: none` and no values.
-    - `test_api_rules_support.py`.
-    - A query-count assertion that `load_bundle` issues at most N statements, with N fixed per family.
-11. **Manual acceptance:** a GM opens the endpoint for a fixture fighter and confirms the explanation is readable. A player is refused.
-12. **Performance:** target p95 under 50 ms for one character on local PostgreSQL 18, recorded in the PR. No list endpoint calls the engine.
-13. **Rollback:** remove the router. Nothing persisted.
-14. **Branch dependencies:** none. `character_sheet.py` is untouched to avoid colliding with P03-A.
-15. **Completion criteria:** tests and parity pass; the endpoints are documented in `DATABASE_MODEL.md` and the API docs section; ADR 0023 status is updated.
-16. **Start / merge / ship:** start after P3a; merge independently (category 2). GM-only API, with no portal UI.
-
-### R19-P2b — Campaign option policy and rules configuration version
-
-1. **Objective and outcome:** a GM can restrict which definitions a campaign permits. Every rules-configuration change bumps a version that fingerprints include. The default preserves today's behaviour.
-2. **Prerequisites:** P3b (catalog hook); P2a recommended for package-level entries. The owner decides OD-8 (default `all_canon`) and OD-10 (`canon.edit` to configure).
-3. **Existing modules:**
-   - `commands/character_builds.py` (`_validate_rules` / `_require_in_ruleset`)
-   - `api/character_builds.py` (`build_options_endpoint`)
-   - `persistence/tables/campaign.py`
-4. **New or modified modules:**
-   - Migration `NNN_campaign_rule_options.py`.
-   - Tables in `persistence/tables/campaign.py`.
-   - `commands/rules_configuration.py`: `set_campaign_option_mode`, `add_campaign_option_entry`, `remove_campaign_option_entry`, and the internal `bump_rules_configuration`.
-   - `queries/rules_catalog.py`: `option_permitted()` and `permitted_options()`.
-   - `api/rules_configuration.py`.
-   - **Coordinated change:** `commands/character_builds._validate_rules` refuses non-permitted options with the existing `BuildOptionNotAvailableError`, and `build_options_endpoint` filters by policy. Both are no-ops in `all_canon` mode.
-5. **Schema changes:**
-   - `campaign.campaign_rules_configurations` (`campaign_id` PK/FK, `configuration_version BIGINT NOT NULL DEFAULT 1`, `updated_at`).
-   - `campaign.campaign_rule_option_policies` (`campaign_id` PK/FK, `mode_code` FK to lookup `campaign.rule_option_modes` with `all_canon` / `allow_list`, `updated_by_user_id`, `updated_at`).
-   - `campaign.campaign_rule_option_entries`:
-     - `campaign_rule_option_entry_id`, `campaign_id`;
-     - `effect_code` (`allow` / `deny`, lookup);
-     - typed target FKs, exactly one set: `class_id`, `subclass_id`, `species_id`, `feat_id`, `spell_id`, `feature_id`, `item_definition_id`, `content_package_id`. `creature_template_id` is added by P2d;
-     - `created_by_user_id`, `created_at`, `removed_at`, `removed_by_user_id`.
-
-     It has a CHECK for exactly one target, a trigger requiring the target's ruleset version to equal the campaign's pin, and a unique partial index of live entries per target.
-   - The migration backfills one configuration and one policy (`all_canon`) row per existing campaign. Campaign creation inserts both (a `commands/campaigns.py` change, coordinated with Phase 14 ownership).
-6. **API and command contracts:**
-   - `GET /campaigns/{c}/rules/configuration` (members): mode, live entries, version, and the house rules once P2c lands.
-   - `PUT …/rules/option-policy {mode, expected_configuration_version}`.
-   - `POST` and `DELETE …/rules/option-entries`.
-   - Writes are idempotent (`Idempotency-Key`) and stale-checked against `expected_configuration_version`, under a campaign-row lock.
-7. **Authorization:** writes need campaign `canon.edit` (OD-10). Reads need `campaign.view`; entries name definitions that are already visible in build options.
-8. **Migration strategy:** an additive backfill, so existing campaigns behave identically.
-9. **Backward compatibility:** in `all_canon` mode, `_validate_rules` and build options behave exactly as before. A parity test runs the existing build tests unchanged.
+     - `GET /campaigns/{c}/characters/{ch}/mechanics` requires `canon.edit` and uses truth mode;
+     - `GET /campaigns/{c}/rules/support` requires `campaign.view`.
+5. **Schema:** none.
+6. **API and commands:** as above. `rules_result.v1`.
+7. **Authorization:** mechanics require `canon.edit`, otherwise a non-disclosing refusal. Characters resolve through the route campaign's **world** and lifecycle rules, never through any notion of campaign ownership.
+8. **Migration:** none.
+9. **Compatibility:** new routes only.
 10. **Automated tests:**
-    - Policy CRUD with stale and idempotent replay.
-    - Allow-list mode permits only listed items.
-    - Deny beats allow.
-    - A package-level allow combined with an item-level deny.
-    - A cross-version target is refused.
-    - Direct build create with a denied option is refused, non-disclosing.
-    - Draft validation shows `option_not_permitted` (after P3d).
-    - The configuration version bumps exactly once per change, and not on replay.
-    - The existing `test_character_builds.py` and `test_api_character_builds.py` pass unchanged.
-11. **Manual acceptance:** a GM restricts the campaign to one class; build options show only that class; a second campaign on the same world is unaffected (T8).
-12. **Performance:** `permitted_options` is a single query using the partial index.
-13. **Rollback:** the downgrade drops the tables. The guarded code paths treat a missing policy as `all_canon` during the deploy window.
-14. **Branch dependencies:** the `character_builds.py` change needs **Phase 15 build-command owner sign-off**. If P03-C is editing that file, land P2b's two-line guard after P03-C or coordinate a joint rebase.
-15. **Completion criteria:** tests pass, owner sign-off on the build-command touch, and documentation updated.
-16. **Start / merge / ship:** start now; merge as category 2 because default behaviour is unchanged. Portal UI comes with R19-P4f.
+    - **Loader:**
+      - tokens are advisory, and values are hashed;
+      - a character with no build gives `missing_input` statuses;
+      - a branch-inherited build resolves through existing resolution;
+      - a past `as_of` gives `historical_state_unavailable` for runtime facts;
+      - a branch component without branch resolution gives `branch_state_unresolved`;
+      - encounter damage (which does not set `last_event_id`) still changes the fingerprint;
+      - an attunement change changes it;
+      - a SQL-fixture edit of `rules.classes.hit_die` changes the content hash.
+    - **API:**
+      - the GM gets values;
+      - a player is refused, non-disclosing;
+      - a character of **another world** gets 404;
+      - same-world draft, archived and denied characters follow existing lifecycle and deny rules;
+      - parity with the sheet's derived fields for one fixture;
+      - an unsupported version returns `support: none`;
+      - a campaign whose pin differs from the active build's version returns `incompatible_ruleset_version`;
+      - **OD-1 regressions before P03-S:** two campaigns on one timeline both get the `legacy_shared_state` warning; identical state gives different fingerprints per campaign (T35); a campaign alone on its timeline gets no warning;
+      - **the same tests re-run after P03-S** with implementation (b): T22, T23.
+    - **Query count** is bounded per family.
+11. **Manual acceptance:** a GM reads one explanation; a player is refused.
+12. **Performance:** p95 under 50 ms per character locally, recorded in the PR.
+13. **Rollback:** remove the router.
+14. **Branch dependencies:** none (port implementation (a)).
+15. **Completion criteria:** tests pass; documentation updated.
+16. **Gates:** §3.
+
+### R19-P2b-1 — Option policy and configuration version (tables, commands, reads)
+
+1. **Objective:** store per-campaign option policy and a configuration version. Commands ship **disabled until OD-10** is recorded.
+2. **Prerequisites:** P3b; P2a for package-level entries.
+3. **Existing modules:** `persistence/tables/campaign.py`.
+4. **New or modified modules:**
+   - migration;
+   - `commands/rules_configuration.py`;
+   - `queries/rules_catalog.option_permitted` / `permitted_options`;
+   - `api/rules_configuration.py`.
+5. **Schema:**
+   - `campaign.campaign_rules_configurations`;
+   - `campaign.campaign_rule_option_policies` (mode lookup `all_canon` / `allow_list`);
+   - `campaign.campaign_rule_option_entries`: allow or deny; at-most-one typed target (class, subclass, species, feat, spell, feature, item definition, content package); same-version trigger; live-entry unique index.
+
+   Rows are created lazily. Missing rows read as `all_canon`, version 0.
+6. **API and commands:**
+   - `GET /campaigns/{c}/rules/configuration` (members);
+   - `PUT …/rules/option-policy`, `POST` / `DELETE …/rules/option-entries`. These refuse `feature_policy_unresolved` until OD-10; they are idempotent and stale-checked on the configuration version.
+7. **Authorization:** reads need `campaign.view`. Writes follow OD-10 (**UNRESOLVED**; nothing encoded).
+8. **Migration:** new tables only; no backfill.
+9. **Compatibility:** `_validate_rules` and build options are **not touched** (that is P2b-2).
+10. **Automated tests:**
+    - lazy defaults;
+    - entry validation, cross-version refusal, deny over allow;
+    - the configuration version bumps exactly once per change and not on replay;
+    - commands refuse while the OD-10 flag is unset.
+11. **Manual acceptance:** none until OD-10.
+12. **Performance:** indexed.
+13. **Rollback:** drop the tables.
+14. **Branch dependencies:** none.
+15. **Completion criteria:** tests pass.
+16. **Gates:** §3.
+
+### R19-P2b-2 — Option enforcement in build creation (behavior change)
+
+1. **Objective:** `allow_list` campaigns refuse non-permitted options at direct build creation, using the existing non-disclosing `build_option_not_available`, and filter build options.
+2. **Prerequisites:**
+   - P2b-1;
+   - OD-10;
+   - build-command owner sign-off;
+   - P03-C merged, if it changes `character_builds.py`.
+3. **Existing modules:** `commands/character_builds._validate_rules`, `api/character_builds.build_options_endpoint`.
+4. **New or modified modules:** a two-line guarded hook in each.
+5. **Schema:** none.
+6. **API and commands:** unchanged shapes.
+7. **Authorization:** unchanged.
+8. **Migration:** none.
+9. **Compatibility:** `all_canon` campaigns are unaffected (the existing build tests run unchanged). This is still category 3, because enabling `allow_list` changes command behavior.
+10. **Automated tests:**
+    - a denied option is refused, non-disclosing;
+    - build options are filtered;
+    - T8.
+11. **Manual acceptance:** T8 in the portal (R19-P4f) or by the API.
+12. **Performance:** one indexed query.
+13. **Rollback:** revert the hooks.
+14. **Branch dependencies:** P03-C sequencing.
+15. **Completion criteria:** owner sign-off; tests pass.
+16. **Gates:** §3.
 
 ### R19-P2c — House rules
 
-1. **Objective and outcome:** GMs record versioned house rules (override, extension or unevaluated) and adopt them explicitly with deterministic precedence. Unresolved conflicts are visible.
-2. **Prerequisites:** P3a (override-point registry and payload schemas) and P2b (configuration version). OD-10 is decided.
-3. **Existing modules:** `persistence/tables/rules.py`, `persistence/tables/campaign.py`, `domain/record_authoring.py` (world authority for world-scoped house rules), `domain/world_authority.py`.
-4. **New or modified modules:**
-   - Migration `NNN_house_rules.py`.
-   - Tables.
-   - `domain/house_rules.py` (pure: kind rules, conflict detection).
-   - `commands/house_rules.py`: `create_house_rule`, `create_house_rule_version` (draft), `update_house_rule_version(expected_row_version)`, `publish_house_rule_version`, `adopt_house_rule_version`, `retire_house_rule_adoption`, `reorder_house_rule_adoptions`, `acknowledge_house_rule_conflict`.
-   - `queries/house_rules.py`: the active set and conflicts.
-   - API routes in `api/rules_configuration.py`.
-   - The 5e adapter declares override points `dnd5e.hit_points_per_level`, `dnd5e.ability_score_generation` and `dnd5e.exhaustion_model`, with Pydantic parameter schemas.
-5. **Schema changes:** as ADR 0023 §6 describes.
-   - Lookups `rules.house_rule_kinds` and `rules.house_rule_scopes`.
-   - `rules.house_rules` with `owning_world_id NOT NULL`. A CHECK makes `campaign_id` required for campaign scope; a trigger requires the campaign to belong to the world.
-   - `rules.house_rule_versions` with `row_version`. An immutability trigger applies when the canon status is canon.
-   - `campaign.campaign_house_rule_adoptions` with a partial unique index `(campaign_id, precedence) WHERE retired_at IS NULL`. A trigger requires version parity with the campaign's pinned version and a canon version.
-6. **API and command contracts:**
-   - `GET /campaigns/{c}/rules/house-rules` (members; `gm_notes` stripped unless `canon.edit`).
-   - `POST …/house-rules`.
-   - `POST …/house-rules/{h}/versions`.
-   - `PATCH …/versions/{v}`.
-   - `POST …/versions/{v}/publish`.
-   - `POST …/rules/adoptions`.
-   - `DELETE …/rules/adoptions/{a}`.
-   - `PUT …/rules/adoptions/order`.
+As in ADR 0023 §6:
 
-   Each adoption change bumps the configuration version in the same transaction.
-7. **Authorization:**
-   - Campaign scope: `canon.edit` to author, publish and adopt.
-   - World scope: world `world.canon.edit` to author, `world.canon.review` to publish, plus campaign `canon.edit` on the route (ADR 0020 decision 6).
-   - Adoption into a campaign: that campaign's `canon.edit`.
-8. **Migration strategy:** new tables only.
-9. **Backward compatibility:** no adoptions means today's behaviour.
-10. **Automated tests:**
-    - Override parameters are validated against the adapter schema; an invalid one is refused, and an unknown override point is refused for kind `override`.
-    - An `unevaluated` version accepts text only.
-    - A canon version is immutable.
-    - Adopting a draft is refused.
-    - Precedence is unique.
-    - Two overrides of the same point without acknowledgement are listed as a conflict; with acknowledgement they are not.
-    - A world rule cannot be adopted by another world's campaign.
-    - Retirement keeps history.
-    - Each change bumps the configuration version once.
-    - Writes are concurrency-safe (two concurrent adoptions at the same precedence: one wins and one gets a stale or conflict error).
-    - Players see the description without GM notes.
-11. **Manual acceptance:** a GM adopts "average HP" and then a conflicting "max HP at level 1". The configuration page lists the conflict until it is acknowledged.
-12. **Performance:** the active set is one indexed query per campaign.
-13. **Rollback:** the downgrade drops the tables.
-14. **Branch dependencies:** none with P03.
-15. **Completion criteria:** T13 and T14 pass at the data layer (their evaluation half lands in P3c), and documentation is updated.
-16. **Start / merge / ship:** start after P3a and P2b; merge as category 2.
+- tables, `domain/house_rules.py`, `commands/house_rules.py`, `queries/house_rules.py`;
+- 5e override points `hit_points_per_level`, `ability_score_generation`, `exhaustion_model`.
 
-### R19-P3c — Runtime conditions, exhaustion and override evaluation (5e subset)
+**Commands disabled until OD-10.** Read paths and schema may merge.
 
-1. **Objective and outcome:** the engine applies seeded conditions, exhaustion (version-specific) and adopted override points, with explanation. Hit-point maximum becomes derivable, and it is reported against the stored value without replacing it.
-2. **Prerequisites:** P3b and P2c.
-3. **Existing modules:**
-   - `campaign.character_state.exhaustion_level`
-   - `campaign.character_conditions`
-   - the seeded conditions (`blinded` … `unconscious`)
-   - `rules.classes.hit_die`
-4. **New or modified modules:**
-   - The 5e adapter adds contributions for conditions as `enum` roll-mode keys (`dnd5e.attack_roll_mode`, `dnd5e.ability_check_mode`, `dnd5e.saving_throw_mode.<ability>`, `dnd5e.speed_zero`).
-   - Exhaustion under the `exhaustion_model` override point, defaulting to `2024_d20_penalty` for 2024: d20 tests −2 × level, speed −5 ft × level.
-   - `dnd5e.hit_point_maximum` from class hit dice, the CON modifier and the `hit_points_per_level` parameter.
-   - `rules_context.load_bundle` adds the house-rule adoptions and conditions.
-   - Unknown or unseeded conditions on a character are reported `unsupported`.
-5. **Schema changes:** none.
-6. **API and command contracts:** the existing mechanics endpoint gains these keys, and the result schema stays `v1`.
-7. **Authorization:** unchanged (GM truth mode).
-8. **Migration strategy:** none.
-9. **Backward compatibility:** the sheet is unaffected.
-10. **Automated tests:**
-    - Each seeded condition's mapping.
-    - Exhaustion levels 0–6 under 2024.
-    - A 2014 version is `none`.
-    - Adopted `average` versus default.
-    - Unacknowledged conflicting overrides make HP `conflicting` with both candidates.
-    - An `unevaluated` house rule naming `dnd5e.critical_damage` makes that key `unsupported`.
-    - A `declared_value_differs` finding is raised when stored max HP differs.
-    - Determinism, and T13, T14 and T19.
-11. **Manual acceptance:** the ADR 0023 §12 worked example is reproduced on a fixture, apart from the equipment part, which is P3e.
-12. **Performance:** unchanged.
-13. **Rollback:** revert the adapter code.
-14. **Branch dependencies:** none.
-15. **Completion criteria:** the tests pass, and the adapter version is bumped.
-16. **Start / merge / ship:** category 2.
+**Tests:**
+
+- schema validation of parameters;
+- unknown override point refused;
+- `unevaluated` is text-only;
+- canon versions are immutable;
+- adopting a draft is refused;
+- unique precedence;
+- unacknowledged overlap is listed as a conflict, and acknowledgement resolves it;
+- a cross-world adoption is refused;
+- retirement keeps history;
+- the configuration version bumps once;
+- a concurrent same-precedence adoption has exactly one winner;
+- members see descriptions without GM notes.
+
+**Rollback:** drop the tables. **Gates:** §3.
+
+### R19-P3c — Conditions, exhaustion and override evaluation (5e)
+
+- **Additions:**
+  - the 14 seeded conditions as enum roll-mode keys;
+  - exhaustion as a `runtime_fact` under the `exhaustion_model` point (2024: −2 × level to d20 tests, −5 ft × level speed);
+  - `dnd5e.hit_point_maximum` from `hit_die` and the CON modifier under `hit_points_per_level`;
+  - house-rule adoptions loaded into the bundle;
+  - an unknown condition reported `unsupported`.
+- **Tests:**
+  - each condition;
+  - exhaustion levels 0–6;
+  - 2014 gives `none`;
+  - adopted vs default;
+  - unacknowledged conflict gives `conflicting` with both candidates;
+  - `unevaluated` gives `unsupported`;
+  - `declared_value_differs`;
+  - T13, T14.
+- **Gates:** §3.
 
 ### R19-P2d — Creature template definitions
 
-1. **Objective and outcome:** a GM can author world-homebrew creature templates with immutable published versions. The engine can evaluate a template version for informational GM use. There are no instances or encounter integration yet.
-2. **Prerequisites:** ADR 0022 accepted, P3a, and P2a (packages).
-3. **Existing modules:** `rules.creature_types`, the `rules.item_definitions` homebrew precedent (`commands/item_definitions.py`, `domain/item_definition_authoring.py`), and `domain/record_authoring.py`.
+- **Content:** ADR 0022 §2 tables, `commands/creature_templates.py`, `queries/creature_templates.py`, `api/creature_template_authoring.py`, the 5e `dnd5e_creature_mechanics.v1` schema.
+- **No dependency on P2b.** The option-entry target `creature_template_id` is the separate follow-up **P2d-x**, which merges only after P2b-1 and P2d.
+- **Authorization:** world `world.canon.edit` / `world.canon.review` plus route `canon.edit`. Players are denied.
+- **Publication:** follows ADR 0023 §7 (a non-valid version needs adjudication or exception with a reason).
+- **Tests:**
+  - lifecycle and immutability;
+  - version pin;
+  - reference integrity;
+  - another world's template is invisible;
+  - schema validation;
+  - player denied;
+  - informational evaluation;
+  - publishing v2 leaves v1 unchanged.
+- **Gates:** §3.
+
+### R19-P3d-1 — Build drafts (no materialization)
+
+1. **Objective:** drafts with custom and unsupported content, validation snapshots, submit, withdraw and reject. **No approval.**
+2. **Prerequisites:** P3b; ADR 0021 accepted.
+3. **Existing modules:** `domain/character_builds.py` (`BuildInput` bounds), the idempotency machinery.
 4. **New or modified modules:**
-   - Migration `NNN_creature_templates.py`.
-   - Tables.
-   - `domain/creature_template_authoring.py`.
-   - `commands/creature_templates.py`.
-   - `queries/creature_templates.py`.
-   - `api/creature_template_authoring.py`.
-   - The 5e adapter adds the schema `dnd5e_creature_mechanics.v1`: ability scores, armor value with its source note, hit-point formula and average, speed, saves, skills, damage resistances, immunities and vulnerabilities, condition immunities, senses, languages, challenge/XP as adapter keys, traits and actions as **text plus optional structured attack entries** (bonus, damage dice, damage type). Its outputs are `dnd5e.creature.*`.
-   - The option-entry target `creature_template_id` is added to P2b's table.
-5. **Schema changes:** as ADR 0022 §2 describes.
-   - `rules.creature_templates` with world homebrew (`owning_world_id NOT NULL` in this checkpoint, because ruleset-wide templates arrive only through packages in P4d) and `row_version`.
-   - `rules.creature_template_versions` with a draft-mutable, canon-immutable trigger.
-   - `rules.creature_template_version_references` with typed FKs, an at-most-one check and a same-version trigger.
-6. **API and command contracts:**
-   - `POST /campaigns/{c}/creature-templates`.
-   - `POST …/{t}/versions`.
-   - `PATCH …/versions/{v}` (draft, `expected_row_version`).
-   - `POST …/versions/{v}/publish`.
-   - `POST …/{t}/archive`.
-   - `GET …/creature-templates` (GM).
-   - `GET …/versions/{v}/mechanics` (an engine result, `informational`).
-
-   Validation uses the shared `ValidationReport`. An unknown schema can be saved as a draft but cannot be published as validated; a publish with non-`valid` overall requires `approved_with_adjudication` and a reason (ADR 0023 §7 semantics).
-7. **Authorization:** authoring a template is world canon. It needs world `world.canon.edit` (draft) and `world.canon.review` (publish), plus campaign `canon.edit` on the route, through `record_authoring` exactly like other world definitions. Players: no access (a GM projection only).
-8. **Migration strategy:** new tables.
-9. **Backward compatibility:** none affected.
-10. **Automated tests:**
-    - Lifecycle and immutability.
-    - A version pinned to the campaign's ruleset version.
-    - The reference table enforces FKs, and JSON references missing from it are refused.
-    - Another world's template is invisible and non-disclosing.
-    - Every payload field is checked against the adapter schema.
-    - A player is denied.
-    - Engine evaluation of a goblin-like fixture yields the expected values with a trace.
-    - Publishing v2 leaves v1 unchanged (the T9 data half).
-11. **Manual acceptance:** a GM creates "Goblin", publishes v1, edits a draft v2 and publishes it, and v1 remains readable.
-12. **Performance:** small.
-13. **Rollback:** the downgrade drops the tables while no P4 consumer exists.
-14. **Branch dependencies:** none with P03.
-15. **Completion criteria:** the tests pass, and ADR 0022 status records "P2d built".
-16. **Start / merge / ship:** category 2, an API without portal UI. Do not advertise creature authoring before R19-P4.
-
-### R19-P3d — Validation report, build drafts, review and custom mechanics
-
-1. **Objective and outcome:** one draft, validate, submit and review workflow for character builds. It is usable now by GMs, and later by delegated players (Phase 16), imports (Phase 18) and AI (Phase 20). Unsupported content is stored and adjudicated without being misreported as validated.
-2. **Prerequisites:**
-   - P3b and P2b.
-   - ADR 0021 accepted, for build authority and scope.
-   - **Build-command owner (Phase 15) sign-off on the `create_character_build` extension.**
-   - OD-9 is decided.
-3. **Existing modules:**
-   - `commands/character_builds.py`, `domain/character_builds.py` (`BuildInput`, `normalize_build`), `api/character_builds.py`
-   - `domain/data_classification.py` (audit)
-   - the idempotency machinery
-4. **New or modified modules:**
-   - Migration `NNN_character_build_drafts_and_reviews.py`.
-   - `domain/build_drafts.py`: status transitions, adjudication rules, the effective-state policy table.
-   - `commands/build_drafts.py`: `create_build_draft`, `update_build_draft`, `submit_build_draft`, `withdraw_build_draft`, `approve_build_draft`, `reject_build_draft`.
-   - `queries/build_drafts.py`.
+   - migration (`character.character_build_drafts`, status lookup);
+   - `domain/build_drafts.py`;
+   - `commands/build_drafts.py` (create, update, validate, submit, withdraw, reject);
+   - `queries/build_drafts.py`;
    - `api/build_drafts.py`.
-   - **Coordinated extension:** `create_character_build(…, custom_mechanics=(), adjudicated_refs=frozenset())`. Both are optional and preserve existing behaviour. `adjudicated_refs` lets an approved reference that is not canon in the catalog pass only when the review names it; otherwise `_require_in_ruleset` is unchanged.
-   - P03-C later adds `build_scope` to the same function, so this checkpoint does **not** add scope columns.
-5. **Schema changes:** as ADR 0023 §7 describes.
-   - `character.character_build_drafts`: status lookup `character.build_draft_statuses`, `payload_jsonb` with `payload_schema_version`, `row_version`, `last_validation_jsonb`, `last_validation_fingerprint`. The campaign must be on the character's world (trigger).
-   - `character.character_build_reviews`: append-only trigger, decision lookup `character.build_review_decisions`, validation outcome lookup `character.validation_outcomes` (`valid`, `invalid`, `incomplete`, `unsupported`, `conflicting`).
-   - `character.character_build_custom_mechanics`: immutable with the build; support status lookup.
-6. **API and command contracts** (all under `/campaigns/{c}/characters/{ch}/`):
-   - `POST …/build-drafts`
-   - `PATCH …/build-drafts/{d}`
-   - `POST …/build-drafts/{d}/validate`
-   - `POST …/build-drafts/{d}/submit`
-   - `POST …/build-drafts/{d}/withdraw`
-   - `POST …/build-drafts/{d}/approve {decision, adjudications[{finding_code, subject_path, note}], reason}`
-   - `POST …/build-drafts/{d}/reject`
-   - `GET …/build-drafts`
-   - `GET …/builds/{b}/review`
-
-   Creates and transitions are idempotent and stale-checked.
+5. **Schema:** ADR 0023 §7.3. A trigger requires the campaign to be on the character's world.
+6. **API and commands:** §5.2, excluding approve.
 7. **Authorization:**
-   - **This checkpoint:** create, edit and submit need `canon.edit`. Approval needs `canon.edit`, plus world `world.canon.edit` when the resulting build is world-shared (after P03-C; before P03-C every approved build is created exactly as today's direct create, `legacy_unscoped`).
-   - **After P03-B/C (Phase 16 enables it):** a delegated `character.propose_build` holder may create, edit, submit and withdraw only their own drafts for that character in that campaign. They may never approve. `approved_as_rules_exception` is never available to a delegated proposer.
-   - Draft reads are limited to the author and `canon.edit` holders.
-8. **Migration strategy:** new tables only. Existing builds have no review and read as `not_evaluated`.
-9. **Backward compatibility:** the GM direct-create route is unchanged. The `create_character_build` defaults reproduce today's behaviour, and the existing build tests run unchanged.
+   - GM `canon.edit` now;
+   - `character.propose_build` holders only after P03-B/C. The path is coded behind the port and refuses until the P03 contract is present;
+   - draft reads are limited to the author and `canon.edit` holders.
+8. **Migration:** new table.
+9. **Compatibility:** no existing command touched.
 10. **Automated tests:**
-    - Status machine.
-    - Failed validation never deletes or rewrites draft content.
-    - Approval re-validates under lock; a stale draft (changed since validation) re-validates and uses the new report.
-    - `incomplete` or `unsupported` drafts cannot be approved as plain `approved`.
-    - `invalid` needs `approved_as_rules_exception` and a reason.
-    - Custom mechanics persist on the build with their support status.
-    - The review record keeps findings after approval: approval does not upgrade them (T16).
-    - Activating an approved build works through `activate_character_build`.
-    - Idempotent replays.
-    - Concurrent approve and withdraw: one wins.
-    - A non-author player cannot read a draft.
-    - Audit rows contain no payload content.
-    - The legacy build reads as `not_evaluated`.
-11. **Manual acceptance:** a GM drafts a build with one custom feature, sees `unsupported`, approves it with adjudication, activates it, and the explanation shows the feature as `declared` or `unsupported` (T15 and T16, GM half).
-12. **Performance:** validation is one bundle load; the draft payload is bounded (`MAX_*` from `domain/character_builds.py`).
-13. **Rollback:** the downgrade drops the tables while no review exists. After that, restore from backup, because reviews are history.
-14. **Branch dependencies:** **coordinate with P03-C** on `commands/character_builds.py`. If P03-C is in flight, rebase after its build-scope change and pass `build_scope` through.
-15. **Completion criteria:** tests pass, owner sign-off, and §5.2 is documented as the Phase 16 contract.
-16. **Start / merge / ship:** start now. Merge after sign-off as category 2 (a GM API). Player use is Phase 16 (category 3 until P03-B/C and Phase 16 acceptance).
-
-### R19-P3e — Equipment modifiers and audience-mode evaluation
-
-1. **Objective and outcome:** armor, shields and simple item modifiers contribute to derived values. Controllers can receive derived values computed only from what they may see.
-2. **Prerequisites:**
-   - P3c.
-   - P03-A projection tiers, for the audience half only.
-   - `knowledge.item_identification` semantics are confirmed with the item-domain owner.
-3. **Existing modules:**
-   - `rules.item_definitions`, `campaign.item_state` (`equipped`), `campaign.inventory_entries`, `campaign.item_attunements`
-   - `knowledge.item_identification`
-   - `queries/inventory.py` (restricted projection)
-4. **New or modified modules:**
-   - Migration `NNN_item_definition_mechanics.py`.
-   - 5e adapter schema `dnd5e_item_mechanics.v1` (armor category, base value, dexterity cap, shield bonus, flat bonuses to declared keys, attunement requirement).
-   - `commands/item_definitions.py` validates mechanics on homebrew create and update, with draft-only mutability of mechanics.
-   - `rules_context` loads equipped and attuned items with tokens.
-   - Audience-mode bundle building in `queries/rules_context.py`.
-   - `api/rules_mechanics.py` adds `mode=audience` for a controller (P03-B) or a `character.view_full` holder.
-5. **Schema changes:** `rules.item_definitions` gains `mechanics_schema_code`, `mechanics_schema_version` and `mechanics_jsonb` (nullable), plus `rules.item_definition_mechanic_references` (typed). A trigger makes the mechanics columns immutable once the canon status is canon. Descriptive columns stay editable (ADR 0023 §4).
-6. **API and command contracts:** item-definition authoring accepts optional `mechanics`. Mechanics `mode=audience` is available to non-GMs.
-7. **Authorization:** truth mode stays GM-only. Audience mode builds its bundle only from the viewer's visible inputs. Unidentified properties and GM-hidden effects are excluded before evaluation, without any marker of exclusion.
-8. **Migration strategy:** additive columns. Existing items have no mechanics and contribute nothing. An equipped item without mechanics raises an `item_without_mechanics` warning finding, in truth mode only. The engine never infers mechanics from an item's name.
-9. **Backward compatibility:** existing item authoring is unchanged when mechanics are omitted.
-10. **Automated tests:**
-    - AC from armor plus shield plus a feature (the ADR 0023 §12 example).
-    - Unequipped items do not contribute.
-    - Attunement-required items contribute only when attuned.
-    - Canon mechanics are immutable.
-    - **T7 leak test:** a hidden cursed item lowers truth AC, while audience-mode AC excludes it and the response contains no trace ref, count or flag revealing it.
-    - A hidden character's mechanics are not returned to a player at all.
-    - Fingerprint changes on equip and unequip.
-11. **Manual acceptance:** the full worked example, and a controller view (after P03-B).
-12. **Performance:** one inventory query per bundle.
-13. **Rollback:** the downgrade drops the columns while they are unused.
-14. **Branch dependencies:** the audience half waits for P03-A/B merges; the truth half can merge before.
-15. **Completion criteria:** tests pass, and the leak tests are reviewed by an independent reviewer.
-16. **Start / merge / ship:** the truth half is category 2; the audience half is category 3 until P03-A is accepted.
-
-### R19-P3f — Contract freeze, neutrality proof, and the Phase 16 consumer guide
-
-1. **Objective and outcome:** the validation-preview and evaluation contracts are frozen as versioned schemas that Phase 16 can build on. Neutrality is demonstrated by a test-only adapter.
-2. **Prerequisites:** P3d. P3e is recommended.
-3. **Existing modules:** the engine, the drafts.
-4. **New or modified modules:**
-   - `tests/unit/rules_engine_fixtures/percentile_adapter.py`, a **test-only** fake adapter implementing the ADR 0023 §13 archetype keys: `pct.skill.*`, `pct.hit_points`, `pct.damage_bonus` (dice) and a `pct.experience_check` advancement offer.
-   - `tests/unit/test_rules_engine_second_archetype.py`.
-   - JSON Schema exports `docs/schemas/rules_result.v1.json` and `validation_report.v1.json`, generated from the Pydantic models, with a test that fails on drift.
-   - `POST /campaigns/{c}/characters/{ch}/mechanics/preview` (unsaved payload, informational) if P3d did not already add it.
-   - `docs/R19_PHASE16_CONSUMER_GUIDE.md`, a short guide: which endpoints, statuses and capabilities to call, and what the UI must label.
-5. **Schema changes:** none.
-6. **API and command contracts:** frozen `v1`.
-7. **Authorization:** as in P3d/P3e.
-8. **Migration strategy:** none.
-9. **Backward compatibility:** a contract test pins `v1`.
-10. **Automated tests:**
-    - The fake adapter registers *only in tests* and composes with the same core.
-    - A build bundle with no class levels, no armor class and no proficiency evaluates.
-    - The advancement offer has no level concept.
-    - Dice-valued outputs serialize.
-    - The JSON Schema drift test.
-11. **Manual acceptance:** the Phase 16 lead reviews the consumer guide.
-12. **Performance:** not applicable.
-13. **Rollback:** not applicable.
+    - status machine;
+    - failed validation preserves content;
+    - stale `row_version` is refused;
+    - idempotency;
+    - a non-author player cannot read;
+    - audit carries no payload;
+    - unequal previews have unequal fingerprints;
+    - T15 (draft half), T20.
+11. **Manual acceptance:** a GM drafts a build with a custom feature and sees `unsupported`.
+12. **Performance:** bounded payloads.
+13. **Rollback:** drop the table.
 14. **Branch dependencies:** none.
-15. **Completion criteria:** contract tests pass, and the guide is accepted.
-16. **Start / merge / ship:** category 2. This closes the early R19-P3 foundation.
+15. **Completion criteria:** tests pass.
+16. **Gates:** §3.
 
-### R19-P4 — Full Phase 19 delivery (after the Phase 17 gate)
+### R19-P3d-2 — Approval, immutable materialization, direct-create review, activation gate
 
-Each item below is planned in detail when Phase 17 closes, re-using this plan's template. The contracts are fixed by ADRs 0021–0023.
+1. **Objective:** ADR 0023 §7.2–7.6 in full.
+2. **Prerequisites:**
+   - P3d-1;
+   - **P03-C build scope merged**, so approval passes `build_scope`;
+   - OD-9 recorded;
+   - P03-S cutover for build activation, because approval activates into the route campaign's state;
+   - build-command owner sign-off.
+3. **Existing modules:** `commands/character_builds.py` (create, activate), `api/character_builds.py`.
+4. **New or modified modules:**
+   - migration (`character_build_reviews`, `character_build_custom_mechanics`, decision and outcome lookups);
+   - `approve_build_draft`, `review_character_build`;
+   - `create_character_build(custom_mechanics=…, review=…)`: **no reference-waiver parameter**;
+   - the direct-create path records a review only when valid;
+   - the `activate_character_build` gate.
+5. **Schema:** ADR 0023 §7.5.
+6. **API and commands:** §5.2.
+7. **Authorization:**
+   - approval follows ADR 0021 §5 for the resulting scope;
+   - `approved_as_rules_exception` is limited to `canon.edit` holders and never available to delegated proposers;
+   - an exception never waives authorization, scope, references or payload safety.
+8. **Migration:** new tables. Existing builds read `not_evaluated`.
+9. **Compatibility:**
+   - the direct-create endpoint and its request shape are preserved;
+   - **behavior change:** non-valid new builds are created unreviewed and cannot be activated until reviewed. Legacy builds are exempt pending OD-9.
+10. **Automated tests:**
+    - approval re-validates under lock;
+    - a draft changed after validation re-validates;
+    - incomplete or unsupported needs adjudication;
+    - invalid needs an exception plus a reason;
+    - an exception cannot reference another world's homebrew, a draft definition or a cross-version definition (integrity holds);
+    - a draft-definition reference must be published or converted to a custom mechanic;
+    - the build has no FK to the draft;
+    - the review stores the manifest;
+    - findings unchanged after approval (T16);
+    - **direct-create bypass (T27):**
+      - a GM direct-creates an incomplete build and it is unreviewed;
+      - activation is refused, then succeeds after `review_character_build` with adjudication;
+      - a delegated player cannot direct-create;
+    - **invalid-but-computable (T28):**
+      - values compute;
+      - the label is "Invalid" plus "Rules exception approved", never "Rules-validated";
+    - legacy builds are activatable and labeled `not_evaluated`;
+    - concurrent approve and withdraw have one winner;
+    - existing build tests pass with the direct-create path unchanged for valid builds.
+11. **Manual acceptance:** T15 and T16 with the GM review queue (API).
+12. **Performance:** one bundle load per approval.
+13. **Rollback:** downgrade only while no review exists; afterwards restore from backup.
+14. **Branch dependencies:** P03-C.
+15. **Completion criteria:** owner sign-off; OD-9 recorded; tests pass.
+16. **Gates:** §3.
 
-| Item | Scope | Key dependencies | Notes |
-|---|---|---|---|
-| **P4a** Persistent creatures | Template-basis builds (`character.character_build_template_bases`), creating creatures from templates, player-controlled creatures through P03-B assignments | P03-B/C, P2d, P3d | Extends `create_character_build` (`template_basis=`); T3 and T9 (persistent half) |
-| **P4b** Encounter combatants | ADR 0022 §4–6: participant columns, combatant state and conditions, `target_encounter_participant_id`, spawning, promotion, member projection, the Foundry refusal path | Phase 15 encounter-owner review, P2d, P4a | T10, T11, T12; spawn limits of 50 per call and 200 participants per encounter (OD-15 may tune them) |
-| **P4c** Advancement | `advancement_options` for 5e, structured prerequisites and exclusions (`rules.definition_prerequisites` / `rules.definition_exclusions`), the Phase 16 draft path, history and explanations | Phase 16 accepted, P3d/P3f | T15 (player half) |
-| **P4d** Content packages | Installable open-content packages (SRD-licensed only after OD-7 review), the operator install command, Phase 17 packaging hooks | P2a, Phase 17 | No commercial ingestion without legal review |
-| **P4e** Encounter analysis | Party-specific analysis (PLANv2 19.4) using engine results; GM-only; assumptions and uncertainty shown | P4a/P4b, P3e | Analysis snapshots store their fingerprint |
-| **P4f** Portal | Rules configuration, house rules, option policy, template authoring, draft review queue, mechanics explanations, combatant tools | All of the above | Accessibility and responsiveness per PLANv2 §17.5 |
-| **P4g** Acceptance | PLANv2 19.8 end-to-end scenarios; `docs/PHASE19_VERIFICATION.md` | All of the above | Phase 19 is complete only here |
+### R19-P3e-T — Equipment modifiers (truth mode)
+
+- **Item mechanics:** `mechanics_schema_code`, `mechanics_schema_version` and `mechanics_jsonb` on `rules.item_definitions`, plus `rules.item_definition_mechanic_references`. Mechanics are draft-mutable and canon-immutable. Existing columns are unchanged and covered by content hashes.
+- **5e schema:** `dnd5e_item_mechanics.v1`.
+- **Loading:** equipped and attuned items.
+- **Missing mechanics:** an item without mechanics contributes nothing and raises an `item_without_mechanics` warning. Nothing is inferred from names.
+- **Sign-off:** item-domain owner.
+- **Tests:**
+  - armor plus shield plus feature;
+  - unequipped items don't contribute;
+  - attunement-required items contribute only when attuned;
+  - canon mechanics are immutable;
+  - editing a homebrew item's existing `requires_attunement` changes the content hash, and a stored review reports `inputs_changed` on recomputation.
+- **Gates:** §3.
+
+### R19-P3e-A — Audience mode
+
+- **Gate:** requires **P03-A projection tiers accepted**. The controller audience additionally requires **P03-B accepted** (`may_operate` and the controller projection).
+- **Behavior:** the bundle contains only viewer-visible inputs. Unidentified item properties (`knowledge.item_identification`) and GM-hidden effects are excluded before evaluation, with no marker. The fingerprint covers the audience bundle only.
+- **Tests:**
+  - **T7:** a hidden cursed item changes truth AC, while audience AC, trace, counts and fingerprint are unchanged and reveal nothing;
+  - an undiscoverable character gives a non-disclosing refusal;
+  - a controller after revocation is refused on the next request.
+- **Gates:** §3.
+
+### R19-P3f — Contract freeze and Phase 16 guide
+
+- **Contents:**
+  - JSON Schemas `docs/schemas/rules_result.v1.json`, `rules_manifest.v1.json`, `validation_report.v1.json`, with drift tests;
+  - `POST …/mechanics/preview`;
+  - `docs/R19_PHASE16_CONSUMER_GUIDE.md`.
+- **Neutrality:** already proven in P3a. P3f re-runs the percentile fixture against the frozen schemas.
+- **Gates:** §3.
+
+### R19-P4 — Full delivery (after Phase 17)
+
+| Item | Scope | Dependencies |
+|---|---|---|
+| P4a | Template-basis builds; persistent creatures; player-controlled creatures | P03-B/C, P2d, P3d-2 |
+| P4b | ADR 0022 E1–E14; combatant state; spawning (pending and active); participant actors and targets; promotion in the corrected order; discovery-gated promotion links; the encounter damage `last_event_id` fix | Phase 15 encounter owner, P4a, ED-3, OD-11 |
+| P4c | Advancement; structured prerequisites and exclusions | Phase 16, P3d-2, P3f |
+| P4d | Content packages; operator install | P2a, OD-7, Phase 17 |
+| P4e | Encounter analysis (GM-only, manifest-stamped) | P4a/b, P3e |
+| P4f | Portal workflows | All of the above |
+| P4g | PLANv2 19.8 acceptance; `PHASE19_VERIFICATION.md` | All of the above |
 
 ---
 
 ## 7. Cross-phase analysis
 
-### 7.1 Phase 15
-
-- **P03-A.** It provides projection tiers, which R19-P3e's audience mode consumes, and the revelation predicates, which mechanics endpoints must respect: a player never receives derived values for a character they cannot discover. R19 adds no projection or discovery code of its own.
-- **P03-B.** It provides control assignments and bounded operations. R19 consumes `may_operate` for controller audience views (P3e) and for player-controlled creatures (P4a). R19 must not add control rows or capabilities.
-- **P03-C.** It provides authoring responsibility, build scope, kind-to-capability eligibility and the portrayal re-key. R19-P3d's approval passes `build_scope`. R19-P4a needs non-NPC/PC characters to be buildable.
-- **Existing builds.** They stay immutable and unchanged. R19 adds reviews and custom mechanics alongside, and they read as `not_evaluated`.
-- **Item and inventory authoring.** R19-P3e adds optional mechanics to item definitions. Instance commands are unchanged.
-- **Encounter runtime.** Phase 15's encounter commands stay authoritative. R19-P4b extends them additively under owner review, and keeps entity addressing and the Foundry sync.
-- **Historical migration safety.** R19 never rewrites builds, events, encounter rows or participation roles. Every R19 table is additive.
-
-### 7.2 Phase 16
-
-- **Player-owned build drafts.** These are P3d drafts created by a `character.propose_build` holder (ADR 0021 §3.5), with no separate builder.
-- **Delegated authoring.** The capability and grant come from P03-C. The draft commands accept it once P03-C ships.
-- **Validation previews.** The P3f-frozen endpoints. Phase 16 shows `support_level`, `overall` and findings verbatim.
-- **GM approvals.** P3d `approve_build_draft` is the review queue. Phase 16 adds the portal queue view (or P4f if it comes later).
-- **Unsupported manual mechanics.** Players may add custom entries to drafts. They stay `unsupported` until adjudicated, and are labeled.
-- **Source access and permitted options.** The option policy (P2b) filters the choices the player sees. Source text is never shown through the builder.
-- **Campaign-specific character state.** Players change only P03-B's bounded operations. Builds and state remain separate.
-- **Phase 16 can proceed before Phase 19 completes.** It needs only P03-B/C plus P3d/P3f. Without P3f, Phase 16 labels submissions "not validated" (PLANv2 16A).
-
-### 7.3 Phase 17
-
-- **Packaging.** No new service. The engine is in the API image.
-- **Migrations.** Every R19 migration is additive and covered by Phase 17's upgrade, backup and restore verification (PLANv2 17.4).
-- **Rules data initialization.** The baseline package from revision 022 plus P2a. Startup requires no other package.
-- **Version compatibility.** The adapter version is reported by `/rules/support`. Upgrade notes list adapter version bumps.
-- **Backup and restore.** House rules, policies, drafts, reviews and templates are ordinary tables and are included.
-- **Optional rules content packages.** Installed by an operator command (P4d).
-- **No startup dependency** on paid sourcebooks, AI services or external rules providers.
-
-### 7.4 Phase 18
-
-Imported rules content becomes **drafts**: creature-template drafts, house-rule drafts, build drafts and homebrew definition drafts, each with source provenance and import-batch metadata. It is validated by the same `ValidationReport` and promoted by the same approve and publish commands. Import never writes `rules.*` canon or builds directly. A reference passage never creates a definition (`PLAN.md` §6.1).
-
-### 7.5 Phase 20
-
-AI explanations use `EvaluationResult.trace` and cite its fingerprint and definition refs. AI retrieval goes through source decisions 1 and 2. AI may propose drafts, and the proposals carry the same validation. AI never computes or asserts a number that the engine did not produce. Audience-mode results are the only ones placed in a player-purpose context.
+- **Phase 15:**
+  - P03-A supplies projection tiers (P3e-A) and revelation (OD-17);
+  - P03-S supplies campaign-scoped mechanical state (OD-1, Owner-approved), lineage seeding and the migration;
+  - P03-B supplies control, operations and clock rules (OD-2/3/4/14);
+  - P03-C supplies authoring (OD-5/19), build scope (OD-6), portrayal and eligibility.
+  - Builds stay immutable. Item and encounter commands are extended only under owner sign-off. R19 never rewrites history, and no early R19 checkpoint changes state writers.
+- **Phase 16:**
+  - Manual player authoring uses **P3d-1 drafts**, which may be entirely custom (support `none`) and are labeled "not rules-validated", plus **P3d-2 review** by the GM with adjudication.
+  - If Phase 16 is ready before P3d-2, P3d-2 is prioritized. No disposable builder is built.
+  - Delegation comes from P03-B/C (`character.propose_build`, `character.edit_narrative` under OD-18).
+  - **Player portrayal guidance** is a campaign-scoped, controller-owned profile (OD-18). It is never `npc_portrayal_profiles`, and it grants no GM portrayal access.
+  - Option policy filters choices (P2b-2). Source text is never exposed through the builder.
+- **Phase 17:**
+  - R19 migrations are additive and are covered by Phase 17's upgrade, backup and restore verification.
+  - The seed stays unreviewed until OD-7, and the review is due before the **next distributed artifact containing it**: a release image, installer or public repository publication, and no later than the Phase 17 packaging gate.
+  - There is no startup dependency on packages, AI or external providers.
+- **Phase 18:** imports produce drafts (builds, templates, house rules, homebrew), validated and reviewed through the same path. No direct canon or build writes.
+- **Phase 20:**
+  - AI explains traces and cites manifest fingerprints.
+  - Player-purpose contexts use audience-mode results only.
+  - AI never originates numbers.
 
 ---
 
 ## 8. Acceptance and compatibility scenarios
 
-The scenario labels used below are:
+Layer key: **db** (database test), **scen** (scenario test), **man** (manual), **unit** (unit test).
 
-- **db:** a `tests/database` test
-- **scen:** a `tests/scenario` test
-- **man:** manual acceptance
-- **unit:** a `tests/unit` test
-
-| # | Scenario | Checkpoint | Layer | Key assertions (privilege escalation, disclosure, staleness, reproducibility, contamination) |
+| # | Scenario | Checkpoint | Layer | Key assertions |
 |---|---|---|---|---|
-| T1 | One world character controlled by player P1 in campaign A and P2 in campaign B | P03-B | db + scen | One UUID. P1 cannot operate in B. Assignments are independent. Neither gains `canon.edit` |
-| T2 | An NPC assigned to a player | P03-B | db | UUID, build, portrayal and history unchanged. The NPC marker remains. No perspective or secrets are gained without a separate grant |
-| T3 | A player-controlled monster with no class or level | P03-B, P4a | db + man | Assignment works with no build, or with a template-basis build. The engine reports `missing_input` or computes from the template. There is no rejection by kind |
-| T4 | A character without an active build | P3b | db | Mechanics endpoint returns `missing_input` statuses, not errors. The sheet is unchanged |
-| T5 | A co-controller loses access | P03-B | db | The next read and write is refused, including an in-flight write that locks after revocation. The primary is unaffected |
-| T6 | A controller is removed while another grant remains | P03-A/B | db | Viewer or revelation grants survive. Play operations are gone. The effective-access explanation shows the surviving source |
-| T7 | A hidden character's mechanics must not leak | P03-A, P3b, P3e | db | A player gets 404 with no count or ID from the mechanics, sheet, roster and encounter reads. Audience mode excludes unidentified item effects without a marker |
-| T8 | A world character with campaign-specific rules restrictions | P2b | db | Campaign A's allow-list blocks an option that campaign B permits. The world character is unchanged. B's builds are unaffected |
-| T9 | A creature template is updated after instances exist | P2d, P4a/b | db | v1-pinned combatants and builds are unchanged. A "newer version" flag is shown. Re-pinning is explicit |
-| T10 | Four unnamed goblins as lightweight combatants | P4b | db + man | Four participant rows, no `core.entities` rows, labels "Goblin 1–4", one spawn group. Members see only labels |
-| T11 | One goblin promoted to a persistent character | P4b | db + man | A new character with a template-basis build and state copied by an event. `promoted_character_id` is set. Historical turns are unchanged. Promotion reveals nothing |
-| T12 | A historical encounter stays reproducible after a template update | P4b | db | The encounter read shows the pinned v1 mechanics. Recorded combat actions are unchanged. Recomputation uses v1 |
-| T13 | A house rule overrides a baseline calculation | P2c, P3c | db + unit | HP uses `average`. The trace cites the HR version. The fingerprint includes the configuration version |
-| T14 | A second house rule conflicts with the first | P2c, P3c | db | The key is `conflicting` with both candidates. The configuration read lists the conflict. Acknowledgement resolves it deterministically |
-| T15 | A player submits an unsupported advancement option | P3d, Phase 16, P4c | db + man | The draft is saved. Validation is `unsupported` with exact refs. The player cannot approve |
-| T16 | A GM approves unsupported content without claiming automated validation | P3d | db | The review records `approved_with_adjudication`. Findings remain `unsupported`. Explanations show it as `declared` or `unsupported`. The build is never labeled validated |
-| T17 | A player-owned reference source whose text is not shared | Phase 18/20 (OD-12), P2b | db | The source is visible only to its owner. A GM homebrew definition citing it shows mechanics only. Members cannot retrieve the passages |
-| T18 | Two campaigns use different ruleset versions | P3b, Phase 15 X4 | db | Each evaluates under its own version. Activating an incompatible build is refused. On a shared timeline, the other campaign gets `incompatible_ruleset_version` |
-| T19 | A non-D&D ruleset without classes or levels | P3a, P3f | unit | The fake adapter evaluates with core types only. A real unsupported ruleset reports `support: none` and no validated claims |
-| T20 | An invalid or stale mechanical preview | P3d | db | Approving a draft changed after validation re-validates. A stale `row_version` is refused. A preview is never persisted as authoritative |
-| T21 | A migration preserves legacy NPC portrayal, builds, history and UUIDs | P03-C | db + man (restored copy) | Entity counts and UUIDs are equal. Portrayal versions are re-keyed with chains intact. Builds and events are unchanged. Effective access before and after is compared, and differences are documented |
+| T1 | One world character, controlled by different players in two campaigns, on different timelines **and on the same timeline** (OD-1) | P03-B, P03-S | db, scen | One UUID; independent assignments and mechanical state; no `canon.edit` |
+| T2 | NPC assigned to a player | P03-B | db | UUID, build and portrayal unchanged; no perspective or private reads from the assignment |
+| T3 | Player-controlled monster with no class or level | P03-B, P4a | db, man | Assignment works with no build or a template basis |
+| T4 | Character without an active build | P3b | db | `missing_input`, not an error |
+| T5 | Co-controller loses access | P03-B | db | Next operation refused; in-flight operation serialized by the anchor |
+| T6 | Controller removed while another grant remains | P03-A/B | db | Legacy viewer, private and perspective grants survive; play gone |
+| T7 | Hidden character or hidden item mechanics do not leak | P03-A, P3b, P3e-A | db | Refusals non-disclosing; audience values and fingerprints unchanged by hidden inputs |
+| T8 | World character with campaign-specific option restrictions | P2b-2 | db | A's allow-list does not affect B |
+| T9 | Template updated after instances exist | P2d, P4a/b | db | Pinned versions unchanged |
+| T10 | Four unnamed goblins | P4b | db, man | Four participants, no entities, labels only for members |
+| T11 | One goblin promoted | P4b | db, man | Order: character, publish, build, state (event), activation, link. Idempotent replay. Link only for discoverers |
+| T12 | Historical encounter after a template update | P4b | db | Actions and pins unchanged |
+| T13 | House rule overrides a baseline | P2c, P3c | db, unit | Trace cites the rule version; fingerprint includes the configuration |
+| T14 | Conflicting second house rule | P2c, P3c | db | `conflicting` until acknowledged |
+| T15 | Player submits an unsupported advancement option | P3d-1/2, Phase 16, P4c | db, man | Draft saved; `unsupported`; player cannot approve |
+| T16 | GM approves unsupported content | P3d-2 | db | Findings preserved; never labeled rules-validated |
+| T17 | Player-owned source not shared | OD-12, ED-8 | db | Text and citation metadata invisible to others |
+| T18 | Two campaigns, different versions | P3b, X4, P03-S | db | Each campaign activates and evaluates its own version's build. A build of the wrong version is refused by the per-campaign guard. Before P03-S: `legacy_shared_state` label |
+| T19 | Non-D&D archetype | P3a | unit | Percentile fixture passes with core types only |
+| T20 | Invalid or stale preview | P3d-1/2 | db | Stale `row_version` refused; approval re-validates |
+| T21 | Migration preserves portrayal, builds, history, UUIDs | P03-C | db, man | Counts, chains and access compared |
+| T22 | **Regression: shared timeline, same ruleset** (ADR 0021 §3.10) | P03-S, P03-B | db, scen | A and B activate different builds; HP, condition, resource, equip and attunement changes in A leave B unchanged; both campaigns' controllers act concurrently on separate rows; encounter damage in A affects A only; travel stays shared (OD-20) |
+| T23 | **Regression: shared timeline, different ruleset versions** | P03-S, P3b | db, scen | Each campaign's build, adapter and support level apply independently; a cross-campaign build copy is refused for version mismatch and listed; no `incompatible_ruleset_version` in normal use |
+| T24 | Branch campaign lineage | P03-S, OD-21 | db | With a lineage, seeding is bounded at the branch point and the report lists non-reconstructable components; without one, the campaign starts empty; later source changes never propagate |
+| T31 | Mechanical-state migration manifest | P03-S | db, man (restored copy) | `single_campaign` proposed, `multi_campaign` stays legacy (`legacy_shared_state`, read-only), `no_campaign` legacy, `branch_inherited` needs lineage; no ownership inferred; migration records written; rollback before cutover leaves legacy byte-identical |
+| T32 | Explicit cross-campaign copy | P03-S, OD-21 | db | Writes the target only, with an event citing the source; refused before OD-21; invalid components skipped and listed |
+| T33 | Mechanical events need a campaign | P03-S | db | A new mechanical effect on an event without a campaign is refused; a campaign-less encounter cannot apply damage; correction restores only the event's campaign |
+| T34 | Per-campaign item mechanics | P03-S | db | One active possession and attunement per (campaign, item); the three-attunement limit per (campaign, character); B unaffected by A |
+| T35 | Campaign-scoped evaluation identity | P3b, P3e-A | unit, db | Identical state in A and B gives different fingerprints; a memo for A is never served to B; a controller of A gets refused or non-disclosing for B's values |
+| T25 | Control migration and concurrency (ADR 0021 acceptance list) | P03-B | db | Index replacement; one-primary race; revoke vs operation; empty-set anchor; clock boundaries; branch has no inheritance |
+| T26 | PC used by A and B, unrelated C on the world | P03-C, OD-19 | db, man | `pending` exception keeps A, B and C; `replace` removes only unnamed campaigns, recorded |
+| T27 | Direct-create bypass | P3d-2 | db | Unreviewed build cannot activate until reviewed; delegated player cannot direct-create |
+| T28 | Invalid but computable build | P3d-2 | db, unit | Values compute; labels "Invalid" and "Rules exception", never "Rules-validated" |
+| T29 | Combatant integration inventory | P4b | db | Every E1–E14 path: start, turn by participant, targets, check refusal, outcomes, readers include combatants, member projection, Foundry refusal |
+| T30 | Fingerprint inputs | P3a/b, P3e-T | unit, db | Unequal previews; truth vs audience; encounter damage without a token; attunement; mutable definition field; branch and as-of requests |
 
 ---
 
-## 9. Outstanding decisions register
+## 9. Decision register
 
-Owner decisions are product policy. Technical decisions are resolved here unless a reviewer objects. Each entry gives a recommended default, which implementation uses until the decision is recorded.
+**Owner decisions** are product policy, and each is **UNRESOLVED** unless the status says otherwise. A recommendation is advice only; it is **never encoded before it is recorded**. The deadline is the gate the decision blocks.
 
-| ID | Decision | Type | Recommended default | Blocks |
-|---|---|---|---|---|
-| OD-1 | Campaigns sharing one timeline with different ruleset versions share one active build | Owner | Keep timeline-scoped activation, add the version guard (X4), and report `incompatible_ruleset_version`. Consider a campaign-scoped build selection only on demand | Nothing early; affects R19-P4 for shared timelines |
-| OD-2 | Co-controller authority, and behaviour when the primary is revoked | Owner | Same bounded play operations as the primary; no assignment management; no perspective or build proposals unless separately granted; no auto-promotion | P03-B |
-| OD-3 | The P03-B shipped controller operation allow-list | Owner (already open in the investigation, H) | HP and temporary HP, named resources, self-manageable conditions, equip/unequip and attune own items; no encounter actions initially | P03-B |
-| OD-4 | Who holds `character.assign_control` | Owner | `campaign_owner` and `gm`; `assistant_gm` opt-in | P03-B |
-| OD-5 | Retiring the PC authoring exception: who may create and edit new player characters without a world role | Owner | Existing PCs: preserve access via `campaign_delegated` responsibility in the manifest. New characters: a world Owner may enable per-campaign character-authoring delegation (default on for campaigns hosted at migration time, to preserve behaviour) | P03-C cutover |
-| OD-6 | Build scope semantics (world-shared versus campaign-scoped; `legacy_unscoped` backfill) | Technical, product-visible | As ADR 0021 §4 | P03-C |
-| OD-7 | License and origin of the seeded 5e content (revision 022) | Owner, legal | Record `unreviewed` until confirmed; do not distribute as a package until confirmed | R19-P4d; the P2a backfill label only |
-| OD-8 | Default campaign option mode | Technical | `all_canon` (preserves behaviour) | R19-P2b |
-| OD-9 | May `invalid` builds be approved as rules exceptions? | Owner | Yes, by `canon.edit` holders only, with a mandatory reason; never by delegated players | R19-P3d |
-| OD-10 | Authority for house rules and option policy | Technical | Campaign: `canon.edit`. World house rules: `world.canon.edit` / `world.canon.review` + route `canon.edit` | R19-P2b/c |
-| OD-11 | Promotion during an active encounter | Owner | Deferred; promotion only for completed or aborted encounters | R19-P4b |
-| OD-12 | Player-contributed reference sources (`contributor_private` visibility; who may register) | Owner | Phase 18/20; the contributor owns visibility; GMs may cite by id only | Phase 18/20 |
-| OD-13 | Audience-mode handling of hidden inputs | Technical | Exclude before evaluation with no exclusion marker (ADR 0023 §9) | R19-P3e |
-| OD-14 | Control effectiveness when a campaign has no clock | Owner (DEF-007) | Follow the DEF-007 no-clock decision; until then, open-ended periods count as effective | P03-B |
-| OD-15 | Spawn limits per call and per encounter | Technical | 50 / 200 | R19-P4b |
-| OD-16 | ADR numbering coordination with the primary PC | Process | ADRs 0021–0023 are reserved by this branch. The primary PC's P03 work uses ADR 0021 rather than writing a competing actor ADR; new primary-PC ADRs start at 0024 | Now |
+| ID | Decision | Alternatives | Recommendation | Consequences | Implementation owner | Deadline (blocked gate) | Status |
+|---|---|---|---|---|---|---|---|
+| OD-1 | Shared-timeline mechanical-state semantics | — | **Decided by the owner:** campaigns sharing a world or timeline maintain independent mechanical character state (active build, HP, conditions, resources, mechanical equipment and inventory, temporary effects); rulesets and versions may differ; no cross-campaign mechanical effect without an explicit authorized operation. The earlier single-campaign-timeline proposal is withdrawn | Campaign-keyed tables, lineage seeding, a manifest migration (ADR 0021 §3) | Phase 15 P03-S (schema, commands); Phase 19 (campaign-scoped calculation) | — | **Owner-approved 2026-11-02** |
+| OD-2 | Co-controller authority; behavior when the primary is revoked | Same operations as primary; read-only co-control; no co-control | Same bounded operations; no assignment management; no auto-promotion; co-controllers survive primary revocation | Defines `CONTROL_ASSIGNMENT_CAPABILITIES` by role | P03-B | P03-B contract freeze | UNRESOLVED |
+| OD-3 | Initial controller operation allow-list | Investigation H list; sheet-only first | HP and temporary HP, named resources, self-manageable conditions, own equip/attune; no encounter actions | Sheet-only must be labeled as such | P03-B | P03-B operations implementation | UNRESOLVED |
+| OD-4 | Who holds `character.assign_control` | GM and owner; owner only; plus assistant GM | `campaign_owner` and `gm`; assistant GM opt-in | Capability migration | P03-B | P03-B contract freeze | UNRESOLVED |
+| OD-5 | Delegation granter and revoker authority; new player-character creation without a world role | ADR 0021 §4.3 rule; world Owner only; campaign GM self-delegation (not recommended) | Grant and revoke need `world.canon.review` plus route `canon.edit`; lifecycle delegation needs the matching world capability; new PCs get `pending` legacy exceptions until decided | Who may edit PCs going forward | P03-C | ADR 0021 acceptance (ADR 0020 amendment) and P03-C cutover | UNRESOLVED |
+| OD-6 | Whether campaign-scoped builds exist (build scope) | — | **Reconciled with owner-approved OD-1, per the owner's 2026-11-02 instruction:** campaign-scoped builds are permitted on any timeline and selectable only by their origin campaign; `world_shared` builds are selectable by any campaign with a matching version | Delegated campaign builds need no world authority | P03-C | — | Reconciled (owner instruction 2026-11-02) |
+| OD-20 | Classification of item legal ownership (`campaign.item_ownership`) and character location (`campaign.character_location_history`): shared narrative or campaign mechanical | Both shared narrative (recommended); ownership per campaign; location per campaign | Both stay timeline-shared narrative; possession, equip and attunement are campaign-mechanical | If per campaign, more P03-S tables and travel and movement changes | P03-S | **P03-S contract freeze** | UNRESOLVED |
+| OD-21 | Authority for explicit cross-campaign mechanical copy and lineage seeding | Target `canon.edit` + source `canon.edit` (recommended); target only + source `view_full`; world authority | Target and source `canon.edit` (truth reads need it); audited; writes target only | Gates T24 and T32 | P03-S | P03-S enablement of copy and seeding | UNRESOLVED |
+| OD-7 | Seed origin and distribution review | Owner review with evidence; replace the seed with authored content; retain as dev-only | Record `unknown` / `unreviewed`; review before the next distributed artifact containing it; confirm the repository's current distribution status | No license claim until reviewed | Owner; R19-P2a supplies the inventory | Next distributed artifact containing the seed; Phase 17 packaging at the latest | UNRESOLVED |
+| OD-9 | Rules-exception approval, and whether legacy builds are exempt from the activation gate | Exceptions allowed with reason; no exceptions; gate legacy too | Exceptions by `canon.edit` with reason, never delegated; legacy exempt but labeled `not_evaluated` | Behavior change on activation | R19-P3d-2 | P3d-2 enable | UNRESOLVED |
+| OD-10 | Authority for house rules and option policy | ADR 0023 §6 recommendation; access managers; world-only | Campaign `canon.edit`; world rules need world edit/review plus route `canon.edit` | Commands disabled until decided | R19-P2b-1, P2c | P2b-1/P2c command enable | UNRESOLVED |
+| OD-11 | Promotion during an active encounter | Allow with state freeze; defer | Defer | Simpler P4b | R19-P4b | P4b design | UNRESOLVED |
+| OD-12 | Player-contributed reference sources | Contributor-private visibility; GM-only registration | Contributor-owned visibility; GMs cite by id only after ED-8 | Corpus change | Phase 18/20 | Phase 18 intake design | UNRESOLVED |
+| OD-14 | Control without a clock; dated vs ongoing kinds; the default kind | Permit `ongoing` + `dated` (dated undetermined without a clock); dated only (no-clock gives no control); ongoing only | Permit both; `ongoing` is an explicit choice at assignment; dated is undetermined without a clock. DEF-007's party rule is cited as precedent, not applied automatically | Defines effectiveness | P03-B | P03-B contract freeze | UNRESOLVED |
+| OD-17 | Revelation audiences and public-profile release semantics | Selected members, groups, campaign-wide (with or without future members); reveal follows releases or freezes a version | Investigation H: selected audiences separate from campaign-wide; reveal follows deliberate releases | P03-A schema | P03-A | P03-A schema | UNRESOLVED |
+| OD-18 | Player-authored portrayal and profile scope | Controller-owned campaign profile; fields on world descriptions with review; none | Campaign-scoped controller profile; named fields; GM-visible; never `npc_portrayal_profiles` | Phase 16 16A scope | P03-A / Phase 16 | P03-A public-profile field list; Phase 16 16A | UNRESOLVED |
+| OD-19 | Intentional legacy-access reductions (for example other campaigns' GMs losing PC edit rights) | Per world; per character; never | Per-character disposition via the manifest, recorded with a reason | Access changes are deliberate | P03-C | P03-C cutover | UNRESOLVED |
+
+**Engineering decisions** are resolved here, subject to independent review.
+
+| ID | Decision | Resolution |
+|---|---|---|
+| ED-1 (formerly OD-8) | Missing option-policy rows | `all_canon`, version 0 (lazy rows) |
+| ED-2 (formerly OD-13) | Hidden inputs in audience mode | Excluded before evaluation, no marker |
+| ED-3 (formerly OD-15) | Spawn limits | 50 per call, 200 participants per encounter |
+| ED-4 | Fingerprint basis | Hash loaded values and content; tokens advisory (ADR 0023 §10) |
+| ED-5 | Contribution identity and order | ADR 0023 §3 |
+| ED-6 | Rules-exception limits | Never waive integrity (ADR 0023 §7.6) |
+| ED-7 | Neutrality guard scope | Core modules only; registry may name adapters |
+| ED-8 | Typed citation link to `core.source_documents` | Design and build before any private-document citation (ADR 0023 §9) |
+| ED-9 | Control locking protocol and index replacement | ADR 0021 §2.3 and §2.8 |
+| ED-10 | No persistent calculation cache in R19-P3 | ADR 0023 §10 |
+
+**Coordination item:**
+
+| ID | Item | Resolution |
+|---|---|---|
+| C-1 (formerly OD-16) | ADR numbering | ADRs 0021–0023 are held by this branch. Primary-PC ADRs start at 0024. P03 work reviews ADR 0021 rather than writing a competing ADR. |
 
 ---
 
 ## 10. Risks
 
-| Risk | Category | Mitigation |
+| Risk | Mitigation |
+|---|---|
+| Assignment rows inheriting legacy capabilities, or legacy rows promoted automatically | Exclusive routing (ADR 0021 §2.5); manifest-only creation; T2, T6, T25 |
+| One campaign's mechanical writes leaking into another campaign | P03-S campaign-keyed tables; route campaign = state campaign; mechanical-event campaign trigger; T22, T33, T34 |
+| Legacy timeline rows misattributed to a campaign | Manifest classification; no inference; dual-read `legacy_shared_state`; T31 |
+| A value computed for one campaign served to another | `campaign_id` in the manifest and memo identity; T35 |
+| Campaign-private builds leaking through branches | Lineage seeding refuses another campaign's private build (`out_of_scope`); T24 |
+| Access silently reduced or expanded at PC cutover | Legacy exceptions; OD-19 per-character records; T26 |
+| Derived values disclosing hidden inputs | Audience mode after P03-A/B; T7 |
+| Stale or wrong fingerprints from unreliable tokens | Hashing loaded values; T30 |
+| Approval laundering invalid or mutable content | Separate axes; immutable materialization; exception limits; T16, T27, T28 |
+| Combatants dropped by inner joins or refused silently | E1–E14 inventory; T29 |
+| Merge collisions with P03 on build or encounter commands | Ownership tables (§4); P2b-2 and P3d-2 sequenced after P03-C |
+| Licensed text in definitions | Attestation plus bounded similarity aid; limitations stated; no legal claims |
+| Migration-number collisions | Claim at merge |
+
+---
+
+## 11. Instructions for the primary PC before P03-B/C
+
+1. **OD-1 is Owner-approved: mechanical state is per campaign.** Review ADR 0021 and record OD-2, 4, 5, 14, 17, 19, 20 and 21 with the owner before freezing the P03-B/C/S contracts. Do not implement recommended defaults that are still unresolved.
+2. **Storage.** Control goes in `security.membership_character_relationships`:
+   - add `is_control_assignment`, `campaign_id`, `is_primary`, `assignment_period_kind`, and revocation provenance;
+   - replace `ux_membership_character_relationships_active_type` with the legacy-only predicate;
+   - add the one-live-primary-per-campaign and one-live-assignment-per-membership indexes;
+   - forbid `expires_at` and `timeline_id` on assignments.
+   - **Do not build `character.character_controllers`.**
+3. **Capability routing.**
+   - Exclude assignment rows from `BUILTIN_RELATIONSHIP_CAPABILITIES`.
+   - Resolve them **only** through `CONTROL_ASSIGNMENT_CAPABILITIES`.
+   - Keep legacy `primary_controller` / `co_controller` capabilities (`view_private`, `view_knowledge`) exactly as they are.
+   - Never promote legacy rows automatically.
+4. **Locking.**
+   - Assign, replace and revoke lock: membership (+ the row being revoked), then campaign, then user, then the character `core.entities` row `FOR UPDATE` (the anchor), then the assignment rows.
+   - Operations take `lock_operation_scope`, then the character entity `FOR SHARE`, then re-read the in-effect assignment.
+5. **Clock.**
+   - Resolve one request clock through `resolve_effective_clock`.
+   - Dated assignments are half-open `[start, end)`.
+   - With no clock, a dated assignment is undetermined.
+   - `ongoing` must be an explicit kind.
+   - Don't apply DEF-007's party rule to control without OD-14.
+   - Update the stale "no fictional clock" docstring in `domain/access.py`.
+6. **Authoring.**
+   - Implement stewardship, delegations and legacy exceptions separately.
+   - Write a `pending` legacy exception for every PC, preserving current world-wide campaign authoring until disposition.
+   - Never infer from creator, kind, first campaign, hosting permission or audit.
+7. **Builds.**
+   - Add `build_scope`, `origin_campaign_id` and `created_by_user_id`, backfilling `legacy_unscoped`.
+   - Add the X4 version guard early.
+   - Activation writes only the route campaign's state (P03-S), with the per-campaign version guard. There is no campaign-creation restriction.
+8. **Mechanical isolation (P03-S, OD-1).**
+   - Add the campaign-keyed tables of ADR 0021 §3.2; do not add `campaign_id` to the existing primary keys.
+   - Move every writer and reader in ADR 0021 §3.9, one consumer family at a time.
+   - Require `campaign_id` on new mechanical events.
+   - Build the §3.8 manifest on a restored copy and never infer ownership of `multi_campaign` rows.
+   - Keep the legacy tables read-only and never drop them in Phase 15.
+   - Ship lineage seeding and cross-campaign copy disabled until OD-21.
+   - P03-S must precede any P03-B operation that writes state.
+9. **Portrayal and eligibility.**
+   - Re-key portrayal before touching markers.
+   - Keep player portrayal guidance out of `npc_portrayal_profiles` (OD-18).
+   - Replace kind lists with capability and lifecycle eligibility.
+10. **Contract.** Expose the §5.1 functions. R19 binds to them through `ActorContractPort`.
+11. **Boundaries.**
+    - Don't modify `rules.*`, `domain/character_calculations.py` or `domain/rules_engine/`.
+    - Sequence `character_builds.py` changes with R19-P2b-2 and R19-P3d-2.
+    - Leave the encounter-damage token fix to R19-P4b, unless you schedule it yourself.
+
+---
+
+## 12. Recommended first checkpoints
+
+- **R19-P3a (revised scope):**
+  - neutral core with contribution identity, dependency evaluation and missing-input propagation;
+  - three-axis result types;
+  - `rules_manifest.v1` and fingerprint;
+  - the registry with per-version support;
+  - the 5e adapter port with parity tests;
+  - **the percentile fixture adapter (test-only)**;
+  - the scoped neutrality guard.
+
+  No schema. No existing file changed.
+- **R19-P2a (in parallel):**
+  - content packages and lookups;
+  - backfilling the seed as license `unknown`, `unreviewed`;
+  - the read endpoint;
+  - the factual seed inventory document.
+
+  No legal conclusion.
+
+---
+
+## 13. Review correction record (2026-11-02, against `10a1a4e`)
+
+| Finding | Correction | Where |
 |---|---|---|
-| Legacy `primary_controller` rows silently become control and expand player rights | Privilege escalation | The `is_control_assignment` flag; only manifest-confirmed promotion; T2 and T6 |
-| A derived value reveals a hidden item, effect or character | Disclosure | Truth mode GM-only; audience mode excludes before evaluation; T7; independent leak review in P3e |
-| Licensed text copied into definitions or explanations | Source disclosure | The engine never reads passages; authoring refuses quotation-forbidden text; the five-decision separation |
-| A stale preview approved as current | Stale results | Re-validation under lock at approval; `row_version`; fingerprints |
-| Recomputation after an adapter change differs from history | Reproducibility | Snapshots on reviews and analysis; `adapter_version_changed` finding; no recomputation of combat outcomes |
-| Shared-timeline campaigns contaminate each other's mechanics | Cross-campaign contamination | The X4 guard; `incompatible_ruleset_version`; OD-1 |
-| Campaign-scoped build visible to another campaign | Cross-campaign contamination | P03-C `build_scope` listing rule; tests in P03-C |
-| P2b/P3d edits to `character_builds.py` collide with P03-C | Merge conflict | Owner sign-off; rebase after P03-C; minimal guarded hooks |
-| Migration-number collisions between PCs | Process | Claim at merge; renumber on rebase; linear Alembic history check in CI |
-| JSONB mechanics drift from the adapter schema | Integrity | Schema version on every row; adapter validation on write; reject unknown versions as validated |
-| Large encounters slow reads | Performance | Bounded spawns; indexed participant reads; evaluate a template once per encounter |
-| Neutrality erodes (5e terms leak into the core) | Architecture | `test_rules_engine_neutrality.py`; review checklist |
-| Portrayal cascade deletes history during the subtype cutover | Data loss | Re-key before any marker change; backup-gated irreversible steps (ADR 0021 §6–7) |
+| R19-01 Campaign/timeline isolation | Campaign-aware resolution; examples (same version, different versions, inherited build, controller writes); alternatives; OD-1 moved before acceptance and contract freeze | ADR 0021 §3; §8 T22–T24; §9 OD-1 |
+| R19-02 Control persistence and concurrency | NULL-period and unique-index facts; assignment invariants; coexistence; index replacement; primary-only rules; expiry forbidden; entity anchor; locking protocol; exclusive capability routing; legacy grants preserved; migration and concurrency scenarios | ADR 0021 §2.2–2.10, acceptance list; §8 T25 |
+| R19-03 No-clock semantics | Open-end fallback removed; dated vs ongoing; one request clock; half-open intervals; branch fallback; OD-14; DEF-007 cited only as precedent | ADR 0021 §2.4; OD-14 |
+| R19-04 Authoring migration | Current author sets shown; stewardship, delegations and legacy exceptions separated; granter and revoker; pending disposition; no inference; hosting is not delegation; ADR 0020 amendment timing | ADR 0021 §4; ADR 0020 note; OD-5, OD-19; T26 |
+| R19-05 Fingerprints and reproducibility | Canonical manifest; value hashing (tokens unreliable); token ownership; mutable fields; draft dependencies removed; reconstruction limits; no cache | ADR 0023 §4, §7.5, §10; T30 |
+| R19-06 Validation, approval, use | Three axes; every producer including direct create; unreviewed builds plus activation gate; label rules; immutable materialization; exception limits | ADR 0023 §5, §7; P3d split; T27, T28 |
+| R19-07 Combatant integration | E1–E14 inventory; participant-addressed actors and targets with integrity; causal damage; check refusal; corrected promotion order; idempotency; discovery-gated links; pending/active spawning; P4b gate | ADR 0022; T29 |
+| R19-08 Deterministic, neutral composition | Contribution identity and order; duplicates; dependencies; propagation; build-component refs; `InputBundle`; percentile fixture moved to P3a; scoped guard | ADR 0023 §2–3, §13; P3a |
+| R19-09 Sequencing and ownership | Four-gate table; P2d independent of P2b (P2d-x); P2b and P3d split into isolated and behavior-changing halves; P3d-2 after P03-C; P3e split by projection and controller gates; P3b port and test fix; Phase 16 manual path and player portrayal; migration and command ownership | §3, §4, §5.1, §6, §7 |
+| Source and provenance | `core.sources` vs `core.source_documents`; typed citation link (ED-8); bounded copied-text aid with limitations; seed unreviewed, review at the next distributed artifact or Phase 17; no legal claims | ADR 0023 §4, §9; OD-7 |
+| Register | Owner and engineering decisions separated; alternatives, consequences, owners, deadlines; no encoded defaults; OD-17/18/19 added; OD-1 expanded | §9 |
+| **OD-1 addendum** (owner decision 2026-11-02) | OD-1 Owner-approved: independent per-campaign mechanical state. The single-campaign-timeline proposal and the one-controlling-campaign rule are withdrawn. Phase 15 P03-S gets campaign-keyed tables, lineage seeding, the mechanical-event campaign rule, the manifest migration, and the full table, command, resolver and API inventory. Phase 19 gets campaign-scoped loading, authorization, manifest and memo identity. OD-6 reconciled; OD-20 and OD-21 added; regression scenarios T22–T24 and T31–T35 | ADR 0021 §3; ADR 0022 §4.4, §6; ADR 0023 status, §1, §9, §10; this plan §1–§11 |
 
----
+## 14. Self-review
 
-## 11. Instructions for the primary PC before starting P03-B and P03-C
-
-1. Read ADR 0021 before any P03-B or P03-C schema work. Implement it rather than writing a competing actor ADR. Raise disagreements as review comments on ADR 0021, so the decision stays single (OD-16).
-2. Store control in `security.membership_character_relationships` with `is_control_assignment`, a denormalized `campaign_id`, revocation provenance, and the one-live-primary exclusion constraint. Do **not** build `character.character_controllers`.
-3. Never convert legacy `primary_controller` or `co_controller` rows to control automatically. Offer manifest-confirmed promotion per row.
-4. Keep `CONTROL_ASSIGNMENT_CAPABILITIES` separate from `BUILTIN_RELATIONSHIP_CAPABILITIES`. Control excludes `canon.edit`, `view_private`, `view_knowledge` (perspective is a separate grant), build creation, portrayal and revelation.
-5. Add `character.character_authoring_responsibilities` and route `record_authoring` through it. Remove `player_character` from `CAMPAIGN_ORIGINATED_TYPES` only through the manifest, preserving existing access. OD-5 decides the default for new characters.
-6. Add `build_scope`, `origin_campaign_id` and `created_by_user_id` to `character.character_builds`, backfilling `legacy_unscoped`. Add the activation ruleset-version guard (X4) as early as convenient.
-7. Expose the §5.1 contract functions (identity, active build, control state, `may_operate`, authoring responsibility, projection tier, state tokens) as named, documented functions. R19 code will import only those.
-8. Re-key portrayal to `character_id` before touching NPC markers, and back up before any irreversible step.
-9. Replace `_BUILDABLE` and `PARTICIPANT_KINDS` kind checks with capability and lifecycle eligibility. Keep the stored historical participation roles.
-10. Coordinate with R19-P2b and R19-P3d. Both make small optional-parameter extensions to `commands/character_builds.py`. Sequence them after, or together with, P03-C's change to that file.
-11. Leave `rules.*`, `domain/character_calculations.py` and the new `domain/rules_engine/` package alone. Phase 19 owns them.
-
----
-
-## 12. Recommended first Sonnet checkpoint
-
-Start with **R19-P3a (engine contracts, registry and the 5e adapter, pure)**. It needs no schema and modifies no existing file, so it cannot conflict with P03. It establishes the types every later checkpoint uses, and its parity and neutrality tests give an objective review standard. R19-P2a can run in parallel as a second, equally isolated checkpoint.
-
----
-
-## 13. Self-review record (R19-P0)
-
-- **Terminology across the ADRs.** The ADRs use the same terms throughout: "control assignment", "authoring responsibility", "build scope", "template-basis build", "combatant", "support level", "authority" (`authoritative` / `partial` / `informational`; never canon) and the validation outcomes. Ownership is identical in ADR 0021 (Phase 15), ADR 0022 and ADR 0023 (Phase 19), §5 and the PLANv2 §6.1 table.
-- **All six owner decisions** are traced in §1.
-- **P03 remains with Phase 15.** R19-P1 lists only obligations, and §11 restates the boundaries.
-- **Phase 16 can proceed before full Phase 19** (§7.2): it needs P03-B/C and P3d/P3f only.
-- **Neutrality.** The core types (ADR 0023 §2) contain no 5e terms, which `test_rules_engine_neutrality.py` enforces, and the fake second archetype is tested in P3f.
-- **Unsupported mechanics never become validated.** Reviews and findings are separate fields, approval never upgrades them, and legacy builds read `not_evaluated`.
-- **No new source access.** The engine reads no passages, and the five decisions are separated (ADR 0023 §9). `contributor_private` is deferred to Phase 18/20.
-- **Reproducibility** holds through immutable ids and the fingerprint. The limitation across adapter versions is stated (ADR 0023 §10).
-- **IDs and history** are preserved: every migration is additive and the manifest is reviewed (ADR 0021 §7; T21).
-- **Sequencing** matches PLANv2 §6 and §6.1. R19-P4 follows Phase 17.
-- **Checkpoint size.** Each P2 and P3 checkpoint is one reviewable PR with its own tests.
-- **Labels.** Existing, planned and new components are labeled in §2 and in the ADR Context tables.
-- **Scope of the change.** The R19-P0 commit adds documentation files only: three ADRs, this plan, and a one-line PLANv2 cross-reference.
+- **Terminology** is consistent across all three ADRs and this plan: assignment, `ongoing` / `dated`, stewardship, delegation, legacy exception, campaign-aware resolution, build scope, the three axes (calculation, legality, approval), manifest and fingerprint, combatant, template basis.
+- **Ownership:** Phase 15 owns actor, control and authoring, plus state writers and the P03-S campaign mechanical-state schema, commands, resolvers and APIs. Phase 19 owns rules, engine, drafts and reviews, templates and the combatant extension, each under the sign-offs in §4.
+- **All six owner decisions** are preserved (§1).
+- **Phase 16** can proceed before full Phase 19, using P3d-1/2, P03-B/C and, optionally, P3f.
+- **No core type uses 5e terms**, and the percentile fixture runs in P3a.
+- **Unsupported mechanics cannot become validated:** the label rules and separate axes prevent it.
+- **No new source access:** citations stay on `core.sources` until ED-8.
+- **Reproduction limits** are stated.
+- **IDs and history** are preserved.
+- **No owner approval is claimed**, and every ADR remains Proposed.
