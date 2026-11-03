@@ -1,6 +1,6 @@
 # ADR 0021: Shared actor identity, campaign control, and authoring responsibility
 
-- **Status**: Proposed. R19-P0 architecture deliverable, first drafted at `10a1a4e` and corrected after independent reviews: R19-01 to R19-04, then R19-10 to R19-13 and residual R19-02 at `74a10cb`, then R19-14 to R19-16 and residual items at `6ea0e73`. Not accepted. The second-review content (§2.8 controller path, §3.1.1 tokens and intent, §3.3 events, §3.7 item versions, §3.8 migration protocol) is proposed design, **not implemented, enabled, tested or accepted**. Owner decisions recorded, all 2026-11-02:
+- **Status**: Proposed. R19-P0 architecture deliverable, first drafted at `10a1a4e` and corrected after independent reviews: R19-01 to R19-04, then R19-10 to R19-13 and residual R19-02 at `74a10cb`, then R19-14 to R19-16 and residual items at `6ea0e73`, then residual R19-14 (withheld unclassified effects, with the Owner-approved stricter attribution rule of 2026-11-03) at `e812dcf`. Not accepted. The second-review content (§2.8 controller path, §3.1.1 tokens and intent, §3.3 events, §3.7 item versions, §3.8 migration protocol) is proposed design, **not implemented, enabled, tested or accepted**. Owner decisions recorded, all 2026-11-02:
   - **OD-1, Owner-approved:** independent mechanical state per campaign (§3).
   - **OD-20, Owner-approved:** shared narrative ownership and location; campaign-specific mechanical possession (§3.1.1).
   - **OD-21, Owner-approved:** separately authorized lineage seeding and cross-campaign copy, both disabled until enablement acceptance (§3.6).
@@ -309,21 +309,59 @@ The registry is seeded from the codes the current commands actually emit (verifi
 
 The generic `POST /campaigns/{id}/events` (`api/events.py` → `commands/events._record_event_impl`) records **no** effects. So it has no caller-supplied codes.
 
-**Legacy and unknown codes.** The migration manifest (§3.8) lists every distinct `target_component` in existing `narrative.event_effects`. A code that is not in the seeded registry is recorded as `unclassified` and needs explicit classification by migration before it is shown. **`unclassified` is handled like `campaign_mechanical` with no proven origin campaign:**
-- it is visible only to `canon.edit` holders of the event's origin campaign, or, when there is none, of campaigns on the timeline, labeled;
-- it is never narrative, never counted for other audiences, and never correctable until classified.
+**Legacy and unknown codes (residual R19-14).** The migration manifest (§3.8) lists every distinct `target_component` in existing `narrative.event_effects`. A code that is not in the seeded registry is recorded as `unclassified`. An `unclassified` effect is **withheld**, and so is a formerly unclassified effect that is not yet released (item 3). A withheld effect is not a mechanical effect with an unproven origin, and campaign `canon.edit` does not admit it, in any campaign.
 
-**Event shape.** An event is:
-- **mechanical** if it has any `campaign_mechanical` or `unclassified` effect and no other effect;
-- **narrative/knowledge** if all its effects are `shared_narrative` or `shared_knowledge`;
+1. **No application audience receives a withheld effect.** Until it is released (item 3), meaning its code is classified **and** every attribution that class needs is reviewed and recorded, no application read returns any part of it:
+   - not its value, component name, target or reference;
+   - not its existence, and no metadata derived from it.
+
+   This holds for players, controllers and audience-mode calculations, and equally for the `canon.edit` holders of the event's origin campaign, of other campaigns on the timeline, and, for an event with no origin campaign, of every campaign on the timeline. No application role is an exception.
+2. **Every surface.** The rule covers lists, counts, cause and correction links, explanations, the authoring view, correction previews, voids and corrections, and every caller of those readers (event pages, session activity, summaries, the World Explorer). It also covers calculation inputs. A withheld effect is omitted entirely: there is no placeholder (`unavailable`, `withheld` or similar), count or status for it. Effect counts and statuses are computed over admitted effects only.
+   - **All effects withheld.** The event is excluded from every application list, count and link, and a direct read returns the existing single 404. This holds whether or not the event has an origin campaign.
+   - **Mixed events.** An event with both withheld and released effects is shown to each audience as the released parts that audience may already see: the narrative/knowledge part under today's rules, and a known `campaign_mechanical` part only to its origin campaign. The withheld part adds nothing, including to the effect count.
+   - **Preview, void and correct.** For any event with a withheld effect, these return the existing single 404 (`EventNotFoundError`) to every caller until every effect of the event is released. The 404 carries no reason, status, count or component name. The atomic rule ("nothing is reversed unless every effect is reversible") therefore never runs over a withheld effect, and no released part of the event is reversed on its own.
+   - **Writes and calculations.** An `unclassified` code cannot be written (the foreign key refuses it), and no reader passes a withheld effect into a calculation or a legacy dual-read value.
+3. **Release needs classification and reviewed attribution (Owner-approved stricter rule, 2026-11-03).** Classification alone does not authorize disclosure. A formerly `unclassified` effect is **released** only when both of these hold:
+   - a reviewed registry migration (§3.8 step 2a) has assigned its code exactly one of `campaign_mechanical`, `shared_narrative` or `shared_knowledge`;
+   - every attribution that the class needs has been reviewed and recorded in the authorized migration-review process.
+
+   Until then the effect stays **withheld** under items 1 and 2. The attribution each class needs:
+   - **`campaign_mechanical`:** a reviewed and recorded **origin campaign**. This is required even when the event row carries a `campaign_id`; that value is evidence the reviewer may confirm, never an automatic attribution.
+     - Without a recorded origin, the effect stays withheld. It is **never** exposed through the `legacy_shared_state` compatibility projection (corrections item 5), and GMs of campaigns on the timeline receive nothing from it.
+     - Once the origin is recorded, the effect follows that origin campaign's existing mechanical-effect authorization and projection rules in this section, including corrections. No other campaign receives it.
+   - **`shared_knowledge`:** the knower or audience that the knowledge-domain audience rules need. Until it is recorded, the effect stays withheld. Afterwards it follows those rules.
+   - **`shared_narrative`:** no attribution beyond classification. It then follows today's narrative rules.
+
+   **Nothing is inferred.** Classification, origin campaign, knower and audience are never derived from:
+   - the effect's value or the event type;
+   - timeline membership, or which campaigns share the timeline;
+   - current or past character control;
+   - the creator or recorder of the event;
+   - any associated campaign (session, party, encounter or route campaign).
+
+   Recorded evidence may be shown to the reviewer, labeled as evidence only (§3.8 step 2).
+4. **Distinct from known legacy mechanical records.** Corrections item 5 is the existing compatibility treatment for codes that the seeded registry classifies as `campaign_mechanical`: a GM-only `legacy_shared_state` explanation, and refusal of correction after cutover unless the event is attributed. It **never** applies to an `unclassified` effect, or to a formerly unclassified effect that is not yet released (item 3). A GM of a campaign on the timeline sees a known legacy mechanical effect, labeled. The same GM sees nothing of a withheld effect.
+5. **Raw inspection belongs to migration review only.** Adjudicating a withheld effect may require reading its raw rows. That happens only in the restricted offline migration-review workflow (§3.8 step 2a), never through an application read.
+6. **Preservation.** Withholding is a read rule only.
+   - It never deletes, rewrites or moves effect or event rows.
+   - Classification changes only the registry.
+   - Attribution is recorded additively: a reviewed attribution record naming the event, the attributed campaign, knower or audience, the reviewer, the manifest and the time. The raw effect row is not modified.
+   - Existing provenance and audit history are kept unchanged. Release or later correction adds to them and never replaces them.
+
+**Event shape.** Shape is computed over **released** effects (effects whose codes the seeded registry classifies count as released). An event is:
+- **withheld** if every effect is withheld (item 2);
+- **mechanical** if every released effect is `campaign_mechanical`;
+- **narrative/knowledge** if every released effect is `shared_narrative` or `shared_knowledge`;
 - **mixed** otherwise.
 
-The **same** classification drives writes (the campaign requirement), reads, lists, counts, cause and correction links, explanations, authoring views, correction previews and corrections. Every reader resolves a code's class **through the registry**. A code missing from a reader's local mapping fails closed to "hidden mechanical".
+Any withheld effect additionally makes the whole event uncorrectable (404) until it is released (item 2).
+
+The **same** classification drives writes (the campaign requirement), reads, lists, counts, cause and correction links, explanations, authoring views, correction previews and corrections. Every reader resolves a code's class **through the registry**. A code missing from a reader's local mapping fails closed to **withheld** (item 2 above).
 
 **Registry coverage tests.**
 - A unit test scans `src/dnd_ai/commands/` for emitted `target_component` literals and constants, and fails if any is missing from the seed.
 - A database test proves the foreign key refuses an unregistered code.
-- A reader test feeds an `unclassified` effect and proves it is hidden from players and from other campaigns.
+- Reader tests feed `unclassified` effects on events with and without an origin campaign, alone and in mixed events (plan T64, T70–T73). They prove that no application audience, **including the origin campaign's GM**, receives any part of them on any surface.
 
 **Authoring rule.** A new event with any mechanical effect must carry `campaign_id`. This is enforced by a deferred constraint trigger and by the commands. Its mechanical effect values belong to that **origin campaign**.
 
@@ -350,7 +388,7 @@ The **same** classification drives writes (the campaign requirement), reads, lis
    - Mechanical reversals go to the origin campaign's tables, never to legacy rows after that family's cutover.
    - Narrative reversals go to the shared tables.
    - Audit uses the existing correction audit rows, with the GM-only reason redacted. Idempotency uses the existing campaign store.
-5. **Legacy campaign-less mechanical events** (recorded before P03-S, `campaign_id` NULL, with mechanical effects):
+5. **Legacy campaign-less mechanical events** (recorded before P03-S, `campaign_id` NULL, with effects whose codes the registry classifies as `campaign_mechanical`). This is the compatibility treatment for **known** mechanical codes only. `unclassified` effects are withheld from every application audience (legacy and unknown codes, items 1–5, above):
    - before the affected family's writer cutover, today's behavior is unchanged;
    - after cutover, correction is refused with `legacy_mechanical_event_requires_disposition` (a 409 with no effect details) **unless** the reviewed migration manifest attributed the event to a campaign (§3.8). In that case it is corrected as that campaign's event;
    - their mechanical effects are shown, in explanations, only to GMs (`canon.edit`) of campaigns on the timeline, labeled `legacy_shared_state`, and never to players or controllers;
@@ -530,10 +568,20 @@ The supported deployment is self-hosted Docker Compose on one host (ADR 0012, AD
    The manifest also lists:
    - every campaign ever created on each timeline, including archived ones;
    - every legacy campaign-less event with mechanical or unclassified effects, for attribution;
-   - every distinct effect code (§3.3);
+   - every distinct effect code (§3.3), with the unknown codes reviewed under step 2a;
    - evidence, labeled as evidence only.
 
    `item_ownership` and `character_location_history` are excluded (OD-20).
+
+   **2a. Migration review of unknown effect codes (residual R19-14).** This restricted offline process is the only place where withheld effect contents (§3.3) may be read.
+   - **Where:** the operator manifest tooling, on the restored copy at S0. It is not an application route, command or query, and holding campaign `canon.edit` or a world role grants nothing here.
+   - **What the reviewer sees:** each unknown code with its rows (event id, origin campaign or none, timeline, value, event type and time).
+   - **Where the extract lives:** with the manifest, as a restricted operator artifact. It is never written to an application-readable table and never served by the API.
+   - **Outcome:** for each code, the reviewer either records a classification, which ships as a reviewed registry migration, or leaves the code `unclassified`. Classification alone releases nothing.
+     - For each `campaign_mechanical` effect, the reviewer records a verified **origin campaign**, or none. This applies whether or not the event row has a `campaign_id`.
+     - For each `shared_knowledge` effect, the reviewer records the knower or audience it needs.
+     - Attributions are additive records (§3.3 item 6), and none is inferred (§3.3 item 3).
+   - **Effect on reads:** an effect stays withheld from every application audience until its classification migration and every attribution it needs are applied (§3.3 item 3). An unattributed `campaign_mechanical` effect is never shown through the `legacy_shared_state` projection.
 
    **Dispositions are per family, never per row.**
    - `copy` to listed campaigns.
@@ -830,7 +878,7 @@ P03-C and P03-S may land in either order. The port's intermediate behavior is sp
   - Attunement of another version's item is refused, while possession and equip are allowed.
   - Legacy campaign-less mechanical events are refused for correction after cutover unless attributed.
 - **Third review (R19-14 to R19-16).**
-  - The registry covers every emitted code; an unregistered code is refused at write; an `unclassified` legacy effect is hidden from players and other campaigns.
+  - The registry covers every emitted code; an unregistered code is refused at write.
   - Campaign A ending K's attunement to X leaves B's attunement row, events and counts unchanged; the event is invisible to B and B cannot correct it.
   - A family drifting after S0 (member added, changed or deleted) is entirely `pending_drift`, with no marker.
   - A partially reviewed family is not applied.
@@ -839,6 +887,13 @@ P03-C and P03-S may land in either order. The port's intermediate behavior is sp
   - A quarantined incompatible attunement contributes nothing, counts toward the limit, and can be ended in the target campaign only. A later transfer in that campaign changes only its rows, and legal ownership is unchanged.
   - Seeding never uses untimed baselines.
   - Provenance follows the single contract.
+- **Residual R19-14 (withheld unclassified effects).**
+  - An `unclassified` effect on an event of campaign A gives nothing to A's GM, A's players and controllers, or B's GM. If every effect is unclassified, the event is absent and a direct read returns 404 (T70).
+  - An `unclassified` effect on a campaign-less event gives nothing to any GM on the timeline and is never labeled `legacy_shared_state`. A known `campaign_mechanical` legacy effect keeps the compatibility treatment (T71).
+  - A mixed event shows each audience only its admitted classified parts, with unchanged effect counts. Preview, void and correct return 404 to every caller (T72).
+  - The GM of another campaign sharing the timeline receives nothing derived from the withheld effects (T73).
+  - Raw withheld contents are readable only in migration review (§3.8 step 2a). Classification alone releases nothing. A `campaign_mechanical` effect stays withheld until its origin campaign is reviewed and recorded, then follows that campaign's rules only. A `shared_knowledge` effect stays withheld until its knower or audience is recorded. Nothing is inferred, and raw rows, provenance and audit history are preserved (T74).
+  - On a timeline shared by A and B, the GMs of both campaigns receive nothing from an unattributed `campaign_mechanical` effect, including through `legacy_shared_state` (T75).
 - **Routing.**
   - An assignment row never grants `view_private` or `view_knowledge`.
   - A legacy `primary_controller` row keeps them after an assignment is created and after one is revoked.
