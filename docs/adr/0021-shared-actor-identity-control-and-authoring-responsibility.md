@@ -1,6 +1,6 @@
 # ADR 0021: Shared actor identity, campaign control, and authoring responsibility
 
-- **Status**: Proposed. R19-P0 architecture deliverable, first drafted at `10a1a4e` and corrected after independent reviews: R19-01 to R19-04, then R19-10 to R19-13 and residual R19-02 at `74a10cb`, then R19-14 to R19-16 and residual items at `6ea0e73`, then residual R19-14 (withheld unclassified effects, with the Owner-approved stricter attribution rule of 2026-11-03) at `e812dcf`, then the universal event-effect disclosure rule (Owner-approved 2026-11-03) at `678db69`. Not accepted. The second-review content (§2.8 controller path, §3.1.1 tokens and intent, §3.3 events, §3.7 item versions, §3.8 migration protocol) is proposed design, **not implemented, enabled, tested or accepted**. Owner decisions recorded, all 2026-11-02:
+- **Status**: Proposed. R19-P0 architecture deliverable, first drafted at `10a1a4e` and corrected after independent reviews: R19-01 to R19-04, then R19-10 to R19-13 and residual R19-02 at `74a10cb`, then R19-14 to R19-16 and residual items at `6ea0e73`, then residual R19-14 (withheld unclassified effects, with the Owner-approved stricter attribution rule of 2026-11-03) at `e812dcf`, then the universal event-effect disclosure rule (Owner-approved 2026-11-03) at `678db69`, then the confirmed attribution policy (`authorized_at_write` and `migration_reviewed` bases, Owner-approved 2026-11-03) at `2d17acf`. Not accepted. The second-review content (§2.8 controller path, §3.1.1 tokens and intent, §3.3 events, §3.7 item versions, §3.8 migration protocol) is proposed design, **not implemented, enabled, tested or accepted**. Owner decisions recorded, all 2026-11-02:
   - **OD-1, Owner-approved:** independent mechanical state per campaign (§3).
   - **OD-20, Owner-approved:** shared narrative ownership and location; campaign-specific mechanical possession (§3.1.1).
   - **OD-21, Owner-approved:** separately authorized lineage seeding and cross-campaign copy, both disabled until enablement acceptance (§3.6).
@@ -326,8 +326,8 @@ The migration manifest (§3.8) lists every distinct `target_component` in existi
    - `basis`, and the reviewer or authorizing actor, the manifest where there is one, and the time.
 
    There are exactly two bases:
-   - **`authorized_at_write`.** A command writing a mechanical effect after the G4 writer cutover records the origin in the same transaction. The origin is the route campaign whose authorization that command has just checked. This is the authoring rule below, recorded explicitly, not read back from the event's `campaign_id`.
-   - **`migration_reviewed`.** For every effect that existed before the G4 writer cutover, a reviewer records the attribution in the restricted offline migration-review workflow (§3.8 step 2a).
+   - **`authorized_at_write`.** A command writing a mechanical effect after the G4 writer cutover records the origin in the same transaction. The origin is the route campaign whose authorization that command has just checked. This is the authoring rule below, recorded explicitly, not read back from the event's `campaign_id`. **(Owner-approved 2026-11-03.)** The effect is released as soon as that transaction commits. No routine human review of individual, properly authorized new mechanical events is required.
+   - **`migration_reviewed`.** For every historical effect, meaning one that existed before the G4 writer cutover, a reviewer records the attribution in the restricted offline migration-review workflow (§3.8 step 2a). This holds even when the legacy event already has a `campaign_id`.
 
    An event row's `campaign_id` is **evidence only**. It may support a review, but it never satisfies the attribution requirement by itself. A campaign-less event that contains a classified mechanical effect authorizes no campaign to see it.
 2. **Nothing is inferred.** Classification, origin campaign, knower and audience are never derived from any of these:
@@ -356,6 +356,10 @@ The migration manifest (§3.8) lists every distinct `target_component` in existi
    - It never deletes, rewrites or moves effect or event rows, or their references.
    - Classification changes only the registry.
    - Attribution adds records and never modifies the raw effect row or the event's `campaign_id`.
+   - **Attribution records are immutable to application paths.**
+     - Ordinary event correction, voiding, editing, authoring views and idempotent replay never change, replace or delete an attribution record.
+     - A replay returns the original outcome and writes no new attribution.
+     - Changing a `migration_reviewed` attribution is possible only through a new reviewed record in the migration-review workflow, which supersedes the old one and keeps it in history.
    - Existing provenance and audit history are kept unchanged. Release or later correction adds to them and never replaces them.
 
 **Event shape.** Shape is computed over **released** effects. An event is:
@@ -394,7 +398,7 @@ The **same** classification drives writes (the campaign requirement), reads, lis
 
    Otherwise the result is the existing single 404 (`EventNotFoundError`). No preview, reason, status, effect count or component name is returned.
 2. **Diagnostics.** The preview reports reversibility per effect using only the event's own campaign tokens and the shared narrative tokens (R19-11). A reason never derives from another campaign's state, because no other campaign's rows are read.
-3. **Atomic.** "Nothing is reversed unless every effect is reversible" (current rule) is kept for mixed events. Narrative and mechanical parts are reversed together in one transaction and one correcting event (`campaign_id` = origin campaign), or not at all.
+3. **Atomic.** "Nothing is reversed unless every effect is reversible" (current rule) is kept for mixed events. Narrative and mechanical parts are reversed together in one transaction and one correcting event (`campaign_id` = origin campaign), or not at all. The correcting event's mechanical effects receive an `authorized_at_write` attribution to the **same** origin campaign, in the same transaction. Correction never moves an effect to another campaign. Any other mixed-event transaction records its mechanical attribution in the same way, under the same authorization boundary as its route campaign.
 4. **Writes.**
    - Mechanical reversals go to the origin campaign's tables, never to legacy rows after that family's cutover.
    - Narrative reversals go to the shared tables.
@@ -593,6 +597,11 @@ The supported deployment is self-hosted Docker Compose on one host (ADR 0012, AD
    - **Where the extract lives:** with the manifest, as a restricted operator artifact. It is never written to an application-readable table and never served by the API.
    - **Outcome:** for each code, the reviewer either records a classification, which ships as a reviewed registry migration, or leaves the code `unclassified`. Classification alone releases nothing.
      - For each `campaign_mechanical` effect, whether its code was seeded or classified here, the reviewer records a verified **origin campaign** (`basis = migration_reviewed`), or none. This applies whether or not the event row has a `campaign_id`.
+     - **Proposals and bulk review (Owner-approved 2026-11-03).**
+       - The tooling may **propose** mappings from evidence, for example an event's existing `campaign_id`. A proposal never establishes authorization by itself.
+       - The reviewer may approve proposals in bulk when the evidence supports them. Every exception is listed explicitly in the approval: a conflicting, missing or inconsistent piece of evidence, or a record removed from the batch.
+       - A bulk approval is recorded per effect, with the batch id, the evidence basis, the reviewer and the time.
+     - **Ambiguous effects stay withheld.** A genuinely ambiguous historical effect gets no attribution. It stays withheld until a later review resolves it. Nothing is guessed.
      - For each `shared_knowledge` effect, the reviewer records the knower or audience it needs.
      - Attributions are additive records (§3.3 disclosure rule, items 1 and 7), and none is inferred (item 2).
    - **Effect on reads:** an effect stays withheld from every application audience until its classification and every attribution it needs are applied (§3.3). An unattributed `campaign_mechanical` effect is never shown through `legacy_shared_state` (§3.3 item 4a).
@@ -625,6 +634,13 @@ The supported deployment is self-hosted Docker Compose on one host (ADR 0012, AD
 | G2 Conditions and resources | `character_conditions`, `character_resources` | `character_state.py`, `event_corrections.py` | `queries/character.py`, explanations, authoring view |
 | G3 Items | `item_state`, `inventory_entries`, `item_attunements` (the token split, R19-11; intents, R19-12) | `item_operations.py`, `items.py`, `event_corrections.py` item components; `api/item_authoring.py`, `api/items.py` | `queries/inventory.py`, `item_authoring.py` (including party inventory, `GET /campaigns/{id}/parties/{party_id}/inventory` in `api/item_authoring.py`), `world_explorer.py`, `api/characters.py` |
 | G4 Event visibility | — | `commands/events.py` (campaign required) | §3.3 readers. **This group switches no later than the first of G1–G3**, so that no campaign-scoped value is ever readable cross-campaign |
+
+   **G4 attribution readiness gate (Owner-approved 2026-11-03).** Before the G4 cutover, the operator tooling produces an **attribution readiness report** over every historical effect that needs attribution. The report:
+   - gives counts and identifiers per timeline and per campaign for four outcomes: **reviewed** (attribution recorded), **withheld** (not reviewed, or no attribution approved), **ambiguous** (explicitly left unattributed) and **failed** (validation or apply errors);
+   - lists the exceptions reported in each bulk approval;
+   - is a restricted operator artifact, like the step 2a extract.
+
+   G4 proceeds only with the operator's **explicit, recorded approval** of the report. If any effect is withheld, ambiguous or failed, the approval must say explicitly that the cutover proceeds with those effects withheld. Failed records are never released by proceeding. Without an approval, the cutover does not run.
 
 6. **Authorization-safe legacy fallback (dual-read).**
    - A campaign subject with **no** initialization row for a family may fall back to the legacy timeline row **only** for callers holding `canon.edit` in that campaign, labeled `legacy_shared_state`, read-only.
