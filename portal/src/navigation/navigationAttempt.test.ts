@@ -13,8 +13,8 @@ const at = (key: string, path: string, state?: unknown): AttemptLocation => {
 const left = at("L", "/parties")
 const WANTED = { pathname: "/quests", search: "?x=1", hash: "#top" }
 
-function attempt() {
-    return new NavigationAttempt(WANTED, { key: left.key, href: hrefOf(left) })
+function attempt(busyAtStart = false) {
+    return new NavigationAttempt(WANTED, { key: left.key, href: hrefOf(left) }, busyAtStart)
 }
 
 function view(overrides: Partial<AttemptView> = {}): AttemptView {
@@ -25,6 +25,7 @@ function view(overrides: Partial<AttemptView> = {}): AttemptView {
         blocked: null,
         proceeding: null,
         failed: false,
+        busy: false,
         ...overrides,
     }
 }
@@ -88,6 +89,30 @@ describe("NavigationAttempt", () => {
         expect(c.observe(view({ location: at("F9", "/elsewhere", { _isRedirect: true }), action: "POP" }))).toBe(
             "cancelled",
         )
+    })
+
+    it("does not follow a redirect once the router was doing anything besides this navigation", () => {
+        const redirected = at("F2", "/elsewhere", { _isRedirect: true })
+
+        // Work already going on when the click was made.
+        const before = attempt(true)
+        before.observe(view({ navigating: wanted("F1") }))
+        expect(before.observe(view({ navigating: redirected }))).toBe("cancelled")
+
+        // Work that began during the navigation, seen in flight or already over by the time of the commit.
+        const during = attempt()
+        during.observe(view({ navigating: wanted("F1") }))
+        expect(during.observe(view({ navigating: wanted("F1"), busy: true }))).toBe("pending")
+        expect(during.observe(view({ location: redirected }))).toBe("cancelled")
+
+        const inFlight = attempt()
+        inFlight.observe(view({ navigating: wanted("F1") }))
+        expect(inFlight.observe(view({ navigating: redirected, busy: true }))).toBe("cancelled")
+
+        // The navigation's own arrival is not a redirect and is unaffected.
+        const own = attempt()
+        own.observe(view({ navigating: wanted("F1"), busy: true }))
+        expect(own.observe(view({ location: wanted("F1") }))).toBe("accepted")
     })
 
     it("cancels a navigation that fails or ends without arriving", () => {

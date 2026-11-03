@@ -54,6 +54,9 @@ export interface AttemptView {
     proceeding: AttemptLocation | null
     // The committed location carries a route error (a failed loader).
     failed: boolean
+    // The router is doing something besides navigating: a fetcher is loading or submitting, or a
+    // revalidation is running. Each of those can end in a redirect that looks like ours.
+    busy: boolean
 }
 
 export type AttemptStatus = "pending" | "accepted" | "cancelled"
@@ -75,12 +78,20 @@ export class NavigationAttempt {
     private requested: string
     private readonly leftHref: string
     private lastCommitKey: string
+    // Once the router has been seen doing anything besides this navigation, a redirect cannot be told
+    // from that other work's redirect, so none is followed (see "Redirects").
+    private shared: boolean
     private phase: Phase = "awaiting"
     // The key of the request that is ours while it is blocked or in flight.
     private ownedKey: string | null = null
     private status: AttemptStatus = "pending"
 
-    constructor(requested: { pathname: string; search: string; hash: string }, left: { key: string; href: string }) {
+    constructor(
+        requested: { pathname: string; search: string; hash: string },
+        left: { key: string; href: string },
+        busyAtStart = false,
+    ) {
+        this.shared = busyAtStart
         this.requested = hrefOf(requested)
         this.leftHref = left.href
         this.lastCommitKey = left.key
@@ -88,6 +99,7 @@ export class NavigationAttempt {
 
     observe(view: AttemptView): AttemptStatus {
         if (this.status !== "pending") return this.status
+        if (view.busy) this.shared = true
         this.status = view.location.key !== this.lastCommitKey ? this.committed(view) : this.progressed(view)
         return this.status
     }
@@ -104,7 +116,7 @@ export class NavigationAttempt {
                 // marked itself, and that location may commit without ever being seen in flight. Only a
                 // PUSH or REPLACE counts (a POP back to such an entry carries the same mark), and any other
                 // navigation, which does not carry it, still cancels.
-                return isRedirect(location) && view.action !== "POP" ? "accepted" : "cancelled"
+                return this.followsRedirect(location) && view.action !== "POP" ? "accepted" : "cancelled"
             case "asked":
                 return "cancelled"
             case "proceeding":
@@ -115,6 +127,11 @@ export class NavigationAttempt {
                 if (view.action === "REPLACE" && hrefOf(location) === this.leftHref) return "pending"
                 return "cancelled"
         }
+    }
+
+    // Whether a router-marked redirect may be taken for the redirect of this request.
+    private followsRedirect(location: AttemptLocation): boolean {
+        return isRedirect(location) && !this.shared
     }
 
     private progressed(view: AttemptView): AttemptStatus {
@@ -151,7 +168,7 @@ export class NavigationAttempt {
             case "loading":
                 if (navigating === null) return "cancelled"
                 if (navigating.key === this.ownedKey) return "pending"
-                if (isRedirect(navigating)) {
+                if (this.followsRedirect(navigating)) {
                     this.requested = hrefOf(navigating)
                     this.ownedKey = navigating.key
                     return "pending"
@@ -162,6 +179,13 @@ export class NavigationAttempt {
 }
 
 type RouterState = DataRouter["state"]
+
+/** A fetcher is working or a revalidation is running: work that is not a navigation. */
+export function isBusy(state: RouterState): boolean {
+    if (state.revalidation !== "idle") return true
+    for (const fetcher of state.fetchers.values()) if (fetcher.state !== "idle") return true
+    return false
+}
 
 /** The attempt's view of the router's state. */
 export function viewOfRouterState(state: RouterState): AttemptView {
@@ -178,5 +202,6 @@ export function viewOfRouterState(state: RouterState): AttemptView {
         blocked,
         proceeding,
         failed: state.errors !== null && state.errors !== undefined,
+        busy: isBusy(state),
     }
 }

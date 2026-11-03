@@ -7,7 +7,7 @@ import type {
 } from "react"
 import { UNSAFE_DataRouterContext, parsePath, useLocation, useNavigationType } from "react-router"
 import { navigationQuestionActive, onQuestionAnswer, registerFocusFallback } from "../hooks/navigationHolds"
-import { NavigationAttempt, hrefOf, viewOfRouterState } from "../navigation/navigationAttempt"
+import { NavigationAttempt, hrefOf, isBusy, viewOfRouterState } from "../navigation/navigationAttempt"
 import type { AttemptView } from "../navigation/navigationAttempt"
 import { canTakeFocus } from "../utils/focusEligibility"
 
@@ -120,6 +120,7 @@ export function useAcceptedNavigation({ onAccepted, opener }: AcceptedNavigation
                 attempt: new NavigationAttempt(
                     { pathname: target.pathname ?? "", search: target.search ?? "", hash: target.hash ?? "" },
                     { key: left.key, href: hrefOf(left) },
+                    router !== null && isBusy(router.state),
                 ),
                 release: () => releases.forEach((release) => release()),
             }
@@ -137,6 +138,7 @@ export function useAcceptedNavigation({ onAccepted, opener }: AcceptedNavigation
             blocked: null,
             proceeding: null,
             failed: false,
+            busy: false,
         })
     }, [feed, location, navigationType, router])
 

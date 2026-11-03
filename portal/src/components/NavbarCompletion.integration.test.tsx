@@ -95,6 +95,7 @@ const gated = async ({ request }: { request: Request }) => {
 }
 
 let router: DataRouter
+let pingTarget = "/app/alpha/home"
 
 function tree(entry: string) {
   router = createMemoryRouter(
@@ -127,6 +128,16 @@ function tree(entry: string) {
                     },
                     element: <Page title="Knowledge" />,
                     errorElement: <h1 tabIndex={-1}>Knowledge failed</h1>,
+                  },
+                  // Only ever the target of a fetcher: its loader waits for its gate, then redirects.
+                  {
+                    id: "ping",
+                    path: "ping",
+                    loader: async ({ request }: { request: Request }) => {
+                      await gates.get(new URL(request.url).pathname)?.promise
+                      return redirect(pingTarget)
+                    },
+                    element: <Page title="Ping" />,
                   },
                   { path: "characters/all", loader: gated, element: <Page title="All characters" /> },
                   { path: "characters/:characterId", element: <Page title="Character record" /> },
@@ -330,6 +341,64 @@ describe("completion belongs to the navigation the click started", () => {
     await waitFor(() => expect(drawerOpen()).toBe(false))
     expect(closes).toHaveBeenCalledTimes(1)
     observer.disconnect()
+  })
+
+  describe("a redirect the click's own navigation did not make", () => {
+    // The router marks every redirect `_isRedirect`, whoever asked for it. An independent fetcher whose
+    // loader redirects while the click's navigation is still in flight produces the same mark.
+    async function fetcherRedirects(to: string) {
+      pingTarget = to
+      const ping = hold("/app/alpha/ping")
+      await act(async () => {
+        void router.fetch("independent", "ping", "/app/alpha/ping")
+      })
+      await waitFor(() => expect(router.state.fetchers.get("independent")?.state).toBe("loading"))
+      ping.release()
+    }
+
+    it("is not completed by an independent fetcher's redirect to another place", async () => {
+      pingTarget = "/app/alpha/home"
+      await start("/app/alpha/parties", "Parties")
+      hold("/app/alpha/quests")
+      await openDrawerAndClick("Quests")
+
+      await fetcherRedirects("/app/alpha/home")
+      await screen.findByRole("heading", { name: "Campaign Home" })
+
+      expect(here()).toBe("/app/alpha/home")
+      // The click never arrived: the drawer is still the person's, and nothing moved focus on its behalf.
+      expect(drawerOpen()).toBe(true)
+    })
+
+    it("is not completed by an independent fetcher's redirect to the very address the click asked for", async () => {
+      await start("/app/alpha/parties", "Parties")
+      const quests = hold("/app/alpha/quests")
+      await openDrawerAndClick("Quests")
+
+      await fetcherRedirects("/app/alpha/quests")
+      quests.release()
+      await screen.findByRole("heading", { name: "Quests" })
+
+      expect(here()).toBe("/app/alpha/quests")
+      expect(drawerOpen()).toBe(true)
+    })
+
+    it("still follows the click's own loader redirect while an unrelated fetcher is idle", async () => {
+      await start("/app/alpha/quests", "Quests")
+      await act(async () => {
+        await router.fetch("settled", "ping", "/app/alpha/ping")
+      })
+      await waitFor(() => expect(router.state.fetchers.get("settled")?.state ?? "idle").toBe("idle"))
+      await screen.findByRole("heading", { name: /Campaign Home|Quests/ })
+      await go("/app/alpha/quests")
+      fireEvent.click(drawerToggle())
+      expect(drawerOpen()).toBe(true)
+
+      fireEvent.click(inNav().getByRole("link", { name: "Sessions" }))
+      await screen.findByRole("heading", { name: "Parties" })
+
+      await waitFor(() => expect(drawerOpen()).toBe(false))
+    })
   })
 
   it("does not take a failed navigation for completion", async () => {
