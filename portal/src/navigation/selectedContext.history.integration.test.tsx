@@ -1,0 +1,437 @@
+import { act, cleanup, configure, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import { useState } from "react"
+import { Link, Route, RouterProvider, Routes, createMemoryRouter, useLocation } from "react-router"
+import type { DataRouter } from "react-router"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { ConfirmDialog } from "../components/authoring/ConfirmDialog"
+import { usePerspective } from "../context/CharacterPerspectiveContext"
+import { RouteSessionProvider } from "../context/RouteSessionProvider"
+import { useAuthoringResource } from "../hooks/useAuthoringResource"
+import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard"
+import { AuthenticatedAppLayout } from "../layouts/AuthenticatedAppLayout"
+import { CampaignSessionBoundary } from "../layouts/CampaignSessionBoundary"
+import { WorldWorkspaceLayout } from "../layouts/WorldWorkspaceLayout"
+import { ThemeProvider } from "../themes/ThemeProvider"
+import type { CampaignContext, SessionBootstrap } from "../types/bootstrap"
+
+// P02-3 history retention. Every accepted in-app location of the authenticated portal mirrors the
+// validated selected context into its own entry (state.ctx), and a reload or Back/Forward restores it
+// through the same validation, for campaign, World and unscoped routes alike. Real providers, shell,
+// layouts, guards and router; only the session bootstrap and fetch are faked.
+
+configure({ asyncUtilTimeout: 5000 })
+
+const control = vi.hoisted(() => ({
+  bootstrap: null as unknown,
+  publish: null as null | ((bootstrap: unknown) => void),
+}))
+
+vi.mock("../hooks/useSessionBootstrap", async () => {
+  const react = await import("react")
+  return {
+    useSessionBootstrap: () => {
+      const [bootstrap, setBootstrap] = react.useState(control.bootstrap)
+      control.publish = (next) => {
+        control.bootstrap = next
+        setBootstrap(next)
+      }
+      const refresh = react.useCallback(async () => true, [])
+      const reload = react.useCallback(() => undefined, [])
+      return { state: { status: "authenticated", bootstrap }, reload, refresh }
+    },
+  }
+})
+
+function campaign(id: string, world: string, perspectives: string[], selected: string | null): CampaignContext {
+  return {
+    campaign_id: id,
+    campaign_name: `Campaign ${id}`,
+    world_id: world,
+    world_name: `World ${world}`,
+    timeline_id: `t-${world}`,
+    timeline_name: `Timeline ${world}`,
+    roles: ["campaign_owner"],
+    character_perspectives: perspectives.map((p) => ({ character_id: p, character_name: `Name ${p}`, authorized_parties: [] })),
+    selected_character_id: selected,
+    capabilities: ["access.manage"],
+  }
+}
+
+function bootstrapOf(over: { alphaDefault?: string | null; withAlpha?: boolean; alpha?: string[]; user?: string } = {}): SessionBootstrap {
+  const { alphaDefault = null, withAlpha = true, alpha = ["a1", "a2"], user = "u1" } = over
+  return {
+    user: { user_id: user, display_name: "Gina" },
+    csrf_token: "csrf",
+    browser_session_id: "s1",
+    system_roles: ["player"],
+    global_capabilities: [],
+    startup_campaign_id: "beta",
+    campaign_preferences: { startup_mode: "resume_last_visited", preferred_campaign_id: null, last_visited_campaign_id: "beta" },
+    campaigns: [
+      ...(withAlpha ? [campaign("alpha", "w1", alpha, alphaDefault)] : []),
+      campaign("beta", "w1", ["b1"], "b1"),
+      campaign("gamma", "w2", [], null),
+    ],
+    features: { ask: false, ai_summaries: false, gm_briefs: false, cited_rules: false },
+  }
+}
+
+const requests: string[] = []
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } })
+const world = (id: string) => ({
+  world_id: id,
+  name: `World ${id}`,
+  capabilities: ["world.view", "world.manage"],
+  default_ruleset_id: null,
+  allowed_rulesets: [],
+  timelines: [{ timeline_id: `t-${id}`, name: `Timeline ${id}` }],
+  managed_campaigns: [],
+  available_actions: [],
+  blocked_actions: [],
+})
+
+function NotesPage() {
+  const { getSelectedCharacterId } = usePerspective()
+  const campaignId = useLocation().pathname.split("/")[2]!
+  const perspective = getSelectedCharacterId(campaignId) ?? ""
+  const read = useAuthoringResource<{ who: string }>(`/campaigns/${campaignId}/probe?character_id=${perspective}`)
+  return (
+    <div>
+      <h1>Notes</h1>
+      <p data-testid="read">{read.state.kind === "ready" ? `ready:${campaignId}:${read.state.data.who}` : read.state.kind}</p>
+    </div>
+  )
+}
+
+// A World editor: unsent input holds the page's one question.
+function WorldEditor() {
+  const [text, setText] = useState("")
+  const guard = useUnsavedChangesGuard(text !== "")
+  return (
+    <div>
+      <h1>World editor</h1>
+      <label>
+        Draft
+        <input value={text} onChange={(event) => setText(event.target.value)} />
+      </label>
+      <ConfirmDialog
+        open={guard.blocked}
+        title="Discard your draft?"
+        description="unsent"
+        confirmLabel="Leave"
+        cancelLabel="Stay"
+        onConfirm={guard.discard}
+        onCancel={guard.stay}
+      />
+    </div>
+  )
+}
+
+type Entry = string | { pathname: string; search?: string; state?: unknown }
+let router: DataRouter
+// Every location the router ever published, to prove what a stamp is and is not.
+let seen: Array<{ key: string; action: string; pathname: string }> = []
+
+function tree(entry: Entry) {
+  router = createMemoryRouter(
+    [
+      {
+        path: "*",
+        element: (
+          <RouteSessionProvider>
+            <Routes>
+              <Route element={<AuthenticatedAppLayout />}>
+                <Route path="/campaigns" element={<main><h1>Campaigns</h1><Link to="/app/beta/notes">to beta</Link></main>} />
+                <Route element={<WorldWorkspaceLayout />}>
+                  <Route path="/worlds/:worldId" element={<h1>World page</h1>} />
+                  <Route path="/worlds/:worldId/edit" element={<WorldEditor />} />
+                </Route>
+                <Route path="/app/:campaignId" element={<CampaignSessionBoundary />}>
+                  <Route path="notes" element={<NotesPage />} />
+                </Route>
+              </Route>
+            </Routes>
+          </RouteSessionProvider>
+        ),
+      },
+    ],
+    { initialEntries: [entry] },
+  )
+  seen = []
+  router.subscribe((state) => {
+    const last = seen[seen.length - 1]
+    if (last !== undefined && last.key === state.location.key && last.action === state.historyAction) return
+    seen.push({ key: state.location.key, action: state.historyAction, pathname: state.location.pathname })
+  })
+  return (
+    <ThemeProvider>
+      <RouterProvider router={router} />
+    </ThemeProvider>
+  )
+}
+
+const mount = (entry: Entry) => render(tree(entry))
+
+beforeEach(() => {
+  requests.length = 0
+  control.bootstrap = bootstrapOf()
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString()
+      requests.push(url)
+      const probe = /\/probe\?character_id=([^&]*)/.exec(url)
+      if (probe !== null) return json({ who: decodeURIComponent(probe[1]!) })
+      const worldMatch = /\/worlds\/(w\d)$/.exec(url)
+      if (worldMatch !== null) return json(world(worldMatch[1]!))
+      if (/\/worlds\?/.test(url)) return json({ items: [], next_cursor: null })
+      return json({ detail: "not found" }, 404)
+    }),
+  )
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
+const stamp = (campaignId: string | null, characterId: string | null, worldId?: string) => ({
+  v: 1,
+  campaignId,
+  worldId: campaignId === null ? null : (worldId ?? "w1"),
+  timelineId: campaignId === null ? null : `t-${worldId ?? "w1"}`,
+  characterId,
+})
+const NOTHING = stamp(null, null)
+const ctx = () => (router.state.location.state as { ctx?: unknown } | null)?.ctx
+const select = () => screen.getByRole("combobox", { name: "Character perspective" }) as HTMLSelectElement
+const nav = () => screen.getByRole("navigation", { name: "Main" })
+const quests = () => within(nav()).queryByRole("link", { name: "Quests" })
+const go = async (to: string | number) => {
+  await act(async () => {
+    await router.navigate(to as string)
+  })
+}
+const ready = (campaignId: string, who: string) =>
+  waitFor(() => expect(screen.getByTestId("read")).toHaveTextContent(`ready:${campaignId}:${who}`))
+const stamped = (expected: unknown) => waitFor(() => expect(ctx()).toEqual(expected))
+const probes = () => requests.filter((url) => url.includes("/probe?")).map((url) => url.replace(/^.*\/campaigns\//, ""))
+
+// What a reload would hand the new document: the current entry, exactly as the history holds it.
+function reload() {
+  const { pathname, search, state } = router.state.location
+  cleanup()
+  requests.length = 0
+  render(tree({ pathname, search, state }))
+}
+
+// alpha with a2 chosen, then on to `to`.
+async function selectedAlphaThen(to: string) {
+  mount("/app/alpha/notes")
+  await ready("alpha", "")
+  fireEvent.change(select(), { target: { value: "a2" } })
+  await ready("alpha", "a2")
+  await go(to)
+}
+
+describe("reload restores the selected context for every kind of route", () => {
+  it("Campaign → World → reload: the compatible authorized selection is back, as the selected campaign", async () => {
+    await selectedAlphaThen("/worlds/w1")
+    await screen.findByRole("heading", { name: "World page" })
+    await stamped(stamp("alpha", "a2"))
+
+    reload()
+    await screen.findByRole("heading", { name: "World page" })
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Selected campaign" })).toBeInTheDocument())
+    expect(quests()).toHaveAttribute("href", "/app/alpha/quests")
+
+    // The campaign route still governs its own scope, and the retained perspective is the one chosen.
+    await go("/app/alpha/notes")
+    await ready("alpha", "a2")
+    expect(select()).toHaveValue("a2")
+    expect(probes()).toEqual(["alpha/probe?character_id=a2"])
+  })
+
+  it("Campaign → unscoped portal route → reload: the selection is back", async () => {
+    await selectedAlphaThen("/campaigns")
+    await screen.findByRole("heading", { name: "Campaigns" })
+    await stamped(stamp("alpha", "a2"))
+
+    reload()
+    await screen.findByRole("heading", { name: "Campaigns" })
+    await waitFor(() => expect(quests()).toHaveAttribute("href", "/app/alpha/quests"))
+    await go("/app/alpha/notes")
+    await ready("alpha", "a2")
+    expect(select()).toHaveValue("a2")
+  })
+
+  it("an incompatible World drops the retained campaign and stamps that, so a reload does not bring it back", async () => {
+    await selectedAlphaThen("/worlds/w2")
+    await screen.findByRole("heading", { name: "World page" })
+    await stamped({ v: 1, campaignId: null, worldId: "w2", timelineId: null, characterId: null })
+    reload()
+    await screen.findByRole("heading", { name: "World page" })
+    expect(quests()).toBeNull()
+  })
+})
+
+describe("the entry's own state on arrival", () => {
+  it("restores an explicit none, and keeps it apart from an uninitialized default", async () => {
+    control.bootstrap = bootstrapOf({ alphaDefault: "a1" })
+    mount({ pathname: "/campaigns", state: { ctx: stamp("alpha", null) } })
+    await screen.findByRole("heading", { name: "Campaigns" })
+    await waitFor(() => expect(quests()).toHaveAttribute("href", "/app/alpha/quests"))
+    await go("/app/alpha/notes")
+    await ready("alpha", "")
+    // The server default (a1) did not replace the recorded choice of no perspective.
+    expect(select()).toHaveValue("")
+  })
+
+  it("restores a valid recorded perspective", async () => {
+    mount({ pathname: "/campaigns", state: { ctx: stamp("alpha", "a2") } })
+    await screen.findByRole("heading", { name: "Campaigns" })
+    await waitFor(() => expect(quests()).toHaveAttribute("href", "/app/alpha/quests"))
+    await stamped(stamp("alpha", "a2"))
+    await go("/app/alpha/notes")
+    await ready("alpha", "a2")
+  })
+
+  it.each([
+    ["no state", undefined],
+    ["a string", { ctx: "x" }],
+    ["an array", { ctx: [] }],
+    ["a wrong version", { ctx: { ...stamp("alpha", "a2"), v: 2 } }],
+    ["a partial form", { ctx: { v: 1, campaignId: "alpha", characterId: "a2" } }],
+    ["a mistyped id", { ctx: { ...stamp("alpha", "a2"), campaignId: 7 } }],
+    ["a campaign the session does not list", { ctx: stamp("ghost", "a2") }],
+    ["another world than the campaign's", { ctx: { ...stamp("alpha", "a2"), worldId: "w9" } }],
+    ["a perspective the campaign does not authorize", { ctx: stamp("alpha", "someone-else") }],
+    ["the older perspective-only stamp, which names no campaign", { ctx: { v: 1, characterId: "a2" } }],
+  ])("selects nothing from %s, and repairs the entry to record that", async (_name, state) => {
+    mount({ pathname: "/campaigns", state })
+    await screen.findByRole("heading", { name: "Campaigns" })
+    await stamped(NOTHING)
+    expect(quests()).toBeNull()
+    expect(router.state.historyAction).toBe("REPLACE")
+  })
+})
+
+describe("Back and Forward restore the context each entry recorded", () => {
+  it("across campaign, World and unscoped entries", async () => {
+    await selectedAlphaThen("/campaigns") // entry 2 records alpha/a2
+    await screen.findByRole("heading", { name: "Campaigns" })
+    await stamped(stamp("alpha", "a2"))
+    await go("/app/beta/notes") // route wins: beta/b1
+    await ready("beta", "b1")
+    await go("/worlds/w1") // compatible with beta
+    await screen.findByRole("heading", { name: "World page" })
+    await stamped(stamp("beta", "b1"))
+    await waitFor(() => expect(quests()).toHaveAttribute("href", "/app/beta/quests"))
+
+    await go(-1) // beta
+    await ready("beta", "b1")
+    await go(-1) // the unscoped entry, which recorded alpha/a2
+    await screen.findByRole("heading", { name: "Campaigns" })
+    await waitFor(() => expect(quests()).toHaveAttribute("href", "/app/alpha/quests"))
+    await stamped(stamp("alpha", "a2"))
+
+    await go(1) // beta's campaign entry: the route governs again
+    await ready("beta", "b1")
+    expect(select()).toHaveValue("b1")
+    await go(1) // the World entry
+    await screen.findByRole("heading", { name: "World page" })
+    await waitFor(() => expect(quests()).toHaveAttribute("href", "/app/beta/quests"))
+  })
+})
+
+describe("a dirty World editor", () => {
+  it("Stay keeps draft, context and history; Leave commits once", async () => {
+    await selectedAlphaThen("/worlds/w1/edit")
+    await screen.findByRole("heading", { name: "World editor" })
+    await stamped(stamp("alpha", "a2"))
+    fireEvent.change(screen.getByLabelText("Draft"), { target: { value: "half" } })
+    const here = router.state.location.key
+    seen.length = 0
+
+    void router.navigate("/campaigns")
+    const dialog = await screen.findByRole("dialog", { name: "Discard your draft?" })
+    fireEvent.click(within(dialog).getByRole("button", { name: "Stay" }))
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+    expect(router.state.location.key).toBe(here)
+    expect(router.state.location.pathname).toBe("/worlds/w1/edit")
+    expect(screen.getByLabelText("Draft")).toHaveValue("half")
+    expect(ctx()).toEqual(stamp("alpha", "a2"))
+    expect(quests()).toHaveAttribute("href", "/app/alpha/quests")
+    // The router may announce the same entry again; nothing new was pushed, replaced or popped.
+    expect(seen.filter((entry) => entry.key !== here)).toEqual([])
+
+    void router.navigate("/campaigns")
+    fireEvent.click(within(await screen.findByRole("dialog", { name: "Discard your draft?" })).getByRole("button", { name: "Leave" }))
+    await screen.findByRole("heading", { name: "Campaigns" })
+    await stamped(stamp("alpha", "a2"))
+    expect(seen.filter((entry) => entry.action === "PUSH")).toHaveLength(1)
+  })
+})
+
+describe("authority changes invalidate what was stored", () => {
+  it("a revoked campaign is not restored, and re-authorization does not bring it back", async () => {
+    control.bootstrap = bootstrapOf({ withAlpha: false })
+    mount({ pathname: "/campaigns", state: { ctx: stamp("alpha", "a2") } })
+    await screen.findByRole("heading", { name: "Campaigns" })
+    await stamped(NOTHING)
+    await act(async () => control.publish!(bootstrapOf()))
+    expect(quests()).toBeNull()
+    expect(ctx()).toEqual(NOTHING)
+  })
+
+  it("a different user or session in the same tab empties the selection and the entry's record of it", async () => {
+    await selectedAlphaThen("/campaigns")
+    await stamped(stamp("alpha", "a2"))
+    await act(async () => control.publish!(bootstrapOf({ user: "u2" })))
+    await waitFor(() => expect(quests()).toBeNull())
+    await stamped(NOTHING)
+    await act(async () => control.publish!(bootstrapOf()))
+    expect(quests()).toBeNull()
+  })
+
+  it("a perspective that is no longer authorized is not restored, and is recorded as none", async () => {
+    await selectedAlphaThen("/campaigns")
+    await stamped(stamp("alpha", "a2"))
+    await act(async () => control.publish!(bootstrapOf({ alpha: ["a1"] })))
+    await stamped(stamp("alpha", null))
+    await act(async () => control.publish!(bootstrapOf()))
+    expect(ctx()).toEqual(stamp("alpha", null))
+  })
+})
+
+describe("stamping itself", () => {
+  it("never overwrites a newer navigation made while it was pending", async () => {
+    mount({ pathname: "/campaigns", state: { ctx: stamp("alpha", "a2") } })
+    await screen.findByRole("heading", { name: "Campaigns" })
+    // Immediately: before the restored selection has been recorded back on this entry.
+    await go("/app/beta/notes")
+    await ready("beta", "b1")
+    await stamped(stamp("beta", "b1"))
+    expect(router.state.location.pathname).toBe("/app/beta/notes")
+    await go(-1)
+    await screen.findByRole("heading", { name: "Campaigns" })
+    expect(ctx()).toEqual(stamp("alpha", "a2"))
+  })
+
+  it("adds no entry, keeps unrelated state and task, and causes no extra page read", async () => {
+    const task = { v: 1, root: "world", scope: { worldId: "w1" }, trail: [] }
+    mount({ pathname: "/worlds/w1", state: { task, keep: "me" } })
+    await screen.findByRole("heading", { name: "World page" })
+    await stamped(NOTHING_WITH_WORLD)
+    expect(router.state.location.state).toMatchObject({ task, keep: "me" })
+    expect(seen.every((entry) => entry.action === "REPLACE" || entry.action === "POP")).toBe(true)
+    expect(requests.filter((url) => /\/worlds\/w1$/.test(url))).toHaveLength(1)
+    const count = requests.length
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(requests.length).toBe(count)
+  })
+})
+
+const NOTHING_WITH_WORLD = { v: 1, campaignId: null, worldId: "w1", timelineId: null, characterId: null }

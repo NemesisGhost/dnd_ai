@@ -12,7 +12,8 @@ import {
 import { WorkspaceFrame } from "../components/WorkspaceFrame"
 import { usePerspective } from "../context/CharacterPerspectiveContext"
 import { useSession } from "../context/SessionContext"
-import { runPermissionLossCleanup, setCommittedPerspective } from "../hooks/navigationHolds"
+import { setCommittedPerspective } from "../hooks/navigationHolds"
+import { asRecord, replaceOwnEntry } from "../navigation/replaceOwnEntry"
 import {
   entryContextStamp,
   entryContextWithinScope,
@@ -33,10 +34,6 @@ interface CampaignLayoutProps {
 }
 
 const REVOKED_NOTICE = "Your selected character is no longer available."
-
-function asRecord(state: unknown): Record<string, unknown> {
-  return typeof state === "object" && state !== null ? (state as Record<string, unknown>) : {}
-}
 
 function withoutPerspectiveQuery(search: string): string {
   const params = new URLSearchParams(search)
@@ -150,58 +147,13 @@ export function CampaignLayout({ bootstrap }: CampaignLayoutProps) {
     // replaced before anything reads under it (I-1); this campaign's own choice is kept.
     adoptRouteCampaign?.(activeCampaignId)
 
-    // A replacement that belongs to one entry. It runs only while that entry is still the router's
-    // current location and nothing is pending or waiting on a decision, and is dropped the moment a
-    // newer location exists (which stamps itself), so it can never overwrite a newer PUSH, REPLACE
-    // or POP, or cut across a blocked one. State and the rest of the query are carried over from the
-    // router's own copy of the entry.
-    //
-    // Permission loss is the one case that does not wait for a blocked transition: the page whose
-    // question that is has just been removed, nothing will say so, and the loss may not wait for an
-    // answer. Its replacement runs under the narrow exemption in `runPermissionLossCleanup`, which
-    // covers exactly this entry and this call; the held navigation is cancelled by its owner as it
-    // goes away, never approved.
-    function replaceOwnEntry(
+    // Entry-bound replacements are written by navigation/replaceOwnEntry (one implementation for the
+    // stamps of every authenticated route).
+    const replaceOwn = (
       entryKey: string,
       next: (current: Location) => { search: string; state: unknown },
       permissionLoss = false,
-    ) {
-      if (dataRouter === null) {
-        const { search, state } = next(location)
-        navigate({ pathname: location.pathname, search, hash: location.hash }, { replace: true, state })
-        return undefined
-      }
-      const router = dataRouter
-      let finished = false
-      const finish = () => {
-        finished = true
-        unsubscribe()
-      }
-      const attempt = () => {
-        if (finished) return
-        const current = router.state
-        if (current.location.key !== entryKey) {
-          finish()
-          return
-        }
-        const waiting =
-          current.navigation.state !== "idle" ||
-          (!permissionLoss && [...current.blockers.values()].some((blocker) => blocker.state === "blocked"))
-        if (waiting) return
-        finish()
-        const { search, state } = next(current.location)
-        const apply = () =>
-          void router.navigate(
-            { pathname: current.location.pathname, search, hash: current.location.hash },
-            { replace: true, state, preventScrollReset: true },
-          )
-        if (permissionLoss) runPermissionLossCleanup(entryKey, apply)
-        else apply()
-      }
-      const unsubscribe = router.subscribe(attempt)
-      attempt()
-      return finish
-    }
+    ) => replaceOwnEntry({ router: dataRouter, navigate, location, entryKey, next, permissionLoss })
 
     if (unprocessed) {
       // StrictMode runs this effect twice before the state below renders.
@@ -252,7 +204,7 @@ export function CampaignLayout({ bootstrap }: CampaignLayoutProps) {
     if (revokedId !== null) {
       // First the address: the page must not read as the perspective that was just lost.
       if (staleQuery) {
-        return replaceOwnEntry(
+        return replaceOwn(
           location.key,
           (current) => ({
             search: withoutPerspectiveQuery(current.search),
@@ -279,7 +231,7 @@ export function CampaignLayout({ bootstrap }: CampaignLayoutProps) {
     // and replaces a foreign one). Same path and same context, so the replacement is never guarded,
     // adds no history entry, and does not remount anything. Unrelated router state is carried over.
     if (!commitPending && !stampCurrent) {
-      return replaceOwnEntry(location.key, (current) => ({
+      return replaceOwn(location.key, (current) => ({
         search: current.search,
         state: {
           ...asRecord(current.state),
