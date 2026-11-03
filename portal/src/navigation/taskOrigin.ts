@@ -1,4 +1,5 @@
 import { isIdShaped } from "./contexts"
+import { isValidListSearch } from "./listState"
 import { NAV_ROOTS, defaultAncestors, executionScopeOf, patternParams, routeMetaById } from "./routeMeta"
 import type { NavRoot, RouteMatch, RouteRef } from "./routeMeta"
 
@@ -26,7 +27,8 @@ export interface TaskOriginV1 {
     root: NavRoot
     scope: TaskScope
     trail: TrailEntry[]
-    // A list the task came from, with its query, for restoring filters on return. Whitelisted list routes only.
+    // A list the task came from, with its query, for restoring filters on return. Only list routes with a
+    // declared contract (navigation/listState.ts), and only the keys and values that route produces.
     list?: { route: string; search: string }
     // A presentation hint for announcement wording. It is never consulted by any guard.
     transition?: "context"
@@ -109,7 +111,9 @@ export function parseTask(state: unknown): TaskOriginV1 | null {
         if (!isRecord(list)) return null
         const route = own(list, "route")
         const search = own(list, "search")
-        if (typeof route !== "string" || !isSafeSearch(search)) return null
+        // Shape only here (a string that is empty or a safe query); which keys and values the route
+        // accepts is checked against the route in validateTask.
+        if (typeof route !== "string" || (search !== "" && !isSafeSearch(search))) return null
         result.list = { route, search }
     }
     if (own(task, "transition") === "context") result.transition = "context"
@@ -118,9 +122,12 @@ export function parseTask(state: unknown): TaskOriginV1 | null {
 
 // Whether a route reference names a real route of `scope` whose params are exactly its pattern's,
 // id-shaped, and carry the task's own scope id.
-function refBelongsToScope(ref: RouteRef, scope: TaskScope): boolean {
+function refBelongsToScope(ref: RouteRef, scope: TaskScope, root: NavRoot): boolean {
     const meta = routeMetaById(ref.route)
     if (meta === undefined) return false
+    // The destination must itself be a place this task root may be in; the task is not forced to equal
+    // containment (a Parties task may pass through a character page), only what the metadata supports.
+    if (!meta.allowedRoots.includes(root)) return false
     // An unscoped list (the Worlds list) names no id, so it can be an ancestor of a scoped page.
     if (meta.scope === "none") return Object.keys(ref.params).length === 0 && meta.kind === "list"
     if (meta.scope !==("campaignId" in scope ? "campaign" : "world")) return false
@@ -144,8 +151,11 @@ function sameRef(left: RouteRef, right: RouteRef): boolean {
  * (duplicates and the current page removed, newest kept) or null when any rule fails:
  *   - the route has an execution scope, and the task's scope id equals the route's;
  *   - the route's `allowedRoots` contains the task's root;
- *   - every trail entry names a known route in the same scope with exactly that pattern's id params;
- *   - `list` names a list route in the same scope.
+ *   - every trail entry names a known route in the same scope with exactly that pattern's id params, and
+ *     that route allows the task's root;
+ *   - `list` names a list route in the same scope that allows the root, and its query is exactly what
+ *     that route's list contract produces (navigation/listState.ts). An invalid descriptor rejects the
+ *     whole task (never normalized), so the entry falls back to a legacy key, then to the route default.
  */
 export function validateTask(task: TaskOriginV1, current: RouteMatch): TaskOriginV1 | null {
     const scope = executionScopeOf(current)
@@ -158,7 +168,7 @@ export function validateTask(task: TaskOriginV1, current: RouteMatch): TaskOrigi
     const here: RouteRef = { route: current.meta.id, params: current.params }
     const trail: TrailEntry[] = []
     for (const entry of task.trail) {
-        if (!refBelongsToScope(entry, task.scope)) return null
+        if (!refBelongsToScope(entry, task.scope, task.root)) return null
         if (sameRef(entry, here) || trail.some((kept) => sameRef(kept, entry))) continue
         trail.push({ ...entry, params: { ...entry.params } })
     }
@@ -166,6 +176,8 @@ export function validateTask(task: TaskOriginV1, current: RouteMatch): TaskOrigi
     if (task.list !== undefined) {
         const listMeta = routeMetaById(task.list.route)
         if (listMeta === undefined || listMeta.kind !== "list" || listMeta.scope === "none") return null
+        if (!listMeta.allowedRoots.includes(task.root)) return null
+        if (!isValidListSearch(task.list.route, task.list.search)) return null
         if (listMeta.scope !== (scope.kind === "campaign" ? "campaign" : "world")) return null
         result.list = { ...task.list }
     }

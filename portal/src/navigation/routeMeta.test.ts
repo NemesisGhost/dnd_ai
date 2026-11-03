@@ -52,8 +52,27 @@ function findRoutes(node: ReactNode): ReactNode | null {
     return found
 }
 
+// The patterns that appear more than once, with their counts. Run on the production list before any set
+// comparison, which would discard the multiplicity. It is exact-string duplication only: two different
+// patterns that match the same URL (overlap) are not analysed; react-router ranks those, and the ranking
+// tests below pin a few that matter rather than all of them.
+function duplicatesOf(list: readonly string[]): string[] {
+    const counts = new Map<string, number>()
+    for (const item of list) counts.set(item, (counts.get(item) ?? 0) + 1)
+    return [...counts].filter(([, count]) => count > 1).map(([item, count]) => `${item} x${count}`)
+}
+
 describe("production route inventory", () => {
     const patterns = productionPatterns()
+
+    it("lists no production route pattern twice", () => {
+        expect(duplicatesOf(patterns)).toEqual([])
+    })
+
+    it("detects a repeated pattern (the check itself)", () => {
+        expect(duplicatesOf(["/a", "/b/:id", "/a", "/a"])).toEqual(["/a x3"])
+        expect(duplicatesOf(["/a", "/b"])).toEqual([])
+    })
 
     it("reads a plausible number of routes from App.tsx", () => {
         expect(patterns.length).toBeGreaterThan(90)
@@ -121,6 +140,9 @@ describe("route metadata invariants", () => {
 })
 
 describe("matching and default ancestors", () => {
+    // Selected cases only: the places where a static segment sits beside a parameter, or a splat beside a
+    // route. They do not prove every URL resolves to the intended entry; they pin the ones the router ranking
+    // decides and fail if a pattern edit changes the winner there.
     it("matches by react-router's ranking: a static preview route beats the claim id route", () => {
         expect(matchRouteMeta("/app/c1/knowledge/member-preview")?.meta.id).toBe("knowledge.memberPreview")
         expect(matchRouteMeta("/app/c1/knowledge/k1")?.meta.id).toBe("knowledge.detail")

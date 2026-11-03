@@ -18,7 +18,7 @@ const asState = (value: unknown) => ({ task: value })
 
 describe("parseTask (shape and version)", () => {
     it("round-trips a well-formed descriptor as a fresh copy", () => {
-        const input = task({ trail: [partiesRef, partyRef], list: { route: "parties.list", search: "?q=a" }, transition: "context" })
+        const input = task({ trail: [partiesRef, partyRef], list: { route: "parties.list", search: "" }, transition: "context" })
         const parsed = parseTask(asState(input))
         expect(parsed).toEqual(input)
         expect(parsed).not.toBe(input)
@@ -104,13 +104,13 @@ describe("validateTask (fit to the route)", () => {
     })
 
     it("requires a list to be a list route of the same scope", () => {
-        expect(validateTask(task({ list: { route: "parties.list", search: "?a=1" } }), partyEdit)!.list).toEqual({
+        expect(validateTask(task({ list: { route: "parties.list", search: "" } }), partyEdit)!.list).toEqual({
             route: "parties.list",
-            search: "?a=1",
+            search: "",
         })
-        expect(validateTask(task({ list: { route: "parties.detail", search: "?a=1" } }), partyEdit)).toBeNull()
-        expect(validateTask(task({ list: { route: "worlds.list", search: "?a=1" } }), partyEdit)).toBeNull()
-        expect(validateTask(task({ list: { route: "nope", search: "?a=1" } }), partyEdit)).toBeNull()
+        expect(validateTask(task({ list: { route: "parties.detail", search: "" } }), partyEdit)).toBeNull()
+        expect(validateTask(task({ list: { route: "worlds.list", search: "" } }), partyEdit)).toBeNull()
+        expect(validateTask(task({ list: { route: "nope", search: "" } }), partyEdit)).toBeNull()
     })
 })
 
@@ -123,14 +123,14 @@ describe("startTask and continueTask", () => {
     })
 
     it("adds the page being left, collapses duplicates, keeps the newest entries, and drops the hint", () => {
-        let current = task({ transition: "context", list: { route: "parties.list", search: "?a=1" } })
+        let current = task({ transition: "context", list: { route: "parties.list", search: "" } })
         for (let index = 0; index < 6; index++) {
             current = continueTask(current, { route: "parties.detail", params: { campaignId: CAMPAIGN, partyId: `p${index}` } })
         }
         expect(current.trail).toHaveLength(MAX_TRAIL)
         expect(current.trail.map((entry) => entry.params.partyId)).toEqual(["p2", "p3", "p4", "p5"])
         expect(current.transition).toBeUndefined()
-        expect(current.list).toEqual({ route: "parties.list", search: "?a=1" })
+        expect(current.list).toEqual({ route: "parties.list", search: "" })
         const again = continueTask(current, { route: "parties.detail", params: { campaignId: CAMPAIGN, partyId: "p3" } })
         expect(again.trail.map((entry) => entry.params.partyId)).toEqual(["p2", "p4", "p5", "p3"])
     })
@@ -182,12 +182,12 @@ describe("legacy return adapters (step 2)", () => {
     const adapt = (state: unknown, match = sheet) => adaptLegacyReturn(match, state)
 
     it("adapts charactersReturn to the Characters root with its list state", () => {
-        expect(adapt({ charactersReturn: `/app/${CAMPAIGN}/characters/all?q=sella` })?.task).toEqual({
+        expect(adapt({ charactersReturn: `/app/${CAMPAIGN}/characters/all?type=npc&q=sella` })?.task).toEqual({
             v: 1,
             root: "characters",
             scope: { campaignId: CAMPAIGN },
             trail: [],
-            list: { route: "characters.browse", search: "?q=sella" },
+            list: { route: "characters.browse", search: "?type=npc&q=sella" },
         })
         expect(adapt({ charactersReturn: `/app/${CAMPAIGN}/characters/${UUID}/inventory` })?.task?.trail).toEqual([
             { route: "characters.inventory", params: { campaignId: CAMPAIGN, characterId: UUID } },
@@ -208,24 +208,46 @@ describe("legacy return adapters (step 2)", () => {
     })
 
     it.each([
-        ["worldSearch", "world", "campaign.world"],
-        ["reviewSearch", "review", "review.queue"],
-        ["itemsSearch", "items", "items.list"],
-        ["definitionsSearch", "items", "itemDefinitions.list"],
-    ])("adapts %s to its root and list", (key, root, route) => {
-        expect(adapt({ [key]: "?category=npcs&page=2" })?.task).toEqual({
-            v: 1,
-            root,
-            scope: { campaignId: CAMPAIGN },
-            trail: [],
-            list: { route, search: "?category=npcs&page=2" },
-        })
+        ["worldSearch", "world", "campaign.world", "?category=character&q=sella&hidden=1&cursor=c2"],
+        ["reviewSearch", "review", "review.queue", "?status=approved&type=quest"],
+        ["definitionsSearch", "items", "itemDefinitions.list", "?category=weapon&homebrew=1"],
+        ["itemsSearch", "items", "items.list", "?"],
+    ])("adapts %s to its root and list when the query is one that list produces", (key, root, route, search) => {
+        const state = { [key]: search }
+        expect(adapt(state)?.task).toEqual({ v: 1, root, scope: { campaignId: CAMPAIGN }, trail: [], list: { route, search } })
+    })
+
+    it.each([
+        ["worldSearch", "?character_id=ch1"],
+        ["worldSearch", "?category=nonsense"],
+        ["worldSearch", "?returnTo=https://evil.example"],
+        ["worldSearch", "?q=" + "x".repeat(201)],
+        ["worldSearch", "?hidden=yes"],
+        ["worldSearch", "?q=a&q=b"],
+        ["reviewSearch", "?status=whatever"],
+        ["reviewSearch", "?party_id=p1"],
+        ["itemsSearch", "?page=2"],
+        ["definitionsSearch", "?homebrew=0"],
+        ["definitionsSearch", "?category=%3Cscript%3E"],
+    ])("ignores %s %s: an unsupported key or value is rejected, not normalized", (key, search) => {
+        expect(adapt({ [key]: search })).toBeNull()
+    })
+
+    it("rejects, rather than trims, a Characters browse query it does not produce", () => {
+        for (const query of ["?character_id=ch1", "?type=dragon", "?cursor=" + "c".repeat(513)]) {
+            expect(adapt({ charactersReturn: `/app/${CAMPAIGN}/characters/all${query}` }), query).toBeNull()
+        }
+        // The Characters index (the selected sheet or the browser) has no list state of its own.
+        expect(adapt({ charactersReturn: `/app/${CAMPAIGN}/characters?type=npc` })).toBeNull()
+        expect(adapt({ charactersReturn: `/app/${CAMPAIGN}/characters` })?.task?.list).toEqual({ route: "characters.index", search: "" })
     })
 
     it("ignores a search value that is not a query, and prefers the Review queue over the World browser", () => {
-        expect(adapt({ worldSearch: "category=npcs" })).toBeNull()
+        expect(adapt({ worldSearch: "category=character" })).toBeNull()
         expect(adapt({ worldSearch: "?a b" })).toBeNull()
-        expect(adapt({ worldSearch: "?a=1", reviewSearch: "?status=open" })?.task?.root).toBe("review")
+        expect(adapt({ worldSearch: "?category=item", reviewSearch: "?status=approved" })?.task?.root).toBe("review")
+        // A rejected key does not stop a later valid one.
+        expect(adapt({ reviewSearch: "?status=whatever", worldSearch: "?category=item" })?.task?.root).toBe("world")
     })
 
     it("keeps returnTo as the page's Back target only", () => {
@@ -243,7 +265,7 @@ describe("legacy return adapters (step 2)", () => {
         expect(resolved?.task.root).toBe("characters")
         expect(resolved?.task.list?.search).toBe("?q=a")
         // A World list cannot be the origin of a Parties page: the root is not allowed there, so defaults apply.
-        const unfit = resolveTask(`/app/${CAMPAIGN}/parties/p1`, { worldSearch: "?a=1" })
+        const unfit = resolveTask(`/app/${CAMPAIGN}/parties/p1`, { worldSearch: "?category=item" })
         expect(unfit?.source).toBe("default")
         expect(unfit?.task.root).toBe("parties")
         // returnTo gives a Back target without changing the task.
@@ -254,7 +276,7 @@ describe("legacy return adapters (step 2)", () => {
 
     it("lets a valid state.task win over legacy keys", () => {
         const own = task({ root: "characters" })
-        const resolved = resolveTask(`/app/${CAMPAIGN}/parties/p1`, { ...asState(own), worldSearch: "?a=1" })
+        const resolved = resolveTask(`/app/${CAMPAIGN}/parties/p1`, { ...asState(own), worldSearch: "?category=item" })
         expect(resolved?.source).toBe("state")
     })
 })
@@ -264,4 +286,52 @@ describe("isSafeSearch", () => {
     it.each(["", "a=1", "?a b", "?a#b", "?a\\b", `?${"x".repeat(1100)}`, 3, null])("rejects %s", (value) =>
         expect(isSafeSearch(value)).toBe(false),
     )
+})
+
+describe("task root and destination consistency", () => {
+    const sheet = matchRouteMeta(`/app/${CAMPAIGN}/characters/${UUID}`)!
+    const charactersTask = (over: Partial<TaskOriginV1> = {}): TaskOriginV1 =>
+        task({ root: "characters", ...over })
+
+    it("rejects a Characters task whose list is the Items list", () => {
+        expect(validateTask(charactersTask({ list: { route: "items.list", search: "" } as never }), sheet)).toBeNull()
+        expect(parseTask(asState(charactersTask({ list: { route: "items.list", search: "?" } })))).not.toBeNull()
+    })
+
+    it("rejects a Parties task with an Items detail in the trail", () => {
+        const itemDetail = { route: "items.detail", params: { campaignId: CAMPAIGN, itemId: "i1" } }
+        expect(validateTask(task({ trail: [itemDetail] }), partyEdit)).toBeNull()
+    })
+
+    it("falls back to the route default for tampered history, never to the crafted descriptor", () => {
+        const path = `/app/${CAMPAIGN}/characters/${UUID}`
+        const expected = resolveTask(path, undefined)
+        expect(expected?.source).toBe("default")
+        for (const list of [
+            { route: "items.list", search: "" },
+            { route: "characters.browse", search: "?character_id=ch1" },
+            { route: "characters.browse", search: "?returnTo=%2Fapp%2Fother" },
+            { route: "characters.browse", search: "?type=dragon" },
+            { route: "parties.detail", search: "" },
+        ]) {
+            expect(resolveTask(path, asState(charactersTask({ list }))), JSON.stringify(list)).toEqual(expected)
+        }
+    })
+
+    it("keeps a supported list descriptor from history", () => {
+        const path = `/app/${CAMPAIGN}/characters/${UUID}`
+        const list = { route: "characters.browse", search: "?type=npc&q=sella&cursor=c2" }
+        expect(resolveTask(path, asState(charactersTask({ list })))).toEqual({ source: "state", task: charactersTask({ list }) })
+    })
+
+    it("keeps the legitimate cross-area paths the metadata supports", () => {
+        const characterRef = { route: "characters.detail", params: { campaignId: CAMPAIGN, characterId: UUID } }
+        // A Parties task that opened a character, then went on (Parties is an allowed root of Characters pages).
+        expect(validateTask(task({ trail: [partiesRef, characterRef] }), matchRouteMeta(`/app/${CAMPAIGN}/characters/${UUID}/inventory`)!)).not.toBeNull()
+        // A Sessions task listing Sessions while viewing a party.
+        expect(validateTask(task({ root: "sessions", list: { route: "sessions.list", search: "" } }), partyEdit)).not.toBeNull()
+        // A World task at a record page, with the World browser as its list.
+        const record = matchRouteMeta(`/app/${CAMPAIGN}/world/npcs/e1`)!
+        expect(validateTask(task({ root: "world", list: { route: "campaign.world", search: "?category=character" } }), record)).not.toBeNull()
+    })
 })

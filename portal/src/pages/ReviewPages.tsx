@@ -17,6 +17,7 @@ import { pickWorldReturnState } from "../hooks/useWorldBackPath"
 import { humanizeCode } from "../utils/humanize"
 import { recordPath, reviewTarget } from "../utils/reviewTarget"
 import "../components/authoring/authoring.css"
+import { REVIEW_STATUS_ORDER } from "../utils/reviewStatus"
 
 const humanize = (code: string): string => code.replace(/_/g, " ")
 const when = (value: string): string => new Date(value).toLocaleString()
@@ -33,7 +34,7 @@ const historyPath = (campaignId: string, category: string | null, entityId: stri
 // approve their own work (it is audited); the queue says when the latest change was theirs.
 // The filters live in the address, so Back from a record returns to the same list.
 const DEFAULT_STATUS = "in_review"
-const STATUS_ORDER = ["in_review", "approved", "pending", "draft", "rejected", "archived"]
+const STATUS_ORDER = REVIEW_STATUS_ORDER
 // The statuses whose counts add up to "needs attention".
 const PENDING_PARTS = ["draft", "in_review", "approved", "rejected"]
 

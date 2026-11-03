@@ -12,6 +12,7 @@ This document records what P02-1 implemented, separately from what later P02 che
 | `routeMeta.ts` | `ROUTE_METAS` (one entry per production route pattern), `matchRouteMeta`, `executionScopeOf`, `viewedRecordOf`, `defaultAncestors`, `NavRoot` | The scope is read from route params, the viewed record from a different param; neither reads a selection. |
 | `taskOrigin.ts` | `TaskOriginV1` (root, scope, bounded trail of route ids and id params, optional whitelisted list state, presentation-only `transition` hint), `parseTask` (shape and version), `validateTask` (fit to a route), `startTask`, `continueTask`, `defaultTask` | A task is navigation state. It never carries a label, free text, URL, capability, authorization outcome or receipt. |
 | `legacyReturn.ts`, `resolveTask.ts` | Origin resolution steps 1 to 3 (`resolveTask`); the read-only adapters for `charactersReturn`, `reviewSearch`, `itemsSearch`, `definitionsSearch`, `worldSearch`, `returnTo` | Adapters read and validate; they never write state. |
+| `listState.ts` | Per-list-route contract for persisted list state: declared keys, repeat limits, value rules (section 1.2) | |
 | `queryKeys.ts` | `queryKeysChanged(...keys)` (a `disposingQuery` predicate), `PERSPECTIVE_QUERY_KEYS` (moved from `CampaignLayout.tsx`, same value) | |
 | `hooks/navigationHolds.ts` | `isGuardedTransition(args, options?)`, `CommittedContext`, `setCommittedContext` | One predicate for both blockers. |
 | `hooks/useUnsavedChangesGuard.ts` | `useUnsavedChangesGuard(isDirty, options?: { disposingQuery })` | The option is optional; no option means today's behavior. |
@@ -32,7 +33,25 @@ Client history and context never grant authority. A stamp or task only asks for 
 10. **`resolveTask` returns `null`** for a route that is not a task page (unscoped, public, a redirect, not-found). The plan said "never null"; this is the one deviation, and it is the only coherent answer where there is no execution scope.
 11. **Extra legacy keys.** The plan named four. `itemsSearch` and `definitionsSearch` also exist in production (`useItemsBackPath`) and are adapted the same way. Precedence: `charactersReturn`, `reviewSearch`, `itemsSearch`, `definitionsSearch`, `worldSearch`, `returnTo`.
 
-### 1.2 Shared guarded-transition behavior
+### 1.2 Validation contracts (correction)
+
+**Root and destination consistency.** `validateTask` checks every trail entry and the list descriptor against two things: the route's actual scope and parameter contract (a known route, the same scope, exactly that pattern's id parameters, the task's own scope id), and the destination's own `allowedRoots`, which must contain the task's root. A task is not forced to equal containment: a Parties task may pass through a character page because the character routes list `parties` among their roots, but it may not carry an Items detail, whose roots do not include it. Reproduced at baseline `a72b9c5` (both were accepted): a Characters task with the Items list as its list, and a Parties task with an Items detail in its trail.
+
+**List state.** A persisted list descriptor is `{ route, search }`. `route` must be a list route that has a contract in `listState.ts` and allows the task's root; `search` is empty or a `?` query satisfying that contract. The contracts follow the real producers (`useCharactersBrowseState`, `useWorldBrowseState`, the Review queue and item-definition filters):
+
+| List route | Keys (value rule) |
+|---|---|
+| `characters.browse` | `type` (`npc` or `player_character`), `q` (text, at most 200 characters, no control characters), `hidden` (`1`), `cursor` (opaque token, at most 512 characters, at most 20 repeats) |
+| `campaign.world` | `category` (a World category: `location`, `character`, `organization`, `religion`, `item`, `event`), `q`, `hidden`, `cursor` |
+| `review.queue` | `status` (the Review statuses, now shared from `utils/reviewStatus.ts`), `type` (a short name) |
+| `itemDefinitions.list` | `category` (a short name), `homebrew` (`1`) |
+| `characters.index`, `items.list`, `parties.list`, `quests.list`, `sessions.list`, `knowledge.list`, `worlds.timelines` | none (empty list state only) |
+
+A key repeats only where the contract says so. Perspective and scope keys (`character_id`, `party_id`, campaign, world and timeline ids), `returnTo` and any key a page does not produce are in no contract; the Quests and Knowledge lists carry their perspective in the query, so their list state is empty. `q` is the only free text: it is permitted because the plan whitelists browse queries, it is bounded, and it stays in `history.state` (it already travels in router state as `worldSearch`).
+
+**Invalid descriptors are rejected, never normalized**, by every reader. In history, an invalid `list`, or a trail entry that fails either check, makes `validateTask` return null, so the entry falls back to a legacy key and then to the route default. In the legacy adapters, a `worldSearch`, `reviewSearch`, `itemsSearch` or `definitionsSearch` that fails its list contract is ignored and the next key is tried; a `charactersReturn` whose browse query fails is ignored (the first P02-1 commit trimmed such a query to empty, which is removed). P02-0b's `readCharactersReturn` is unchanged and still decides which address is a valid Characters return; the adapter applies the list contract on top. The accepted bounded deviations keep their fallback contracts: `resolveTask` returns null where there is no execution scope or task root, and a trail over 4 entries is rejected as tampered.
+
+### 1.3 Shared guarded-transition behavior
 
 `isGuardedTransition(transition, options?)` is true for, in order of evaluation:
 
@@ -45,6 +64,8 @@ A query-only change is therefore unguarded unless the editor or dialog would unm
 ## 2. Route inventory
 
 The inventory is `ROUTE_METAS` in [routeMeta.ts](../portal/src/navigation/routeMeta.ts): **91 patterns**. `routeMeta.test.ts` takes the production patterns from `App.tsx` itself (it calls the hook-free `App` component, reads the `<Routes>` element and passes its children to react-router's `createRoutesFromChildren`), and fails when a production pattern has no entry or an entry matches no production pattern. There is no second, hand-maintained route table in the test. Matching in `matchRouteMeta` is react-router's own ranking over the same patterns, so route matching and permissions are untouched: nothing in `App.tsx` or any route element changed.
+
+Coverage limits (correction). The test now also fails on a production pattern listed twice, checked on the raw list before the set comparison discards multiplicity (with a self-check of the detector). That is exact-string duplication only: two different patterns that can match the same URL are not analysed. Which entry wins for such URLs is react-router's ranking; the ranking tests pin a handful of selected cases (a static `member-preview` segment beside a claim id, `world/location/new` beside `world/:category/:entityId`, the splat fall-throughs) and do not prove every URL resolves to the intended entry.
 
 | Scope / default root | Patterns |
 |---|---|
@@ -93,18 +114,42 @@ The inventory is `ROUTE_METAS` in [routeMeta.ts](../portal/src/navigation/routeM
 
 No caller other than #1 was found whose query-only change unmounts its own editor. That is a finding about the 18 call sites reviewed, not a general guarantee: see 3.4.
 
-### 3.3 Picker blockers
+#### Row 1: confirmed-but-unread ownership (correction)
 
-`PickerRecordTime` holds a navigation while a recording is open (`useNavigationHold`) and installs a blocker only when no page guard is mounted (`useHostGuard`). It evaluates `isGuardedTransition` with no options. The pages hosting `WorldTimePicker` without a page guard (Campaign Home's clock card, the NPC runtime panel, the relationship editor, the organization member editor) were **not** individually audited for query-driven remounts, so the picker's own blocker guards pathname and context changes only. Item workspace and World times are covered by their page guard (rows 17 and 18).
+The first P02-1 commit released the guard in `onSuccess`. After the server confirmed a create, the page still owned the created id and the "Open the campaign" recovery action, but a step change could drop them silently, and the confirmation dialog was not rendered in that state, so a held navigation would have had no question to answer. Now:
+
+- The guard is active while `createdId !== null && !listed`, so it covers the confirming read and every recovery state.
+- The question ("Leave before the campaign is confirmed?", Stay or Leave) is rendered in the created and recovery states.
+- Stay keeps the created id, the recovery action and the entered values (all component state).
+- Leave abandons only this page. Nothing on the page can send the create again once it is created, and a test asserts exactly one POST through every path.
+- A successful read that lists the campaign releases the hold just before the deliberate navigation to the new campaign, so that navigation is never asked.
+- Refresh outcomes inspected: a rejected read sets `refreshFailed`; a read that resolves `false` (superseded, aborted or unauthenticated) or applies a bootstrap that does not list the campaign leaves `success && !listed`. Both show the recovery action under the same hold, and the recovery action calls `refresh()` again on the retained id.
+
+### 3.3 Picker hosts and their enclosing guards (traced from source)
+
+`PickerRecordTime` holds a navigation while a recording is open (`useNavigationHold`) and installs a blocker only when no page guard is mounted (`useHostGuard`). It evaluates `isGuardedTransition` with no options. Each `WorldTimePicker` host, traced to its page:
+
+| Picker host | Hosted by | Enclosing guard | Query-only unmount? |
+|---|---|---|---|
+| `NpcRuntimePanel`; `RelationshipEditor` (through `RelationshipsPanel`); `OrganizationMemberEditor` (through `OrganizationMembers`) | `WorldRecordWorkspace`, inside its `SectionPanel`s | `UnsavedInputGuard` (row 18) | No. `SectionPanel` is always mounted and only `hidden` changes; `section` is the only query key the workspace reads |
+| `ItemWorkspace` time picker | `ItemWorkspace` | `UnsavedInputGuard` (row 18) | No, same staged panels |
+| `WorldTimesPage` | the page | its own guard (row 17) | No query read |
+| `RecordEventPage` | the page | row 11 | No query read |
+| `CampaignClockCard` on Campaign Home | `CampaignHomePage` | none; the picker's own blocker | No query read by the page or the card; no query-only unmount condition identified |
+| `CampaignClockCard` (compact) and `TravelSection` on Run session | `SessionRunPage` | none; the picker's own blocker | `section` only. `RunSectionPanel` is always mounted and the card sits outside the panels, so a section change unmounts neither |
+| Party members picker | `PartyMembersPage` under `PartyDetailPage` | none; the picker's own blocker | No query read |
+
+The picker's own blocker therefore guards pathname and context changes only, and no query-only unmount was found for any host. This is a trace of the current source, not a proof for a future host.
 
 ### 3.4 What is and is not claimed
 
 - Claimed: every one of the 18 call sites was classified from source; one disposing query (row 1) was found, declared and tested; staged `?section=` is harmless in the three guarded workspaces, the calendar steps and the knowledge claim page because their sections stay mounted.
 - **Not claimed:** a complete query-safety guarantee. Open items, none of which is repaired here:
-  - **F-1.** Most pages keep a pending or unknown-outcome write in a local `useAuthoringMutation` and exclude it from `isDirty` (only `WorldTimesPage` includes it). A pathname departure during an uncertain write therefore asks nothing on those pages; this is existing behavior, unchanged. For row 1 the effect is that a query-only step change during an in-flight create is also not asked unless something is typed.
+  - **F-1.** Most pages keep a pending or unknown-outcome write in a local `useAuthoringMutation` and exclude it from `isDirty` (only `WorldTimesPage` includes it). A pathname departure during an uncertain write therefore asks nothing on those pages; this is existing behavior, unchanged. Row 1 no longer has this gap once the create is confirmed (see its correction above); before confirmation the typed values still make the form dirty.
   - **F-2.** Quest and Knowledge claim read `character_id` and `party_id` and re-read under that perspective with the editor mounted. Whether a changed perspective may keep a draft is a scope decision, so it is a context transition in the plan (Q3), but declaring those keys today would also hold the pages' own stale-party cleanup (`useQuestPartyPerspective` rewrites the address when a party is no longer authorized, which is a permission-loss case and must never wait for a question). The declaration needs that cleanup distinguished first; the natural place is P02-3 (selection ownership). Concrete follow-up: add a `disposingQuery` prop to `UnsavedInputGuard`, pass `queryKeysChanged(...PERSPECTIVE_QUERY_KEYS)` from `QuestWorkspace` and the claim page, and route the stale-party cleanup through `runPermissionLossCleanup`.
-  - **F-3.** Picker hosts without a page guard are unaudited for query keys (3.3).
-  - **F-4.** `CharacterRecordSections` mounts only the shown section (`?section=`), but it is not a guard caller and no editor state lives in it today. A guard added there must declare `section` disposing.
+  - **F-3 (closed by tracing).** The picker hosts were traced in 3.3; none has a query-only unmount condition today.
+  - **F-4.** `CharacterRecordSections` mounts only the shown section (`?section=`) and is not a guard caller. Its surfaces are read-only today: the relationships reader (one local disclosure toggle), the inventory panel and the parties panel contain no form, mutation or picker. If an editor is introduced there, `section` becomes disposing and the editor's host must declare it.
+  - **F-2 stays explicit:** the staged workspaces (Quest, and the Knowledge claim page) are not protected against a `character_id`/`party_id` change with a dirty draft; that remains deferred to P02-3.
   - The guard does not distinguish a user-initiated query change from a page's own REPLACE of its address. A page that rewrites a declared key itself while dirty would be asked. Row 1 does not do this: its steps change only by user links.
 
 ## 4. Verification summary

@@ -1,7 +1,8 @@
 import { readCharactersReturn } from "../hooks/useCharactersBackPath"
 import { readQueryState } from "../hooks/returnState"
 import { isIdShaped } from "./contexts"
-import { isSafeSearch, defaultTask, validateTask } from "./taskOrigin"
+import { isValidListSearch } from "./listState"
+import { defaultTask, isSafeSearch, validateTask } from "./taskOrigin"
 import type { TaskOriginV1 } from "./taskOrigin"
 import { executionScopeOf, matchRouteMeta } from "./routeMeta"
 import type { RouteMatch } from "./routeMeta"
@@ -52,7 +53,8 @@ function fromCharactersReturn(campaignId: string, state: unknown): TaskOriginV1 
     const target = matchRouteMeta(pathname)
     if (target === null) return null
     if (target.meta.kind === "list") {
-        return listTask(campaignId, "characters", target.meta.id, isSafeSearch(search) ? search : "")
+        // Rejected, not normalized: a browse query this route does not produce is not carried at all.
+        return isValidListSearch(target.meta.id, search) ? listTask(campaignId, "characters", target.meta.id, search) : null
     }
     return {
         v: 1,
@@ -91,7 +93,9 @@ export function adaptLegacyReturn(match: RouteMatch, state: unknown): LegacyRetu
     ]
     for (const [key, root, route] of queryKeys) {
         const search = readQueryState(state, key)
-        if (search !== undefined && isSafeSearch(search)) return { task: listTask(campaignId, root, route, search) }
+        if (search !== undefined && isSafeSearch(search) && isValidListSearch(route, search)) {
+            return { task: listTask(campaignId, root, route, search) }
+        }
     }
 
     const backTarget = fromReturnTo(campaignId, state)

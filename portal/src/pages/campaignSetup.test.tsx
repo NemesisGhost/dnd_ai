@@ -58,7 +58,11 @@ afterEach(() => {
 describe("CampaignSetupPage", () => {
     function setup(
         entry: string,
-        options: { refreshes?: boolean; bootstrap?: ReturnType<typeof bootstrapWith> } = {},
+        options: {
+            refreshes?: boolean
+            bootstrap?: ReturnType<typeof bootstrapWith>
+            onRefresh?: () => Promise<ReturnType<typeof bootstrapWith> | null>
+        } = {},
     ) {
         const server = installMockServer()
         server.on("GET", /^\/worlds\?status=active/, {
@@ -81,9 +85,10 @@ describe("CampaignSetupPage", () => {
             routes,
             bootstrap: options.bootstrap ?? bootstrapWith(),
             onRefresh:
-                options.refreshes === false
+                options.onRefresh ??
+                (options.refreshes === false
                     ? () => Promise.reject(new Error("offline"))
-                    : async () => bootstrapWith({ campaigns: [created] }),
+                    : async () => bootstrapWith({ campaigns: [created] })),
         })
         return { server, ...rendered }
     }
@@ -248,6 +253,91 @@ describe("CampaignSetupPage", () => {
             await screen.findByText("Campaign home page")
             expect(router.state.location.pathname).toBe("/app/c-new/home")
             expect(server.callsTo("POST", "/campaigns")).toHaveLength(1)
+        })
+
+        // A confirmed create is owned by this page until the bootstrap lists the campaign: the guard stays
+        // active through the confirming read and through any recovery action, and Leave never resends the create.
+        describe("after the server has confirmed the create", () => {
+            const listing = () =>
+                bootstrapWith({
+                    campaigns: [{ ...sessionBootstrapFixture.campaigns[0]!, campaign_id: "c-new", campaign_name: "Fresh" }],
+                })
+            const QUESTION = "Leave before the campaign is confirmed?"
+
+            async function confirmCreate(onRefresh: () => Promise<ReturnType<typeof bootstrapWith> | null>) {
+                const rendered = setup(WIZARD, { onRefresh })
+                rendered.server.on("POST", "/campaigns", {
+                    status: 201,
+                    body: { campaign_id: "c-new", campaign_membership_id: "m" },
+                })
+                fireEvent.change(await screen.findByRole("textbox", { name: /Campaign name/ }), {
+                    target: { value: "Fresh" },
+                })
+                fireEvent.click(screen.getByRole("button", { name: "Create campaign" }))
+                await waitFor(() => expect(rendered.server.callsTo("POST", "/campaigns")).toHaveLength(1))
+                return rendered
+            }
+            const stepBack = (router: { navigate: (to: string) => Promise<void> }) =>
+                act(async () => {
+                    void router.navigate("/campaigns/new?worldId=w1")
+                })
+
+            it("asks while the confirming read is pending; Stay keeps the owner and the settled read still navigates", async () => {
+                let release: (value: ReturnType<typeof bootstrapWith> | null) => void = () => {}
+                const { server, router } = await confirmCreate(() => new Promise((resolve) => (release = resolve)))
+                expect(await screen.findByText("Campaign created. Opening it…")).toBeInTheDocument()
+
+                await stepBack(router)
+                expect(await screen.findByRole("heading", { name: QUESTION })).toBeInTheDocument()
+                expect(router.state.location.search).toBe("?worldId=w1&timelineId=t1")
+
+                fireEvent.click(screen.getByRole("button", { name: "Stay" }))
+                await waitFor(() => expect(screen.queryByRole("heading", { name: QUESTION })).toBeNull())
+                expect(screen.getByText("Campaign created. Opening it…")).toBeInTheDocument()
+
+                await act(async () => release(listing()))
+                await screen.findByText("Campaign home page")
+                expect(router.state.location.pathname).toBe("/app/c-new/home")
+                expect(screen.queryByRole("heading", { name: QUESTION })).toBeNull()
+                expect(server.callsTo("POST", "/campaigns")).toHaveLength(1)
+            })
+
+            it.each([
+                ["a rejected", () => Promise.reject(new Error("offline"))],
+                ["an unapplied (superseded)", () => Promise.resolve(null)],
+                ["a stale", () => Promise.resolve(bootstrapWith())],
+            ])("%s confirming read leaves a recovery action that still asks; Stay keeps it, Leave abandons the page without resending", async (_label, refreshOutcome) => {
+                const { server, router } = await confirmCreate(refreshOutcome)
+                const recover = await screen.findByRole("button", { name: "Open the campaign" })
+
+                await stepBack(router)
+                expect(await screen.findByRole("heading", { name: QUESTION })).toBeInTheDocument()
+                fireEvent.click(screen.getByRole("button", { name: "Stay" }))
+                await waitFor(() => expect(screen.queryByRole("heading", { name: QUESTION })).toBeNull())
+                expect(router.state.location.search).toBe("?worldId=w1&timelineId=t1")
+                expect(screen.getByRole("button", { name: "Open the campaign" })).toBe(recover)
+
+                await stepBack(router)
+                fireEvent.click(await screen.findByRole("button", { name: "Leave" }))
+                expect(await screen.findByRole("radio", { name: "Main (primary)" })).toBeInTheDocument()
+                expect(router.state.location.search).toBe("?worldId=w1")
+                expect(server.callsTo("POST", "/campaigns")).toHaveLength(1)
+            })
+
+            it("recovery reuses the created id, sends no second create, and a successful read releases the hold", async () => {
+                let reads = 0
+                const { server, router } = await confirmCreate(() => {
+                    reads += 1
+                    return reads === 1 ? Promise.reject(new Error("offline")) : Promise.resolve(listing())
+                })
+                fireEvent.click(await screen.findByRole("button", { name: "Open the campaign" }))
+                await screen.findByText("Campaign home page")
+                expect(reads).toBe(2)
+                expect(router.state.location.pathname).toBe("/app/c-new/home")
+                // Settled: the hold was released, so nothing asked on the way out.
+                expect(screen.queryByRole("heading", { name: QUESTION })).toBeNull()
+                expect(server.callsTo("POST", "/campaigns")).toHaveLength(1)
+            })
         })
 
         it("leaves a query key the page does not declare unguarded", async () => {
