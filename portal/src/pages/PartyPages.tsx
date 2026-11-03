@@ -28,6 +28,9 @@ import { useAnnounceWhenRead, useConfirmedRefresh } from "../hooks/useConfirmedR
 import { useEligibilityRefresh } from "../hooks/usePartyScopeRecovery"
 import { useKept } from "../hooks/useKeptResource"
 import { usePageArrival } from "../hooks/usePageArrival"
+import { TaskBreadcrumb } from "../components/navigation/TaskBreadcrumb"
+import { useBreadcrumbLabel } from "../navigation/BreadcrumbLabelContext"
+import { useTaskLinkState } from "../navigation/useTaskLinkState"
 import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard"
 import type { PartyFieldsBody, PartyItem, PartyList, PartyReceipt } from "../types/parties"
 import {
@@ -54,6 +57,8 @@ export function PartiesPage() {
     const listPath = partiesPath(campaignId, showArchived)
     const list = useAuthoringResource<PartyList>(listPath)
     const headingRef = usePageArrival(list.state.kind !== "loading")
+    // New party continues the Parties task.
+    const taskState = useTaskLinkState()
     // The last list that loaded stays through a failed re-read (after an archive or restore, say),
     // so the rows and the notice that explains the failure are not replaced by an error screen.
     const data = useKept(list.state, listPath)
@@ -81,7 +86,7 @@ export function PartiesPage() {
                     {stale ? <StaleReadNotice what="party list" onRetry={() => void list.refetch()} /> : null}
                     {data.can_create ? (
                         <div className="authoring-page__actions-row">
-                            <Link className="authoring-button" to={`${base(campaignId)}/parties/new`}>
+                            <Link className="authoring-button" to={`${base(campaignId)}/parties/new`} state={taskState}>
                                 New party
                             </Link>{" "}
                             <label className="authoring-checkbox">
@@ -134,6 +139,8 @@ function PartyRow({
     const { reload } = useSession()
     const announce = useAnnounce()
     const refreshEligibility = useEligibilityRefresh()
+    // Opening a party from the list continues the Parties task.
+    const taskState = useTaskLinkState()
     const [dialog, setDialog] = useState<"archive" | "restore" | null>(null)
     const [reason, setReason] = useState("")
     const [reasonError, setReasonError] = useState<string | null>(null)
@@ -194,6 +201,7 @@ function PartyRow({
                     <Link
                         className="authoring-button"
                         to={`${base(campaignId)}/parties/${encodeURIComponent(party.party_id)}`}
+                        state={taskState}
                     >
                         View {party.name}
                     </Link>
@@ -203,6 +211,7 @@ function PartyRow({
                     <Link
                         className="authoring-button"
                         to={`${base(campaignId)}/parties/${encodeURIComponent(party.party_id)}`}
+                        state={taskState}
                     >
                         Members of {party.name}
                     </Link>
@@ -210,6 +219,7 @@ function PartyRow({
                         <Link
                             className="authoring-button"
                             to={`${base(campaignId)}/parties/${encodeURIComponent(party.party_id)}/edit`}
+                        state={taskState}
                         >
                             Edit {party.name}
                         </Link>
@@ -418,9 +428,7 @@ export function CreatePartyPage() {
     const headingRef = usePageArrival(list.state.kind === "ready")
     return (
         <section className="authoring-page" aria-labelledby="new-party-heading">
-            <p className="authoring-page__breadcrumb">
-                <Link to={`${base(campaignId)}/parties`}>Parties</Link>
-            </p>
+            <TaskBreadcrumb />
             <h1 id="new-party-heading" ref={headingRef} tabIndex={-1}>
                 New party
             </h1>
@@ -448,11 +456,16 @@ export function EditPartyPage() {
     const party = useAuthoringResource<PartyItem>(partyPath(campaignId, partyId))
     const headingRef = usePageArrival(party.state.kind !== "loading")
     const data = party.state.kind === "ready" ? party.state.data : null
+    // This page read the party itself, so a direct entry to it can still name the party in its trail.
+    useBreadcrumbLabel({
+        route: "parties.detail",
+        params: { campaignId, partyId },
+        name: data?.name,
+        denied: party.state.kind === "denied" || party.state.kind === "unavailable",
+    })
     return (
         <section className="authoring-page" aria-labelledby="edit-party-heading">
-            <p className="authoring-page__breadcrumb">
-                <Link to={`${base(campaignId)}/parties`}>Parties</Link>
-            </p>
+            <TaskBreadcrumb />
             <h1 id="edit-party-heading" ref={headingRef} tabIndex={-1}>
                 Edit party
             </h1>

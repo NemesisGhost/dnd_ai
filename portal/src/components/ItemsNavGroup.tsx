@@ -30,6 +30,7 @@ export function ItemsNavGroup({ campaignPath, collapsed, canOpenDefinitions, onN
     <ExpandableNavGroup
       icon={Package}
       label="Items"
+      root="items"
       sectionActive={inInventory || inDefinitions}
       collapsed={collapsed}
       onNavigate={onNavigate}

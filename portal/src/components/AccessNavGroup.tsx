@@ -28,6 +28,7 @@ export function AccessNavGroup({
     <ExpandableNavGroup
       icon={ShieldCheck}
       label="Access"
+      root="access"
       sectionActive={active}
       collapsed={collapsed}
       onNavigate={onNavigate}
@@ -35,7 +36,7 @@ export function AccessNavGroup({
         { to: accessBasePath, label: "Access Management", end: true },
         { to: `${accessBasePath}/invitations`, label: "Invitations" },
         { to: `${accessBasePath}/audit`, label: "Audit History" },
-        { to: settingsPath, label: "Campaign Settings" },
+        { to: settingsPath, label: "Campaign Settings", root: "campaign" },
       ]}
     />
   )

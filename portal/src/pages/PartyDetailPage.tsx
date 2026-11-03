@@ -1,8 +1,10 @@
-import { Link, useParams } from "react-router"
+import { useParams } from "react-router"
 import { partyRosterPath } from "../api/parties"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { usePageArrival } from "../hooks/usePageArrival"
+import { TaskBreadcrumb } from "../components/navigation/TaskBreadcrumb"
+import { useBreadcrumbLabel } from "../navigation/BreadcrumbLabelContext"
 import type { PartyRoster } from "../types/parties"
 import { MembershipClockUnsetNotice } from "../components/MembershipClockUnsetNotice"
 import { PartyMembersPage } from "./PartyMembersPage"
@@ -22,12 +24,17 @@ function PartyRosterPage() {
     const resource = useAuthoringResource<PartyRoster>(partyRosterPath(campaignId, partyId))
     const headingRef = usePageArrival(resource.state.kind === "ready")
     const data = resource.state.kind === "ready" ? resource.state.data : null
+    // The party's name, from this page's own authorized read, for the breadcrumbs of its sub-pages.
+    useBreadcrumbLabel({
+        route: "parties.detail",
+        params: { campaignId, partyId },
+        name: data?.party.name,
+        denied: resource.state.kind === "denied" || resource.state.kind === "unavailable",
+    })
 
     return (
         <section className="authoring-page" aria-labelledby="roster-heading">
-            <p className="authoring-page__breadcrumb">
-                <Link to={`/app/${encodeURIComponent(campaignId)}/parties`}>Parties</Link>
-            </p>
+            <TaskBreadcrumb current={data?.party.name} />
             <h1 id="roster-heading" ref={headingRef} tabIndex={-1}>
                 {data !== null ? data.party.name : "Party"}
             </h1>

@@ -21,6 +21,8 @@ import { useWorkspaceHierarchy } from "../context/WorkspaceHierarchyContext"
 import { useSidebarCollapsed } from "../hooks/useSidebarCollapsed"
 import type { NavigationDrawerControl } from "../hooks/useNavigationDrawer"
 import { resolveNavigationCampaign } from "../utils/resolveNavigationCampaign"
+import { navTaskState } from "../navigation/navStart"
+import type { NavRoot } from "../navigation/routeMeta"
 import { canCreateWorlds } from "../utils/worldAccess"
 import { AccessNavGroup } from "./AccessNavGroup"
 import { CampaignHomeNavGroup } from "./CampaignHomeNavGroup"
@@ -33,6 +35,8 @@ import { WorldsNavGroup } from "./WorldsNavGroup"
 interface NavigationItem {
   path: string
   label: string
+  // The task root this Navbar item starts (docs/UI_DESIGN.md §4.8).
+  root: NavRoot
   icon: LucideIcon
   // Shown only on a campaign that grants this capability.
   capability?: string
@@ -44,13 +48,14 @@ interface NavigationItem {
 // Campaign Home is rendered by CampaignHomeNavGroup; the campaign world page
 // lives under the Worlds group (WorldsNavGroup).
 const campaignNavigationItems: NavigationItem[] = [
-  { path: "characters", label: "Characters", icon: Users },
-  { path: "parties", label: "Parties", icon: UsersRound },
-  { path: "quests", label: "Quests", icon: ScrollText },
-  { path: "sessions", label: "Sessions", icon: CalendarDays },
-  { path: "knowledge", label: "Knowledge", icon: BookOpen },
+  { path: "characters", label: "Characters", root: "characters", icon: Users },
+  { path: "parties", label: "Parties", root: "parties", icon: UsersRound },
+  { path: "quests", label: "Quests", root: "quests", icon: ScrollText },
+  { path: "sessions", label: "Sessions", root: "sessions", icon: CalendarDays },
+  { path: "knowledge", label: "Knowledge", root: "knowledge", icon: BookOpen },
   {
     path: "review",
+    root: "review",
     label: "Review queue",
     icon: ClipboardCheck,
     capability: "canon.edit",
@@ -58,6 +63,7 @@ const campaignNavigationItems: NavigationItem[] = [
   },
   {
     path: "items",
+    root: "items",
     label: "Items",
     icon: Package,
     capability: "canon.edit",
@@ -338,6 +344,7 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
                       <NavLink
                         className={linkClassName}
                         to={`${campaignPath}/${item.path}`}
+                        state={navTaskState(`${campaignPath}/${item.path}`, item.root)}
                         title={collapsed ? item.label : undefined}
                         onClick={close}
                       >
@@ -366,6 +373,7 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
                   <NavLink
                     className={linkClassName}
                     to={`${campaignPath}/ask`}
+                    state={navTaskState(`${campaignPath}/ask`, "campaign")}
                     title={collapsed ? "Ask" : undefined}
                     onClick={close}
                   >

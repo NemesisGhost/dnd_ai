@@ -10,6 +10,8 @@ import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { pickCharactersReturnState, readCharactersReturn } from "../hooks/useCharactersBackPath"
 import { pickWorldReturnState } from "../hooks/useWorldBackPath"
 import { Link, useLocation, useParams } from "react-router"
+import { TaskBreadcrumb } from "../components/navigation/TaskBreadcrumb"
+import { useTaskLinkState } from "../navigation/useTaskLinkState"
 import { ContentCreatePage } from "../components/authoring/ContentCreatePage"
 import type { ContentCreateConfig } from "../components/authoring/ContentCreatePage"
 import { ContentEditPage } from "../components/authoring/ContentEditPage"
@@ -276,6 +278,9 @@ const createConfig: ContentCreateConfig<NpcOptions, NpcFormValues, CreateNpcBody
     heading: "New NPC",
     lead: "A new NPC is saved as a draft. Only people who can edit canon see it until it is published. This sets who the character is; stats, inventory, and behavior are managed elsewhere.",
     breadcrumbLabel: "World",
+    // The shared task breadcrumb replaces the single back link on the create pages (NPC and player
+    // character); Cancel and the back targets below are unchanged.
+    taskBreadcrumb: true,
     worldPath: worldBase,
     // From World -> People the person returns to that same view, and the new NPC's workspace
     // starts with it, so Back to World lands on People again.
@@ -449,13 +454,13 @@ export function ChooseCharacterTypePage() {
     const base = `/app/${encodeURIComponent(campaignId)}/characters`
     const state = useLocation().state
     // Only a validated Characters address is honoured and forwarded; otherwise the browser.
-    const returnState = pickCharactersReturnState(campaignId, state)
-    const backPath = readCharactersReturn(campaignId, state) ?? `${base}/all`
+    // The legacy key is still forwarded (the create pages' Cancel reads it); the task rides beside it,
+    // but only when this page itself has an origin: after a direct entry the create pages keep their
+    // existing fallback.
+    const returnState = { ...pickCharactersReturnState(campaignId, state), ...useTaskLinkState({ requireOrigin: true }) }
     return (
         <section className="authoring-page" aria-labelledby="choose-character-heading">
-            <p className="authoring-page__breadcrumb">
-                <Link to={backPath}>Characters</Link>
-            </p>
+            <TaskBreadcrumb />
             <h1 id="choose-character-heading">New character</h1>
             <p className="authoring-page__lead">What kind of character is this?</p>
             <ul className="op-list">

@@ -16,6 +16,7 @@ import { readEntryPerspective, runPermissionLossCleanup, setCommittedPerspective
 // A perspective change must not leave the old character/party query pair in the address: pages prefer
 // it to the selection, and syncCharacterFromUrl would otherwise turn the accepted change back.
 import { PERSPECTIVE_QUERY_KEYS } from "../navigation/queryKeys"
+import { BreadcrumbLabelProvider } from "../navigation/BreadcrumbLabelProvider"
 import { useRecordLastVisitedCampaign } from "../hooks/useRecordLastVisitedCampaign"
 import PlaceholderPage from "../pages/PlaceholderPage"
 import type { SessionBootstrap } from "../types/bootstrap"
@@ -288,22 +289,24 @@ export function CampaignLayout({ bootstrap }: CampaignLayoutProps) {
   const showNotice = noticePath === location.pathname && selectedCharacterId === null
 
   return (
-    <WorkspaceFrame
-      campaign={activeCampaign}
-      selectedCharacterId={selectedCharacterId}
-      onSelectCharacter={requestPerspective}
-    >
-      {showNotice ? (
-        <p className="authoring-message authoring-message--warning" role="status">
-          {REVOKED_NOTICE}
-        </p>
-      ) : null}
-      {/* Keyed on campaign and perspective, never the location: every perspective-dependent page
-          remounts (and reads again) when the perspective changes, and nothing else does. Nothing
-          renders while a commit is pending or the address still names a perspective just lost. */}
-      <Fragment key={`${activeCampaign.campaign_id}:${selectedCharacterId ?? "none"}`}>
-        {commitPending || staleQuery ? null : <Outlet />}
-      </Fragment>
-    </WorkspaceFrame>
+    <BreadcrumbLabelProvider campaignId={activeCampaign.campaign_id} characterId={selectedCharacterId}>
+      <WorkspaceFrame
+        campaign={activeCampaign}
+        selectedCharacterId={selectedCharacterId}
+        onSelectCharacter={requestPerspective}
+      >
+        {showNotice ? (
+          <p className="authoring-message authoring-message--warning" role="status">
+            {REVOKED_NOTICE}
+          </p>
+        ) : null}
+        {/* Keyed on campaign and perspective, never the location: every perspective-dependent page
+            remounts (and reads again) when the perspective changes, and nothing else does. Nothing
+            renders while a commit is pending or the address still names a perspective just lost. */}
+        <Fragment key={`${activeCampaign.campaign_id}:${selectedCharacterId ?? "none"}`}>
+          {commitPending || staleQuery ? null : <Outlet />}
+        </Fragment>
+      </WorkspaceFrame>
+    </BreadcrumbLabelProvider>
   )
 }

@@ -27,6 +27,9 @@ import type { RefetchOutcome } from "../hooks/useAuthoringResource"
 import { useConfirmedRefresh } from "../hooks/useConfirmedRefresh"
 import { useEligibilityRefresh } from "../hooks/usePartyScopeRecovery"
 import { useKept } from "../hooks/useKeptResource"
+import { TaskBreadcrumb } from "../components/navigation/TaskBreadcrumb"
+import { useBreadcrumbLabel } from "../navigation/BreadcrumbLabelContext"
+import { useTaskLinkState } from "../navigation/useTaskLinkState"
 import { usePageArrival } from "../hooks/usePageArrival"
 import type {
     MembershipPeriodStatus,
@@ -85,12 +88,18 @@ export function PartyMembersPage() {
     const data = useKept(resource.state, membersPath)
     const stale = resource.state.kind === "error" && data !== null
     const unset = data?.clock_unset === true
+    // The party's name, from this page's own authorized read, for the breadcrumbs of its sub-pages. A
+    // refused or missing party drops it.
+    useBreadcrumbLabel({
+        route: "parties.detail",
+        params: { campaignId, partyId },
+        name: data?.party.name,
+        denied: resource.state.kind === "denied" || resource.state.kind === "unavailable",
+    })
 
     return (
         <section className="authoring-page" aria-labelledby="members-heading">
-            <p className="authoring-page__breadcrumb">
-                <Link to={`${base(campaignId)}/parties`}>Parties</Link>
-            </p>
+            <TaskBreadcrumb current={data?.party.name} />
             <h1 id="members-heading" ref={headingRef} tabIndex={-1}>
                 {data !== null ? data.party.name : "Party"}
             </h1>
@@ -171,6 +180,8 @@ function MemberTable({
     const { reload } = useSession()
     const announce = useAnnounce()
     const refreshEligibility = useEligibilityRefresh()
+    // A member's name opens their record inside the Parties task (PD-9; this page is the editors' only).
+    const taskState = useTaskLinkState()
     const text = GROUP_TEXT[group]
     const rows = data.members.filter((m) => m.period_status === GROUP_STATUS[group])
     // Ending is a command on a membership that has no recorded end, whatever its temporal status:
@@ -246,7 +257,14 @@ function MemberTable({
                     <tbody>
                         {rows.map((member) => (
                             <tr key={member.party_membership_id}>
-                                <th scope="row">{member.character_name}</th>
+                                <th scope="row">
+                                    <Link
+                                        to={`${base(campaignId)}/characters/${encodeURIComponent(member.character_id)}`}
+                                        state={taskState}
+                                    >
+                                        {member.character_name}
+                                    </Link>
+                                </th>
                                 <td>{member.joined_at}</td>
                                 {showLeft ? <td>{member.left_at}</td> : null}
                                 {canEnd ? (

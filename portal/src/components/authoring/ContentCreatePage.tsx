@@ -8,7 +8,10 @@ import { usePageArrival } from "../../hooks/usePageArrival"
 import { useWorldCapability, WORLD_CANON_EDIT } from "../../hooks/useWorldCapability"
 import { useUnsavedChangesGuard } from "../../hooks/useUnsavedChangesGuard"
 import type { MutationContext } from "../../api/worlds"
+import { resolveTask } from "../../navigation/resolveTask"
+import { useHasTaskOrigin } from "../../navigation/useTaskLinkState"
 import { ERROR_CODE_MESSAGE, fieldForErrorCode } from "../../utils/authoringValidation"
+import { TaskBreadcrumb } from "../navigation/TaskBreadcrumb"
 import { ConfirmDialog } from "./ConfirmDialog"
 import { AuthoringForm, ErrorSummary, FormActions, MutationStatusMessage } from "./feedback"
 import type { FieldError } from "./feedback"
@@ -40,6 +43,12 @@ export interface ContentCreateConfig<TOptions, TValues, TBody, TResult> {
     resultState?: (state: unknown) => object | undefined
     // Optional: the breadcrumb text, when it depends on where the person came from.
     breadcrumbLabelFor?: (campaignId: string, state: unknown) => string
+    // Optional: show the shared task breadcrumb (navigation/TaskBreadcrumb) instead of the single
+    // back link, and carry the task to the created record, when the arrival names an origin (its own
+    // task, or a Characters/World return key that validates). After a direct entry the single back
+    // link, with its existing fallback, is kept exactly as before. Cancel and the record's own state
+    // are unchanged either way. Only the character-create family uses it so far.
+    taskBreadcrumb?: boolean
     optionsPath: (campaignId: string) => string
     canCreate: (options: TOptions) => boolean
     // Records that are campaign-originated (player-character identity, ADR 0020 E3) need no
@@ -72,17 +81,22 @@ export function ContentCreatePage<TOptions, TValues, TBody, TResult>({
     const headingId = `create-${config.noun.replace(/\s+/g, "-")}-heading`
     const arrival = useLocation().state
     const listPath = config.listPath?.(campaignId, arrival) ?? config.worldPath(campaignId)
+    const hasOrigin = useHasTaskOrigin()
     const denied = (
         <p role="alert">You do not have permission to create {config.noun}s in this campaign.</p>
     )
 
     return (
         <section className="authoring-page" aria-labelledby={headingId}>
-            <p className="authoring-page__breadcrumb">
-                <Link to={listPath}>
-                    {config.breadcrumbLabelFor?.(campaignId, arrival) ?? config.breadcrumbLabel}
-                </Link>
-            </p>
+            {config.taskBreadcrumb === true && hasOrigin ? (
+                <TaskBreadcrumb />
+            ) : (
+                <p className="authoring-page__breadcrumb">
+                    <Link to={listPath}>
+                        {config.breadcrumbLabelFor?.(campaignId, arrival) ?? config.breadcrumbLabel}
+                    </Link>
+                </p>
+            )}
             <h1 id={headingId} ref={headingRef} tabIndex={-1}>
                 {config.heading}
             </h1>
@@ -121,7 +135,8 @@ function CreateForm<TOptions, TValues, TBody, TResult>({
     listPath: string
 }) {
     const navigate = useNavigate()
-    const arrivalState = useLocation().state
+    const { pathname, state: arrivalState } = useLocation()
+    const hasOrigin = useHasTaskOrigin()
     const { reload } = useSession()
     const [initial] = useState(() => config.initialValues(options))
     const [values, setValues] = useState<TValues>(initial)
@@ -135,9 +150,26 @@ function CreateForm<TOptions, TValues, TBody, TResult>({
         onSuccess: (created) => {
             guard.release()
             // Replace, so Back never returns to a form that was already submitted.
+            // The created record takes this page's place in the task: same root, trail and list state,
+            // without the "New ..." page itself (it is the page being replaced). No legacy key is added.
+            const resolved = config.taskBreadcrumb === true && hasOrigin ? resolveTask(pathname, arrivalState) : null
+            const task =
+                resolved === null
+                    ? undefined
+                    : {
+                          v: resolved.task.v,
+                          root: resolved.task.root,
+                          scope: resolved.task.scope,
+                          trail: resolved.task.trail,
+                          ...(resolved.task.list === undefined ? {} : { list: resolved.task.list }),
+                      }
             void navigate(config.resultPath(campaignId, created), {
                 replace: true,
-                state: { ...config.resultState?.(arrivalState), announce: config.announce },
+                state: {
+                    ...(task === undefined ? {} : { task }),
+                    ...config.resultState?.(arrivalState),
+                    announce: config.announce,
+                },
             })
         },
     })

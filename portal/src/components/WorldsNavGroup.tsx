@@ -11,6 +11,7 @@ import {
   SELECT_TIMELINE_FIRST,
   SELECT_WORLD_FIRST,
 } from "./navigationReasons"
+import { navTaskState } from "../navigation/navStart"
 
 interface WorldsNavGroupProps {
   // The one world whose routes are nested, already verified against the
@@ -208,6 +209,7 @@ export function WorldsNavGroup({
               end
               className={subLinkClassName}
               to={worldPath}
+              state={navTaskState(worldPath, "world")}
               onClick={handleChildActivated}
             >
               <span className="portal-sidebar__label">World overview</span>
@@ -226,6 +228,7 @@ export function WorldsNavGroup({
               end
               className={subLinkClassName}
               to={`${worldPath}/timelines`}
+              state={navTaskState(`${worldPath}/timelines`, "world")}
               onClick={handleChildActivated}
             >
               <span className="portal-sidebar__label">Timelines</span>
@@ -243,6 +246,7 @@ export function WorldsNavGroup({
             <NavLink
               className={subLinkClassName}
               to={`${worldPath}/timelines/${activeTimelineId}`}
+              state={navTaskState(`${worldPath}/timelines/${activeTimelineId}`, "world")}
               onClick={handleChildActivated}
             >
               <span className="portal-sidebar__label">Timeline overview</span>
@@ -265,6 +269,7 @@ export function WorldsNavGroup({
               end
               className={subLinkClassName}
               to={`${worldPath}/canon`}
+              state={navTaskState(`${worldPath}/canon`, "world")}
               onClick={handleChildActivated}
             >
               <span className="portal-sidebar__label">Published canon</span>
@@ -283,6 +288,7 @@ export function WorldsNavGroup({
               end
               className={subLinkClassName}
               to={`${worldPath}/sharing`}
+              state={navTaskState(`${worldPath}/sharing`, "world")}
               onClick={handleChildActivated}
             >
               <span className="portal-sidebar__label">Sharing</span>
@@ -300,6 +306,7 @@ export function WorldsNavGroup({
             <NavLink
               className={subLinkClassName}
               to={campaignWorldPath}
+              state={navTaskState(campaignWorldPath, "world")}
               onClick={handleChildActivated}
             >
               <span className="portal-sidebar__label">Campaign world</span>

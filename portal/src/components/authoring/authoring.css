@@ -982,3 +982,25 @@
 .authoring-actions > .authoring-message {
   flex: 1 1 100%;
 }
+
+/* The shared task breadcrumb (components/navigation/TaskBreadcrumb.tsx). A wrapping list: a long name
+   or a narrow screen breaks onto the next line instead of scrolling the page sideways. The separator
+   is decoration; the list structure and aria-current carry the meaning. */
+.task-breadcrumb__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.125rem 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.task-breadcrumb__list li {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.task-breadcrumb__list li + li::before {
+  content: "›";
+  margin-right: 0.25rem;
+}

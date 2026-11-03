@@ -7,6 +7,8 @@ import { Link, NavLink, useLocation } from "react-router"
 import { ChevronDown } from "lucide-react"
 import { DisabledNavItem } from "./DisabledNavItem"
 import type { LucideIcon } from "lucide-react"
+import { navTaskState } from "../navigation/navStart"
+import type { NavRoot } from "../navigation/routeMeta"
 
 export interface ExpandableNavItem {
   to: string
@@ -19,6 +21,8 @@ export interface ExpandableNavItem {
   // When set, the child is shown as the disabled-navigation entry with this neutral
   // reason instead of a link (see DisabledNavItem).
   unavailableReason?: string
+  // The task root this child starts, when it differs from the group's (Campaign Settings in Access).
+  root?: NavRoot
 }
 
 interface ExpandableNavGroupProps {
@@ -26,6 +30,8 @@ interface ExpandableNavGroupProps {
   label: string
   // Whether the current route lies anywhere in this group.
   sectionActive: boolean
+  // The task root every child starts (docs/UI_DESIGN.md §4.8); a child may override it.
+  root: NavRoot
   items: ExpandableNavItem[]
   collapsed: boolean
   onNavigate: () => void
@@ -37,6 +43,7 @@ interface ExpandableNavGroupProps {
 // Knowledge groups.
 export function ExpandableNavGroup({
   icon: Icon,
+  root,
   label,
   sectionActive: isAccessSectionActive,
   items,
@@ -188,6 +195,7 @@ export function ExpandableNavGroup({
                   }
                   aria-current={active ? "page" : undefined}
                   to={item.to}
+                  state={navTaskState(item.to, item.root ?? root)}
                   onClick={handleChildActivated}
                 >
                   <span className="portal-sidebar__label">{item.label}</span>
@@ -198,6 +206,7 @@ export function ExpandableNavGroup({
                   end={item.end}
                   className={subLinkClassName}
                   to={item.to}
+                  state={navTaskState(item.to, item.root ?? root)}
                   onClick={handleChildActivated}
                 >
                   <span className="portal-sidebar__label">{item.label}</span>

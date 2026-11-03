@@ -5,6 +5,7 @@ import { ChevronDown, House, LayoutList } from "lucide-react"
 import type { CampaignContext } from "../types/bootstrap"
 import { DisabledNavItem } from "./DisabledNavItem"
 import { SELECT_CAMPAIGN_FIRST } from "./navigationReasons"
+import { navTaskState } from "../navigation/navStart"
 
 interface CampaignHomeNavGroupProps {
   campaigns: CampaignContext[]
@@ -85,6 +86,7 @@ export function CampaignHomeNavGroup({
               end
               className={homeLinkClassName}
               to={`/app/${resolvedCampaign.campaign_id}/home`}
+              state={navTaskState(`/app/${resolvedCampaign.campaign_id}/home`, "campaign")}
               title="Campaign Home"
               onClick={onNavigate}
             >
@@ -128,6 +130,7 @@ export function CampaignHomeNavGroup({
             end
             className={homeLinkClassName}
             to={`/app/${resolvedCampaign.campaign_id}/home`}
+            state={navTaskState(`/app/${resolvedCampaign.campaign_id}/home`, "campaign")}
             onClick={onNavigate}
           >
             <House className="portal-sidebar__icon" aria-hidden="true" />
@@ -167,6 +170,7 @@ export function CampaignHomeNavGroup({
             <Link
               className="portal-sidebar__sublink"
               to={`/app/${campaign.campaign_id}/home`}
+              state={navTaskState(`/app/${campaign.campaign_id}/home`, "campaign")}
               aria-current={
                 campaign.campaign_id === authorizedRouteCampaignId
                   ? "true"
