@@ -2,6 +2,9 @@
 
 - **Status**: Proposed. R19-P0 architecture deliverable, corrected after independent review (findings R19-05, R19-06, R19-08, and the source and provenance corrections). Not accepted. It implements owner Decisions 4 (rules-engine-neutral core), 5 (versioned house rules) and 6 (drafts with unsupported mechanics, honest validation, authorized review).
 - **Owner decision applied**: OD-1 (Owner-approved, 2026-11-02). Campaigns sharing a world or timeline keep independent mechanical state ([ADR 0021 §3](0021-shared-actor-identity-control-and-authoring-responsibility.md)). Every evaluation in this ADR is therefore for **one campaign**: input loading (§1), authorization and projection (§9), the manifest, fingerprint and any future cache identity (§10) are all campaign-scoped.
+- **Owner decisions applied**: OD-20 and OD-21 (Owner-approved, 2026-11-02).
+  - **OD-20:** equipment inputs come from the route campaign's **possession**, item state and attunement. Fictional/legal ownership (`campaign.item_ownership`, shared narrative) is **not** a mechanical input and never changes because of a calculation (ADR 0021 §3.1.1).
+  - **OD-21:** the engine's only cross-campaign truth read is inside the separately authorized, disabled seeding and copy commands (ADR 0021 §3.6).
 - **Date**: 2026-11-02
 - **Extends**: [ADR 0005](0005-separate-rules-definitions-from-world-instances.md) and the identity-immutability policy of `DATABASE_MODEL.md` §8 (revisions 033/036). It does not replace the `rules` schema.
 - **Related**: [ADR 0006](0006-ai-proposes-but-does-not-own-canon.md), [ADR 0016](0016-data-classification-and-private-data-handling.md), [ADR 0021](0021-shared-actor-identity-control-and-authoring-responsibility.md), [ADR 0022](0022-creature-templates-combatants-and-promotion.md).
@@ -301,7 +304,8 @@ Approval never changes a finding's outcome.
 - **Truth mode** uses all authorized inputs and is returned only to callers who may read every input: initially `canon.edit`, later the ADR 0021 GM projection.
 - **Audience mode** builds its bundle only from inputs visible to the viewer. Unidentified item properties and GM-hidden effects are excluded before evaluation, without any marker.
 - Audience mode requires the P03-A projection tier, and for controllers the P03-B assignment.
-- **Campaign scope (OD-1).** Authorization is resolved in the route campaign, and the evaluated state is that campaign's. A controller or GM of campaign A can never receive campaign B's mechanical values, even for the same character on the same timeline. A truth read of another campaign happens only inside the explicit cross-campaign copy (ADR 0021 §3.6), under that command's authority (OD-21).
+- **Campaign scope (OD-1).** Authorization is resolved in the route campaign, and the evaluated state is that campaign's. A controller or GM of campaign A can never receive campaign B's mechanical values, even for the same character on the same timeline. A truth read of another campaign happens only inside lineage seeding or cross-campaign copy (ADR 0021 §3.6, OD-21 Owner-approved). That read requires `mechanics.transfer_read` in the source **and** the target capability, is limited to mechanical components (never player-private, Knowledge, briefing or GM-note material), and is available only after the commands are enabled.
+- **Ownership is not an input (OD-20).** Equipment facts are built from the route campaign's possession, item state and attunement. If a future adapter needs legal ownership (for example a rule about "items you own"), it reads it as a **narrative fact**, read-only, recorded in the manifest like any other input. A calculation never changes ownership or possession.
 
 ### 10. Effective-input manifest, fingerprint, reproducibility (R19-05)
 
