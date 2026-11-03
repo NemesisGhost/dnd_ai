@@ -1,6 +1,6 @@
 # ADR 0021: Shared actor identity, campaign control, and authoring responsibility
 
-- **Status**: Proposed. R19-P0 architecture deliverable, first drafted at `10a1a4e` and corrected after independent review (findings R19-01 to R19-04). Not accepted. Owner decisions recorded, all 2026-11-02:
+- **Status**: Proposed. R19-P0 architecture deliverable, first drafted at `10a1a4e` and corrected after independent reviews: R19-01 to R19-04, then R19-10 to R19-13 and residual R19-02 at `74a10cb`. Not accepted. The second-review content (§2.8 controller path, §3.1.1 tokens and intent, §3.3 events, §3.7 item versions, §3.8 migration protocol) is proposed design, **not implemented, enabled, tested or accepted**. Owner decisions recorded, all 2026-11-02:
   - **OD-1, Owner-approved:** independent mechanical state per campaign (§3).
   - **OD-20, Owner-approved:** shared narrative ownership and location; campaign-specific mechanical possession (§3.1.1).
   - **OD-21, Owner-approved:** separately authorized lineage seeding and cross-campaign copy, both disabled until enablement acceptance (§3.6).
@@ -139,7 +139,7 @@ The protocol extends the existing relationship order and must not invert it.
 | Path | Lock sequence |
 |---|---|
 | Assign / replace / revoke | (1) the target membership row `FOR UPDATE`, plus any existing assignment row being revoked, together with its membership (`OF mcr, cm`); (2) `campaign.campaigns` `FOR UPDATE`; (3) the user row `FOR UPDATE`; (4) **the character's `core.entities` row `FOR UPDATE`, the stable anchor even when the assignment set is empty**; (5) read and modify the live assignment rows; (6) insert, update and audit. |
-| Controller operation | `lock_operation_scope` (as today), then the character's `core.entities` row `FOR SHARE` via `lock_entities`, then the state rows the operation changes. After those locks are taken, it re-reads the in-effect assignment for the caller. A missing assignment is refused, non-disclosing. |
+| Controller operation | **A new bounded scope, `lock_controller_operation_scope(campaign_id, actor_user_id, character_id, operation_code)`.** `lock_operation_scope` cannot be used: it raises unless the capability is `canon.edit` (`commands/_operations.py`). The new scope takes the same prefix as `lock_authoring_scope`, in the same order: world `FOR SHARE`, the actor's membership and role rows, the account, campaign `FOR SHARE`. It does **not** require `canon.edit`. Then: the character's `core.entities` row `FOR SHARE`; then the caller's live, in-effect assignment row `FOR SHARE`, re-read under lock; then a check that `operation_code` is in the closed `CONTROLLER_OPERATIONS` allow-list (OD-3) and not denied; then the route campaign's state rows the operation changes, `FOR UPDATE`. A failure at any step is a non-disclosing refusal. |
 
 Because revocation takes the anchor `FOR UPDATE` and operations take it `FOR SHARE`:
 - an operation that holds the share lock completes before the revocation commits;
@@ -147,6 +147,8 @@ Because revocation takes the anchor `FOR UPDATE` and operations take it `FOR SHA
 - a committed operation remains history.
 
 No operation re-checks against a cached `AccessContext`.
+
+**Controller commands are separate, named intents** (for example `controller_adjust_hit_points`, `controller_set_resource`, `controller_equip_item`). Each returns a typed scope and calls a shared **internal** implementation function, the same function the canonical command uses after its own authorization. The public canonical commands (`commands/character_state.py`, `commands/item_operations.py`, …) keep their `canon.edit` requirement **unchanged**. They are never widened, given an alternative capability parameter, or reachable with a controller scope. Controller commands accept only the allow-listed parameters (for example HP delta within bounds), never maxima, builds, ownership, location or another actor.
 
 #### 2.9 Revocation scope
 
@@ -192,29 +194,67 @@ Different campaigns sharing a world and timeline **may pin different rulesets or
 - Character location and fictional/legal item ownership remain world/timeline narrative state.
 - Mechanical item possession, inventory, equipment, attunement, charges, consumable quantities and other mechanical item state belong to the individual campaign.
 
-These five concepts stay independent:
-
 | Concept | Storage | Scope | Who may change it |
 |---|---|---|---|
 | World item identity | `world.item_instances` (an entity) | World | Item-instance authoring. It stays a campaign-originated record under ADR 0020 decision 6, unchanged here |
-| Item definition | `rules.item_definitions` | Ruleset-wide, or world homebrew | Rules and homebrew authoring (ADR 0023) |
-| **Fictional/legal ownership** | `campaign.item_ownership`: `(timeline_id, item_instance_id)` gives `owner_entity_id`, where NULL means unowned. Comment: "current legal owner … distinct from who currently possesses it" | **Timeline narrative, shared by every campaign on the timeline** | The canonical narrative path: a causal event at a world time, under the existing canonical authorization for shared timeline state (campaign `canon.edit` in a campaign on that timeline, as for other shared narrative state). **Never** control assignments (`CONTROL_ASSIGNMENT_CAPABILITIES` has no ownership or location operation) |
-| **Possession and inventory**: holder, containing item, or the place where the item lies | Today `campaign.inventory_entries`, keyed `(timeline_id, item_instance_id)`, with at most one of holder, container or location. After P03-S, `campaign.campaign_inventory_entries` | **Campaign** | Campaign mechanical authority, plus the bounded controller operations allowed by OD-3 |
-| **Mechanical item state**: quantity and consumables, charges, damage, equipped, destroyed, attunement | `campaign.item_state` and `item_attunements`; after P03-S, the campaign tables | **Campaign** | The same as possession |
-| Ruleset interpretation of item mechanics | Adapter mechanics (ADR 0023 §2, R19-P3e-T) | Per campaign's pinned version | Phase 19 engine (read-only) |
+| Item definition | `rules.item_definitions` (per ruleset version, or world homebrew) | Ruleset-wide or world | Rules and homebrew authoring (ADR 0023) |
+| **Fictional/legal ownership** | `campaign.item_ownership`: `(timeline_id, item_instance_id)` gives `owner_entity_id`, with NULL meaning unowned. Its comment reads "current legal owner … distinct from who currently possesses it", and it has its own `last_event_id` | **Timeline narrative, shared** | The canonical narrative path: a causal event at a world time under the existing canonical authorization for shared timeline state, which is campaign `canon.edit` in a campaign on that timeline. **Never** a control assignment |
+| **Possession and inventory**: holder, containing item, or the place where it lies | Today `campaign.inventory_entries`, keyed `(timeline_id, item_instance_id)`, holding at most one of holder, container or location. After P03-S, `campaign.campaign_inventory_entries` | **Campaign** | Campaign mechanical authority, plus OD-3 controller intents |
+| **Mechanical item state**: quantity, charges, damage, equipped, destroyed, attunement | `campaign.item_state`, `item_attunements`; after P03-S, the campaign tables | **Campaign** | As possession |
+| Ruleset interpretation | Adapter mechanics (ADR 0023) | The campaign's pinned version (§3.7) | Phase 19 engine (read-only) |
 
-**Verified semantics.** The current schema already distinguishes legal ownership (`item_ownership`) from possession (`inventory_entries`); both table comments cite `DOMAIN_MODEL.md` §12.4. **No inventory-holder relationship is relabeled as ownership.** One schema extension is still required, and three existing behaviors couple the two concepts and must change in P03-S:
+**Verified semantics.** The schema already separates legal ownership from possession (both table comments cite `DOMAIN_MODEL.md` §12.4). No holder relationship is relabeled as ownership.
 
-1. **Implicit ownership writes.** `award_item(…, set_owner=True)` sets the owner to the new holder **by default**. `transfer_in_context(…, transfer_ownership=False)` can set ownership together with possession in one event. Both are authorized by campaign `canon.edit` (`api/item_authoring.py`, `api/items.py`). Under OD-20 an inventory change must never change ownership automatically. P03-S therefore:
-   - removes the `set_owner` default, so the caller must state it explicitly, and changes no ownership unless asked. This is a behavior change that needs Phase 15 owner sign-off;
-   - when ownership is requested, records it as a separate **narrative** effect on the shared `item_ownership` row and a **mechanical** effect on the campaign possession row. Each is authorized separately. The ownership part never inherits authority from the possession part.
-2. **No dedicated ownership command.** `commands/items.py` states that ownership has no command of its own. P03-S adds `change_item_ownership(item, new_owner_entity_id | none, world_time, reason)`. It is temporal, writes a narrative event, and audits through the existing framework. It never touches possession.
-3. **Corrections.** `event_corrections` restores ownership effects into the shared `item_ownership` row and possession or state effects into the event campaign's tables.
-4. **Item whereabouts (schema observation).** Today's `inventory_entries.location_id` and `container_id` record where an unheld item lies. Because possession becomes campaign-scoped, **where an item lies becomes campaign-scoped too**, and no shared narrative record of an item's whereabouts will exist. OD-20 does not require one. If one is wanted, it is a new extension (OD-22, UNRESOLVED and non-blocking): a shared narrative placement table separate from campaign possession. The schema does not provide it today.
+**R19-11. Revision checks are split; there is no single item token.** Today `campaign.item_state.last_event_id` is "the item's single optimistic token: every operation writes it, so `expected_last_event_id` goes stale whichever table another operation changed" (`commands/item_operations.py` docstring). `assess_event` also reverses item effects by matching it. Under OD-1 and OD-20 that single token is replaced by two independent checks:
 
-**Character location** (`campaign.character_location_history`) stays shared timeline narrative. `commands/movement.py` and `commands/travel.py` keep their canonical authorization and temporal events. Moving a character in campaign A moves it on the timeline for every campaign. Ordinary control does not authorize movement, because movement is not an OD-3 operation.
+| State | Revision check | Locked as |
+|---|---|---|
+| Shared ownership (`item_ownership`) | `expected_ownership_event_id`, compared with `item_ownership.last_event_id`. A NULL row is the "no ownership row" sentinel | `item_ownership` row `FOR UPDATE`. When no row exists, the item instance `FOR UPDATE` is the anchor (this already exists in the lock order) |
+| Campaign mechanical state (possession, item state, attunement) | `expected_campaign_item_event_id`, compared with `campaign_item_state.last_event_id` **for the route campaign**. Every campaign item operation writes it. Another campaign's operations never touch it | The route campaign's `campaign_item_state` row `FOR UPDATE` (the item instance anchor when absent) |
 
-**Mechanical use never changes ownership.** Equip, unequip, consume, charge use, damage, repair, attune, end attunement, and campaign-level "destroyed" state write only campaign rows. Archiving the world item instance is item authoring, not a mechanical operation.
+- **Lock order:** the item instance first, then the shared ownership row, then the campaign rows.
+- **A mechanical-only operation** supplies and checks only the campaign token. A change made by another campaign, or to shared ownership, never makes it stale.
+- **An ownership-only operation** (`change_item_ownership`) supplies and checks only the ownership token.
+- **A mixed operation** (an explicit award or transfer *with* ownership):
+  - supplies both tokens;
+  - is authorized for both parts: campaign mechanical authority and the narrative ownership authority;
+  - checks both tokens under lock;
+  - commits both effects in **one** event and transaction, or neither. A stale token on either side refuses the whole operation and names which side is stale, without disclosing another campaign's values;
+  - records one audit row per state family;
+  - has its idempotency fingerprint include both tokens, the ownership intent, and the route campaign.
+- **Corrections** (§3.3):
+  - a mechanical effect is reversible only if the effect's own campaign token still equals the corrected event;
+  - an ownership effect is reversible only if `item_ownership.last_event_id` still equals it;
+  - a mixed event is corrected atomically: if either part is no longer reversible, nothing is reversed.
+- **Regression (sequential A/E1, then B/E2, then correction of E1):**
+  1. Event E1 in campaign A awards item X to K **with** ownership. It changes A's possession and the shared owner (X now owned by K).
+  2. Event E2 in campaign B changes B's possession of X (equip or transfer within B).
+  3. A's GM corrects E1. Both E1 effects are still reversible: A's campaign token is still E1, the ownership token is still E1, and E2 touched only B's rows. The correction reverts A's possession and the shared owner and leaves B untouched.
+  4. **Variant:** if E2 had changed the shared owner (an ownership effect recorded from B), E1's ownership effect is no longer reversible, so the whole E1 correction is refused (`state_changed`, side `ownership`). B's mechanical rows are never read or disclosed.
+
+**R19-12. No implicit ownership intent anywhere.** Today:
+- `AwardRequest.set_owner: bool = True` (`api/item_authoring.py`) is forwarded as `award_item(set_owner=body.set_owner)`, and `award_item(…, set_owner=True)` defaults the same way (`commands/item_operations.py`).
+- The portal's `AwardItemSection.tsx` posts `{expected_last_event_id, holder_entity_id}` **without** `set_owner`, so it changes ownership through the default.
+- `ItemPlaySections.tsx` / `useItemDrafts.ts` already require an explicit choice ("There is no default: ownership is its own decision").
+- The transfer path: `TransferRequest.transfer_ownership: bool = False` (`api/items.py`) → `commands/items.transfer_item_possession(transfer_ownership=False)` → `transfer_in_context(transfer_ownership=False)`.
+
+P03-S changes every boundary:
+
+| Boundary | Change | Omission behavior |
+|---|---|---|
+| `api/item_authoring.py` `AwardRequest` | Replace `set_owner: bool = True` with `ownership: Literal["unchanged","assign_to_holder"]`, **required** | Missing gives `422 ownership_intent_required`. No default |
+| `api/items.py` transfer request | Replace `transfer_ownership: bool = False` with the same required `ownership` field | Missing gives 422. `unchanged` is the explicit choice for the current behavior |
+| `commands/item_operations.award_item`, `transfer_in_context`, `commands/items.transfer_item_possession` | Keyword-only `ownership` parameter with **no default** | A missing argument is a `TypeError` at the call site, caught by mypy and tests |
+| Internal callers (`commands/items.py`, the `commands/encounters.py` re-export noted in `commands/_shared.py`, tests and builders) | Each passes an explicit intent | — |
+| Portal (`portal/src/api/items.ts` `runItemOperation`, `AwardItemSection.tsx`, `ItemPlaySections.tsx`, `useItemDrafts.ts`, `types/items.ts`) | Send the explicit `ownership` field. `AwardItemSection` gains the same required choice as `ItemPlaySections` | The client cannot submit without a choice |
+| Idempotency fingerprints and audit | Include the intent | — |
+| `assign_to_holder` | A mixed operation, with both authorizations and both tokens (R19-11). It is never available to controller intents | — |
+
+**Character location** (`campaign.character_location_history`, `commands/movement.py`, `commands/travel.py`) stays shared narrative under its existing canonical authorization and temporal events. Controllers have no movement intent.
+
+**Mechanical use never changes ownership.** Equip, unequip, consume, charge use, damage, repair, attune, end attunement, and campaign "destroyed" write campaign rows only.
+
+**Where an unheld item lies (OD-22, UNRESOLVED, non-blocking).** `inventory_entries.location_id` and `container_id` record where an unheld item lies. Under OD-20 that becomes part of each campaign's possession, so an item may lie in different places in different campaigns. **No shared record of item whereabouts exists today or is planned.** OD-22 only asks whether the owner wants one. No design is proposed or approved.
 
 #### 3.2 Campaign-keyed storage (Phase 15, checkpoint P03-S)
 
@@ -235,13 +275,47 @@ The new tables are additive. The legacy tables are retained.
 
 The ruleset dependency guard on `rules.world_rulesets` (revisions 031/035/037) and the event-consistency triggers are extended to the new tables.
 
-#### 3.3 Mechanical events
+#### 3.3 Mechanical events: authoring, visibility, explanations and corrections (R19-10)
 
-- Events remain shared timeline narrative history, visible under the existing audience rules.
-- Every event that records an effect on a **mechanical component** must carry `campaign_id`. The mechanical components are listed in a new lookup `campaign.mechanical_components`: `current_hit_points`, `character_build_id`, conditions, resources, item state, possession and attunement. A deferred constraint trigger enforces this for **new** events. Existing events with a NULL campaign are listed in the manifest (§3.8) and are not rewritten.
-- The effect's values belong to that campaign's state.
-- Effects on **narrative** components (item ownership, character location, other shared timeline state) are not mechanical. They keep today's rules, may be recorded with or without a campaign, and always write the shared timeline tables (§3.1.1).
-- Corrections (`commands/event_corrections.py`) restore values into the corrected event's campaign table.
+**Classification.** Every effect component is either **narrative** or **mechanical**, as listed in the lookup `campaign.mechanical_components`:
+- **Mechanical:** `current_hit_points`, `character_build_id`, condition, resource, item state, possession (`inventory_entries.*`), attunement (`item_attuned`).
+- **Everything else is narrative:** `item_ownership`, location and travel, party membership, the clock, quest and objective status, knowledge.
+
+An event is:
+- **mechanical-only** when all its effects are mechanical;
+- **narrative-only** when none are;
+- **mixed** otherwise, for example an award with `assign_to_holder`.
+
+**Authoring rule.** A new event with any mechanical effect must carry `campaign_id`. This is enforced by a deferred constraint trigger and by the commands. Its mechanical effect values belong to that **origin campaign**.
+
+**Visibility.** This is enforced in every reader *before* anything is serialized:
+
+| Reader | Today (verified) | After P03-S |
+|---|---|---|
+| `queries/event_explanations.py` via `api/event_explanations.explain_for_caller`. Callers: campaign event page, GM event view (`api/event_corrections.py` GET), session activity (`api/sessions.py`), recent events (`api/summary.py`), World Explorer event detail (`api/world_explorer.py` `/world/events/{id}`) | Admits any event on the caller's own timeline; character, build, party, session and time references are audience-filtered | Narrative effects follow today's rules. **Mechanical effects are included only when the caller's route campaign equals the event's origin campaign** and the existing tier checks pass (for example `may_read_build`). Otherwise they are **omitted entirely**: no value, name, reference, `unavailable` placeholder, count or status. A **mechanical-only** event from another campaign is excluded from lists, counts, cause and correction links, and direct reads (404). A **mixed** event appears to other campaigns as its narrative part only |
+| `queries/event_authoring.get_event_authoring_view` (GM event view, effects list) | Reads every `narrative.event_effects` row of the event | Same origin-campaign filter on effect rows. Other campaigns' GMs see narrative effects only |
+| `campaign.effective_events()`-based resolution | Timeline-bounded | Mechanical resolution also filters `campaign_id = route campaign` (§3.4) |
+| `POST /campaigns/{id}/events` (`api/events.py`, `commands/events.py`) | Records events for the route campaign | Mechanical effects require `campaign_id` = route campaign. Recording a mechanical effect for another campaign is impossible |
+
+**Corrections** (`api/event_corrections.py` preview, void and correct; `commands/event_corrections.assess_event`, `void_event`, `correct_event`; `domain/event_corrections.REVERSIBLE_COMPONENTS`):
+
+1. **Authorization happens before any diagnostic.** Reaching an event requires that it is on the route campaign's timeline (today's rule), **and**:
+   - for a mechanical-only event, route campaign = origin campaign;
+   - for a mixed event, route campaign = origin campaign **and** the narrative correction authority;
+   - for a narrative-only event, today's rule.
+
+   Otherwise the result is the existing single 404 (`EventNotFoundError`). No preview, reason, status, effect count or component name is returned.
+2. **Diagnostics.** The preview reports reversibility per effect using only the event's own campaign tokens and the shared narrative tokens (R19-11). A reason never derives from another campaign's state, because no other campaign's rows are read.
+3. **Atomic.** "Nothing is reversed unless every effect is reversible" (current rule) is kept for mixed events. Narrative and mechanical parts are reversed together in one transaction and one correcting event (`campaign_id` = origin campaign), or not at all.
+4. **Writes.**
+   - Mechanical reversals go to the origin campaign's tables, never to legacy rows after that family's cutover.
+   - Narrative reversals go to the shared tables.
+   - Audit uses the existing correction audit rows, with the GM-only reason redacted. Idempotency uses the existing campaign store.
+5. **Legacy campaign-less mechanical events** (recorded before P03-S, `campaign_id` NULL, with mechanical effects):
+   - before the affected family's writer cutover, today's behavior is unchanged;
+   - after cutover, correction is refused with `legacy_mechanical_event_requires_disposition` (a 409 with no effect details) **unless** the reviewed migration manifest attributed the event to a campaign (§3.8). In that case it is corrected as that campaign's event;
+   - their mechanical effects are shown, in explanations, only to GMs (`canon.edit`) of campaigns on the timeline, labeled `legacy_shared_state`, and never to players or controllers;
+   - attribution is never inferred.
 
 #### 3.4 Resolution, including timeline inheritance within a campaign
 
@@ -251,7 +325,7 @@ A campaign's timeline is immutable (revision 030), so a campaign never moves bet
 2. **No row.** The component is absent in this campaign. Calculation reports `missing_input`, and nothing is read from another campaign or from the legacy timeline tables. The only exception is the dual-read period (§3.8), labeled `legacy_shared_state`.
 3. **Lineage seeding.** This is how a branch campaign inherits. When a campaign on a branch timeline is created, or later through an explicit command, a GM may record a lineage from a **source campaign on an ancestor timeline**. Seeding then runs once, explicitly and with an audit record:
    - it reconstructs the source campaign's mechanical state **as of the branch point** from that campaign's mechanical events in `campaign.effective_events(branch timeline)`, which is the existing bounded-ancestry function filtered to `campaign_id = source`;
-   - it falls back to the source campaign's administrative baselines, with the documented limitation of `character_build_resolution`;
+   - **only proven branch-time values are used.** An administrative baseline (`last_event_id IS NULL`) cannot be proven to predate the branch point. This is the documented limitation in `character_build_resolution`. Such a component is reported `history_unavailable` and is **not** seeded;
    - it writes local rows with `origin = lineage_seeded`.
 
    Components that cannot be reconstructed are **not** seeded and are listed in the seed report. Examples: a condition or resource change made without an effect, or possession that is not event-linked.
@@ -324,13 +398,28 @@ These are **two distinct commands with separate authorization**. Both ship **dis
 - Applying a transfer takes the character anchor `FOR SHARE` (§2.8) and the target campaign's affected rows `FOR UPDATE`. If the target's fingerprint differs from the preview's, the transfer is refused as `stale_preview` with a new conflict report. A concurrent target update is never overwritten.
 - **The source is never mutated.** Tests compare source fingerprints before and after.
 
+**Additional obligations before enablement:**
+- **Source snapshot semantics.**
+  - The preview stores a snapshot of the selected source mechanical facts together with the source and target fingerprints.
+  - Approval and apply re-check, under lock, that **both** fingerprints are unchanged. A change on either side gives `stale_preview` and needs a new preview.
+  - Apply writes exactly the previewed values. It never re-reads the source to pick up newer values.
+- **Revoked-access replays.**
+  - Request, approve and apply responses are **id-only receipts**. An idempotent replay returns the receipt, never preview content.
+  - Reading a preview or transfer record re-authorizes the caller against both sides **now**. A caller who has lost `mechanics.transfer_read` in the source gets a non-disclosing refusal, even for their own earlier request.
+  - Approval or apply after the requester's or approver's revocation fails.
+- **Safe conflict and provenance responses.**
+  - Conflict reports name the component key and target-side value.
+  - Source values appear only to a caller currently holding source read.
+  - Provenance on the target event (source campaign id, snapshot fingerprint) is GM-only in the target and never shown to target players or controllers.
+- **Indirect paths cannot reach either operation.** Build approval or activation (P3d-2), item award and transfer, encounter damage and promotion (ADR 0022), the Foundry integration sync (`commands/integration.py`), quest rewards, Phase 18 import promotion and AI proposals never read another campaign's mechanical state or write it cross-campaign. They operate only on the route campaign. Tests cover each path.
+
 **Enablement.** Both commands refuse with `feature_not_enabled` (a non-disclosing 404-equivalent) until all of the following are true:
 1. their security tests pass: authorization matrix, audience and privacy, non-disclosure;
 2. their compatibility tests pass: versions, scopes, conflicts;
 3. their acceptance tests pass: T24, T32, T40–T45;
 4. an explicit enablement review is recorded.
 
-OD-21's approval does not satisfy item 4. **Ordinary P03-S isolation does not depend on either command.** Campaigns without a lineage start without mechanical state, and existing branch-inherited rows are handled by the reviewed migration (§3.8), not by the runtime seeding command.
+OD-21's approval does not satisfy item 4. **Ordinary P03-S isolation does not depend on either command.** Campaigns without a lineage start without mechanical state. Existing branch-inherited rows are handled by the **reviewed offline migration** (§3.8). That migration runs as operator tooling under the owner-reviewed manifest in a stopped-writer window. It is **not** a runtime command and grants or uses no runtime capability (`mechanics.*`).
 
 #### 3.7 Builds and rulesets under isolation
 
@@ -340,27 +429,70 @@ OD-21's approval does not satisfy item 4. **Ordinary P03-S isolation does not de
 - `campaign` builds are selectable only by their origin campaign, on any timeline. **OD-6 is reconciled:** campaign-scoped builds are permitted without timeline restriction.
 - Two campaigns on one timeline may activate different builds, including builds on different rulesets or versions.
 
-#### 3.8 Migrating existing timeline-only records (P03-S; additive, reversible, manifest-reviewed)
+**Shared item instances across ruleset versions (R19-8; engineering decision ED-12).** A world item instance has one fixed `rules.item_definitions` row, whose `ruleset_version_id` matched the creating campaign (`commands/item_instances._require_usable_definition`). Another campaign on the world may pin a different version. Today the item operations perform no version check. After P03-S the normal rule is:
 
-1. **Create** the empty campaign tables, the lineage and migration-record tables, and the mechanical-components lookup.
-2. **Manifest.** A read-only script run on a restored copy lists every legacy mechanical row (character state, conditions and resources; item state, inventory and attunements), keyed by `(timeline, …)`. **`campaign.item_ownership` and `campaign.character_location_history` are not migrated.** They stay shared narrative (OD-20). Each row is listed with:
-   - every campaign ever created on that timeline, including archived ones;
-   - mechanical events by `campaign_id`, sessions and encounters, as **evidence only**.
+| Operation in campaign C whose pin ≠ the item definition's version | Rule |
+|---|---|
+| Possession: award, transfer, place; ownership (narrative); `change_item_ownership` | **Allowed.** Version-neutral state of a world object |
+| Equip and unequip; quantity consume; damage, repair, destroy | **Allowed** as campaign mechanical state. The flags are version-neutral |
+| Attune and end attunement; any operation that interprets definition mechanics (charges maximum, attunement requirement) | **Refused** with `item_definition_version_mismatch` (400, non-disclosing about other campaigns), because the definition's rules belong to another version |
+| Calculation (ADR 0023) | The item's equipment facts are `incompatible_ruleset_version`: they contribute nothing and raise a warning. No implicit mapping to a same-code definition in C's version. Any mapping is a separate future design |
 
-   It classifies each row:
-   - `single_campaign`: exactly one campaign has ever existed on the timeline. A mapping to that campaign is *proposed* and still reviewed;
-   - `multi_campaign`: ambiguous. The reviewer chooses copy to all listed campaigns, copy to selected campaigns, or leave unmapped (the campaigns start without that state);
+A campaign whose pin equals the definition's version behaves as today.
+
+#### 3.8 Migrating existing timeline-only records (P03-S; additive; manifest-reviewed; no rolling deployment assumed)
+
+The supported deployment is self-hosted Docker Compose on one host (ADR 0012, ADR 0013). This protocol **does not assume a rolling production deployment**. Every write cutover happens in a **stopped-writer window**:
+- the API service is stopped, or put into a refusing maintenance mode;
+- the worker and Foundry sync are stopped, if present.
+
+1. **Schema (additive).** Create:
+   - the empty campaign tables;
+   - `campaign_mechanical_lineages`, `mechanical_state_migration_records`, `mechanical_components`;
+   - **`campaign.campaign_mechanical_initializations`** (`campaign_id`, `character_id` or `item_instance_id`, `component_family`, `origin`, `initialized_at`).
+
+   The initializations table makes an explicitly **empty** state (for example "no conditions") distinguishable from "never initialized". Row-set families (conditions, resources, inventory, attunements) are authoritative for a campaign once their initialization row exists. Absent rows then mean none, and an absent initialization means not initialized.
+
+   Data classification: every new TEXT or JSONB column is registered in `domain/data_classification.COLUMN_CLASSES`, and audit structural fields in `AUDIT_STRUCTURAL_FIELDS`. Examples: condition `source_description` (GM-only), lineage and migration `reason` (GM-only), transfer-request preview (GM-only).
+2. **Manifest** (read-only, on a restored copy at snapshot S0). It lists:
+   - every legacy mechanical row of character state, conditions, resources, item state, inventory and attunements, with a **content hash**;
+   - every campaign ever created on each timeline, including archived ones;
+   - every legacy campaign-less event with mechanical effects;
+   - evidence (event `campaign_id`, sessions, encounters), labeled as evidence only.
+
+   `item_ownership` and `character_location_history` are excluded (OD-20).
+
+   Classification:
+   - `single_campaign`: a mapping is proposed and still reviewed;
+   - `multi_campaign`: the reviewer chooses copy to all, copy to selected, or leave unmapped;
    - `no_campaign`: legacy only;
-   - `branch_inherited`: the timeline has no local row but resolves through ancestry. The reviewer may either (a) materialize the value that resolves today into the branch campaign as a reviewed migration copy (`origin = migrated_from_timeline`), or (b) leave it in dual-read as `legacy_shared_state`. This is an offline, owner-reviewed migration step and **does not use the disabled runtime seeding command** (§3.6).
+   - `branch_inherited`: the reviewer chooses to materialize the value that resolves today, recorded as `migrated_from_timeline` with the reviewer acknowledging that administrative baselines are unproven; or to leave it unmapped.
 
-   Historical campaign ownership is **never inferred** for ambiguous rows.
-3. **Apply.** Copy reviewed rows with `origin = migrated_from_timeline` and a `mechanical_state_migration_records` entry each. Unreviewed rows stay legacy.
-4. **Dual-read.** Readers prefer campaign rows. A campaign with only a `pending` legacy row shows it, GM-visible only, labeled `legacy_shared_state` and read-only. Calculation results built from it carry a `legacy_shared_state` warning and are never labeled rules-validated.
-5. **Cut over** writers one consumer family at a time (§3.9). After cutover, a trigger makes the legacy tables read-only. They are **never dropped in Phase 15**.
-6. **Rollback.**
-   - Before writers cut over: drop the new tables; the legacy tables are untouched.
-   - After cutover: a reverse copy is possible only for `single_campaign` rows. Divergent multi-campaign state cannot be merged back, so rollback is a backup restore.
-   - The migration takes a backup before writers cut over.
+   Each legacy mechanical event is attributed to a reviewed campaign or left unattributed. Ownership is **never inferred**.
+3. **Manifest-to-live validation.** At apply time, inside the stopped-writer window, a validator recomputes every manifest row's content hash on the **live** database. Any row added, changed or deleted since S0 is excluded from apply and returned for re-review. Apply proceeds only for validated rows, or for none, at the reviewer's choice. Deleted legacy rows are recorded as `deleted_since_manifest` and are never resurrected.
+4. **Apply** (operator tooling, not a runtime command). It:
+   - copies validated rows into the campaign tables with `origin = migrated_from_timeline`;
+   - writes initialization rows for each mapped (campaign, subject, family), including families whose legacy set is empty, so they become explicitly empty;
+   - writes `mechanical_state_migration_records` and the event attributions.
+5. **Cutover groups.** Readers move first (dual-read), then writers move in the stopped-writer window. Each group's legacy tables get a write-block trigger at its writer cutover.
+
+| Group | Tables | Writers | Readers |
+|---|---|---|---|
+| G1 Character core | `character_state` (HP, build, exhaustion, …) | `commands/character_builds.py`, `character_state.py` (HP), `encounters.py` damage, which **also gains `last_event_id`**: the encounter-token repair is assigned to P03-S; `event_corrections.py` for these components; `integration.py` combat sync | `queries/character.py`, `character_sheet.py`, `character_builds.py`, `character_build_resolution.py`, `encounter_preparation.py`, `event_explanations.py`, `event_authoring.py` |
+| G2 Conditions and resources | `character_conditions`, `character_resources` | `character_state.py`, `event_corrections.py` | `queries/character.py`, explanations, authoring view |
+| G3 Items | `item_state`, `inventory_entries`, `item_attunements` (the token split, R19-11; intents, R19-12) | `item_operations.py`, `items.py`, `event_corrections.py` item components; `api/item_authoring.py`, `api/items.py` | `queries/inventory.py`, `item_authoring.py` (including party inventory, `GET /campaigns/{id}/parties/{party_id}/inventory` in `api/item_authoring.py`), `world_explorer.py`, `api/characters.py` |
+| G4 Event visibility | — | `commands/events.py` (campaign required) | §3.3 readers. **This group switches no later than the first of G1–G3**, so that no campaign-scoped value is ever readable cross-campaign |
+
+6. **Authorization-safe legacy fallback (dual-read).**
+   - A campaign subject with **no** initialization row for a family may fall back to the legacy timeline row **only** for callers holding `canon.edit` in that campaign, labeled `legacy_shared_state`, read-only.
+   - Players, controllers and audience-mode calculations get "no mechanical state", never legacy values, because those values may come from another campaign's play.
+   - Calculations from legacy rows are GM-only and never labeled rules-validated.
+7. **Rollback** (qualified the same way everywhere):
+   - **Code rollback** is possible while the schema is backward compatible, that is, before a group's write-block trigger.
+   - **Data rollback before a group's writer cutover:** drop or empty that group's new rows. Legacy rows are untouched.
+   - **After a group's writer cutover, once any campaign row has diverged:** the only data rollback is **restoring the backup taken in that group's stopped-writer window immediately before cutover**. This discards every write made after it. The backup is verified restorable before cutover (the Phase 17 runbook).
+   - A reverse copy into legacy tables is not a supported rollback.
+   - Legacy tables are never dropped in Phase 15.
 
 #### 3.9 Affected tables, commands, resolvers and APIs
 
@@ -374,8 +506,10 @@ The owner is Phase 15, P03-S, unless noted.
 | Tables | `rules.world_rulesets` dependency guard (revisions 031/035/037) | Extend to the new tables |
 | Commands | `commands/character_builds.py` (`initialize_character_state`, `activate_character_build`) | Campaign rows; per-campaign version guard |
 | Commands | `commands/character_state.py` (HP, conditions, resources) | Campaign rows |
-| Commands | `commands/encounters.py` (combat damage) | The encounter's campaign row, and set `last_event_id`. Campaign-less encounters may not write mechanical state after cutover: they are refused explicitly, and existing ones are listed in the manifest |
-| Commands | `commands/event_corrections.py` | Restore into the event's campaign table |
+| Commands | `commands/encounters.py` (combat damage) | The encounter's campaign row, and set `last_event_id`. **The encounter state-token repair is owned by P03-S (G1)**, not R19-P4b. Campaign-less encounters may not write mechanical state after cutover: they are refused explicitly, and existing ones are listed in the manifest |
+| Commands | `commands/event_corrections.py` (`assess_event`, `void_event`, `correct_event`), `domain/event_corrections.py` (`REVERSIBLE_COMPONENTS`) | Origin-campaign authorization before diagnostics; split tokens; atomic mixed corrections; legacy campaign-less refusal (§3.3) |
+| Commands | `commands/events.py` (`_insert_event_row`, `_record_event_impl`) | Campaign required for mechanical effects |
+| Commands (new) | `lock_controller_operation_scope` and named controller intents (§2.8) | Bounded controller path. Canonical commands unchanged |
 | Commands | `commands/item_operations.py`, `commands/items.py` | Campaign item state, possession and attunement; per-campaign limits. **OD-20:** `award_item` loses its implicit `set_owner=True` default; `transfer_in_context(transfer_ownership)` and any explicit ownership request write a separately authorized narrative effect on the shared `item_ownership`. Phase 15 owner sign-off (behavior change) |
 | Commands (new) | `change_item_ownership` | A dedicated temporal narrative command for fictional/legal ownership (OD-20). Never available to controllers |
 | Tables | `campaign.item_ownership`, `campaign.character_location_history` | **Unchanged and shared** (OD-20). Not migrated |
@@ -383,7 +517,11 @@ The owner is Phase 15, P03-S, unless noted.
 | Resolvers | `queries/character_build_resolution.py` | Replaced by `resolve_campaign_active_build`. Branch ancestry is used only during lineage seeding |
 | Queries | `queries/character.py`, `character_sheet.py`, `character_builds.py`, `encounter_preparation.py` | Read campaign rows (dual-read during migration) |
 | Queries | `queries/inventory.py`, `item_authoring.py`, `world_explorer.py` (item state, possession) | Campaign rows. World Explorer item cards show possession only for the route campaign |
-| Queries | Party inventory reads (`api/parties` via `queries/inventory.py`) | Campaign rows |
+| Queries/APIs | Party inventory: `GET /campaigns/{id}/parties/{party_id}/inventory` in **`api/item_authoring.py`** (not `api/parties.py`), via `queries/inventory.py` | Campaign rows |
+| Queries/APIs | Events: `queries/event_explanations.py`, `queries/event_authoring.py`; `api/event_explanations.py`, `api/event_corrections.py` (GET, preview, void, correct), `api/events.py` (POST), `api/sessions.py` (session activity), `api/summary.py` (recent events), `api/world_explorer.py` (`/world/events/{id}`) | §3.3 visibility and correction rules |
+| APIs | `api/item_authoring.py` (`AwardRequest`, `_RUNTIME/award` and other operations, party inventory), `api/items.py` (transfer) | Required `ownership` intent; split tokens (§3.1.1) |
+| Domain | `domain/data_classification.py` (`COLUMN_CLASSES`, `AUDIT_STRUCTURAL_FIELDS`) | Register every new TEXT/JSONB column and audit field |
+| Portal | `portal/src/api/items.ts` (`runItemOperation`), `components/AwardItemSection.tsx`, `components/items/ItemPlaySections.tsx`, `components/items/useItemDrafts.ts`, `types/items.ts`; event explanation, correction and inventory views | Explicit ownership intent; split tokens; render omitted mechanical effects without placeholders |
 | APIs | `api/character_state.py`, `api/character_builds.py`, `api/characters.py` (sheet, inventory, attunements), `api/items.py`, `api/encounters.py`, `api/integration.py` | Route campaign = state campaign. Response shapes unchanged, plus a `state_origin` field where useful |
 | New commands | `request_lineage_seed` / `approve_lineage_seed`; `request_mechanical_copy` / `approve_mechanical_copy`; table `campaign.mechanical_transfer_requests`; capabilities `mechanics.transfer_read`, `mechanics.seed`, `mechanics.copy_in` | OD-21 Owner-approved. **Disabled until the enablement conditions in §3.6 are met**; not required for P03-S isolation |
 | Rules (Phase 19) | `queries/rules_context*.py`, the manifest and fingerprint, catalog | ADR 0023: campaign-scoped facts and manifest context |
@@ -569,6 +707,8 @@ The actor model exposes to ADR 0023 only these elements of the plan's §5.1 cont
 
 The rules engine never decides control, revelation or authoring. Control never decides mechanics.
 
+P03-C and P03-S may land in either order. The port's intermediate behavior is specified in the plan's §5.1 (phases a, a+C, a+S, b).
+
 ## Acceptance scenarios (added to the plan's §8)
 
 - **Migration.**
@@ -594,6 +734,18 @@ The rules engine never decides control, revelation or authoring. Control never d
   - A dated assignment at clock = start is in effect; at clock = end it is not; after the clock is unset it is undetermined.
   - An ongoing assignment is unaffected by the clock.
   - A branch campaign does not inherit assignments.
+- **R19-10 to R19-13 (this revision).**
+  - A mechanical-only event of campaign A is absent from B's lists, counts, links, detail, preview and correction (404).
+  - A mixed event shows B only its narrative part.
+  - B's GM cannot preview or correct A's mechanical effects.
+  - The A/E1 → B/E2 → correct-E1 regression (§3.1.1), including the ownership variant.
+  - An award without `ownership` is rejected with 422, and the portal sends explicit intent.
+  - A controller intent succeeds without `canon.edit`, while the canonical command still refuses the controller.
+  - Manifest-to-live validation excludes rows changed after S0.
+  - An explicitly empty condition set does not fall back to legacy rows.
+  - A player never sees `legacy_shared_state` values.
+  - Attunement of another version's item is refused, while possession and equip are allowed.
+  - Legacy campaign-less mechanical events are refused for correction after cutover unless attributed.
 - **Routing.**
   - An assignment row never grants `view_private` or `view_knowledge`.
   - A legacy `primary_controller` row keeps them after an assignment is created and after one is revoked.

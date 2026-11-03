@@ -189,7 +189,7 @@ flowchart TD
     E --> G["Phase 20: Grounded assistance"]
     F --> G
     G --> H["Phase 21: Integrations"]
-    B15H["Phase 15H: shared actor refactor P03-A/B/C (= R19-P1)"] -.-> F0
+    B15H["Phase 15H: shared actor refactor P03-A/B/C/S (= R19-P1)"] -.-> F0
     F0["Phase 19 foundations: R19-P0, R19-P2, limited R19-P3"] -.-> C
     F0 --> F
     B15H --> D
@@ -223,6 +223,7 @@ Early work on a later phase is allowed only when it is separable from the phases
 | Shared area | Owner | Consumers and constraint |
 |---|---|---|
 | Character identity (`core.entities`, `character.characters`), NPC/PC subtype storage and its compatibility adapters | Phase 15 (15H, P03-C) | Phase 16 and Phase 19 consume. A Phase 19 branch must not add a competing actor abstraction or alter subtype storage. |
+| Campaign mechanical state (active build, HP, conditions, resources, item possession, state and attunement); mechanical event visibility and corrections; the item ownership/possession split | Phase 15 (15H, P03-S) | Phase 16 and Phase 19 consume through the actor contract. Phase 19 never writes mechanical state |
 | Campaign control assignments, revelation, public-profile projection, controller-derived rights | Phase 15 (15H, P03-A/B) | Phase 16 player authoring and Phase 19 creature control consume. Control is not canonical editing permission. |
 | Canonical authoring responsibility for characters | Phase 15 (15H, P03-C) | All authoring commands consume. Not inferred from control, kind, or first campaign. |
 | Character build commands (`create_character_build`, `activate_character_build`) and their approval/audit semantics | Phase 15 owns the command and transaction contract; Phase 16 adds player submission; Phase 19 adds rules-aware validation | One command family. Phase 16 and Phase 19 must not introduce a parallel builder or second build store. Validation is injected through the R19-P3 interface, not by forking the command. |
@@ -447,7 +448,7 @@ No SQL, seed script, importer, Foundry, or AI provider may be used.
 - Cross-world, cross-timeline, and cross-campaign requests are rejected without disclosure.
 - Audit and provenance identify real changes without storing reusable secrets.
 - The same commands are suitable for later import and integration clients.
-- The 15H shared actor contracts are accepted: P03-A revelation and audience-safe reads, P03-B ongoing control with the shipped operation allow-list stated, and P03-C explicit authoring responsibility with compatibility adapters. The same character keeps its UUID and history through a control change, including a player-controlled monster. Destructive retirement of NPC/PC subtype storage is not required to close Phase 15. It may follow once compatibility is demonstrated.
+- The 15H shared actor contracts are accepted: P03-A revelation and audience-safe reads, P03-B ongoing control with the shipped operation allow-list stated, P03-C explicit authoring responsibility with compatibility adapters, and **P03-S campaign mechanical-state isolation** (OD-1, OD-20, OD-21): campaign-keyed state; origin-campaign event visibility and corrections; split item revision checks; required ownership intent; reviewed manifest migration with stopped-writer cutover; seeding and copy still disabled ([ADR 0021](adr/0021-shared-actor-identity-control-and-authoring-responsibility.md) §3, Proposed). The same character keeps its UUID and history through a control change, including a player-controlled monster. Destructive retirement of NPC/PC subtype storage is not required to close Phase 15. It may follow once compatibility is demonstrated.
 - Focused tests, full suites, migrations, lint, types, build, and final-head CI pass.
 
 ---
@@ -598,7 +599,7 @@ Complete the self-hosted topology:
 - health/readiness checks;
 - startup migration procedure;
 - structured logs and bounded audit retention;
-- backup, restore, and rollback runbooks;
+- backup, restore, and rollback runbooks, including the P03-S mechanical-state tables and migration records, the stopped-writer cutover backups, and restore after post-cutover divergence;
 - release/version metadata;
 - upgrade verification from the previous supported release.
 

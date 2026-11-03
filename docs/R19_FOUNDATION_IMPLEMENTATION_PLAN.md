@@ -1,6 +1,6 @@
 # Phase 19 foundation implementation plan (R19-P0 to R19-P4)
 
-**Status:** Proposed. This is the R19-P0 planning deliverable, first drafted at `10a1a4e` and corrected after independent review (findings R19-01 to R19-09; see §13). Nothing here is implemented or accepted. **Owner decisions recorded (all 2026-11-02, all Owner-approved):**
+**Status:** Proposed. This is the R19-P0 planning deliverable, first drafted at `10a1a4e` and corrected after independent reviews (findings R19-01 to R19-13; see §13). **This revision (R19-10 to R19-13) is proposed design only. Nothing in it is implemented, enabled, tested or accepted.** Nothing here is implemented or accepted. **Owner decisions recorded (all 2026-11-02, all Owner-approved):**
 
 - **OD-1:** campaigns sharing a world or timeline maintain independent mechanical character state (ADR 0021 §3).
 - **OD-20:** character location and fictional/legal item ownership are shared narrative; mechanical possession, inventory, equipment, attunement, charges and quantities are per campaign (ADR 0021 §3.1.1).
@@ -55,9 +55,15 @@ As instructed, OD-6 is reconciled to permit campaign-scoped builds. Every other 
 | X10 | Live uniqueness is per `(membership, character, type)`, so a legacy row and an assignment of the same type would collide. Nothing enforces one primary per campaign. | `ux_membership_character_relationships_active_type` | ADR 0021 §2.3 index replacement. |
 | X11 | `effective_period` is NULL when no start endpoint is supplied. | Revision 080 trigger | ADR 0021 §2.3 (`ongoing` and `dated` kinds). |
 | X12 | Relationship effectiveness ignores the campaign clock, and its docstring says no clock exists. | `domain/access.py` | ADR 0021 §2.4 (OD-14); docstring follow-up. |
-| X13 | `last_event_id` is not reliable: encounter damage omits it, the baseline is administrative, branch rows are inherited. | `commands/encounters.py`, `commands/character_builds.py`, `queries/character_build_resolution.py` | ADR 0023 §10 hashes loaded values; R19-P4b fixes the damage token. |
+| X13 | `last_event_id` is not reliable: encounter damage omits it, the baseline is administrative, branch rows are inherited. | `commands/encounters.py`, `commands/character_builds.py`, `queries/character_build_resolution.py` | ADR 0023 §10 hashes loaded values; **P03-S (group G1) fixes the damage token**. |
 | X14 | Mechanically relevant rules columns stay mutable (`hit_die`, associations; homebrew item fields). | Revisions 033/036; `commands/item_definitions.py` | ADR 0023 §4 and §10 content hashes. |
 | X15 | Encounter readers inner-join participant entities; interaction actors require entities. | `queries/encounter_preparation.py` lines 93 and 111; `interaction.actions`, `check_requests` | ADR 0022 E1–E14 (R19-P4b). |
+| X17 | Event explanations and corrections admit any event on the caller's timeline, so under OD-1 a campaign could see or correct another campaign's mechanical effects. | `queries/event_explanations.py` docstring; `api/event_corrections.py` ("Only events of the campaign's own timeline") | ADR 0021 §3.3 (P03-S, G4) |
+| X18 | Item operations use a single token, `item_state.last_event_id`, for every item table, ownership included. | `commands/item_operations.py` docstring; `assess_event` | ADR 0021 §3.1.1 split checks (P03-S, G3) |
+| X19 | `AwardRequest.set_owner` defaults to `True`, and the portal `AwardItemSection.tsx` omits it, so it changes ownership implicitly. | `api/item_authoring.py`; `portal/src/components/AwardItemSection.tsx` | ADR 0021 §3.1.1 R19-12 |
+| X20 | `lock_operation_scope` refuses any capability other than `canon.edit`. | `commands/_operations.py` | ADR 0021 §2.8 `lock_controller_operation_scope` |
+| X21 | The party-inventory route lives in `api/item_authoring.py`, not `api/parties.py`. | `GET /campaigns/{id}/parties/{party_id}/inventory` | Inventory corrected (ADR 0021 §3.8, §3.9) |
+| X22 | Item operations do not check the item definition's ruleset version; only instance creation does. | `commands/item_instances._require_usable_definition` | ADR 0021 §3.7 (ED-12) |
 | X16 | `core.sources` (citations) and `core.source_documents` (rights-bearing corpus) are unrelated. | `persistence/tables/core.py` | ADR 0023 §9 citation link (ED-8). |
 
 ---
@@ -97,7 +103,7 @@ A hook that changes an existing command's behavior is category 3 even if its def
 | Checkpoint | Begin | Merge | Enable | Accept |
 |---|---|---|---|---|
 | R19-P0 | Now | After independent review | n/a | After owner acceptance of the ADRs, with OD-2/4/5/14/17/19/20/21 recorded (OD-1 is already Owner-approved) |
-| R19-P1 (P03-A/B/C/S) | Phase 15 | Phase 15 | Phase 15. P03-S writer cutover per consumer family | PLANv2 15.9 |
+| R19-P1 (P03-A/B/C/S) | Phase 15 | Phase 15 | Phase 15. P03-S writer cutover per group (G1–G4) in stopped-writer windows | PLANv2 15.9, including the P03-S criterion |
 | P2a provenance | ADR 0023 §4 reviewed | Isolated (cat. 2) | Package metadata read API: merge = enable (non-sensitive) | With R19-P4g; OD-7 before distribution |
 | P3a engine and fixtures | ADR 0023 §2–3 reviewed | Cat. 2 | n/a (pure) | With P3f |
 | P3b loader and GM endpoints | P3a | Cat. 2 (GM `canon.edit` only, no portal) | Non-GM exposure only via P3e-A | With P3f |
@@ -108,7 +114,7 @@ A hook that changes an existing command's behavior is category 3 even if its def
 | P2d creature templates | P3a, P2a | Cat. 2 (GM API); **independent of P2b** | No portal before R19-P4 | R19-P4g |
 | P2d-x option target for templates | P2b-1 and P2d merged | Cat. 2 | With P2b-2 | R19-P4g |
 | P3d-1 drafts (create, validate, submit, withdraw, reject) | P3b; ADR 0021 accepted | Cat. 2 (GM drafts, no materialization) | Player drafting after P03-B/C and Phase 16 | Phase 16 / P3f |
-| P3d-2 approval, materialization, direct-create review, activation gate | P3d-1, **P03-C build scope merged**, OD-9 | **Cat. 3:** build-command owner sign-off | Activation-gate behavior change enabled only after owner acceptance (OD-9) | Phase 16 / P3f |
+| P3d-2 approval, materialization, direct-create review, activation gate | P3d-1; **P03-C build scope merged**; **P03-S G1 writer cutover** (approval activates into campaign state); OD-9 | **Cat. 3:** build-command owner sign-off | Activation-gate behavior change enabled only after owner acceptance (OD-9) | Phase 16 / P3f |
 | P3e-T equipment (truth) | P3c | Cat. 2 with item-domain owner sign-off | GM endpoint | P3f |
 | P3e-A audience mode | P3e-T; **P03-A projection tier accepted**; for controllers, **P03-B accepted** | Cat. 3 | Non-GM mechanics reads | P3f |
 | P3f contract freeze | P3d-2, P3e-A | Cat. 2 | Phase 16 consumption | Phase 16 consumer review |
@@ -147,7 +153,7 @@ A hook that changes an existing command's behavior is category 3 even if its def
 | Drafts, reviews, custom mechanics | R19-P3d-1/2 | Build-command owner |
 | Item-definition mechanics columns | R19-P3e-T | Item-domain owner (Phase 15, 15F) |
 | Encounter, participant and interaction actor/target columns; combatant state | R19-P4b | Encounter owner (Phase 15) |
-| **State-writer token changes** (setting `last_event_id` anywhere) | Phase 15 writers; the encounter-damage fix in R19-P4b | Phase 15 owner. **No early R19 checkpoint changes state writers.** |
+| **State-writer token changes** (setting `last_event_id` anywhere; the split item tokens) | Phase 15 writers; the encounter-damage fix and the item-token split in **P03-S** | Phase 15 owner. **No early R19 checkpoint changes state writers.** |
 
 ### Shared commands
 
@@ -157,7 +163,10 @@ A hook that changes an existing command's behavior is category 3 even if its def
 | `activate_character_build`, `initialize_character_state`; `character_state`, `encounters` damage, `event_corrections`, `item_operations`, `items`, Foundry sync writers | Phase 15 (X4 guard; **P03-S moves every mechanical writer to the route campaign's tables**) | P3d-2: activation gate (ADR 0023 §7.4). R19 never writes mechanical state |
 | `_validate_rules` / `build_options_endpoint` | Phase 15 | P2b-2 option enforcement |
 | Item definition commands | Phase 15 (15F) | P3e-T mechanics payload |
-| Encounter preparation and operation commands; Foundry sync | Phase 15 / Phase 11 | P4b (E1–E14) |
+| Encounter preparation and operation commands; Foundry sync | Phase 15 / Phase 11. **P03-S moves damage writes to campaign state and repairs `last_event_id`** | P4b (E1–E14, combatants only) |
+| Event recording, explanations, correction preview and correction (`commands/events.py`, `commands/event_corrections.py`, `queries/event_explanations.py`, `queries/event_authoring.py`) | Phase 15 (**P03-S, G4**) | R19 consumes them; never changes them |
+| Item award and transfer APIs and commands (`api/item_authoring.py`, `api/items.py`, `commands/item_operations.py`, `commands/items.py`); portal item contracts | Phase 15 (**P03-S, G3**: required ownership intent, split tokens) | — |
+| Controller path (`lock_controller_operation_scope`, named intents) | Phase 15 (**P03-B**) | — |
 
 ---
 
@@ -184,7 +193,9 @@ A hook that changes an existing command's behavior is category 3 even if its def
   - mechanical state is read from the legacy **timeline** tables. When the route campaign's timeline hosts more than one campaign (including archived ones), every fact and result is labeled `legacy_shared_state` and is never shown as rules-validated. The manifest records `state_scope = legacy_shared_state`. After P03-S, implementation (b) reads only the route campaign's tables;
   - the projection tier is `gm` for `canon.edit` callers and `none` otherwise;
   - control is not consulted.
-- **(b) the P03 implementation**, swapped in when the P03 contracts are accepted.
+- **(a+C) P03-C merged, P03-S not yet cut over:** build scope is known, and state still comes from the legacy timeline rows, as in (a). P03-C must refuse activating `campaign`-scoped builds until P03-S G1 cuts over (`campaign_build_activation_requires_isolation`). This is a transitional guard, not a policy. So no campaign-private build becomes timeline-wide. Any such legacy row would resolve `out_of_scope`.
+- **(a+S) P03-S cut over (per group), P03-C not merged:** state comes from campaign tables for cut-over groups and from GM-only dual-read (ADR 0021 §3.8) for the rest. Every build is treated as `legacy_unscoped`.
+- **(b) both accepted:** the full contract. The port switches per phase without changing the R19 interfaces. Tests run against each implementation that exists at merge time.
 
 R19 code and tests target the port, never subtype tables or campaign-owned characters.
 
@@ -267,7 +278,7 @@ Fields that are unchanged from the first draft are stated briefly.
 15. **Completion criteria:** the ADRs are Accepted (or amended), and the primary PC acknowledges ADR 0021.
 16. **Gates:** §3.
 
-### R19-P1 — Shared actor foundation (Phase 15 P03-A/B/C)
+### R19-P1 — Shared actor foundation (Phase 15 P03-A/B/C/S)
 
 The obligations are those of ADR 0021:
 
@@ -279,11 +290,21 @@ The obligations are those of ADR 0021:
   - `award_item`'s implicit owner default is removed, and explicit ownership is written as a separately authorized narrative effect;
   - a new `change_item_ownership` command.
 
-  **OD-21:** request and approve commands for lineage seeding and copy, `campaign.mechanical_transfer_requests`, and capabilities `mechanics.transfer_read`, `mechanics.seed`, `mechanics.copy_in`. All of it stays **disabled until enablement acceptance**. **Neither is required to complete P03-S isolation**, because existing branch-inherited rows go through the reviewed migration.
+  **OD-21:** request and approve commands for lineage seeding and copy, `campaign.mechanical_transfer_requests`, and capabilities `mechanics.transfer_read`, `mechanics.seed`, `mechanics.copy_in`. All of it stays **disabled until enablement acceptance**. **Neither is required to complete P03-S isolation**, because existing branch-inherited rows go through the reviewed offline migration.
+
+  **R19-10 to R19-13 obligations (P03-S and P03-B):**
+  - event visibility, authoring and correction rules (ADR 0021 §3.3, group G4);
+  - split item revision checks and atomic mixed operations (§3.1.1, G3);
+  - required ownership intent at every boundary, including the portal (§3.1.1, G3);
+  - the encounter-damage `last_event_id` repair (G1);
+  - `lock_controller_operation_scope` and named controller intents, with canonical commands unchanged (§2.8, P03-B);
+  - the item version rule (§3.7, ED-12);
+  - the full migration protocol: manifest-to-live validation, initialization markers, cutover groups in stopped-writer windows, the authorization-safe fallback, qualified rollback (§3.8);
+  - `data_classification` registration.
 
 **Also Phase 15, early:** the X4 activation version guard (`build_ruleset_mismatch`, 400), with a database test. Campaigns A and B pin different versions on one timeline; activating A's build from B is refused.
 
-**Tests:** T1–T7, T21–T26 (§8).
+**Tests (Phase 15 acceptance):** T1–T7, T21–T26, T31, T33–T39, T46–T56, T61. Enablement of the OD-21 commands additionally needs T24, T32, T40–T45 and T57–T60. Phase 17: T62.
 
 R19 implements none of this.
 
@@ -656,7 +677,7 @@ As in ADR 0023 §6:
 | Item | Scope | Dependencies |
 |---|---|---|
 | P4a | Template-basis builds; persistent creatures; player-controlled creatures | P03-B/C, P2d, P3d-2 |
-| P4b | ADR 0022 E1–E14; combatant state; spawning (pending and active); participant actors and targets; promotion in the corrected order; discovery-gated promotion links; the encounter damage `last_event_id` fix | Phase 15 encounter owner, P4a, ED-3, OD-11 |
+| P4b | ADR 0022 E1–E14; combatant state; spawning (pending and active); participant actors and targets; promotion in the corrected order; discovery-gated promotion links. The character-damage `last_event_id` repair is **P03-S**, not P4b | Phase 15 encounter owner, P4a, ED-3, OD-11 |
 | P4c | Advancement; structured prerequisites and exclusions | Phase 16, P3d-2, P3f |
 | P4d | Content packages; operator install | P2a, OD-7, Phase 17 |
 | P4e | Encounter analysis (GM-only, manifest-stamped) | P4a/b, P3e |
@@ -681,6 +702,9 @@ As in ADR 0023 §6:
   - Option policy filters choices (P2b-2). Source text is never exposed through the builder.
 - **Phase 17:**
   - R19 migrations are additive and are covered by Phase 17's upgrade, backup and restore verification.
+  - **P03-S state** must be included in backup and restore: campaign mechanical tables, initialization markers, migration records, lineage and transfer-request tables, and the read-only legacy tables.
+  - The P03-S migration runs in **stopped-writer windows**, with a verified backup taken in each window immediately before cutover. After divergence, rollback is restoring that backup (T55).
+  - An upgrade from a pre-P03-S release must stop at manifest review. Unreviewed rows stay in GM-only dual-read, and no `multi_campaign` mapping is applied automatically (T62).
   - The seed stays unreviewed until OD-7, and the review is due before the **next distributed artifact containing it**: a release image, installer or public repository publication, and no later than the Phase 17 packaging gate.
   - There is no startup dependency on packages, AI or external providers.
 - **Phase 18:** imports produce drafts (builds, templates, house rules, homebrew), validated and reviewed through the same path. No direct canon or build writes.
@@ -736,6 +760,23 @@ Layer key: **db** (database test), **scen** (scenario test), **man** (manual), *
 | T43 | Duplicate requests and concurrent target updates | P03-S (OD-21) | db | A replay with the same key returns the original result; a target change after preview makes the apply fail with `stale_preview` and a new conflict report; no overwrite; concurrent approvals give one winner |
 | T44 | Hidden or player-private information stays protected | P03-S (OD-21), P3e-A | db | Previews and copies contain mechanical components only, never player-private notes, briefings, GM notes, Knowledge or identification; target members see results only through target projections; provenance is GM-only |
 | T45 | Disabled commands refuse until enablement acceptance | P03-S | db | Seed and copy requests return `feature_not_enabled` (non-disclosing) for every caller, including fully authorized ones, until the enablement review is recorded |
+| T46 | Cross-campaign event visibility (R19-10) | P03-S (G4) | db | A mechanical-only event of A is absent from B's lists, counts, cause and correction links, detail (404), preview and correction (404); no value, name, reference, placeholder or status leaks |
+| T47 | Mixed event (narrative and mechanical) | P03-S | db | B sees the narrative part only; B's GM cannot preview or correct it (404); A's GM corrects atomically; one irreversible part means nothing is reversed |
+| T48 | Legacy campaign-less mechanical events | P03-S | db | Before cutover, behavior is unchanged. After cutover, correction is refused (`legacy_mechanical_event_requires_disposition`) unless the manifest attributed the event; legacy mechanical effects are shown to GMs only, labeled |
+| T49 | Sequential A/E1 → B/E2 → correct E1 (R19-11) | P03-S (G3) | db | E1 (A, award with ownership) and E2 (B possession) → correcting E1 reverts A's possession and the shared owner, and leaves B untouched. Variant: E2 changes ownership → the whole E1 correction is refused, with side `ownership` and no B data |
+| T50 | Mixed operation tokens | P03-S (G3) | db | A stale ownership token, or a stale campaign token, refuses the whole operation and names the stale side; an idempotent replay returns the original result; one audit row per state family; fingerprints include both tokens and the intent |
+| T51 | Ownership intent required (R19-12) | P03-S (G3) | db, unit, portal | An API award or transfer without `ownership` gives 422; the command needs the keyword (mypy and tests); the portal `AwardItemSection` sends an explicit choice; `unchanged` keeps the owner; `assign_to_holder` needs both authorizations; controllers cannot request it |
+| T52 | Bounded controller path (residual R19-02) | P03-B, P03-S | db | An allow-listed controller intent succeeds without `canon.edit`; the canonical command still refuses the controller; an assignment revoked before the scope lock gives a refusal; a non-allow-listed parameter or another actor is refused |
+| T53 | Manifest-to-live validation | P03-S | db, man (restored copy) | Rows changed, added or deleted after S0 are excluded and returned for review; deleted rows are never resurrected |
+| T54 | Explicitly empty versus uninitialized state | P03-S | db | An initialized empty family never falls back to legacy rows; an uninitialized family falls back to the GM-only labeled legacy value; players, controllers and audience mode get no state |
+| T55 | Cutover groups, stopped writers, rollback | P03-S | man, db | G4 switches no later than the first of G1–G3; write-block triggers apply per group; the in-window backup restores cleanly; post-divergence rollback restores that backup and discards later writes |
+| T56 | Item definition from another ruleset version (R19-8) | P03-S, P3e-T | db | Possession, equip and ownership are allowed; attune is refused (`item_definition_version_mismatch`); the engine marks the facts `incompatible_ruleset_version` and maps nothing |
+| T57 | OD-21 indirect paths | P03-S, P3d-2, P4b, Phase 18 | db | Build approval and activation, item award and transfer, encounter damage and promotion, Foundry sync, quest rewards, import promotion and AI proposals never read or write another campaign's mechanical state |
+| T58 | OD-21 revoked-access replay | P03-S (after enablement) | db | Replays return id-only receipts; reading a preview after revocation is refused, non-disclosing; approval and apply after revocation fail |
+| T59 | OD-21 safe conflict and provenance | P03-S (after enablement) | db | Conflict reports show target values and keys; source values only to a current source reader; provenance is GM-only in the target |
+| T60 | OD-21 source snapshot | P03-S (after enablement) | db | Apply writes the previewed snapshot; a source or target change after the preview gives `stale_preview` |
+| T61 | OD-21 proven baselines and the offline migration boundary | P03-S | db | Seeding reports administrative baselines as `history_unavailable`; the offline migration materializes branch-inherited rows only under the reviewed manifest and uses no runtime `mechanics.*` capability |
+| T62 | Phase 17 backup, restore and upgrade of P03-S state | Phase 17 | man | Restore preserves campaign tables, initialization markers, migration records, transfer requests and read-only legacy tables; an upgrade from a pre-P03-S release requires manifest review and leaves unreviewed rows in GM-only dual-read |
 | T25 | Control migration and concurrency (ADR 0021 acceptance list) | P03-B | db | Index replacement; one-primary race; revoke vs operation; empty-set anchor; clock boundaries; branch has no inheritance |
 | T26 | PC used by A and B, unrelated C on the world | P03-C, OD-19 | db, man | `pending` exception keeps A, B and C; `replace` removes only unnamed campaigns, recorded |
 | T27 | Direct-create bypass | P3d-2 | db | Unreviewed build cannot activate until reviewed; delegated player cannot direct-create |
@@ -759,7 +800,7 @@ Layer key: **db** (database test), **scen** (scenario test), **man** (manual), *
 | OD-6 | Whether campaign-scoped builds exist (build scope) | — | **Reconciled with owner-approved OD-1, per the owner's 2026-11-02 instruction:** campaign-scoped builds are permitted on any timeline and selectable only by their origin campaign; `world_shared` builds are selectable by any campaign with a matching version | Delegated campaign builds need no world authority | P03-C | — | Reconciled (owner instruction 2026-11-02) |
 | OD-20 | Shared narrative ownership and campaign-specific mechanical possession | — | **Decided by the owner:**<br>• Character location and fictional/legal item ownership stay world/timeline narrative.<br>• Possession, inventory, equipment, attunement, charges, quantities and other mechanical item state are per campaign.<br>• Inventory changes never change ownership automatically.<br>• Ownership and location changes need canonical authorization and a temporal workflow.<br>• Control never suffices. | `award_item` default removed; `change_item_ownership` added; ownership effects decoupled from possession; ownership and location tables stay shared (ADR 0021 §3.1.1) | P03-S (Phase 15 owner sign-off for the `award_item` behavior change) | — | **Owner-approved 2026-11-02** |
 | OD-21 | Separate authorization for lineage seeding and cross-campaign copy | — | **Decided by the owner:**<br>• Two distinct operations.<br>• Each needs explicit source-read **and** target authorization, plus explicit target approval.<br>• Each has a preview, provenance, audit and idempotency.<br>• Neither mutates the source; there is no inferred lineage and no synchronization.<br>• Control grants neither, and world ownership does not open player-private information.<br>• **Both stay disabled until security, compatibility and acceptance tests pass. Approval does not enable them.** | ADR 0021 §3.6: request and approve commands; `mechanics.transfer_read`, `mechanics.seed`, `mechanics.copy_in` (ED-11); transfer-request table; T40–T45 | P03-S, with enablement in a later reviewed step | Enablement review (not an owner decision already taken) | **Owner-approved 2026-11-02** (commands remain disabled) |
-| OD-22 | Shared narrative record of an unheld item's whereabouts (where an item lies, independent of campaign possession) | None (recommended now); a shared narrative placement table later | None now. Where an item lies is part of campaign possession (OD-20). Add a separate narrative placement record only if a product need appears | Without it, "where the Blade lies" may differ by campaign | Future | Before any feature presents a campaign-independent item location | UNRESOLVED (non-blocking) |
+| OD-22 | Whether a shared narrative record of an unheld item's whereabouts is wanted at all | (a) none; (b) some shared whereabouts record, whose design is not proposed | (a) none. Where an unheld item lies is part of each campaign's possession (OD-20) and may differ by campaign. **No shared placement record exists, and none is designed or approved.** | Without one, campaigns may disagree about where an item lies | Not assigned | Before any feature presents a campaign-independent item location | UNRESOLVED (non-blocking) |
 | OD-7 | Seed origin and distribution review | Owner review with evidence; replace the seed with authored content; retain as dev-only | Record `unknown` / `unreviewed`; review before the next distributed artifact containing it; confirm the repository's current distribution status | No license claim until reviewed | Owner; R19-P2a supplies the inventory | Next distributed artifact containing the seed; Phase 17 packaging at the latest | UNRESOLVED |
 | OD-9 | Rules-exception approval, and whether legacy builds are exempt from the activation gate | Exceptions allowed with reason; no exceptions; gate legacy too | Exceptions by `canon.edit` with reason, never delegated; legacy exempt but labeled `not_evaluated` | Behavior change on activation | R19-P3d-2 | P3d-2 enable | UNRESOLVED |
 | OD-10 | Authority for house rules and option policy | ADR 0023 §6 recommendation; access managers; world-only | Campaign `canon.edit`; world rules need world edit/review plus route `canon.edit` | Commands disabled until decided | R19-P2b-1, P2c | P2b-1/P2c command enable | UNRESOLVED |
@@ -784,6 +825,11 @@ Layer key: **db** (database test), **scen** (scenario test), **man** (manual), *
 | ED-8 | Typed citation link to `core.source_documents` | Design and build before any private-document citation (ADR 0023 §9) |
 | ED-9 | Control locking protocol and index replacement | ADR 0021 §2.3 and §2.8 |
 | ED-10 | No persistent calculation cache in R19-P3 | ADR 0023 §10 |
+| ED-12 | Shared item instances across ruleset versions | Possession, ownership, equip, quantity, damage and destroy are allowed; attunement and definition-interpreting operations are refused (`item_definition_version_mismatch`); the engine marks the facts incompatible and maps nothing (ADR 0021 §3.7) |
+| ED-13 | Item revision checks | Split shared-ownership and campaign-mechanical tokens; atomic mixed operations and corrections (ADR 0021 §3.1.1) |
+| ED-14 | Controller authorization path | `lock_controller_operation_scope` plus named intents; canonical commands unchanged (ADR 0021 §2.8) |
+| ED-15 | Migration protocol | Stopped-writer windows; manifest-to-live validation; initialization markers; cutover groups G1–G4; GM-only legacy fallback; restore-only rollback after divergence (ADR 0021 §3.8) |
+| ED-16 | Event effect classification and visibility | Narrative vs mechanical component lookup; origin-campaign gating before serialization; atomic mixed corrections; legacy event attribution only through the manifest (ADR 0021 §3.3) |
 | ED-11 | Capability codes and role mapping for OD-21 commands | `mechanics.transfer_read` (source), `mechanics.seed` and `mechanics.copy_in` (target), all campaign-scoped. They are never in the control or relationship matrices and never implied by world roles or `canon.edit`. The role mapping, and whether a requester may self-approve, are fixed at enablement review (ADR 0021 §3.6) |
 
 **Coordination item:**
@@ -801,6 +847,11 @@ Layer key: **db** (database test), **scen** (scenario test), **man** (manual), *
 | Assignment rows inheriting legacy capabilities, or legacy rows promoted automatically | Exclusive routing (ADR 0021 §2.5); manifest-only creation; T2, T6, T25 |
 | One campaign's mechanical writes leaking into another campaign | P03-S campaign-keyed tables; route campaign = state campaign; mechanical-event campaign trigger; T22, T33, T34 |
 | Legacy timeline rows misattributed to a campaign | Manifest classification; no inference; dual-read `legacy_shared_state`; T31 |
+| Another campaign's mechanical event values, names or diagnostics leaking through explanations or corrections | Origin-campaign gating before serialization; G4 switches first; T46–T48 |
+| A cross-campaign correction or stale item token corrupting another campaign | Split tokens; atomic mixed corrections; T49, T50 |
+| An implicit ownership change through an omitted field | Required intent at every boundary; T51 |
+| Controllers gaining canonical power | Separate scope and intents; canonical commands unchanged; T52 |
+| A live database diverging from the reviewed manifest | Live validation in stopped-writer windows; T53, T55 |
 | A value computed for one campaign served to another | `campaign_id` in the manifest and memo identity; T35 |
 | Campaign-private builds leaking through branches | Lineage seeding refuses another campaign's private build (`out_of_scope`); T24 |
 | Access silently reduced or expanded at PC cutover | Legacy exceptions; OD-19 per-character records; T26 |
@@ -830,7 +881,8 @@ Layer key: **db** (database test), **scen** (scenario test), **man** (manual), *
    - Never promote legacy rows automatically.
 4. **Locking.**
    - Assign, replace and revoke lock: membership (+ the row being revoked), then campaign, then user, then the character `core.entities` row `FOR UPDATE` (the anchor), then the assignment rows.
-   - Operations take `lock_operation_scope`, then the character entity `FOR SHARE`, then re-read the in-effect assignment.
+   - Controller operations do **not** use `lock_operation_scope`, which is canon-only. They use a new `lock_controller_operation_scope`: the same prefix (world, membership and role rows, account, campaign `FOR SHARE`) without `canon.edit`, then the character entity `FOR SHARE`, then the in-effect assignment `FOR SHARE`, then the operation allow-list check, then the campaign state rows `FOR UPDATE`.
+   - Expose only named controller intents that call internal implementations. Never widen or parameterize the canonical commands.
 5. **Clock.**
    - Resolve one request clock through `resolve_effective_clock`.
    - Dated assignments are half-open `[start, end)`.
@@ -863,7 +915,7 @@ Layer key: **db** (database test), **scen** (scenario test), **man** (manual), *
 11. **Boundaries.**
     - Don't modify `rules.*`, `domain/character_calculations.py` or `domain/rules_engine/`.
     - Sequence `character_builds.py` changes with R19-P2b-2 and R19-P3d-2.
-    - Leave the encounter-damage token fix to R19-P4b, unless you schedule it yourself.
+    - The encounter-damage `last_event_id` repair and the item-token split are **P03-S** work (groups G1 and G3).
 
 ---
 
@@ -906,6 +958,24 @@ Layer key: **db** (database test), **scen** (scenario test), **man** (manual), *
 | Register | Owner and engineering decisions separated; alternatives, consequences, owners, deadlines; no encoded defaults; OD-17/18/19 added; OD-1 expanded | §9 |
 | **OD-1 addendum** (owner decision 2026-11-02) | OD-1 Owner-approved: independent per-campaign mechanical state. The single-campaign-timeline proposal and the one-controlling-campaign rule are withdrawn. Phase 15 P03-S gets campaign-keyed tables, lineage seeding, the mechanical-event campaign rule, the manifest migration, and the full table, command, resolver and API inventory. Phase 19 gets campaign-scoped loading, authorization, manifest and memo identity. OD-6 reconciled; OD-20 and OD-21 added; regression scenarios T22–T24 and T31–T35 | ADR 0021 §3; ADR 0022 §4.4, §6; ADR 0023 status, §1, §9, §10; this plan §1–§11 |
 | **OD-20 / OD-21 record** (owner decisions 2026-11-02) | OD-20 and OD-21 Owner-approved. Ownership versus possession verified in the schema; implicit ownership writes (`award_item` default, `transfer_ownership`) are scheduled for decoupling; `change_item_ownership` added; the item-whereabouts observation logged as OD-22. Seeding and copy split into separately authorized, previewed, approved, idempotent, disabled commands (ED-11). P03-S independent of both; branch-inherited rows go through the reviewed migration. Scenarios T36–T45 | ADR 0021 status, §3.1, §3.1.1, §3.3, §3.4, §3.6, §3.8–§3.10; ADR 0023 status, §9; this plan §3, §6, §8, §9, §11; PLANv2 15H |
+
+### 13.1 Second review (R19-10 to R19-13, residual R19-02, R19-09), against `74a10cb`
+
+| Finding | Correction (proposed design) | Where |
+|---|---|---|
+| R19-10 Event paths | Narrative and mechanical classification; origin-campaign gating in every event reader before serialization; atomic mixed corrections; legacy campaign-less mechanical events | ADR 0021 §3.3; §4 ownership; T46–T48 |
+| R19-11 Item tokens | Split ownership and campaign tokens; lock order; atomic mixed operations, corrections, audit and idempotency; A/E1 → B/E2 → correct-E1 regression | ADR 0021 §3.1.1; T49, T50 |
+| R19-12 Ownership intent | Required `ownership` at the API, command, internal callers and portal; omission gives 422 or `TypeError` | ADR 0021 §3.1.1; T51 |
+| Residual R19-02 | `lock_controller_operation_scope` and named intents; canonical commands unchanged | ADR 0021 §2.8; §11; T52 |
+| R19-09 / R19-13 | P03-S in Phase 15 acceptance (PLANv2 15.9) and in the §3, §4 and PLANv2 §6.1 tables; P3d-2 needs P03-S G1; the encounter-token repair moved to P03-S everywhere; port phases a, a+C, a+S and b; rollback qualified identically | §3, §4, §5.1, §6; ADR 0021 §3.8; ADR 0022 §4.4, §9; ADR 0023 §10; PLANv2 |
+| Migration protocol | Stopped-writer windows; manifest-to-live validation; initialization markers; groups G1–G4; GM-only fallback; restore after divergence | ADR 0021 §3.8; T53–T55 |
+| Inventory | Event APIs and queries; `api/item_authoring.py`; portal item contracts; `data_classification`; party-inventory route corrected | ADR 0021 §3.9; X17–X22 |
+| Item version rule | ED-12 | ADR 0021 §3.7; T56 |
+| OD-21 extensions | Indirect paths; revoked replays; safe conflict and provenance; source snapshot; proven baselines; the offline migration separated from runtime capabilities. Commands still disabled | ADR 0021 §3.4, §3.6; T57–T61 |
+| OD-22 wording | No shared placement record exists or is designed; the question only | ADR 0021 §3.1.1; §9 |
+| Phase 15 and 17 acceptance | P03-S criteria; backup, restore and upgrade (T62) | PLANv2 15.9, 17.3, 17.4; §7 |
+
+P2a and P3a keep their independent begin and merge eligibility (§3). Their later acceptance gates are unchanged.
 
 ## 14. Self-review
 

@@ -129,7 +129,7 @@ This is tactical encounter-log state (`DATABASE_MODEL.md` §12). Every change ci
   - a `narrative.events` row;
   - `event_causes.cause_encounter_id`;
   - the `current_hit_points` effect;
-  - **and the state row's `last_event_id` set to that event**. This fixes the existing omission for both paths; it is an R19-P4b change with Phase 15 owner review.
+  - **and the state row's `last_event_id` set to that event**. For the **character** path, the existing omission is fixed by **Phase 15 P03-S** (cutover group G1, ADR 0021 §3.8). R19-P4b only reuses that path for combatant attackers, and adds `last_combat_action_id` for combatant targets.
 
   Under OD-1 (ADR 0021 §3) the write targets the **encounter campaign's** `campaign.campaign_character_state` row once P03-S has cut over, and the event carries that `campaign_id`. Another campaign's state for the same character is never touched. A campaign-less encounter cannot apply mechanical damage.
 
@@ -198,7 +198,7 @@ Derived mechanics follow ADR 0023 §9.
 | Template tables, versions, references, adapter validation, GM homebrew API | R19-P2d | May merge before Phase 17 (category 2). No user-facing claim |
 | Template evaluation by the engine (informational) | R19-P3c or later | Category 2 |
 | Template-basis builds, persistent creatures, player-controlled creatures | R19-P4a | After Phase 17 and the P03-B/C contracts |
-| E1–E14 combatant integration, spawning, promotion, the damage-token fix | R19-P4b | After Phase 17, with Phase 15 encounter-owner review |
+| E1–E14 combatant integration, spawning, promotion (the character-damage `last_event_id` repair itself belongs to P03-S) | R19-P4b | After Phase 17, with Phase 15 encounter-owner review |
 | Catalog packages, generators, automatic summons | R19-P4d or later | After Phase 17 |
 
 ### 10. Migration and rollback
