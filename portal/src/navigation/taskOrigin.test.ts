@@ -234,7 +234,7 @@ describe("legacy return adapters (step 2)", () => {
     })
 
     it("rejects, rather than trims, a Characters browse query it does not produce", () => {
-        for (const query of ["?character_id=ch1", "?type=dragon", "?cursor=" + "c".repeat(513)]) {
+        for (const query of ["?character_id=ch1", "?type=dragon", "?cursor=" + "c".repeat(2049)]) {
             expect(adapt({ charactersReturn: `/app/${CAMPAIGN}/characters/all${query}` }), query).toBeNull()
         }
         // The Characters index (the selected sheet or the browser) has no list state of its own.
@@ -283,7 +283,7 @@ describe("legacy return adapters (step 2)", () => {
 
 describe("isSafeSearch", () => {
     it.each(["?", "?a=1&b=2", "?q=%20x"])("accepts %s", (value) => expect(isSafeSearch(value)).toBe(true))
-    it.each(["", "a=1", "?a b", "?a#b", "?a\\b", `?${"x".repeat(1100)}`, 3, null])("rejects %s", (value) =>
+    it.each(["", "a=1", "?a b", "?a#b", "?a\\b", `?${"x".repeat(524288)}`, 3, null])("rejects %s", (value) =>
         expect(isSafeSearch(value)).toBe(false),
     )
 })

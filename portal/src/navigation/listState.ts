@@ -30,10 +30,24 @@ interface KeyContract {
     repeat: number
 }
 
+/**
+ * The most characters a persisted list query may have in total. It is a resource bound for tampered
+ * history, not a paging limit: 512 KiB holds a trail of about 300 maximum-length (2048) encoded cursors,
+ * far beyond what a page trail reaches in practice, and well under the structured-clone limits of
+ * `history.state`. A query over it is rejected (the return falls back to the route default), never truncated.
+ */
+export const MAX_LIST_SEARCH = 512 * 1024
+
 const one = (rule: Rule): KeyContract => ({ rule, repeat: 1 })
 
-const MAX_CURSORS = 20
-const CURSOR = { rule: { kind: "token", max: 512 } as Rule, repeat: MAX_CURSORS }
+// The backend accepts a cursor of up to 2048 characters (api/pagination.py `_MAX_CURSOR_BYTES`, and the
+// `Query(max_length=2048)` of every browse route). A cursor is opaque: it is checked for alphabet and length
+// only, never decoded, and the stored string is the producer's own. The browsers keep every cursor of the
+// page trail in the address (the API pages forward only), one per next-page action, with no cap, so the
+// validator has none per key either: truncating or rejecting a long trail would silently reset the person's
+// browse position on return. The resource bound is the total size of the query (MAX_LIST_SEARCH).
+const BACKEND_CURSOR_MAX = 2048
+const CURSOR = { rule: { kind: "token", max: BACKEND_CURSOR_MAX } as Rule, repeat: Number.POSITIVE_INFINITY }
 const SEARCH = one({ kind: "text", max: 200 })
 const HIDDEN = one({ kind: "flag" })
 
@@ -59,10 +73,12 @@ const LIST_CONTRACTS: Readonly<Record<string, Record<string, KeyContract>>> = {
     "campaign.world": WORLD_BROWSE,
     "review.queue": {
         status: one({ kind: "enum", accepts: (value) => REVIEW_STATUS_ORDER.includes(value) }),
-        type: one({ kind: "name", max: 64 }),
+        // The endpoint's own bound: `type: Query(max_length=60)` in api/review_queue.py.
+        type: one({ kind: "name", max: 60 }),
     },
     "itemDefinitions.list": {
-        category: one({ kind: "name", max: 64 }),
+        // `category: Query(max_length=100)` in api/item_definition_authoring.py.
+        category: one({ kind: "name", max: 100 }),
         homebrew: HIDDEN,
     },
     "items.list": NONE,
@@ -109,7 +125,7 @@ function valueAccepted(rule: Rule, value: string): boolean {
 export function isValidListSearch(route: string, search: string): boolean {
     if (!hasListContract(route)) return false
     if (search === "") return true
-    if (!search.startsWith("?")) return false
+    if (!search.startsWith("?") || search.length > MAX_LIST_SEARCH) return false
     const keys = LIST_CONTRACTS[route]!
     const seen = new Map<string, number>()
     for (const [key, value] of new URLSearchParams(search)) {

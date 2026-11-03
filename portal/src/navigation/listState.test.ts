@@ -30,6 +30,7 @@ describe("list state contracts", () => {
     it.each([
         ["characters.browse", ""],
         ["characters.browse", "?type=player_character&q=sella&hidden=1&cursor=abc&cursor=def"],
+        ["campaign.world", `?${Array.from({ length: 40 }, (_, i) => `cursor=c${i}`).join("&")}`],
         ["campaign.world", "?category=location&q=old%20mill"],
         ["review.queue", "?status=in_review&type=knowledge_item"],
         ["itemDefinitions.list", "?category=weapon&homebrew=1"],
@@ -50,7 +51,6 @@ describe("list state contracts", () => {
         ["campaign.world", "?hidden=true"],
         ["campaign.world", `?q=${"x".repeat(201)}`],
         ["campaign.world", "?q=%00"],
-        ["campaign.world", `?${Array.from({ length: 21 }, (_, i) => `cursor=c${i}`).join("&")}`],
         ["campaign.world", "?cursor=has%20space"],
         ["campaign.world", "?__proto__=1"],
         ["campaign.world", "no-question-mark"],

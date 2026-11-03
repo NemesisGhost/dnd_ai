@@ -1,5 +1,5 @@
 import { isIdShaped } from "./contexts"
-import { isValidListSearch } from "./listState"
+import { MAX_LIST_SEARCH, isValidListSearch } from "./listState"
 import { NAV_ROOTS, defaultAncestors, executionScopeOf, patternParams, routeMetaById } from "./routeMeta"
 import type { NavRoot, RouteMatch, RouteRef } from "./routeMeta"
 
@@ -35,7 +35,8 @@ export interface TaskOriginV1 {
 }
 
 const SECTION_PATTERN = /^[a-z][a-z0-9-]{0,31}$/
-const MAX_SEARCH = 1024
+// A syntax bound only; the per-route contract (listState.ts) decides what a list route accepts.
+const MAX_SEARCH = MAX_LIST_SEARCH
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === "object" && value !== null && !Array.isArray(value)
