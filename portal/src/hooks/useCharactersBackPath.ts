@@ -13,17 +13,15 @@ const charactersBase = (campaignId: string): string =>
 // The one origin the carried address is resolved against, so only its path and query can matter.
 const RESOLVE_ORIGIN = "http://return.invalid"
 
-// Path segments that name a Characters route rather than a character.
-const RESERVED_SEGMENTS: ReadonlySet<string> = new Set(["all", "new", "npc", "pc"])
+// Character ids are UUIDs (the API contract), so a character segment is never decoded: a literal
+// UUID has nothing to decode, and anything else (a creation route in any casing, an encoded
+// separator, a double encoding) simply does not match. The router matches case-insensitively and
+// decodes parameters, which is why only the lowercase literals `all` and `inventory` and UUIDs are accepted.
+const UUID = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 
-// Characters destinations a sheet or the browser can come from: the sheet, the browser, a
-// character's sheet and its inventory. Creation, edit and build routes are never a return target.
-function isSupportedCharactersPath(segments: readonly string[]): boolean {
-    if (segments.length === 0) return true
-    const [first, second] = segments
-    if (segments.length === 1) return first === "all" || !RESERVED_SEGMENTS.has(first)
-    return segments.length === 2 && !RESERVED_SEGMENTS.has(first) && second === "inventory"
-}
+// What follows `/characters` for a destination a sheet or the browser can come from: the browser, a character's sheet and its inventory. Creation, edit and build routes are
+// never a return target.
+const SUPPORTED_REST = new RegExp(`^(?:|/all|/${UUID}|/${UUID}/inventory)$`)
 
 // Any C0 control character or DEL (written as code points: a control character in a regex literal
 // is a lint error).
@@ -33,23 +31,6 @@ function hasControl(text: string): boolean {
         if (code <= 0x1f || code === 0x7f) return true
     }
     return false
-}
-
-// A segment that decodes (once) to an ordinary name: no separators, dot segments or controls.
-function isPlainSegment(segment: string): boolean {
-    let decoded: string
-    try {
-        decoded = decodeURIComponent(segment)
-    } catch {
-        return false
-    }
-    return (
-        decoded !== "" &&
-        decoded !== "." &&
-        decoded !== ".." &&
-        !/[/\\]/.test(decoded) &&
-        !hasControl(decoded)
-    )
 }
 
 // The carried address, or undefined. The address is resolved the way the browser and router
@@ -74,11 +55,7 @@ export function readCharactersReturn(campaignId: string, state: unknown): string
     }
     if (target.origin !== RESOLVE_ORIGIN) return undefined
     const path = target.pathname
-    if (path !== base && !path.startsWith(`${base}/`)) return undefined
-    const segments = path === base ? [] : path.slice(base.length + 1).split("/")
-    if (!segments.every(isPlainSegment) || !isSupportedCharactersPath(segments.map(decodeURIComponent))) {
-        return undefined
-    }
+    if (!path.startsWith(base) || !SUPPORTED_REST.test(path.slice(base.length))) return undefined
     return `${path}${target.search}`
 }
 

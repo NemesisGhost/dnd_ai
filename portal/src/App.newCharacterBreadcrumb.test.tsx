@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react"
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { installCampaignShellMocks, openApp } from "./test/campaignRoutes"
 import type { MockServer } from "./test/authoringHarness"
@@ -63,7 +63,7 @@ describe("New character breadcrumb", () => {
   it("returns to the validated Characters view and forwards it to the NPC and PC pages", async () => {
     const app = openApp(NEW, ["canon.edit"])
     await screen.findByRole("heading", { level: 1, name: "New character" })
-    void app.router.navigate(NEW, { state: { charactersReturn: FROM } })
+    await act(() => app.router.navigate(NEW, { state: { charactersReturn: FROM } }))
     const main = screen.getByRole("main")
     await waitFor(() => expect(page().getByRole("link", { name: "Characters" })).toHaveAttribute("href", FROM))
 
@@ -76,7 +76,7 @@ describe("New character breadcrumb", () => {
       expect(app.router.state.location.pathname + app.router.state.location.search).toBe(FROM),
     )
 
-    void app.router.navigate(NEW, { state: { charactersReturn: FROM } })
+    await act(() => app.router.navigate(NEW, { state: { charactersReturn: FROM } }))
     await screen.findByRole("heading", { level: 1, name: "New character" })
     fireEvent.click(await screen.findByRole("link", { name: "New player character" }))
     await screen.findByRole("heading", { level: 1, name: "New player character" })
@@ -93,10 +93,12 @@ describe("New character breadcrumb", () => {
     ["encoded dot segments into another campaign", "/app/mundivita/characters/%2e%2e/%2e%2e/other/characters/all"],
     ["mixed-case encoded dot segments", "/app/mundivita/characters/%2E%2e/%2e%2E/other/characters/all"],
     ["an encoded separator", "/app/mundivita/characters%2f..%2f..%2fother/characters/all"],
+    ["a creation route in another casing", "/app/mundivita/characters/New"],
+    ["a doubly encoded separator in an id", "/app/mundivita/characters/a%252Fb"],
   ])("ignores a crafted return from %s", async (_name, crafted) => {
     const app = openApp(NEW, ["canon.edit"])
     await screen.findByRole("heading", { level: 1, name: "New character" })
-    void app.router.navigate(NEW, { state: { charactersReturn: crafted } })
+    await act(() => app.router.navigate(NEW, { state: { charactersReturn: crafted } }))
     const main = screen.getByRole("main")
     await waitFor(() => expect(app.router.state.location.state).toMatchObject({ charactersReturn: crafted }))
     expect(page().getByRole("link", { name: "Characters" })).toHaveAttribute("href", ALL)
@@ -118,7 +120,7 @@ describe("New character breadcrumb", () => {
   ])("never navigates out of the campaign through the chooser breadcrumb (%s)", async (_name, crafted) => {
     const app = openApp(NEW, ["canon.edit"])
     await screen.findByRole("heading", { level: 1, name: "New character" })
-    void app.router.navigate(NEW, { state: { charactersReturn: crafted } })
+    await act(() => app.router.navigate(NEW, { state: { charactersReturn: crafted } }))
     await waitFor(() => expect(app.router.state.location.state).toMatchObject({ charactersReturn: crafted }))
     const href = page().getByRole("link", { name: "Characters" }).getAttribute("href") ?? ""
     expect(new URL(href, "http://x.invalid").pathname).toBe(ALL)
