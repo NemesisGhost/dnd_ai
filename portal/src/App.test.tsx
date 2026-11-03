@@ -645,9 +645,10 @@ describe("portal routing", () => {
   it("routes Characters to the selected character workspace", () => {
     renderAppAt("/app/mundivita/characters")
 
-    // In a Characters task the Characters control is the button that toggles its menu, shown as current.
+    // In a Characters task on a page that is not the selected character's shell, the Characters control is
+    // the link to that shell, shown as current for the section.
     expect(
-      screen.getByRole("button", { name: "Characters menu" }),
+      screen.getByRole("link", { name: "Characters: open Ixamarra" }),
     ).toHaveClass("portal-sidebar__link--active")
 
     expect(

@@ -223,7 +223,7 @@ describe("PortalSidebar destinations", () => {
         const expected: Array<[string, string]> = [
             ["Campaign Home", "/app/campaign-a/home"],
             // The selected (server-default) perspective's record shell.
-            ["Open character Ixamarra", "/app/campaign-a/characters/character-ixamarra"],
+            ["Characters: open Ixamarra", "/app/campaign-a/characters/character-ixamarra"],
             ["Quests", "/app/campaign-a/quests"],
             ["Sessions", "/app/campaign-a/sessions"],
             ["Knowledge", "/app/campaign-a/knowledge"],
@@ -254,7 +254,7 @@ describe("PortalSidebar destinations", () => {
             "page",
         )
         expect(
-            within(nav()).getByRole("link", { name: "Open character Ixamarra" }),
+            within(nav()).getByRole("link", { name: "Characters: open Ixamarra" }),
         ).not.toHaveAttribute("aria-current")
     })
 
@@ -441,7 +441,7 @@ describe("PortalSidebar campaign submenu", () => {
 
         // Away from Home, with a campaign resolved, the main control is a link to its Home.
         expect(
-            within(nav()).getByRole("link", { name: "Open campaign Alpha Campaign" }),
+            within(nav()).getByRole("link", { name: "Campaign: open Alpha Campaign" }),
         ).toHaveAttribute("href", "/app/campaign-a/home")
         const button = within(nav()).getByRole("button", { name: "Show campaign menu" })
 
@@ -1179,7 +1179,7 @@ describe("PortalSidebar stable navigation structure (Phase 14)", () => {
 
         // Characters opens the selected perspective's record shell (a link away from Characters).
         expect(
-            within(nav()).getByRole("link", { name: "Open character Ixamarra" }),
+            within(nav()).getByRole("link", { name: "Characters: open Ixamarra" }),
         ).toHaveAttribute("href", "/app/campaign-a/characters/character-ixamarra")
         for (const [label, path] of [
             ["Quests", "quests"],
@@ -1289,7 +1289,7 @@ describe("PortalSidebar World authoring navigation on a campaign route", () => {
                 within(nav()).getByRole("link", { name: "Campaign world" }),
             ).toHaveAttribute("href", "/app/campaign-a/world")
             expect(
-                within(nav()).getByRole("link", { name: "Open character Ixamarra" }),
+                within(nav()).getByRole("link", { name: "Characters: open Ixamarra" }),
             ).toHaveAttribute("href", "/app/campaign-a/characters/character-ixamarra")
         },
     )

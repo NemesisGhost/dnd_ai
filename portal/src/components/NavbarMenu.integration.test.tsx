@@ -175,6 +175,7 @@ function tree(entry: string) {
                 <Route path="/settings" element={<Page title="Settings" />} />
                 <Route element={<WorldWorkspaceLayout />}>
                   <Route path="/worlds/:worldId" element={<Page title="World page" />} />
+                  <Route path="/worlds/:worldId/timelines" element={<Page title="Timelines" />} />
                 </Route>
                 <Route path="/worlds" element={<Page title="Worlds" />} />
                 <Route path="/app/:campaignId" element={<CampaignSessionBoundary />}>
@@ -183,6 +184,7 @@ function tree(entry: string) {
                   <Route path="parties/new" element={<DraftPage />} />
                   <Route path="sessions/new" element={<PickerPage />} />
                   <Route path="quests" element={<Page title="Quests" />} />
+                  <Route path="world-times" element={<Page title="World time" />} />
                   <Route path="world" element={<Page title="Campaign world" />} />
                   <Route path="characters/all" element={<Page title="All characters" />} />
                   <Route path="characters/:characterId" element={<Page title="Character record" />} />
@@ -289,7 +291,7 @@ describe("Campaign, World and Characters main controls: link, button and disclos
   it("Campaign: a link to the selected campaign's Home away from it, a button at it, separate from the disclosure", async () => {
     await mountSettled("/app/alpha/parties", "Parties")
 
-    const link = inNav().getByRole("link", { name: "Open campaign Campaign alpha" })
+    const link = inNav().getByRole("link", { name: "Campaign: open Campaign alpha" })
     expect(link).toHaveAttribute("href", "/app/alpha/home")
     // The disclosure is its own control, never nested in the link.
     expect(link.contains(campaignDisclosure())).toBe(false)
@@ -302,7 +304,7 @@ describe("Campaign, World and Characters main controls: link, button and disclos
     expect(stateOf()?.task?.root).toBe("campaign")
 
     // At the destination the same slot is a button that only toggles.
-    expect(inNav().queryByRole("link", { name: /^Open campaign/ })).toBeNull()
+    expect(inNav().queryByRole("link", { name: /^Campaign: open/ })).toBeNull()
     const button = inNav().getByRole("button", { name: "Campaign menu" })
     expect(button).toHaveAttribute("aria-expanded", "false")
     activate(button)
@@ -314,10 +316,10 @@ describe("Campaign, World and Characters main controls: link, button and disclos
     await mountSettled("/settings", "Settings")
 
     expect(inNav().getByRole("button", { name: "Campaign menu" })).toBeInTheDocument()
-    expect(inNav().queryByRole("link", { name: /^Open campaign/ })).toBeNull()
+    expect(inNav().queryByRole("link", { name: /^Campaign: open/ })).toBeNull()
     // Not the startup, last-visited or sole campaign: no campaign-scoped link at all.
     expect(inNav().queryByRole("link", { name: "Quests", hidden: true })).toBeNull()
-    expect(inNav().queryByRole("link", { name: /^Open character/, hidden: true })).toBeNull()
+    expect(inNav().queryByRole("link", { name: /^Characters: open/, hidden: true })).toBeNull()
     activate(campaignDisclosure())
     expect(inNav().getByRole("link", { name: "Campaign beta" })).toHaveAttribute("href", "/app/beta/home")
     expect(inNav().getByRole("link", { name: "View all campaigns" })).toHaveAttribute("href", "/campaigns")
@@ -326,14 +328,14 @@ describe("Campaign, World and Characters main controls: link, button and disclos
   it("World: a link to /worlds/:w for a viewable selected world, then a button inside the World task", async () => {
     await mountSettled("/app/alpha/parties", "Parties")
 
-    const link = await inNav().findByRole("link", { name: "Open world World w1" })
+    const link = await inNav().findByRole("link", { name: "World: open World w1" })
     expect(link).toHaveAttribute("href", "/worlds/w1")
     fireEvent.click(link)
     await heading("World page")
     expect(here()).toBe("/worlds/w1")
     expect(stateOf()?.task?.root).toBe("world")
     expect(inNav().getByRole("button", { name: "World menu" })).toBeInTheDocument()
-    expect(inNav().queryByRole("link", { name: /^Open world/ })).toBeNull()
+    expect(inNav().queryByRole("link", { name: /^World: open/ })).toBeNull()
   })
 
   it("World: falls back to the campaign world page without world.view, and offers nothing for an unknown world", async () => {
@@ -341,7 +343,7 @@ describe("Campaign, World and Characters main controls: link, button and disclos
     await mountSettled("/app/alpha/parties", "Parties")
 
     // No world.view: the campaign's own world page, not /worlds/w1.
-    const link = await inNav().findByRole("link", { name: "Open world World w1" })
+    const link = await inNav().findByRole("link", { name: "World: open World w1" })
     expect(link).toHaveAttribute("href", "/app/alpha/world")
     expect(nav().innerHTML).not.toContain('href="/worlds/w1"')
   })
@@ -349,30 +351,30 @@ describe("Campaign, World and Characters main controls: link, button and disclos
   it("Characters: a link to the selected character's record shell, a button when the page shown is that shell", async () => {
     await mountSettled("/app/alpha/parties", "Parties")
 
-    const link = inNav().getByRole("link", { name: "Open character Name a1" })
+    const link = inNav().getByRole("link", { name: "Characters: open Name a1" })
     expect(link).toHaveAttribute("href", "/app/alpha/characters/a1")
     fireEvent.click(link)
     await heading("Character record")
     expect(here()).toBe("/app/alpha/characters/a1")
     expect(stateOf()?.task?.root).toBe("characters")
     expect(inNav().getByRole("button", { name: "Characters menu" })).toBeInTheDocument()
-    expect(inNav().queryByRole("link", { name: /^Open character/ })).toBeNull()
+    expect(inNav().queryByRole("link", { name: /^Characters: open/ })).toBeNull()
   })
 
   it("Characters: an explicit choice of none makes the control a button; the viewed record is never a selection", async () => {
     await mountSettled("/app/alpha/characters/a2", "Character record")
 
     // Viewing a2 did not select it: the selection is still the server default a1.
-    expect(inNav().queryByRole("link", { name: "Open character Name a2" })).toBeNull()
+    expect(inNav().queryByRole("link", { name: "Characters: open Name a2" })).toBeNull()
     // At a different place in another task the link is the selected one, a1.
     await go("/app/alpha/parties")
-    expect(await inNav().findByRole("link", { name: "Open character Name a1" })).toHaveAttribute(
+    expect(await inNav().findByRole("link", { name: "Characters: open Name a1" })).toHaveAttribute(
       "href",
       "/app/alpha/characters/a1",
     )
 
     fireEvent.change(screen.getByRole("combobox", { name: "Character perspective" }), { target: { value: "" } })
-    await waitFor(() => expect(inNav().queryByRole("link", { name: /^Open character/ })).toBeNull())
+    await waitFor(() => expect(inNav().queryByRole("link", { name: /^Characters: open/ })).toBeNull())
     expect(inNav().getByRole("button", { name: "Characters menu" })).toBeInTheDocument()
     // The menu offers browsing, and no selected character.
     activate(charactersDisclosure())
@@ -382,16 +384,16 @@ describe("Campaign, World and Characters main controls: link, button and disclos
 
   it("a revoked campaign leaves every control a button, with no stale link", async () => {
     await mountSettled("/app/alpha/parties", "Parties")
-    await inNav().findByRole("link", { name: "Open world World w1" })
+    await inNav().findByRole("link", { name: "World: open World w1" })
     await go("/campaigns")
     await heading("Campaigns")
-    expect(inNav().getByRole("link", { name: "Open campaign Campaign alpha" })).toBeInTheDocument()
+    expect(inNav().getByRole("link", { name: "Campaign: open Campaign alpha" })).toBeInTheDocument()
 
     act(() => {
       control.publish?.(bootstrapOf({ withAlpha: false }))
     })
 
-    await waitFor(() => expect(inNav().queryByRole("link", { name: /^Open (campaign|world|character)/ })).toBeNull())
+    await waitFor(() => expect(inNav().queryByRole("link", { name: /^(Campaign|World|Characters): open/ })).toBeNull())
     for (const name of ["Campaign menu", "World menu", "Characters menu"]) {
       expect(inNav().getByRole("button", { name })).toBeInTheDocument()
     }
@@ -400,7 +402,7 @@ describe("Campaign, World and Characters main controls: link, button and disclos
 
   it("keeps a modified click and a new-tab open on the browser: no navigation, menu untouched", async () => {
     await mountSettled("/app/alpha/parties", "Parties")
-    const link = inNav().getByRole("link", { name: "Open campaign Campaign alpha" })
+    const link = inNav().getByRole("link", { name: "Campaign: open Campaign alpha" })
 
     fireEvent.click(link, { ctrlKey: true })
     fireEvent.click(link, { metaKey: true })
@@ -408,6 +410,91 @@ describe("Campaign, World and Characters main controls: link, button and disclos
 
     expect(here()).toBe("/app/alpha/parties")
     expect(campaignDisclosure()).toHaveAttribute("aria-expanded", "false")
+  })
+})
+
+// The main control links to the authorized selected destination whenever the page shown is a different one,
+// whatever task the person is in. It expands the menu only where it already is, or nothing applies.
+describe("the primary action follows the selected record, not the task root", () => {
+  const mainLinks = (href: string) =>
+    inNav()
+      .queryAllByRole("link")
+      .filter((link) => link.getAttribute("href") === href && link.closest(".portal-sidebar__row") !== null)
+
+  it("Characters: viewing a2 inside a Characters task with a1 selected offers navigation to a1", async () => {
+    await mountSettled("/app/alpha/characters/a2", "Character record")
+    // The task the page belongs to is Characters (route default root).
+    expect(mainLinks("/app/alpha/characters/a1")).toHaveLength(1)
+    expect(inNav().queryByRole("button", { name: "Characters menu" })).toBeNull()
+
+    fireEvent.click(mainLinks("/app/alpha/characters/a1")[0]!)
+    await waitFor(() => expect(here()).toBe("/app/alpha/characters/a1"))
+    // Already at the selected destination: the same slot expands the menu instead.
+    expect(await inNav().findByRole("button", { name: "Characters menu" })).toBeInTheDocument()
+    expect(mainLinks("/app/alpha/characters/a1")).toHaveLength(0)
+  })
+
+  it("Characters: the record shell with a query is still the destination; a deeper route is not", async () => {
+    await mountSettled("/app/alpha/characters/a1?section=notes", "Character record")
+    expect(inNav().getByRole("button", { name: "Characters menu" })).toBeInTheDocument()
+    expect(mainLinks("/app/alpha/characters/a1")).toHaveLength(0)
+  })
+
+  it("Campaign: inside a Campaign task on a page that is not Home offers navigation to Home", async () => {
+    await mountSettled("/app/alpha/world-times", "World time")
+    expect(mainLinks("/app/alpha/home")).toHaveLength(1)
+    expect(inNav().queryByRole("button", { name: "Campaign menu" })).toBeNull()
+  })
+
+  it("World: inside a World task on another world page offers navigation to the world's details", async () => {
+    await mountSettled("/worlds/w1/timelines", "Timelines")
+    await waitFor(() => expect(mainLinks("/worlds/w1")).toHaveLength(1))
+    expect(inNav().queryByRole("button", { name: "World menu" })).toBeNull()
+
+    fireEvent.click(mainLinks("/worlds/w1")[0]!)
+    await heading("World page")
+    expect(inNav().getByRole("button", { name: "World menu" })).toBeInTheDocument()
+  })
+
+  it("the disclosure stays available whichever the main control is", async () => {
+    await mountSettled("/app/alpha/characters/a2", "Character record")
+    for (const name of ["Show campaign menu", "Show world menu", "Show characters menu"]) {
+      expect(inNav().getByRole("button", { name })).toHaveAttribute("aria-expanded")
+    }
+  })
+})
+
+describe("the main control's accessible name contains its visible label", () => {
+  const labels = ["Campaign", "World", "Characters"]
+
+  it.each([
+    ["a link (away from the destination)", "/app/alpha/parties/new", "Parties"],
+    ["a button (at the destination)", "/campaigns", "Campaigns"],
+  ])("in every split group when it is %s", async (_state, entry, title) => {
+    await mountSettled(entry === "/campaigns" ? entry : "/app/alpha/parties", entry === "/campaigns" ? title : "Parties")
+    const rows = Array.from(nav().querySelectorAll<HTMLElement>(".portal-sidebar__split-group > .portal-sidebar__row"))
+    expect(rows).toHaveLength(3)
+    for (const row of rows) {
+      const main = row.querySelector<HTMLElement>("[data-menu-control='main']")!
+      const visible = main.querySelector(".portal-sidebar__label")!.textContent!
+      expect(labels).toContain(visible)
+      expect(main).toHaveAccessibleName(expect.stringContaining(visible))
+      // The disclosure is a different control with a different name.
+      const disclosure = row.querySelector<HTMLElement>("[data-menu-control='disclosure']")!
+      expect(disclosure).toHaveAccessibleName(`Show ${visible.toLowerCase()} menu`)
+      expect(main).not.toHaveAccessibleName(`Show ${visible.toLowerCase()} menu`)
+    }
+  })
+
+  it("keeps expanded state accurate on both controls when the main control is a button", async () => {
+    await mountSettled("/campaigns", "Campaigns")
+    const main = inNav().getByRole("button", { name: "World menu" })
+    const disclosure = worldDisclosure()
+    expect(main).toHaveAttribute("aria-expanded", "false")
+    activate(disclosure)
+    expect(main).toHaveAttribute("aria-expanded", "true")
+    expect(disclosure).toHaveAttribute("aria-expanded", "true")
+    expect(main).toHaveAttribute("aria-controls", disclosure.getAttribute("aria-controls"))
   })
 })
 
@@ -609,7 +696,7 @@ describe("the unsaved-changes question and the menu (CTX-4)", () => {
 
   it("the main control as a link is guarded like any link: Stay keeps the page, Leave starts the task", async () => {
     await dirtyDraft()
-    const link = inNav().getByRole("link", { name: "Open campaign Campaign alpha" })
+    const link = inNav().getByRole("link", { name: "Campaign: open Campaign alpha" })
 
     fireEvent.click(link)
     await screen.findByRole("dialog", { name: "Discard your draft?" })

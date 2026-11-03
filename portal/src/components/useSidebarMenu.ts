@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
+import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from "react"
 import type {
     FocusEvent as ReactFocusEvent,
     KeyboardEvent as ReactKeyboardEvent,
     MouseEvent as ReactMouseEvent,
     RefObject,
 } from "react"
-import { useLocation } from "react-router"
+import { UNSAFE_DataRouterContext, parsePath, useLocation, useNavigationType } from "react-router"
 import { navigationQuestionActive, onQuestionAnswer, registerFocusFallback } from "../hooks/navigationHolds"
+import { NavigationAttempt, hrefOf, viewOfRouterState } from "../navigation/navigationAttempt"
+import type { AttemptView } from "../navigation/navigationAttempt"
 import { canTakeFocus } from "../utils/focusEligibility"
 
 // The one open / close / focus lifecycle of every sidebar menu and of the drawer (docs/UI_DESIGN.md §4,
@@ -23,26 +25,18 @@ const FALLBACK_ACTIVATED = 0
 const FALLBACK_OPENER = 1
 export const FALLBACK_DRAWER_TOGGLE = 2
 
-function pathOf(address: string): string {
-    const end = address.search(/[?#]/)
-    const path = end === -1 ? address : address.slice(0, end)
-    return path.length > 1 ? path.replace(/\/+$/, "") : path
-}
-
 // A click the browser handles itself (new tab, new window, download): not a navigation of this document.
 function handledByBrowser(event: ReactMouseEvent<HTMLElement>): boolean {
     return event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey
 }
 
 interface Pending {
-    fromKey: string
-    fromPath: string
-    path: string
+    attempt: NavigationAttempt
     release: () => void
 }
 
 interface AcceptedNavigationOptions {
-    // Runs when the location the click asked for has actually been reached.
+    // Runs once, when the navigation the click itself started has arrived.
     onAccepted: () => void
     // The control Stay falls back to when the activated one is no longer usable, after the activated one.
     opener: () => HTMLElement | null
@@ -57,16 +51,19 @@ export interface AcceptedNavigation {
 }
 
 /**
- * Closing on *accepted* navigation (CTX-4). A click only records the destination. The close happens when
- * the router's location reaches it, which is after the page's unsaved-changes guard decided to let it
- * through. Until then the menu and drawer stay open: while the question is on screen they are still the
- * place the person came from, and Stay leaves them exactly as they were. The location is what decides, so
- * a question that was answered Stay, a navigation that never completed, or an unrelated REPLACE (the
- * stamp-only replacements the selected-context owners write) is never mistaken for completion: a
- * completion needs the *requested path* to be reached by a new history entry after the click.
+ * Closing on *accepted* navigation (CTX-4). A click records the full destination (path, query and hash)
+ * and the entry it left, and then watches the router for the request it started: held by the
+ * unsaved-changes question, in flight, redirected, or committed (`navigation/navigationAttempt.ts` states
+ * the contract). Only that request arriving closes the menu and the drawer, once. Stay, a failed route, a
+ * superseding or unrelated navigation (Back, a REPLACE, another link, the same address asked for by
+ * someone else), and the stamp-only replacements the selected-context owners write never complete it, and
+ * leave nothing pending. Without a data router (an isolated test) only commits can be watched, and the
+ * same rules apply to them.
  */
 export function useAcceptedNavigation({ onAccepted, opener }: AcceptedNavigationOptions): AcceptedNavigation {
     const location = useLocation()
+    const navigationType = useNavigationType()
+    const router = useContext(UNSAFE_DataRouterContext)?.router ?? null
     const pending = useRef<Pending | null>(null)
     const accepted = useRef(onAccepted)
     const openerRef = useRef(opener)
@@ -92,41 +89,56 @@ export function useAcceptedNavigation({ onAccepted, opener }: AcceptedNavigation
         [cancel],
     )
 
+    // Feeds the attempt a view of the router; settles it when it has an answer.
+    const feed = useCallback(
+        (view: AttemptView) => {
+            const current = pending.current
+            if (current === null) return
+            const status = current.attempt.observe(view)
+            if (status === "pending") return
+            cancel()
+            if (status === "accepted") accepted.current()
+        },
+        [cancel],
+    )
+
     const begin = useCallback(
         (event: ReactMouseEvent<HTMLElement>, to: string) => {
             if (event.defaultPrevented || handledByBrowser(event)) return
             cancel()
             const activated = event.currentTarget
+            const left = router?.state.location ?? location
             const releases = [
                 registerFocusFallback(FALLBACK_ACTIVATED, () => activated),
                 registerFocusFallback(FALLBACK_OPENER, () => openerRef.current()),
             ]
+            // The router tells us everything from here on, in order; the click's own navigate() call follows
+            // this handler, so its first notification is the first thing we see of it.
+            if (router !== null) releases.push(router.subscribe((state) => feed(viewOfRouterState(state))))
+            const target = parsePath(to)
             pending.current = {
-                fromKey: location.key,
-                fromPath: pathOf(location.pathname),
-                path: pathOf(to),
+                attempt: new NavigationAttempt(
+                    { pathname: target.pathname ?? "", search: target.search ?? "", hash: target.hash ?? "" },
+                    { key: left.key, href: hrefOf(left) },
+                ),
                 release: () => releases.forEach((release) => release()),
             }
         },
-        [cancel, location.key, location.pathname],
+        [cancel, feed, location, router],
     )
 
+    // Without a data router there is nothing to watch but commits.
     useEffect(() => {
-        const current = pending.current
-        if (current === null) return
-        // Nothing was committed yet: the guard is asking, or the router has not got there.
-        if (location.key === current.fromKey) return
-        const reached = pathOf(location.pathname)
-        if (reached === current.path) {
-            cancel()
-            accepted.current()
-        } else if (reached !== current.fromPath) {
-            // Another navigation took over; this click is no longer what is happening.
-            cancel()
-        }
-        // (The same path as before the click but not the requested one is a REPLACE of the entry we were on,
-        // such as a stamp: it neither completes nor cancels the click.)
-    }, [cancel, location.key, location.pathname])
+        if (router !== null || pending.current === null) return
+        feed({
+            location,
+            action: navigationType,
+            navigating: null,
+            blocked: null,
+            proceeding: null,
+            failed: false,
+        })
+    }, [feed, location, navigationType, router])
 
     return { begin, cancel }
 }

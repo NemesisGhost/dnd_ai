@@ -45,6 +45,9 @@ export function SplitNavGroup({
     const { menu, containerRef, submenuRef } = useSidebarMenu({ initialOpen, onNavigate })
     const { open } = menu
     const submenuId = useId()
+    // The accessible name starts with the visible label, so voice control and screen readers agree with
+    // what is on screen (WCAG 2.5.3): "Characters: open Ixamarra", "World: open Mundivita".
+    const linkName = action.kind === "link" ? `${label}: open ${action.detail}` : undefined
 
     const mainClassName = sectionActive
         ? "portal-sidebar__link portal-sidebar__link--active"
@@ -73,8 +76,8 @@ export function SplitNavGroup({
                         className={mainClassName}
                         to={action.to}
                         state={navTaskState(action.to, action.root)}
-                        aria-label={action.name}
-                        title={collapsed ? action.name : undefined}
+                        aria-label={linkName}
+                        title={collapsed ? linkName : undefined}
                         onClick={menu.onItemClick(action.to)}
                     >
                         {mainContent}

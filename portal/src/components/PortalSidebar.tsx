@@ -236,10 +236,9 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
 
   // The explicit selection this tab retains, for this user only; and the task the shown page belongs to.
   const selection = selectionFor(retained, bootstrap)
-  const situation = {
-    pathname: location.pathname,
-    currentRoot: resolveTask(location.pathname, location.state)?.task.root ?? null,
-  }
+  const situation = { pathname: location.pathname }
+  // The task the shown page belongs to: styling only. It never decides whether a control links.
+  const currentRoot = resolveTask(location.pathname, location.state)?.task.root ?? null
 
   // The selected world. A world the route confirms is the route's own scope. Otherwise it is the retained
   // selection, and only while it is compatible with the retained campaign: a campaign that is gone or
@@ -338,7 +337,7 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
                 resolvedCampaign={resolvedCampaign}
                 authorizedRouteCampaignId={authorizedRouteCampaignId}
                 action={campaignAction(resolvedCampaign, situation)}
-                sectionActive={situation.currentRoot === "campaign"}
+                sectionActive={currentRoot === "campaign"}
                 collapsed={collapsed}
                 onNavigate={close}
               />
@@ -383,7 +382,7 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
                 campaignPath={campaignPath}
                 character={selectedCharacterRecord}
                 action={charactersAction(resolvedCampaign, selectedCharacterRecord, situation)}
-                sectionActive={situation.currentRoot === "characters"}
+                sectionActive={currentRoot === "characters"}
                 collapsed={collapsed}
                 onNavigate={close}
               />

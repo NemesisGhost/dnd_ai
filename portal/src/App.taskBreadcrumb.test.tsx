@@ -202,7 +202,7 @@ describe("the Navbar starts a task, applied only when the navigation is accepted
     ["Quests", `${base}/quests`, "quests"],
     ["Sessions", `${base}/sessions`, "sessions"],
     // Characters is a split control: its main control opens the selected perspective's record shell.
-    ["Open character Ixamarra", `${base}/characters/character-ixamarra`, "characters"],
+    ["Characters: open Ixamarra", `${base}/characters/character-ixamarra`, "characters"],
   ])("%s starts a task rooted there, with no trail and no list state", async (name, path, root) => {
     const app = openApp(`${base}/parties/p1/members`.replace("/members", ""))
     await screen.findByRole("heading", { level: 1, name: "The Company" })
@@ -214,7 +214,7 @@ describe("the Navbar starts a task, applied only when the navigation is accepted
   it("Campaign Home starts a campaign task", async () => {
     const app = openApp(`${base}/parties`)
     await screen.findByRole("heading", { level: 1, name: "Parties" })
-    fireEvent.click(navbar().getByRole("link", { name: /^Open campaign / }))
+    fireEvent.click(navbar().getByRole("link", { name: /^Campaign: open / }))
     await waitFor(() => expect(app.router.state.location.pathname).toBe(`${base}/home`))
     expect(state(app).task).toMatchObject({ root: "campaign", trail: [] })
   })
