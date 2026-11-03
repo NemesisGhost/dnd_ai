@@ -1,6 +1,6 @@
 # ADR 0021: Shared actor identity, campaign control, and authoring responsibility
 
-- **Status**: Proposed. R19-P0 architecture deliverable, first drafted at `10a1a4e` and corrected after independent reviews: R19-01 to R19-04, then R19-10 to R19-13 and residual R19-02 at `74a10cb`. Not accepted. The second-review content (§2.8 controller path, §3.1.1 tokens and intent, §3.3 events, §3.7 item versions, §3.8 migration protocol) is proposed design, **not implemented, enabled, tested or accepted**. Owner decisions recorded, all 2026-11-02:
+- **Status**: Proposed. R19-P0 architecture deliverable, first drafted at `10a1a4e` and corrected after independent reviews: R19-01 to R19-04, then R19-10 to R19-13 and residual R19-02 at `74a10cb`, then R19-14 to R19-16 and residual items at `6ea0e73`. Not accepted. The second-review content (§2.8 controller path, §3.1.1 tokens and intent, §3.3 events, §3.7 item versions, §3.8 migration protocol) is proposed design, **not implemented, enabled, tested or accepted**. Owner decisions recorded, all 2026-11-02:
   - **OD-1, Owner-approved:** independent mechanical state per campaign (§3).
   - **OD-20, Owner-approved:** shared narrative ownership and location; campaign-specific mechanical possession (§3.1.1).
   - **OD-21, Owner-approved:** separately authorized lineage seeding and cross-campaign copy, both disabled until enablement acceptance (§3.6).
@@ -277,14 +277,53 @@ The ruleset dependency guard on `rules.world_rulesets` (revisions 031/035/037) a
 
 #### 3.3 Mechanical events: authoring, visibility, explanations and corrections (R19-10)
 
-**Classification.** Every effect component is either **narrative** or **mechanical**, as listed in the lookup `campaign.mechanical_components`:
-- **Mechanical:** `current_hit_points`, `character_build_id`, condition, resource, item state, possession (`inventory_entries.*`), attunement (`item_attuned`).
-- **Everything else is narrative:** `item_ownership`, location and travel, party membership, the clock, quest and objective status, knowledge.
+**Classification is a closed, fail-closed registry (R19-14).** P03-S adds the lookup `campaign.effect_component_classes`, which maps each `target_component` code to exactly one class:
+- `campaign_mechanical`;
+- `shared_narrative`;
+- `shared_knowledge`, governed by the knowledge-domain audience rules;
+- `unclassified`.
 
-An event is:
-- **mechanical-only** when all its effects are mechanical;
-- **narrative-only** when none are;
-- **mixed** otherwise, for example an award with `assign_to_holder`.
+`narrative.event_effects.target_component` gets a foreign key to this lookup **for new rows**. A code missing from the registry therefore cannot be written. Adding a code requires a migration that classifies it. **No code is ever narrative by default.**
+
+The registry is seeded from the codes the current commands actually emit (verified at `6ea0e73`):
+
+| Class | Codes | Emitted by |
+|---|---|---|
+| `campaign_mechanical` | `current_hit_points` | `commands/character_state.py`, `commands/encounters.py`, corrections |
+| | `character_build_id` | `commands/character_builds.py`, corrections |
+| | `condition_id` (apply and remove) | `commands/character_state.py` |
+| | `current_amount` (resources) | `commands/character_state.py` |
+| | `item_state` (quantity, condition, equipped, destroyed) | `commands/item_operations.py` |
+| | `inventory_entries.location` (possession: holder, container or place) | `commands/item_operations.py` (award, transfer) |
+| | `item_attuned`, `item_attunement_ended` | `commands/item_operations.py` |
+| `shared_narrative` | `item_ownership` | `commands/item_operations.py` |
+| | `current_location_id` | `commands/movement.py`, `commands/travel.py` |
+| | `current_world_time_id` | `commands/campaign_clock.py` |
+| | `party_membership` | `commands/party_members.py` |
+| | `quest_status_id`, `objective_status_id` | `commands/quests.py`, `commands/quest_runtime.py` |
+| | `organization_status_id`, `relationship_status_id` | `commands/relationships.py` |
+| | `location_is_searched`, `location_is_destroyed`, `location_alarm_level`, `location_condition_notes`, `feature_is_destroyed`, `feature_condition_notes` | `commands/dungeon_state.py` (fixed field spec) |
+| | `connection_status_id`, `hazard_status_id`, `interactable_status_id` | `commands/interactions.py` |
+| `shared_knowledge` | `knowledge_learned`, `knowledge_public`, `belief_awareness_level`, `belief_confidence`, `belief_interpretation`, `belief_willing_to_share`, `awareness_level`, `party_discovered`, `discovered` | `commands/knowledge.py`, `knowledge_runtime.py`, `interactions.py` |
+| | `identification_level` | `commands/items.py` (`identify_item`): per-knower knowledge, not mechanical |
+
+The generic `POST /campaigns/{id}/events` (`api/events.py` → `commands/events._record_event_impl`) records **no** effects. So it has no caller-supplied codes.
+
+**Legacy and unknown codes.** The migration manifest (§3.8) lists every distinct `target_component` in existing `narrative.event_effects`. A code that is not in the seeded registry is recorded as `unclassified` and needs explicit classification by migration before it is shown. **`unclassified` is handled like `campaign_mechanical` with no proven origin campaign:**
+- it is visible only to `canon.edit` holders of the event's origin campaign, or, when there is none, of campaigns on the timeline, labeled;
+- it is never narrative, never counted for other audiences, and never correctable until classified.
+
+**Event shape.** An event is:
+- **mechanical** if it has any `campaign_mechanical` or `unclassified` effect and no other effect;
+- **narrative/knowledge** if all its effects are `shared_narrative` or `shared_knowledge`;
+- **mixed** otherwise.
+
+The **same** classification drives writes (the campaign requirement), reads, lists, counts, cause and correction links, explanations, authoring views, correction previews and corrections. Every reader resolves a code's class **through the registry**. A code missing from a reader's local mapping fails closed to "hidden mechanical".
+
+**Registry coverage tests.**
+- A unit test scans `src/dnd_ai/commands/` for emitted `target_component` literals and constants, and fails if any is missing from the seed.
+- A database test proves the foreign key refuses an unregistered code.
+- A reader test feeds an `unclassified` effect and proves it is hidden from players and from other campaigns.
 
 **Authoring rule.** A new event with any mechanical effect must carry `campaign_id`. This is enforced by a deferred constraint trigger and by the commands. Its mechanical effect values belong to that **origin campaign**.
 
@@ -350,7 +389,7 @@ These are **two distinct commands with separate authorization**. Both ship **dis
 **Lineage seeding:** `request_lineage_seed` → `approve_lineage_seed`. It initializes a target campaign's mechanical state from an explicitly selected source campaign and branch point.
 
 - **Explicit lineage.** The caller names the source campaign. Its timeline must be an ancestor of the target campaign's timeline (trigger), and the branch point is the target timeline's own. Lineage is never inferred and never implicit.
-- **Bounded reconstruction (§3.4).** The source's mechanical events go through `campaign.effective_events(target timeline)`, filtered to the source campaign and bounded at the branch point, then through the administrative baseline with its documented limitation. Each component gets one explicit outcome:
+- **Bounded reconstruction (§3.4).** The source's mechanical events go through `campaign.effective_events(target timeline)`, filtered to the source campaign and bounded at the branch point. **Untimed administrative baselines (`last_event_id IS NULL`) are never used**: they cannot be proven to predate the branch point, so such a component is `history_unavailable`. This matches §3.4. The reviewed offline migration (§3.8) is a separate, explicit disposition and is not seeding. Each component gets one explicit outcome:
   - `seeded`;
   - `history_unavailable`: not reconstructable;
   - `incompatible_version`: the definition or build is not valid in the target version;
@@ -388,8 +427,16 @@ These are **two distinct commands with separate authorization**. Both ship **dis
   - controller briefings, GM notes, portrayal, Knowledge or belief;
   - `knowledge.item_identification` (identification is per knower and is not copied);
   - narrative history, or anything outside the selected components.
-- A preview is returned only to a caller who holds both authorizations.
-- The provenance (source campaign id, source values) is recorded on the target event and the transfer record, and is visible only to target GMs. Target members see the resulting state through the target campaign's normal projections (§3.5, ADR 0023 §9 audience mode).
+- A preview is returned only to a caller who holds both authorizations, re-checked now.
+- **Provenance contract (one definition):**
+
+  | Where | Contains | Readable by |
+  |---|---|---|
+  | **Target event** (`mechanical_transfer_applied`, `campaign_id` = target) | `campaign_mechanical` effects with `previous_value` = the target's old value and `new_value` = the applied value, plus an opaque `transfer_request_id` | The target campaign's normal mechanical-event rules (§3.3). It carries **no** source campaign id, source fingerprint, or non-applied source value |
+  | **Protected transfer record** (`campaign.mechanical_transfer_requests`) | Source campaign id, branch point or `as_of`, the selected components, the **source snapshot** (all selected source values, including skipped and incompatible ones), outcomes, conflicts, both fingerprints, requester, approver, timestamps | Only a caller who **currently** holds `mechanics.transfer_read` in the source **and** the kind's target capability (`mechanics.seed` or `mechanics.copy_in`) in the target. Re-checked on every read. A caller without both gets a non-disclosing refusal |
+  | **Audit** | Ids, kind, status changes and actor. No values | Existing audit-history rules |
+
+  No other surface exposes source values or the source campaign's identity. A target GM without source read sees that a transfer was applied, and its applied values through the target event, but not where they came from.
 - No path uses the source campaign's audience to widen the target's, or the reverse.
 
 **Integrity, idempotency and concurrency.**
@@ -407,10 +454,7 @@ These are **two distinct commands with separate authorization**. Both ship **dis
   - Request, approve and apply responses are **id-only receipts**. An idempotent replay returns the receipt, never preview content.
   - Reading a preview or transfer record re-authorizes the caller against both sides **now**. A caller who has lost `mechanics.transfer_read` in the source gets a non-disclosing refusal, even for their own earlier request.
   - Approval or apply after the requester's or approver's revocation fails.
-- **Safe conflict and provenance responses.**
-  - Conflict reports name the component key and target-side value.
-  - Source values appear only to a caller currently holding source read.
-  - Provenance on the target event (source campaign id, snapshot fingerprint) is GM-only in the target and never shown to target players or controllers.
+- **Safe conflict responses.** Conflict reports are part of the protected transfer record and follow its read rule. An approval response is an id-only receipt, which includes no conflict detail.
 - **Indirect paths cannot reach either operation.** Build approval or activation (P3d-2), item award and transfer, encounter damage and promotion (ADR 0022), the Foundry integration sync (`commands/integration.py`), quest rewards, Phase 18 import promotion and AI proposals never read another campaign's mechanical state or write it cross-campaign. They operate only on the route campaign. Tests cover each path.
 
 **Enablement.** Both commands refuse with `feature_not_enabled` (a non-disclosing 404-equivalent) until all of the following are true:
@@ -435,10 +479,24 @@ OD-21's approval does not satisfy item 4. **Ordinary P03-S isolation does not de
 |---|---|
 | Possession: award, transfer, place; ownership (narrative); `change_item_ownership` | **Allowed.** Version-neutral state of a world object |
 | Equip and unequip; quantity consume; damage, repair, destroy | **Allowed** as campaign mechanical state. The flags are version-neutral |
-| Attune and end attunement; any operation that interprets definition mechanics (charges maximum, attunement requirement) | **Refused** with `item_definition_version_mismatch` (400, non-disclosing about other campaigns), because the definition's rules belong to another version |
+| **Attune**; any operation that **creates or interprets** definition mechanics (charges maximum, attunement requirement) | **Refused** with `item_definition_version_mismatch` (400, non-disclosing about other campaigns), because the definition's rules belong to another version |
+| **End attunement** (`end_item_attunement`) | **Allowed** (R19-16). Ending removes a campaign row and interprets no mechanics. It uses the normal campaign authorization (`canon.edit`, or a controller intent if OD-3 includes it), the campaign token and an event |
 | Calculation (ADR 0023) | The item's equipment facts are `incompatible_ruleset_version`: they contribute nothing and raise a warning. No implicit mapping to a same-code definition in C's version. Any mapping is a separate future design |
 
 A campaign whose pin equals the definition's version behaves as today.
+
+**Quarantined incompatible state (R19-16).** The migration (§3.8) can bring a mechanically incompatible row into a campaign: an attunement, or item state with charges, whose item definition belongs to another version than the target campaign's pin. Apply copies such a row with `compatibility_status = 'quarantined_incompatible_version'`, a column on the campaign item tables. Quarantined rows:
+- contribute nothing to calculation (ADR 0023);
+- are shown to the campaign's GMs with a resolution prompt;
+- **count toward the attunement limit** until resolved, so no limit is silently exceeded;
+- block transfer of the item's possession while attuned, under the existing rule that an attuned item does not change holder.
+
+Supported resolutions, each an audited command with an event in **that campaign only**:
+- **end the attunement** (`end_item_attunement`), allowed as above;
+- **acknowledge and keep quarantined** (`acknowledge_quarantined_item_state`), recorded with a reason;
+- **clear quarantined item mechanical state** (`clear_quarantined_item_state`), which resets version-specific values such as charges to unset, through a campaign event.
+
+None of these touches shared ownership or any other campaign. After resolution, a later possession transfer in that campaign follows the normal rules and still changes only that campaign's rows.
 
 #### 3.8 Migrating existing timeline-only records (P03-S; additive; manifest-reviewed; no rolling deployment assumed)
 
@@ -448,32 +506,55 @@ The supported deployment is self-hosted Docker Compose on one host (ADR 0012, AD
 
 1. **Schema (additive).** Create:
    - the empty campaign tables;
-   - `campaign_mechanical_lineages`, `mechanical_state_migration_records`, `mechanical_components`;
+   - `campaign_mechanical_lineages`, `mechanical_state_migration_records`, `effect_component_classes`;
    - **`campaign.campaign_mechanical_initializations`** (`campaign_id`, `character_id` or `item_instance_id`, `component_family`, `origin`, `initialized_at`).
 
    The initializations table makes an explicitly **empty** state (for example "no conditions") distinguishable from "never initialized". Row-set families (conditions, resources, inventory, attunements) are authoritative for a campaign once their initialization row exists. Absent rows then mean none, and an absent initialization means not initialized.
 
    Data classification: every new TEXT or JSONB column is registered in `domain/data_classification.COLUMN_CLASSES`, and audit structural fields in `AUDIT_STRUCTURAL_FIELDS`. Examples: condition `source_description` (GM-only), lineage and migration `reason` (GM-only), transfer-request preview (GM-only).
-2. **Manifest** (read-only, on a restored copy at snapshot S0). It lists:
-   - every legacy mechanical row of character state, conditions, resources, item state, inventory and attunements, with a **content hash**;
+2. **Manifest** (read-only, on a restored copy at snapshot S0). The unit of review and application is the **family**: one target campaign, one subject, one component family, with its complete membership:
+
+   | Family | Subject | Members | Dependencies checked at apply |
+   |---|---|---|---|
+   | `character_core` | (character) | The `character_state` row (HP, maximum, temporary, exhaustion, death saves, initiative, transformation, `character_build_id`) | The build exists and is usable by the target (else the build field is quarantined and shown to GMs); the character is in the target's world |
+   | `conditions` | (character) | **All** `character_conditions` rows of `(timeline, character)` | Each condition is in the target's pinned version (else the family needs an explicit replacement) |
+   | `resources` | (character) | **All** `character_resources` rows | Same version rule |
+   | `item` | (item instance) | The `item_state` row, the `inventory_entries` row, and **all** `item_attunements` rows of the item | The holder is in the world; the attunement holder equals the possessor; the per-(campaign, character) attunement limit holds across all families applied for the campaign; version compatibility (incompatible rows are quarantined, §3.7) |
+
+   For each family the manifest records:
+   - every member row with its content hash;
+   - the **membership hash**, a hash over the sorted member keys and hashes;
+   - the classification (`single_campaign`, `multi_campaign`, `no_campaign`, `branch_inherited`);
+   - the reviewed disposition.
+
+   The manifest also lists:
    - every campaign ever created on each timeline, including archived ones;
-   - every legacy campaign-less event with mechanical effects;
-   - evidence (event `campaign_id`, sessions, encounters), labeled as evidence only.
+   - every legacy campaign-less event with mechanical or unclassified effects, for attribution;
+   - every distinct effect code (§3.3);
+   - evidence, labeled as evidence only.
 
    `item_ownership` and `character_location_history` are excluded (OD-20).
 
-   Classification:
-   - `single_campaign`: a mapping is proposed and still reviewed;
-   - `multi_campaign`: the reviewer chooses copy to all, copy to selected, or leave unmapped;
-   - `no_campaign`: legacy only;
-   - `branch_inherited`: the reviewer chooses to materialize the value that resolves today, recorded as `migrated_from_timeline` with the reviewer acknowledging that administrative baselines are unproven; or to leave it unmapped.
+   **Dispositions are per family, never per row.**
+   - `copy` to listed campaigns.
+   - `leave_unmapped`.
+   - `reviewed_replacement`: the reviewer supplies the complete member set to write, including an explicitly empty set, with a reason.
+   - `empty_confirmed`: the legacy family has no rows, and the reviewer explicitly confirms "this campaign starts with none".
 
-   Each legacy mechanical event is attributed to a reviewed campaign or left unattributed. Ownership is **never inferred**.
-3. **Manifest-to-live validation.** At apply time, inside the stopped-writer window, a validator recomputes every manifest row's content hash on the **live** database. Any row added, changed or deleted since S0 is excluded from apply and returned for re-review. Apply proceeds only for validated rows, or for none, at the reviewer's choice. Deleted legacy rows are recorded as `deleted_since_manifest` and are never resurrected.
-4. **Apply** (operator tooling, not a runtime command). It:
-   - copies validated rows into the campaign tables with `origin = migrated_from_timeline`;
-   - writes initialization rows for each mapped (campaign, subject, family), including families whose legacy set is empty, so they become explicitly empty;
-   - writes `mechanical_state_migration_records` and the event attributions.
+   For `branch_inherited`, materializing the value that resolves today is a **distinct, explicit disposition** (`materialize_inherited`, reviewer-acknowledged as an unproven administrative baseline). It is never runtime seeding. A partial review of a family's members is **not** a disposition. The family stays `pending`.
+3. **Manifest-to-live validation** (inside the stopped-writer window). For every family with a disposition, the validator recomputes the **membership hash and every member hash** on the live database. Any added, changed or deleted member, or a failed dependency, makes the **whole family** `pending_drift`:
+   - nothing from it is written;
+   - **no initialization marker is created**, so the campaign keeps the GM-only legacy fallback for that family;
+   - it is returned for re-review.
+
+   Families are never partially applied. A deleted legacy member is recorded and never resurrected.
+4. **Apply** (operator tooling, not a runtime command; one transaction per family). For each validated family:
+   - write exactly the reviewed member set (or the reviewed replacement), with `origin = migrated_from_timeline`;
+   - quarantine incompatible members (§3.7);
+   - write the family's `campaign_mechanical_initializations` row **in the same transaction**;
+   - write the `mechanical_state_migration_records` entry, keyed by `(manifest_id, family_key, membership_hash)`.
+
+   **Retry is idempotent:** a family whose record exists with the same membership hash is skipped. The same family key with a different hash is refused for re-review. An `empty_confirmed` or empty `reviewed_replacement` writes only the initialization row. A family with no disposition writes nothing and stays uninitialized. Event attributions are applied with their families' group.
 5. **Cutover groups.** Readers move first (dual-read), then writers move in the stopped-writer window. Each group's legacy tables get a write-block trigger at its writer cutover.
 
 | Group | Tables | Writers | Readers |
@@ -521,6 +602,8 @@ The owner is Phase 15, P03-S, unless noted.
 | Queries/APIs | Events: `queries/event_explanations.py`, `queries/event_authoring.py`; `api/event_explanations.py`, `api/event_corrections.py` (GET, preview, void, correct), `api/events.py` (POST), `api/sessions.py` (session activity), `api/summary.py` (recent events), `api/world_explorer.py` (`/world/events/{id}`) | §3.3 visibility and correction rules |
 | APIs | `api/item_authoring.py` (`AwardRequest`, `_RUNTIME/award` and other operations, party inventory), `api/items.py` (transfer) | Required `ownership` intent; split tokens (§3.1.1) |
 | Domain | `domain/data_classification.py` (`COLUMN_CLASSES`, `AUDIT_STRUCTURAL_FIELDS`) | Register every new TEXT/JSONB column and audit field |
+| Tables (new) | `campaign.effect_component_classes`, plus a foreign key from new `narrative.event_effects` rows | Fail-closed effect classification (§3.3) |
+| Columns and commands (new) | `compatibility_status` on campaign item tables; `acknowledge_quarantined_item_state`, `clear_quarantined_item_state`; `end_item_attunement` allowed across versions | Quarantine and resolution (§3.7) |
 | Portal | `portal/src/api/items.ts` (`runItemOperation`), `components/AwardItemSection.tsx`, `components/items/ItemPlaySections.tsx`, `components/items/useItemDrafts.ts`, `types/items.ts`; event explanation, correction and inventory views | Explicit ownership intent; split tokens; render omitted mechanical effects without placeholders |
 | APIs | `api/character_state.py`, `api/character_builds.py`, `api/characters.py` (sheet, inventory, attunements), `api/items.py`, `api/encounters.py`, `api/integration.py` | Route campaign = state campaign. Response shapes unchanged, plus a `state_origin` field where useful |
 | New commands | `request_lineage_seed` / `approve_lineage_seed`; `request_mechanical_copy` / `approve_mechanical_copy`; table `campaign.mechanical_transfer_requests`; capabilities `mechanics.transfer_read`, `mechanics.seed`, `mechanics.copy_in` | OD-21 Owner-approved. **Disabled until the enablement conditions in §3.6 are met**; not required for P03-S isolation |
@@ -741,11 +824,21 @@ P03-C and P03-S may land in either order. The port's intermediate behavior is sp
   - The A/E1 → B/E2 → correct-E1 regression (§3.1.1), including the ownership variant.
   - An award without `ownership` is rejected with 422, and the portal sends explicit intent.
   - A controller intent succeeds without `canon.edit`, while the canonical command still refuses the controller.
-  - Manifest-to-live validation excludes rows changed after S0.
+  - Manifest-to-live validation is per family: any drift makes the whole family pending, with no marker (see the third-review items).
   - An explicitly empty condition set does not fall back to legacy rows.
   - A player never sees `legacy_shared_state` values.
   - Attunement of another version's item is refused, while possession and equip are allowed.
   - Legacy campaign-less mechanical events are refused for correction after cutover unless attributed.
+- **Third review (R19-14 to R19-16).**
+  - The registry covers every emitted code; an unregistered code is refused at write; an `unclassified` legacy effect is hidden from players and other campaigns.
+  - Campaign A ending K's attunement to X leaves B's attunement row, events and counts unchanged; the event is invisible to B and B cannot correct it.
+  - A family drifting after S0 (member added, changed or deleted) is entirely `pending_drift`, with no marker.
+  - A partially reviewed family is not applied.
+  - `reviewed_replacement` and `empty_confirmed` write exactly what was reviewed.
+  - A retry is idempotent.
+  - A quarantined incompatible attunement contributes nothing, counts toward the limit, and can be ended in the target campaign only. A later transfer in that campaign changes only its rows, and legal ownership is unchanged.
+  - Seeding never uses untimed baselines.
+  - Provenance follows the single contract.
 - **Routing.**
   - An assignment row never grants `view_private` or `view_knowledge`.
   - A legacy `primary_controller` row keeps them after an assignment is created and after one is revoked.

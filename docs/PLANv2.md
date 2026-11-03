@@ -448,7 +448,7 @@ No SQL, seed script, importer, Foundry, or AI provider may be used.
 - Cross-world, cross-timeline, and cross-campaign requests are rejected without disclosure.
 - Audit and provenance identify real changes without storing reusable secrets.
 - The same commands are suitable for later import and integration clients.
-- The 15H shared actor contracts are accepted: P03-A revelation and audience-safe reads, P03-B ongoing control with the shipped operation allow-list stated, P03-C explicit authoring responsibility with compatibility adapters, and **P03-S campaign mechanical-state isolation** (OD-1, OD-20, OD-21): campaign-keyed state; origin-campaign event visibility and corrections; split item revision checks; required ownership intent; reviewed manifest migration with stopped-writer cutover; seeding and copy still disabled ([ADR 0021](adr/0021-shared-actor-identity-control-and-authoring-responsibility.md) §3, Proposed). The same character keeps its UUID and history through a control change, including a player-controlled monster. Destructive retirement of NPC/PC subtype storage is not required to close Phase 15. It may follow once compatibility is demonstrated.
+- The 15H shared actor contracts are accepted: P03-A revelation and audience-safe reads, P03-B ongoing control with the shipped operation allow-list stated, P03-C explicit authoring responsibility with compatibility adapters, and **P03-S campaign mechanical-state isolation** (OD-1, OD-20, OD-21): campaign-keyed state; origin-campaign event visibility and corrections; fail-closed effect classification; split item revision checks; required ownership intent; family-atomic reviewed manifest migration with stopped-writer cutover; quarantine of incompatible migrated item state; seeding and copy still disabled ([ADR 0021](adr/0021-shared-actor-identity-control-and-authoring-responsibility.md) §3, Proposed). The same character keeps its UUID and history through a control change, including a player-controlled monster. Destructive retirement of NPC/PC subtype storage is not required to close Phase 15. It may follow once compatibility is demonstrated.
 - Focused tests, full suites, migrations, lint, types, build, and final-head CI pass.
 
 ---
@@ -599,7 +599,7 @@ Complete the self-hosted topology:
 - health/readiness checks;
 - startup migration procedure;
 - structured logs and bounded audit retention;
-- backup, restore, and rollback runbooks, including the P03-S mechanical-state tables and migration records, the stopped-writer cutover backups, and restore after post-cutover divergence;
+- backup, restore, and rollback runbooks, including the P03-S mechanical-state tables and migration records (complete and pending families, quarantined state, the effect registry, event attributions), the stopped-writer cutover backups, and restore after post-cutover divergence;
 - release/version metadata;
 - upgrade verification from the previous supported release.
 
