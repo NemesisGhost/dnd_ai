@@ -4,6 +4,7 @@ import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { CharacterBoundary } from "../components/CharacterBoundary"
 import { CharacterSheetBoundary } from "../components/CharacterSheetBoundary"
 import { CharactersBrowser } from "../components/CharactersBrowser"
+import { ArrivalHeadingFocus } from "../navigation/ArrivalHeadingFocus"
 import { usePerspective } from "../context/CharacterPerspectiveContext"
 import { CharacterSheetPage } from "./CharacterSheetPage"
 import PlaceholderPage from "./PlaceholderPage"
@@ -154,6 +155,7 @@ export function CampaignCharactersBrowsePage() {
             hasSelection={getSelectedCharacterId(campaignId) !== null}
         >
             <h1>Characters</h1>
+            <ArrivalHeadingFocus />
             <CharactersBrowser campaignId={campaignId} />
         </WithCharactersHeader>
     )

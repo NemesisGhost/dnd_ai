@@ -228,7 +228,7 @@ export function HierarchyContextPanel({
             onSelect={(worldId) => {
               const choice = worldChoices.find((item) => item.world_id === worldId)
               if (choice !== undefined) {
-                const request = scopeRequest(choice.to, "world")
+                const request = scopeRequest(choice.to, "world", { level: "world", id: worldId })
                 navigate(request.to, { state: request.state })
               }
             }}
@@ -254,6 +254,7 @@ export function HierarchyContextPanel({
               const request = scopeRequest(
                 `/worlds/${encodeURIComponent(activeWorldId ?? "")}/timelines/${encodeURIComponent(timelineId)}`,
                 "world",
+                { level: "timeline", id: timelineId },
               )
               navigate(request.to, { state: request.state })
             }}
@@ -276,7 +277,7 @@ export function HierarchyContextPanel({
             options={campaignOptionsShown}
             enabled={campaignOptionsShown.length > 0}
             onSelect={(campaignId) => {
-              const request = scopeRequest(`/app/${encodeURIComponent(campaignId)}/home`, "campaign")
+              const request = scopeRequest(`/app/${encodeURIComponent(campaignId)}/home`, "campaign", { level: "campaign", id: campaignId })
               navigate(request.to, { state: request.state })
             }}
           />

@@ -23,19 +23,39 @@ describe("perspectiveRequest", () => {
     it("encodes ids and carries nothing of the page left (no query, no hash, no other state)", () => {
         const request = perspectiveRequest("alpha", "a/b?c=d", scope)
         expect(request.to).toBe("/app/alpha/characters/a%2Fb%3Fc%3Dd")
-        expect(Object.keys(request.state).sort()).toEqual(["ctx", "task"])
+        expect(Object.keys(request.state).sort()).toEqual(["ctx", "selection", "task"])
+    })
+
+    it("names the level and id chosen, and only that (never a label)", () => {
+        expect(perspectiveRequest("alpha", "a2", scope).state.selection).toEqual({
+            level: "character",
+            id: "a2",
+            campaignId: "alpha",
+        })
+        expect(perspectiveRequest("alpha", null, scope).state.selection).toEqual({
+            level: "character",
+            id: null,
+            campaignId: "alpha",
+        })
     })
 })
 
 describe("scopeRequest", () => {
     it("starts a task with the section's root in the destination's own scope", () => {
-        expect(scopeRequest("/app/beta/home", "campaign").state.task).toMatchObject({ root: "campaign", scope: { campaignId: "beta" } })
-        expect(scopeRequest("/worlds/w1", "world").state.task).toMatchObject({ root: "world", scope: { worldId: "w1" } })
+        expect(scopeRequest("/app/beta/home", "campaign", { level: "campaign", id: "beta" }).state.task).toMatchObject({
+            root: "campaign",
+            scope: { campaignId: "beta" },
+        })
+        expect(scopeRequest("/worlds/w1", "world", { level: "world", id: "w1" }).state.task).toMatchObject({
+            root: "world",
+            scope: { worldId: "w1" },
+        })
     })
 
     it("starts nothing for an address that is not a task page, and still names the destination", () => {
-        const request = scopeRequest("/campaigns", "campaign")
+        const request = scopeRequest("/campaigns", "campaign", { level: "campaign", id: "beta" })
         expect(request.to).toBe("/campaigns")
         expect(request.state.task).toBeUndefined()
+        expect(request.state.selection).toEqual({ level: "campaign", id: "beta" })
     })
 })

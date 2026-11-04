@@ -2,6 +2,7 @@ import { entryContextStamp } from "./contexts"
 import type { EntryContextV1, SelectedContext } from "./contexts"
 import { navTaskState } from "./navStart"
 import type { NavRoot } from "./routeMeta"
+import type { SelectionChange } from "./selectionChange"
 import type { TaskOriginV1 } from "./taskOrigin"
 
 // What a deliberate Infobox selection asks the router for (docs/UI_DESIGN.md §4.8.4, plan §4.2, PD-6).
@@ -13,7 +14,9 @@ import type { TaskOriginV1 } from "./taskOrigin"
 
 export interface SelectionRequest {
     to: string
-    state: { task?: TaskOriginV1; ctx?: EntryContextV1 }
+    // `selection` names the level and id chosen (no labels); it only lets the accepted arrival be
+    // announced and focused (navigation/selectionChange.ts).
+    state: { task?: TaskOriginV1; ctx?: EntryContextV1; selection: SelectionChange }
 }
 
 /**
@@ -30,7 +33,11 @@ export function perspectiveRequest(
     const to = characterId === null ? `${base}/all` : `${base}/${encodeURIComponent(characterId)}`
     return {
         to,
-        state: { ...navTaskState(to, "characters"), ctx: entryContextStamp({ ...context, characterId }) },
+        state: {
+            ...navTaskState(to, "characters"),
+            ctx: entryContextStamp({ ...context, characterId }),
+            selection: { level: "character", id: characterId, campaignId },
+        },
     }
 }
 
@@ -39,6 +46,10 @@ export function perspectiveRequest(
  * task rooted at the corresponding Navbar section. The selection itself follows the route that is accepted
  * (the route scope governs, UI_DESIGN §4.8.2).
  */
-export function scopeRequest(to: string, root: Extract<NavRoot, "campaign" | "world">): SelectionRequest {
-    return { to, state: { ...navTaskState(to, root) } }
+export function scopeRequest(
+    to: string,
+    root: Extract<NavRoot, "campaign" | "world">,
+    selection: { level: "campaign" | "world" | "timeline"; id: string },
+): SelectionRequest {
+    return { to, state: { ...navTaskState(to, root), selection } }
 }

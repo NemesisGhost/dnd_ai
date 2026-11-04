@@ -1,4 +1,5 @@
 import type { ReactNode } from "react"
+import { ArrivalHeadingFocus } from "../navigation/ArrivalHeadingFocus"
 import { useCharacter } from "../hooks/useCharacter"
 import type { CharacterDetail } from "../types/character"
 import PlaceholderPage from "../pages/PlaceholderPage"
@@ -22,6 +23,7 @@ export function CharacterBoundary({
     if (state.status === "loading") {
         return (
             <PlaceholderPage
+                busy
                 title="Loading character"
                 description="Loading the latest authorized character information."
             />
@@ -30,15 +32,20 @@ export function CharacterBoundary({
 
     if (state.status === "unavailable") {
         return (
-            <PlaceholderPage
-                title="Character unavailable"
-                description="The requested character information is not available."
-            />
+            <>
+                <PlaceholderPage
+                    title="Character unavailable"
+                    description="The requested character information is not available."
+                />
+                <ArrivalHeadingFocus />
+            </>
         )
     }
 
     if (state.status === "error") {
         return (
+            <>
+            <ArrivalHeadingFocus />
             <section
                 className="placeholder-page"
                 aria-labelledby="character-error-heading"
@@ -59,8 +66,14 @@ export function CharacterBoundary({
                     Try again
                 </button>
             </section>
+            </>
         )
     }
 
-    return <>{children(state.character)}</>
+    return (
+        <>
+            {children(state.character)}
+            <ArrivalHeadingFocus />
+        </>
+    )
 }

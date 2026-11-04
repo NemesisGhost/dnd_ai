@@ -1,4 +1,5 @@
 import type { ReactNode } from "react"
+import { ArrivalHeadingFocus } from "../navigation/ArrivalHeadingFocus"
 import { useCampaignSummary } from "../hooks/useCampaignSummary"
 import PlaceholderPage from "../pages/PlaceholderPage"
 import type { CampaignSummary } from "../types/campaignSummary"
@@ -21,6 +22,7 @@ export function CampaignSummaryBoundary({
         case "loading":
             return (
                 <PlaceholderPage
+                    busy
                     title="Loading campaign"
                     description="Loading the latest authorized campaign information."
                 />
@@ -28,14 +30,19 @@ export function CampaignSummaryBoundary({
 
         case "unavailable":
             return (
-                <PlaceholderPage
-                    title="Campaign information unavailable"
-                    description="The requested campaign information is unavailable or you do not have access to it."
-                />
+                <>
+                    <PlaceholderPage
+                        title="Campaign information unavailable"
+                        description="The requested campaign information is unavailable or you do not have access to it."
+                    />
+                    <ArrivalHeadingFocus />
+                </>
             )
 
         case "error":
             return (
+                <>
+                <ArrivalHeadingFocus />
                 <section
                     className="placeholder-page"
                     aria-labelledby="campaign-summary-error-heading"
@@ -56,9 +63,15 @@ export function CampaignSummaryBoundary({
                         Try again
                     </button>
                 </section>
+                </>
             )
 
         case "success":
-            return children(state.summary)
+            return (
+                <>
+                    {children(state.summary)}
+                    <ArrivalHeadingFocus />
+                </>
+            )
     }
 }

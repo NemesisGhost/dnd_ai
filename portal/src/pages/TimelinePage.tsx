@@ -21,7 +21,7 @@ export function TimelinePage() {
     // so the page that reports the save is not replaced by "could not be loaded".
     const kept = useKept(state, url)
     const stale = state.kind === "error" && kept !== null
-    const headingRef = usePageArrival(state.kind === "ready")
+    const headingRef = usePageArrival(state.kind !== "loading")
 
     return (
         <div className="world-page">
