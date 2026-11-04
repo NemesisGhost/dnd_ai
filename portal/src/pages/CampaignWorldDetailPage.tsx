@@ -1,5 +1,4 @@
 import { Link, useParams } from "react-router"
-import { useWorldBackPath } from "../hooks/useWorldBackPath"
 import {
     fetchEventDetail,
     fetchItemDetail,
@@ -8,6 +7,7 @@ import {
     fetchReligionDetail,
 } from "../api/world"
 import { CharacterBoundary } from "../components/CharacterBoundary"
+import { CharacterBreadcrumb } from "../components/characters/CharacterBreadcrumb"
 import { CharacterRecordSections } from "../components/characters/CharacterRecordNav"
 import { ItemWorkspace } from "../components/items/ItemWorkspace"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
@@ -38,7 +38,6 @@ export function CampaignWorldDetailPage() {
         category: string
         entityId: string
     }>()
-    const worldBackPath = useWorldBackPath(campaignId ?? "")
     const canEdit = useCampaignCapability(campaignId ?? "", "canon.edit")
 
     if (
@@ -154,9 +153,7 @@ export function CampaignWorldDetailPage() {
         <CharacterBoundary campaignId={campaignId} characterId={entityId}>
             {(character) => (
                 <div className="world-detail__layout">
-                    <p>
-                        <Link to={worldBackPath}>Back to World</Link>
-                    </p>
+                    <CharacterBreadcrumb campaignId={campaignId} characterId={entityId} />
                     <CharacterRecordSections
                         campaignId={campaignId}
                         characterId={entityId}

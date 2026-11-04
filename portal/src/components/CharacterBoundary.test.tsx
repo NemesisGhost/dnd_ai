@@ -68,6 +68,7 @@ describe("CharacterBoundary", () => {
                 status: "loading",
             },
             retry: retryMock,
+            authority: null,
         })
 
         renderBoundary()
@@ -94,6 +95,7 @@ describe("CharacterBoundary", () => {
                 status: "unavailable",
             },
             retry: retryMock,
+            authority: null,
         })
 
         renderBoundary()
@@ -126,6 +128,7 @@ describe("CharacterBoundary", () => {
                 error: diagnosticError,
             },
             retry: retryMock,
+            authority: null,
         })
 
         renderBoundary()
@@ -160,6 +163,7 @@ describe("CharacterBoundary", () => {
                 character: characterFixture,
             },
             retry: retryMock,
+            authority: null,
         })
 
         renderBoundary()

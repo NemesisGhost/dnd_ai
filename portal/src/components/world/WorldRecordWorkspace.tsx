@@ -39,6 +39,10 @@ import { LifecycleActionsProvider } from "../EntityLifecyclePanel"
 import { EntitySourcesSection } from "../EntitySourcesSection"
 import { CharacterInventoryPanel } from "../InventoryPanels"
 import { BuildsLink, PlayerAccessLink, PortrayalLink } from "../NpcAuthoringControls"
+import { useBreadcrumbLabel } from "../../navigation/BreadcrumbLabelContext"
+import { outsideTaskOf } from "../../navigation/breadcrumbModel"
+import { navTaskState } from "../../navigation/navStart"
+import { TaskBreadcrumb } from "../navigation/TaskBreadcrumb"
 import { NpcRuntimePanel } from "../NpcRuntimePanel"
 import { OrganizationMembers } from "../OrganizationMembers"
 import { RelationshipsPanel } from "../RelationshipsPanel"
@@ -130,6 +134,15 @@ export function WorldRecordWorkspace(props: Props) {
 
 function Loaded({ campaignId, category, entityId }: Props) {
     const detail = useAuthoringResource<WorkspaceDetail>(worldDetailPath(campaignId, category, entityId))
+    // A character's name, from this page's own authorized read, for the breadcrumbs of its Characters
+    // pages (builds, portrayal, edit). Other categories register nothing.
+    useBreadcrumbLabel({
+        route: "characters.detail",
+        params: { campaignId, characterId: entityId },
+        name: category === "character" && detail.state.kind === "ready" ? (detail.state.data as CharacterDetail).name : undefined,
+        denied: category === "character" && (detail.state.kind === "denied" || detail.state.kind === "unavailable"),
+        authority: category === "character" ? detail.authority : null,
+    })
     // The last read that succeeded for this record. A refresh that fails recoverably (a network or
     // server error) keeps the workspace mounted on it, so unsent input in any section survives and
     // the person can retry; a denied or unavailable answer, or a loading state, discards it and
@@ -363,10 +376,20 @@ function Workspace({
     const location = useLocation()
     // Router state naming where the record was opened from (the World browser, the Review queue)
     // rides along every in-page link, so moving between sections never forgets where Back returns.
-    const linkState = pickWorldReturnState(location.state)
     const worldBack = useWorldBackPath(campaignId)
     const reviewBack = useReviewBackPath(campaignId)
-    const back = reviewBack !== null ? { href: reviewBack, label: "Back to Review queue" } : { href: worldBack, label: "Back to World" }
+    // A character opened from a task other than World's own (Characters, Parties, a session) keeps that
+    // task: the header shows the task's breadcrumb instead of a World back link, and the section links
+    // carry the validated task. Every other record, and a character opened from World, the Review queue
+    // or directly, is unchanged.
+    const taskBack = category === "character" ? outsideTaskOf(location.pathname, location.state) : null
+    const linkState = taskBack !== null ? taskBack.state : pickWorldReturnState(location.state)
+    const back =
+        taskBack !== null
+            ? { href: taskBack.nearest.to, label: `Back to ${taskBack.nearest.generic}` }
+            : reviewBack !== null
+              ? { href: reviewBack, label: "Back to Review queue" }
+              : { href: worldBack, label: "Back to World" }
 
     const settled = lifecycle.state.kind !== "loading"
     // A lifecycle read that succeeded and says the record is not lifecycle-managed (a bare
@@ -663,6 +686,7 @@ function Workspace({
                     summary={info.summary}
                     status={null}
                     back={back}
+                    breadcrumb={taskBack === null ? undefined : <TaskBreadcrumb current={info.name} />}
                     headingRef={headingRef}
                     guidance={null}
                     guidanceHref={null}
@@ -711,6 +735,7 @@ function Workspace({
                 summary={info.summary}
                 status={lifecycleView}
                 back={back}
+                breadcrumb={taskBack === null ? undefined : <TaskBreadcrumb current={info.name} />}
                 headingRef={headingRef}
                 guidance={guidance}
                 guidanceHref={guidance === null ? null : sectionHref(guidance.section)}
@@ -874,7 +899,11 @@ function DetailsSection({
                     <CharacterPanels character={character} />
                     {/* The sheet is its own page: linked, never embedded a second time here. */}
                     <p className="authoring-page__actions-row">
-                        <Link className="authoring-button" to={`${root}/characters/${encodeURIComponent(id)}`}>
+                        <Link
+                            className="authoring-button"
+                            to={`${root}/characters/${encodeURIComponent(id)}`}
+                            state={navTaskState(`${root}/characters/${encodeURIComponent(id)}`, "characters")}
+                        >
                             Open character sheet
                         </Link>
                     </p>

@@ -273,6 +273,7 @@ beforeEach(() => {
       status: "unavailable",
     },
     retry: vi.fn(),
+    authority: null,
   })
 
   useCampaignSessionsMock.mockReset()
@@ -642,14 +643,15 @@ describe("portal routing", () => {
     ).not.toContain("not-a-real-campaign")
   })
 
-  it("routes Characters to the selected character workspace", () => {
+  it("routes Characters to the selected character workspace", async () => {
     renderAppAt("/app/mundivita/characters")
 
-    // In a Characters task on a page that is not the selected character's shell, the Characters control is
-    // the link to that shell, shown as current for the section.
+    // The index is replaced by the selected character's record (PD-4), which reads that character.
     expect(
-      screen.getByRole("link", { name: "Characters: open Ixamarra" }),
-    ).toHaveClass("portal-sidebar__link--active")
+      await screen.findByRole("heading", {
+        name: "Character unavailable",
+      }),
+    ).toBeInTheDocument()
 
     expect(
       useCharacterMock,
@@ -658,11 +660,10 @@ describe("portal routing", () => {
       "character-ixamarra",
     )
 
+    // On that record the Characters control is the section's toggle, current for the section.
     expect(
-      screen.getByRole("heading", {
-        name: "Character unavailable",
-      }),
-    ).toBeInTheDocument()
+      screen.getByRole("button", { name: /Characters/ }),
+    ).toHaveClass("portal-sidebar__link--active")
   })
 
   it("routes Quests through the selected character perspective", () => {

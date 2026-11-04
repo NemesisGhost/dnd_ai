@@ -1,5 +1,5 @@
 import { Link } from "react-router"
-import type { RefObject } from "react"
+import type { ReactNode, RefObject } from "react"
 import type { EntityLifecycleView } from "../../types/entityLifecycle"
 import { RecordHeader, RecordStatus } from "../records/RecordHeader"
 
@@ -13,6 +13,8 @@ interface Props {
     // Where the person came from: the Review queue (with the filters it was left on) or the World
     // browser (with its category, search and page).
     back: { href: string; label: string }
+    // Replaces the back link with the task's breadcrumb, for a record opened inside another task.
+    breadcrumb?: ReactNode
     headingRef: RefObject<HTMLHeadingElement | null>
     // The one next step, as text; where it leads is `guidanceHref`. Null when there is none.
     guidance: { text: string } | null
@@ -34,6 +36,7 @@ export function WorldRecordHeader({
     summary,
     status,
     back,
+    breadcrumb,
     headingRef,
     guidance,
     guidanceHref,
@@ -44,9 +47,11 @@ export function WorldRecordHeader({
     return (
         <RecordHeader
             back={
-                <p>
-                    <Link to={back.href}>{back.label}</Link>
-                </p>
+                breadcrumb ?? (
+                    <p>
+                        <Link to={back.href}>{back.label}</Link>
+                    </p>
+                )
             }
             eyebrow={eyebrow}
             context={context}

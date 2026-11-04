@@ -1,5 +1,6 @@
 import type { ReactNode } from "react"
 import { Link } from "react-router"
+import { useTaskLinkState } from "../../navigation/useTaskLinkState"
 import type { SessionParticipant } from "../../types/campaignSession"
 import { characterKindLabel } from "../../utils/characterKind"
 import { ROLE_LABEL } from "./participantRoles"
@@ -20,6 +21,8 @@ export function SessionRoster({
     controls?: (participant: SessionParticipant) => ReactNode
     emptyText?: string
 }) {
+    // A character opened from a session is a step of the session's task (Sessions stays the root).
+    const taskState = useTaskLinkState()
     if (participants.length === 0) {
         return <p>{emptyText}</p>
     }
@@ -34,6 +37,7 @@ export function SessionRoster({
                     ) : (
                         <Link
                             to={`/app/${encodeURIComponent(campaignId)}/characters/${encodeURIComponent(p.character_id)}`}
+                            state={taskState}
                         >
                             {p.character_name}
                         </Link>

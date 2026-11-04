@@ -2,8 +2,7 @@ import { useRef } from "react"
 import type { ReactNode } from "react"
 import { useLocation } from "react-router"
 import { useCampaignCapability } from "../../hooks/useCampaignCapability"
-import { pickCharactersReturnState } from "../../hooks/useCharactersBackPath"
-import { pickWorldReturnState } from "../../hooks/useWorldBackPath"
+import { retainedState } from "../../navigation/breadcrumbModel"
 import type { CharacterDetail } from "../../types/character"
 import { characterKindLabel } from "../../utils/characterKind"
 import { sectionsOf } from "../../utils/characterSections"
@@ -50,7 +49,7 @@ export function CharacterRecordSections({
 }) {
     const sections = sectionsOf(character)
     const canEdit = useCampaignCapability(campaignId, "canon.edit")
-    const { state } = useLocation()
+    const { pathname, state } = useLocation()
     const root = base(campaignId)
     const id = encodeURIComponent(characterId)
 
@@ -85,11 +84,12 @@ export function CharacterRecordSections({
         if (key === outKey) return key === "details" ? `${root}/world/character/${id}` : `${root}/characters/${id}`
         return nav.sectionHref(key)
     }
-    // Both return states ride along every link, so Back from either route lands where it came from.
-    const linkState = {
-        ...pickCharactersReturnState(campaignId, state),
-        ...pickWorldReturnState(state),
-    }
+    // Every link here stays inside the task this record was opened in (Characters, Parties, a session,
+    // World): the validated task rides along, with the legacy return keys beside it, so the breadcrumb
+    // and Back from either route land where the person came from. After a direct entry there is no
+    // origin to carry and the destination's defaults apply. Only the explicit "Open in World" and "Open
+    // in Characters" controls start another task.
+    const linkState = retainedState(pathname, state) ?? undefined
 
     // Move focus to the content when the section changes after arrival (a link, Back or Forward).
     const content = useRef<HTMLDivElement>(null)
@@ -110,7 +110,7 @@ export function CharacterRecordSections({
                 sections={defs}
                 current={nav.section}
                 hrefFor={hrefFor}
-                linkState={Object.keys(linkState).length === 0 ? undefined : linkState}
+                linkState={linkState}
             />
             <div ref={content} tabIndex={-1} className="character-record__content">
                 {nav.section === mainKey ? main : null}

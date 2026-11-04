@@ -11,11 +11,13 @@ import { pickCharactersReturnState, readCharactersReturn } from "../hooks/useCha
 import { pickWorldReturnState } from "../hooks/useWorldBackPath"
 import { Link, useLocation, useParams } from "react-router"
 import { TaskBreadcrumb } from "../components/navigation/TaskBreadcrumb"
+import { breadcrumbModel } from "../navigation/breadcrumbModel"
+import { resolveTask } from "../navigation/resolveTask"
 import { useTaskLinkState } from "../navigation/useTaskLinkState"
 import { ContentCreatePage } from "../components/authoring/ContentCreatePage"
 import type { ContentCreateConfig } from "../components/authoring/ContentCreatePage"
 import { ContentEditPage } from "../components/authoring/ContentEditPage"
-import type { ContentEditConfig } from "../components/authoring/ContentEditPage"
+import type { ContentEditConfig, EditNavigation } from "../components/authoring/ContentEditPage"
 import { worldEditNavigation } from "../components/world/editNavigation"
 import type { FieldError } from "../components/authoring/feedback"
 import { SelectField, TextAreaField, TextField } from "../components/authoring/fields"
@@ -367,6 +369,37 @@ const summarize: ContentEditConfig<
     </dl>
 )
 
+// An edit reached from a record page inside a task other than World's own (Characters, Parties, a
+// session, Quests) stays in that task: the shared breadcrumb, and Back, Cancel and Save lead to the
+// nearest ancestor with the task cut back to it. Reached from the World workspace, or directly, it keeps
+// the World navigation it has always had.
+function editTaskOf(pathname: string, state: unknown) {
+    const resolved = resolveTask(pathname, state)
+    if (resolved === null || resolved.source === "default") return null
+    return resolved.task.root === "world" || resolved.task.root === "review" ? null : resolved.task
+}
+
+const characterEditPath = (campaignId: string, characterId: string): string =>
+    `/app/${encodeURIComponent(campaignId)}/characters/${encodeURIComponent(characterId)}/edit`
+
+function characterEditNavigation(context: {
+    campaignId: string
+    entityId: string
+    state: unknown
+    params: Record<string, string | undefined>
+}): EditNavigation {
+    const world = worldEditNavigation("character")(context)
+    const pathname = characterEditPath(context.campaignId, context.entityId)
+    if (editTaskOf(pathname, context.state) === null) return world
+    const model = breadcrumbModel(pathname, context.state)
+    const nearest = model?.ancestors.at(-1)
+    if (model === null || nearest === undefined) return world
+    return {
+        listPath: model.ancestors[0]?.to ?? world.listPath,
+        detail: { to: nearest.to, state: nearest.state },
+    }
+}
+
 const editConfig: ContentEditConfig<NpcAuthoringView, NpcOptions, NpcFormValues, NpcFieldsBody> = {
     noun: "NPC",
     heading: "Edit NPC",
@@ -374,7 +407,12 @@ const editConfig: ContentEditConfig<NpcAuthoringView, NpcOptions, NpcFormValues,
     breadcrumbLabel: "World",
     worldPath: worldBase,
     detailPath: (campaignId, id) => `${worldBase(campaignId)}/character/${encodeURIComponent(id)}`,
-    navigation: worldEditNavigation("character"),
+    navigation: characterEditNavigation,
+    taskBreadcrumb: {
+        applies: (pathname, state) => editTaskOf(pathname, state) !== null,
+        labelRoute: "characters.detail",
+        labelParams: (campaignId, characterId) => ({ campaignId, characterId }),
+    },
     viewPath: npcAuthoringPath,
     optionsPath: npcOptionsPath,
     name: (view) => view.name,

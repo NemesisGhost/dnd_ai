@@ -5,7 +5,10 @@ import {
 import {
     MemoryRouter,
     Route,
+    RouterProvider,
     Routes,
+    createMemoryRouter,
+    useLocation,
 } from "react-router"
 import {
     beforeEach,
@@ -14,9 +17,6 @@ import {
     it,
     vi,
 } from "vitest"
-import { characterSheetFixture } from "../fixtures/characterSheet"
-import type { CharacterDetail } from "../types/character"
-import type { CharacterSheet } from "../types/characterSheet"
 import { CampaignCharactersBrowsePage, CampaignCharactersPage } from "./CampaignCharactersPage"
 
 const {
@@ -62,31 +62,6 @@ vi.mock("../hooks/useCharacter", () => ({
 vi.mock("../hooks/useCharacterSheet", () => ({
     useCharacterSheet: useCharacterSheetMock,
 }))
-
-const characterFixture: CharacterDetail = {
-    character_id: "character-a",
-    name: "Character A",
-    character_kind: "character",
-    species_code: "human",
-    size_category: "medium",
-    current_hit_points: 6,
-    maximum_hit_points: 12,
-    temporary_hit_points: 0,
-    exhaustion_level: 0,
-    death_save_successes: 0,
-    death_save_failures: 0,
-    current_location_id: null,
-    active_encounter_id: null,
-    conditions: [],
-    resources: [],
-}
-
-const sheetFixture = {
-    ...characterSheetFixture,
-    character_id: "character-a",
-    name: "Character A",
-    character_kind: "character",
-} satisfies CharacterSheet
 
 function renderAt(
     initialPath: string,
@@ -171,29 +146,25 @@ describe("CampaignCharactersPage", () => {
         ).not.toHaveBeenCalled()
     })
 
-    it("offers both views when a perspective is selected, and keeps the sheet as the default", () => {
+    it("replaces the index with the selected character's record, carrying the entry's state", () => {
         getSelectedCharacterIdMock.mockReturnValue("character-a")
-        useCharacterMock.mockReturnValue({
-            state: { status: "success", character: characterFixture },
-            retry: characterRetryMock,
-        })
-        useCharacterSheetMock.mockReturnValue({
-            state: { status: "success", sheet: sheetFixture },
-            retry: characterSheetRetryMock,
-        })
-
-        renderAt("/app/campaign-a/characters", "/app/:campaignId/characters")
-
-        expect(screen.getByRole("link", { name: "Selected character" })).toHaveAttribute(
-            "aria-current",
-            "page",
+        const task = { v: 1, root: "characters", scope: { campaignId: "campaign-a" }, trail: [] }
+        const router = createMemoryRouter(
+            [
+                { path: "/app/:campaignId/characters", element: <CampaignCharactersPage /> },
+                { path: "/app/:campaignId/characters/:characterId", element: <RecordProbe /> },
+            ],
+            { initialEntries: [{ pathname: "/app/campaign-a/characters", state: { task } }] },
         )
-        expect(screen.getByRole("link", { name: "All characters" })).toHaveAttribute(
-            "href",
-            "/app/campaign-a/characters/all",
-        )
-        expect(screen.getByRole("heading", { level: 1, name: "Character A" })).toBeInTheDocument()
-        expect(screen.queryByText("Browser for campaign-a")).not.toBeInTheDocument()
+        render(<RouterProvider router={router} />)
+
+        expect(screen.getByTestId("record")).toHaveTextContent("/app/campaign-a/characters/character-a")
+        // A REPLACE: the index is not left behind in history, so Back does not bounce through it.
+        expect(router.state.historyAction).toBe("REPLACE")
+        expect(router.state.location.state).toEqual({ task })
+        // The index itself reads nothing: the record page owns the character and sheet requests.
+        expect(useCharacterMock).not.toHaveBeenCalled()
+        expect(useCharacterSheetMock).not.toHaveBeenCalled()
     })
 
     it("offers New PC to editors only, carrying the view to return to", () => {
@@ -218,7 +189,7 @@ describe("CampaignCharactersPage", () => {
         expect(screen.queryByRole("link", { name: "New PC" })).not.toBeInTheDocument()
     })
 
-    it("shows the browser at /characters/all even with a perspective, marking it current", () => {
+    it("shows the browser at /characters/all even with a perspective, linking to the record as a new task", () => {
         getSelectedCharacterIdMock.mockReturnValue("character-a")
 
         renderAt("/app/campaign-a/characters/all", "/app/:campaignId/characters/all")
@@ -228,171 +199,16 @@ describe("CampaignCharactersPage", () => {
             "aria-current",
             "page",
         )
+        // The selected character is one link away, straight to its record (not through the index).
         expect(screen.getByRole("link", { name: "Selected character" })).toHaveAttribute(
             "href",
-            "/app/campaign-a/characters",
+            "/app/campaign-a/characters/character-a",
         )
         // Browsing requests no character data.
         expect(useCharacterMock).not.toHaveBeenCalled()
     })
-
-    it("does not request the sheet while the character is loading", () => {
-        getSelectedCharacterIdMock.mockReturnValue(
-            "character-a",
-        )
-
-        useCharacterMock.mockReturnValue({
-            state: {
-                status: "loading",
-            },
-            retry: characterRetryMock,
-        })
-
-        renderAt(
-            "/app/campaign-a/characters",
-            "/app/:campaignId/characters",
-        )
-
-        expect(
-            useCharacterMock,
-        ).toHaveBeenCalledWith(
-            "campaign-a",
-            "character-a",
-        )
-
-        expect(
-            useCharacterSheetMock,
-        ).not.toHaveBeenCalled()
-
-        expect(
-            screen.queryByRole("heading", {
-                name: "Character A",
-            }),
-        ).not.toBeInTheDocument()
-    })
-
-    it("does not request the sheet when the character is unavailable", () => {
-        getSelectedCharacterIdMock.mockReturnValue(
-            "character-a",
-        )
-
-        useCharacterMock.mockReturnValue({
-            state: {
-                status: "unavailable",
-            },
-            retry: characterRetryMock,
-        })
-
-        renderAt(
-            "/app/campaign-a/characters",
-            "/app/:campaignId/characters",
-        )
-
-        expect(
-            screen.getByRole("heading", {
-                name: "Character unavailable",
-            }),
-        ).toBeInTheDocument()
-
-        expect(
-            useCharacterSheetMock,
-        ).not.toHaveBeenCalled()
-    })
-
-    it("requests the sheet after the character succeeds", () => {
-        getSelectedCharacterIdMock.mockReturnValue(
-            "character-a",
-        )
-
-        useCharacterMock.mockReturnValue({
-            state: {
-                status: "success",
-                character: characterFixture,
-            },
-            retry: characterRetryMock,
-        })
-
-        useCharacterSheetMock.mockReturnValue({
-            state: {
-                status: "loading",
-            },
-            retry: characterSheetRetryMock,
-        })
-
-        renderAt(
-            "/app/campaign-a/characters",
-            "/app/:campaignId/characters",
-        )
-
-        expect(
-            useCharacterSheetMock,
-        ).toHaveBeenCalledWith(
-            "campaign-a",
-            "character-a",
-        )
-
-        expect(
-            screen.queryByRole("heading", {
-                name: "Character A",
-            }),
-        ).not.toBeInTheDocument()
-    })
-
-    it("renders the character sheet after both requests succeed", () => {
-        getSelectedCharacterIdMock.mockReturnValue(
-            "character-a",
-        )
-
-        useCharacterMock.mockReturnValue({
-            state: {
-                status: "success",
-                character: characterFixture,
-            },
-            retry: characterRetryMock,
-        })
-
-        useCharacterSheetMock.mockReturnValue({
-            state: {
-                status: "success",
-                sheet: sheetFixture,
-            },
-            retry: characterSheetRetryMock,
-        })
-
-        renderAt(
-            "/app/campaign-a/characters",
-            "/app/:campaignId/characters",
-        )
-
-        expect(
-            getSelectedCharacterIdMock,
-        ).toHaveBeenCalledWith("campaign-a")
-
-        expect(
-            useCharacterMock,
-        ).toHaveBeenCalledWith(
-            "campaign-a",
-            "character-a",
-        )
-
-        expect(
-            useCharacterSheetMock,
-        ).toHaveBeenCalledWith(
-            "campaign-a",
-            "character-a",
-        )
-
-        expect(
-            screen.getByRole("heading", {
-                level: 1,
-                name: "Character A",
-            }),
-        ).toBeInTheDocument()
-
-        expect(
-            screen.getByRole("meter", {
-                name: "Hit points",
-            }),
-        ).toHaveAttribute("aria-valuenow", "6")
-    })
 })
+
+function RecordProbe() {
+    return <p data-testid="record">{useLocation().pathname}</p>
+}

@@ -17,18 +17,23 @@ import "../authoring/authoring.css"
 //
 // `current` is the page's own heading text when it has an authorized one (a party's name); without it
 // the route's generic noun is used.
-export function TaskBreadcrumb({ current }: { current?: string | null }) {
+//
+// `omit` drops ancestors by route id for a page that cannot know whether the person may open them (the
+// inventory-only reader's page is not told the character's other sections, so it does not offer a link
+// to the record). The remaining trail and the current page are unchanged.
+export function TaskBreadcrumb({ current, omit = [] }: { current?: string | null; omit?: readonly string[] }) {
     const location = useLocation()
     const labelFor = useBreadcrumbLabelReader()
     const model = breadcrumbModel(location.pathname, location.state)
     // A page that is the top of its task (a Navbar destination) has no ancestors, and a breadcrumb of
     // only the current page says nothing the heading does not: nothing is rendered.
-    if (model === null || model.ancestors.length === 0) return null
+    const ancestors = model === null ? [] : model.ancestors.filter((crumb) => !omit.includes(crumb.ref.route))
+    if (model === null || ancestors.length === 0) return null
     const currentLabel = current !== undefined && current !== null && current !== "" ? current : model.current.generic
     return (
         <nav className="authoring-page__breadcrumb task-breadcrumb" aria-label="Breadcrumb">
             <ol className="task-breadcrumb__list">
-                {model.ancestors.map((crumb) => (
+                {ancestors.map((crumb) => (
                     <li key={`${crumb.ref.route}:${Object.values(crumb.ref.params).join("/")}`}>
                         <Link to={crumb.to} state={crumb.state}>
                             {(crumb.named ? labelFor(crumb.ref.route, crumb.ref.params) : undefined) ?? crumb.generic}

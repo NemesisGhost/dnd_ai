@@ -166,3 +166,38 @@ export function continuedState(pathname: string, state: unknown): CrumbState | n
     const here: RouteRef = { route: match.meta.id, params: match.params }
     return withState(continueTask(resolved.task, here))
 }
+
+/**
+ * The task state for a link that stays on the same record inside the same task (a section of a record,
+ * the same record on its other route): the entry's validated task as it is, without the one-shot
+ * `transition` hint, plus the legacy keys beside it. Null for a page that is not a task page and after a
+ * direct entry, where a link carries nothing and the destination's defaults apply (a link must not turn
+ * "no evidence of an origin" into one).
+ */
+export function retainedState(pathname: string, state: unknown): CrumbState | null {
+    const resolved = resolveTask(pathname, state)
+    if (resolved === null || resolved.source === "default") return null
+    const task: TaskOriginV1 = {
+        v: 1,
+        root: resolved.task.root,
+        scope: { ...resolved.task.scope },
+        trail: resolved.task.trail.map((entry) => ({ ...entry, params: { ...entry.params } })),
+    }
+    if (resolved.task.list !== undefined) task.list = { ...resolved.task.list }
+    return withState(task)
+}
+
+/**
+ * For a record page opened inside a task whose root is neither World nor the Review queue (Characters,
+ * Parties, a session, Quests) and has an origin on evidence: the state that keeps that task for the
+ * page's own links, and the nearest ancestor (what "back" means there). Null after a direct entry and
+ * inside World's or the Review queue's own tasks, where the page keeps its existing navigation.
+ */
+export function outsideTaskOf(pathname: string, state: unknown): { state: CrumbState; nearest: Crumb } | null {
+    const resolved = resolveTask(pathname, state)
+    if (resolved === null || resolved.source === "default") return null
+    if (resolved.task.root === "world" || resolved.task.root === "review") return null
+    const kept = retainedState(pathname, state)
+    const nearest = breadcrumbModel(pathname, state)?.ancestors.at(-1)
+    return kept === null || nearest === undefined ? null : { state: kept, nearest }
+}

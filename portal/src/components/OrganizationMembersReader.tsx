@@ -1,4 +1,5 @@
 import { Link } from "react-router"
+import { useTaskLinkState } from "../navigation/useTaskLinkState"
 import { organizationMembersPath } from "../api/organizationMembers"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import type { MemberRow, OrganizationMembers } from "../types/organizationMembers"
@@ -27,11 +28,19 @@ function memberPath(campaignId: string, m: MemberRow): string | null {
 
 function Row({ campaignId, member }: { campaignId: string; member: MemberRow }) {
     const to = memberPath(campaignId, member)
+    // A character member is a step of the task this organization was opened in.
+    const taskState = useTaskLinkState()
     return (
         <li className="member-roster__row" aria-label={member.member_name}>
             <span className="member-roster__who">
                 <span className="member-roster__name">
-                    {to === null ? member.member_name : <Link to={to}>{member.member_name}</Link>}
+                    {to === null ? (
+                        member.member_name
+                    ) : (
+                        <Link to={to} state={member.category === "character" ? taskState : undefined}>
+                            {member.member_name}
+                        </Link>
+                    )}
                 </span>{" "}
                 <span className="member-roster__type">{humanizeCode(member.member_type_code)}</span>
             </span>

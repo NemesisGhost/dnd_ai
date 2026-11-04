@@ -1,5 +1,5 @@
 import { useLocation } from "react-router"
-import { continuedState } from "./breadcrumbModel"
+import { breadcrumbModel, continuedState } from "./breadcrumbModel"
 import type { CrumbState } from "./breadcrumbModel"
 import { resolveTask } from "./resolveTask"
 
@@ -30,4 +30,15 @@ export function useTaskLinkState(options: { requireOrigin?: boolean } = {}): Cru
         if (resolved === null || resolved.source === "default") return undefined
     }
     return continuedState(pathname, state) ?? undefined
+}
+
+/**
+ * The link to an ancestor of the current page in its task (a created record's list, a form's Cancel),
+ * with the task cut back to that ancestor, or null when the page's trail has no such route. Direct
+ * entries give the route's default ancestors, so a destination exists there too.
+ */
+export function useAncestorLink(route: string): { to: string; state: CrumbState } | null {
+    const { pathname, state } = useLocation()
+    const crumb = breadcrumbModel(pathname, state)?.ancestors.find((candidate) => candidate.ref.route === route)
+    return crumb === undefined ? null : { to: crumb.to, state: crumb.state }
 }

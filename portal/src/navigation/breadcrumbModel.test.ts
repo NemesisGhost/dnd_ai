@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { readCharactersReturn } from "../hooks/useCharactersBackPath"
-import { breadcrumbModel, continuedState, legacyKeys } from "./breadcrumbModel"
+import { breadcrumbModel, continuedState, legacyKeys, outsideTaskOf, retainedState } from "./breadcrumbModel"
 import type { Crumb } from "./breadcrumbModel"
 import { startTask } from "./taskOrigin"
 import type { TaskOriginV1 } from "./taskOrigin"
@@ -295,5 +295,60 @@ describe("what a link's state may contain", () => {
                 expect(TASK_KEYS.has(key) || PARAM_KEYS.has(key) || /^\d+$/.test(key)).toBe(true)
             }
         }
+    })
+})
+
+describe("retainedState: a link that stays on the record inside its task", () => {
+    const record = `${base}/characters/ch1`
+    const partiesTask: TaskOriginV1 = {
+        v: 1,
+        root: "parties",
+        scope: { campaignId: C },
+        trail: [{ route: "parties.list", params: { campaignId: C } }],
+        transition: "context",
+    }
+
+    it("is null after a direct entry, so a link cannot turn no evidence into an origin", () => {
+        expect(retainedState(record, undefined)).toBeNull()
+        expect(retainedState(record, { task: { v: 2 } })).toBeNull()
+        expect(retainedState(`${base}/not-a-route`, { task: partiesTask })).toBeNull()
+    })
+
+    it("keeps the task as it is without the one-shot transition hint, and does not add the current page", () => {
+        const kept = retainedState(record, { task: partiesTask })
+        expect(kept?.task).toEqual({
+            v: 1,
+            root: "parties",
+            scope: { campaignId: C },
+            trail: [{ route: "parties.list", params: { campaignId: C } }],
+        })
+        expect(kept?.task).not.toHaveProperty("transition")
+    })
+
+    it("regenerates the legacy keys from an adapted legacy entry", () => {
+        const kept = retainedState(record, { charactersReturn: `${base}/characters/all?type=npc` })
+        expect(kept?.task).toMatchObject({ root: "characters", list: { route: "characters.browse", search: "?type=npc" } })
+        expect(kept?.charactersReturn).toBe(`${base}/characters/all?type=npc`)
+    })
+})
+
+describe("outsideTaskOf: a record opened inside another task than World's or the Review queue's", () => {
+    const world = `${base}/world/character/ch1`
+
+    it("is null for a direct entry, a World task and a Review task", () => {
+        expect(outsideTaskOf(world, undefined)).toBeNull()
+        expect(outsideTaskOf(world, { worldSearch: "?category=character" })).toBeNull()
+        expect(outsideTaskOf(world, { reviewSearch: "?status=draft" })).toBeNull()
+    })
+
+    it("gives the nearest ancestor and the state that keeps the task for a Characters or Parties task", () => {
+        const fromCharacters = outsideTaskOf(world, { charactersReturn: `${base}/characters/all?type=npc` })
+        expect(fromCharacters?.nearest.generic).toBe("Characters")
+        expect(fromCharacters?.nearest.to).toBe(`${base}/characters/all?type=npc`)
+        expect(fromCharacters?.state.task).toMatchObject({ root: "characters" })
+        const partiesTask = continuedState(`${base}/parties/${P}`, continuedState(`${base}/parties`, undefined))
+        const fromParties = outsideTaskOf(world, partiesTask)
+        expect(fromParties?.nearest.to).toBe(`${base}/parties/${P}`)
+        expect(fromParties?.state.task).toMatchObject({ root: "parties" })
     })
 })

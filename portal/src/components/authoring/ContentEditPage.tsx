@@ -8,6 +8,7 @@ import { useKept } from "../../hooks/useKeptResource"
 import { usePageArrival } from "../../hooks/usePageArrival"
 import { useWorldCapability, WORLD_CANON_EDIT } from "../../hooks/useWorldCapability"
 import { useUnsavedChangesGuard } from "../../hooks/useUnsavedChangesGuard"
+import { useBreadcrumbLabel } from "../../navigation/BreadcrumbLabelContext"
 import type { MutationContext } from "../../api/worlds"
 import type { EntityBlockedAction } from "../../types/entityLifecycle"
 import { REASON_MAX, ERROR_CODE_MESSAGE, fieldForErrorCode } from "../../utils/authoringValidation"
@@ -15,6 +16,7 @@ import { describeBlockedReason } from "../../utils/blockedReason"
 import { retainedChanges } from "../../utils/retainedChanges"
 import type { RetainedChange } from "../../utils/retainedChanges"
 import { StaleReadNotice } from "../StaleReadNotice"
+import { TaskBreadcrumb } from "../navigation/TaskBreadcrumb"
 import { ConfirmDialog } from "./ConfirmDialog"
 import { TextField } from "./fields"
 import {
@@ -63,6 +65,15 @@ export interface ContentEditConfig<TView extends EditableView, TOptions, TValues
         state: unknown
         params: Record<string, string | undefined>
     }) => EditNavigation
+    // Optional: show the shared task breadcrumb (navigation/TaskBreadcrumb) instead of the single back
+    // link, for a record edited inside the task it was opened in. `applies` decides from the entry's
+    // validated task (an edit reached any other way keeps the single link); the record's name, from this
+    // page's own authorized read, is registered under `labelRoute` for the breadcrumbs of pages below it.
+    taskBreadcrumb?: {
+        applies: (pathname: string, state: unknown) => boolean
+        labelRoute: string
+        labelParams: (campaignId: string, entityId: string) => Record<string, string>
+    }
     viewPath: (campaignId: string, entityId: string) => string
     optionsPath: (campaignId: string) => string
     name: (view: TView) => string
@@ -112,7 +123,7 @@ export function ContentEditPage<TView extends EditableView, TOptions, TValues, T
     const entityId = params[config.entityParam] ?? ""
     const viewPath = config.viewPath(campaignId, entityId)
     const optionsPath = config.optionsPath(campaignId)
-    const { state, refetch } = useAuthoringResource<TView>(viewPath)
+    const { state, refetch, authority } = useAuthoringResource<TView>(viewPath)
     const options = useAuthoringResource<TOptions>(optionsPath)
     // The last record and choices that loaded, held through a recoverable read failure so the form
     // and what was typed in it stay put; a denied or missing answer, or another record, drops them.
@@ -139,20 +150,33 @@ export function ContentEditPage<TView extends EditableView, TOptions, TValues, T
         detail: { to: config.detailPath(campaignId, entityId) },
     }
     const headingId = `edit-${config.noun.replace(/\s+/g, "-")}-heading`
+    const taskBreadcrumb = config.taskBreadcrumb
+    const showTaskBreadcrumb = taskBreadcrumb?.applies(location.pathname, location.state) === true
+    useBreadcrumbLabel({
+        route: taskBreadcrumb?.labelRoute ?? "",
+        params: taskBreadcrumb?.labelParams(campaignId, entityId) ?? {},
+        name: state.kind === "ready" ? config.name(state.data) : undefined,
+        denied: state.kind === "denied" || state.kind === "unavailable",
+        authority: taskBreadcrumb === undefined ? null : authority,
+    })
 
     return (
         <section className="authoring-page" aria-labelledby={headingId}>
-            <p className="authoring-page__breadcrumb">
-                <Link to={target.listPath}>{config.breadcrumbLabel}</Link>
-                {view !== null ? (
-                    <>
-                        {" / "}
-                        <Link to={target.detail.to} state={target.detail.state}>
-                            {config.name(view)}
-                        </Link>
-                    </>
-                ) : null}
-            </p>
+            {showTaskBreadcrumb ? (
+                <TaskBreadcrumb />
+            ) : (
+                <p className="authoring-page__breadcrumb">
+                    <Link to={target.listPath}>{config.breadcrumbLabel}</Link>
+                    {view !== null ? (
+                        <>
+                            {" / "}
+                            <Link to={target.detail.to} state={target.detail.state}>
+                                {config.name(view)}
+                            </Link>
+                        </>
+                    ) : null}
+                </p>
+            )}
             <h1 id={headingId} ref={headingRef} tabIndex={-1}>
                 {config.heading}
             </h1>

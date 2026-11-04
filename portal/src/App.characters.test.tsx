@@ -14,6 +14,9 @@ const NOT_FOUND = {
   status: 404,
   body: { error: { code: "not_found", message: "m", correlation_id: "c" } },
 }
+const crumb = (name: string) =>
+  within(screen.getByRole("navigation", { name: "Breadcrumb" })).getByRole("link", { name })
+
 const NO_PERSPECTIVE = { character_perspectives: [], selected_character_id: null }
 
 const card = (id: string, name: string, type: string, extra: object = {}) => ({
@@ -236,7 +239,8 @@ describe("Characters browser", () => {
     const selector = screen.getByRole("combobox", { name: "Character perspective" })
     expect(selector).toHaveValue("character-ixamarra")
 
-    fireEvent.click(screen.getByRole("link", { name: "Back to characters" }))
+    // The breadcrumb's root is the browser as the person left it, with the filters.
+    fireEvent.click(crumb("Characters"))
     await screen.findByRole("link", { name: "Mira, NPC" })
     expect(app.router.state.location.search).toBe("?type=npc")
     expect(screen.getByRole("combobox", { name: "Character perspective" })).toHaveValue("character-ixamarra")
@@ -244,13 +248,13 @@ describe("Characters browser", () => {
 })
 
 describe("Characters page with a selected perspective", () => {
-  it("keeps the selected sheet as the default, with the browser one link away", async () => {
-    openApp("/app/mundivita/characters", ["canon.edit"])
+  it("replaces the index with the selected character's record, the sheet with its section row", async () => {
+    const app = openApp("/app/mundivita/characters", ["canon.edit"])
     expect(await screen.findByRole("heading", { level: 1, name: "Ixamarra" })).toBeInTheDocument()
-    expect(screen.getByRole("link", { name: "All characters" })).toHaveAttribute(
-      "href",
-      "/app/mundivita/characters/all",
-    )
+    expect(app.router.state.location.pathname).toBe("/app/mundivita/characters/character-ixamarra")
+    expect(screen.getByRole("navigation", { name: "Character sections" })).toBeInTheDocument()
+    // One history entry: Back leaves the app's previous page, not the index it replaced.
+    expect(app.router.state.historyAction).toBe("REPLACE")
     expect(searchCalls()).toHaveLength(0)
   })
 })
@@ -332,10 +336,8 @@ describe("Character sheet by address", () => {
   it("falls back to the characters browser for Back when opened by a direct link", async () => {
     openApp("/app/mundivita/characters/pc-1", ["campaign.view"], NO_PERSPECTIVE)
     await screen.findByRole("banner", { name: "Aldric" })
-    expect(screen.getByRole("link", { name: "Back to characters" })).toHaveAttribute(
-      "href",
-      "/app/mundivita/characters/all",
-    )
+    // A direct entry has no origin: the breadcrumb is the safe default, Characters then the record.
+    expect(crumb("Characters")).toHaveAttribute("href", "/app/mundivita/characters/all")
   })
 
   it("ignores a crafted return address", async () => {
@@ -345,10 +347,7 @@ describe("Character sheet by address", () => {
       state: { charactersReturn: "/app/other/characters/all" },
     })
     await waitFor(() =>
-      expect(screen.getByRole("link", { name: "Back to characters" })).toHaveAttribute(
-        "href",
-        "/app/mundivita/characters/all",
-      ),
+      expect(crumb("Characters")).toHaveAttribute("href", "/app/mundivita/characters/all"),
     )
   })
 })

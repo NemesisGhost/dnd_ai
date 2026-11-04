@@ -1,12 +1,10 @@
 import type { ReactNode } from "react"
-import { Link, useLocation, useParams } from "react-router"
+import { Link, Navigate, useLocation, useParams } from "react-router"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
-import { CharacterBoundary } from "../components/CharacterBoundary"
-import { CharacterSheetBoundary } from "../components/CharacterSheetBoundary"
 import { CharactersBrowser } from "../components/CharactersBrowser"
 import { ArrivalHeadingFocus } from "../navigation/ArrivalHeadingFocus"
+import { navTaskState } from "../navigation/navStart"
 import { usePerspective } from "../context/CharacterPerspectiveContext"
-import { CharacterSheetPage } from "./CharacterSheetPage"
 import PlaceholderPage from "./PlaceholderPage"
 
 // The Characters page header: local navigation between the selected character's sheet and the
@@ -17,10 +15,10 @@ import PlaceholderPage from "./PlaceholderPage"
 // the World's People category.
 function CharactersHeader({
     campaignId,
-    hasSelection,
+    selectedCharacterId,
 }: {
     campaignId: string
-    hasSelection: boolean
+    selectedCharacterId: string | null
 }) {
     const canCreate = useCampaignCapability(campaignId, "canon.edit")
     const { pathname, search } = useLocation()
@@ -29,11 +27,11 @@ function CharactersHeader({
     return (
         <header className="characters-page__header">
             <nav aria-label="Characters views" className="characters-page__views">
-                {hasSelection ? (
+                {selectedCharacterId !== null ? (
                     <Link
-                        to={base}
+                        to={`${base}/${encodeURIComponent(selectedCharacterId)}`}
+                        state={navTaskState(`${base}/${encodeURIComponent(selectedCharacterId)}`, "characters")}
                         className="characters-page__view-link"
-                        aria-current={browsing ? undefined : "page"}
                     >
                         Selected character
                     </Link>
@@ -63,27 +61,31 @@ function CharactersHeader({
 
 function WithCharactersHeader({
     campaignId,
-    hasSelection,
+    selectedCharacterId,
     children,
 }: {
     campaignId: string
-    hasSelection: boolean
+    selectedCharacterId: string | null
     children: ReactNode
 }) {
     return (
         <>
-            <CharactersHeader campaignId={campaignId} hasSelection={hasSelection} />
+            <CharactersHeader campaignId={campaignId} selectedCharacterId={selectedCharacterId} />
             {children}
         </>
     )
 }
 
-// /app/:campaignId/characters. The selected perspective's sheet, exactly as before. With no
-// perspective (typically a GM, or a player who can only view characters) it is the character
-// browser instead of an empty placeholder.
+// /app/:campaignId/characters. With a selected perspective it is a REPLACE to that character's record
+// (`/characters/:id`, the sheet and the same section row as every other entry; docs/UI_DESIGN.md §5.5,
+// decision PD-4): the index is never a second rendering of the sheet, and Back does not return to it. The
+// entry's state (its task and context mirror) is carried over, so the record opens in the task that
+// reached the index. With no perspective (typically a GM, or a player who can only view characters) it is
+// the character browser instead of an empty placeholder.
 export function CampaignCharactersPage() {
     const { campaignId } =
         useParams<{ campaignId: string }>()
+    const { state } = useLocation()
 
     const { getSelectedCharacterId } =
         usePerspective()
@@ -100,35 +102,20 @@ export function CampaignCharactersPage() {
     const characterId =
         getSelectedCharacterId(campaignId)
 
-    if (characterId === null) {
+    if (characterId !== null) {
         return (
-            <WithCharactersHeader campaignId={campaignId} hasSelection={false}>
-                <h1>Characters</h1>
-                <CharactersBrowser campaignId={campaignId} />
-            </WithCharactersHeader>
+            <Navigate
+                replace
+                to={`/app/${encodeURIComponent(campaignId)}/characters/${encodeURIComponent(characterId)}`}
+                state={state}
+            />
         )
     }
 
     return (
-        <WithCharactersHeader campaignId={campaignId} hasSelection>
-            <CharacterBoundary
-                campaignId={campaignId}
-                characterId={characterId}
-            >
-                {(character) => (
-                    <CharacterSheetBoundary
-                        campaignId={campaignId}
-                        characterId={characterId}
-                    >
-                        {(sheet) => (
-                            <CharacterSheetPage
-                                sheet={sheet}
-                                character={character}
-                            />
-                        )}
-                    </CharacterSheetBoundary>
-                )}
-            </CharacterBoundary>
+        <WithCharactersHeader campaignId={campaignId} selectedCharacterId={null}>
+            <h1>Characters</h1>
+            <CharactersBrowser campaignId={campaignId} />
         </WithCharactersHeader>
     )
 }
@@ -152,7 +139,7 @@ export function CampaignCharactersBrowsePage() {
     return (
         <WithCharactersHeader
             campaignId={campaignId}
-            hasSelection={getSelectedCharacterId(campaignId) !== null}
+            selectedCharacterId={getSelectedCharacterId(campaignId)}
         >
             <h1>Characters</h1>
             <ArrivalHeadingFocus />

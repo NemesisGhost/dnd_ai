@@ -1,5 +1,6 @@
 import type { ReactNode } from "react"
 import { ArrivalHeadingFocus } from "../navigation/ArrivalHeadingFocus"
+import { useBreadcrumbLabel } from "../navigation/BreadcrumbLabelContext"
 import { useCharacter } from "../hooks/useCharacter"
 import type { CharacterDetail } from "../types/character"
 import PlaceholderPage from "../pages/PlaceholderPage"
@@ -15,10 +16,19 @@ export function CharacterBoundary({
     characterId,
     children,
 }: CharacterBoundaryProps) {
-    const { state, retry } = useCharacter(
+    const { state, retry, authority } = useCharacter(
         campaignId,
         characterId,
     )
+    // The character's name, from this authorized read, for the breadcrumbs of the pages that name it.
+    // An unavailable (403/404) answer drops it; nothing is stored beyond the registry in force.
+    useBreadcrumbLabel({
+        route: "characters.detail",
+        params: { campaignId, characterId },
+        name: state.status === "success" ? state.character.name : undefined,
+        denied: state.status === "unavailable",
+        authority,
+    })
 
     if (state.status === "loading") {
         return (

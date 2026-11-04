@@ -204,7 +204,10 @@ describe("NPC authoring routes", () => {
   })
 
   it("offers New PC on the Characters page to editors, even with no character selected", async () => {
-    const editor = openApp("/app/mundivita/characters")
+    const editor = openApp("/app/mundivita/characters", ["access.manage", "canon.edit"], {
+      character_perspectives: [],
+      selected_character_id: null,
+    })
     expect(await screen.findByRole("link", { name: "New PC" })).toHaveAttribute(
       "href",
       "/app/mundivita/characters/pc/new",
@@ -212,7 +215,7 @@ describe("NPC authoring routes", () => {
     expect(screen.queryByRole("link", { name: "New character" })).toBeNull()
     expect(screen.queryByRole("link", { name: "New NPC" })).toBeNull()
     editor.unmount()
-    openApp("/app/mundivita/characters", ["campaign.view"])
+    openApp("/app/mundivita/characters", ["campaign.view"], { character_perspectives: [], selected_character_id: null })
     await screen.findByRole("navigation", { name: "Characters views" })
     expect(screen.queryByRole("link", { name: "New PC" })).toBeNull()
   })

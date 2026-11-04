@@ -140,7 +140,7 @@ const OWNER = ["campaign.create", "timeline.manage", "world.manage", "world.view
 beforeEach(() => {
   selectCharacter.mockReset()
   useCharacterMock.mockReset()
-  useCharacterMock.mockReturnValue({ state: { status: "unavailable" }, retry: vi.fn() })
+  useCharacterMock.mockReturnValue({ state: { status: "unavailable" }, retry: vi.fn(), authority: null })
   server = installMockServer()
   server.on("GET", /^\/worlds\?status=all/, {
     body: {

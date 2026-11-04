@@ -1,6 +1,9 @@
 import {
     useCallback,
+    useContext,
     useEffect,
+    useLayoutEffect,
+    useRef,
     useState,
 } from "react"
 import {
@@ -8,6 +11,8 @@ import {
     fetchCharacter,
 } from "../api/character"
 import { useSession } from "../context/SessionContext"
+import { BreadcrumbLabelContext } from "../navigation/BreadcrumbLabelContext"
+import type { LabelRegistry } from "../navigation/labelRegistry"
 import type { CharacterDetail } from "../types/character"
 
 export type CharacterState =
@@ -29,6 +34,9 @@ export type CharacterState =
 export interface UseCharacterResult {
     state: CharacterState
     retry: () => void
+    // The breadcrumb-label authority under which the read behind `state` STARTED (see
+    // useAuthoringResource): the only registry its answer may publish the character's name into.
+    authority: LabelRegistry | null
 }
 
 interface CharacterSnapshot {
@@ -36,6 +44,7 @@ interface CharacterSnapshot {
     characterId: string
     requestVersion: number
     state: CharacterState
+    authority: LabelRegistry | null
 }
 
 const initialState: CharacterState = {
@@ -55,7 +64,16 @@ export function useCharacter(
             characterId,
             requestVersion: 0,
             state: initialState,
+            authority: null,
         }))
+
+    // The label authority now in force, read when a request starts (a ref: a change of authority must
+    // not start a read).
+    const registry = useContext(BreadcrumbLabelContext)
+    const currentAuthority = useRef(registry)
+    useLayoutEffect(() => {
+        currentAuthority.current = registry
+    })
 
     const retry = useCallback(() => {
         setRequestVersion(
@@ -74,6 +92,7 @@ export function useCharacter(
 
     useEffect(() => {
         const controller = new AbortController()
+        const authority = currentAuthority.current
 
         void fetchCharacter(
             campaignId,
@@ -89,6 +108,7 @@ export function useCharacter(
                     campaignId,
                     characterId,
                     requestVersion,
+                    authority,
                     state: {
                         status: "success",
                         character,
@@ -123,6 +143,7 @@ export function useCharacter(
                         campaignId,
                         characterId,
                         requestVersion,
+                        authority,
                         state: {
                             status: "unavailable",
                         },
@@ -134,6 +155,7 @@ export function useCharacter(
                     campaignId,
                     characterId,
                     requestVersion,
+                    authority,
                     state: {
                         status: "error",
                         error,
@@ -154,5 +176,6 @@ export function useCharacter(
     return {
         state,
         retry,
+        authority: snapshotMatchesRequest ? snapshot.authority : null,
     }
 }
