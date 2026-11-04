@@ -351,7 +351,7 @@ export const ROUTE_METAS: readonly RouteMeta[] = [
         ["sessions"],
         "create",
         "Prepare encounter",
-        { parent: "sessions.detail" },
+        { parent: "sessions.run" },
     ),
     campaign(
         "sessions.encounters.detail",
@@ -360,7 +360,7 @@ export const ROUTE_METAS: readonly RouteMeta[] = [
         ["sessions"],
         "detail",
         "Encounter",
-        { viewed: { type: "encounter", param: "encounterId" }, parent: "sessions.detail" },
+        { viewed: { type: "encounter", param: "encounterId" }, parent: "sessions.run" },
     ),
     campaign(
         "sessions.detail",

@@ -34,6 +34,10 @@ interface EventExplanationProps {
     // The page for an event the caller may open, or null. Differs by surface (the world page or
     // the GM correction page), so the host supplies it.
     eventHref?: (eventId: string) => string | null
+    // Detail only: the task the host page is in, continued. Every link of the detail (a character, a
+    // party, the session, a related event) is a step of it, so the destination's breadcrumb and Back
+    // keep the person's origin. Without it the links carry nothing, as on the World event page.
+    linkState?: object
 }
 
 const enc = encodeURIComponent
@@ -47,27 +51,52 @@ function refHref(campaignId: string, ref: ExplanationRef): string | null {
 }
 
 // A name, a link when the caller may open it, or an honest placeholder (never an id).
-function RefText({ campaignId, target, fallback }: { campaignId: string; target: ExplanationRef | null; fallback: string }) {
+function RefText({
+    campaignId,
+    target,
+    fallback,
+    linkState,
+}: {
+    campaignId: string
+    target: ExplanationRef | null
+    fallback: string
+    linkState?: object
+}) {
     if (target === null || target.state !== "named" || target.name === null) {
         return <>{target?.state === "unrecorded" ? NOT_RECORDED : fallback}</>
     }
     const href = refHref(campaignId, target)
-    return href ? <Link to={href}>{target.name}</Link> : <>{target.name}</>
+    return href ? (
+        <Link to={href} state={linkState}>
+            {target.name}
+        </Link>
+    ) : (
+        <>{target.name}</>
+    )
 }
 
 function RelationLine({
     relation,
     eventHref,
+    linkState,
 }: {
     relation: ExplanationRelation
     eventHref?: (eventId: string) => string | null
+    linkState?: object
 }) {
     const ref = relation.event
     const href = ref.state === "named" && ref.openable && ref.entity_id !== null ? (eventHref?.(ref.entity_id) ?? null) : null
     const name = ref.state === "named" && ref.name !== null ? ref.name : "an event that is not available"
     return (
         <li>
-            {RELATION_LABEL[relation.relation]}: {href ? <Link to={href}>{name}</Link> : name}
+            {RELATION_LABEL[relation.relation]}:{" "}
+            {href ? (
+                <Link to={href} state={linkState}>
+                    {name}
+                </Link>
+            ) : (
+                name
+            )}
             {relation.reason !== null ? <span className="authoring-note"> Reason: {relation.reason}</span> : null}
         </li>
     )
@@ -121,7 +150,7 @@ function advanceCause(x: EventExplanationData): string | null {
 
 // The shared explanation of an event. The two times are always separate and labelled: "In-world"
 // is the effective fictional time, "Recorded" the real moment the event was written down.
-export function EventExplanation({ explanation: x, density = "compact", campaignId = "", showTime = true, eventHref }: EventExplanationProps) {
+export function EventExplanation({ explanation: x, density = "compact", campaignId = "", showTime = true, eventHref, linkState }: EventExplanationProps) {
     const sentence = explanationSentence(x)
     const isTravel = (x.family === "travel" || x.family === "location") && x.travel !== null
 
@@ -145,7 +174,7 @@ export function EventExplanation({ explanation: x, density = "compact", campaign
         <div className="event-explanation event-explanation--detail">
             {sentence !== null ? (
                 <p className="event-explanation__sentence">
-                    {renderLinked(x, campaignId) ?? sentence}
+                    {renderLinked(x, campaignId, linkState) ?? sentence}
                 </p>
             ) : null}
             {isTravel ? <TravelLegs legs={x.travel!.legs} /> : null}
@@ -177,7 +206,7 @@ export function EventExplanation({ explanation: x, density = "compact", campaign
                     <div className="fact-grid__row">
                         <dt>Session</dt>
                         <dd>
-                            <Link to={`${base(campaignId)}/sessions/${enc(x.session.session_id)}`}>
+                            <Link to={`${base(campaignId)}/sessions/${enc(x.session.session_id)}`} state={linkState}>
                                 {x.session.title ?? `Session ${x.session.session_number}`}
                             </Link>
                         </dd>
@@ -187,7 +216,12 @@ export function EventExplanation({ explanation: x, density = "compact", campaign
             {x.relations.length > 0 ? (
                 <ul className="record-list event-explanation__relations" aria-label="Related events">
                     {x.relations.map((relation, index) => (
-                        <RelationLine key={`${relation.relation}-${index}`} relation={relation} eventHref={eventHref} />
+                        <RelationLine
+                            key={`${relation.relation}-${index}`}
+                            relation={relation}
+                            eventHref={eventHref}
+                            linkState={linkState}
+                        />
                     ))}
                 </ul>
             ) : null}
@@ -196,13 +230,13 @@ export function EventExplanation({ explanation: x, density = "compact", campaign
 }
 
 // The party families link the character and the party inside the sentence.
-function renderLinked(x: EventExplanationData, campaignId: string) {
+function renderLinked(x: EventExplanationData, campaignId: string, linkState?: object) {
     if (x.family !== "party_member_joined" && x.family !== "party_member_left") return null
     return (
         <>
-            <RefText campaignId={campaignId} target={x.subject} fallback="A character" />
+            <RefText campaignId={campaignId} target={x.subject} fallback="A character" linkState={linkState} />
             {x.family === "party_member_joined" ? " joined " : " left "}
-            <RefText campaignId={campaignId} target={x.party} fallback="a party" />.
+            <RefText campaignId={campaignId} target={x.party} fallback="a party" linkState={linkState} />.
         </>
     )
 }

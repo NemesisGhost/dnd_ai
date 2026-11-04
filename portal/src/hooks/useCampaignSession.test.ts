@@ -10,6 +10,9 @@ import {
     it,
     vi,
 } from "vitest"
+import { createElement } from "react"
+import type { ReactNode } from "react"
+import { BreadcrumbLabelContext, LabelRegistry } from "../navigation/BreadcrumbLabelContext"
 import {
     CampaignSessionsRequestError,
 } from "../api/campaignSessions"
@@ -306,5 +309,57 @@ describe("useCampaignSession", () => {
         unmount()
 
         expect(signal.aborted).toBe(true)
+    })
+
+    describe("breadcrumb label authority", () => {
+        const wrapperFor = (registry: () => LabelRegistry) =>
+            function Wrapper({ children }: { children: ReactNode }) {
+                return createElement(BreadcrumbLabelContext.Provider, { value: registry() }, children)
+            }
+
+        it("hands back the registry in force when the read STARTED, not the one in force when it answered", async () => {
+            const first = new LabelRegistry()
+            const second = new LabelRegistry()
+            let current = first
+            let answer: (session: CampaignSessionDetail) => void = () => undefined
+            fetchCampaignSessionMock.mockReturnValue(new Promise<CampaignSessionDetail>((resolve) => (answer = resolve)))
+            const { result, rerender } = renderHook(() => useCampaignSession("campaign-a", "session-a"), {
+                wrapper: wrapperFor(() => current),
+            })
+            expect(result.current.authority).toBeNull()
+            current = second
+            rerender()
+            await act(async () => {
+                answer(sessionFixture)
+            })
+            await waitFor(() => expect(result.current.state.status).toBe("success"))
+            expect(result.current.authority).toBe(first)
+            expect(result.current.authority).not.toBe(second)
+        })
+
+        it("a refresh started under a newer registry hands back that one", async () => {
+            const first = new LabelRegistry()
+            const second = new LabelRegistry()
+            let current = first
+            fetchCampaignSessionMock.mockResolvedValue(sessionFixture)
+            const { result, rerender } = renderHook(() => useCampaignSession("campaign-a", "session-a"), {
+                wrapper: wrapperFor(() => current),
+            })
+            await waitFor(() => expect(result.current.state.status).toBe("success"))
+            expect(result.current.authority).toBe(first)
+            current = second
+            rerender()
+            await act(async () => {
+                await result.current.refresh()
+            })
+            expect(result.current.authority).toBe(second)
+        })
+
+        it("is null without a registry and for a refused session", async () => {
+            fetchCampaignSessionMock.mockRejectedValue(new CampaignSessionsRequestError(404))
+            const { result } = renderHook(() => useCampaignSession("campaign-a", "session-a"))
+            await waitFor(() => expect(result.current.state.status).toBe("unavailable"))
+            expect(result.current.authority).toBeNull()
+        })
     })
 })

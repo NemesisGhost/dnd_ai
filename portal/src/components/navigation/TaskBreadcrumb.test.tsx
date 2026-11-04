@@ -33,6 +33,20 @@ const crumbs = () =>
         .getAllByRole("listitem")
         .map((item) => item.textContent)
 
+describe("TaskBreadcrumb sections (P02-7a)", () => {
+    it("opens a staged ancestor on the section the page names, by route id, and only that ancestor", () => {
+        const router = createMemoryRouter(
+            [{ path: "*", element: <TaskBreadcrumb current="Encounter" sections={{ "sessions.run": "encounter-prep" }} /> }],
+            { initialEntries: [`${base}/sessions/s1/encounters/e1`] },
+        )
+        render(<RouterProvider router={router} />)
+        const hrefs = within(screen.getByRole("navigation", { name: "Breadcrumb" }))
+            .getAllByRole("link")
+            .map((link) => link.getAttribute("href"))
+        expect(hrefs).toEqual([`${base}/sessions`, `${base}/sessions/s1`, `${base}/sessions/s1/run?section=encounter-prep`])
+    })
+})
+
 describe("TaskBreadcrumb markup", () => {
     it("is a labelled navigation landmark with an ordered list, links for ancestors and a marked current page", () => {
         open(`${base}/parties/${P}/edit`)

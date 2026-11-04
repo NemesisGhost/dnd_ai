@@ -67,6 +67,7 @@ describe("CampaignSessionDetailBoundary", () => {
                 status: "loading",
             },
             retry: retryMock,
+            authority: null,
         })
 
         renderBoundary()
@@ -95,6 +96,7 @@ describe("CampaignSessionDetailBoundary", () => {
                 status: "unavailable",
             },
             retry: retryMock,
+            authority: null,
         })
 
         renderBoundary()
@@ -127,6 +129,7 @@ describe("CampaignSessionDetailBoundary", () => {
                 error: diagnosticError,
             },
             retry: retryMock,
+            authority: null,
         })
 
         renderBoundary()
@@ -161,6 +164,7 @@ describe("CampaignSessionDetailBoundary", () => {
                 session: sessionFixture,
             },
             retry: retryMock,
+            authority: null,
         })
 
         renderBoundary()

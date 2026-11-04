@@ -4,6 +4,7 @@ import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import { bootstrapWith, installMockServer, renderAuthoringRoutes } from "../test/authoringHarness"
 import { PrepareEncounterPage, PreparedEncounterPage } from "./EncounterPages"
 import { EncounterList } from "../components/EncounterList"
+import { BreadcrumbLabelProvider } from "../navigation/BreadcrumbLabelProvider"
 
 const AUTH = "/campaigns/c1/authoring/encounters"
 const BASE = "/campaigns/c1/encounters"
@@ -95,8 +96,22 @@ function setup(entry: string, view: object = encounter(), capabilities = ["canon
             campaigns: [{ ...sessionBootstrapFixture.campaigns[0]!, campaign_id: "c1", capabilities }],
         }),
         routes: [
-            { path: "/app/:campaignId/sessions/:sessionId/encounters/new", element: <PrepareEncounterPage /> },
-            { path: "/app/:campaignId/sessions/:sessionId/encounters/:encounterId", element: <PreparedEncounterPage /> },
+            {
+                path: "/app/:campaignId/sessions/:sessionId/encounters/new",
+                element: (
+                    <BreadcrumbLabelProvider campaignId="c1" characterId={null}>
+                        <PrepareEncounterPage />
+                    </BreadcrumbLabelProvider>
+                ),
+            },
+            {
+                path: "/app/:campaignId/sessions/:sessionId/encounters/:encounterId",
+                element: (
+                    <BreadcrumbLabelProvider campaignId="c1" characterId={null}>
+                        <PreparedEncounterPage />
+                    </BreadcrumbLabelProvider>
+                ),
+            },
         ],
     })
     return server

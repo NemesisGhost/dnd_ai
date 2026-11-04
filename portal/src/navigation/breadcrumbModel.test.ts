@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { readCharactersReturn } from "../hooks/useCharactersBackPath"
-import { breadcrumbModel, continuedState, legacyKeys, outsideTaskOf, retainedState } from "./breadcrumbModel"
+import { breadcrumbModel, continuedState, continuedStateVia, legacyKeys, outsideTaskOf, retainedState } from "./breadcrumbModel"
 import type { Crumb } from "./breadcrumbModel"
 import { startTask } from "./taskOrigin"
 import type { TaskOriginV1 } from "./taskOrigin"
@@ -350,5 +350,56 @@ describe("outsideTaskOf: a record opened inside another task than World's or the
         const fromParties = outsideTaskOf(world, partiesTask)
         expect(fromParties?.nearest.to).toBe(`${base}/parties/${P}`)
         expect(fromParties?.state.task).toMatchObject({ root: "parties" })
+    })
+})
+
+describe("Sessions and Run (P02-7a)", () => {
+    const S = "s1"
+    const E = "e1"
+    const run = `${base}/sessions/${S}/run`
+
+    it("a direct entry follows the documented hierarchy: Run is under the session, an encounter under Run", () => {
+        expect(summary(modelOf(`${base}/sessions/${S}`).ancestors)).toEqual([["Sessions", `${base}/sessions`]])
+        expect(summary(modelOf(run).ancestors)).toEqual([
+            ["Sessions", `${base}/sessions`],
+            ["Session", `${base}/sessions/${S}`],
+        ])
+        expect(summary(modelOf(`${base}/sessions/${S}/encounters/${E}`).ancestors)).toEqual([
+            ["Sessions", `${base}/sessions`],
+            ["Session", `${base}/sessions/${S}`],
+            ["Run session", run],
+        ])
+        expect(summary(modelOf(`${base}/sessions/${S}/encounters/new`).ancestors).at(-1)).toEqual(["Run session", run])
+    })
+
+    it("continuedStateVia adds the page and then the parent the person skipped, once", () => {
+        const fromList = continuedStateVia(`${base}/sessions`, undefined, {
+            route: "sessions.detail",
+            params: { campaignId: C, sessionId: S },
+        })
+        expect(fromList?.task.root).toBe("sessions")
+        expect(fromList?.task.trail.map((entry) => entry.route)).toEqual(["sessions.list", "sessions.detail"])
+        expect(summary(modelOf(run, fromList).ancestors)).toEqual([
+            ["Sessions", `${base}/sessions`],
+            ["Session", `${base}/sessions/${S}`],
+        ])
+        // From the session itself the parent is already the current page: it is not added twice.
+        const fromDetail = continuedStateVia(`${base}/sessions/${S}`, undefined, {
+            route: "sessions.detail",
+            params: { campaignId: C, sessionId: S },
+        })
+        expect(fromDetail?.task.trail.map((entry) => entry.route)).toEqual(["sessions.list", "sessions.detail"])
+        expect(continuedStateVia(`${base}/not-a-route`, undefined, { route: "sessions.detail", params: {} })).toBeNull()
+    })
+
+    it("a character opened from Run shows the whole Sessions trail, and carries ids only", () => {
+        const fromRun = continuedState(run, continuedState(`${base}/sessions/${S}`, undefined))
+        const model = modelOf(`${base}/characters/ch1`, fromRun)
+        expect(summary(model.ancestors)).toEqual([
+            ["Sessions", `${base}/sessions`],
+            ["Session", `${base}/sessions/${S}`],
+            ["Run session", run],
+        ])
+        expect(JSON.stringify(fromRun)).not.toMatch(/Hollow|name|label/i)
     })
 })

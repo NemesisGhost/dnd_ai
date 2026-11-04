@@ -21,7 +21,19 @@ import "../authoring/authoring.css"
 // `omit` drops ancestors by route id for a page that cannot know whether the person may open them (the
 // inventory-only reader's page is not told the character's other sections, so it does not offer a link
 // to the record). The remaining trail and the current page are unchanged.
-export function TaskBreadcrumb({ current, omit = [] }: { current?: string | null; omit?: readonly string[] }) {
+//
+// `sections` names the section an ancestor opens on, by route id, for an ancestor that is a staged page
+// (the Run session returns to the stage the encounter belongs to). It is a destination query on the
+// link, never part of the task, and it is the page's own knowledge, so it is the same after a direct entry.
+export function TaskBreadcrumb({
+    current,
+    omit = [],
+    sections = {},
+}: {
+    current?: string | null
+    omit?: readonly string[]
+    sections?: Readonly<Record<string, string>>
+}) {
     const location = useLocation()
     const labelFor = useBreadcrumbLabelReader()
     const model = breadcrumbModel(location.pathname, location.state)
@@ -35,7 +47,10 @@ export function TaskBreadcrumb({ current, omit = [] }: { current?: string | null
             <ol className="task-breadcrumb__list">
                 {ancestors.map((crumb) => (
                     <li key={`${crumb.ref.route}:${Object.values(crumb.ref.params).join("/")}`}>
-                        <Link to={crumb.to} state={crumb.state}>
+                        <Link
+                            to={sections[crumb.ref.route] === undefined ? crumb.to : `${crumb.to}?section=${encodeURIComponent(sections[crumb.ref.route]!)}`}
+                            state={crumb.state}
+                        >
                             {(crumb.named ? labelFor(crumb.ref.route, crumb.ref.params) : undefined) ?? crumb.generic}
                         </Link>
                     </li>

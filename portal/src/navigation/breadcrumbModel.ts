@@ -168,6 +168,22 @@ export function continuedState(pathname: string, state: unknown): CrumbState | n
 }
 
 /**
+ * The task state for a link from the current page to a page whose declared parent is another page of
+ * the same task that the person has not opened (a list's "Run" link goes to the Run session, whose
+ * parent is the session): the current page and then `parent` are added to the trail, so the destination
+ * shows its documented hierarchy instead of skipping a level. Same rules as `continuedState`; the
+ * parent is a route reference (ids only), and following it is authorized by the server as any link is.
+ */
+export function continuedStateVia(pathname: string, state: unknown, parent: RouteRef): CrumbState | null {
+    const match = matchRouteMeta(pathname)
+    if (match === null) return null
+    const resolved = resolveTask(pathname, state)
+    if (resolved === null) return null
+    const here: RouteRef = { route: match.meta.id, params: match.params }
+    return withState(continueTask(continueTask(resolved.task, here), parent))
+}
+
+/**
  * The task state for a link that stays on the same record inside the same task (a section of a record,
  * the same record on its other route): the entry's validated task as it is, without the one-shot
  * `transition` hint, plus the legacy keys beside it. Null for a page that is not a task page and after a

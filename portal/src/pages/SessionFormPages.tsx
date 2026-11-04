@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { Link, useNavigate, useParams } from "react-router"
+import { useNavigate, useParams } from "react-router"
 import { scheduleSession } from "../api/sessionAuthoring"
 import { ConfirmDialog } from "../components/authoring/ConfirmDialog"
 import { TextAreaField, TextField } from "../components/authoring/fields"
@@ -10,11 +10,13 @@ import {
     MutationStatusMessage,
 } from "../components/authoring/feedback"
 import type { FieldError } from "../components/authoring/feedback"
+import { TaskBreadcrumb } from "../components/navigation/TaskBreadcrumb"
 import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { usePageArrival } from "../hooks/usePageArrival"
 import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard"
+import { useAncestorLink } from "../navigation/useTaskLinkState"
 import type { SessionReceipt } from "../types/campaignSession"
 import { fromLocalInput } from "../utils/sessionForm"
 import {
@@ -67,6 +69,9 @@ function SessionForm({ campaignId }: { campaignId: string }) {
         values.scheduledFor !== initial.scheduledFor ||
         values.summary !== initial.summary
     const guard = useUnsavedChangesGuard(dirty)
+    // Cancel and a successful save return to the Sessions list the task came from.
+    const listLink = useAncestorLink("sessions.list")
+    const listPath = listLink?.to ?? `${base(campaignId)}/sessions`
     const mutation = useAuthoringMutation<
         { title: string | null; scheduled_for: string | null; summary: string | null },
         SessionReceipt
@@ -75,9 +80,9 @@ function SessionForm({ campaignId }: { campaignId: string }) {
         request: (body, ctx) => scheduleSession(campaignId, body, ctx),
         onSuccess: () => {
             guard.release()
-            void navigate(`${base(campaignId)}/sessions`, {
+            void navigate(listPath, {
                 replace: true,
-                state: { announce: "Session scheduled" },
+                state: { ...listLink?.state, announce: "Session scheduled" },
             })
         },
     })
@@ -148,7 +153,7 @@ function SessionForm({ campaignId }: { campaignId: string }) {
                 <FormActions
                     pending={pending}
                     saveLabel="Schedule session"
-                    onCancel={() => void navigate(`${base(campaignId)}/sessions`)}
+                    onCancel={() => void navigate(listPath, { state: listLink?.state })}
                 />
             </AuthoringForm>
             <ConfirmDialog
@@ -171,9 +176,7 @@ export function CreateSessionPage() {
     const headingRef = usePageArrival(true)
     return (
         <section className="authoring-page" aria-labelledby="new-session-heading">
-            <p className="authoring-page__breadcrumb">
-                <Link to={`${base(campaignId)}/sessions`}>Sessions</Link>
-            </p>
+            <TaskBreadcrumb current="Schedule a session" />
             <h1 id="new-session-heading" ref={headingRef} tabIndex={-1}>
                 Schedule a session
             </h1>

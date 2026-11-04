@@ -294,6 +294,7 @@ beforeEach(() => {
       session: campaignSessionDetail,
     },
     retry: vi.fn(),
+    authority: null,
     refresh: vi.fn(() => Promise.resolve(true)),
   })
 
@@ -825,19 +826,20 @@ describe("portal routing", () => {
       "The party entered the dormant facility.",
     )
 
+    // The breadcrumb's Sessions ancestor replaces the former "Back to sessions" link.
     expect(
-      screen.getByRole("link", {
-        name: "Back to sessions",
-      }),
+      within(
+        screen.getByRole("navigation", { name: "Breadcrumb" }),
+      ).getByRole("link", { name: "Sessions" }),
     ).toHaveAttribute(
       "href",
       "/app/mundivita/sessions",
     )
 
     expect(
-      screen.getByRole("link", {
-        name: "Sessions",
-      }),
+      within(
+        screen.getByRole("navigation", { name: "Main" }),
+      ).getByRole("link", { name: "Sessions" }),
     ).toHaveAttribute(
       "aria-current",
       "page",

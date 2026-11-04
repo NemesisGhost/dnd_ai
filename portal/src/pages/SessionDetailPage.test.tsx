@@ -91,7 +91,9 @@ describe("SessionDetailPage", () => {
             .map((row) => within(row).getAllByRole("cell")[0]?.textContent)
         expect(names).toEqual(["Zeta Event", "Alpha Event"])
         expect(screen.getByText("The party crossed the threshold.")).toBeInTheDocument()
-        expect(screen.getByRole("link", { name: "Back to sessions" })).toHaveAttribute(
+        expect(
+            within(screen.getByRole("navigation", { name: "Breadcrumb" })).getByRole("link", { name: "Sessions" }),
+        ).toHaveAttribute(
             "href",
             "/app/mundivita/sessions",
         )

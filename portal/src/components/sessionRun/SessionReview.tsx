@@ -1,4 +1,5 @@
 import { Link } from "react-router"
+import { useTaskLinkState } from "../../navigation/useTaskLinkState"
 import type { CampaignSessionDetail } from "../../types/campaignSession"
 import type { EncounterSummary } from "../../types/encounters"
 import type { SectionKey } from "./runStages"
@@ -15,6 +16,7 @@ export function SessionReview({
     session,
     encounters,
     sectionHref,
+    linkState,
     canPrepareEncounters,
     reasonLog,
     reasonTravel,
@@ -24,6 +26,8 @@ export function SessionReview({
     // null while the list is loading or unavailable.
     encounters: EncounterSummary[] | null
     sectionHref: (key: SectionKey) => string
+    // Carried by the links that stay on this page (a section of the Run session).
+    linkState?: object
     canPrepareEncounters: boolean
     reasonLog: string | null
     reasonTravel: string | null
@@ -34,6 +38,8 @@ export function SessionReview({
     const pending = (encounters ?? []).filter((e) => e.status === "pending")
     const started = (encounters ?? []).filter((e) => e.status !== "pending")
     const campaign = `/app/${enc(campaignId)}`
+    // A session's detail and an encounter opened from the review are steps of the task the Run page is in.
+    const taskState = useTaskLinkState()
     const travel = session.travel ?? []
 
     return (
@@ -59,7 +65,9 @@ export function SessionReview({
                     <li>{session.summary ? `Recap: ${session.summary}` : "No recap yet."}</li>
                 </ul>
                 <p>
-                    <Link to={`${campaign}/sessions/${enc(session.session_id)}`}>Edit session details</Link>
+                    <Link to={`${campaign}/sessions/${enc(session.session_id)}`} state={taskState}>
+                        Edit session details
+                    </Link>
                 </p>
             </section>
 
@@ -72,7 +80,7 @@ export function SessionReview({
                 />
                 {actions.includes("manage_participants") ? (
                     <p>
-                        <Link to={sectionHref("participants")}>Change participants</Link>
+                        <Link to={sectionHref("participants")} state={linkState}>Change participants</Link>
                     </p>
                 ) : (
                     <p className="authoring-note">Participants can't be changed now.</p>
@@ -91,7 +99,7 @@ export function SessionReview({
                 />
                 {actions.includes("log") ? (
                     <p>
-                        <Link to={sectionHref("log")}>Add to the log</Link>
+                        <Link to={sectionHref("log")} state={linkState}>Add to the log</Link>
                     </p>
                 ) : (
                     <p className="authoring-note">{reasonLog}</p>
@@ -108,7 +116,7 @@ export function SessionReview({
                 />
                 {actions.includes("log") ? (
                     <p>
-                        <Link to={sectionHref("travel")}>Record travel</Link>
+                        <Link to={sectionHref("travel")} state={linkState}>Record travel</Link>
                     </p>
                 ) : (
                     <p className="authoring-note">{reasonTravel}</p>
@@ -132,6 +140,7 @@ export function SessionReview({
                                 <li key={e.encounter_id}>
                                     <Link
                                         to={`${campaign}/sessions/${enc(session.session_id)}/encounters/${enc(e.encounter_id)}`}
+                                        state={taskState}
                                     >
                                         {e.summary ?? "Untitled encounter"}
                                     </Link>{" "}
@@ -143,11 +152,11 @@ export function SessionReview({
                 )}
                 <p>
                     {canPrepareEncounters ? (
-                        <Link to={sectionHref("encounter-prep")}>Prepare encounters</Link>
+                        <Link to={sectionHref("encounter-prep")} state={linkState}>Prepare encounters</Link>
                     ) : (
                         <span className="authoring-note">Encounters can't be prepared now.</span>
                     )}{" "}
-                    {started.length > 0 ? <Link to={sectionHref("encounters")}>Open encounters</Link> : null}
+                    {started.length > 0 ? <Link to={sectionHref("encounters")} state={linkState}>Open encounters</Link> : null}
                 </p>
             </section>
 
@@ -155,7 +164,7 @@ export function SessionReview({
                 <h3 id="review-time-heading">Campaign time</h3>
                 <p>
                     The in-world time is shown above.{" "}
-                    <Link to={sectionHref("log")}>Advance or correct time</Link> in the Run session stage.
+                    <Link to={sectionHref("log")} state={linkState}>Advance or correct time</Link> in the Run session stage.
                 </p>
             </section>
         </div>

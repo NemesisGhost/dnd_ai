@@ -196,7 +196,7 @@ Routes now rendering the shared breadcrumb (`routeMeta` ids): `characters.detail
 | Characters browser card | `charactersReturn` (legacy adapter) gives a Characters task with list state | `retainedState` | filters survive in the root crumb |
 | Navbar / Infobox / Selected character | fresh `{task: characters}` | `retainedState` | |
 | Parties members page (GM) | `useTaskLinkState` (Parties task, trail list + party) | `retainedState` | |
-| Session roster | `useTaskLinkState` (Sessions task, trail session) | `retainedState` | the rest of Sessions is P02-7a |
+| Session roster | `useTaskLinkState` (Sessions task, trail session) | `retainedState` | the rest of Sessions is §9 (P02-7a) |
 | World browser / organization members | `worldSearch` legacy / `useTaskLinkState` | `retainedState` | |
 | Relationship counterpart (character) | `useTaskLinkState` | `retainedState` | other record kinds unchanged |
 | Direct entry / tampered state | none (defaults) | none | |
@@ -204,3 +204,25 @@ Routes now rendering the shared breadcrumb (`routeMeta` ids): `characters.detail
 Guard audit (F-4 revisited): `CharacterRecordSections` remains read-only and not a guard caller. New guard callers: none. `ContentEditPage` (character edit), `CreateCharacterBuildPage`/`BuildForm`, `NpcPortrayalPage` and `WorldRecordWorkspace` keep their existing declarations; their breadcrumb ancestors are plain links covered by the pathname predicate (a test drives a dirty new-build form: Stay keeps draft, task and entry; Leave goes). Query keys: `section` on the record remains retaining (nothing editable is mounted there). If an editor is ever added to a record section, `section` becomes disposing and its host must declare it.
 
 **Correction after review of P02-6 (New PC).** `CharactersCreateAction` (the existing New PC link, `canon.edit`, `/characters/pc/new`, `charactersReturn`) is shared by the Characters header and `CharacterSheetRoutePage`. No route, guard, query key or read was added; the inventory-only route renders none of it.
+
+
+## 9. Sessions and Run after P02-7a
+
+Routes now rendering the shared breadcrumb (`routeMeta` ids): `sessions.new`, `sessions.detail`, `sessions.run`, `sessions.encounters.new`, `sessions.encounters.detail`, and `events.detail` when the entry has an origin. `sessions.list` is the top of its task and renders none. `sessions.encounters.new` and `sessions.encounters.detail` now declare `sessions.run` as their parent in `routeMeta`; no route was added or removed (`routeMeta.test.ts` passing).
+
+| From | To | State carried |
+|---|---|---|
+| Sessions list | session, Schedule a session | `useTaskLinkState` |
+| Sessions list | Run | `continuedStateVia` (list, then the session as Run's declared parent) |
+| Session | Run (participants) | `useTaskLinkState` |
+| Run (stage, section and in-page links) | the same page, other section | `retainedState` (none after a direct entry) |
+| Run, review | encounter, prepare, session, event, character | `useTaskLinkState` |
+| Prepare encounter | the new encounter | REPLACE with `retainedState` |
+| Event page | character, party, session, related and correcting/replacing events | `useTaskLinkState({ requireOrigin })`; none after a direct entry, where the page keeps its **Campaign Home** link |
+| Schedule a session | Sessions list (Cancel, success) | `useAncestorLink("sessions.list")` |
+
+Legacy keys: `sessions.list` has no list state, so no legacy key is written or read for Sessions. The `returnTo`, `charactersReturn`, `worldSearch` and `reviewSearch` adapters are unchanged.
+
+Guard audit: **no new guard caller, hold or declaring key.** `SessionDetailPage` (row 15) and `CreateSessionPage` (row 16) keep their declarations; their breadcrumb ancestors are plain links covered by the pathname predicate. The Run page's forms are not page-guarded (existing; pending and unknown-outcome writes are held by their `useAuthoringMutation` owners, and the pickers by `PickerRecordTime`'s blocker). `useRunNavigation` now delegates to `useStagedNavigation`, which keeps the entry's state when it normalizes `?section=`; `section` stays the only query key and every `RunSectionPanel` stays mounted, so it disposes nothing. `EncounterPages` and `RecordEventPage` are unchanged as guard callers.
+
+Reads: none were added. Labels come from the session read of the session page, the Run page and the two encounter pages, and from the event page's own read; the member's session read stays member-shaped. Remaining exceptions: `events.new` keeps its **Campaign Home** breadcrumb (it is reached from Campaign Home's tools), a direct entry to `events.detail` keeps its **Campaign Home** link, the World event page's `EventExplanation` links carry no task (P02-7d), and Home and other-family links to sessions carry none.

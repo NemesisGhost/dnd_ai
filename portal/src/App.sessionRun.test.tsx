@@ -733,9 +733,10 @@ describe("stages and sections", () => {
       openApp(RUN)
       await screen.findByRole("alert")
       const crumbs = screen.getByRole("navigation", { name: "Breadcrumb" })
-      expect(within(crumbs).getByText("Session")).toBeInTheDocument()
+      // No name was read, so the session ancestor is the generic noun, never its identifier.
+      expect(within(crumbs).getByRole("link", { name: "Session" })).toHaveAttribute("href", "/app/mundivita/sessions/s1")
       expect(within(crumbs).queryByText(/s1/)).toBeNull()
-      expect(within(crumbs).getAllByRole("link")).toHaveLength(1)
+      expect(within(crumbs).getAllByRole("link")).toHaveLength(2)
     })
 
     it("reaches the session list route", async () => {
