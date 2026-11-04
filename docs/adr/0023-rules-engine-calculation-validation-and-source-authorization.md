@@ -6,6 +6,7 @@
   - **OD-20:** equipment inputs come from the route campaign's **possession**, item state and attunement. Fictional/legal ownership (`campaign.item_ownership`, shared narrative) is **not** a mechanical input and never changes because of a calculation (ADR 0021 §3.1.1).
   - **OD-21:** the engine's only cross-campaign truth read is inside the separately authorized, disabled seeding and copy commands (ADR 0021 §3.6).
 - **Owner decisions applied (Owner-approved 2026-11-03)**: OD-7 (seed provenance, §4), OD-9 (rules exceptions and legacy builds, §7.4, §7.6), OD-10 (rules authority, §6) and OD-12 (player-registered sources, §9). These are policy approvals, not acceptance of this ADR.
+- **Owner decisions applied (Owner-approved 2026-11-04)**: OD-7a (the existing public repository seed is treated as potentially distributed, §4) and OD-12a (only the contributor authorizes access to a contributor-private source, §9). These are policy approvals, not acceptance of this ADR, and OD-7a is **not** licensing clearance.
 - **Date**: 2026-11-02
 - **Extends**: [ADR 0005](0005-separate-rules-definitions-from-world-instances.md) and the identity-immutability policy of `DATABASE_MODEL.md` §8 (revisions 033/036). It does not replace the `rules` schema.
 - **Related**: [ADR 0006](0006-ai-proposes-but-does-not-own-canon.md), [ADR 0016](0016-data-classification-and-private-data-handling.md), [ADR 0021](0021-shared-actor-identity-control-and-authoring-responsibility.md), [ADR 0022](0022-creature-templates-combatants-and-promotion.md).
@@ -147,7 +148,14 @@ These are core types. **None of them names classes, levels, proficiency, armor c
   - Before distribution, documented rights clearance, or replacement of uncleared content, is required.
   - The approval is **not** licensing clearance.
 
-  The requirement applies before the next distributed artifact that contains the seed: any release image, packaged installer or public repository publication, and at the latest the Phase 17 packaging gate. The repository is currently publicly visible and already contains the seed. Whether that existing publication is distribution under OD-7 is an open owner question (plan §9, OD-7a). This ADR does not answer it.
+  The requirement applies before the next distributed artifact that contains the seed: any release image, packaged installer or public repository publication, and at the latest the Phase 17 packaging gate.
+
+  **OD-7a (Owner-approved 2026-11-04).** The repository is publicly visible and already contains the seed. That existing publication is treated as **potentially distributed**:
+  - the requirement for documented rights clearance, or replacement of uncleared material, therefore already applies to the seed as published, not only to the next artifact;
+  - the R19-P2a rights and provenance inventory is prioritized ahead of other R19-P2 work;
+  - the seed's package stays `license_code = 'unknown'` and `review_status = 'unreviewed'` until documented evidence supports a change. A recorded clearance changes only the items it documents.
+
+  OD-7a is **not** licensing clearance and makes no determination that distribution has or has not occurred. This ADR still makes no legal determination.
 - **Stable lineage.** `(family, definition table, code)` across ruleset versions.
 - **Mutable existing fields.** Mechanically relevant columns that are mutable today stay mutable, because changing their editability is a behavior change. They are covered by content hashing in the manifest (§10). New mechanical payload columns introduced by R19 (template, item and house-rule mechanics, structured prerequisites) are mutable only while `draft` and immutable once `canon`.
 - **Structured prerequisites and exclusions** (schema later, used in R19-P4c) are typed rows. A prerequisite the adapter cannot evaluate is `unsupported`, never treated as satisfied.
@@ -307,8 +315,12 @@ Approval never changes a finding's outcome.
 **A player's contributed material (OD-12, Owner-approved 2026-11-03):**
 - Players may register reference sources they are entitled to use.
 - A registered source starts `contributor_private`.
-- GM access requires an explicit grant. The decision does not say who may make the grant (plan §9, OD-12a). That is settled before the Phase 18 intake design.
-- Citations (decision 1, and the typed citation link) and AI retrieval (decision 2) enforce the source's permissions. A reader who fails them sees nothing about the source or the citation.
+- GM access requires an explicit grant. **OD-12a (Owner-approved 2026-11-04):**
+  - Only the **contributor** authorizes access to their contributor-private source, including a GM's access.
+  - A GM cannot grant themselves access. Neither can any other campaign role, `access.manage` holder or access group.
+  - World ownership, world roles and system administration (including the ADR 0020 recovery commands) grant no access automatically.
+  - Consequently, the general `create_resource_grant` command and campaign retrieval grants (`ai.reference_source_campaigns`) refuse a contributor-private source unless the caller is its contributor. Each grant is explicit, scoped to named grantees, revocable by the contributor, and audited.
+- Citations (decision 1, and the typed citation link) and AI retrieval (decision 2) are governed by those explicit sharing permissions. A reader who fails them sees nothing about the source or the citation.
 - Deriving a homebrew definition from the material never widens access to its text.
 
 **Catalog eligibility:**

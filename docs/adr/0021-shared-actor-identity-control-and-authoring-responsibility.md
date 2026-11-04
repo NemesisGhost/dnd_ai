@@ -15,7 +15,11 @@
   - **OD-18:** the campaign-scoped player profile (§4.7, §7);
   - **OD-19:** legacy-access reductions only by per-character reviewed disposition (§4.1, §4.5);
   - **OD-22:** no world-shared record of an unheld item's whereabouts (§3.1.1).
-- **Acceptance prerequisites**: Every owner decision this ADR depends on is now recorded in [R19_FOUNDATION_IMPLEMENTATION_PLAN.md §9](../R19_FOUNDATION_IMPLEMENTATION_PLAN.md#9-decision-register). Acceptance still needs independent review and a **separate ADR acceptance decision**; the P03-B/P03-C/P03-S contracts freeze only after it. One open owner question remains in scope (plan §9, OD-4a): who may delegate `character.assign_control` to an assistant GM. It blocks only that delegation path (§2.7), not the contract freeze.
+
+  Owner decisions recorded 2026-11-04 (policy approvals only, not acceptance of this ADR):
+  - **OD-4a:** Campaign Owners and GMs may grant and revoke a campaign-scoped, audited delegation of `character.assign_control` to an assistant GM; recipients cannot redelegate (§2.7);
+  - **OD-18 clarification:** primary and co-controllers may edit their character's campaign-scoped player profile through `character.edit_player_profile`. That capability is not `character.edit_narrative` and grants no world-canon editing and no GM-private portrayal access (§2.5, §4.7, §7).
+- **Acceptance prerequisites**: Every owner decision this ADR depends on is now recorded in [R19_FOUNDATION_IMPLEMENTATION_PLAN.md §9](../R19_FOUNDATION_IMPLEMENTATION_PLAN.md#9-decision-register). No open owner question remains in scope (OD-4a was decided on 2026-11-04). Acceptance still needs independent review and a **separate ADR acceptance decision**; the P03-B/P03-C/P03-S contracts freeze only after it.
 - **Date**: 2026-11-02
 - **Would amend, once accepted**: [ADR 0020](0020-scoped-system-world-and-campaign-roles.md) decision 6, for player-character identity only (§4.6). ADR 0020 remains fully in force until this ADR is accepted *and* the P03-C cutover for each character has completed.
 - **Implemented by**: Phase 15 checkpoints P03-A, P03-B, P03-C, and **P03-S** (campaign mechanical-state isolation, §3). The P03-S name is provisional; Phase 15 may fold it into P03-B/C, but it must precede controller operations that write state ([PLANv2.md](../PLANv2.md) §8, 15H). Phase 19 consumes the contracts ([R19_FOUNDATION_IMPLEMENTATION_PLAN.md §5.1](../R19_FOUNDATION_IMPLEMENTATION_PLAN.md#51-actor-contract-owner-phase-15)) and implements none of them.
@@ -115,12 +119,23 @@ Non-human operators are not controllers:
    - `discover`, `view_summary`, `view_full` (the controller mechanical projection), `view_inventory`;
    - `character.control`;
    - `character.edit_mechanical_state`, limited to the OD-3 operation allow-list (§2.5a);
-   - `character.view_player_profile`: read-only access to the campaign-scoped player profile (OD-18, §7).
+   - `character.view_player_profile`: read access to the campaign-scoped player profile (OD-18, §7);
+   - `character.edit_player_profile`: editing of the route campaign's player profile for the controlled character (OD-18 clarification, 2026-11-04; §7).
 3. It never includes:
    - `canon.edit`, world capabilities, `access.manage`;
    - `view_private`, `view_knowledge` (perspective);
-   - build proposals, GM portrayal (`npc_portrayal_profiles`), authoring of the player profile (§4.7), or revelation;
+   - `character.edit_narrative` or any other canonical narrative authoring (§4.7);
+   - build proposals, GM portrayal (`npc_portrayal_profiles`), or revelation;
    - `character.assign_control` (§2.7).
+
+   **Narrative and profile capabilities are distinct (OD-18).** No capability in one row implies another.
+
+   | Capability | What it permits | Conferred by a control assignment |
+   |---|---|---|
+   | `character.view_player_profile` | Read the campaign-scoped player profile in the route campaign | Yes, primary and co-controllers |
+   | `character.edit_player_profile` | Edit the campaign-scoped player profile in the route campaign. Writes no world-canon field, no `character.character_descriptions` row, no `npc_portrayal_profiles` row and no mechanical state, and publishes nothing (§7) | Yes, primary and co-controllers |
+   | `character.edit_narrative` | Canonical narrative editing of the world character. Governed by §4 (stewardship, OD-5 delegations, legacy exceptions) | **Never** |
+   | GM portrayal (`canon.edit`) | Read and write GM-private portrayal (`npc_portrayal_profiles`) | **Never** |
 4. **Co-controllers (OD-2, Owner-approved 2026-11-03).**
    - Primary and co-controllers receive the same matrix entries and the same bounded operations.
    - Neither role manages assignments.
@@ -153,8 +168,17 @@ With no live, in-effect player assignment, the actor is GM-operated under existi
 
 - Commands `assign_character_control`, `replace_primary_controller` and `revoke_character_control` are idempotent and audited.
 - They require a new campaign capability, `character.assign_control`, separate from `access.manage` and `canon.edit`.
-- **Holders (OD-4, Owner-approved 2026-11-03):** the built-in campaign roles `campaign_owner` and `gm`. `assistant_gm` does not hold it by default. An assistant GM may assign or revoke control only through an **explicit, revocable, audited delegation** of `character.assign_control` to that membership. The decision does not say who may make that delegation (plan §9, OD-4a). Until that is decided, no delegation path is enabled and assistant GMs cannot assign control. Control assignments never confer it (OD-2).
+- **Holders (OD-4, Owner-approved 2026-11-03):** the built-in campaign roles `campaign_owner` and `gm`. `assistant_gm` does not hold it by default. An assistant GM may assign or revoke control only through an **explicit, revocable, audited delegation** of `character.assign_control` to that membership. Control assignments never confer it (OD-2).
 - The assignee must be an active membership of the campaign.
+
+**Assistant-GM delegation (OD-4a, Owner-approved 2026-11-04).**
+- **Grantors.** Only a caller who holds `character.assign_control` through the built-in `campaign_owner` or `gm` role in that campaign may grant or revoke the delegation. Commands: `delegate_character_assign_control` and `revoke_character_assign_control_delegation`, idempotent and audited, each with a reason.
+- **Recipient.** An active membership of the same campaign that holds `assistant_gm`. The delegation confers `character.assign_control` only while the recipient's membership is active and holds `assistant_gm`.
+- **Scope.** Campaign-wide within that one campaign: the recipient may run `assign_character_control`, `replace_primary_controller` and `revoke_character_control` there, exactly as an Owner or GM may. It confers nothing in any other campaign and nothing else: no `access.manage`, `canon.edit`, controller operation or character read.
+- **No redelegation.** A recipient cannot grant, extend or revoke any delegation, including through a custom role or resource grant. `character.assign_control` is never carried by a custom role's capability set or a `security.resource_grants` row; its only sources are the two built-in roles and this delegation.
+- **Record.** A history-preserving delegation record: `campaign_id`, grantee membership, `granted_by_membership_id`, `granted_at`, `revoked_by_membership_id`, `revoked_at`, `reason`. It is never edited in place. P03-B chooses the table when it freezes the contract.
+- **Revocation.** Any current Owner or GM of the campaign may revoke it. The grantor's later loss of role does not revoke it, because authorship is provenance, not authority (ADR 0020 decision 7). Revoking a delegation never revokes, replaces or alters the control assignments its holder made; those remain in force and in history.
+- **Concurrency.** Grant and revoke take the grantee membership, then `campaign.campaigns` `FOR UPDATE`, then the delegation row (§2.8). Assign, replace and revoke re-read the caller's authority (built-in role or live delegation) after their own campaign lock (§2.8, step 2). A command that obtains the campaign lock after a delegation's revocation commits is refused, non-disclosingly.
 
 #### 2.8 Common locking protocol (R19-02)
 
@@ -164,6 +188,8 @@ The protocol extends the existing relationship order and must not invert it.
 |---|---|
 | Assign / replace / revoke | (1) the target membership row `FOR UPDATE`, plus any existing assignment row being revoked, together with its membership (`OF mcr, cm`); (2) `campaign.campaigns` `FOR UPDATE`; (3) the user row `FOR UPDATE`; (4) **the character's `core.entities` row `FOR UPDATE`, the stable anchor even when the assignment set is empty**; (5) read and modify the live assignment rows; (6) insert, update and audit. |
 | Controller operation | **A new bounded scope, `lock_controller_operation_scope(campaign_id, actor_user_id, character_id, operation_code)`.** `lock_operation_scope` cannot be used: it raises unless the capability is `canon.edit` (`commands/_operations.py`). The new scope takes the same prefix as `lock_authoring_scope`, in the same order: world `FOR SHARE`, the actor's membership and role rows, the account, campaign `FOR SHARE`. It does **not** require `canon.edit`. Then: the character's `core.entities` row `FOR SHARE`; then the caller's live, in-effect assignment row `FOR SHARE`, re-read under lock; then a check that `operation_code` is in the closed `CONTROLLER_OPERATIONS` allow-list (OD-3) and not denied; then the route campaign's state rows the operation changes, `FOR UPDATE`. A failure at any step is a non-disclosing refusal. |
+| Player-profile edit (OD-18) | The controller-operation prefix and anchor steps above: world `FOR SHARE`, membership and role rows, account, campaign `FOR SHARE`, the character's `core.entities` row `FOR SHARE`, then the caller's live, in-effect assignment row `FOR SHARE`, re-read under lock. Then a check of `character.edit_player_profile`, **not** of `CONTROLLER_OPERATIONS`: profile editing is not an OD-3 operation and does not extend that allow-list. Then the route campaign's player-profile row `FOR UPDATE`. A failure at any step is a non-disclosing refusal, so a revocation that commits first refuses the edit. |
+| Grant / revoke assistant-GM delegation (OD-4a) | Same order as assign, never inverted: (1) the grantee membership and its role rows `FOR UPDATE`; (2) `campaign.campaigns` `FOR UPDATE`; (3) the caller's built-in role re-checked; (4) the delegation row; (5) insert or revoke, and audit. Serializes with assign / replace / revoke at step (2). |
 
 Because revocation takes the anchor `FOR UPDATE` and operations take it `FOR SHARE`:
 - an operation that holds the share lock completes before the revocation commits;
@@ -813,11 +839,13 @@ Ambiguous characters stay `pending`, with unchanged access, until reviewed. A pe
 
 #### 4.7 Delegated player authoring
 
-Delegated player authoring uses resource grants (`security.resource_grants`, character target) for:
-- `character.edit_narrative`, which edits only the campaign-scoped player profile (§7, OD-18), never world-canon fields;
-- `character.propose_build`, a new capability (ADR 0023 §7).
+Delegated player authoring uses resource grants (`security.resource_grants`, character target) for `character.propose_build`, a new capability (ADR 0023 §7).
+
+Player-profile editing needs no grant: live, in-effect primary and co-controllers hold `character.edit_player_profile` through control (§2.5, §7, OD-18). Before the 2026-11-04 clarification, a controller authored the profile only with an additional `character.edit_narrative` grant; that grant path is withdrawn, because control now confers exactly the profile-editing authority it supplied. `character.edit_player_profile` is not issued through `security.resource_grants`, so the editing audience never exceeds the OD-18 read audience.
 
 A grant is campaign-scoped, revocable and audited. The granter must hold `access.manage` **and** the delegated authority for that character in that campaign. Direct build commit is not delegable.
+
+**`character.edit_narrative` is not a player-authoring grant (OD-18 clarification, 2026-11-04).** It denotes canonical narrative editing of the world character and stays governed by §4.2–§4.5 (stewardship, OD-5 delegations such as `identity_edit`, and legacy exceptions). It is not conferred by control, by `character.edit_player_profile` or by a grant under this section. The legacy relationship code `edit_narrative` stays withheld from every relationship type, as today (`DATABASE_MODEL.md` §19.4), and is never an input to player-profile authorization. This changes no existing authoring permission: §4.1 author sets, OD-5 and the OD-19 per-character review requirement are unchanged.
 
 #### 4.8 Campaign preferences never overwrite world definitions
 
@@ -871,7 +899,7 @@ The `npc_id` dependency is dropped only after verification, with a backup. Portr
 
 **Player-authored portrayal and profile (OD-18, Owner-approved 2026-11-03).** Guidance for a controlled character (PLANv2 16A) is a separate, **campaign-scoped** player profile:
 - It is distinct from world canon (`character.character_descriptions`) and from GM-private portrayal (`npc_portrayal_profiles`). It grants no GM portrayal access and never reads GM-private fields.
-- It is authored through the explicit `character.edit_narrative` grant (§4.7). Control alone grants reading, not authoring.
+- **Editing (OD-18 clarification, Owner-approved 2026-11-04).** The character's live, in-effect primary and co-controllers in that campaign may edit it, through `character.edit_player_profile` (§2.5). Nobody else edits it through a player path; when control is revoked or ends, editing ends with it. Edits are versioned and attributed to the editing member, and every edit is re-authorized under lock (§2.8). Editing grants neither `character.edit_narrative`, nor any world-canon edit, nor any read or write of GM-private portrayal or GM-private fields. A controller's profile edit in campaign A never changes A's or any other campaign's world canon, and never changes campaign B's player profile for the same character.
 - It is readable by that campaign's GMs (`canon.edit`) and by the character's live, in-effect controllers in that campaign (`character.view_player_profile`, §2.5), and by nobody else.
 - A field is published only when explicitly selected, through the existing workflow for its destination: to campaign audiences by an OD-17 revelation of a released version, or into world canon only through OD-5 world-authorized review. Nothing is published automatically.
 
@@ -973,6 +1001,9 @@ P03-C and P03-S may land in either order. The port's intermediate behavior is sp
 - **Routing.**
   - An assignment row never grants `view_private` or `view_knowledge`.
   - A legacy `primary_controller` row keeps them after an assignment is created and after one is revoked.
+- **Owner decisions of 2026-11-04.**
+  - OD-4a: an Owner or GM delegates `character.assign_control` to an assistant GM, who then assigns, replaces and revokes control in that campaign only. The assistant GM cannot delegate onward. A revoked delegation refuses the next assignment command; the assignments made before it stay in force. A delegation to a non-`assistant_gm` membership, or by a delegated holder, is refused (plan T86).
+  - OD-18 clarification: a primary and a co-controller each edit K's player profile in A. Neither edit touches world canon, `npc_portrayal_profiles`, mechanical state or B's profile, and neither confers `character.edit_narrative`. After revocation the next edit is refused. Nothing is published without a revelation or OD-5 review (plan T85).
 
 ## Consequences
 

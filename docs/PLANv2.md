@@ -470,7 +470,7 @@ For characters the player is authorized to control:
 
 The full option engine, broad rules catalog, and rich advancement analysis belong to Phase 19. Phase 16 must not pretend unsupported rules content is complete.
 
-**Shared commands and rules contracts.** "Characters the player is authorized to control" means the 15H control assignment (P03-B), not a character kind or a legacy relationship label. Control alone does not grant canonical editing. Phase 16 player authoring must:
+**Shared commands and rules contracts.** "Characters the player is authorized to control" means the 15H control assignment (P03-B), not a character kind or a legacy relationship label. Control alone does not grant canonical editing. Under OD-18 (clarified 2026-11-04), the portrayal guidance a controller maintains is the campaign-scoped player profile, edited through `character.edit_player_profile`; it is never `character.edit_narrative`, world canon or GM-private portrayal ([ADR 0021](adr/0021-shared-actor-identity-control-and-authoring-responsibility.md) §2.5, §7, Proposed). Phase 16 player authoring must:
 
 - use the same character, build, and portrayal commands as GM authoring, with the same approval, lifecycle, idempotency, and audit semantics. A player build or advancement is a submission or proposal against `create_character_build` / `activate_character_build`, not a separate player-side builder or build store;
 - avoid a temporary character builder that Phase 19 would later have to replace;
