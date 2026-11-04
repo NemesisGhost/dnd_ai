@@ -1,5 +1,7 @@
 import type { ReactNode } from "react"
 import { useWorldEntities } from "../hooks/useWorldEntities"
+import { ArrivalHeadingFocus } from "../navigation/ArrivalHeadingFocus"
+import { LOADING_ATTRIBUTE } from "../navigation/selectionArrival"
 import type {
     CharacterType,
     WorldCategory,
@@ -48,6 +50,7 @@ export function WorldEntitiesBoundary({
                 role="region"
                 aria-label="World entities results"
                 aria-busy="true"
+                {...{ [LOADING_ATTRIBUTE]: "true" }}
             >
                 <h2>Loading world</h2>
                 <p>
@@ -67,6 +70,7 @@ export function WorldEntitiesBoundary({
                 <p>
                     The requested world information is not available.
                 </p>
+                <ArrivalHeadingFocus />
             </div>
         )
     }
@@ -90,6 +94,7 @@ export function WorldEntitiesBoundary({
                 >
                     Try again
                 </button>
+                <ArrivalHeadingFocus />
             </div>
         )
     }
@@ -100,6 +105,7 @@ export function WorldEntitiesBoundary({
                 state.page,
                 state.status === "refreshing",
             )}
+            <ArrivalHeadingFocus />
         </>
     )
 }

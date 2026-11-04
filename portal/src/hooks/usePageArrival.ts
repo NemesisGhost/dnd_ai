@@ -10,9 +10,10 @@ import { readAnnounceMessage, useAnnounce } from "../components/authoring/announ
 // navigation (keyed by location.key), or, for a page whose own links only change the query (a
 // staged workspace that moves focus to its section heading), once per path (`keyBy: "path"`).
 //
-// A REPLACE of the entry already arrived at (same path and query) that has nothing to announce only
+// A REPLACE of the entry already arrived at (same path and query) that has nothing new to announce only
 // restates its state: the context stamp and task clean-up the selected-context owners write in the
-// background. It is not an arrival, so it moves focus nowhere and an open menu or a field in use keeps it.
+// background, which carry the entry's state over (a success message included). It is not an arrival, so
+// it moves focus nowhere, repeats no announcement, and an open menu or a field in use keeps it.
 export function usePageArrival(
     ready: boolean,
     keyBy: "navigation" | "path" = "navigation",
@@ -23,6 +24,7 @@ export function usePageArrival(
     const announce = useAnnounce()
     const arrivedFor = useRef<string | null>(null)
     const arrivedAt = useRef<string | null>(null)
+    const arrivedMessage = useRef<string | null>(null)
 
     useEffect(() => {
         const arrival = keyBy === "path" ? location.pathname : location.key
@@ -36,13 +38,14 @@ export function usePageArrival(
             arrivedFor.current !== null &&
             navigationType === NavigationType.Replace &&
             arrivedAt.current === address &&
-            message === null
+            (message === null || message === arrivedMessage.current)
         ) {
             arrivedFor.current = arrival
             return
         }
         arrivedFor.current = arrival
         arrivedAt.current = address
+        arrivedMessage.current = message
         headingRef.current?.focus()
         if (message !== null) {
             announce(message)

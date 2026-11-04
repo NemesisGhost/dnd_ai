@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react"
+import { useCallback, useMemo, useRef, useState } from "react"
 import type { PropsWithChildren } from "react"
 import { AnnouncerContext } from "./announcer"
 
@@ -10,12 +10,29 @@ export function AnnouncerProvider({ children }: PropsWithChildren) {
     const [message, setMessage] = useState("")
     const [toggle, setToggle] = useState(false)
 
+    // Which announcement the region shows now; every announce makes a newer one.
+    const latest = useRef(0)
+
     const announce = useCallback((next: string) => {
+        latest.current += 1
         setMessage(next)
         setToggle((current) => !current)
     }, [])
 
-    const value = useMemo(() => ({ announce }), [announce])
+    const announceOwned = useCallback(
+        (next: string) => {
+            announce(next)
+            const mine = latest.current
+            return () => {
+                if (latest.current !== mine) return
+                latest.current += 1
+                setMessage("")
+            }
+        },
+        [announce],
+    )
+
+    const value = useMemo(() => ({ announce, announceOwned }), [announce, announceOwned])
 
     return (
         <AnnouncerContext.Provider value={value}>

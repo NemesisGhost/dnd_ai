@@ -6,6 +6,7 @@ import { SELECT_CAMPAIGN_FIRST } from "./navigationReasons"
 import { SplitNavGroup } from "./SplitNavGroup"
 import { navTaskState } from "../navigation/navStart"
 import type { PrimaryAction } from "../navigation/navbarDestinations"
+import type { SelectionChange } from "../navigation/selectionChange"
 
 interface CampaignHomeNavGroupProps {
   campaigns: CampaignContext[]
@@ -79,7 +80,14 @@ export function CampaignHomeNavGroup({
               <Link
                 className="portal-sidebar__sublink"
                 to={`/app/${campaign.campaign_id}/home`}
-                state={navTaskState(`/app/${campaign.campaign_id}/home`, "campaign")}
+                state={{
+                  ...navTaskState(`/app/${campaign.campaign_id}/home`, "campaign"),
+                  // Choosing a campaign other than the one in force is a selection (announced once it is
+                  // accepted and committed, UI_DESIGN §4.8.4); the one already in force is only a link.
+                  ...(campaign.campaign_id === resolvedCampaign?.campaign_id
+                    ? {}
+                    : { selection: { level: "campaign", id: campaign.campaign_id } satisfies SelectionChange }),
+                }}
                 aria-current={
                   campaign.campaign_id === authorizedRouteCampaignId
                     ? "true"

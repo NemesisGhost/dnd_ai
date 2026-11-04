@@ -1,6 +1,6 @@
 import { act, configure, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { StrictMode, useState } from "react"
-import { Route, RouterProvider, Routes, createMemoryRouter } from "react-router"
+import { Outlet, Route, RouterProvider, Routes, createMemoryRouter, useOutletContext } from "react-router"
 import type { DataRouter } from "react-router"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { ConfirmDialog } from "../components/authoring/ConfirmDialog"
@@ -12,6 +12,8 @@ import { CampaignSessionBoundary } from "../layouts/CampaignSessionBoundary"
 import { WorldWorkspaceLayout } from "../layouts/WorldWorkspaceLayout"
 import { CampaignCharactersBrowsePage } from "../pages/CampaignCharactersPage"
 import { CampaignHomePage } from "../pages/CampaignHomePage"
+import { CampaignWorldPage } from "../pages/CampaignWorldPage"
+import { useAnnounce } from "../components/authoring/announcer"
 import { CharacterSheetRoutePage } from "../pages/CharacterSheetRoutePage"
 import { TimelinePage } from "../pages/TimelinePage"
 import { WorldOverviewPage } from "../pages/WorldOverviewPage"
@@ -30,6 +32,7 @@ configure({ asyncUtilTimeout: 5000 })
 const control = vi.hoisted(() => ({
   bootstrap: null as unknown,
   publish: null as null | ((bootstrap: unknown) => void),
+  signOut: null as null | (() => void),
 }))
 
 vi.mock("../hooks/useSessionBootstrap", async () => {
@@ -37,13 +40,19 @@ vi.mock("../hooks/useSessionBootstrap", async () => {
   return {
     useSessionBootstrap: () => {
       const [bootstrap, setBootstrap] = react.useState(control.bootstrap)
+      const [signedOut, setSignedOut] = react.useState(false)
       control.publish = (next) => {
         control.bootstrap = next
         setBootstrap(next)
       }
+      control.signOut = () => setSignedOut(true)
       const refresh = react.useCallback(async () => true, [])
       const reload = react.useCallback(() => undefined, [])
-      return { state: { status: "authenticated", bootstrap }, reload, refresh }
+      return {
+        state: signedOut ? { status: "unauthenticated" } : { status: "authenticated", bootstrap },
+        reload,
+        refresh,
+      }
     },
   }
 })
@@ -132,6 +141,10 @@ type Outcome = "ok" | "missing" | "broken"
 const parkedCharacters: Array<{ id: string; answer: (outcome: Outcome) => Promise<void> }> = []
 let parkCharacters = false
 const requests: string[] = []
+// How the world and timeline reads answer, and the Campaign World explorer's search (parked until the test answers).
+let worldRead: Outcome = "ok"
+let worldSearch: Outcome | "parked" = "ok"
+const parkedSearches: Array<{ answer: (outcome: Outcome) => Promise<void> }> = []
 
 function respondCharacter(id: string, outcome: Outcome): Response {
   if (outcome === "missing") return json({ detail: "not found" }, 404)
@@ -165,6 +178,20 @@ function DraftPage() {
   )
 }
 
+// Something unrelated to a selection that announces: a save, say.
+function WithSay() {
+  const announce = useAnnounce()
+  const context = useOutletContext()
+  return (
+    <>
+      <Outlet context={context} />
+      <button type="button" onClick={() => announce("Saved.")}>
+        Say saved
+      </button>
+    </>
+  )
+}
+
 function tree(entry: { pathname: string; state?: unknown }) {
   router = createMemoryRouter(
     [
@@ -174,15 +201,18 @@ function tree(entry: { pathname: string; state?: unknown }) {
           <RouteSessionProvider>
             <Routes>
               <Route element={<AuthenticatedAppLayout />}>
-                <Route element={<WorldWorkspaceLayout />}>
-                  <Route path="/worlds/:worldId" element={<WorldOverviewPage />} />
-                  <Route path="/worlds/:worldId/timelines/:timelineId" element={<TimelinePage />} />
-                </Route>
-                <Route path="/app/:campaignId" element={<CampaignSessionBoundary />}>
-                  <Route path="home" element={<CampaignHomePage />} />
-                  <Route path="knowledge" element={<DraftPage />} />
-                  <Route path="characters/all" element={<CampaignCharactersBrowsePage />} />
-                  <Route path="characters/:characterId" element={<CharacterSheetRoutePage />} />
+                <Route element={<WithSay />}>
+                  <Route element={<WorldWorkspaceLayout />}>
+                    <Route path="/worlds/:worldId" element={<WorldOverviewPage />} />
+                    <Route path="/worlds/:worldId/timelines/:timelineId" element={<TimelinePage />} />
+                  </Route>
+                  <Route path="/app/:campaignId" element={<CampaignSessionBoundary />}>
+                    <Route path="home" element={<CampaignHomePage />} />
+                    <Route path="world" element={<CampaignWorldPage />} />
+                    <Route path="knowledge" element={<DraftPage />} />
+                    <Route path="characters/all" element={<CampaignCharactersBrowsePage />} />
+                    <Route path="characters/:characterId" element={<CharacterSheetRoutePage />} />
+                  </Route>
                 </Route>
               </Route>
             </Routes>
@@ -219,6 +249,8 @@ function watchAnnouncer() {
   observer.observe(document.body, { childList: true, subtree: true })
 }
 const settle = () => act(async () => undefined)
+// What the polite live region holds right now (retained DOM text, not a claim about what was spoken).
+const regionText = () => screen.getByTestId("authoring-announcer").textContent
 // The newest parked read for a character: an earlier one may belong to a page instance that was replaced.
 const parkedFor = (id: string) => parkedCharacters.filter((read) => read.id === id).at(-1)!
 // Something outside the destination that a person can have focus on (the header's title link).
@@ -233,6 +265,9 @@ beforeEach(() => {
   requests.length = 0
   parkedCharacters.length = 0
   parkCharacters = false
+  worldRead = "ok"
+  worldSearch = "ok"
+  parkedSearches.length = 0
   said = []
   control.bootstrap = bootstrapOf()
   vi.stubGlobal(
@@ -263,6 +298,25 @@ beforeEach(() => {
       }
       if (/\/campaigns\/[^/]+\/summary$/.test(url)) {
         return json({ current_session: null, previous_session_recap: null, recent_events: [] })
+      }
+      if (/\/api\/campaigns\/[^/]+\/world\/search\/counts/.test(url)) return json({ detail: "none" }, 404)
+      if (/\/api\/campaigns\/[^/]+\/world\/search/.test(url)) {
+        const answerSearch = (outcome: Outcome): Response =>
+          outcome === "missing" ? json({ detail: "no" }, 404) : outcome === "broken" ? json({ detail: "boom" }, 500) : json({ items: [], next_cursor: null })
+        if (worldSearch !== "parked") return answerSearch(worldSearch)
+        return new Promise<Response>((resolve) => {
+          parkedSearches.push({
+            answer: async (outcome) => {
+              await act(async () => {
+                resolve(answerSearch(outcome))
+                await Promise.resolve()
+              })
+            },
+          })
+        })
+      }
+      if (worldRead !== "ok" && /\/worlds\/w\d(\/timelines\/[^/]+)?$/.test(url)) {
+        return respondCharacter("x", worldRead)
       }
       const timelineMatch = /\/worlds\/(w\d)\/timelines\/(t-w\d(?:-b)?)$/.exec(url)
       if (timelineMatch !== null) {
@@ -661,5 +715,477 @@ describe("a destination that refuses or fails", () => {
     await settle()
     expect(said).toEqual([])
     expect(document.querySelector(".campaign-workspace__content")!.textContent).not.toContain("World w3")
+  })
+})
+
+// ---------------------------------------------------------------------------------------------------
+// P02-5 second correction. An arrival belongs to the destination its note names, survives only its own
+// stamp, and what it announced is withdrawn when the authority behind the words is lost. The Navbar
+// menu's campaign choice is announced, the Campaign World explorer takes the heading focus, and the
+// ordinary World/Timeline arrival (state.announce) neither repeats nor steals.
+// ---------------------------------------------------------------------------------------------------
+
+const campaignNote = (id: string) => ({ selection: { level: "campaign", id } })
+
+describe("an arrival belongs to the destination its note names", () => {
+  it.each([
+    ["a campaign note", campaignNote("alpha")],
+    ["a world note", { selection: { level: "world", id: "w1" } }],
+    ["a character note", { selection: { level: "character", id: "a2", campaignId: "alpha" } }],
+  ])("%s on an unrelated route announces nothing and claims no focus even when the store matches it", async (_name, note) => {
+    mount("/app/alpha/characters/a2", false, { ctx: ctxOf("a2") })
+    await heading("Character a2")
+    await waitFor(() => expect(stamp()).toMatchObject({ characterId: "a2" }))
+    act(() => (document.activeElement as HTMLElement | null)?.blur())
+    watchAnnouncer()
+
+    // The campaign, its world and (for the character note) the perspective are all already selected:
+    // the store agrees with the note, the route does not.
+    await act(async () => {
+      await router.navigate("/app/alpha/characters/all", { state: { ...note, ctx: ctxOf("a2") } })
+    })
+
+    const browse = await heading("Characters")
+    await waitFor(() => expect(stamp()).toBeDefined())
+    await settle()
+    expect(said).toEqual([])
+    expect(browse).not.toHaveFocus()
+    expect(document.body).toHaveFocus()
+  })
+
+  describe("a same-path REPLACE that is not the entry's own stamp ends the arrival", () => {
+    const base = () => router.state.location.state as Record<string, unknown>
+    it.each([
+      ["another query", () => ({ search: "?x=1", state: base() })],
+      ["a hash", () => ({ hash: "#notes", state: base() })],
+      ["no selection marker", () => ({ state: { ...base(), selection: undefined } })],
+      ["another marker", () => ({ state: { ...base(), selection: { level: "character", id: "a3", campaignId: "alpha" } } })],
+      ["another task", () => ({ state: { ...base(), task: { v: 1, root: "world", scope: { campaignId: "alpha" }, trail: [] } } })],
+    ])("%s: the heading is not focused when the page settles", async (_name, replacement) => {
+      mount("/app/alpha/knowledge")
+      await heading("Knowledge")
+      parkCharacters = true
+
+      choose("a2")
+      await waitFor(() => expect(parkedCharacters.some((read) => read.id === "a2")).toBe(true))
+      await waitFor(() => expect(stamp()).toMatchObject({ characterId: "a2" }))
+      const { search, hash, state } = { search: "", hash: "", ...replacement() }
+      await act(async () => {
+        await router.navigate({ pathname: where(), search, hash }, { replace: true, state })
+      })
+      expect(select()).toHaveFocus()
+
+      parkCharacters = false
+      await parkedFor("a2").answer("ok")
+      const record = await heading("Character a2")
+      await settle()
+
+      expect(record).not.toHaveFocus()
+      expect(select()).toHaveFocus()
+    })
+  })
+
+  it("the entry's own stamp, which lands while the page loads, keeps the arrival (focus still follows)", async () => {
+    mount("/app/alpha/knowledge")
+    await heading("Knowledge")
+    parkCharacters = true
+
+    choose("a2")
+    await waitFor(() => expect(parkedCharacters.some((read) => read.id === "a2")).toBe(true))
+    await waitFor(() => expect(stamp()).toMatchObject({ characterId: "a2" }))
+    parkCharacters = false
+    await parkedFor("a2").answer("ok")
+
+    const record = await heading("Character a2")
+    await waitFor(() => expect(record).toHaveFocus())
+  })
+})
+
+describe("what an arrival announced is withdrawn when the authority behind it is lost", () => {
+  const without = (...gone: string[]) => bootstrapOf(["a1", "a2", "a3"].filter((id) => !gone.includes(id)))
+
+  async function announcedAs(name: string) {
+    mount("/app/alpha/knowledge")
+    await heading("Knowledge")
+    choose(name)
+    await heading(`Character ${name}`)
+    await waitFor(() => expect(regionText()).toBe(`Viewing as Name ${name}.`))
+    await settle()
+  }
+
+  it("the selected character is revoked", async () => {
+    await announcedAs("a2")
+
+    await act(async () => {
+      control.publish!(without("a2"))
+    })
+
+    await waitFor(() => expect(regionText()).not.toContain("Name a2"))
+    expect(document.body.textContent).not.toContain("Viewing as Name a2")
+  })
+
+  it("the person's session is lost", async () => {
+    await announcedAs("a2")
+
+    await act(async () => {
+      control.signOut!()
+    })
+    await settle()
+
+    expect(screen.queryByTestId("authoring-announcer")?.textContent ?? "").not.toContain("Name a2")
+    expect(document.body.textContent).not.toContain("Name a2")
+  })
+
+  it("the browser session or the user is replaced, and returning to the first does not bring it back (A, B, A)", async () => {
+    await announcedAs("a2")
+
+    await act(async () => {
+      control.publish!({ ...bootstrapOf(), browser_session_id: "s2" })
+    })
+    await waitFor(() => expect(regionText()).toBe(""))
+
+    await act(async () => {
+      control.publish!(bootstrapOf())
+    })
+    await settle()
+    expect(regionText()).toBe("")
+    expect(said).not.toContain("Viewing as Name a2.")
+  })
+
+  it("a different user's bootstrap withdraws it and a different user's names are never spoken for it", async () => {
+    await announcedAs("a2")
+
+    await act(async () => {
+      control.publish!({ ...bootstrapOf(), user: { user_id: "u2", display_name: "Other" } })
+    })
+
+    await waitFor(() => expect(regionText()).toBe(""))
+  })
+
+  it("a refresh that keeps the same names and the same session leaves it alone", async () => {
+    await announcedAs("a2")
+
+    await act(async () => {
+      control.publish!(bootstrapOf())
+    })
+    await settle()
+
+    expect(regionText()).toBe("Viewing as Name a2.")
+  })
+
+  it("a newer unrelated announcement survives the old cleanup", async () => {
+    await announcedAs("a2")
+    fireEvent.click(screen.getByRole("button", { name: "Say saved" }))
+    expect(regionText()).toBe("Saved.")
+
+    await act(async () => {
+      control.publish!(without("a2"))
+    })
+    await settle()
+
+    expect(regionText()).toBe("Saved.")
+  })
+
+  it("an older selection's cleanup does not remove the newer selection's message", async () => {
+    mount("/app/alpha/knowledge")
+    await heading("Knowledge")
+    choose("a2")
+    await heading("Character a2")
+    await waitFor(() => expect(regionText()).toBe("Viewing as Name a2."))
+    choose("a3")
+    await heading("Character a3")
+    await waitFor(() => expect(regionText()).toBe("Viewing as Name a3."))
+
+    // a2 was the earlier choice; losing it must not take the current message with it.
+    await act(async () => {
+      control.publish!(without("a2"))
+    })
+    await settle()
+
+    expect(regionText()).toBe("Viewing as Name a3.")
+  })
+
+  it("the cleanup of a message already taken back does nothing a second time", async () => {
+    await announcedAs("a2")
+    await act(async () => {
+      control.publish!(without("a2"))
+    })
+    await waitFor(() => expect(regionText()).not.toContain("Name a2"))
+    fireEvent.click(screen.getByRole("button", { name: "Say saved" }))
+
+    await act(async () => {
+      control.publish!(without("a2", "a3"))
+    })
+    await settle()
+
+    expect(regionText()).toBe("Saved.")
+  })
+
+  it("a generic message (no name was readable) names nothing and is not withdrawn for a name it never had", async () => {
+    // The Infobox names the person's own world; the announcement is generic when it is not readable.
+    mount("/app/alpha/knowledge")
+    await heading("Knowledge")
+    await waitFor(() => expect(within(level("World")).getByRole("option", { name: "World w3" })).toBeInTheDocument())
+    chooseLevel("World", "w3")
+    await heading("World w3")
+    await waitFor(() => expect(regionText()).toBe("World changed to World w3. Campaign selection cleared."))
+    expect(regionText()).not.toContain("Name ")
+  })
+})
+
+// ---- The Navbar menu's campaign choice ------------------------------------------------------------
+
+const main = () => within(screen.getByRole("navigation", { name: "Main" }))
+const openCampaignMenu = () => {
+  const disclosure = main().getByRole("button", { name: "Show campaign menu" })
+  act(() => disclosure.focus())
+  fireEvent.click(disclosure, { detail: 1 })
+}
+const menuCampaign = (name: string) => {
+  const link = main().getByRole("link", { name })
+  act(() => link.focus())
+  fireEvent.pointerDown(link)
+  fireEvent.click(link, { detail: 1 })
+}
+
+describe("the Navbar menu's campaign choice", () => {
+  it("is announced once, after it is accepted and committed", async () => {
+    mount("/app/alpha/knowledge")
+    await heading("Knowledge")
+    watchAnnouncer()
+    openCampaignMenu()
+
+    menuCampaign("Campaign beta")
+
+    await heading("Campaign Home")
+    expect(where()).toBe("/app/beta/home")
+    await waitFor(() => expect(said).toEqual(["Campaign changed to Campaign beta."]))
+    await settle()
+    expect(said).toEqual(["Campaign changed to Campaign beta."])
+  })
+
+  it("the campaign already in force is only a link: nothing is announced", async () => {
+    mount("/app/alpha/knowledge")
+    await heading("Knowledge")
+    watchAnnouncer()
+    openCampaignMenu()
+
+    menuCampaign("Campaign alpha")
+
+    await heading("Campaign Home")
+    expect(where()).toBe("/app/alpha/home")
+    await settle()
+    expect(said).toEqual([])
+  })
+
+  it("Stay announces nothing; the attempt that is accepted afterwards is announced once", async () => {
+    mount("/app/alpha/knowledge")
+    await heading("Knowledge")
+    typeDraft()
+    watchAnnouncer()
+    openCampaignMenu()
+
+    menuCampaign("Campaign beta")
+    await answer("Stay")
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+    await settle()
+    expect(said).toEqual([])
+    expect(where()).toBe("/app/alpha/knowledge")
+
+    if (main().queryByRole("link", { name: "Campaign beta" }) === null) openCampaignMenu()
+    menuCampaign("Campaign beta")
+    await answer("Leave")
+
+    await heading("Campaign Home")
+    await waitFor(() => expect(said).toEqual(["Campaign changed to Campaign beta."]))
+    await settle()
+    expect(said).toEqual(["Campaign changed to Campaign beta."])
+  })
+
+  it("a choice answered Stay and superseded by another announces only the accepted one", async () => {
+    mount("/app/alpha/knowledge")
+    await heading("Knowledge")
+    typeDraft()
+    watchAnnouncer()
+    openCampaignMenu()
+
+    menuCampaign("Campaign beta")
+    await answer("Stay")
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+    if (main().queryByRole("link", { name: "Campaign gamma" }) === null) openCampaignMenu()
+    menuCampaign("Campaign gamma")
+    await answer("Leave")
+
+    await heading("Campaign Home")
+    expect(where()).toBe("/app/gamma/home")
+    await waitFor(() => expect(said).toEqual(["Campaign changed to Campaign gamma."]))
+    await settle()
+    expect(said).toEqual(["Campaign changed to Campaign gamma."])
+  })
+})
+
+// ---- The Campaign World explorer, the Infobox World fallback destination --------------------------
+
+describe("the Infobox World choice that opens the Campaign World explorer (/app/:c/world)", () => {
+  async function chooseExplorerWorld() {
+    mount("/worlds/w3")
+    await heading("World w3")
+    await waitFor(() => expect(within(level("World")).getByRole("option", { name: "World w1" })).toBeInTheDocument())
+    watchAnnouncer()
+    chooseLevel("World", "w1")
+    await waitFor(() => expect(where()).toBe("/app/alpha/world"))
+  }
+
+  it("a settled explorer takes the heading focus once and the world is announced once", async () => {
+    await chooseExplorerWorld()
+
+    const explorer = await heading("Campaign World")
+    await waitFor(() => expect(explorer).toHaveFocus())
+    await waitFor(() => expect(said).toEqual(["World changed to World w1."]))
+    await settle()
+    expect(said).toEqual(["World changed to World w1."])
+    act(() => elsewhere().focus())
+    await act(async () => {
+      control.publish!(bootstrapOf())
+    })
+    await settle()
+    expect(elsewhere()).toHaveFocus()
+  })
+
+  it("while the explorer is loading nothing takes the heading focus; the settled page does, once", async () => {
+    worldSearch = "parked"
+    await chooseExplorerWorld()
+
+    const explorer = await heading("Campaign World")
+    await waitFor(() => expect(parkedSearches.length).toBeGreaterThan(0))
+    await waitFor(() => expect(said).toEqual(["World changed to World w1."]))
+    await settle()
+    expect(explorer).not.toHaveFocus()
+    // (The shell was remounted for the new campaign scope, so focus is nowhere until the page settles.)
+    expect(document.body).toHaveFocus()
+
+    worldSearch = "ok"
+    await parkedSearches.at(-1)!.answer("ok")
+    await waitFor(() => expect(explorer).toHaveFocus())
+    expect(said).toEqual(["World changed to World w1."])
+  })
+
+  it.each([
+    ["unavailable", "missing", "World unavailable"],
+    ["error", "broken", "World information unavailable"],
+  ] as const)("an %s explorer takes the heading focus and keeps its message", async (_name, outcome, message) => {
+    worldSearch = outcome
+    await chooseExplorerWorld()
+
+    const explorer = await heading("Campaign World")
+    await screen.findByRole("heading", { level: 2, name: message })
+    await waitFor(() => expect(explorer).toHaveFocus())
+    await settle()
+    expect(said).toEqual(["World changed to World w1."])
+  })
+
+  it("a person who moved focus away while it loaded keeps it", async () => {
+    worldSearch = "parked"
+    await chooseExplorerWorld()
+    await heading("Campaign World")
+    await waitFor(() => expect(parkedSearches.length).toBeGreaterThan(0))
+    const other = elsewhere()
+    act(() => other.focus())
+
+    worldSearch = "ok"
+    await parkedSearches.at(-1)!.answer("ok")
+    await settle()
+
+    expect(other).toHaveFocus()
+  })
+})
+
+// ---- Ordinary World and Timeline arrival (state.announce) -----------------------------------------
+
+describe("ordinary World and Timeline arrival with a confirmed-write message", () => {
+  const go = async (to: string, state: unknown) => {
+    await act(async () => {
+      await router.navigate(to, { state })
+    })
+  }
+  // The same entry restated by the owners that stamp it, as they do after the page has arrived.
+  const restate = async () => {
+    const current = router.state.location
+    await act(async () => {
+      await router.navigate(
+        { pathname: current.pathname, search: current.search, hash: current.hash },
+        { replace: true, state: { ...(current.state as object), ctx: ctxOf(null) } },
+      )
+    })
+  }
+
+  it.each([
+    ["World", "/worlds/w1", "World w1"],
+    ["Timeline", "/worlds/w1/timelines/t-w1", "Timeline w1"],
+  ])("%s: announced once after a successful read, the heading focused once, a later restating of the entry neither repeats nor steals", async (_name, path, title) => {
+    mount("/app/alpha/knowledge")
+    await heading("Knowledge")
+    watchAnnouncer()
+
+    await go(path, { announce: "Saved the record." })
+
+    const page = await heading(title)
+    await waitFor(() => expect(page).toHaveFocus())
+    await waitFor(() => expect(said).toEqual(["Saved the record."]))
+    await waitFor(() => expect(stamp()).toBeDefined())
+    await settle()
+
+    const other = elsewhere()
+    act(() => other.focus())
+    await restate()
+    await settle()
+
+    expect(said).toEqual(["Saved the record."])
+    expect(other).toHaveFocus()
+  })
+
+  it.each([
+    ["World", "/worlds/w1", "broken", "World", "The world could not be loaded"],
+    ["World", "/worlds/w1", "missing", "World not available", "This world does not exist"],
+    ["Timeline", "/worlds/w1/timelines/t-w1", "broken", "Timeline", "The timeline could not be loaded"],
+    ["Timeline", "/worlds/w1/timelines/t-w1", "missing", "Timeline not available", "This timeline does not exist"],
+  ] as const)(
+    "%s %s read that fails after a confirmed write (%s): the confirmed message is announced once, the heading is focused, nothing repeats",
+    async (_noun, path, outcome, title, alert) => {
+      mount("/app/alpha/knowledge")
+      await heading("Knowledge")
+      watchAnnouncer()
+      worldRead = outcome
+
+      await go(path, { announce: "Saved the record." })
+
+      const page = await heading(title)
+      await waitFor(() => expect(page).toHaveFocus())
+      expect(await screen.findByRole("alert")).toHaveTextContent(alert)
+      await waitFor(() => expect(said).toEqual(["Saved the record."]))
+      await waitFor(() => expect(stamp()).toBeDefined())
+
+      const other = elsewhere()
+      act(() => other.focus())
+      await restate()
+      await settle()
+
+      expect(said).toEqual(["Saved the record."])
+      expect(other).toHaveFocus()
+    },
+  )
+
+  it("a navigation that carries no message and fails to read still focuses the error heading once", async () => {
+    mount("/app/alpha/knowledge")
+    await heading("Knowledge")
+    watchAnnouncer()
+    worldRead = "missing"
+
+    await go("/worlds/w1", null)
+
+    const page = await heading("World not available")
+    await waitFor(() => expect(page).toHaveFocus())
+    await settle()
+    expect(said).toEqual([])
   })
 })

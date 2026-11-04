@@ -6,6 +6,11 @@ import { createContext, useContext } from "react"
 // fetch resolves, so the message survives the refetch that proves the write.
 export interface Announcer {
     announce: (message: string) => void
+    // Announces, and hands back the way to take that one message back out of the live region again: it
+    // clears the region only while this is still the latest message, so it can never remove a newer
+    // announcement (a save, an error, a recovery) and cleaning up an old one twice does nothing.
+    // Optional so a stand-in announcer needs only `announce`.
+    announceOwned?: (message: string) => () => void
 }
 
 export const AnnouncerContext = createContext<Announcer>({
@@ -14,6 +19,15 @@ export const AnnouncerContext = createContext<Announcer>({
 
 export function useAnnounce(): Announcer["announce"] {
     return useContext(AnnouncerContext).announce
+}
+
+/** Like `useAnnounce`, but the message can be withdrawn by whoever made it (while it is still the latest). */
+export function useAnnounceOwned(): NonNullable<Announcer["announceOwned"]> {
+    const { announce, announceOwned } = useContext(AnnouncerContext)
+    return announceOwned ?? ((message: string) => {
+        announce(message)
+        return () => undefined
+    })
 }
 
 // Navigation state carrying a success message to announce at the destination.

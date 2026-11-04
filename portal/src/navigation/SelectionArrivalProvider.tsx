@@ -1,7 +1,7 @@
-import { useContext, useEffect, useMemo, useState, useSyncExternalStore } from "react"
+import { useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 import type { PropsWithChildren } from "react"
 import { UNSAFE_DataRouterContext, useLocation } from "react-router"
-import { useAnnounce } from "../components/authoring/announcer"
+import { useAnnounceOwned } from "../components/authoring/announcer"
 import { useSession } from "../context/SessionContext"
 import { useWorkspaceHierarchy } from "../context/WorkspaceHierarchyContext"
 import type { WorkspaceHierarchy } from "../context/WorkspaceHierarchyContext"
@@ -10,13 +10,19 @@ import { SelectionArrivalContext } from "./selectionArrival"
 import type { SelectionArrival } from "./selectionArrival"
 import { createArrivalTracker } from "./selectionArrivalTracker"
 import type { ArrivalTracker } from "./selectionArrivalTracker"
-import { selectionFor, useSelectedContextSnapshot, useSelectedContextStore } from "./selectedContextStore"
+import { selectionFor, selectionOwner, useSelectedContextSnapshot, useSelectedContextStore } from "./selectedContextStore"
 import type { SelectedContextState } from "./selectedContextStore"
 
 // The one owner of what follows an accepted Infobox selection (docs/UI_DESIGN.md §4.8.4): the polite
 // announcement here, the heading focus in the destination (navigation/ArrivalHeadingFocus.tsx), both
 // from the same arrival, each at most once. What counts as an arrival (and what ends one) is decided from
 // the router's committed locations (navigation/selectionArrivalTracker.ts).
+//
+// What was announced is withdrawn again when the authority it was worded under is lost (the announcer
+// owns the message; withdrawing it never touches a newer one): the person or browser session is replaced
+// or gone, or a name it spoke is no longer readable (a revoked character, a world the person can no
+// longer read). It is a clear, not a rewrite: nothing private is re-spoken. Only what the live region
+// still holds is withdrawn; speech already given cannot be recalled.
 //
 // The announcement waits for the selection itself to be committed (the store names what was chosen) and
 // is worded from what the person may read at that moment: a name that is not readable is left out and the
@@ -42,49 +48,84 @@ function timelineName(bootstrap: SessionBootstrap, hierarchy: WorkspaceHierarchy
 
 const CLEARED = "Campaign selection cleared."
 
-/** What to announce, or null while the chosen selection is not yet committed. */
+/** The name the announcement would speak, from what the person may read now; null when not readable. */
+function nameFor(
+    arrival: SelectionArrival,
+    bootstrap: SessionBootstrap,
+    hierarchy: WorkspaceHierarchy,
+): string | null {
+    const { change } = arrival
+    switch (change.level) {
+        case "campaign":
+            return campaignName(bootstrap, change.id as string)
+        case "world":
+            return worldName(bootstrap, hierarchy, change.id as string)
+        case "timeline":
+            return timelineName(bootstrap, hierarchy, change.id as string)
+        case "character":
+            return (
+                bootstrap.campaigns
+                    .find((campaign) => campaign.campaign_id === change.campaignId)
+                    ?.character_perspectives.find((character) => character.character_id === change.id)?.character_name ?? null
+            )
+    }
+}
+
+/**
+ * What to announce, or null while the chosen selection is not yet committed or does not fit the
+ * destination the choice arrived at (route scope, level and id must all agree).
+ */
 function messageFor(
     arrival: SelectionArrival,
     selection: SelectedContextState,
     bootstrap: SessionBootstrap,
     hierarchy: WorkspaceHierarchy,
 ): string | null {
-    const { change } = arrival
+    const { change, scope } = arrival
+    const name = nameFor(arrival, bootstrap, hierarchy)
     const clearedCampaign = arrival.campaignBefore !== null && selection.campaignId === null ? ` ${CLEARED}` : ""
     switch (change.level) {
-        case "campaign": {
+        case "campaign":
             if (selection.campaignId !== change.id) return null
-            const name = campaignName(bootstrap, change.id as string)
             return name === null ? "Campaign changed." : `Campaign changed to ${name}.`
-        }
         case "world": {
             if (selection.worldId !== change.id) return null
-            const name = worldName(bootstrap, hierarchy, change.id as string)
+            if (scope.campaignId !== null) {
+                // A world opened through a campaign of it: that campaign must be in the person's session,
+                // be in this world, and be the selected campaign.
+                const through = bootstrap.campaigns.find((campaign) => campaign.campaign_id === scope.campaignId)
+                if (through?.world_id !== change.id || selection.campaignId !== scope.campaignId) return null
+            }
             return `${name === null ? "World changed." : `World changed to ${name}.`}${clearedCampaign}`
         }
-        case "timeline": {
-            if (selection.timelineId !== change.id) return null
-            const name = timelineName(bootstrap, hierarchy, change.id as string)
+        case "timeline":
+            if (selection.timelineId !== change.id || selection.worldId !== scope.worldId) return null
             return `${name === null ? "Timeline changed." : `Timeline changed to ${name}.`}${clearedCampaign}`
-        }
-        case "character": {
+        case "character":
             if (selection.campaignId !== change.campaignId || selection.characterId !== change.id) return null
             if (change.id === null) return "No character perspective selected."
-            const name = bootstrap.campaigns
-                .find((campaign) => campaign.campaign_id === change.campaignId)
-                ?.character_perspectives.find((character) => character.character_id === change.id)?.character_name
-            return name === undefined ? "Character perspective changed." : `Viewing as ${name}.`
-        }
+            return name === null ? "Character perspective changed." : `Viewing as ${name}.`
     }
 }
 
 const NO_ARRIVALS: ArrivalTracker = { getSnapshot: () => null, subscribe: () => () => undefined }
 
+// What is currently in the live region on this owner's behalf.
+interface Announced {
+    withdraw: () => void
+    // The name it spoke (null when the wording was generic: nothing private to withdraw).
+    name: string | null
+    // The same lookup, made again against what the person may read now.
+    nameNow: (bootstrap: SessionBootstrap, hierarchy: WorkspaceHierarchy) => string | null
+    // The authority generation it was made under.
+    generation: number
+}
+
 export function SelectionArrivalProvider({ children }: PropsWithChildren) {
     const router = useContext(UNSAFE_DataRouterContext)?.router ?? null
     const store = useSelectedContextStore()
     const { key: locationKey } = useLocation()
-    const announce = useAnnounce()
+    const announceOwned = useAnnounceOwned()
     const { state } = useSession()
     const snapshot = useSelectedContextSnapshot()
     const hierarchy = useWorkspaceHierarchy()
@@ -97,11 +138,40 @@ export function SelectionArrivalProvider({ children }: PropsWithChildren) {
     const arrival = useSyncExternalStore(tracker.subscribe, tracker.getSnapshot)
 
     const selection = bootstrap === null ? null : selectionFor(snapshot, bootstrap)
+    const owner = bootstrap === null ? null : selectionOwner(bootstrap)
+
+    // The authority generation: a new one whenever the person or browser session behind the bootstrap
+    // changes, so an announcement made under an earlier one is never kept, even if the same person or
+    // session later returns (A, B, A).
+    const authority = useRef<{ owner: string | null; generation: number }>({ owner, generation: 0 })
+    const announced = useRef<Announced | null>(null)
+
     useEffect(() => {
+        if (authority.current.owner !== owner) {
+            authority.current = { owner, generation: authority.current.generation + 1 }
+        }
+        const live = announced.current
+        if (live !== null) {
+            const lost =
+                live.generation !== authority.current.generation ||
+                bootstrap === null ||
+                (live.name !== null && live.name !== live.nameNow(bootstrap, hierarchy))
+            if (lost) {
+                announced.current = null
+                live.withdraw()
+            }
+        }
         if (arrival === null || bootstrap === null || selection === null) return
         const message = messageFor(arrival, selection, bootstrap, hierarchy)
-        if (message !== null && arrival.claimAnnouncement()) announce(message)
-    }, [announce, arrival, bootstrap, hierarchy, selection])
+        if (message !== null && arrival.claimAnnouncement()) {
+            announced.current = {
+                withdraw: announceOwned(message),
+                name: nameFor(arrival, bootstrap, hierarchy),
+                nameNow: (nextBootstrap, nextHierarchy) => nameFor(arrival, nextBootstrap, nextHierarchy),
+                generation: authority.current.generation,
+            }
+        }
+    }, [announceOwned, arrival, bootstrap, hierarchy, owner, selection])
 
     const current = useMemo(() => (arrival === null ? null : { arrival, locationKey }), [arrival, locationKey])
     return <SelectionArrivalContext.Provider value={current}>{children}</SelectionArrivalContext.Provider>
