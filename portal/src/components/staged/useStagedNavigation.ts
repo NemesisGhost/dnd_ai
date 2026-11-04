@@ -1,5 +1,6 @@
 import { useLayoutEffect, useState } from "react"
 import { useLocation, useSearchParams } from "react-router"
+import { markNormalization } from "../../navigation/entryStamp"
 
 export interface StagedSectionRef<S extends string, K extends string> {
     key: K
@@ -29,7 +30,7 @@ export function useStagedNavigation<S extends string, K extends string>(
 ): StagedNavigation<S, K> {
     const [params, setParams] = useSearchParams()
     // The router state names where the record was opened from; replacing the address must keep it.
-    const { state } = useLocation()
+    const { state, key } = useLocation()
     const requested = params.get("section")
     const aliased: string | null =
         requested !== null && aliases !== undefined && Object.prototype.hasOwnProperty.call(aliases, requested)
@@ -49,9 +50,14 @@ export function useStagedNavigation<S extends string, K extends string>(
         if (ready && (parsed === null || parsed !== requested)) {
             const next = new URLSearchParams(params)
             next.set("section", section)
-            setParams(next, { replace: true, state })
+            // The write declares itself (navigation/entryStamp.ts) before the router sees it: a copy of the
+            // router state for this entry, marked as this entry's section normalization. An object is needed
+            // to carry the mark; an entry with no object state has no selection arrival to keep.
+            const written: unknown = typeof state === "object" && state !== null ? { ...state } : state
+            if (typeof written === "object" && written !== null) markNormalization({ key, state }, written)
+            setParams(next, { replace: true, state: written })
         }
-    }, [ready, parsed, requested, section, params, setParams, state])
+    }, [ready, parsed, requested, section, params, setParams, state, key])
 
     // Remember the section last shown in each stage (adjusted during render, not in an effect).
     if (remembered[stage] !== section) {

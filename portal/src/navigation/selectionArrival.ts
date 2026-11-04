@@ -1,6 +1,6 @@
 import { createContext, useContext } from "react"
 import { activationFor, releaseActivation } from "./activationOwner"
-import { differsOnlyInSection, sameState, sameStateButCtx, stampRoot } from "./entryStamp"
+import { differsOnlyInSection, normalizationRoot, sameStateButCtx, stampRoot } from "./entryStamp"
 import type { SelectionChange, SelectionScope } from "./selectionChange"
 
 // One accepted selection arrival (docs/UI_DESIGN.md §4.8.4): the Infobox choice the router has accepted
@@ -61,24 +61,25 @@ export class SelectionArrival {
     }
 
     /**
-     * Whether `next`, a REPLACE, keeps this arrival: it is the context stamp the stamp writer made for the
-     * entry this arrival is rendered under (navigation/entryStamp.ts: the writer marked that very state
-     * object, as a stamp of a chain rooted at an entry of this arrival), at the same address; or it is the
-     * default `?section=` a staged record page writes for itself into the entry it has just opened (the
-     * same state but for `ctx`, only the section differing). Nothing that merely resembles a stamp keeps
-     * it: any other replacement, even of the same path with the same state and `ctx`, ends the arrival.
+     * Whether `next`, a REPLACE, keeps this arrival: it was written by one of the two writers that restate
+     * the entry the arrival is rendered under, and says so (navigation/entryStamp.ts marks the very state
+     * object before the router sees it, with the chain root it restates, which must be one of this
+     * arrival's own entries):
+     *   - the context stamp (`replaceOwnEntry`): the same address; or
+     *   - the staged record page's normalization of a missing or invalid `?section=`
+     *     (`useStagedNavigation`): the same path and hash, a query that differs from the entry's only in
+     *     `section`, and the entry's state carried over but for `ctx`.
+     * Nothing that merely resembles one keeps it: any other replacement, even of the same address with
+     * exactly the same state, ends the arrival, and a later look-alike does not revive it.
      */
     isOwnStamp(next: ArrivalEntry): boolean {
         const now = this.entry
         if (next.pathname !== now.pathname || next.hash !== now.hash) return false
-        if (next.search === now.search) {
-            const root = stampRoot(next.state)
-            if (root !== null && this.keys.has(root)) return true
-            // The very same state restated (a page asking for the address it is already at, as StrictMode's
-            // second effect does) changes nothing, so it is not another navigation.
-            return sameState(now.state, next.state)
-        }
-        return differsOnlyInSection(now.search, next.search) && sameStateButCtx(now.state, next.state)
+        const stamp = stampRoot(next.state)
+        if (stamp !== null) return next.search === now.search && this.keys.has(stamp)
+        const normalization = normalizationRoot(next.state)
+        if (normalization === null || !this.keys.has(normalization)) return false
+        return (next.search === now.search || differsOnlyInSection(now.search, next.search)) && sameStateButCtx(now.state, next.state)
     }
 
     /** A stamp-only replacement of the entry arrived at: still this arrival, now rendered under `entry`. */

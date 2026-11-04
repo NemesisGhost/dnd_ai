@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { markStamp } from "./entryStamp"
+import { markNormalization, markStamp } from "./entryStamp"
 import { createArrivalTracker } from "./selectionArrivalTracker"
 import { readSelectionChange } from "./selectionChange"
 
@@ -158,10 +158,10 @@ describe("createArrivalTracker", () => {
             expect(arrival?.owns("k3")).toBe(true)
         })
 
-        it("the very same state restated at the same address (a page asking for where it is) changes nothing", () => {
-            const { tracker, commit, arrival } = arrive()
+        it("the very same state restated at the same address by anyone else ends it (nothing is inferred from equality)", () => {
+            const { tracker, commit } = arrive()
             commit("k2", DETAILS, "REPLACE", { ...first })
-            expect(tracker.getSnapshot()).toBe(arrival)
+            expect(tracker.getSnapshot()).toBeNull()
         })
 
         it("a replacement that looks exactly like a stamp but was not written by the writer ends it", () => {
@@ -205,15 +205,84 @@ describe("createArrivalTracker", () => {
             expect(tracker.getSnapshot()).toBeNull()
         })
 
-        it("the default section a staged page writes for itself keeps it; no other query does", () => {
+        // What the staged record page's normalization does: a copy of the entry's state, marked.
+        const normalizer = (entryKey: string, entryState: unknown) => {
+            const state = { ...(entryState as object) }
+            markNormalization({ key: entryKey, state: entryState }, state)
+            return state
+        }
+
+        it("the staged page's marked section normalization keeps it, and so does the writer's stamp of the normalized entry", () => {
             const { tracker, commit, arrival } = arrive()
-            // Same state object, as the page hands back what it read; only `section` differs.
-            commit("k2", DETAILS, "REPLACE", first, { search: "?section=sheet" })
+            commit("k2", DETAILS, "REPLACE", normalizer("k1", first), { search: "?section=sheet" })
             expect(tracker.getSnapshot()).toBe(arrival)
-            // The writer then stamps that normalised entry: its root is the adopted key.
-            commit("k3", DETAILS, "REPLACE", writer("k2", first), { search: "?section=sheet" })
+            const second = normalizer("k1", first)
+            commit("k3", DETAILS, "REPLACE", writer("k2", second), { search: "?section=sheet" })
             expect(tracker.getSnapshot()).toBe(arrival)
-            commit("k4", DETAILS, "REPLACE", first, { search: "?section=sheet&q=x" })
+            expect(arrival?.owns("k3")).toBe(true)
+        })
+
+        it("a batched stamp and normalization, observed in either order, keep it", () => {
+            for (const order of ["stamp-first", "normalization-first"]) {
+                const { tracker, commit, arrival } = arrive()
+                const stampState = writer("k1", first, "a1")
+                // The page rendered the entry before it was stamped, so its copy lacks the stamp.
+                const normalState = normalizer("k1", first)
+                if (order === "stamp-first") {
+                    commit("k2", DETAILS, "REPLACE", stampState)
+                    commit("k3", DETAILS, "REPLACE", normalState, { search: "?section=sheet" })
+                } else {
+                    commit("k2", DETAILS, "REPLACE", normalState, { search: "?section=sheet" })
+                    commit("k3", DETAILS, "REPLACE", writer("k1", first, "a1"), { search: "?section=sheet" })
+                }
+                expect(tracker.getSnapshot()).toBe(arrival)
+            }
+        })
+
+        it("the same normalization replayed at the address it already wrote (StrictMode's second effect) keeps it", () => {
+            const { tracker, commit, arrival } = arrive()
+            commit("k2", DETAILS, "REPLACE", normalizer("k1", first), { search: "?section=sheet" })
+            commit("k3", DETAILS, "REPLACE", normalizer("k1", first), { search: "?section=sheet" })
+            expect(tracker.getSnapshot()).toBe(arrival)
+        })
+
+        it("an unmarked copy or look-alike of the normalization ends it", () => {
+            const { tracker, commit } = arrive()
+            commit("k2", DETAILS, "REPLACE", { ...first }, { search: "?section=sheet" })
+            expect(tracker.getSnapshot()).toBeNull()
+        })
+
+        it("a marked normalization that changes more than the section, or that restates another chain, ends it", () => {
+            const changedQuery = arrive()
+            changedQuery.commit("k2", DETAILS, "REPLACE", normalizer("k1", first), { search: "?section=sheet&q=x" })
+            expect(changedQuery.tracker.getSnapshot()).toBeNull()
+
+            const changedState = arrive()
+            const altered = { ...normalizer("k1", first), task: { ...task, root: "world" } }
+            changedState.commit("k2", DETAILS, "REPLACE", altered, { search: "?section=sheet" })
+            expect(changedState.tracker.getSnapshot()).toBeNull()
+
+            const other = arrive()
+            other.commit("k2", DETAILS, "REPLACE", normalizer("elsewhere", { unrelated: true }), { search: "?section=sheet" })
+            expect(other.tracker.getSnapshot()).toBeNull()
+        })
+
+        it("a stamp mark does not license a normalization's change, nor the reverse", () => {
+            const stampAtOtherQuery = arrive()
+            stampAtOtherQuery.commit("k2", DETAILS, "REPLACE", writer("k1", first), { search: "?section=sheet" })
+            expect(stampAtOtherQuery.tracker.getSnapshot()).toBeNull()
+
+            const normalizationWithCtx = arrive()
+            const withCtx = { ...normalizer("k1", first), ctx: stamped("a2").ctx }
+            normalizationWithCtx.commit("k2", DETAILS, "REPLACE", withCtx, { search: "?section=sheet" })
+            // (an unmarked spread of a marked state is a new object)
+            expect(normalizationWithCtx.tracker.getSnapshot()).toBeNull()
+        })
+
+        it("a superseded arrival is not revived by a normalization written for it", () => {
+            const { tracker, commit } = arrive()
+            commit("k2", "/app/alpha/characters/a3", "PUSH", { selection: { level: "character", id: "a3", campaignId: "alpha" } })
+            commit("k3", "/app/alpha/characters/a3", "REPLACE", normalizer("k1", first), { search: "?section=sheet" })
             expect(tracker.getSnapshot()).toBeNull()
         })
 

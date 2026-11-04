@@ -49,6 +49,23 @@ describe("ConfirmDialog", () => {
         expect(opener).toHaveFocus()
     })
 
+    it("does not take focus back from something live that took it while the dialog was open or as it closed", () => {
+        render(
+            <>
+                <Harness />
+                <button type="button">Destination</button>
+            </>,
+        )
+        const opener = screen.getByRole("button", { name: "Archive world" })
+        opener.focus()
+        fireEvent.click(opener)
+        // As an accepted navigation does: the destination takes focus in the same step the dialog closes.
+        const destination = screen.getByRole("button", { name: "Destination" })
+        destination.focus()
+        fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
+        expect(destination).toHaveFocus()
+    })
+
     describe("when the control that had focus is no longer usable (navigation focus fallbacks)", () => {
         function Fallbacks({ candidates }: { candidates: Array<[number, () => HTMLElement | null]> }) {
             useEffect(() => {

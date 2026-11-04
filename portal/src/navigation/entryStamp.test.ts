@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { differsOnlyInSection, entryRoot, markStamp, sameStateButCtx, stampRoot } from "./entryStamp"
+import { differsOnlyInSection, entryRoot, markNormalization, markStamp, normalizationRoot, sameStateButCtx, stampRoot } from "./entryStamp"
 
 describe("stamp identity", () => {
     it("only the object the writer marked is a stamp; its root is the first entry that was not one", () => {
@@ -27,6 +27,34 @@ describe("stamp identity", () => {
         expect(stampRoot(null)).toBeNull()
         expect(stampRoot("k1")).toBeNull()
         expect(entryRoot({ key: "k9", state: { ...stamped } })).toBe("k9")
+    })
+})
+
+describe("the two writers are different kinds of mark", () => {
+    it("a normalization is not a stamp and a stamp is not a normalization", () => {
+        const entry = { key: "k1", state: { a: 1 } }
+        const stamp = { ...entry.state, ctx: {} }
+        const normal = { ...entry.state }
+        markStamp(entry, stamp)
+        markNormalization(entry, normal)
+
+        expect(stampRoot(stamp)).toBe("k1")
+        expect(normalizationRoot(stamp)).toBeNull()
+        expect(normalizationRoot(normal)).toBe("k1")
+        expect(stampRoot(normal)).toBeNull()
+    })
+
+    it("a chain mixing both keeps one root, and an unmarked copy of a normalization is nothing", () => {
+        const entry = { key: "k1", state: { a: 1 } }
+        const normal = { ...entry.state }
+        markNormalization(entry, normal)
+        const stamp = { ...normal, ctx: {} }
+        markStamp({ key: "k2", state: normal }, stamp)
+
+        expect(stampRoot(stamp)).toBe("k1")
+        expect(entryRoot({ key: "k3", state: stamp })).toBe("k1")
+        expect(normalizationRoot({ ...normal })).toBeNull()
+        expect(normalizationRoot(structuredClone(normal))).toBeNull()
     })
 })
 

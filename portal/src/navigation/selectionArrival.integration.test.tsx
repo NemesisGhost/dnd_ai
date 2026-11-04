@@ -1577,3 +1577,88 @@ describe("the internal stamp is identified by the writer, never by resemblance",
     expect(select()).toHaveFocus()
   })
 })
+
+// ---- Nothing unmarked keeps a selection arrival; the staged page's own normalization does ----------
+
+describe.each([
+  ["plain", false],
+  ["StrictMode", true],
+])("the selection arrival's lifetime across same-address replacements (%s)", (_name, strict) => {
+  async function deferredChoice() {
+    mount("/app/alpha/knowledge", strict)
+    await heading("Knowledge")
+    parkCharacters = true
+    choose("a2")
+    await waitFor(() => expect(parkedCharacters.some((read) => read.id === "a2")).toBe(true))
+    await waitFor(() => expect(stamp()).toMatchObject({ characterId: "a2" }))
+  }
+  const replaceWith = async (change: { search?: string; hash?: string }, state: unknown) => {
+    const current = router.state.location
+    await act(async () => {
+      await router.navigate(
+        { pathname: current.pathname, search: change.search ?? current.search, hash: change.hash ?? current.hash },
+        { replace: true, state },
+      )
+    })
+  }
+  const settleDestination = async () => {
+    parkCharacters = false
+    await parkedFor("a2").answer("ok")
+    const record = await heading("Character a2")
+    await settle()
+    return record
+  }
+
+  it("the real normalization of the missing section, with the stamp, keeps the arrival: the heading is focused once", async () => {
+    await deferredChoice()
+
+    const record = await settleDestination()
+
+    await waitFor(() => expect(router.state.location.search).toBe("?section=sheet"))
+    await waitFor(() => expect(record).toHaveFocus())
+    expect(where()).toBe("/app/alpha/characters/a2")
+  })
+
+  it("an external REPLACE with exactly the same address and state ends it", async () => {
+    await deferredChoice()
+    const current = router.state.location
+
+    await replaceWith({}, { ...(current.state as object) })
+    const record = await settleDestination()
+
+    expect(record).not.toHaveFocus()
+    expect(select()).toHaveFocus()
+  })
+
+  it("an external look-alike of the section normalization (same section, same state shape) ends it", async () => {
+    await deferredChoice()
+    const current = router.state.location
+
+    await replaceWith({ search: "?section=sheet" }, { ...(current.state as object) })
+    const record = await settleDestination()
+
+    expect(record).not.toHaveFocus()
+    expect(select()).toHaveFocus()
+  })
+
+  it("a newer choice supersedes the arrival: a late normalization of the first neither focuses nor announces", async () => {
+    mount("/app/alpha/knowledge", strict)
+    await heading("Knowledge")
+    watchAnnouncer()
+    parkCharacters = true
+    choose("a2")
+    await waitFor(() => expect(parkedCharacters.some((read) => read.id === "a2")).toBe(true))
+    choose("a3")
+    await waitFor(() => expect(parkedCharacters.some((read) => read.id === "a3")).toBe(true))
+
+    parkCharacters = false
+    await parkedFor("a3").answer("ok")
+    const record = await heading("Character a3")
+    await waitFor(() => expect(record).toHaveFocus())
+    await parkedFor("a2").answer("ok")
+    await settle()
+
+    expect(record).toHaveFocus()
+    expect(said).toEqual(["Viewing as Name a2.", "Viewing as Name a3."])
+  })
+})

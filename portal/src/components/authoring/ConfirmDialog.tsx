@@ -88,6 +88,13 @@ export function ConfirmDialog({
         const fallbacks = fallbacksRef.current
         returnFocusRef.current = null
         fallbacksRef.current = []
+        // Focus that has already moved onto something live outside the dialog is not ours to take back: an
+        // accepted navigation's destination heading, or a control the person chose. Only focus that is
+        // still in the dialog, or nowhere, is returned.
+        const current = document.activeElement
+        if (current instanceof HTMLElement && current !== document.body && current !== target && !dialog.contains(current)) {
+            return
+        }
         if (restoreFocus(target, dialog)) {
             return
         }

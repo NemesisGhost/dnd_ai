@@ -214,4 +214,19 @@ describe("the activated control survives the navigation and hands focus to its o
     await waitFor(() => expect(home).toHaveFocus())
     expect(router.state.location.pathname).toBe("/app/gamma/home")
   })
+
+  it("guarded Leave: the accepted request's destination heading ends with the focus", async () => {
+    mount()
+    fireEvent.change(screen.getByLabelText("Draft"), { target: { value: "unsent" } })
+    const opener = link("Open beta")
+
+    press(opener)
+    await answer("Leave")
+
+    const home = await heading("Home beta")
+    await act(async () => undefined)
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+    expect(router.state.location.pathname).toBe("/app/beta/home")
+    expect(home).toHaveFocus()
+  })
 })
