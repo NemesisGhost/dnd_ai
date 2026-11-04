@@ -5,9 +5,11 @@ import {
     useState,
 } from "react"
 import {
+    useLocation,
     useParams,
     useSearchParams,
 } from "react-router"
+import { retainedState } from "../navigation/breadcrumbModel"
 import {
     CardGrid,
 } from "../components/CardGrid"
@@ -173,6 +175,10 @@ function CampaignKnowledgeContent({
         characterId !== null && partyMembershipUndetermined(sessionState, campaignId)
 
     const [searchParams, setSearchParams] = useSearchParams()
+    // Filter, search and party changes stay in the task the list was opened in. Only the validated
+    // task is carried (retainedState), never the rest of the entry's state.
+    const { pathname, state: locationState } = useLocation()
+    const entryState = retainedState(pathname, locationState) ?? undefined
     const view = viewFromAddress(searchParams.get("view"))
     const lifecycle = lifecycleFromAddress(
         searchParams.get("lifecycle"),
@@ -231,10 +237,10 @@ function CampaignKnowledgeContent({
                     change(next)
                     return next
                 },
-                { replace },
+                { replace, state: entryState },
             )
         },
-        [setSearchParams],
+        [setSearchParams, entryState],
     )
 
     useEffect(() => {

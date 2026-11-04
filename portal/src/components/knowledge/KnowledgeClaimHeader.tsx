@@ -1,4 +1,5 @@
 import { Link } from "react-router"
+import { TaskBreadcrumb } from "../navigation/TaskBreadcrumb"
 import type { KnowledgeDetail } from "../../types/knowledge"
 import { humanizeCode } from "../../utils/humanize"
 import { LifecycleBadge } from "../authoring/feedback"
@@ -23,6 +24,8 @@ interface Props {
     item: KnowledgeDetail
     characterId: string | null
     partyId: string | null
+    // Router state for the links to other records: the claim's own task, continued.
+    linkState?: object
     // The Knowledge list, carrying the perspective.
     listHref: string
     // The actual record status, for people who can read it (editors). Stage navigation never
@@ -33,6 +36,8 @@ interface Props {
     guidance: ClaimGuidance | null
     // Where the guidance leads; null when it has no destination the person can open.
     guidanceHref: string | null
+    // Router state for the guidance link (the page's own section keeps the task; another record continues it).
+    guidanceState?: object
     canEdit: boolean
 }
 
@@ -44,23 +49,22 @@ export function KnowledgeClaimHeader({
     item,
     characterId,
     partyId,
+    linkState,
     listHref,
     status,
     replacementHref,
     guidance,
     guidanceHref,
+    guidanceState,
     canEdit,
 }: Props) {
     return (
         <header className="knowledge-claim__header">
-            <nav aria-label="Breadcrumb" className="authoring-page__breadcrumb">
-                <ol className="session-run__breadcrumb">
-                    <li>
-                        <Link to={listHref}>Knowledge</Link>
-                    </li>
-                    <li aria-current="page">Claim</li>
-                </ol>
-            </nav>
+            {/* The task the claim was opened in; the Knowledge list is opened under the claim's perspective. */}
+            <TaskBreadcrumb
+                current="Claim"
+                queries={{ "knowledge.list": listHref.includes("?") ? listHref.slice(listHref.indexOf("?")) : "" }}
+            />
             <div className="knowledge-claim__headline">
                 <h1 id="knowledge-claim-heading" className="knowledge-claim__title" tabIndex={-1}>
                     {headline(item.statement)}
@@ -77,6 +81,7 @@ export function KnowledgeClaimHeader({
                 subject={item.subject}
                 characterId={characterId}
                 partyId={partyId}
+                linkState={linkState}
                 variant="claim"
                 separateOpen={canEdit}
             />
@@ -84,7 +89,9 @@ export function KnowledgeClaimHeader({
                 <p className="knowledge-claim__replaced" role="status">
                     {replacementHref !== null ? (
                         <>
-                            Replaced by <Link to={replacementHref}>{status.supersededBy.name}</Link>.
+                            Replaced by <Link to={replacementHref} state={linkState}>
+                                {status.supersededBy.name}
+                            </Link>.
                         </>
                     ) : (
                         <>Replaced by {status.supersededBy.name}.</>
@@ -98,7 +105,9 @@ export function KnowledgeClaimHeader({
                     {guidance !== null ? (
                         <span className="knowledge-claim__next">
                             Next:{" "}
-                            {guidanceHref !== null ? <Link to={guidanceHref}>{guidance.text} ›</Link> : guidance.text}
+                            {guidanceHref !== null ? <Link to={guidanceHref} state={guidanceState}>
+                                    {guidance.text} ›
+                                </Link> : guidance.text}
                         </span>
                     ) : null}
                 </div>

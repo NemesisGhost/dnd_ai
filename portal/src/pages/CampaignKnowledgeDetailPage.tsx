@@ -2,6 +2,7 @@ import { useCallback, useEffect } from "react"
 import { useLocation, useParams, useSearchParams } from "react-router"
 import { KnowledgeDetailBoundary } from "../components/KnowledgeDetailBoundary"
 import { usePerspective } from "../context/CharacterPerspectiveContext"
+import { retainedState } from "../navigation/breadcrumbModel"
 import { runPermissionLossCleanup } from "../hooks/navigationHolds"
 import { KnowledgeClaimPage } from "./KnowledgeClaimPage"
 import PlaceholderPage from "./PlaceholderPage"
@@ -53,7 +54,8 @@ export function CampaignKnowledgeDetailPage() {
     // history, so Back cannot restore it); the record is then read again without it.
     // Permission loss, not a choice: it runs under the narrow exemption so it is never held behind the
     // claim page's "discard unsaved changes?" question, which a deliberate party change does ask.
-    const locationKey = useLocation().key
+    const { key: locationKey, pathname, state: locationState } = useLocation()
+    const taskState = retainedState(pathname, locationState) ?? undefined
     const dropRevokedParty = useCallback(
         (revokedPartyId: string) => {
             runPermissionLossCleanup(locationKey, () =>
@@ -64,11 +66,11 @@ export function CampaignKnowledgeDetailPage() {
                         next.delete("party_id")
                         return next
                     },
-                    { replace: true },
+                    { replace: true, state: taskState },
                 ),
             )
         },
-        [setSearchParams, locationKey],
+        [setSearchParams, locationKey, taskState],
     )
 
     if (campaignId === undefined || knowledgeItemId === undefined) {

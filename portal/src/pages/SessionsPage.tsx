@@ -138,8 +138,12 @@ export function SessionsPage({
     const { pathname, state } = useLocation()
     const { campaignId = "" } = useParams()
     const runState = (sessionId: string): CrumbState | undefined =>
-        continuedStateVia(pathname, state, { route: "sessions.detail", params: { campaignId, sessionId } }) ??
-        undefined
+        continuedStateVia(
+            pathname,
+            state,
+            { route: "sessions.detail", params: { campaignId, sessionId } },
+            { route: "sessions.run", params: { campaignId, sessionId } },
+        ) ?? undefined
     const columns = columnsFor(taskState)
     return (
         <section aria-labelledby="sessions-heading">

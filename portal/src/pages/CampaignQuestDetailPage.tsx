@@ -81,7 +81,12 @@ function CampaignQuestReader({
         >
             {(quest) => (
                 <>
-                    <QuestDetailPage campaignId={campaignId} quest={quest} />
+                    <QuestDetailPage
+                        campaignId={campaignId}
+                        quest={quest}
+                        characterId={characterId}
+                        partyId={partyId}
+                    />
                     {runs ? (
                         <section className="authoring-page" aria-label="Quest progress in this campaign">
                             <p className="authoring-note">

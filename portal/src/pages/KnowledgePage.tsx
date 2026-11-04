@@ -3,6 +3,7 @@ import type { ReactNode } from "react"
 import { Link } from "react-router"
 import { MembershipClockUnsetNotice } from "../components/MembershipClockUnsetNotice"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
+import { useTaskLinkState } from "../navigation/useTaskLinkState"
 import type { AuthorizedParty } from "../types/bootstrap"
 import type { KnowledgeLifecycle, KnowledgeView } from "../types/knowledge"
 
@@ -46,6 +47,21 @@ const lifecycleOptions: { value: KnowledgeLifecycle; label: string }[] = [
     { value: "all", label: "All" },
 ]
 
+// New claim, from the list, is a step of the task the list is the page of. Its own component so the
+// router is only needed where the link is.
+function NewClaimLink({ campaignId }: { campaignId: string }) {
+    const taskState = useTaskLinkState()
+    return (
+        <Link
+            className="authoring-button"
+            to={`/app/${encodeURIComponent(campaignId)}/knowledge/new`}
+            state={taskState}
+        >
+            New claim
+        </Link>
+    )
+}
+
 export function KnowledgePage({
     campaignId,
     view,
@@ -83,12 +99,7 @@ export function KnowledgePage({
 
             {canAuthor ? (
                 <p className="authoring-page__actions-row">
-                    <Link
-                        className="authoring-button"
-                        to={`/app/${encodeURIComponent(campaignId)}/knowledge/new`}
-                    >
-                        New claim
-                    </Link>
+                    <NewClaimLink campaignId={campaignId} />
                 </p>
             ) : null}
 

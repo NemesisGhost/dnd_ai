@@ -3,6 +3,11 @@ import { breadcrumbModel } from "../../navigation/breadcrumbModel"
 import { useBreadcrumbLabelReader } from "../../navigation/BreadcrumbLabelContext"
 import "../authoring/authoring.css"
 
+// A recorded list search already on the link wins: the page's query is appended only to a bare path.
+const withQuery = (to: string, query: string): string => (to.includes("?") ? to : `${to}${query}`)
+const sectionQuery = (section: string | undefined): string =>
+    section === undefined ? "" : `?section=${encodeURIComponent(section)}`
+
 // The one breadcrumb for a page (docs/UI_DESIGN.md §4.8, UI_STYLE_GUIDE §8 and §10a.1).
 //
 // The trail follows the history entry's validated task origin: the task the person started from the
@@ -25,14 +30,20 @@ import "../authoring/authoring.css"
 // `sections` names the section an ancestor opens on, by route id, for an ancestor that is a staged page
 // (the Run session returns to the stage the encounter belongs to). It is a destination query on the
 // link, never part of the task, and it is the page's own knowledge, so it is the same after a direct entry.
+//
+// `queries` is the same for a whole query string (`?character_id=…`), by route id: an ancestor list
+// opened under the perspective the page is read under (Quests and Knowledge). It is a destination query
+// the page already holds in its own address, never router state, and it wins over `sections`.
 export function TaskBreadcrumb({
     current,
     omit = [],
     sections = {},
+    queries = {},
 }: {
     current?: string | null
     omit?: readonly string[]
     sections?: Readonly<Record<string, string>>
+    queries?: Readonly<Record<string, string>>
 }) {
     const location = useLocation()
     const labelFor = useBreadcrumbLabelReader()
@@ -48,7 +59,7 @@ export function TaskBreadcrumb({
                 {ancestors.map((crumb) => (
                     <li key={`${crumb.ref.route}:${Object.values(crumb.ref.params).join("/")}`}>
                         <Link
-                            to={sections[crumb.ref.route] === undefined ? crumb.to : `${crumb.to}?section=${encodeURIComponent(sections[crumb.ref.route]!)}`}
+                            to={withQuery(crumb.to, queries[crumb.ref.route] ?? sectionQuery(sections[crumb.ref.route]))}
                             state={crumb.state}
                         >
                             {(crumb.named ? labelFor(crumb.ref.route, crumb.ref.params) : undefined) ?? crumb.generic}

@@ -114,6 +114,7 @@ const createConfig: ContentCreateConfig<
     heading: "New knowledge claim",
     lead: "A new claim is saved as a draft. Only people who can edit canon see it until it is published. This writes the claim only; who knows it is recorded separately.",
     breadcrumbLabel: "Knowledge",
+    taskBreadcrumb: true,
     worldPath: knowledgePath,
     optionsPath: knowledgeOptionsPath,
     canCreate: (options) => options.can_create,

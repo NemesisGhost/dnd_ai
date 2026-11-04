@@ -1,5 +1,6 @@
 import { useEffect, useId, useState } from "react"
-import { useParams, useSearchParams } from "react-router"
+import { useLocation, useParams, useSearchParams } from "react-router"
+import { retainedState } from "../navigation/breadcrumbModel"
 import { previewKnowledgeListPath } from "../api/knowledgePreview"
 import { CardGrid } from "../components/CardGrid"
 import { KnowledgeCard } from "../components/KnowledgeCard"
@@ -32,9 +33,13 @@ const VIEW_LABEL: Readonly<Record<KnowledgeView, string>> = {
 // link reproduce them; nothing here touches the normal Knowledge page's own state.
 function MemberPreviewCollection({ campaignId }: { campaignId: string }) {
     const [params, setParams] = useSearchParams()
+    const { pathname, state } = useLocation()
     const context = parseMemberPreviewContext(params)
+    // Choosing a member, perspective or page stays in the task the preview was opened in (only the
+    // validated task is carried, never the rest of the entry's state).
+    const taskState = retainedState(pathname, state) ?? undefined
     const update = (next: Partial<MemberPreviewContext>, replace = false) => {
-        setParams(new URLSearchParams(memberPreviewSearch({ ...context, ...next })), { replace })
+        setParams(new URLSearchParams(memberPreviewSearch({ ...context, ...next })), { replace, state: taskState })
     }
 
     return (

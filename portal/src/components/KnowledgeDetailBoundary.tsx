@@ -2,6 +2,7 @@ import { useEffect } from "react"
 import type { ReactNode } from "react"
 import { useSession } from "../context/SessionContext"
 import { useKnowledgeDetail } from "../hooks/useKnowledgeDetail"
+import { useBreadcrumbLabel } from "../navigation/BreadcrumbLabelContext"
 import { resolveAuthorizedParties } from "../utils/authorizedParties"
 import type { KnowledgeDetail } from "../types/knowledge"
 import type { RefetchOutcome } from "../hooks/useAuthoringResource"
@@ -29,12 +30,21 @@ export function KnowledgeDetailBoundary({
     onPartyRevoked,
     children,
 }: KnowledgeDetailBoundaryProps) {
-    const { state, retry, refresh } = useKnowledgeDetail(
+    const { state, retry, refresh, authority } = useKnowledgeDetail(
         campaignId,
         knowledgeItemId,
         characterId,
         partyId,
     )
+    // The claim's statement (as the page's own heading shows it), from this authorized read, for the
+    // breadcrumbs of the pages opened from it. An unavailable (403/404) answer drops it.
+    useBreadcrumbLabel({
+        route: "knowledge.detail",
+        params: { campaignId, knowledgeItemId },
+        name: state.status === "success" ? state.item.statement : undefined,
+        denied: state.status === "unavailable",
+        authority,
+    })
 
     // With no session state to compare against (an isolated render), nothing is treated as revoked.
     const sessionState = useSession().state as ReturnType<typeof useSession>["state"] | undefined

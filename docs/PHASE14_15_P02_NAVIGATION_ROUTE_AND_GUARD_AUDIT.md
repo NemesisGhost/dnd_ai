@@ -226,3 +226,26 @@ Legacy keys: `sessions.list` has no list state, so no legacy key is written or r
 Guard audit: **no new guard caller, hold or declaring key.** `SessionDetailPage` (row 15) and `CreateSessionPage` (row 16) keep their declarations; their breadcrumb ancestors are plain links covered by the pathname predicate. The Run page's forms are not page-guarded (existing; pending and unknown-outcome writes are held by their `useAuthoringMutation` owners, and the pickers by `PickerRecordTime`'s blocker). `useRunNavigation` now delegates to `useStagedNavigation`, which keeps the entry's state when it normalizes `?section=`; `section` stays the only query key and every `RunSectionPanel` stays mounted, so it disposes nothing. `EncounterPages` and `RecordEventPage` are unchanged as guard callers.
 
 Reads: none were added. Labels come from the session read of the session page, the Run page and the two encounter pages, and from the event page's own read; the member's session read stays member-shaped. Remaining exceptions: `events.new` keeps its **Campaign Home** breadcrumb (it is reached from Campaign Home's tools), a direct entry to `events.detail` keeps its **Campaign Home** link, the World event page's `EventExplanation` links carry no task (P02-7d), and Home and other-family links to sessions carry none.
+
+
+## 10. Quests and Knowledge after P02-7b
+
+Routes now rendering the shared breadcrumb (`routeMeta` ids): `quests.new`, `quests.detail` (reader; workspace for a task of its own), `knowledge.new`, `knowledge.detail`, `knowledge.memberPreview`, `knowledge.memberPreview.claim`. `quests.list` and `knowledge.list` are tops of their tasks. No route was added or removed (`routeMeta.test.ts` passing).
+
+| From | To | State carried |
+|---|---|---|
+| Quests list / Knowledge list | record, New quest / New claim, a claim's subject | `useTaskLinkState` |
+| Quest workspace, claim page | their own sections and stages | `retainedState` (`nav.linkState`; none after a direct entry) |
+| Claim page | replacement claim, subject, guidance to another record | `useTaskLinkState({ requireOrigin })` |
+| Create page | the created record (REPLACE) | the entry's task (`ContentCreatePage taskBreadcrumb`) |
+| List filters, party choice, Member preview member choice | the same page | `retainedState` on the same entry; no other state |
+| Revoked-party cleanup | the same claim | `retainedState` under `runPermissionLossCleanup` |
+| `/quests/:id/edit`, `/progress`, `/knowledge/:id/edit`, `/audience` | the record at the matching section | the entry's state |
+
+Legacy keys: `quests.list` / `knowledge.list` have no list state; `reviewSearch` / `returnTo` adapters are unchanged and the Review queue keeps its own return for a quest opened from it.
+
+Guard audit: **no new caller or declaring key.** Row 12 (`KnowledgeClaimPage`) keeps `character_id` / `party_id` disposing and its permission-loss path (a test: the cleanup is not asked and keeps the task; a deliberate change asks and Stay keeps the task). Row 18 (`QuestWorkspace`) stays undeclared, re-inspected: its editors read neither key, `section` is the only query it reads, every section stays mounted. `useQuestPartyPerspective`'s own REPLACEs (party choice, stale party) are used by the list and reader only, which have no draft guard. `ContentCreatePage` (rows 8) is unchanged as a guard caller. `useClaimNavigation` delegating to `useStagedNavigation` changes no query key.
+
+Reads: none were added. The P02-7a `continuedStateVia` follow-up (§4.8.7) validates its parent against the destination's declared ancestors and the stored-task validation, and returns null otherwise.
+
+Remaining exceptions: the World event page and the World record workspace for non-character categories keep their links (P02-7d); a quest or claim opened from Campaign Home or another family's pages without task state shows the route defaults; `MemberPreviewShell`'s in-page **Return to Knowledge** / **Back to Member preview** links keep their plain hrefs.

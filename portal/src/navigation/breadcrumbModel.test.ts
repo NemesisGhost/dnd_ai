@@ -372,24 +372,44 @@ describe("Sessions and Run (P02-7a)", () => {
         expect(summary(modelOf(`${base}/sessions/${S}/encounters/new`).ancestors).at(-1)).toEqual(["Run session", run])
     })
 
-    it("continuedStateVia adds the page and then the parent the person skipped, once", () => {
-        const fromList = continuedStateVia(`${base}/sessions`, undefined, {
-            route: "sessions.detail",
-            params: { campaignId: C, sessionId: S },
+    describe("continuedStateVia validates its parent and destination", () => {
+        const detailRef = { route: "sessions.detail", params: { campaignId: C, sessionId: S } }
+        const runRef = { route: "sessions.run", params: { campaignId: C, sessionId: S } }
+
+        it("adds the page and then the declared parent the person skipped, once", () => {
+            const fromList = continuedStateVia(`${base}/sessions`, undefined, detailRef, runRef)
+            expect(fromList?.task.root).toBe("sessions")
+            expect(fromList?.task.trail.map((entry) => entry.route)).toEqual(["sessions.list", "sessions.detail"])
+            expect(summary(modelOf(run, fromList).ancestors)).toEqual([
+                ["Sessions", `${base}/sessions`],
+                ["Session", `${base}/sessions/${S}`],
+            ])
+            // From the session itself the parent is the current page: it is not added twice.
+            const fromDetail = continuedStateVia(`${base}/sessions/${S}`, undefined, detailRef, runRef)
+            expect(fromDetail?.task.trail.map((entry) => entry.route)).toEqual(["sessions.list", "sessions.detail"])
         })
-        expect(fromList?.task.root).toBe("sessions")
-        expect(fromList?.task.trail.map((entry) => entry.route)).toEqual(["sessions.list", "sessions.detail"])
-        expect(summary(modelOf(run, fromList).ancestors)).toEqual([
-            ["Sessions", `${base}/sessions`],
-            ["Session", `${base}/sessions/${S}`],
-        ])
-        // From the session itself the parent is already the current page: it is not added twice.
-        const fromDetail = continuedStateVia(`${base}/sessions/${S}`, undefined, {
-            route: "sessions.detail",
-            params: { campaignId: C, sessionId: S },
+
+        it.each([
+            ["a page that is not a route", `${base}/not-a-route`, detailRef, runRef],
+            ["an unknown parent route", `${base}/sessions`, { route: "nope", params: {} }, runRef],
+            ["a parent with the wrong parameter shape", `${base}/sessions`, { route: "sessions.detail", params: { campaignId: C } }, runRef],
+            ["a parent with a URL as an id", `${base}/sessions`, { route: "sessions.detail", params: { campaignId: C, sessionId: "https://evil.example/" } }, runRef],
+            ["a parent of another campaign", `${base}/sessions`, { route: "sessions.detail", params: { campaignId: "other", sessionId: S } }, runRef],
+            ["a real route that is not the destination's parent", `${base}/sessions`, { route: "quests.list", params: { campaignId: C } }, runRef],
+            ["a parent for a different session than the destination", `${base}/sessions`, { route: "sessions.detail", params: { campaignId: C, sessionId: "s2" } }, runRef],
+            ["an unknown destination", `${base}/sessions`, detailRef, { route: "nope", params: {} }],
+            ["a destination with the wrong parameters", `${base}/sessions`, detailRef, { route: "sessions.run", params: { campaignId: C } }],
+            ["a destination with a foreign scope id", `${base}/sessions`, detailRef, { route: "sessions.run", params: { campaignId: "other", sessionId: S } }],
+        ])("emits nothing for %s", (_name, pathname, parent, destination) => {
+            expect(continuedStateVia(pathname, undefined, parent, destination)).toBeNull()
         })
-        expect(fromDetail?.task.trail.map((entry) => entry.route)).toEqual(["sessions.list", "sessions.detail"])
-        expect(continuedStateVia(`${base}/not-a-route`, undefined, { route: "sessions.detail", params: {} })).toBeNull()
+
+        it("emits nothing when the task's root is not allowed at the destination", () => {
+            const access = { task: startTask("access", { campaignId: C }) }
+            expect(continuedStateVia(`${base}/sessions`, access, detailRef, runRef)?.task.root).toBe("sessions")
+            const parties = continuedState(`${base}/parties`, undefined)
+            expect(continuedStateVia(`${base}/parties`, parties, detailRef, runRef)).toBeNull()
+        })
     })
 
     it("a character opened from Run shows the whole Sessions trail, and carries ids only", () => {

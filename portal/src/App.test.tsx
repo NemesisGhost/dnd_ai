@@ -316,6 +316,7 @@ beforeEach(() => {
       quest: campaignQuestDetail,
     },
     retry: vi.fn(),
+    authority: null,
   })
 
   useWorldEntitiesMock.mockReset()
@@ -728,16 +729,16 @@ describe("portal routing", () => {
     ).toBeInTheDocument()
 
     expect(
-      screen.getByRole("link", {
-        name: "Back to quests",
-      }),
+      within(
+        screen.getByRole("navigation", { name: "Breadcrumb" }),
+      ).getByRole("link", { name: "Quests" }),
     ).toHaveAttribute(
       "href",
-      "/app/mundivita/quests",
+      "/app/mundivita/quests?character_id=character-ixamarra&party_id=party-primary",
     )
 
     expect(
-      screen.getByRole("link", {
+      within(screen.getByRole("navigation", { name: "Main" })).getByRole("link", {
         name: "Quests",
       }),
     ).toHaveAttribute(

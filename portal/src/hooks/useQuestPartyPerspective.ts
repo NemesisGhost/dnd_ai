@@ -1,5 +1,6 @@
 import { useCallback, useEffect } from "react"
-import { useSearchParams } from "react-router"
+import { useLocation, useSearchParams } from "react-router"
+import { retainedState } from "../navigation/breadcrumbModel"
 import { usePerspective } from "../context/CharacterPerspectiveContext"
 import { useSession } from "../context/SessionContext"
 import type { AuthorizedParty } from "../types/bootstrap"
@@ -41,6 +42,11 @@ export function useQuestPartyPerspective(campaignId: string): QuestPartyPerspect
     const { state: sessionState } = useSession()
     const parties = resolveAuthorizedParties(sessionState, campaignId, characterId)
     const [searchParams, setSearchParams] = useSearchParams()
+    // The address changes here (a party picked, a stale party dropped) stay in the task the entry was
+    // opened in. Only the validated task is carried (retainedState), never the rest of the entry's state
+    // (an announcement, a selection note, a stamp), which would be replayed.
+    const { pathname, state } = useLocation()
+    const entryState = retainedState(pathname, state) ?? undefined
 
     const urlCharacterId = searchParams.get("character_id")
     const urlPartyId = searchParams.get("party_id")
@@ -69,9 +75,9 @@ export function useQuestPartyPerspective(campaignId: string): QuestPartyPerspect
                 next.delete("party_id")
                 return next
             },
-            { replace: true },
+            { replace: true, state: entryState },
         )
-    }, [urlPartyIsStale, setSearchParams])
+    }, [urlPartyIsStale, setSearchParams, entryState])
 
     const partyId = urlPartyIsCurrent
         ? urlPartyId
@@ -93,10 +99,10 @@ export function useQuestPartyPerspective(campaignId: string): QuestPartyPerspect
                     }
                     return next
                 },
-                { replace: true },
+                { replace: true, state: entryState },
             )
         },
-        [characterId, setSearchParams],
+        [characterId, setSearchParams, entryState],
     )
 
     const partiesUndetermined = partyMembershipUndetermined(sessionState, campaignId)

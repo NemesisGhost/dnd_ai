@@ -1,6 +1,5 @@
 import { useLocation } from "react-router"
-import { breadcrumbModel, continuedState, continuedStateVia } from "./breadcrumbModel"
-import type { RouteRef } from "./routeMeta"
+import { breadcrumbModel, continuedState } from "./breadcrumbModel"
 import type { CrumbState } from "./breadcrumbModel"
 import { resolveTask } from "./resolveTask"
 
@@ -31,15 +30,6 @@ export function useTaskLinkState(options: { requireOrigin?: boolean } = {}): Cru
         if (resolved === null || resolved.source === "default") return undefined
     }
     return continuedState(pathname, state) ?? undefined
-}
-
-/**
- * Like `useTaskLinkState`, for a link to a page whose declared parent (`parent`) the person has not
- * opened: the parent is added to the trail as well, so the destination keeps its documented hierarchy.
- */
-export function useTaskLinkStateVia(parent: RouteRef): CrumbState | undefined {
-    const { pathname, state } = useLocation()
-    return continuedStateVia(pathname, state, parent) ?? undefined
 }
 
 /**

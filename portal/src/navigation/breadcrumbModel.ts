@@ -1,8 +1,9 @@
 import { generatePath } from "react-router"
-import { matchRouteMeta, routeMetaById } from "./routeMeta"
+import { defaultAncestors, matchRouteMeta, patternParams, routeMetaById } from "./routeMeta"
+import { isIdShaped } from "./contexts"
 import type { NavRoot, RouteMatch, RouteRef } from "./routeMeta"
 import { resolveTask } from "./resolveTask"
-import { continueTask } from "./taskOrigin"
+import { continueTask, validateTask } from "./taskOrigin"
 import type { TaskOriginV1, TrailEntry } from "./taskOrigin"
 
 // The breadcrumb for a page, as data (docs/UI_DESIGN.md §4.8). It follows the VALIDATED task origin of
@@ -168,19 +169,43 @@ export function continuedState(pathname: string, state: unknown): CrumbState | n
 }
 
 /**
- * The task state for a link from the current page to a page whose declared parent is another page of
- * the same task that the person has not opened (a list's "Run" link goes to the Run session, whose
- * parent is the session): the current page and then `parent` are added to the trail, so the destination
- * shows its documented hierarchy instead of skipping a level. Same rules as `continuedState`; the
- * parent is a route reference (ids only), and following it is authorized by the server as any link is.
+ * The task state for a link from the current page to `destination`, a page whose declared parent
+ * (`parent`) the person has not opened (a list's "Run" link goes to the Run session, whose parent is the
+ * session): the current page and then `parent` are added to the trail, so the destination shows its
+ * documented hierarchy instead of skipping a level.
+ *
+ * Nothing is trusted: `destination` must be a known route with exactly its pattern's id-shaped params,
+ * `parent` must be one of that destination's declared ancestors (the `parent` chain of its metadata),
+ * and the resulting task must pass the same validation a stored task does for the destination (scope,
+ * allowed root, every trail entry a known route of that scope that allows the root). Anything else
+ * yields null, so no invalid task is ever emitted; the caller's link then carries nothing.
  */
-export function continuedStateVia(pathname: string, state: unknown, parent: RouteRef): CrumbState | null {
+export function continuedStateVia(
+    pathname: string,
+    state: unknown,
+    parent: RouteRef,
+    destination: RouteRef,
+): CrumbState | null {
     const match = matchRouteMeta(pathname)
     if (match === null) return null
+    const destinationMeta = routeMetaById(destination.route)
+    if (destinationMeta === undefined) return null
+    const names = patternParams(destinationMeta.pattern)
+    const keys = Object.keys(destination.params)
+    if (
+        keys.length !== names.length ||
+        !names.every((name) => Object.prototype.hasOwnProperty.call(destination.params, name)) ||
+        !keys.every((key) => isIdShaped(destination.params[key]))
+    ) {
+        return null
+    }
+    const target: RouteMatch = { meta: destinationMeta, params: { ...destination.params } }
+    if (!defaultAncestors(target).some((ancestor) => sameRef(ancestor, parent))) return null
     const resolved = resolveTask(pathname, state)
     if (resolved === null) return null
     const here: RouteRef = { route: match.meta.id, params: match.params }
-    return withState(continueTask(continueTask(resolved.task, here), parent))
+    const valid = validateTask(continueTask(continueTask(resolved.task, here), parent), target)
+    return valid === null ? null : withState(valid)
 }
 
 /**
