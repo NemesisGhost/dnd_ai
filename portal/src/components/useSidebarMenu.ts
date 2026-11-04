@@ -9,6 +9,7 @@ import { UNSAFE_DataRouterContext, parsePath, useLocation, useNavigationType } f
 import { navigationQuestionActive, onQuestionAnswer, registerFocusFallback } from "../hooks/navigationHolds"
 import { NavigationAttempt, hrefOf, isBusy, viewOfRouterState } from "../navigation/navigationAttempt"
 import type { AttemptView } from "../navigation/navigationAttempt"
+import { recordActivation, releaseActivation } from "../navigation/activationOwner"
 import { canTakeFocus } from "../utils/focusEligibility"
 
 // The one open / close / focus lifecycle of every sidebar menu and of the drawer (docs/UI_DESIGN.md §4,
@@ -116,6 +117,8 @@ export function useAcceptedNavigation({ onAccepted, opener }: AcceptedNavigation
             // this handler, so its first notification is the first thing we see of it.
             if (router !== null) releases.push(router.subscribe((state) => feed(viewOfRouterState(state))))
             const target = parsePath(to)
+            recordActivation(activated, target.pathname ?? "")
+            releases.push(() => releaseActivation(activated))
             pending.current = {
                 attempt: new NavigationAttempt(
                     { pathname: target.pathname ?? "", search: target.search ?? "", hash: target.hash ?? "" },

@@ -145,6 +145,9 @@ const requests: string[] = []
 let worldRead: Outcome = "ok"
 let worldSearch: Outcome | "parked" = "ok"
 const parkedSearches: Array<{ answer: (outcome: Outcome) => Promise<void> }> = []
+// The campaign summary (Campaign Home's read), parked until the test answers it.
+let parkSummary = false
+const parkedSummaries: Array<{ answer: () => Promise<void> }> = []
 
 function respondCharacter(id: string, outcome: Outcome): Response {
   if (outcome === "missing") return json({ detail: "not found" }, 404)
@@ -268,6 +271,8 @@ beforeEach(() => {
   worldRead = "ok"
   worldSearch = "ok"
   parkedSearches.length = 0
+  parkSummary = false
+  parkedSummaries.length = 0
   said = []
   control.bootstrap = bootstrapOf()
   vi.stubGlobal(
@@ -297,7 +302,18 @@ beforeEach(() => {
         return json({ ...characterSheetFixture, character_id: id, name: `Character ${id}`, character_kind: "character" })
       }
       if (/\/campaigns\/[^/]+\/summary$/.test(url)) {
-        return json({ current_session: null, previous_session_recap: null, recent_events: [] })
+        const body = { current_session: null, previous_session_recap: null, recent_events: [] }
+        if (!parkSummary) return json(body)
+        return new Promise<Response>((resolve) => {
+          parkedSummaries.push({
+            answer: async () => {
+              await act(async () => {
+                resolve(json(body))
+                await Promise.resolve()
+              })
+            },
+          })
+        })
       }
       if (/\/api\/campaigns\/[^/]+\/world\/search\/counts/.test(url)) return json({ detail: "none" }, 404)
       if (/\/api\/campaigns\/[^/]+\/world\/search/.test(url)) {
@@ -1187,5 +1203,262 @@ describe("ordinary World and Timeline arrival with a confirmed-write message", (
     await waitFor(() => expect(page).toHaveFocus())
     await settle()
     expect(said).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------------------------------
+// P02-5 third correction. One validated arrival: announcement and focus share the context eligibility.
+// The Navbar menu's campaign choice focuses the settled destination heading. Page-arrival
+// de-duplication is by operation, not by message text.
+// ---------------------------------------------------------------------------------------------------
+
+describe("announcement and focus share one eligibility (route shape matches, committed context does not)", () => {
+  it("/app/:c/world with a marker naming another World neither announces nor claims the heading focus", async () => {
+    mount("/app/alpha/knowledge")
+    await heading("Knowledge")
+    act(() => (document.activeElement as HTMLElement | null)?.blur())
+    watchAnnouncer()
+
+    await act(async () => {
+      await router.navigate("/app/alpha/world", { state: { selection: { level: "world", id: "w2" } } })
+    })
+
+    const explorer = await heading("Campaign World")
+    await waitFor(() => expect(stamp()).toBeDefined())
+    await settle()
+    expect(said).toEqual([])
+    expect(explorer).not.toHaveFocus()
+  })
+
+  it("a perspective that is not authorized (the store does not commit it) neither announces nor claims focus", async () => {
+    mount("/app/alpha/knowledge")
+    await heading("Knowledge")
+    act(() => (document.activeElement as HTMLElement | null)?.blur())
+    watchAnnouncer()
+
+    await act(async () => {
+      await router.navigate("/app/alpha/characters/stranger", {
+        state: { selection: { level: "character", id: "stranger", campaignId: "alpha" } },
+      })
+    })
+
+    const page = await screen.findByRole("heading", { level: 1 })
+    await settle()
+    expect(said).toEqual([])
+    expect(page).not.toHaveFocus()
+  })
+
+  it("a legitimate deferred arrival stays pending until its own context settles, then focuses once", async () => {
+    mount("/app/alpha/knowledge")
+    await heading("Knowledge")
+    watchAnnouncer()
+    parkCharacters = true
+
+    choose("a2")
+    await waitFor(() => expect(parkedCharacters.some((read) => read.id === "a2")).toBe(true))
+    parkCharacters = false
+    await parkedFor("a2").answer("ok")
+
+    const record = await heading("Character a2")
+    await waitFor(() => expect(record).toHaveFocus())
+    await waitFor(() => expect(said).toEqual(["Viewing as Name a2."]))
+  })
+})
+
+// ---- Focus after an accepted Navbar-menu campaign change -------------------------------------------
+
+describe("an accepted Navbar-menu campaign change focuses the settled destination heading", () => {
+  it("menu: the Campaign Home heading takes focus once, from the activated link or from nowhere", async () => {
+    mount("/app/alpha/knowledge")
+    await heading("Knowledge")
+    openCampaignMenu()
+
+    menuCampaign("Campaign beta")
+
+    const home = await heading("Campaign Home")
+    await waitFor(() => expect(home).toHaveFocus())
+    expect(where()).toBe("/app/beta/home")
+  })
+
+  it("deferred: nothing is focused while the destination loads; the settled heading is, once", async () => {
+    mount("/app/alpha/knowledge")
+    await heading("Knowledge")
+    parkSummary = true
+    openCampaignMenu()
+
+    menuCampaign("Campaign beta")
+
+    await waitFor(() => expect(parkedSummaries.length).toBeGreaterThan(0))
+    const loading = await heading("Loading campaign")
+    await settle()
+    expect(loading).not.toHaveFocus()
+
+    parkSummary = false
+    await parkedSummaries.at(-1)!.answer()
+    const home = await heading("Campaign Home")
+    await waitFor(() => expect(home).toHaveFocus())
+  })
+
+  it("drawer: the drawer closes and the destination heading takes focus", async () => {
+    mount("/app/alpha/knowledge")
+    await heading("Knowledge")
+    fireEvent.click(screen.getByRole("button", { name: /Open navigation/ }))
+    openCampaignMenu()
+
+    menuCampaign("Campaign beta")
+
+    const home = await heading("Campaign Home")
+    await waitFor(() => expect(home).toHaveFocus())
+    expect(screen.getByRole("navigation", { name: "Main" }).classList.contains("portal-sidebar--mobile-open")).toBe(false)
+  })
+
+  it("Stay returns focus to the activated link and focuses no heading; Leave then focuses the destination", async () => {
+    mount("/app/alpha/knowledge")
+    await heading("Knowledge")
+    typeDraft()
+    openCampaignMenu()
+
+    menuCampaign("Campaign beta")
+    await answer("Stay")
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+    await waitFor(() => expect(main().getByRole("link", { name: "Campaign beta" })).toHaveFocus())
+    expect(screen.getByRole("heading", { level: 1, name: "Knowledge" })).not.toHaveFocus()
+
+    menuCampaign("Campaign beta")
+    await answer("Leave")
+
+    const home = await heading("Campaign Home")
+    await waitFor(() => expect(home).toHaveFocus())
+  })
+
+  it("a person who moved focus away while the destination loaded keeps it", async () => {
+    mount("/app/alpha/knowledge")
+    await heading("Knowledge")
+    parkSummary = true
+    openCampaignMenu()
+
+    menuCampaign("Campaign beta")
+    await waitFor(() => expect(parkedSummaries.length).toBeGreaterThan(0))
+    const other = elsewhere()
+    act(() => other.focus())
+
+    parkSummary = false
+    await parkedSummaries.at(-1)!.answer()
+    await heading("Campaign Home")
+    await settle()
+
+    expect(other).toHaveFocus()
+  })
+
+  it("a choice answered Stay and superseded by another focuses only the accepted destination, once", async () => {
+    mount("/app/alpha/knowledge")
+    await heading("Knowledge")
+    typeDraft()
+    openCampaignMenu()
+
+    menuCampaign("Campaign beta")
+    await answer("Stay")
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+    if (main().queryByRole("link", { name: "Campaign gamma" }) === null) openCampaignMenu()
+    menuCampaign("Campaign gamma")
+    await answer("Leave")
+
+    const home = await heading("Campaign Home")
+    expect(where()).toBe("/app/gamma/home")
+    await waitFor(() => expect(home).toHaveFocus())
+    await settle()
+    expect(home).toHaveFocus()
+  })
+
+  it("an Infobox focus is not stolen by an unrelated menu link being focused", async () => {
+    mount("/app/alpha/knowledge")
+    await heading("Knowledge")
+    parkCharacters = true
+
+    choose("a2")
+    await waitFor(() => expect(parkedCharacters.some((read) => read.id === "a2")).toBe(true))
+    openCampaignMenu()
+    const link = main().getByRole("link", { name: "Campaign beta" })
+    act(() => link.focus())
+    parkCharacters = false
+    await parkedFor("a2").answer("ok")
+    await heading("Character a2")
+    await settle()
+
+    expect(link).toHaveFocus()
+  })
+})
+
+// ---- Operation-aware de-duplication of an ordinary arrival ----------------------------------------
+
+describe("two distinct successes that replace the same address with the same message", () => {
+  const SAVED = "Saved the record."
+  // A distinct operation: a REPLACE of the address the page is on, with the state its producer builds
+  // (no context stamp: the stamp owners add it afterwards).
+  const succeed = async () => {
+    await act(async () => {
+      await router.navigate({ pathname: "/worlds/w1" }, { replace: true, state: { announce: SAVED } })
+    })
+  }
+  const restate = async () => {
+    const current = router.state.location
+    await act(async () => {
+      await router.navigate(
+        { pathname: current.pathname, search: current.search, hash: current.hash },
+        { replace: true, state: { ...(current.state as object), ctx: ctxOf(null) } },
+      )
+    })
+  }
+
+  async function firstSuccess() {
+    mount("/app/alpha/knowledge")
+    await heading("Knowledge")
+    watchAnnouncer()
+    await act(async () => {
+      await router.navigate("/worlds/w1", { state: { announce: SAVED } })
+    })
+    const page = await heading("World w1")
+    await waitFor(() => expect(page).toHaveFocus())
+    await waitFor(() => expect(said).toEqual([SAVED]))
+    await waitFor(() => expect(stamp()).toBeDefined())
+    await settle()
+    return page
+  }
+
+  it("each gets its own feedback; the stamp that follows each adds none", async () => {
+    const page = await firstSuccess()
+    act(() => elsewhere().focus())
+
+    await succeed()
+    await waitFor(() => expect(said).toEqual([SAVED, SAVED]))
+    await waitFor(() => expect(page).toHaveFocus())
+    await waitFor(() => expect(stamp()).toBeDefined())
+    await settle()
+    expect(said).toEqual([SAVED, SAVED])
+
+    // A stamp after the second, with focus deliberately elsewhere: nothing is repeated or restored.
+    act(() => elsewhere().focus())
+    await restate()
+    await settle()
+    expect(said).toEqual([SAVED, SAVED])
+    expect(elsewhere()).toHaveFocus()
+
+    await succeed()
+    await waitFor(() => expect(said).toEqual([SAVED, SAVED, SAVED]))
+  })
+
+  it("a newer navigation after the second success restores no focus and repeats nothing", async () => {
+    await firstSuccess()
+
+    await succeed()
+    await waitFor(() => expect(said).toEqual([SAVED, SAVED]))
+    await act(async () => {
+      await router.navigate("/app/alpha/knowledge")
+    })
+    const knowledge = await heading("Knowledge")
+    await settle()
+
+    expect(said).toEqual([SAVED, SAVED])
+    expect(knowledge).not.toHaveFocus()
   })
 })

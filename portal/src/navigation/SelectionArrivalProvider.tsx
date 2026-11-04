@@ -10,6 +10,7 @@ import { SelectionArrivalContext } from "./selectionArrival"
 import type { SelectionArrival } from "./selectionArrival"
 import { createArrivalTracker } from "./selectionArrivalTracker"
 import type { ArrivalTracker } from "./selectionArrivalTracker"
+import { contextEligible } from "./selectionEligibility"
 import { selectionFor, selectionOwner, useSelectedContextSnapshot, useSelectedContextStore } from "./selectedContextStore"
 import type { SelectedContextState } from "./selectedContextStore"
 
@@ -72,8 +73,8 @@ function nameFor(
 }
 
 /**
- * What to announce, or null while the chosen selection is not yet committed or does not fit the
- * destination the choice arrived at (route scope, level and id must all agree).
+ * What to announce, or null while the arrival is not eligible (the chosen selection is not yet the
+ * committed one, or does not fit the destination's route scope: navigation/selectionEligibility.ts).
  */
 function messageFor(
     arrival: SelectionArrival,
@@ -81,28 +82,18 @@ function messageFor(
     bootstrap: SessionBootstrap,
     hierarchy: WorkspaceHierarchy,
 ): string | null {
-    const { change, scope } = arrival
+    if (!contextEligible(arrival, selection, bootstrap)) return null
+    const { change } = arrival
     const name = nameFor(arrival, bootstrap, hierarchy)
     const clearedCampaign = arrival.campaignBefore !== null && selection.campaignId === null ? ` ${CLEARED}` : ""
     switch (change.level) {
         case "campaign":
-            if (selection.campaignId !== change.id) return null
             return name === null ? "Campaign changed." : `Campaign changed to ${name}.`
-        case "world": {
-            if (selection.worldId !== change.id) return null
-            if (scope.campaignId !== null) {
-                // A world opened through a campaign of it: that campaign must be in the person's session,
-                // be in this world, and be the selected campaign.
-                const through = bootstrap.campaigns.find((campaign) => campaign.campaign_id === scope.campaignId)
-                if (through?.world_id !== change.id || selection.campaignId !== scope.campaignId) return null
-            }
+        case "world":
             return `${name === null ? "World changed." : `World changed to ${name}.`}${clearedCampaign}`
-        }
         case "timeline":
-            if (selection.timelineId !== change.id || selection.worldId !== scope.worldId) return null
             return `${name === null ? "Timeline changed." : `Timeline changed to ${name}.`}${clearedCampaign}`
         case "character":
-            if (selection.campaignId !== change.campaignId || selection.characterId !== change.id) return null
             if (change.id === null) return "No character perspective selected."
             return name === null ? "Character perspective changed." : `Viewing as ${name}.`
     }
@@ -173,6 +164,12 @@ export function SelectionArrivalProvider({ children }: PropsWithChildren) {
         }
     }, [announceOwned, arrival, bootstrap, hierarchy, owner, selection])
 
-    const current = useMemo(() => (arrival === null ? null : { arrival, locationKey }), [arrival, locationKey])
+    // The destination sees the arrival only once it is eligible, the same condition the announcement waits
+    // for; a legitimate arrival whose context has not settled yet stays pending (nothing is discarded).
+    const eligible = arrival !== null && bootstrap !== null && selection !== null && contextEligible(arrival, selection, bootstrap)
+    const current = useMemo(
+        () => (arrival === null || !eligible ? null : { arrival, locationKey }),
+        [arrival, eligible, locationKey],
+    )
     return <SelectionArrivalContext.Provider value={current}>{children}</SelectionArrivalContext.Provider>
 }

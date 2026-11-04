@@ -1,6 +1,7 @@
 import type { DataRouter } from "react-router"
 import { SelectionArrival } from "./selectionArrival"
 import type { ArrivalEntry } from "./selectionArrival"
+import { claimActivation } from "./activationOwner"
 import { readSelectionChange, selectionScope } from "./selectionChange"
 
 // Which accepted selection arrival is in force, judged from the router's own committed locations rather
@@ -30,6 +31,7 @@ export interface ArrivalTracker {
 export function createArrivalTracker(
     router: Pick<DataRouter, "state" | "subscribe">,
     selectedCampaign: () => string | null,
+    activationFor: (pathname: string) => HTMLElement | null = claimActivation,
 ): ArrivalTracker {
     let lastKey: string | null = null
     let current: SelectionArrival | null = null
@@ -54,7 +56,7 @@ export function createArrivalTracker(
         }
         const change = historyAction === "PUSH" ? readSelectionChange(location.state) : null
         const scope = change === null ? null : selectionScope(change, location.pathname)
-        return change === null || scope === null ? null : new SelectionArrival(change, scope, entry, selectedCampaign())
+        return change === null || scope === null ? null : new SelectionArrival(change, scope, entry, selectedCampaign(), activationFor(location.pathname))
     }
 
     // The location the tracker is created under counts too: a campaign scope change remounts the shell in

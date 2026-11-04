@@ -1,5 +1,5 @@
 import { createContext, useContext } from "react"
-import { readEntryContext } from "./contexts"
+import { isContextStamp } from "./entryStamp"
 import type { SelectionChange, SelectionScope } from "./selectionChange"
 
 // One accepted selection arrival (docs/UI_DESIGN.md §4.8.4): the Infobox choice the router has accepted
@@ -26,38 +26,6 @@ export interface ArrivalEntry {
     state: unknown
 }
 
-function plain(value: unknown): Record<string, unknown> {
-    return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {}
-}
-
-// The one query difference a destination makes to its own address as it arrives: a staged record page
-// writes its default `?section=` into the entry it has just opened (components/staged/useStagedNavigation).
-// Any other parameter, added, changed or removed, makes it a different address.
-function sameSearchButSection(a: string, b: string): boolean {
-    if (a === b) return true
-    const left = new URLSearchParams(a)
-    const right = new URLSearchParams(b)
-    left.delete("section")
-    right.delete("section")
-    left.sort()
-    right.sort()
-    return left.toString() === right.toString()
-}
-
-function withoutCtx(state: unknown): Record<string, unknown> {
-    return Object.fromEntries(Object.entries(plain(state)).filter(([key]) => key !== "ctx"))
-}
-
-function sameValue(a: unknown, b: unknown): boolean {
-    if (a === b) return true
-    if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false
-    if (Array.isArray(a) !== Array.isArray(b)) return false
-    const left = a as Record<string, unknown>
-    const right = b as Record<string, unknown>
-    const keys = Object.keys(left)
-    return keys.length === Object.keys(right).length && keys.every((key) => key in right && sameValue(left[key], right[key]))
-}
-
 export class SelectionArrival {
     readonly change: SelectionChange
     // The campaign or world the destination's address names; what the committed selection must agree with.
@@ -74,7 +42,18 @@ export class SelectionArrival {
     private announced = false
     private focused = false
 
-    constructor(change: SelectionChange, scope: SelectionScope, entry: ArrivalEntry, campaignBefore: string | null) {
+    // The control the choice was made with, when it was a navigation control that is not in the Infobox
+    // (the Navbar menu's link): focus may be taken from it, and from nowhere else outside the Infobox.
+    private readonly origin: HTMLElement | null
+
+    constructor(
+        change: SelectionChange,
+        scope: SelectionScope,
+        entry: ArrivalEntry,
+        campaignBefore: string | null,
+        origin: HTMLElement | null = null,
+    ) {
+        this.origin = origin
         this.change = change
         this.scope = scope
         this.entry = entry
@@ -95,13 +74,10 @@ export class SelectionArrival {
      * task or list state, or without a stamp, is a different navigation and ends the arrival.
      */
     isOwnStamp(next: ArrivalEntry): boolean {
-        const now = this.entry
-        if (next.pathname !== now.pathname || next.hash !== now.hash || !sameSearchButSection(now.search, next.search)) return false
-        if (!sameValue(withoutCtx(now.state), withoutCtx(next.state))) return false
-        // The stamp may still name the selection from before the choice was committed (the owners stamp the
-        // entry as soon as it is accepted, then again once the selection has followed), so it is judged by
-        // being a well-formed stamp, not by which context it records.
-        return readEntryContext(next.state).kind !== "absent"
+        // The stamp may still record the selection from before the choice was committed (the owners stamp
+        // the entry as soon as it is accepted, then again once the selection has followed), so it is judged
+        // by being the entry's stamp (navigation/entryStamp.ts), not by which context it records.
+        return isContextStamp(this.entry, next, { tolerateSection: true })
     }
 
     /** A stamp-only replacement of the entry arrived at: still this arrival, now rendered under `entry`. */
@@ -132,7 +108,14 @@ export class SelectionArrival {
         if (heading === null) return
         this.focused = true
         const active = document.activeElement
-        if (active instanceof HTMLElement && active !== document.body && active.closest(ORIGIN) === null) return
+        if (
+            active instanceof HTMLElement &&
+            active !== document.body &&
+            active !== this.origin &&
+            active.closest(ORIGIN) === null
+        ) {
+            return
+        }
         if (!heading.hasAttribute("tabindex")) heading.setAttribute("tabindex", "-1")
         heading.focus()
     }
