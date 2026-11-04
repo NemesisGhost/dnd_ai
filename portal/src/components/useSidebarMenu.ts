@@ -9,7 +9,7 @@ import { UNSAFE_DataRouterContext, parsePath, useLocation, useNavigationType } f
 import { navigationQuestionActive, onQuestionAnswer, registerFocusFallback } from "../hooks/navigationHolds"
 import { NavigationAttempt, hrefOf, isBusy, viewOfRouterState } from "../navigation/navigationAttempt"
 import type { AttemptView } from "../navigation/navigationAttempt"
-import { recordActivation, releaseActivation } from "../navigation/activationOwner"
+import { bindActivation } from "../navigation/activationOwner"
 import { canTakeFocus } from "../utils/focusEligibility"
 
 // The one open / close / focus lifecycle of every sidebar menu and of the drawer (docs/UI_DESIGN.md §4,
@@ -32,6 +32,8 @@ function handledByBrowser(event: ReactMouseEvent<HTMLElement>): boolean {
 }
 
 interface Pending {
+    // The control the click was made with.
+    activated: HTMLElement
     attempt: NavigationAttempt
     release: () => void
 }
@@ -98,7 +100,11 @@ export function useAcceptedNavigation({ onAccepted, opener }: AcceptedNavigation
             const status = current.attempt.observe(view)
             if (status === "pending") return
             cancel()
-            if (status === "accepted") accepted.current()
+            if (status === "accepted") {
+                // The arrival this request owns takes over the control it was made with (see activationOwner).
+                bindActivation(view.location.key, current.activated)
+                accepted.current()
+            }
         },
         [cancel],
     )
@@ -117,9 +123,8 @@ export function useAcceptedNavigation({ onAccepted, opener }: AcceptedNavigation
             // this handler, so its first notification is the first thing we see of it.
             if (router !== null) releases.push(router.subscribe((state) => feed(viewOfRouterState(state))))
             const target = parsePath(to)
-            recordActivation(activated, target.pathname ?? "")
-            releases.push(() => releaseActivation(activated))
             pending.current = {
+                activated,
                 attempt: new NavigationAttempt(
                     { pathname: target.pathname ?? "", search: target.search ?? "", hash: target.hash ?? "" },
                     { key: left.key, href: hrefOf(left) },

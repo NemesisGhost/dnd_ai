@@ -18,6 +18,7 @@ import { CharacterSheetRoutePage } from "../pages/CharacterSheetRoutePage"
 import { TimelinePage } from "../pages/TimelinePage"
 import { WorldOverviewPage } from "../pages/WorldOverviewPage"
 import { ThemeProvider } from "../themes/ThemeProvider"
+import { replaceOwnEntry } from "./replaceOwnEntry"
 import type { CampaignContext, SessionBootstrap } from "../types/bootstrap"
 
 // P02-5 correction. An accepted Infobox selection is announced once (polite live region) after its
@@ -252,6 +253,19 @@ function watchAnnouncer() {
   observer.observe(document.body, { childList: true, subtree: true })
 }
 const settle = () => act(async () => undefined)
+// A context stamp written by the real writer (navigation/replaceOwnEntry) on the entry the router holds.
+const writeStamp = async (context: unknown = ctxOf(null)) => {
+  const current = router.state.location
+  await act(async () => {
+    replaceOwnEntry({
+      router,
+      navigate: vi.fn() as never,
+      location: current,
+      entryKey: current.key,
+      next: (entry) => ({ search: entry.search, state: { ...(entry.state as object), ctx: context } }),
+    })
+  })
+}
 // What the polite live region holds right now (retained DOM text, not a claim about what was spoken).
 const regionText = () => screen.getByTestId("authoring-announcer").textContent
 // The newest parked read for a character: an earlier one may belong to a page instance that was replaced.
@@ -1124,16 +1138,8 @@ describe("ordinary World and Timeline arrival with a confirmed-write message", (
       await router.navigate(to, { state })
     })
   }
-  // The same entry restated by the owners that stamp it, as they do after the page has arrived.
-  const restate = async () => {
-    const current = router.state.location
-    await act(async () => {
-      await router.navigate(
-        { pathname: current.pathname, search: current.search, hash: current.hash },
-        { replace: true, state: { ...(current.state as object), ctx: ctxOf(null) } },
-      )
-    })
-  }
+  // The same entry restated by the owners that stamp it, as they do after the page has arrived: the real writer.
+  const restate = writeStamp
 
   it.each([
     ["World", "/worlds/w1", "World w1"],
@@ -1400,15 +1406,7 @@ describe("two distinct successes that replace the same address with the same mes
       await router.navigate({ pathname: "/worlds/w1" }, { replace: true, state: { announce: SAVED } })
     })
   }
-  const restate = async () => {
-    const current = router.state.location
-    await act(async () => {
-      await router.navigate(
-        { pathname: current.pathname, search: current.search, hash: current.hash },
-        { replace: true, state: { ...(current.state as object), ctx: ctxOf(null) } },
-      )
-    })
-  }
+  const restate = writeStamp
 
   async function firstSuccess() {
     mount("/app/alpha/knowledge")
@@ -1460,5 +1458,122 @@ describe("two distinct successes that replace the same address with the same mes
 
     expect(said).toEqual([SAVED, SAVED])
     expect(knowledge).not.toHaveFocus()
+  })
+})
+
+// ---- A stamp is what the writer wrote, not what looks like one -------------------------------------
+
+describe("the internal stamp is identified by the writer, never by resemblance", () => {
+  const SAVED = "Saved the record."
+  const retaining = async (extra: Record<string, unknown> = {}, address: { search?: string; hash?: string } = {}) => {
+    const current = router.state.location
+    await act(async () => {
+      await router.navigate(
+        { pathname: current.pathname, search: address.search ?? "", hash: address.hash ?? "" },
+        { replace: true, state: { ...(current.state as object), announce: SAVED, ...extra } },
+      )
+    })
+  }
+
+  async function firstSuccess() {
+    mount("/app/alpha/knowledge")
+    await heading("Knowledge")
+    watchAnnouncer()
+    await act(async () => {
+      await router.navigate("/worlds/w1", { state: { announce: SAVED } })
+    })
+    const page = await heading("World w1")
+    await waitFor(() => expect(page).toHaveFocus())
+    await waitFor(() => expect(said).toEqual([SAVED]))
+    await waitFor(() => expect(stamp()).toBeDefined())
+    await settle()
+    return page
+  }
+
+  it("a second same-address REPLACE that retains ctx and repeats the text is a new operation; each actual stamp adds nothing", async () => {
+    const page = await firstSuccess()
+    act(() => elsewhere().focus())
+
+    // Retains exactly the ctx the first stamp wrote: nothing differs from a stamp but the writer.
+    await retaining()
+    await waitFor(() => expect(said).toEqual([SAVED, SAVED]))
+    await waitFor(() => expect(page).toHaveFocus())
+
+    // An actual stamp follows the second operation: no duplicate announcement, no focus restored.
+    act(() => elsewhere().focus())
+    await writeStamp(ctxOf("a1"))
+    await settle()
+    expect(said).toEqual([SAVED, SAVED])
+    expect(elsewhere()).toHaveFocus()
+
+    // And a third operation is again its own.
+    await retaining()
+    await waitFor(() => expect(said).toEqual([SAVED, SAVED, SAVED]))
+  })
+
+  it("a look-alike external replacement (a stamp's shape, written by someone else) gets its own feedback", async () => {
+    await firstSuccess()
+
+    await retaining({ ctx: ctxOf("a1") })
+
+    await waitFor(() => expect(said).toEqual([SAVED, SAVED]))
+  })
+
+  it("an operation that supersedes a stamp before it lands is its own arrival and its later stamp is not another", async () => {
+    await firstSuccess()
+    const before = router.state.location
+
+    await act(async () => {
+      // The writer asks to stamp the entry the page is on; the operation replaces it first.
+      replaceOwnEntry({
+        router,
+        navigate: vi.fn() as never,
+        location: before,
+        entryKey: "no-longer-current",
+        next: (entry) => ({ search: entry.search, state: { ...(entry.state as object), ctx: ctxOf("a1") } }),
+      })
+      await router.navigate({ pathname: before.pathname }, { replace: true, state: { announce: SAVED } })
+    })
+    await waitFor(() => expect(said).toEqual([SAVED, SAVED]))
+    await writeStamp(ctxOf("a1"))
+    await settle()
+
+    expect(said).toEqual([SAVED, SAVED])
+  })
+
+  it.each([
+    ["a changed query", { search: "?x=1" }],
+    ["a hash", { hash: "#notes" }],
+  ])("%s with the same message is an operation of its own", async (_name, address) => {
+    await firstSuccess()
+
+    await retaining({}, address)
+
+    await waitFor(() => expect(said).toEqual([SAVED, SAVED]))
+  })
+
+  it("a selection arrival survives its own stamp but not a look-alike replacement", async () => {
+    mount("/app/alpha/knowledge")
+    await heading("Knowledge")
+    parkCharacters = true
+
+    choose("a2")
+    await waitFor(() => expect(parkedCharacters.some((read) => read.id === "a2")).toBe(true))
+    await waitFor(() => expect(stamp()).toMatchObject({ characterId: "a2" }))
+    // Not written by the stamp writer: the same entry with only ctx changed.
+    const current = router.state.location
+    await act(async () => {
+      await router.navigate(
+        { pathname: current.pathname, search: current.search, hash: current.hash },
+        { replace: true, state: { ...(current.state as object), ctx: ctxOf("a1") } },
+      )
+    })
+    parkCharacters = false
+    await parkedFor("a2").answer("ok")
+    const record = await heading("Character a2")
+    await settle()
+
+    expect(record).not.toHaveFocus()
+    expect(select()).toHaveFocus()
   })
 })

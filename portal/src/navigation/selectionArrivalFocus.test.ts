@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest"
-import { claimActivation, recordActivation, releaseActivation } from "./activationOwner"
+import { activationFor, bindActivation, releaseActivation } from "./activationOwner"
 import { SelectionArrival } from "./selectionArrival"
 
 // Which focus a settled destination may take its heading from (docs/UI_DESIGN.md §4.8.4): nowhere, the
@@ -22,14 +22,16 @@ function page() {
         h1: document.querySelector("h1")!,
     }
 }
-const arrival = (origin: HTMLElement | null) =>
-    new SelectionArrival(
+// An arrival accepted at location "k"; `origin` is the control the accepted request bound to that location.
+const arrival = (origin: HTMLElement | null, key = "k") => {
+    if (origin !== null) bindActivation(key, origin)
+    return new SelectionArrival(
         { level: "campaign", id: "beta" },
         { campaignId: "beta", worldId: null },
-        { key: "k", pathname: "/app/beta/home", search: "", hash: "", state: null },
+        { key, pathname: "/app/beta/home", search: "", hash: "", state: null },
         null,
-        origin,
     )
+}
 
 describe("SelectionArrival.focusHeading", () => {
     it("takes focus from the control the navigation was requested with", () => {
@@ -59,25 +61,40 @@ describe("SelectionArrival.focusHeading", () => {
     })
 })
 
-describe("activation owner", () => {
-    it("is claimed once, for the address it was recorded for", () => {
-        const { activated } = page()
-        recordActivation(activated, "/app/beta/home")
-        expect(claimActivation("/app/gamma/home")).toBeNull()
-        expect(claimActivation("/app/beta/home")).toBe(activated)
-        expect(claimActivation("/app/beta/home")).toBeNull()
+describe("activation handoff", () => {
+    it("is bound to the location the request was accepted at: an unrelated arrival at the same path gets nothing", () => {
+        const { activated, h1 } = page()
+        bindActivation("accepted-key", activated)
+        activated.focus()
+
+        // Another arrival (same pathname, different location key) does not own the control.
+        new SelectionArrival(
+            { level: "campaign", id: "beta" },
+            { campaignId: "beta", worldId: null },
+            { key: "unrelated-key", pathname: "/app/beta/home", search: "", hash: "", state: null },
+            null,
+        ).focusHeading("unrelated-key")
+        expect(h1).not.toHaveFocus()
+        expect(activated).toHaveFocus()
+        expect(activationFor("accepted-key")).toBe(activated)
     })
 
-    it("a request that ended (Stay, superseded, failed) leaves nothing to claim; a newer one replaces an older", () => {
-        const { activated, other } = page()
-        recordActivation(activated, "/app/beta/home")
-        releaseActivation(activated)
-        expect(claimActivation("/app/beta/home")).toBeNull()
+    it("is used up with the focus claim and can be released", () => {
+        const { activated, h1 } = page()
+        activated.focus()
+        arrival(activated, "k1").focusHeading("k1")
+        expect(h1).toHaveFocus()
+        expect(activationFor("k1")).toBeNull()
 
-        recordActivation(activated, "/app/beta/home")
-        recordActivation(other, "/app/gamma/home")
-        releaseActivation(activated)
-        expect(claimActivation("/app/beta/home")).toBeNull()
-        expect(claimActivation("/app/gamma/home")).toBe(other)
+        bindActivation("k2", activated)
+        releaseActivation("k2")
+        expect(activationFor("k2")).toBeNull()
+    })
+
+    it("is bounded", () => {
+        const { activated } = page()
+        for (let index = 0; index < 10; index += 1) bindActivation(`bound-${index}`, activated)
+        expect(activationFor("bound-0")).toBeNull()
+        expect(activationFor("bound-9")).toBe(activated)
     })
 })

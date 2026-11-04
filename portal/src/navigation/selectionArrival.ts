@@ -1,5 +1,6 @@
 import { createContext, useContext } from "react"
-import { isContextStamp } from "./entryStamp"
+import { activationFor, releaseActivation } from "./activationOwner"
+import { differsOnlyInSection, sameState, sameStateButCtx, stampRoot } from "./entryStamp"
 import type { SelectionChange, SelectionScope } from "./selectionChange"
 
 // One accepted selection arrival (docs/UI_DESIGN.md §4.8.4): the Infobox choice the router has accepted
@@ -42,18 +43,11 @@ export class SelectionArrival {
     private announced = false
     private focused = false
 
-    // The control the choice was made with, when it was a navigation control that is not in the Infobox
-    // (the Navbar menu's link): focus may be taken from it, and from nowhere else outside the Infobox.
-    private readonly origin: HTMLElement | null
+    // The location this arrival was accepted at: what a navigation request's activated control is bound to.
+    private readonly acceptedKey: string
 
-    constructor(
-        change: SelectionChange,
-        scope: SelectionScope,
-        entry: ArrivalEntry,
-        campaignBefore: string | null,
-        origin: HTMLElement | null = null,
-    ) {
-        this.origin = origin
+    constructor(change: SelectionChange, scope: SelectionScope, entry: ArrivalEntry, campaignBefore: string | null) {
+        this.acceptedKey = entry.key
         this.change = change
         this.scope = scope
         this.entry = entry
@@ -67,17 +61,24 @@ export class SelectionArrival {
     }
 
     /**
-     * Whether `next`, a REPLACE, is the arrival's own stamp and nothing else: the context stamp the
-     * selected-context owners write on the entry they have just accepted (navigation/replaceOwnEntry.ts).
-     * That is the same address (path, hash and query, but for the `section` a staged record page writes
-     * for itself) and the same state except for `ctx`, and a `ctx` that is a well-formed stamp. Any other same-path replacement, with another query, hash, marker,
-     * task or list state, or without a stamp, is a different navigation and ends the arrival.
+     * Whether `next`, a REPLACE, keeps this arrival: it is the context stamp the stamp writer made for the
+     * entry this arrival is rendered under (navigation/entryStamp.ts: the writer marked that very state
+     * object, as a stamp of a chain rooted at an entry of this arrival), at the same address; or it is the
+     * default `?section=` a staged record page writes for itself into the entry it has just opened (the
+     * same state but for `ctx`, only the section differing). Nothing that merely resembles a stamp keeps
+     * it: any other replacement, even of the same path with the same state and `ctx`, ends the arrival.
      */
     isOwnStamp(next: ArrivalEntry): boolean {
-        // The stamp may still record the selection from before the choice was committed (the owners stamp
-        // the entry as soon as it is accepted, then again once the selection has followed), so it is judged
-        // by being the entry's stamp (navigation/entryStamp.ts), not by which context it records.
-        return isContextStamp(this.entry, next, { tolerateSection: true })
+        const now = this.entry
+        if (next.pathname !== now.pathname || next.hash !== now.hash) return false
+        if (next.search === now.search) {
+            const root = stampRoot(next.state)
+            if (root !== null && this.keys.has(root)) return true
+            // The very same state restated (a page asking for the address it is already at, as StrictMode's
+            // second effect does) changes nothing, so it is not another navigation.
+            return sameState(now.state, next.state)
+        }
+        return differsOnlyInSection(now.search, next.search) && sameStateButCtx(now.state, next.state)
     }
 
     /** A stamp-only replacement of the entry arrived at: still this arrival, now rendered under `entry`. */
@@ -107,11 +108,14 @@ export class SelectionArrival {
         const heading = content.querySelector<HTMLElement>("h1")
         if (heading === null) return
         this.focused = true
+        // The control the accepted request was made with (the Navbar menu's link), if this arrival is its own.
+        const origin = activationFor(this.acceptedKey)
+        releaseActivation(this.acceptedKey)
         const active = document.activeElement
         if (
             active instanceof HTMLElement &&
             active !== document.body &&
-            active !== this.origin &&
+            active !== origin &&
             active.closest(ORIGIN) === null
         ) {
             return

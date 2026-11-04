@@ -1,6 +1,7 @@
 import type { Location, NavigateFunction } from "react-router"
 import type { DataRouter } from "react-router"
 import { runPermissionLossCleanup } from "../hooks/navigationHolds"
+import { markStamp } from "./entryStamp"
 
 // A replacement that belongs to one history entry (the one place stamps and clean-ups are written).
 // It runs only while that entry is still the router's current location and nothing is pending or
@@ -14,6 +15,11 @@ import { runPermissionLossCleanup } from "../hooks/navigationHolds"
 // answer. Its replacement runs under the narrow exemption in `runPermissionLossCleanup`, which
 // covers exactly this entry and this call; the held navigation is cancelled by its owner as it
 // goes away, never approved.
+//
+// The state it hands the router is declared a stamp of the entry it replaces (navigation/entryStamp.ts)
+// before the router can see it, so observers tell this write from any other navigation that merely looks
+// like it. The declaration is the state object itself: a replacement that is blocked, superseded or
+// abandoned leaves nothing behind but an object that is never committed.
 //
 // Returns what abandons it.
 export function replaceOwnEntry({
@@ -33,6 +39,7 @@ export function replaceOwnEntry({
 }): (() => void) | undefined {
     if (router === null) {
         const { search, state } = next(location)
+        if (typeof state === "object" && state !== null) markStamp(location, state)
         navigate({ pathname: location.pathname, search, hash: location.hash }, { replace: true, state })
         return undefined
     }
@@ -54,6 +61,7 @@ export function replaceOwnEntry({
         if (waiting) return
         finish()
         const { search, state } = next(current.location)
+        if (typeof state === "object" && state !== null) markStamp(current.location, state)
         const apply = () =>
             void router.navigate(
                 { pathname: current.location.pathname, search, hash: current.location.hash },

@@ -1,45 +1,49 @@
 import { describe, expect, it } from "vitest"
-import { isContextStamp } from "./entryStamp"
+import { differsOnlyInSection, entryRoot, markStamp, sameStateButCtx, stampRoot } from "./entryStamp"
 
-const ctx = { v: 1, campaignId: "alpha", worldId: "w1", timelineId: "t-w1", characterId: null }
-const entry = (state: unknown, extra: Partial<{ pathname: string; search: string; hash: string }> = {}) => ({
-    pathname: "/worlds/w1",
-    search: "",
-    hash: "",
-    state,
-    ...extra,
+describe("stamp identity", () => {
+    it("only the object the writer marked is a stamp; its root is the first entry that was not one", () => {
+        const first = { key: "k1", state: { announce: "Saved." } }
+        const stamp1 = { ...first.state, ctx: { v: 1 } }
+        markStamp(first, stamp1)
+
+        expect(stampRoot(stamp1)).toBe("k1")
+        expect(entryRoot({ key: "k2", state: stamp1 })).toBe("k1")
+        // A chain keeps one root.
+        const stamp2 = { ...stamp1, ctx: { v: 2 } }
+        markStamp({ key: "k2", state: stamp1 }, stamp2)
+        expect(stampRoot(stamp2)).toBe("k1")
+    })
+
+    it("a copy, a spread, an equal object, a forged value or a non-object is never a stamp", () => {
+        const first = { key: "k1", state: { announce: "Saved." } }
+        const stamped = { ...first.state, ctx: { v: 1 } }
+        markStamp(first, stamped)
+
+        expect(stampRoot({ ...stamped })).toBeNull()
+        expect(stampRoot(structuredClone(stamped))).toBeNull()
+        expect(stampRoot({ announce: "Saved.", ctx: { v: 1 } })).toBeNull()
+        expect(stampRoot({ stampRoot: "k1" })).toBeNull()
+        expect(stampRoot(null)).toBeNull()
+        expect(stampRoot("k1")).toBeNull()
+        expect(entryRoot({ key: "k9", state: { ...stamped } })).toBe("k9")
+    })
 })
 
-describe("isContextStamp", () => {
-    const arrived = entry({ announce: "Saved." })
-
-    it("the same entry with only a well-formed ctx added or changed is a stamp", () => {
-        expect(isContextStamp(arrived, entry({ announce: "Saved.", ctx }))).toBe(true)
-        expect(
-            isContextStamp(entry({ announce: "Saved.", ctx }), entry({ announce: "Saved.", ctx: { ...ctx, characterId: "a1" } })),
-        ).toBe(true)
+describe("state comparisons", () => {
+    it("sameStateButCtx ignores only ctx", () => {
+        expect(sameStateButCtx({ a: 1, ctx: { v: 1 } }, { a: 1 })).toBe(true)
+        expect(sameStateButCtx({ a: 1, ctx: { v: 1 } }, { a: 2, ctx: { v: 1 } })).toBe(false)
+        expect(sameStateButCtx({ a: { b: [1] } }, { a: { b: [1] } })).toBe(true)
+        expect(sameStateButCtx({ a: 1 }, { a: 1, b: 2 })).toBe(false)
     })
 
-    it("a distinct operation repeating the same message and address, without a stamp, is not", () => {
-        expect(isContextStamp(entry({ announce: "Saved.", ctx }), entry({ announce: "Saved." }))).toBe(false)
-        expect(isContextStamp(arrived, entry({ announce: "Saved." }))).toBe(false)
-    })
-
-    it.each([
-        ["another message", entry({ announce: "Deleted.", ctx })],
-        ["an added key", entry({ announce: "Saved.", extra: 1, ctx })],
-        ["another query", entry({ announce: "Saved.", ctx }, { search: "?q=1" })],
-        ["a hash", entry({ announce: "Saved.", ctx }, { hash: "#a" })],
-        ["another path", entry({ announce: "Saved.", ctx }, { pathname: "/worlds/w2" })],
-        ["a malformed ctx", entry({ announce: "Saved.", ctx: { v: 2 } })],
-    ])("%s is not a stamp", (_name, after) => {
-        expect(isContextStamp(arrived, after)).toBe(false)
-    })
-
-    it("a staged page's own section is tolerated only on request", () => {
-        const before = entry({ ctx })
-        const after = entry({ ctx }, { search: "?section=sheet" })
-        expect(isContextStamp(before, after)).toBe(false)
-        expect(isContextStamp(before, after, { tolerateSection: true })).toBe(true)
+    it("differsOnlyInSection is true only for a query that differs in section alone", () => {
+        expect(differsOnlyInSection("", "?section=sheet")).toBe(true)
+        expect(differsOnlyInSection("?section=a", "?section=b")).toBe(true)
+        expect(differsOnlyInSection("?x=1", "?x=1&section=sheet")).toBe(true)
+        expect(differsOnlyInSection("?x=1", "?x=2&section=sheet")).toBe(false)
+        expect(differsOnlyInSection("?section=a", "?section=a")).toBe(false)
+        expect(differsOnlyInSection("", "?q=1")).toBe(false)
     })
 })

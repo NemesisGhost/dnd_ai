@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import { markStamp } from "./entryStamp"
 import { createArrivalTracker } from "./selectionArrivalTracker"
 import { readSelectionChange } from "./selectionChange"
 
@@ -118,18 +119,25 @@ describe("createArrivalTracker", () => {
         })
     })
 
-    describe("a REPLACE keeps the arrival only when it is the entry's own stamp", () => {
-        const arrive = (state: unknown = { task, ...choice }) => {
+    describe("a REPLACE keeps the arrival only when the stamp writer made it", () => {
+        const first = { task, ...choice }
+        const arrive = () => {
             const { router, commit } = fakeRouter()
             const tracker = createArrivalTracker(router as never, () => null)
             tracker.subscribe(() => undefined)
-            commit("k1", DETAILS, "PUSH", state)
+            commit("k1", DETAILS, "PUSH", first)
             return { tracker, commit, arrival: tracker.getSnapshot() }
         }
+        // What the writer does: marks the state it hands the router, as a stamp of the entry it replaces.
+        const writer = (entryKey: string, entryState: unknown, characterId: string | null = "a2") => {
+            const state = { ...(entryState as object), ctx: stamped(characterId).ctx }
+            markStamp({ key: entryKey, state: entryState }, state)
+            return state
+        }
 
-        it("the stamp of the same address and state keeps it; the new key is the same arrival's", () => {
+        it("the writer's stamp keeps it; the new key is the same arrival's", () => {
             const { tracker, commit, arrival } = arrive()
-            commit("k2", DETAILS, "REPLACE", stamped("a2"))
+            commit("k2", DETAILS, "REPLACE", writer("k1", first))
             expect(tracker.getSnapshot()).toBe(arrival)
             expect(arrival?.owns("k1")).toBe(true)
             expect(arrival?.owns("k2")).toBe(true)
@@ -137,52 +145,85 @@ describe("createArrivalTracker", () => {
 
         it("a stamp that still records the selection from before the choice is the same stamp", () => {
             const { tracker, commit, arrival } = arrive()
-            commit("k2", DETAILS, "REPLACE", stamped("a1"))
+            commit("k2", DETAILS, "REPLACE", writer("k1", first, "a1"))
             expect(tracker.getSnapshot()).toBe(arrival)
         })
 
-        it("a second stamp of the stamped entry keeps it too", () => {
+        it("a chain of the writer's stamps keeps it, even when a middle one was never observed", () => {
             const { tracker, commit, arrival } = arrive()
-            commit("k2", DETAILS, "REPLACE", stamped("a1"))
-            commit("k3", DETAILS, "REPLACE", stamped("a2"))
+            const s1 = writer("k1", first, "a1")
+            const s2 = writer("k2", s1, "a2")
+            commit("k3", DETAILS, "REPLACE", s2)
             expect(tracker.getSnapshot()).toBe(arrival)
             expect(arrival?.owns("k3")).toBe(true)
         })
 
-        it("the default section a staged page writes for itself keeps it; no other query does", () => {
+        it("the very same state restated at the same address (a page asking for where it is) changes nothing", () => {
             const { tracker, commit, arrival } = arrive()
-            commit("k2", DETAILS, "REPLACE", stamped("a2"), { search: "?section=sheet" })
+            commit("k2", DETAILS, "REPLACE", { ...first })
             expect(tracker.getSnapshot()).toBe(arrival)
-            commit("k3", DETAILS, "REPLACE", stamped("a2"), { search: "?section=sheet&q=x" })
+        })
+
+        it("a replacement that looks exactly like a stamp but was not written by the writer ends it", () => {
+            const { tracker, commit } = arrive()
+            commit("k2", DETAILS, "REPLACE", { ...first, ctx: stamped("a2").ctx })  // (first carries no ctx: a new field)
+            expect(tracker.getSnapshot()).toBeNull()
+        })
+
+        it("neither a copy nor a clone of the writer's stamp is one", () => {
+            const { tracker, commit } = arrive()
+            const real = writer("k1", first)
+            commit("k2", DETAILS, "REPLACE", structuredClone(real))
+            expect(tracker.getSnapshot()).toBeNull()
+        })
+
+        it("an ended arrival is not revived by a later stamp of the writer", () => {
+            const { tracker, commit } = arrive()
+            commit("k2", DETAILS, "REPLACE", { ...first, task: { ...task, root: "world" } })
+            commit("k3", DETAILS, "REPLACE", writer("k2", first))
+            expect(tracker.getSnapshot()).toBeNull()
+        })
+
+        it("a stamp of another chain (another root) is not this arrival's", () => {
+            const { tracker, commit } = arrive()
+            commit("k2", DETAILS, "REPLACE", writer("other-root", { unrelated: true }))
             expect(tracker.getSnapshot()).toBeNull()
         })
 
         it.each([
-            ["another query", DETAILS, stamped("a2"), { search: "?q=elsewhere" }],
-            ["a hash", DETAILS, stamped("a2"), { hash: "#notes" }],
-            [
-                "another marker",
-                DETAILS,
-                { ...stamped("a2"), selection: { level: "character", id: "a3", campaignId: "alpha" } },
-                {},
-            ],
-            ["no marker", DETAILS, { task, ctx: stamped("a2").ctx }, {}],
-            ["another task", DETAILS, { ...stamped("a2"), task: { ...task, root: "world" } }, {}],
-            ["another task trail", DETAILS, { ...stamped("a2"), task: { ...task, trail: [{ route: "x" }] } }, {}],
-            ["unrelated state", DETAILS, { ...stamped("a2"), charactersReturn: "/app/alpha/characters/all" }, {}],
-            ["no stamp at all", DETAILS, { task, ...choice }, {}],
-            ["a malformed stamp", DETAILS, { task, ...choice, ctx: { v: 2, characterId: "a2" } }, {}],
-            ["another path", "/app/alpha/characters/a3", stamped("a2"), {}],
-        ])("same entry, %s: ends the arrival", (_name, path, state, extra) => {
+            ["another query", { search: "?q=elsewhere" }],
+            ["a hash", { hash: "#notes" }],
+        ])("the writer's stamp at %s is not the same entry's stamp", (_name, extra) => {
             const { tracker, commit } = arrive()
-            commit("k2", path, "REPLACE", state, extra)
+            commit("k2", DETAILS, "REPLACE", writer("k1", first), extra)
             expect(tracker.getSnapshot()).toBeNull()
         })
 
-        it("an ended arrival is not revived by a later look-alike stamp", () => {
+        it("another path ends it, stamp or not", () => {
             const { tracker, commit } = arrive()
-            commit("k2", DETAILS, "REPLACE", { ...stamped("a2"), task: { ...task, root: "world" } })
-            commit("k3", DETAILS, "REPLACE", stamped("a2"))
+            commit("k2", "/app/alpha/characters/a3", "REPLACE", writer("k1", first))
+            expect(tracker.getSnapshot()).toBeNull()
+        })
+
+        it("the default section a staged page writes for itself keeps it; no other query does", () => {
+            const { tracker, commit, arrival } = arrive()
+            // Same state object, as the page hands back what it read; only `section` differs.
+            commit("k2", DETAILS, "REPLACE", first, { search: "?section=sheet" })
+            expect(tracker.getSnapshot()).toBe(arrival)
+            // The writer then stamps that normalised entry: its root is the adopted key.
+            commit("k3", DETAILS, "REPLACE", writer("k2", first), { search: "?section=sheet" })
+            expect(tracker.getSnapshot()).toBe(arrival)
+            commit("k4", DETAILS, "REPLACE", first, { search: "?section=sheet&q=x" })
+            expect(tracker.getSnapshot()).toBeNull()
+        })
+
+        it.each([
+            ["another marker", { ...first, selection: { level: "character", id: "a3", campaignId: "alpha" } }],
+            ["another task", { ...first, task: { ...task, root: "world" } }],
+            ["unrelated state", { ...first, charactersReturn: "/app/alpha/characters/all" }],
+        ])("the section default with %s is a different navigation", (_name, state) => {
+            const { tracker, commit } = arrive()
+            commit("k2", DETAILS, "REPLACE", state, { search: "?section=sheet" })
             expect(tracker.getSnapshot()).toBeNull()
         })
 
@@ -190,7 +231,7 @@ describe("createArrivalTracker", () => {
             const { router, commit } = fakeRouter({ key: "k0", pathname: DETAILS }, { task, ...choice }, "POP")
             const tracker = createArrivalTracker(router as never, () => null)
             tracker.subscribe(() => undefined)
-            commit("k1", DETAILS, "REPLACE", stamped("a2"))
+            commit("k1", DETAILS, "REPLACE", writer("k0", { task, ...choice }))
             expect(tracker.getSnapshot()).toBeNull()
         })
     })
@@ -204,7 +245,9 @@ describe("createArrivalTracker", () => {
         const ctx = { v: 1, campaignId: null, worldId: "w1", timelineId: "t2", characterId: null }
 
         commit("k1", "/worlds/w1/timelines/t2", "PUSH", note)
-        commit("k2", "/worlds/w1/timelines/t2", "REPLACE", { ...note, ctx })
+        const stamp = { ...note, ctx }
+        markStamp({ key: "k1", state: note }, stamp)
+        commit("k2", "/worlds/w1/timelines/t2", "REPLACE", stamp)
 
         expect(tracker.getSnapshot()?.change).toEqual({ level: "timeline", id: "t2" })
         expect(seen).toHaveLength(1)
@@ -226,8 +269,10 @@ describe("createArrivalTracker", () => {
         commit("k5", DETAILS, "PUSH", choice)
         commit("k6", DETAILS, "POP", choice)
         expect(tracker.getSnapshot()).toBeNull()
-        // A REPLACE of a Back/Forward entry that carries the choice's state is a stamp, not an arrival.
-        commit("k7", DETAILS, "REPLACE", stamped("a2"))
+        // A REPLACE of a Back/Forward entry is a stamp, not an arrival.
+        const popped = stamped("a2")
+        markStamp({ key: "k6", state: choice }, popped)
+        commit("k7", DETAILS, "REPLACE", popped)
         expect(tracker.getSnapshot()).toBeNull()
     })
 
