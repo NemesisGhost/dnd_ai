@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef } from "react"
 import type { ReactNode } from "react"
-import { restoreFocus } from "../../utils/focusEligibility"
+import { focusHeldOutside, keepHeldFocus, restoreFocus } from "../../utils/focusEligibility"
 import "./authoring.css"
 
 // A question asked inside the dialog, in place of stacking a second modal on it.
@@ -112,16 +112,17 @@ export function FormDialog({
         // Never opened (the first run): there is nothing to close and no focus to give back.
         if (!wasOpen.current) return
         wasOpen.current = false
+        const target = returnFocusRef.current
+        returnFocusRef.current = null
+        // Focus that has already moved to something on the page (not the dialog, not nowhere) is left alone.
+        // Read before the native close, which restores focus to the surviving opener, and put back after it.
+        const held = focusHeldOutside(dialog, target)
         if (typeof dialog.close === "function") {
             if (dialog.open) dialog.close()
         } else {
             dialog.removeAttribute("open")
         }
-        const target = returnFocusRef.current
-        returnFocusRef.current = null
-        // Focus that has already moved to something on the page (not the dialog, not nowhere) is left alone.
-        const active = document.activeElement
-        if (active !== null && active !== document.body && !dialog.contains(active)) return
+        if (keepHeldFocus(held, dialog)) return
         if (!restoreFocus(target, dialog)) restoreFocus(fallbackRef.current?.(), dialog)
     }, [open, suspended])
 

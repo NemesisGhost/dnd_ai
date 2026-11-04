@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef } from "react"
 import type { ReactNode } from "react"
 import { snapshotFocusFallbacks } from "../../hooks/navigationHolds"
-import { restoreFocus } from "../../utils/focusEligibility"
+import { focusHeldOutside, keepHeldFocus, restoreFocus } from "../../utils/focusEligibility"
 import { TextAreaField } from "./fields"
 import "./authoring.css"
 
@@ -77,6 +77,14 @@ export function ConfirmDialog({
             cancelRef.current?.focus()
             return
         }
+        const target = returnFocusRef.current
+        const fallbacks = fallbacksRef.current
+        returnFocusRef.current = null
+        fallbacksRef.current = []
+        // Focus that has already moved onto something live outside the dialog is not ours to take back: an
+        // accepted navigation's destination heading, or a control the person chose. It is read before the
+        // native close, which itself restores focus to the surviving opener, and put back after it.
+        const held = focusHeldOutside(dialog, target)
         if (typeof dialog.close === "function") {
             if (dialog.open) {
                 dialog.close()
@@ -84,15 +92,7 @@ export function ConfirmDialog({
         } else {
             dialog.removeAttribute("open")
         }
-        const target = returnFocusRef.current
-        const fallbacks = fallbacksRef.current
-        returnFocusRef.current = null
-        fallbacksRef.current = []
-        // Focus that has already moved onto something live outside the dialog is not ours to take back: an
-        // accepted navigation's destination heading, or a control the person chose. Only focus that is
-        // still in the dialog, or nowhere, is returned.
-        const current = document.activeElement
-        if (current instanceof HTMLElement && current !== document.body && current !== target && !dialog.contains(current)) {
+        if (keepHeldFocus(held, dialog)) {
             return
         }
         if (restoreFocus(target, dialog)) {

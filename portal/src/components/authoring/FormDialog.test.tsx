@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { useState } from "react"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { installNativeDialogModel } from "../../test/nativeDialog"
 import { FormDialog } from "./FormDialog"
 import type { FormDialogPrompt } from "./FormDialog"
 
@@ -48,6 +49,34 @@ const escape = (dialog: HTMLElement) => {
     fireEvent(dialog, event)
     return event
 }
+
+describe("FormDialog when native close restores focus to the element focused before showModal()", () => {
+    let uninstall: () => void
+    beforeEach(() => {
+        uninstall = installNativeDialogModel()
+    })
+    afterEach(() => uninstall())
+
+    it("keeps focus that moved to the page, and still returns it to the opener otherwise", () => {
+        render(
+            <>
+                <Harness />
+                <button type="button">Destination</button>
+            </>,
+        )
+        const opener = screen.getByRole("button", { name: "Open it" })
+        opener.focus()
+        fireEvent.click(opener)
+        screen.getByRole("button", { name: "Destination" }).focus()
+        fireEvent.click(screen.getByRole("button", { name: "Close it" }))
+        expect(screen.getByRole("button", { name: "Destination" })).toHaveFocus()
+
+        opener.focus()
+        fireEvent.click(opener)
+        fireEvent.click(screen.getByRole("button", { name: "Close it" }))
+        expect(opener).toHaveFocus()
+    })
+})
 
 describe("FormDialog", () => {
     it("is labelled and described, and moves focus to the first control when it opens", () => {

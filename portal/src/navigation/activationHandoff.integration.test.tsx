@@ -2,8 +2,9 @@ import { act, configure, fireEvent, render, screen, waitFor, within } from "@tes
 import { useMemo, useState, useSyncExternalStore } from "react"
 import { Link, Route, RouterProvider, Routes, createMemoryRouter, useLocation, useParams } from "react-router"
 import type { DataRouter } from "react-router"
-import { beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { ConfirmDialog } from "../components/authoring/ConfirmDialog"
+import { installNativeDialogModel } from "../test/nativeDialog"
 import { useAcceptedNavigation } from "../components/useSidebarMenu"
 import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard"
 import { ArrivalHeadingFocus } from "./ArrivalHeadingFocus"
@@ -228,5 +229,59 @@ describe("the activated control survives the navigation and hands focus to its o
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
     expect(router.state.location.pathname).toBe("/app/beta/home")
     expect(home).toHaveFocus()
+  })
+})
+
+// The same guarded Leave when the dialog's native close restores focus to the element focused before
+// showModal() (modeled in test/nativeDialog.ts; jsdom has no native close). Modeled evidence, not a browser run.
+describe("guarded Leave with a native close that restores the opener", () => {
+  let uninstall: () => void
+  beforeEach(() => {
+    uninstall = installNativeDialogModel()
+  })
+  afterEach(() => uninstall())
+
+  it("the destination heading ends with the focus, not the surviving link", async () => {
+    mount()
+    fireEvent.change(screen.getByLabelText("Draft"), { target: { value: "unsent" } })
+    const opener = link("Open beta")
+
+    press(opener)
+    await answer("Leave")
+
+    const home = await heading("Home beta")
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+    await waitFor(() => expect(home).toHaveFocus())
+    expect(opener.isConnected).toBe(true)
+  })
+
+  it("Leave closes before the destination has loaded: the link has focus meanwhile and the arrival takes it once", async () => {
+    mount()
+    setLoaded(false)
+    fireEvent.change(screen.getByLabelText("Draft"), { target: { value: "unsent" } })
+    const opener = link("Open beta")
+
+    press(opener)
+    await answer("Leave")
+    await waitFor(() => expect(router.state.location.pathname).toBe("/app/beta/home"))
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+    expect(opener).toHaveFocus()
+
+    act(() => setLoaded(true))
+    const home = await heading("Home beta")
+    await waitFor(() => expect(home).toHaveFocus())
+  })
+
+  it("Stay returns focus to the link and navigates nowhere", async () => {
+    mount()
+    fireEvent.change(screen.getByLabelText("Draft"), { target: { value: "unsent" } })
+    const opener = link("Open beta")
+
+    press(opener)
+    await answer("Stay")
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+    await waitFor(() => expect(opener).toHaveFocus())
+    expect(router.state.location.pathname).toBe("/start")
   })
 })

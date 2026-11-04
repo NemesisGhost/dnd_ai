@@ -1,7 +1,8 @@
 import { fireEvent, render, screen } from "@testing-library/react"
 import { useEffect, useState } from "react"
-import { describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { registerFocusFallback } from "../../hooks/navigationHolds"
+import { installNativeDialogModel } from "../../test/nativeDialog"
 import { ConfirmDialog } from "./ConfirmDialog"
 
 function Harness({ onConfirm = vi.fn(), error }: { onConfirm?: () => void; error?: string }) {
@@ -149,6 +150,142 @@ describe("ConfirmDialog", () => {
             fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
             expect(candidate).toHaveFocus()
             candidate.remove()
+        })
+    })
+
+    // jsdom does not implement the native close; this models its focus rule (showModal records the focused
+    // element, close() hands focus back to it if connected, whoever holds focus). Modeled evidence, not a browser run.
+    describe("when native close restores focus to the element focused before showModal()", () => {
+        let uninstall: () => void
+        beforeEach(() => {
+            uninstall = installNativeDialogModel()
+        })
+        afterEach(() => uninstall())
+
+        function Closing({ onClosed }: { onClosed?: () => void }) {
+            const [open, setOpen] = useState(false)
+            const close = () => {
+                setOpen(false)
+                onClosed?.()
+            }
+            return (
+                <>
+                    <button type="button" onClick={() => setOpen(true)}>
+                        Open question
+                    </button>
+                    <button type="button">Destination</button>
+                    <button type="button">Elsewhere</button>
+                    <ConfirmDialog
+                        open={open}
+                        title="Discard?"
+                        description="unsent"
+                        confirmLabel="Leave"
+                        cancelLabel="Stay"
+                        onConfirm={close}
+                        onCancel={close}
+                    />
+                </>
+            )
+        }
+        const button = (name: string) => screen.getByRole("button", { name })
+        const ask = () => {
+            const opener = button("Open question")
+            opener.focus()
+            fireEvent.click(opener)
+            return opener
+        }
+
+        it("Leave: a destination that took focus before the close keeps it", () => {
+            render(<Closing />)
+            const opener = ask()
+            button("Destination").focus()
+
+            fireEvent.click(button("Leave"))
+
+            expect(button("Destination")).toHaveFocus()
+            expect(opener).not.toHaveFocus()
+        })
+
+        it("Leave: the opener gets focus at close, and a destination that arrives afterwards keeps it", () => {
+            render(<Closing />)
+            const opener = ask()
+
+            fireEvent.click(button("Leave"))
+            expect(opener).toHaveFocus()
+
+            button("Destination").focus()
+            expect(button("Destination")).toHaveFocus()
+        })
+
+        it("Stay and Escape return focus to the usable opener", () => {
+            render(<Closing />)
+            const opener = ask()
+            fireEvent.click(button("Stay"))
+            expect(opener).toHaveFocus()
+
+            opener.focus()
+            fireEvent.click(opener)
+            fireEvent(screen.getByRole("dialog", { hidden: true }), new Event("cancel", { cancelable: true }))
+            expect(opener).toHaveFocus()
+        })
+
+        it("uses the registered fallback when the opener is hidden, though the native close tried it first", () => {
+            const fallback = document.createElement("button")
+            document.body.append(fallback)
+            const Fallback = () => {
+                useEffect(() => registerFocusFallback(0, () => fallback), [])
+                return null
+            }
+            render(
+                <>
+                    <Fallback />
+                    <Closing />
+                </>,
+            )
+            const opener = ask()
+            opener.hidden = true
+
+            fireEvent.click(button("Stay"))
+
+            expect(fallback).toHaveFocus()
+            fallback.remove()
+        })
+
+        it("a control the person moved focus to is not taken back", () => {
+            render(<Closing />)
+            ask()
+            button("Elsewhere").focus()
+
+            fireEvent.click(button("Stay"))
+
+            expect(button("Elsewhere")).toHaveFocus()
+        })
+
+        it("a held control that is gone or hidden by the close falls back to the opener", () => {
+            render(<Closing />)
+            const opener = ask()
+            const destination = button("Destination")
+            destination.focus()
+            destination.hidden = true
+
+            fireEvent.click(button("Leave"))
+
+            expect(opener).toHaveFocus()
+        })
+
+        it("unmounting while open, or a removed opener, restores nothing stale", () => {
+            const { unmount } = render(<Closing />)
+            ask()
+            expect(() => unmount()).not.toThrow()
+            expect(document.body).toHaveFocus()
+
+            render(<Closing />)
+            const opener = ask()
+            const parent = opener.parentElement as HTMLElement
+            opener.remove()
+            fireEvent.click(button("Stay"))
+            expect(document.body).toHaveFocus()
+            parent.prepend(opener)
         })
     })
 
