@@ -2,6 +2,7 @@ import { useParams } from "react-router"
 import { CharacterBoundary } from "../components/CharacterBoundary"
 import { CharacterManageLinks } from "../components/CharacterManageLinks"
 import { CharacterBreadcrumb } from "../components/characters/CharacterBreadcrumb"
+import { CharactersCreateAction } from "../components/characters/CharactersCreateAction"
 import { CharacterRecordSections } from "../components/characters/CharacterRecordNav"
 import { CharacterSheetBoundary } from "../components/CharacterSheetBoundary"
 import type { CharacterDetail } from "../types/character"
@@ -34,6 +35,7 @@ function CharacterSheetRoute({ campaignId, characterId }: { campaignId: string; 
     return (
         <div className="character-sheet-route">
             <CharacterBreadcrumb campaignId={campaignId} characterId={characterId} />
+            <CharactersCreateAction campaignId={campaignId} />
             <CharacterBoundary campaignId={campaignId} characterId={characterId}>
                 {(character) => (
                     <>

@@ -202,3 +202,5 @@ Routes now rendering the shared breadcrumb (`routeMeta` ids): `characters.detail
 | Direct entry / tampered state | none (defaults) | none | |
 
 Guard audit (F-4 revisited): `CharacterRecordSections` remains read-only and not a guard caller. New guard callers: none. `ContentEditPage` (character edit), `CreateCharacterBuildPage`/`BuildForm`, `NpcPortrayalPage` and `WorldRecordWorkspace` keep their existing declarations; their breadcrumb ancestors are plain links covered by the pathname predicate (a test drives a dirty new-build form: Stay keeps draft, task and entry; Leave goes). Query keys: `section` on the record remains retaining (nothing editable is mounted there). If an editor is ever added to a record section, `section` becomes disposing and its host must declare it.
+
+**Correction after review of P02-6 (New PC).** `CharactersCreateAction` (the existing New PC link, `canon.edit`, `/characters/pc/new`, `charactersReturn`) is shared by the Characters header and `CharacterSheetRoutePage`. No route, guard, query key or read was added; the inventory-only route renders none of it.

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react"
 import { Link, Navigate, useLocation, useParams } from "react-router"
-import { useCampaignCapability } from "../hooks/useCampaignCapability"
+import { CharactersCreateAction } from "../components/characters/CharactersCreateAction"
 import { CharactersBrowser } from "../components/CharactersBrowser"
 import { ArrivalHeadingFocus } from "../navigation/ArrivalHeadingFocus"
 import { navTaskState } from "../navigation/navStart"
@@ -20,8 +20,7 @@ function CharactersHeader({
     campaignId: string
     selectedCharacterId: string | null
 }) {
-    const canCreate = useCampaignCapability(campaignId, "canon.edit")
-    const { pathname, search } = useLocation()
+    const { pathname } = useLocation()
     const base = `/app/${encodeURIComponent(campaignId)}/characters`
     const browsing = pathname.replace(/\/+$/, "") === `${base}/all`
     return (
@@ -44,17 +43,7 @@ function CharactersHeader({
                     All characters
                 </Link>
             </nav>
-            {canCreate ? (
-                <nav aria-label="Create character" className="authoring-page__actions-row">
-                    <Link
-                        to={`${base}/pc/new`}
-                        state={{ charactersReturn: `${pathname}${search}` }}
-                        className="authoring-button"
-                    >
-                        New PC
-                    </Link>
-                </nav>
-            ) : null}
+            <CharactersCreateAction campaignId={campaignId} />
         </header>
     )
 }

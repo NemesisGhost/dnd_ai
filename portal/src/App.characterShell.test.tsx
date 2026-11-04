@@ -521,3 +521,86 @@ describe("editors' character pages keep the task and their guards", () => {
         await waitFor(() => expect(trail()).toEqual(["Parties", "The Company", "Aldric", "Edit"]))
     })
 })
+
+describe("New PC stays discoverable from the selected-character entry point (PD-8 pending)", () => {
+    const OPTIONS = {
+        can_create: true,
+        species: [{ species_id: "sp-human", name: "Human", ruleset_name: "D&D 5e" }],
+        sizes: [{ code: "medium", label: "Medium" }],
+        limits: { name_max_length: 200, summary_max_length: 4000, text_max_length: 4000, change_note_max_length: 1000 },
+    }
+    // Character ids are UUIDs; the create pages accept only such a Characters address as a return.
+    const UUID = "0f8fad5b-d9cb-469f-a165-0c0b0d6c1b3e"
+    const SELECTED = {
+        character_perspectives: [{ character_id: UUID, character_name: "Ixamarra", authorized_parties: [] }],
+        selected_character_id: UUID,
+    }
+    beforeEach(() => {
+        installCharacter(UUID, "Ixamarra")
+        server.on("GET", `${API}/authoring/player-characters/options`, { body: OPTIONS })
+    })
+
+    it("/characters redirects to the selected record, which offers New PC to an editor with the record as its return", async () => {
+        const app = openApp(`${base}/characters`, ["access.manage", "canon.edit"], SELECTED)
+        await ready()
+        expect(app.router.state.location.pathname).toBe(`${base}/characters/${UUID}`)
+        expect(app.router.state.historyAction).toBe("REPLACE")
+        const link = within(screen.getByRole("navigation", { name: "Create character" })).getByRole("link", { name: "New PC" })
+        expect(link).toHaveAttribute("href", `${base}/characters/pc/new`)
+        // The shared record navigation is unchanged beside it.
+        expect(screen.getByRole("navigation", { name: "Character sections" })).toBeInTheDocument()
+
+        fireEvent.click(link)
+        await screen.findByRole("heading", { level: 1, name: "New player character" })
+        expect(
+            (app.router.state.location.state as EntryState).charactersReturn,
+        ).toBe(`${base}/characters/${UUID}`)
+        // The page's breadcrumb is the Characters task's root; Cancel is what honors the record return.
+        expect(within(screen.getByRole("main")).getByRole("link", { name: "Characters" })).toHaveAttribute(
+            "href",
+            `${base}/characters/all`,
+        )
+        // Cancel returns to the record it was offered on.
+        fireEvent.click(await screen.findByRole("button", { name: "Cancel" }))
+        await ready()
+        expect(app.router.state.location.pathname).toBe(`${base}/characters/${UUID}`)
+        expect(server.calls.filter((call) => call.method !== "GET")).toEqual([])
+    })
+
+    it("carries the section the person was on, as a validated return", async () => {
+        installCharacter(UUID, "Ixamarra")
+        const app = openApp(`${base}/characters/${UUID}?section=inventory`, ["access.manage", "canon.edit"], SELECTED)
+        await screen.findByRole("link", { name: "Longsword" })
+        fireEvent.click(screen.getByRole("link", { name: "New PC" }))
+        await screen.findByRole("heading", { level: 1, name: "New player character" })
+        expect((app.router.state.location.state as EntryState).charactersReturn).toBe(
+            `${base}/characters/${UUID}?section=inventory`,
+        )
+    })
+
+    it("is not offered without canon.edit, on the record or after the redirect", async () => {
+        openApp(`${base}/characters`, ["campaign.view"], SELECTED)
+        await ready()
+        expect(screen.queryByRole("navigation", { name: "Create character" })).toBeNull()
+        expect(screen.queryByRole("link", { name: "New PC" })).toBeNull()
+    })
+
+    it("is still offered on /characters/all", async () => {
+        openApp(`${base}/characters/all`)
+        expect(await screen.findByRole("link", { name: "New PC" })).toHaveAttribute("href", `${base}/characters/pc/new`)
+    })
+
+    it.each([[["campaign.view"]], [["campaign.view", "canon.edit"]]])(
+        "the inventory-only page reads only the inventory and offers no create control (%j)",
+        async (capabilities) => {
+            server.on("GET", `${API}/characters/pc-1`, FORBIDDEN)
+            openApp(`${base}/characters/pc-1/inventory`, capabilities, NO_PERSPECTIVE)
+            expect(await screen.findByRole("link", { name: "Longsword" })).toBeInTheDocument()
+            expect(screen.queryByRole("link", { name: "New PC" })).toBeNull()
+            expect(screen.queryByRole("navigation", { name: "Create character" })).toBeNull()
+            expect(reads("/characters/pc-1")).toHaveLength(0)
+            expect(reads("/characters/pc-1/sheet")).toHaveLength(0)
+            expect(reads("/characters/pc-1/inventory")).toHaveLength(1)
+        },
+    )
+})
