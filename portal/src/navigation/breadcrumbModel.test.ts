@@ -214,6 +214,43 @@ describe("legacy return keys are adapted, not trusted", () => {
         expect(model.current.generic).toBe("New PC")
     })
 
+    describe("a character sheet left on a section", () => {
+        const UUID = "11111111-2222-3333-4444-555555555555"
+        const sheet = `${base}/characters/${UUID}`
+
+        it("keeps the supported section through adaptation and on the crumb", () => {
+            const model = modelOf(`${base}/characters/pc/new`, { charactersReturn: `${sheet}?section=inventory` })
+            expect(model.source).toBe("legacy")
+            expect(summary(model.ancestors).at(-1)).toEqual(["Character", `${sheet}?section=inventory`])
+            const chooser = continuedState(`${base}/characters/new`, { charactersReturn: `${sheet}?section=inventory` })
+            expect(chooser?.task.trail[0]).toEqual({ route: "characters.detail", params: { campaignId: C, characterId: UUID }, section: "inventory" })
+        })
+
+        it("copies no other parameter into the detail trail", () => {
+            const model = modelOf(`${base}/characters/pc/new`, { charactersReturn: `${sheet}?q=mira&type=npc&section=inventory&next=/x` })
+            expect(summary(model.ancestors).at(-1)).toEqual(["Character", `${sheet}?section=inventory`])
+            const plain = modelOf(`${base}/characters/pc/new`, { charactersReturn: `${sheet}?q=mira&next=/x` })
+            expect(summary(plain.ancestors).at(-1)).toEqual(["Character", sheet])
+        })
+
+        it.each(["Inventory", "../x", "a b", "", "x".repeat(40), "1abc"])("opens the sheet plainly for the section %j, which is not a section token", (value) => {
+            const model = modelOf(`${base}/characters/pc/new`, { charactersReturn: `${sheet}?section=${encodeURIComponent(value)}` })
+            expect(summary(model.ancestors).at(-1)).toEqual(["Character", sheet])
+        })
+
+        it("still rejects a foreign campaign, a malformed id and an unsupported destination", () => {
+            for (const bad of [
+                `/app/other/characters/${UUID}?section=inventory`,
+                `${base}/characters/not-a-uuid?section=inventory`,
+                `${base}/characters/${UUID}/edit?section=inventory`,
+                `${base}/characters/new?section=inventory`,
+            ]) {
+                const model = modelOf(`${base}/characters/pc/new`, { charactersReturn: bad })
+                expect(model.source).toBe("default")
+            }
+        })
+    })
+
     it("a worldSearch is the World root with its filters", () => {
         const model = modelOf(`${base}/characters/npc/new`, { worldSearch: "?category=character&q=mira" })
         expect(model.source).toBe("legacy")

@@ -147,6 +147,33 @@ describe("the location edit page", () => {
         })
     })
 
+    it.each<[string, () => object]>([
+        ["a foreign explicit task", () => ({ task: { ...taskOf("world", { route: "campaign.world", search: "?category=location" }), scope: { campaignId: "c2" } } })],
+        ["an explicit task whose list its root does not own", () => ({ task: taskOf("review", { route: "items.list", search: "" }) })],
+        ["a malformed explicit task", () => ({ task: { v: 2 } })],
+    ])("hands the historical Review origin back to the record when %s sits beside it", async (_name, explicit) => {
+        const { router } = open({ ...explicit(), reviewSearch: "?status=draft" })
+        fireEvent.click(await screen.findByRole("button", { name: "Cancel" }))
+        await screen.findByText("Location page")
+        expect(router.state.location.pathname).toBe("/app/c1/world/location/l1")
+        expect(router.state.location.state).toEqual({ task: taskOf("review", { route: "review.queue", search: "?status=draft" }) })
+    })
+
+    it("a valid explicit task is handed back as it is, over a conflicting historical origin", async () => {
+        const explicit = taskOf("world", { route: "campaign.world", search: "?category=location" })
+        const { router } = open({ task: explicit, reviewSearch: "?status=draft" })
+        fireEvent.click(await screen.findByRole("button", { name: "Cancel" }))
+        await screen.findByText("Location page")
+        expect(router.state.location.state).toEqual({ task: explicit })
+    })
+
+    it("hands back nothing when the explicit task and the historical state are both invalid", async () => {
+        const { router } = open({ task: { v: 2 }, reviewSearch: "?status=draft&redirect=/x" })
+        fireEvent.click(await screen.findByRole("button", { name: "Cancel" }))
+        await screen.findByText("Location page")
+        expect(router.state.location.state).toBeNull()
+    })
+
     it("still goes to the plain location page when opened any other way", async () => {
         const { router } = open(null)
         fireEvent.click(await screen.findByRole("button", { name: "Cancel" }))

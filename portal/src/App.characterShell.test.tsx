@@ -588,6 +588,20 @@ describe("New PC stays discoverable from the selected-character entry point (PD-
         expect(app.router.state.location.search).toBe("?section=inventory")
     })
 
+    it("returns to the section an entry written before the task existed was left on, from the older key alone", async () => {
+        installCharacter(UUID, "Ixamarra")
+        const sheet = `${base}/characters/${UUID}`
+        const app = openApp(`${base}/characters/pc/new`, ["access.manage", "canon.edit"], SELECTED)
+        await screen.findByRole("heading", { level: 1, name: "New player character" })
+        await act(() => app.router.navigate(`${base}/characters/pc/new`, { state: { charactersReturn: `${sheet}?section=inventory&q=mira` } }))
+        await waitFor(() => expect(trailLinks()).toContain(`${sheet}?section=inventory`))
+        expect(entryState(app)).not.toHaveProperty("task")
+        fireEvent.click(await screen.findByRole("button", { name: "Cancel" }))
+        await screen.findByRole("link", { name: "Longsword" })
+        expect(app.router.state.location.pathname).toBe(`${base}/characters/${UUID}`)
+        expect(app.router.state.location.search).toBe("?section=inventory")
+    })
+
     it("is not offered without canon.edit, on the record or after the redirect", async () => {
         openApp(`${base}/characters`, ["campaign.view"], SELECTED)
         await ready()

@@ -2,8 +2,8 @@ import { readCharactersReturn } from "./legacyCharactersReturn"
 import { readQueryState } from "../hooks/returnState"
 import { isIdShaped } from "./contexts"
 import { isValidListSearch } from "./listState"
-import { defaultTask, isSafeSearch, validateTask } from "./taskOrigin"
-import type { TaskOriginV1 } from "./taskOrigin"
+import { defaultTask, isSafeSearch, isSectionToken, validateTask } from "./taskOrigin"
+import type { TaskOriginV1, TrailEntry } from "./taskOrigin"
 import { executionScopeOf, matchRouteMeta } from "./routeMeta"
 import type { RouteMatch } from "./routeMeta"
 
@@ -14,7 +14,7 @@ import type { RouteMatch } from "./routeMeta"
 // session history, carries only those keys (plan H6). It reads them, validates them with the validators
 // that already guard them, and expresses them as a task, so a reader of the new contract sees one
 // shape. It is read-only: nothing here writes state, and a key that fails validation is ignored, never
-// repaired. Whether to retire it is an open owner decision (reconciliation F-3).
+// repaired. The owner decided to keep it (reconciliation R-15); no writer or page reader may return.
 //
 //   charactersReturn -> root characters, with the list (or the character page) it names
 //   reviewSearch     -> root review, list = the Review queue
@@ -57,12 +57,12 @@ function fromCharactersReturn(campaignId: string, state: unknown): TaskOriginV1 
         // Rejected, not normalized: a browse query this route does not produce is not carried at all.
         return isValidListSearch(target.meta.id, search) ? listTask(campaignId, "characters", target.meta.id, search) : null
     }
-    return {
-        v: 1,
-        root: "characters",
-        scope: { campaignId },
-        trail: [{ route: target.meta.id, params: { ...target.params } }],
-    }
+    const entry: TrailEntry = { route: target.meta.id, params: { ...target.params } }
+    // A sheet left on a section reopens on it. Only the one `section` token is read (the form a trail
+    // entry records; the sheet decides whether it has that section); no other parameter is carried.
+    const section = target.meta.id === "characters.detail" ? new URLSearchParams(search).get("section") : null
+    if (isSectionToken(section)) entry.section = section
+    return { v: 1, root: "characters", scope: { campaignId }, trail: [entry] }
 }
 
 function fromReturnTo(campaignId: string, state: unknown): string | undefined {

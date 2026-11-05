@@ -62,6 +62,54 @@ describe("carriedState", () => {
     })
 })
 
+describe("an explicit task that does not hold up does not hide a valid historical origin", () => {
+    const edit = "/app/c1/world/dungeon/d1/edit"
+    const legacy = { reviewSearch: "?status=draft" }
+    const fromLegacy = {
+        v: 1,
+        root: "review",
+        scope: { campaignId: "c1" },
+        trail: [],
+        list: { route: "review.queue", search: "?status=draft" },
+    }
+
+    it.each<[string, object]>([
+        ["a foreign explicit task (another campaign)", { task: task({ scope: { campaignId: "c2" } }) }],
+        ["an explicit task whose list the root does not own", { task: task({ root: "review", list: { route: "items.list", search: "" } }) }],
+        ["an explicit task with a trail entry of an unknown route", { task: task({ trail: [{ route: "nowhere", params: {} }] }) }],
+        ["an explicit task with a list query its contract rejects", { task: task({ list: { route: "campaign.world", search: "?token=abc" } }) }],
+        ["a malformed explicit task", { task: { v: 2 } }],
+    ])("%s, beside a valid legacy origin, carries the legacy origin", (_name, explicit) => {
+        expect(carriedState(edit, { ...explicit, ...legacy })).toEqual({ task: fromLegacy })
+        expect(carriedListSearch(edit, { ...explicit, ...legacy }, "review", "review.queue")).toBe("?status=draft")
+    })
+
+    it("a valid explicit task wins over a conflicting legacy origin", () => {
+        const carried = carriedState(page, { task: task(), ...legacy })
+        expect(carried).toEqual({ task: task() })
+        expect(carriedListSearch(page, { task: task(), ...legacy }, "world", "campaign.world")).toBe("?category=location&q=mill")
+        expect(carriedListSearch(page, { task: task(), ...legacy }, "review", "review.queue")).toBeUndefined()
+    })
+
+    it("an explicit task this page does not allow the root of still passes through", () => {
+        const review = task({ root: "review", list: { route: "review.queue", search: "?status=draft" } })
+        expect(carriedState(edit, { task: review, worldSearch: "?category=location" })).toEqual({ task: review })
+    })
+
+    it("nothing is carried when the explicit task and the legacy state are both invalid", () => {
+        const bad = { task: task({ scope: { campaignId: "c2" } }), reviewSearch: "?status=draft&redirect=/x", worldSearch: "https://evil.example/" }
+        expect(carriedState(edit, bad)).toBeUndefined()
+        expect(carriedListSearch(edit, bad, "review", "review.queue")).toBeUndefined()
+        expect(carriedState(edit, { task: { v: 2 }, charactersReturn: "/app/c2/characters/all" })).toBeUndefined()
+    })
+
+    it("emits the task alone: no legacy key, no announcement, no transition, no unrelated state", () => {
+        const carried = carriedState(edit, { task: task({ scope: { campaignId: "c2" } }), ...legacy, announce: "Saved", returnTo: { pathname: "/x" }, ctx: { a: 1 } })
+        expect(Object.keys(carried!)).toEqual(["task"])
+        expect(carried!.task).not.toHaveProperty("transition")
+    })
+})
+
 describe("a trail entry records the section it was left on", () => {
     const sheet = "/app/c1/characters/ch1"
 

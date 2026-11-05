@@ -35,6 +35,11 @@ export interface TaskOriginV1 {
 }
 
 const SECTION_PATTERN = /^[a-z][a-z0-9-]{0,31}$/
+
+/** Whether a value is a section token: the only form a trail entry records (a page decides which sections it has). */
+export function isSectionToken(value: unknown): value is string {
+    return typeof value === "string" && SECTION_PATTERN.test(value)
+}
 // A syntax bound only; the per-route contract (listState.ts) decides what a list route accepts.
 const MAX_SEARCH = MAX_LIST_SEARCH
 
@@ -166,7 +171,26 @@ export function validateTask(task: TaskOriginV1, current: RouteMatch): TaskOrigi
         return null
     }
     if (!current.meta.allowedRoots.includes(task.root)) return null
-    const here: RouteRef = { route: current.meta.id, params: current.params }
+    return checkTaskBody(task, scope.kind, { route: current.meta.id, params: current.params })
+}
+
+/**
+ * `validateTask` for a page that only hands the task on (an edit page that does not accept a Review
+ * task, on the way back to the record that does): the same scope, trail and list rules, judged for the
+ * task's own scope, but without asking this page to allow the root. The destination validates it again
+ * for its own route.
+ */
+export function validateCarriedTask(task: TaskOriginV1, current: RouteMatch): TaskOriginV1 | null {
+    const scope = executionScopeOf(current)
+    if (scope.kind === "none") return null
+    if (scope.kind === "campaign" ? !("campaignId" in task.scope) || task.scope.campaignId !== scope.campaignId
+        : !("worldId" in task.scope) || task.scope.worldId !== scope.worldId) {
+        return null
+    }
+    return checkTaskBody(task, scope.kind, { route: current.meta.id, params: current.params })
+}
+
+function checkTaskBody(task: TaskOriginV1, kind: "campaign" | "world", here: RouteRef): TaskOriginV1 | null {
     const trail: TrailEntry[] = []
     for (const entry of task.trail) {
         if (!refBelongsToScope(entry, task.scope, task.root)) return null
@@ -179,7 +203,7 @@ export function validateTask(task: TaskOriginV1, current: RouteMatch): TaskOrigi
         if (listMeta === undefined || listMeta.kind !== "list" || listMeta.scope === "none") return null
         if (!listMeta.allowedRoots.includes(task.root)) return null
         if (!isValidListSearch(task.list.route, task.list.search)) return null
-        if (listMeta.scope !== (scope.kind === "campaign" ? "campaign" : "world")) return null
+        if (listMeta.scope !== kind) return null
         result.list = { ...task.list }
     }
     if (task.transition === "context") result.transition = "context"

@@ -4,7 +4,7 @@ import { adaptLegacyReturn } from "./legacyReturn"
 import { isValidListSearch } from "./listState"
 import { executionScopeOf, matchRouteMeta } from "./routeMeta"
 import type { NavRoot } from "./routeMeta"
-import { parseTask } from "./taskOrigin"
+import { parseTask, validateCarriedTask } from "./taskOrigin"
 import type { TaskOriginV1 } from "./taskOrigin"
 
 // The task an entry carries, read for the pages that only pass an origin through or ask it where a list
@@ -26,11 +26,16 @@ function campaignOf(pathname: string): string | null {
 function carriedTask(pathname: string, state: unknown): TaskOriginV1 | null {
     const campaignId = campaignOf(pathname)
     if (campaignId === null) return null
-    const own = parseTask(state)
     const match = matchRouteMeta(pathname)
-    const task = own ?? (match === null ? null : (adaptLegacyReturn(match, state)?.task ?? null))
-    if (task === null || !("campaignId" in task.scope) || task.scope.campaignId !== campaignId) return null
-    return task
+    if (match === null) return null
+    // Same precedence as `resolveTask`: the entry's own task if it holds up, otherwise the legacy
+    // adapter. A parseable task that is foreign or invalid is rejected here, so it cannot hide a
+    // legacy origin that is valid; it is judged for its own scope, not for this page's allowed roots.
+    const parsed = parseTask(state)
+    const own = parsed === null ? null : validateCarriedTask(parsed, match)
+    if (own !== null) return own
+    const legacy = adaptLegacyReturn(match, state)?.task
+    return legacy === undefined || legacy === null ? null : validateCarriedTask(legacy, match)
 }
 
 /**
