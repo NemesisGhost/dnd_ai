@@ -313,3 +313,39 @@ Reads: none were added; the breadcrumb is static. Compatibility exceptions: the 
 ## 14. Status after P02-8
 
 No route, guard caller or declaring key changed in P02-8 or its correction. Rows 1 and 2 (campaign setup and settings) and every row above stand as audited at their checkpoint. Facts the earlier sections do not state: the legacy return keys are still read by the pages listed in the reconciliation record R-3 (an outstanding plan obligation, follow-up F-3, not an approved exception); and `InvitationsSection` (reached from `access.invitations`) declares no guard or hold, so a departure during or just after an issue request can abandon the response (DEF-010, follow-up F-1; source-confirmed: a matching-key replay returns the sanitized body without the token, and `invited_email` has no uniqueness). Neither was introduced by P02. No browser check has run; see [PHASE14_15_P02_RECONCILIATION_2026-11-04.md](PHASE14_15_P02_RECONCILIATION_2026-11-04.md) §6.
+
+
+## 15. Legacy return keys after the F-3 migration
+
+*Supersedes the "Legacy keys" paragraphs of §§8-12 and the dual-writing statements in §§11-12 (kept as written for the history of each checkpoint). Documentation of a code change; nothing here is browser-verified.*
+
+### 15.1 Inventory before editing
+
+| Key | Production writers | Production readers (incl. indirect) |
+|---|---|---|
+| `charactersReturn` | `legacyKeys` (every task link), `CharactersBrowser` card, `CharactersCreateAction`, `ChooseCharacterTypePage` (forward) | `readCharactersReturn` (`useCharactersBackPath`: adapter, `NpcAuthoringPages` create `listPath`/`breadcrumbLabelFor`), `useCharactersBackPath` (no caller), `pickCharactersReturnState` |
+| `worldSearch` | `legacyKeys`, `CampaignWorldPage`, `WorldCard`/`WorldEntityList` (`returnSearch`) | `useWorldBackPath` (`useWorldBackPath`, `pickWorldReturnState`, `useWorldReturnState`), `WorldRecordBack`, `WorldRecordWorkspace`, `QuestWorkspace`, `ItemWorkspace`, `editNavigation`, `ProvenancePage`, `DungeonAuthoringPages`, `NpcAuthoringPages`, `ReviewPages` history, `InventoryPanels`, `CampaignWorldDetailPage`, `WorldEventDetailPage`, `WorldOrganizationDetailPage`, `ItemPages` (`pickReturnState`) |
+| `reviewSearch` | `legacyKeys`, `ReviewPages` queue rows and History links (**legacy only, no task**) | `useReviewBackPath` (`WorldRecordWorkspace`, `QuestWorkspace`), `ReviewPages` history, `pickWorldReturnState` consumers above |
+| `itemsSearch` | `legacyKeys`, `ItemsPage` | `useItemsBackPath`, `ItemPages` (edit `listPath`, create `listPath`, `pickReturnState`), `ItemWorkspace` |
+| `definitionsSearch` | `legacyKeys`, `ItemDefinitionsPage` | `useDefinitionsBackPath` (`ItemDefinitionFormPage`) |
+
+### 15.2 Behavior map and result
+
+| Return behavior | Task equivalent now used |
+|---|---|
+| Back to World with category, search and page | `task.list` of root `world`, route `campaign.world`, read by `useCarriedListSearch` |
+| Back to the Review queue with its filters; History and record links out of the queue | queue rows and History links write `continuedListState` (root `review`, route `review.queue`); `useReviewBackPath`, history `queueHref` read the list |
+| Items inventory vs the definitions catalog | root `items`, list routes `items.list` / `itemDefinitions.list`, each read for its own route only (a definitions list is never the inventory's) |
+| Characters browser filters and paging; a sheet; a sheet's section | browser cards write `continuedListState`; `CharactersCreateAction` writes `continuedListState` or `continuedState(…, section)`; the create pages' Cancel and breadcrumb take the nearest trail page that is not the chooser; `TrailEntry.section` reopens the section |
+| Cross-root origin through a page that does not accept the root (edit, provenance, dungeon pages, the item and quest pages) | `carriedState` hands the task on as written (campaign-checked, parsed, `transition` dropped); the record validates it for its own route |
+| Created record keeps the origin | the create shell's resolved task (`ContentCreatePage`); the per-config `resultState` is removed |
+
+### 15.3 Removed and remaining
+
+Removed: `legacyKeys`, the legacy members of `CrumbState`, `pickWorldReturnState`, `pickReturnState`, `useItemsReturnState`, `pickCharactersReturnState`, `useCharactersBackPath`, `pickQueryStates`, `WorldCard`/`WorldEntityList` `returnSearch`, `useCharactersBrowseState.returnTo`, `ContentCreateConfig.resultState`. Added: `navigation/taskReturn.ts`.
+
+Remaining occurrences in production code (searched again after the change): `navigation/legacyReturn.ts` (the read-only adapter and its comments), `navigation/legacyCharactersReturn.ts` (the validator the adapter uses), `hooks/returnState.ts` `readQueryState` (the adapter's reader), the explanatory comment in `navigation/resolveTask.ts`; and ordinary local identifiers or the substring in `memberPreviewSearch`. No writer and no page reader remains. Tests keep a few seeded legacy-key entries on purpose: they are the adapter's historical-entry cases (plan H6).
+
+### 15.4 Historical entry compatibility (unresolved decision)
+
+Plan §4.3 step 2 and scenario H6 say an entry carrying only a legacy key is adapted. The reconciliation's F-3 acceptance text says the adapter is removed and old entries fall back to route defaults. The two disagree; the adapter is retained so no supported entry loses its origin, and no persistence or versioning policy was invented. Differences a retained adapter already has against the old readers: an entry with several legacy keys resolves to one origin (order: `charactersReturn`, `reviewSearch`, `itemsSearch`, `definitionsSearch`, `worldSearch`), and a query the list contract does not accept is ignored.
