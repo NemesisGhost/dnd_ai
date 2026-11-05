@@ -15,6 +15,9 @@ interface Props {
     // it was left on) or the World browser (with its category, search and page): `backHref` is the World
     // browser's, and is unused for the inventory.
     backHref: string
+    // Show the shared task breadcrumb in place of the World back link: the item was opened inside a task
+    // (the inventory always is; on the World page, a task named by the entry). Defaults to the inventory.
+    taskBreadcrumb?: boolean
     headingRef: RefObject<HTMLHeadingElement | null>
     guidance: ItemGuidance | null
     // Where the guidance leads; null when it has no destination.
@@ -25,11 +28,20 @@ interface Props {
 // The always-visible top of the item page, in the frame the World record shares (`RecordHeader`).
 // What is the item's own: the task breadcrumb when it was opened from the inventory, its kind, and
 // Destroyed beside the record's status.
-export function ItemHeader({ view, origin, backHref, headingRef, guidance, guidanceHref, linkState }: Props) {
+export function ItemHeader({
+    view,
+    origin,
+    backHref,
+    taskBreadcrumb = origin === "items",
+    headingRef,
+    guidance,
+    guidanceHref,
+    linkState,
+}: Props) {
     return (
         <RecordHeader
             back={
-                origin === "items" ? (
+                taskBreadcrumb ? (
                     <TaskBreadcrumb current={view.name} />
                 ) : (
                     <p>

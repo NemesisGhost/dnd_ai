@@ -440,7 +440,7 @@ describe("Items: inventory, item workspace, edit and create", () => {
         expect(screen.getByRole("link", { name: "Item inventory" })).toHaveAttribute("href", `${base}/items?x=1`)
     })
 
-    it("an item opened from the World page keeps its World navigation: no breadcrumb, Back to World with its query", async () => {
+    it("an item opened from the World page inside World's task shows its breadcrumb; edit, which World's task cannot reach, keeps its own links", async () => {
         const app = openApp(`${base}/world`)
         await act(async () => {
             await app.router.navigate(`${base}/world/item/i1?section=details`, {
@@ -448,15 +448,14 @@ describe("Items: inventory, item workspace, edit and create", () => {
             })
         })
         await itemHeading()
-        expect(screen.queryByRole("navigation", { name: "Breadcrumb" })).toBeNull()
-        expect(screen.getByRole("link", { name: "Back to World" })).toHaveAttribute(
-            "href",
-            `${base}/world?category=item&cursor=abc`,
-        )
+        // The legacy `worldSearch` entry is adapted to World's task (docs/UI_DESIGN.md §4.8.9).
+        expect(trail()).toEqual(["World", "Moonblade"])
+        expect(trailLinks()).toEqual([`${base}/world?category=item&cursor=abc`])
+        expect(screen.queryByRole("link", { name: "Back to World" })).toBeNull()
         fireEvent.click(await screen.findByRole("link", { name: "Edit item" }))
         await screen.findByRole("heading", { level: 1, name: "Edit item" })
+        // The item edit route allows no World task, so its single back link stays.
         expect(screen.queryByRole("navigation", { name: "Breadcrumb" })).toBeNull()
-        expect(entryState(app)?.task).toBeUndefined()
     })
 
     it("keeps item instances and definitions apart: the Items list's definitions link starts a task of its own", async () => {

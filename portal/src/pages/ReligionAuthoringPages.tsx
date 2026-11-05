@@ -8,6 +8,7 @@ import { ContentCreatePage } from "../components/authoring/ContentCreatePage"
 import type { ContentCreateConfig } from "../components/authoring/ContentCreatePage"
 import { ContentEditPage } from "../components/authoring/ContentEditPage"
 import type { ContentEditConfig } from "../components/authoring/ContentEditPage"
+import { inWorldTask } from "../navigation/breadcrumbModel"
 import { worldEditNavigation } from "../components/world/editNavigation"
 import type { FieldError } from "../components/authoring/feedback"
 import { TextAreaField, TextField } from "../components/authoring/fields"
@@ -132,6 +133,7 @@ const createConfig: ContentCreateConfig<
     create: createReligion,
     resultPath: (campaignId, created) =>
         `${worldPath(campaignId)}/religion/${encodeURIComponent(created.religion_id)}`,
+    taskBreadcrumb: true,
     announce: "Religion created as a draft",
     saveLabel: "Create religion",
     pendingLabel: "Creating…",
@@ -158,6 +160,13 @@ const editConfig: ContentEditConfig<
     worldPath,
     detailPath: (campaignId, id) => `${worldPath(campaignId)}/religion/${encodeURIComponent(id)}`,
     navigation: worldEditNavigation("religion"),
+    // Inside World's own task the shared breadcrumb replaces the single back link; opened any other way
+    // the page keeps the links it has always had.
+    taskBreadcrumb: {
+        applies: inWorldTask,
+        labelRoute: "world.record",
+        labelParams: (campaignId, entityId) => ({ campaignId, category: "religion", entityId }),
+    },
     viewPath: religionAuthoringPath,
     optionsPath: religionOptionsPath,
     name: (view) => view.name,

@@ -3,6 +3,7 @@ import {
     locationOptionsPath,
     updateLocation,
 } from "../api/locationAuthoring"
+import { inWorldTask } from "../navigation/breadcrumbModel"
 import { ContentEditPage } from "../components/authoring/ContentEditPage"
 import { worldEditNavigation } from "../components/world/editNavigation"
 import type { ContentEditConfig } from "../components/authoring/ContentEditPage"
@@ -36,6 +37,13 @@ const config: ContentEditConfig<
     detailPath: (campaignId, id) =>
         `/app/${encodeURIComponent(campaignId)}/world/location/${encodeURIComponent(id)}`,
     navigation: worldEditNavigation("location"),
+    // Inside World's own task the shared breadcrumb replaces the single back link; opened any other way
+    // the page keeps the links it has always had.
+    taskBreadcrumb: {
+        applies: inWorldTask,
+        labelRoute: "world.record",
+        labelParams: (campaignId, entityId) => ({ campaignId, category: "location", entityId }),
+    },
     viewPath: locationAuthoringPath,
     optionsPath: locationOptionsPath,
     name: (view) => view.name,

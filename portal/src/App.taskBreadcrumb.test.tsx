@@ -494,11 +494,12 @@ describe("New-character family", () => {
     // Replaced, not pushed: the created page took the New NPC entry's place...
     expect(app.router.state.location.key).not.toBe(createdFrom)
     expect(app.router.state.historyAction).toBe("REPLACE")
-    // ...with the same root and list state and no "New NPC" page in the trail; the legacy key still rides.
+    // ...with the same root and list state and no "New NPC" page in the trail (the browser the link came
+    // from is the first entry, which the crumbs skip as the root's own page); the legacy key still rides.
     expect(state(app).task).toMatchObject({
       root: "world",
       scope: { campaignId: "mundivita" },
-      trail: [],
+      trail: [{ route: "campaign.world", params: { campaignId: "mundivita" } }],
       list: { route: "campaign.world", search: "?category=character&q=mira" },
     })
     expect(app.router.state.location.state).toMatchObject({ worldSearch: "?category=character&q=mira" })

@@ -272,3 +272,26 @@ Guard audit: **no new caller or declaring key.** Row 18 (`ItemWorkspace`'s `Unsa
 Reads: none were added. The definition catalog's filters are replaced in place by the page itself, as before (no router state is carried by that REPLACE; the list is the top of its task).
 
 Remaining exceptions: the World item page (`origin="world"`, **Back to World**), the character and party inventory panels' links to it, and an edit page reached from the World page keep their links (P02-7d); an edit page reached by a direct entry or by the item page's `returnTo` alone keeps its single back link; the definition catalog's own filter REPLACE and create destination are unchanged.
+
+## 12. World authoring and reader after P02-7d
+
+Routes now rendering the shared breadcrumb (`routeMeta` ids): `world.record` (the editors' workspace for non-character categories, and the place, organization, religion, event and item readers, including the World item workspace) when the entry names an origin; `world.location.edit`, `world.dungeon.edit`, `world.dungeon.area.edit`, `world.organization.edit`, `world.religion.edit` inside World's own task; `world.location.new`, `world.dungeon.new`, `world.organization.new`, `world.religion.new` when the arrival names an origin. `campaign.world` is the top of World's task. Not changed: `worlds.*` (standalone), `world.record.provenance/history`, character on `world.record` (P02-6 rule), `NpcAuthoringPages`.
+
+| From | To | State carried |
+|---|---|---|
+| World browser | record, New place/dungeon/organization/religion/NPC | `continuedListState` (task with the recorded list when its contract accepts the query, + `worldSearch`) |
+| Record workspace | its sections, stages, area/dungeon links, guidance | `taskOf(...).state` merged over `pickWorldReturnState` (so `worldSearch` and `reviewSearch` both survive) |
+| Record workspace | Edit | the above + `continuedState` (World task only) + `returnTo` |
+| Edit page | the record (Save, Cancel) | `worldEditNavigation`: the record's crumb state (task cut back to before the record) over the carried legacy keys; `announce` on Save |
+| Reader / workspace | related record (parent, HQ, religion, member, relationship, event explanation, Open the event record) | `useWorldReturnState` = `useTaskLinkState({ requireOrigin })`, else the older `worldSearch` behavior |
+| Character / party inventory | World item | the same hook (task or nothing) |
+
+Legacy keys: `worldSearch` and `reviewSearch` are still written (`legacyKeys`) and read by the pages' own destinations; `adaptLegacyReturn` turns them into a task for the breadcrumb. An edit page entered with only legacy keys keeps its single links (`inWorldTask` requires the entry's own task).
+
+Guard audit: **no new caller or declaring key.** The workspace's `UnsavedInputGuard` (row for `WorldRecordWorkspace`) was re-inspected: it reads `section`, every section stays mounted, so it stays undeclared. `ContentCreatePage` / `ContentEditPage` read `location.state`, not the query, as before. Permission-loss cleanup, the retained-input registry and the lifecycle/source/member editors are untouched.
+
+Reads: none were added. `useWorldDetail` now also returns the authority captured at request start (used only for labels).
+
+Remaining exceptions: the standalone `/worlds/*` pages; the character on `world.record` opened from World, the Review queue or directly; delete destinations; an edit entered with only legacy keys or a Review-queue task.
+
+Observed, not fixed: the `useStagedNavigation` normalizing REPLACE can overtake a link followed before the workspace's lifecycle read answers (see UI_DESIGN §4.8.9).

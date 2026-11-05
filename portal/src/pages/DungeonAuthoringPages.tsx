@@ -12,6 +12,7 @@ import { ContentCreatePage } from "../components/authoring/ContentCreatePage"
 import type { ContentCreateConfig } from "../components/authoring/ContentCreatePage"
 import { ContentEditPage } from "../components/authoring/ContentEditPage"
 import type { ContentEditConfig } from "../components/authoring/ContentEditPage"
+import { inWorldTask } from "../navigation/breadcrumbModel"
 import { worldEditNavigation } from "../components/world/editNavigation"
 import { worldRecordPath } from "../components/world/worldPaths"
 import { pickWorldReturnState } from "../hooks/useWorldBackPath"
@@ -231,6 +232,7 @@ const createDungeonConfig: ContentCreateConfig<
     create: createDungeon,
     resultPath: (campaignId, created) => `${locationDetail(campaignId, created.dungeon_id)}?section=areas`,
     resultState: (state) => pickWorldReturnState(state),
+    taskBreadcrumb: true,
     announce: "Dungeon created as a draft",
     saveLabel: "Create dungeon",
     pendingLabel: "Creating…",
@@ -263,6 +265,13 @@ const editDungeonConfig: ContentEditConfig<
     worldPath,
     detailPath: locationDetail,
     navigation: worldEditNavigation("location"),
+    // Inside World's own task the shared breadcrumb replaces the single back link; opened any other way
+    // the page keeps the links it has always had.
+    taskBreadcrumb: {
+        applies: inWorldTask,
+        labelRoute: "world.record",
+        labelParams: (campaignId, entityId) => ({ campaignId, category: "location", entityId }),
+    },
     viewPath: dungeonAuthoringPath,
     optionsPath: dungeonOptionsPath,
     name: (view) => view.name,
@@ -379,6 +388,13 @@ const editAreaConfig: ContentEditConfig<AreaAuthoringView, DungeonOptions, AreaV
     navigation: worldEditNavigation("location", ({ campaignId, params }) =>
         params.dungeonId === undefined ? [] : [worldRecordPath(campaignId, "location", params.dungeonId)],
     ),
+    // Inside World's own task the shared breadcrumb replaces the single back link; opened any other way
+    // the page keeps the links it has always had.
+    taskBreadcrumb: {
+        applies: inWorldTask,
+        labelRoute: "world.record",
+        labelParams: (campaignId, entityId) => ({ campaignId, category: "location", entityId }),
+    },
     viewPath: areaAuthoringPath,
     optionsPath: dungeonOptionsPath,
     name: (view) => view.name,

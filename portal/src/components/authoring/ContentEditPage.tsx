@@ -62,6 +62,8 @@ export interface ContentEditConfig<TView extends EditableView, TOptions, TValues
     navigation?: (context: {
         campaignId: string
         entityId: string
+        // The edit page's own address, so a task carried in `state` is read for this route.
+        pathname: string
         state: unknown
         params: Record<string, string | undefined>
     }) => EditNavigation
@@ -145,7 +147,13 @@ export function ContentEditPage<TView extends EditableView, TOptions, TValues, T
     if (refusedWhileEditing !== null && lost?.path !== viewPath) setLost(refusedWhileEditing)
     const permissionLost = lost !== null && lost.path === viewPath ? lost : null
     const location = useLocation()
-    const target: EditNavigation = config.navigation?.({ campaignId, entityId, state: location.state, params }) ?? {
+    const target: EditNavigation = config.navigation?.({
+        campaignId,
+        entityId,
+        pathname: location.pathname,
+        state: location.state,
+        params,
+    }) ?? {
         listPath: config.worldPath(campaignId),
         detail: { to: config.detailPath(campaignId, entityId) },
     }

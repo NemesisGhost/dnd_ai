@@ -275,7 +275,30 @@ export function outsideTaskOf(pathname: string, state: unknown): { state: CrumbS
     const resolved = resolveTask(pathname, state)
     if (resolved === null || resolved.source === "default") return null
     if (resolved.task.root === "world" || resolved.task.root === "review") return null
+    return taskOf(pathname, state)
+}
+
+/**
+ * `outsideTaskOf` for any root: a record page opened inside a task on evidence (its own task, or a legacy
+ * return key that validates) of ANY root, World's and the Review queue's included, with the state that keeps
+ * the task for the page's own links and the nearest ancestor. Null after a direct entry, where the page
+ * keeps the link it has always had (a link must not turn "no evidence of an origin" into one).
+ */
+export function taskOf(pathname: string, state: unknown): { state: CrumbState; nearest: Crumb } | null {
+    const resolved = resolveTask(pathname, state)
+    if (resolved === null || resolved.source === "default") return null
     const kept = retainedState(pathname, state)
     const nearest = breadcrumbModel(pathname, state)?.ancestors.at(-1)
     return kept === null || nearest === undefined ? null : { state: kept, nearest }
+}
+
+/**
+ * Whether an edit page of a World record was opened inside World's own task by a link that carried it:
+ * the entry's own validated task, of World's root (the edit routes allow no other). A legacy return key
+ * alone (an older entry, a link that only knew where to come back to) and a direct entry keep the page's
+ * single back link, because the trail would not contain the record. Containment is never consulted.
+ */
+export function inWorldTask(pathname: string, state: unknown): boolean {
+    const resolved = resolveTask(pathname, state)
+    return resolved !== null && resolved.source === "state" && resolved.task.root === "world"
 }

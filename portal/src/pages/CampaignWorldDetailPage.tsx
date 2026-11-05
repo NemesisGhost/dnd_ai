@@ -11,6 +11,7 @@ import { CharacterBreadcrumb } from "../components/characters/CharacterBreadcrum
 import { CharacterRecordSections } from "../components/characters/CharacterRecordNav"
 import { ItemWorkspace } from "../components/items/ItemWorkspace"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
+import { useWorldReturnState } from "../hooks/useWorldBackPath"
 import { WorldRecordWorkspace } from "../components/world/WorldRecordWorkspace"
 import { WorldEntityDetailBoundary } from "../components/WorldEntityDetailBoundary"
 import { isWorldDetailCategory } from "../types/world"
@@ -65,6 +66,7 @@ export function CampaignWorldDetailPage() {
                 entityId={entityId}
                 fetchDetail={fetchLocationDetail}
                 resourceLabel="location"
+                label={{ category: "location", name: (detail) => detail.name }}
             >
                 {(location) => (
                     <WorldLocationDetailPage
@@ -83,6 +85,7 @@ export function CampaignWorldDetailPage() {
                 entityId={entityId}
                 fetchDetail={fetchOrganizationDetail}
                 resourceLabel="organization"
+                label={{ category: "organization", name: (detail) => detail.name }}
             >
                 {(organization) => (
                     <WorldOrganizationDetailPage
@@ -101,6 +104,7 @@ export function CampaignWorldDetailPage() {
                 entityId={entityId}
                 fetchDetail={fetchReligionDetail}
                 resourceLabel="religion"
+                label={{ category: "religion", name: (detail) => detail.name }}
             >
                 {(religion) => (
                     <WorldReligionDetailPage
@@ -124,6 +128,7 @@ export function CampaignWorldDetailPage() {
                 fetchDetail={fetchEventDetail}
                 resourceLabel="event"
                 lifecycle={false}
+                label={{ category: "event", name: (detail) => detail.name }}
             >
                 {(event) => (
                     <>
@@ -131,13 +136,7 @@ export function CampaignWorldDetailPage() {
                             campaignId={campaignId}
                             event={event}
                         />
-                        {canEdit ? (
-                            <p>
-                                <Link to={`/app/${encodeURIComponent(campaignId)}/events/${encodeURIComponent(entityId)}`}>
-                                    Open the event record
-                                </Link>
-                            </p>
-                        ) : null}
+                        {canEdit ? <OpenEventRecord campaignId={campaignId} eventId={entityId} /> : null}
                     </>
                 )}
             </WorldEntityDetailBoundary>
@@ -167,6 +166,20 @@ export function CampaignWorldDetailPage() {
     )
 }
 
+// The editors' way from the World event page to the event's own record: the next step of the task the
+// event was opened in (the event record allows the World root), so its breadcrumb names where the person
+// came from; after a direct entry it carries nothing, as before.
+function OpenEventRecord({ campaignId, eventId }: { campaignId: string; eventId: string }) {
+    const state = useWorldReturnState()
+    return (
+        <p>
+            <Link to={`/app/${encodeURIComponent(campaignId)}/events/${encodeURIComponent(eventId)}`} state={state}>
+                Open the event record
+            </Link>
+        </p>
+    )
+}
+
 // An item on the World page. People who can edit canon get the item workspace (the same page as
 // from the item inventory, returning to the World browser); everyone else gets the reader, which
 // shows only what the World API allows them. Players send no authoring request.
@@ -182,6 +195,7 @@ function WorldItemEntry({ campaignId, entityId }: { campaignId: string; entityId
             fetchDetail={fetchItemDetail}
             resourceLabel="item"
             lifecycle={false}
+            label={{ category: "item", name: (detail) => detail.name }}
         >
             {(item) => <WorldItemDetailPage campaignId={campaignId} item={item} />}
         </WorldEntityDetailBoundary>

@@ -1,5 +1,4 @@
-import { useWorldBackPath } from "../hooks/useWorldBackPath"
-import { Link } from "react-router"
+import { WorldRecordBack } from "../components/world/WorldRecordBack"
 import { DetailPanel, PanelFrame } from "../components/DetailPanel"
 import { AuthoringEditLink } from "../components/AuthoringEditLink"
 import { locationEditPath, locationNoun, locationViewPath } from "../components/world/placePaths"
@@ -73,7 +72,7 @@ export function LocationPanels({
                 isEmpty={location.breadcrumbs.length === 0}
                 emptyState={<p>No containment recorded.</p>}
             >
-                <ol className="world-detail__breadcrumbs">
+                <ol className="world-detail__breadcrumbs" aria-label="Location path">
                     {location.breadcrumbs.map((crumb) => (
                         <li key={crumb.location_id}>
                             {crumb.name} (
@@ -133,15 +132,10 @@ export function WorldLocationDetailPage({
     campaignId,
     location,
 }: WorldLocationDetailPageProps) {
-    const worldBackPath = useWorldBackPath(campaignId)
     const headingRef = usePageArrival(true)
     return (
         <section aria-labelledby="world-location-heading">
-            <p>
-                <Link to={worldBackPath}>
-                    Back to World
-                </Link>
-            </p>
+            <WorldRecordBack campaignId={campaignId} current={location.name} />
 
             <p className="world-detail__eyebrow">
                 {humanizeCode(location.location_type_code)}

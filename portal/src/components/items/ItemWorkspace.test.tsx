@@ -237,9 +237,10 @@ describe("navigation", () => {
         await waitReady()
         // The missing section is filled in by replacing the address, which must keep the origin.
         await waitFor(() => expect(where()).toBe("/app/c1/world/item/i1?section=move"))
-        const back = () => screen.getByRole("link", { name: "Back to World" })
+        // The legacy `worldSearch` entry is adapted to World's task: the breadcrumb's World crumb is the way back.
+        const back = () => within(screen.getByRole("navigation", { name: "Breadcrumb" })).getByRole("link", { name: "World" })
         expect(back()).toHaveAttribute("href", "/app/c1/world?category=item&cursor=abc")
-        expect(screen.queryByRole("navigation", { name: "Breadcrumb" })).not.toBeInTheDocument()
+        expect(screen.queryByRole("link", { name: "Back to World" })).not.toBeInTheDocument()
         fireEvent.click(sectionLink("Equip & attune"))
         await waitFor(() => expect(where()).toContain("section=equipment"))
         fireEvent.click(stageLink(1))
@@ -283,10 +284,7 @@ describe("navigation", () => {
         fireEvent.click(await screen.findByRole("button", { name: "Cancel" }))
         await waitReady()
         await waitFor(() => expect(where()).toBe("/app/c1/world/item/i1?section=details"))
-        expect(screen.getByRole("link", { name: "Back to World" })).toHaveAttribute(
-            "href",
-            "/app/c1/world?category=item&cursor=abc",
-        )
+        expect(screen.getByRole("link", { name: "World" })).toHaveAttribute("href", "/app/c1/world?category=item&cursor=abc")
     })
 
     it("returns from the edit page to the inventory item page", async () => {

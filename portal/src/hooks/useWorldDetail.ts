@@ -1,10 +1,15 @@
 import {
     useCallback,
+    useContext,
     useEffect,
+    useLayoutEffect,
+    useRef,
     useState,
 } from "react"
 import { WorldRequestError } from "../api/world"
 import { useSession } from "../context/SessionContext"
+import { BreadcrumbLabelContext } from "../navigation/BreadcrumbLabelContext"
+import type { LabelRegistry } from "../navigation/labelRegistry"
 
 export type WorldDetailState<T> =
     | {
@@ -25,6 +30,9 @@ export type WorldDetailState<T> =
 export interface UseWorldDetailResult<T> {
     state: WorldDetailState<T>
     retry: () => void
+    // The breadcrumb-label authority generation under which the read behind `state` STARTED (see
+    // useAuthoringResource), or null while loading or where the read began outside any registry.
+    authority: LabelRegistry | null
 }
 
 type FetchWorldDetail<T> = (
@@ -38,6 +46,7 @@ interface WorldDetailSnapshot<T> {
     entityId: string
     requestVersion: number
     state: WorldDetailState<T>
+    authority: LabelRegistry | null
 }
 
 const initialState: WorldDetailState<never> = {
@@ -61,6 +70,13 @@ export function useWorldDetail<T>(
     entityId: string,
 ): UseWorldDetailResult<T> {
     const { reload } = useSession()
+    // The label authority in force when a request starts: a ref, not a dependency, so a change of
+    // authority never starts a read.
+    const registry = useContext(BreadcrumbLabelContext)
+    const currentAuthority = useRef(registry)
+    useLayoutEffect(() => {
+        currentAuthority.current = registry
+    })
 
     const [requestVersion, setRequestVersion] = useState(0)
 
@@ -70,6 +86,7 @@ export function useWorldDetail<T>(
             entityId,
             requestVersion: 0,
             state: initialState,
+            authority: null,
         }))
 
     const retry = useCallback(() => {
@@ -89,6 +106,7 @@ export function useWorldDetail<T>(
 
     useEffect(() => {
         const controller = new AbortController()
+        const authority = currentAuthority.current
 
         void fetchDetail(campaignId, entityId, controller.signal)
             .then((detail) => {
@@ -100,6 +118,7 @@ export function useWorldDetail<T>(
                     campaignId,
                     entityId,
                     requestVersion,
+                    authority,
                     state: {
                         status: "success",
                         detail,
@@ -126,6 +145,7 @@ export function useWorldDetail<T>(
                         campaignId,
                         entityId,
                         requestVersion,
+                        authority,
                         state: initialState,
                     })
                     void reload()
@@ -140,6 +160,7 @@ export function useWorldDetail<T>(
                         campaignId,
                         entityId,
                         requestVersion,
+                        authority,
                         state: {
                             status: "unavailable",
                         },
@@ -151,6 +172,7 @@ export function useWorldDetail<T>(
                     campaignId,
                     entityId,
                     requestVersion,
+                    authority,
                     state: {
                         status: "error",
                         error,
@@ -172,5 +194,6 @@ export function useWorldDetail<T>(
     return {
         state,
         retry,
+        authority: snapshotMatchesRequest ? snapshot.authority : null,
     }
 }

@@ -37,7 +37,7 @@ function Row({ campaignId, member }: { campaignId: string; member: MemberRow }) 
                     {to === null ? (
                         member.member_name
                     ) : (
-                        <Link to={to} state={member.category === "character" ? taskState : undefined}>
+                        <Link to={to} state={taskState}>
                             {member.member_name}
                         </Link>
                     )}

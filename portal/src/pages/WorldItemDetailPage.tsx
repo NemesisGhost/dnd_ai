@@ -1,5 +1,4 @@
-import { useWorldBackPath } from "../hooks/useWorldBackPath"
-import { Link } from "react-router"
+import { WorldRecordBack } from "../components/world/WorldRecordBack"
 import { DetailPanel } from "../components/DetailPanel"
 import { FactGrid } from "../components/FactGrid"
 import type { FactGridItem } from "../components/FactGrid"
@@ -17,7 +16,6 @@ export function WorldItemDetailPage({
     campaignId,
     item,
 }: WorldItemDetailPageProps) {
-    const worldBackPath = useWorldBackPath(campaignId)
     const hasCharges =
         item.charges_current !== null || item.charges_maximum !== null
     // An item nothing has happened to has no state row, so every state field is empty. That is
@@ -44,11 +42,7 @@ export function WorldItemDetailPage({
 
     return (
         <section aria-labelledby="world-item-heading">
-            <p>
-                <Link to={worldBackPath}>
-                    Back to World
-                </Link>
-            </p>
+            <WorldRecordBack campaignId={campaignId} current={item.name} />
 
             <p className="world-detail__eyebrow">Item</p>
             <h1 id="world-item-heading">{item.name}</h1>

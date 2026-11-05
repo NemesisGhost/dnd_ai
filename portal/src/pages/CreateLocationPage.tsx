@@ -23,6 +23,8 @@ const config: ContentCreateConfig<
     lead: "A new location is saved as a draft. Only people who can edit canon see it until it is published.",
     breadcrumbLabel: "World",
     worldPath: (campaignId) => `/app/${encodeURIComponent(campaignId)}/world`,
+    // Opened from the World browser the shared breadcrumb names the task and the created place keeps it.
+    taskBreadcrumb: true,
     optionsPath: locationOptionsPath,
     canCreate: (options) => options.can_create,
     initialValues: () => EMPTY_LOCATION_FORM,

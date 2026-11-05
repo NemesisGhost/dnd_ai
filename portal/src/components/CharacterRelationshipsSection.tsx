@@ -43,7 +43,7 @@ function Who({ campaignId, participant }: { campaignId: string; participant: Rea
     const taskState = useTaskLinkState()
     if (to === null) return <>{participant.name}</>
     return (
-        <Link to={to} state={participant.category === "character" ? taskState : undefined}>
+        <Link to={to} state={taskState}>
             {participant.name}
         </Link>
     )

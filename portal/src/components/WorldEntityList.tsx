@@ -19,6 +19,8 @@ interface WorldEntityListProps {
     categoryNoun?: string
     onClearSearch?: () => void
     returnSearch?: string
+    // The task a card opens its record in (the browser's list state), when the page is in one.
+    taskState?: object
 }
 
 export function WorldEntityList({
@@ -33,6 +35,7 @@ export function WorldEntityList({
     categoryNoun = "entries",
     onClearSearch,
     returnSearch,
+    taskState,
 }: WorldEntityListProps) {
     const hasNextPage = page.next_cursor !== null
     const searching = query !== ""
@@ -53,6 +56,7 @@ export function WorldEntityList({
                             campaignId={campaignId}
                             entity={entity}
                             returnSearch={returnSearch}
+                            taskState={taskState}
                         />
                     ))}
                 </CardGrid>

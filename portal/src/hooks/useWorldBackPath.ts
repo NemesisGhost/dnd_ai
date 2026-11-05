@@ -1,4 +1,6 @@
 import { useLocation } from "react-router"
+import type { CrumbState } from "../navigation/breadcrumbModel"
+import { useTaskLinkState } from "../navigation/useTaskLinkState"
 import { pickQueryStates, readQueryState } from "./returnState"
 
 export interface WorldReturnState {
@@ -19,9 +21,14 @@ export function pickWorldReturnState(state: unknown): WorldReturnState | undefin
 }
 
 // Router state for a link from one World entry to another, so the next entry's
-// "Back to World" still returns to the original category, search and page.
-export function useWorldReturnState(): WorldReturnState | undefined {
+// "Back to World" still returns to the original category, search and page. Inside a task (the World
+// browser with its filters, a character's inventory, the Review queue) it is the validated task with
+// this page added to its trail and the older keys beside it; after a direct entry, or where the page
+// is not a task page, it is what it always was.
+export function useWorldReturnState(): CrumbState | WorldReturnState | undefined {
+    const task = useTaskLinkState({ requireOrigin: true })
     const { state } = useLocation() as { state: WorldReturnState | null }
+    if (task !== undefined) return task
     const worldSearch = readWorldSearch(state)
     return worldSearch === undefined ? undefined : { worldSearch }
 }

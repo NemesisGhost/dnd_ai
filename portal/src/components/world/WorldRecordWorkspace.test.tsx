@@ -282,9 +282,16 @@ describe("World record workspace: a place", () => {
         })
         fireEvent.click(await screen.findByRole("link", { name: "Edit location" }))
         await screen.findByText("Location edit page")
-        expect(router.state.location.state).toEqual({
+        // The older keys beside the task, which now names the record the edit page was opened from.
+        expect(router.state.location.state).toMatchObject({
             worldSearch: "?category=location",
             returnTo: { pathname: "/app/c1/world/location/l1", search: "?section=details" },
+            task: {
+                root: "world",
+                scope: { campaignId: "c1" },
+                list: { route: "campaign.world", search: "?category=location" },
+                trail: [{ route: "world.record", params: { campaignId: "c1", category: "location", entityId: "l1" } }],
+            },
         })
     })
 })
@@ -292,15 +299,24 @@ describe("World record workspace: a place", () => {
 describe("World record workspace: where it leads back to", () => {
     it("leads back to the World browser the record was opened from", async () => {
         setup({ entry: { pathname: "/app/c1/world/location/l1", state: { worldSearch: "?category=location&q=mill" } } })
-        expect(await screen.findByRole("link", { name: "Back to World" })).toHaveAttribute(
+        // A legacy `worldSearch` entry is adapted: the shared breadcrumb replaces the back link and its World
+        // crumb returns to the same browser view.
+        expect(await screen.findByRole("link", { name: "World" })).toHaveAttribute(
             "href",
             "/app/c1/world?category=location&q=mill",
         )
+        expect(screen.queryByRole("link", { name: "Back to World" })).not.toBeInTheDocument()
+    })
+
+    it("keeps the back link when it is opened directly", async () => {
+        setup({ entry: { pathname: "/app/c1/world/location/l1" } })
+        expect(await screen.findByRole("link", { name: "Back to World" })).toHaveAttribute("href", "/app/c1/world")
+        expect(screen.queryByRole("navigation", { name: "Breadcrumb" })).not.toBeInTheDocument()
     })
 
     it("leads back to the Review queue, with its filters, when opened from there", async () => {
         setup({ entry: { pathname: "/app/c1/world/location/l1", state: { reviewSearch: "?status=approved&type=settlement" } } })
-        expect(await screen.findByRole("link", { name: "Back to Review queue" })).toHaveAttribute(
+        expect(await screen.findByRole("link", { name: "Review queue" })).toHaveAttribute(
             "href",
             "/app/c1/review?status=approved&type=settlement",
         )
@@ -314,7 +330,7 @@ describe("World record workspace: where it leads back to", () => {
         await opened("Old Mill")
         fireEvent.click(screen.getByRole("link", { name: "Sources" }))
         await waitFor(() => expect(router.state.location.search).toBe("?section=sources"))
-        expect(router.state.location.state).toEqual({ reviewSearch: "?status=draft" })
+        expect(router.state.location.state).toMatchObject({ reviewSearch: "?status=draft", task: { root: "review", trail: [] } })
     })
 })
 
@@ -730,7 +746,7 @@ describe("World record workspace: a dungeon", () => {
         expect(list.getByRole("link", { name: "Entry Hall" })).toHaveAttribute("href", "/app/c1/world/location/a1")
         fireEvent.click(list.getByRole("link", { name: "Entry Hall" }))
         await waitFor(() => expect(router.state.location.pathname).toBe("/app/c1/world/location/a1"))
-        expect(router.state.location.state).toEqual({ reviewSearch: "?status=draft" })
+        expect(router.state.location.state).toMatchObject({ reviewSearch: "?status=draft", task: { root: "review", trail: [] } })
     })
 
     it("offers Edit only for the areas the server says can be edited, and returns to this list", async () => {
@@ -752,9 +768,13 @@ describe("World record workspace: a dungeon", () => {
         fireEvent.click(list.getByRole("link", { name: "Edit Entry Hall" }))
         await screen.findByText("Area edit page")
         expect(router.state.location.pathname).toBe("/app/c1/world/dungeon/l1/areas/a1/edit")
-        expect(router.state.location.state).toEqual({
+        expect(router.state.location.state).toMatchObject({
             worldSearch: "?category=location",
             returnTo: { pathname: "/app/c1/world/location/l1", search: "?section=areas" },
+            task: {
+                root: "world",
+                trail: [{ route: "world.record", params: { campaignId: "c1", category: "location", entityId: "l1" } }],
+            },
         })
     })
 
@@ -1533,7 +1553,7 @@ describe("World record workspace: a dungeon area", () => {
         fireEvent.click(link)
         await waitFor(() => expect(router.state.location.pathname).toBe("/app/c1/world/location/d1"))
         expect(router.state.location.search).toBe("?section=areas")
-        expect(router.state.location.state).toEqual({ reviewSearch: "?status=draft" })
+        expect(router.state.location.state).toMatchObject({ reviewSearch: "?status=draft", task: { root: "review", trail: [] } })
     })
 
     it("shows what the area holds in three compact groups, without any runtime status", async () => {
