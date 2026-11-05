@@ -2,8 +2,9 @@ import { generatePath } from "react-router"
 import { defaultAncestors, matchRouteMeta, patternParams, routeMetaById } from "./routeMeta"
 import { isIdShaped } from "./contexts"
 import type { NavRoot, RouteMatch, RouteRef } from "./routeMeta"
+import { isValidListSearch } from "./listState"
 import { resolveTask } from "./resolveTask"
-import { continueTask, validateTask } from "./taskOrigin"
+import { continueTask, isSafeSearch, validateTask } from "./taskOrigin"
 import type { TaskOriginV1, TrailEntry } from "./taskOrigin"
 
 // The breadcrumb for a page, as data (docs/UI_DESIGN.md §4.8). It follows the VALIDATED task origin of
@@ -32,6 +33,8 @@ export interface CrumbState {
     charactersReturn?: string
     worldSearch?: string
     reviewSearch?: string
+    itemsSearch?: string
+    definitionsSearch?: string
 }
 
 export interface Crumb {
@@ -77,6 +80,8 @@ export function legacyKeys(task: TaskOriginV1): Omit<CrumbState, "task"> {
     }
     if (task.root === "world" && list.route === "campaign.world") return { worldSearch: list.search }
     if (task.root === "review" && list.route === "review.queue") return { reviewSearch: list.search }
+    if (task.root === "items" && list.route === "items.list") return { itemsSearch: list.search }
+    if (task.root === "items" && list.route === "itemDefinitions.list") return { definitionsSearch: list.search }
     return {}
 }
 
@@ -97,6 +102,12 @@ function sameRef(left: RouteRef, right: RouteRef): boolean {
     )
 }
 
+// A list that is a page of its own inside a root, not the root's page with filters: the Items root
+// is the item inventory, and the item definitions catalog is a different list of the same root.
+// It is shown as its own crumb (with its recorded filters) after the root, never in the root's place,
+// so item instances and item definitions stay distinct in labels and ancestry.
+const DISTINCT_LISTS: ReadonlySet<string> = new Set(["itemDefinitions.list"])
+
 function rootCrumb(task: TaskOriginV1): { ref: RouteRef; label: string } | null {
     if (!("campaignId" in task.scope)) {
         return task.root === "world" ? { ref: { route: "worlds.list", params: {} }, label: "Worlds" } : null
@@ -104,7 +115,7 @@ function rootCrumb(task: TaskOriginV1): { ref: RouteRef; label: string } | null 
     const root = CAMPAIGN_ROOT[task.root]
     // A recorded list (with its filters) is the root's own page as the person left it; the labels stay
     // the root's noun, not the list route's.
-    const route = task.list?.route ?? root.route
+    const route = task.list !== undefined && !DISTINCT_LISTS.has(task.list.route) ? task.list.route : root.route
     return { ref: { route, params: { campaignId: task.scope.campaignId } }, label: root.label }
 }
 
@@ -143,6 +154,12 @@ function ancestorsOf(task: TaskOriginV1, match: RouteMatch): Crumb[] {
 
     const root = rootCrumb(task)
     if (root !== null) push(root.ref, root.label, false, [])
+    if (root !== null && task.list !== undefined && DISTINCT_LISTS.has(task.list.route) && "campaignId" in task.scope) {
+        const listMeta = routeMetaById(task.list.route)
+        if (listMeta !== undefined) {
+            push({ route: task.list.route, params: { campaignId: task.scope.campaignId } }, listMeta.label, false, [])
+        }
+    }
     task.trail.forEach((entry, index) => {
         const meta = routeMetaById(entry.route)
         if (meta === undefined) return
@@ -166,6 +183,26 @@ export function continuedState(pathname: string, state: unknown): CrumbState | n
     if (resolved === null) return null
     const here: RouteRef = { route: match.meta.id, params: match.params }
     return withState(continueTask(resolved.task, here))
+}
+
+/**
+ * `continuedState` for a link from a LIST page that has declared list state (the item definitions
+ * catalog): the task also records the list as it is now (its route and the query it was left on), so
+ * the list's crumb on a page opened from it reopens the same filters. The query is recorded only when
+ * the list's contract accepts it (listState.ts); otherwise the task carries no list state, exactly
+ * as for a list that declares none. Null for a page that is not a list page.
+ */
+export function continuedListState(pathname: string, state: unknown, search: string): CrumbState | null {
+    const match = matchRouteMeta(pathname)
+    if (match === null || match.meta.kind !== "list") return null
+    const resolved = resolveTask(pathname, state)
+    if (resolved === null) return null
+    const here: RouteRef = { route: match.meta.id, params: match.params }
+    const task = continueTask(resolved.task, here)
+    if (isSafeSearch(search) && isValidListSearch(match.meta.id, search)) {
+        task.list = { route: match.meta.id, search }
+    }
+    return withState(task)
 }
 
 /**

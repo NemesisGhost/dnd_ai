@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest"
 import { readCharactersReturn } from "../hooks/useCharactersBackPath"
-import { breadcrumbModel, continuedState, continuedStateVia, legacyKeys, outsideTaskOf, retainedState } from "./breadcrumbModel"
+import {
+    breadcrumbModel,
+    continuedListState,
+    continuedState,
+    continuedStateVia,
+    legacyKeys,
+    outsideTaskOf,
+    retainedState,
+} from "./breadcrumbModel"
 import type { Crumb } from "./breadcrumbModel"
 import { startTask } from "./taskOrigin"
 import type { TaskOriginV1 } from "./taskOrigin"
@@ -421,5 +429,72 @@ describe("Sessions and Run (P02-7a)", () => {
             ["Run session", run],
         ])
         expect(JSON.stringify(fromRun)).not.toMatch(/Hollow|name|label/i)
+    })
+})
+
+describe("Items and Item definitions (P02-7c)", () => {
+    const items = `${base}/items`
+    const definitions = `${base}/item-definitions`
+
+    it("a direct entry to a definition is Items, Item definitions, then the definition: the catalog is not the root", () => {
+        const model = modelOf(`${definitions}/d1`)
+        expect(summary(model.ancestors)).toEqual([
+            ["Items", items],
+            ["Item definitions", definitions],
+        ])
+        expect(model.current.generic).toBe("Item definition")
+        expect(model.ancestors[1]!.named).toBe(false)
+    })
+
+    it("a definition opened from the catalog reopens it on the recorded filters, and the Items crumb stays the inventory", () => {
+        const search = "?category=weapon&homebrew=1"
+        const link = continuedListState(definitions, undefined, search)
+        expect(link?.task.list).toEqual({ route: "itemDefinitions.list", search })
+        expect(link?.definitionsSearch).toBe(search)
+        const model = modelOf(`${definitions}/d1`, link)
+        expect(summary(model.ancestors)).toEqual([
+            ["Items", items],
+            ["Item definitions", `${definitions}${search}`],
+        ])
+        expect(model.source).toBe("state")
+    })
+
+    it("a query the catalog does not produce is not recorded, and the link still continues the task", () => {
+        const link = continuedListState(definitions, undefined, "?category=weapon&evil=1")
+        expect(link?.task.list).toBeUndefined()
+        expect(link?.definitionsSearch).toBeUndefined()
+        expect(link?.task.trail.map((entry) => entry.route)).toEqual(["itemDefinitions.list"])
+    })
+
+    it("only a list page continues a list; any other page gives null", () => {
+        expect(continuedListState(`${items}/i1`, undefined, "")).toBeNull()
+        expect(continuedListState(`${base}/unknown`, undefined, "")).toBeNull()
+    })
+
+    it("the inventory declares no list state: its link records none and keeps the older key", () => {
+        const link = continuedListState(items, undefined, "")
+        expect(link?.task.list).toBeUndefined()
+        expect(summary(modelOf(`${items}/i1`, link).ancestors)).toEqual([["Items", items]])
+    })
+
+    it("the older definitionsSearch and itemsSearch keys are written beside a recorded list", () => {
+        const task = { ...startTask("items", { campaignId: C }), list: { route: "itemDefinitions.list", search: "?homebrew=1" } }
+        expect(legacyKeys(task)).toEqual({ definitionsSearch: "?homebrew=1" })
+        expect(legacyKeys({ ...task, list: { route: "items.list", search: "" } })).toEqual({ itemsSearch: "" })
+        // Not for another root.
+        expect(legacyKeys({ ...task, root: "characters" })).toEqual({})
+    })
+
+    it("an item opened inside a Characters task keeps that root, and the edit page continues it", () => {
+        const fromCharacter = { task: startTask("characters", { campaignId: C }) }
+        const detail = modelOf(`${items}/i1`, fromCharacter)
+        expect(summary(detail.ancestors)).toEqual([["Characters", `${base}/characters/all`]])
+        const edit = continuedState(`${items}/i1`, fromCharacter)
+        expect(summary(modelOf(`${items}/i1/edit`, edit).ancestors)).toEqual([
+            ["Characters", `${base}/characters/all`],
+            ["Item", `${items}/i1`],
+        ])
+        expect(outsideTaskOf(`${items}/i1/edit`, edit)?.nearest.ref.route).toBe("items.detail")
+        expect(retainedState(`${items}/i1`, fromCharacter)?.task.root).toBe("characters")
     })
 })

@@ -13,6 +13,9 @@ import { useHeldWorldCapability, WORLD_CANON_READ_PRIVATE } from "../../hooks/us
 import { pickReturnState, useItemsBackPath } from "../../hooks/useItemsBackPath"
 import { usePageArrival } from "../../hooks/usePageArrival"
 import { useWorldBackPath } from "../../hooks/useWorldBackPath"
+import { useBreadcrumbLabel } from "../../navigation/BreadcrumbLabelContext"
+import { retainedState } from "../../navigation/breadcrumbModel"
+import { useTaskLinkState } from "../../navigation/useTaskLinkState"
 import type { EntityLifecycleView } from "../../types/entityLifecycle"
 import type { ItemView } from "../../types/items"
 import type { Provenance } from "../../types/provenance"
@@ -88,6 +91,16 @@ function Loaded({ campaignId, itemId, origin }: Props) {
     const canReadSources = useHeldWorldCapability(campaignId, WORLD_CANON_READ_PRIVATE)
     const provenance = useGatedAuthoringResource<Provenance>(provenancePath(campaignId, itemId), canReadSources)
     const headingRef = usePageArrival(view.state.kind === "ready", "path")
+    // The item's name, from this page's own authorized read, for the breadcrumbs of the pages opened from
+    // it (the edit page). Registered under the authority in force when the read started; a denied or
+    // unavailable answer drops it, and the kept view after a failed re-read is not an answer.
+    useBreadcrumbLabel({
+        route: "items.detail",
+        params: { campaignId, itemId },
+        name: view.state.kind === "ready" ? view.state.data.name : undefined,
+        denied: view.state.kind === "denied" || view.state.kind === "unavailable",
+        authority: view.authority,
+    })
     // The last item read that succeeded for this item. A refresh that fails recoverably (a network
     // or server error) keeps the workspace mounted on it, so unsent input in any section survives
     // and the person can retry; a denied or unavailable answer, or a loading state, discards it and
@@ -160,8 +173,16 @@ function Workspace({
 }) {
     const location = useLocation()
     // Router state naming the collection this was opened from rides along every in-page link, so
-    // moving between sections never forgets where Back to World (or the inventory) returns to.
-    const linkState = pickReturnState(location.state)
+    // moving between sections never forgets where Back to World (or the inventory) returns to. For an
+    // item opened from the inventory it also carries the validated task (never the rest of the entry's
+    // state: an announcement would be replayed). The World page's own navigation is unchanged.
+    const legacyState = pickReturnState(location.state)
+    const kept = origin === "items" ? retainedState(location.pathname, location.state) : null
+    const linkState = kept === null ? legacyState : { ...legacyState, ...kept }
+    // Edit opens a different page of the same task, so it continues the task with this page added; after
+    // a direct entry there is no origin to continue and it carries only what it always did.
+    const continued = useTaskLinkState({ requireOrigin: true })
+    const editState = origin === "items" && continued !== undefined ? { ...legacyState, ...continued } : linkState
     const itemsBack = useItemsBackPath(campaignId)
     const worldBack = useWorldBackPath(campaignId)
     const backHref = origin === "items" ? itemsBack : worldBack
@@ -203,7 +224,7 @@ function Workspace({
                 campaignId={campaignId}
                 itemId={itemId}
                 view={data}
-                linkState={linkState}
+                linkState={editState}
                 returnTo={{ pathname: location.pathname, search: nav.sectionHref("details") }}
             />
         ),

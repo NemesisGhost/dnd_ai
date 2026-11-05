@@ -249,3 +249,26 @@ Guard audit: **no new caller or declaring key.** Row 12 (`KnowledgeClaimPage`) k
 Reads: none were added. The P02-7a `continuedStateVia` follow-up (§4.8.7) validates its parent against the destination's declared ancestors and the stored-task validation, and returns null otherwise.
 
 Remaining exceptions: the World event page and the World record workspace for non-character categories keep their links (P02-7d); a quest or claim opened from Campaign Home or another family's pages without task state shows the route defaults; `MemberPreviewShell`'s in-page **Return to Knowledge** / **Back to Member preview** links keep their plain hrefs.
+
+
+## 11. Items and Item definitions after P02-7c
+
+Routes now rendering the shared breadcrumb (`routeMeta` ids): `items.new`, `items.detail` (the workspace opened from the inventory), `items.edit` (inside a task), `itemDefinitions.new`, `itemDefinitions.detail`. `items.list` and `itemDefinitions.list` are tops of their tasks. No route was added or removed (`routeMeta.test.ts` passing).
+
+| From | To | State carried |
+|---|---|---|
+| Item inventory | item, New item | `continuedListState` (task + `itemsSearch`) |
+| Item definitions catalog | definition, New item definition | `continuedListState` (task with the recorded list when its contract accepts the query, + `definitionsSearch`) |
+| Item workspace | its sections and stages | `retainedState` (+ the legacy keys); none added for the World origin |
+| Item workspace | Edit item | `useTaskLinkState({ requireOrigin })` + the legacy keys + `returnTo` |
+| Edit page | the item page (Save, Cancel) | the entry's task (`itemTaskOf`) + the legacy keys; `announce` on Save |
+| Create page | the created item (REPLACE) | the entry's task (`ContentCreatePage taskBreadcrumb`) + the legacy keys |
+| Inventory | the catalog | nothing (starts the catalog's own task) |
+
+Legacy keys: `itemsSearch` and `definitionsSearch` are still written (and read by the pages' own Back, Cancel, delete and create destinations through `useItemsBackPath` / `useDefinitionsBackPath`) and adapted to a task by `adaptLegacyReturn`; `legacyKeys` now emits them beside any task that records the matching list, so the readers are not migrated away yet. The `ItemHeader` inventory breadcrumb markup was removed with its last user.
+
+Guard audit: **no new caller or declaring key.** Row 18 (`ItemWorkspace`'s `UnsavedInputGuard`) re-inspected: it reads only `section`, every section stays mounted, so it stays undeclared. Rows 8 and 13 (`ContentCreatePage`, `ContentEditPage`) read `location.state`, not the query, as before. `ItemDefinitionFormPage` has no guard and none was added. The `useItemNavigation` rewrite over `useStagedNavigation` changes no query key and adds the entry stamp to its normalizing REPLACE.
+
+Reads: none were added. The definition catalog's filters are replaced in place by the page itself, as before (no router state is carried by that REPLACE; the list is the top of its task).
+
+Remaining exceptions: the World item page (`origin="world"`, **Back to World**), the character and party inventory panels' links to it, and an edit page reached from the World page keep their links (P02-7d); an edit page reached by a direct entry or by the item page's `returnTo` alone keeps its single back link; the definition catalog's own filter REPLACE and create destination are unchanged.

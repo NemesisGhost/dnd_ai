@@ -28,6 +28,8 @@ import type {
     ItemDefinitionOptions,
 } from "../types/itemDefinitions"
 import { StaleReadNotice } from "../components/StaleReadNotice"
+import { TaskBreadcrumb } from "../components/navigation/TaskBreadcrumb"
+import { continuedListState } from "../navigation/breadcrumbModel"
 import { ReadTerminal } from "../components/authoring/ReadState"
 import "../components/authoring/authoring.css"
 
@@ -65,6 +67,13 @@ export function ItemDefinitionsPage() {
     // link restore them.
     const [params, setParams] = useSearchParams()
     const location = useLocation()
+    // What a definition opened from here returns to: the task (with this list and the filters it is on, when
+    // the list's contract accepts them) and, beside it, the older `definitionsSearch` key that the form's
+    // own Back and Cancel still read.
+    const linkState = {
+        ...(continuedListState(location.pathname, location.state, location.search) ?? {}),
+        definitionsSearch: location.search,
+    }
     const category = params.get("category") ?? ""
     const homebrewOnly = params.get("homebrew") === "1"
     const setFilter = (key: string, value: string | null) => {
@@ -113,7 +122,7 @@ export function ItemDefinitionsPage() {
                             <Link
                                 className="authoring-button"
                                 to={`${campaignBase(campaignId)}/new`}
-                                state={{ definitionsSearch: location.search }}
+                                state={linkState}
                             >
                                 New item definition
                             </Link>
@@ -165,7 +174,7 @@ export function ItemDefinitionsPage() {
                                             {" "}
                                             <Link
                                                 to={`${campaignBase(campaignId)}/${encodeURIComponent(item.item_definition_id)}`}
-                                                state={{ definitionsSearch: location.search }}
+                                                state={linkState}
                                             >
                                                 Edit {item.name}
                                             </Link>
@@ -209,20 +218,15 @@ export function ItemDefinitionFormPage() {
     const headingRef = usePageArrival(ready)
     return (
         <section className="authoring-page" aria-labelledby="item-definition-heading">
-            <nav aria-label="Breadcrumb" className="authoring-page__breadcrumb">
-                <ol className="session-run__breadcrumb">
-                    <li>
-                        <Link to={listPath}>Item definitions</Link>
-                    </li>
-                    <li aria-current="page">
-                        {definitionId === undefined
-                            ? "New item definition"
-                            : current !== null
-                              ? current.name
-                              : "Edit item definition"}
-                    </li>
-                </ol>
-            </nav>
+            <TaskBreadcrumb
+                current={
+                    definitionId === undefined
+                        ? "New item definition"
+                        : current !== null
+                          ? current.name
+                          : "Edit item definition"
+                }
+            />
             <h1 id="item-definition-heading" ref={headingRef} tabIndex={-1}>
                 {definitionId === undefined ? "New item definition" : "Edit item definition"}
             </h1>

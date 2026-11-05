@@ -2,6 +2,7 @@ import { Link } from "react-router"
 import type { RefObject } from "react"
 import type { ItemView } from "../../types/items"
 import { rarityText } from "../../utils/itemState"
+import { TaskBreadcrumb } from "../navigation/TaskBreadcrumb"
 import { RecordHeader, RecordStatus } from "../records/RecordHeader"
 import type { ItemGuidance } from "./itemStages"
 
@@ -10,8 +11,9 @@ export type ItemOrigin = "items" | "world"
 interface Props {
     view: ItemView
     origin: ItemOrigin
-    // Where the person came from: the item inventory (with the query it was left on) or the World
-    // browser (with its category, search and page).
+    // Where the person came from: the item inventory (the shared task breadcrumb, which carries the query
+    // it was left on) or the World browser (with its category, search and page): `backHref` is the World
+    // browser's, and is unused for the inventory.
     backHref: string
     headingRef: RefObject<HTMLHeadingElement | null>
     guidance: ItemGuidance | null
@@ -21,21 +23,14 @@ interface Props {
 }
 
 // The always-visible top of the item page, in the frame the World record shares (`RecordHeader`).
-// What is the item's own: a breadcrumb when it was opened from the inventory, its kind, and
+// What is the item's own: the task breadcrumb when it was opened from the inventory, its kind, and
 // Destroyed beside the record's status.
 export function ItemHeader({ view, origin, backHref, headingRef, guidance, guidanceHref, linkState }: Props) {
     return (
         <RecordHeader
             back={
                 origin === "items" ? (
-                    <nav aria-label="Breadcrumb" className="authoring-page__breadcrumb">
-                        <ol className="session-run__breadcrumb">
-                            <li>
-                                <Link to={backHref}>Item inventory</Link>
-                            </li>
-                            <li aria-current="page">{view.name}</li>
-                        </ol>
-                    </nav>
+                    <TaskBreadcrumb current={view.name} />
                 ) : (
                     <p>
                         <Link to={backHref}>Back to World</Link>

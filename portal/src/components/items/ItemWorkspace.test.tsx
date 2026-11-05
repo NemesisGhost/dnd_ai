@@ -226,7 +226,7 @@ describe("navigation", () => {
         await waitReady()
         await waitFor(() => expect(where()).toBe("/app/c1/items/i1?section=move"))
         const crumbs = screen.getByRole("navigation", { name: "Breadcrumb" })
-        expect(within(crumbs).getByRole("link", { name: "Item inventory" })).toHaveAttribute("href", "/app/c1/items")
+        expect(within(crumbs).getByRole("link", { name: "Items" })).toHaveAttribute("href", "/app/c1/items")
         expect(within(crumbs).getByText("Moonblade")).toHaveAttribute("aria-current", "page")
         expect(screen.queryByRole("link", { name: "Back to World" })).not.toBeInTheDocument()
     })
@@ -250,7 +250,7 @@ describe("navigation", () => {
     it("returns to the plain collections for a direct link", async () => {
         const { unmount } = setup("/app/c1/items/i1")
         await waitReady()
-        expect(screen.getByRole("link", { name: "Item inventory" })).toHaveAttribute("href", "/app/c1/items")
+        expect(screen.getByRole("link", { name: "Items" })).toHaveAttribute("href", "/app/c1/items")
         unmount()
         setup("/app/c1/world/item/i1")
         await waitReady()
