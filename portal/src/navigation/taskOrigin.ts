@@ -194,10 +194,14 @@ export function startTask(root: NavRoot, scope: TaskScope): TaskOriginV1 {
 /**
  * The task for a link within the task: same root and list state, with the page being left added to
  * the trail (duplicates collapse, newest `MAX_TRAIL` kept). The `transition` hint is not carried.
+ * `section` is the `?section=` the page being left was showing, recorded on its trail entry so a return to
+ * that page reopens the same section; a value that is not a section token is not recorded.
  */
-export function continueTask(task: TaskOriginV1, leaving: RouteRef): TaskOriginV1 {
+export function continueTask(task: TaskOriginV1, leaving: RouteRef, section?: string): TaskOriginV1 {
     const trail = task.trail.filter((entry) => !sameRef(entry, leaving))
-    trail.push({ route: leaving.route, params: { ...leaving.params } })
+    const left: TrailEntry = { route: leaving.route, params: { ...leaving.params } }
+    if (section !== undefined && SECTION_PATTERN.test(section)) left.section = section
+    trail.push(left)
     const next: TaskOriginV1 = {
         v: 1,
         root: task.root,

@@ -1,6 +1,6 @@
 import { matchRoutes } from "react-router"
 import { describe, expect, it } from "vitest"
-import { pickCharactersReturnState, readCharactersReturn } from "./useCharactersBackPath"
+import { readCharactersReturn } from "./legacyCharactersReturn"
 
 const ID = "0b8f6c1e-5d2a-4c3b-9e7f-1a2b3c4d5e6f"
 const ID_UPPER = ID.toUpperCase()
@@ -165,11 +165,3 @@ describe("readCharactersReturn", () => {
     })
 })
 
-describe("pickCharactersReturnState", () => {
-    it("forwards only the valid key", () => {
-        expect(pickCharactersReturnState("c1", { charactersReturn: "/app/c1/characters/all", x: 1 })).toEqual({
-            charactersReturn: "/app/c1/characters/all",
-        })
-        expect(pickCharactersReturnState("c1", { charactersReturn: "/elsewhere" })).toBeUndefined()
-    })
-})

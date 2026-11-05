@@ -37,15 +37,14 @@ export interface ContentCreateConfig<TOptions, TValues, TBody, TResult> {
     lead: string
     breadcrumbLabel: string
     worldPath: (campaignId: string) => string
-    // Optional: the collection the person came from (the router state names it), when it differs
-    // from `worldPath`; and the state the new record's page should start with.
-    listPath?: (campaignId: string, state: unknown) => string
-    resultState?: (state: unknown) => object | undefined
+    // Optional: the collection the person came from (the entry's task names it), when it differs
+    // from `worldPath`. Given the page's own address, so the task is read for this route.
+    listPath?: (campaignId: string, state: unknown, pathname: string) => string
     // Optional: the breadcrumb text, when it depends on where the person came from.
-    breadcrumbLabelFor?: (campaignId: string, state: unknown) => string
+    breadcrumbLabelFor?: (campaignId: string, state: unknown, pathname: string) => string
     // Optional: show the shared task breadcrumb (navigation/TaskBreadcrumb) instead of the single
     // back link, and carry the task to the created record, when the arrival names an origin (its own
-    // task, or a Characters/World return key that validates). After a direct entry the single back
+    // valid task, or an older entry's key that adapts into one). After a direct entry the single back
     // link, with its existing fallback, is kept exactly as before. Cancel and the record's own state
     // are unchanged either way. Only the character-create family uses it so far.
     taskBreadcrumb?: boolean
@@ -79,8 +78,8 @@ export function ContentCreatePage<TOptions, TValues, TBody, TResult>({
     const needsWorldEdit = config.campaignOriginated !== true && !hasWorldEdit
     const headingRef = usePageArrival(state.kind === "ready" || needsWorldEdit)
     const headingId = `create-${config.noun.replace(/\s+/g, "-")}-heading`
-    const arrival = useLocation().state
-    const listPath = config.listPath?.(campaignId, arrival) ?? config.worldPath(campaignId)
+    const { pathname: arrivalPath, state: arrival } = useLocation()
+    const listPath = config.listPath?.(campaignId, arrival, arrivalPath) ?? config.worldPath(campaignId)
     const hasOrigin = useHasTaskOrigin()
     const denied = (
         <p role="alert">You do not have permission to create {config.noun}s in this campaign.</p>
@@ -93,7 +92,7 @@ export function ContentCreatePage<TOptions, TValues, TBody, TResult>({
             ) : (
                 <p className="authoring-page__breadcrumb">
                     <Link to={listPath}>
-                        {config.breadcrumbLabelFor?.(campaignId, arrival) ?? config.breadcrumbLabel}
+                        {config.breadcrumbLabelFor?.(campaignId, arrival, arrivalPath) ?? config.breadcrumbLabel}
                     </Link>
                 </p>
             )}
@@ -167,7 +166,6 @@ function CreateForm<TOptions, TValues, TBody, TResult>({
                 replace: true,
                 state: {
                     ...(task === undefined ? {} : { task }),
-                    ...config.resultState?.(arrivalState),
                     announce: config.announce,
                 },
             })

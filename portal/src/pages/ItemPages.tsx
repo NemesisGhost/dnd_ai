@@ -9,10 +9,10 @@ import { SelectField, TextAreaField, TextField } from "../components/authoring/f
 import { LifecycleBadge } from "../components/authoring/feedback"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
-import { readQueryState, resolveReturnTo } from "../hooks/returnState"
+import { resolveReturnTo } from "../hooks/returnState"
 import { continuedListState, outsideTaskOf } from "../navigation/breadcrumbModel"
 import { hasTaskEvidence, resolveTask } from "../navigation/resolveTask"
-import { pickReturnState } from "../hooks/useItemsBackPath"
+import { carriedListSearch, carriedState } from "../navigation/taskReturn"
 import { usePageArrival } from "../hooks/usePageArrival"
 import { useHeldWorldCapability, WORLD_CANON_READ_PRIVATE } from "../hooks/useWorldCapability"
 import type { CreateItemBody, ItemList, ItemOptions, ItemView, UpdateItemBody } from "../types/items"
@@ -34,22 +34,24 @@ function editNavigation({
     campaignId,
     entityId,
     state,
+    pathname,
 }: {
     campaignId: string
     entityId: string
     state: unknown
+    pathname: string
 }): EditNavigation {
-    const carried = pickReturnState(state)
+    const carried = carriedState(pathname, state)
     const own = itemPath(campaignId, entityId)
     // Inside a task of its own (the inventory, a character, a session) the item page it returns to keeps the
-    // task: the validated task only, with the legacy keys beside it. Reached from the World page, or
+    // task: the validated task only. Reached from the World page, or
     // directly, the state is exactly what it was.
     const outside = itemTaskOf(`${own}/edit`, state)
     return {
-        listPath: `${itemsListPath(campaignId)}${readQueryState(state, "itemsSearch") ?? ""}`,
+        listPath: `${itemsListPath(campaignId)}${carriedListSearch(pathname, state, "items", "items.list") ?? ""}`,
         detail: {
             to: resolveReturnTo(state, [own, worldItemPath(campaignId, entityId)], own),
-            state: outside === null ? carried : { ...carried, ...outside.state },
+            state: outside === null ? carried : outside.state,
         },
     }
 }
@@ -181,8 +183,8 @@ const createConfig: ContentCreateConfig<ItemOptions, ItemFormValues, CreateItemB
     breadcrumbLabel: "Item inventory",
     taskBreadcrumb: true,
     worldPath: itemsListPath,
-    listPath: (campaignId, state) => `${itemsListPath(campaignId)}${readQueryState(state, "itemsSearch") ?? ""}`,
-    resultState: (state) => pickReturnState(state),
+    listPath: (campaignId, state, pathname) =>
+        `${itemsListPath(campaignId)}${carriedListSearch(pathname, state, "items", "items.list") ?? ""}`,
     optionsPath: itemOptionsPath,
     canCreate: (options) => options.can_create,
     initialValues: () => EMPTY,
@@ -285,7 +287,7 @@ export function ItemsPage() {
     const location = useLocation()
     // What an item opened from here returns to (the list as it was left: today it has no filters,
     // but any query it gains is carried).
-    const here = { ...(continuedListState(location.pathname, location.state, location.search) ?? {}), itemsSearch: location.search }
+    const here = continuedListState(location.pathname, location.state, location.search) ?? undefined
     const canEdit = useCampaignCapability(campaignId, "canon.edit")
     // The definitions catalog is the world's authoring side; the link is offered only to a holder.
     const canOpenDefinitions = useHeldWorldCapability(campaignId, WORLD_CANON_READ_PRIVATE)

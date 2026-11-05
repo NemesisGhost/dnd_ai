@@ -17,6 +17,16 @@ const OPTIONS = {
 const NEW = "/app/mundivita/characters/new"
 const ALL = "/app/mundivita/characters/all"
 const FROM = "/app/mundivita/characters/all?type=npc&q=mira"
+// The Characters browser on the filters it was left on, as a link out of it carries it.
+const FROM_TASK = {
+  task: {
+    v: 1,
+    root: "characters",
+    scope: { campaignId: "mundivita" },
+    trail: [{ route: "characters.browse", params: { campaignId: "mundivita" } }],
+    list: { route: "characters.browse", search: "?type=npc&q=mira" },
+  },
+}
 
 let server: MockServer
 
@@ -60,27 +70,31 @@ describe("New character breadcrumb", () => {
     expect(page().getByRole("link", { name: "World" })).toHaveAttribute("href", "/app/mundivita/world")
   })
 
-  it("returns to the validated Characters view and forwards it to the NPC and PC pages", async () => {
+  it.each<[string, object]>([
+    ["the task a link out of the browser carries", FROM_TASK],
+    ["an entry written before the task existed (only the older key)", { charactersReturn: FROM }],
+  ])("returns to the validated Characters view and forwards it to the NPC and PC pages, from %s", async (_name, seed) => {
     const app = openApp(NEW, ["canon.edit"])
     await screen.findByRole("heading", { level: 1, name: "New character" })
-    await act(() => app.router.navigate(NEW, { state: { charactersReturn: FROM } }))
+    await act(() => app.router.navigate(NEW, { state: seed }))
     const main = screen.getByRole("main")
     await waitFor(() => expect(page().getByRole("link", { name: "Characters" })).toHaveAttribute("href", FROM))
 
     fireEvent.click(within(main).getByRole("link", { name: "New NPC" }))
     await screen.findByRole("heading", { level: 1, name: "New NPC" })
-    expect(app.router.state.location.state).toMatchObject({ charactersReturn: FROM })
+    expect(app.router.state.location.state).toMatchObject({ task: { root: "characters" } })
+    expect(app.router.state.location.state).not.toHaveProperty("charactersReturn")
     expect(page().getByRole("link", { name: "Characters" })).toHaveAttribute("href", FROM)
     fireEvent.click(await screen.findByRole("button", { name: "Cancel" }))
     await waitFor(() =>
       expect(app.router.state.location.pathname + app.router.state.location.search).toBe(FROM),
     )
 
-    await act(() => app.router.navigate(NEW, { state: { charactersReturn: FROM } }))
+    await act(() => app.router.navigate(NEW, { state: seed }))
     await screen.findByRole("heading", { level: 1, name: "New character" })
     fireEvent.click(await screen.findByRole("link", { name: "New player character" }))
     await screen.findByRole("heading", { level: 1, name: "New player character" })
-    expect(app.router.state.location.state).toMatchObject({ charactersReturn: FROM })
+    expect(app.router.state.location.state).toMatchObject({ task: { root: "characters" } })
     expect(page().getByRole("link", { name: "Characters" })).toHaveAttribute("href", FROM)
   })
 
@@ -126,6 +140,24 @@ describe("New character breadcrumb", () => {
     expect(new URL(href, "http://x.invalid").pathname).toBe(ALL)
     fireEvent.click(page().getByRole("link", { name: "Characters" }))
     await waitFor(() => expect(app.router.state.location.pathname).toBe(ALL))
+  })
+
+  it.each<[string, unknown]>([
+    ["a task of another campaign", { task: { ...FROM_TASK.task, scope: { campaignId: "other" } } }],
+    ["a task with a query the browser does not produce", { task: { ...FROM_TASK.task, list: { route: "characters.browse", search: "?next=https://evil.example" } } }],
+    ["a task with an unknown root", { task: { ...FROM_TASK.task, root: "nonsense" } }],
+    ["a task with an overlong trail", { task: { ...FROM_TASK.task, trail: new Array(20).fill({ route: "characters.browse", params: { campaignId: "mundivita" } }) } }],
+  ])("ignores a crafted task: %s", async (_name, crafted) => {
+    const app = openApp(NEW, ["canon.edit"])
+    await screen.findByRole("heading", { level: 1, name: "New character" })
+    await act(() => app.router.navigate(NEW, { state: crafted }))
+    await waitFor(() => expect(page().getByRole("link", { name: "Characters" })).toHaveAttribute("href", ALL))
+    fireEvent.click(within(screen.getByRole("main")).getByRole("link", { name: "New NPC" }))
+    await screen.findByRole("heading", { level: 1, name: "New NPC" })
+    expect(page().getByRole("link", { name: "World" })).toHaveAttribute("href", "/app/mundivita/world")
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel" }))
+    await screen.findByRole("heading", { level: 1, name: "Campaign World" })
+    expect(app.router.state.location.pathname).toBe("/app/mundivita/world")
   })
 
   it("keeps World as the NPC breadcrumb when reached from World People", async () => {

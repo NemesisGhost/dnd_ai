@@ -10,11 +10,12 @@ import type { UseAuthoringResourceResult } from "../../hooks/useAuthoringResourc
 import { useCampaignCapability } from "../../hooks/useCampaignCapability"
 import { useGatedAuthoringResource } from "../../hooks/useGatedAuthoringResource"
 import { useHeldWorldCapability, WORLD_CANON_READ_PRIVATE } from "../../hooks/useWorldCapability"
-import { pickReturnState, useItemsBackPath } from "../../hooks/useItemsBackPath"
+import { useItemsBackPath } from "../../hooks/useItemsBackPath"
 import { usePageArrival } from "../../hooks/usePageArrival"
 import { useWorldBackPath } from "../../hooks/useWorldBackPath"
 import { useBreadcrumbLabel } from "../../navigation/BreadcrumbLabelContext"
 import { retainedState, taskOf } from "../../navigation/breadcrumbModel"
+import { carriedState } from "../../navigation/taskReturn"
 import { useTaskLinkState } from "../../navigation/useTaskLinkState"
 import type { EntityLifecycleView } from "../../types/entityLifecycle"
 import type { ItemView } from "../../types/items"
@@ -181,16 +182,16 @@ function Workspace({
     headingRef: RefObject<HTMLHeadingElement | null>
 }) {
     const location = useLocation()
-    // Router state naming the collection this was opened from rides along every in-page link, so
-    // moving between sections never forgets where Back to World (or the inventory) returns to. For an
-    // item opened from the inventory it also carries the validated task (never the rest of the entry's
-    // state: an announcement would be replayed). The World page's own navigation is unchanged.
-    const legacyState = pickReturnState(location.state)
+    // The task naming the collection this was opened from rides along every in-page link, so moving
+    // between sections never forgets where Back to World (or the inventory) returns to (never the rest
+    // of the entry's state: an announcement would be replayed). Where this page does not adopt the
+    // task for its own breadcrumb it is still handed on as the entry carried it.
+    const carried = carriedState(location.pathname, location.state)
     // On the World page an item opened inside a task (a character's inventory, the World browser's
     // filters) keeps it the same way; after a direct entry the page keeps its World back link.
     const worldTask = origin === "world" ? taskOf(location.pathname, location.state) : null
     const kept = origin === "items" ? retainedState(location.pathname, location.state) : (worldTask?.state ?? null)
-    const linkState = kept === null ? legacyState : { ...legacyState, ...kept }
+    const linkState = kept ?? carried
     // Edit opens a different page of the same task, so it continues the task with this page added; after
     // a direct entry there is no origin to continue and it carries only what it always did.
     const continued = useTaskLinkState({ requireOrigin: true })
@@ -198,7 +199,7 @@ function Workspace({
     // to the page's own links.)
     const editsInTask =
         origin === "items" || (worldTask !== null && worldTask.nearest.state.task.root !== "world" && worldTask.nearest.state.task.root !== "review")
-    const editState = editsInTask && continued !== undefined ? { ...legacyState, ...continued } : linkState
+    const editState = editsInTask && continued !== undefined ? continued : linkState
     const itemsBack = useItemsBackPath(campaignId)
     const worldBack = useWorldBackPath(campaignId)
     const backHref = origin === "items" ? itemsBack : worldBack

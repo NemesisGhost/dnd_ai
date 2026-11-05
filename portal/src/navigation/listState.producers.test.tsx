@@ -48,7 +48,7 @@ function CharactersProbe({ cursors }: { cursors: readonly string[] }) {
             </button>
             <output data-testid="page">{state.pageNumber}</output>
             <output data-testid="cursor">{state.cursor ?? ""}</output>
-            <output data-testid="returnTo">{state.returnTo}</output>
+            <output data-testid="returnTo">{`${location.pathname}${location.search}`}</output>
             <output data-testid="search">{location.search}</output>
         </div>
     )

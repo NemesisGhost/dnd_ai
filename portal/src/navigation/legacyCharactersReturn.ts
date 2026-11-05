@@ -1,8 +1,7 @@
-import { useLocation } from "react-router"
-
-// Router state that restores the Characters view a person came from (the selected sheet, the
-// browser with its filters, or a character's sheet), the way `worldSearch` restores the World
-// browser.
+// The reader of the older `charactersReturn` router-state key: the Characters view a person came
+// from (the browser with its filters, or a character's sheet or inventory). No page writes the key
+// any more; the legacy adapter (legacyReturn.ts) reads it so a history entry written before the task
+// existed still resolves to its origin. Nothing else reads it.
 export interface CharactersReturnState {
     charactersReturn?: string
 }
@@ -57,18 +56,4 @@ export function readCharactersReturn(campaignId: string, state: unknown): string
     const path = target.pathname
     if (!path.startsWith(base) || !SUPPORTED_REST.test(path.slice(base.length))) return undefined
     return `${path}${target.search}`
-}
-
-// The valid return key of a location state, for forwarding through in-page links.
-export function pickCharactersReturnState(
-    campaignId: string,
-    state: unknown,
-): CharactersReturnState | undefined {
-    const charactersReturn = readCharactersReturn(campaignId, state)
-    return charactersReturn === undefined ? undefined : { charactersReturn }
-}
-
-// "Back to characters" target: the view the sheet was opened from, else the characters browser.
-export function useCharactersBackPath(campaignId: string): string {
-    return readCharactersReturn(campaignId, useLocation().state) ?? `${charactersBase(campaignId)}/all`
 }

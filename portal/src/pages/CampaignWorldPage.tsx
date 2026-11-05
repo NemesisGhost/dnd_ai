@@ -39,13 +39,9 @@ function CampaignWorldContent({
     // Forward and deep links work. Only the text being typed is local.
     const browse = useWorldBrowseState()
     // What a record or a creation page opened from here returns to: the task with this list and the
-    // category, search and page it is on (when the list's contract accepts them), and beside it the
-    // older `worldSearch` key that the entries' own Back still reads.
+    // category, search and page it is on (when the list's contract accepts them).
     const location = useLocation()
-    const taskState = {
-        ...(continuedListState(location.pathname, location.state, location.search) ?? {}),
-        worldSearch: browse.returnSearch,
-    }
+    const taskState = continuedListState(location.pathname, location.state, location.search) ?? undefined
     const [searchInputValue, setSearchInputValue] = useState(browse.query)
     const [seenUrlQuery, setSeenUrlQuery] = useState(browse.query)
     if (browse.query !== seenUrlQuery) {
@@ -156,7 +152,6 @@ function CampaignWorldContent({
                         query={browse.query}
                         categoryNoun={categoryItem.noun}
                         onClearSearch={clearSearch}
-                        returnSearch={browse.returnSearch}
                         taskState={taskState}
                     />
                 )}

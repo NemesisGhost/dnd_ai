@@ -386,7 +386,8 @@ describe("New-character family", () => {
     await screen.findByRole("heading", { level: 1, name: "New player character" })
     await waitFor(() => expect(trail()).toEqual(["Characters", "New PC"]))
     expect(main().getByRole("link", { name: "Characters" })).toHaveAttribute("href", FROM)
-    expect(app.router.state.location.state).toMatchObject({ charactersReturn: FROM })
+    expect(state(app).task).toMatchObject({ root: "characters", list: { route: "characters.browse", search: "?type=npc&q=mira" } })
+    expect(app.router.state.location.state).not.toHaveProperty("charactersReturn")
     fireEvent.click(main().getByRole("link", { name: "Characters" }))
     await waitFor(() =>
       expect(app.router.state.location.pathname + app.router.state.location.search).toBe(
@@ -395,7 +396,7 @@ describe("New-character family", () => {
     )
   })
 
-  it("through the chooser the trail keeps the chooser, and the legacy key is forwarded beside the task", async () => {
+  it("through the chooser the trail keeps the chooser, and only the task is forwarded", async () => {
     const FROM = `${base}/characters/all?type=npc`
     const app = openApp(`${base}/characters/new`, ["canon.edit"])
     await screen.findByRole("heading", { level: 1, name: "New character" })
@@ -404,7 +405,7 @@ describe("New-character family", () => {
     fireEvent.click(main().getByRole("link", { name: "New NPC" }))
     await screen.findByRole("heading", { level: 1, name: "New NPC" })
     await waitFor(() => expect(trail()).toEqual(["Characters", "New character", "New NPC"]))
-    expect(app.router.state.location.state).toMatchObject({ charactersReturn: FROM })
+    expect(app.router.state.location.state).not.toHaveProperty("charactersReturn")
     expect(state(app).task).toMatchObject({ root: "characters" })
     expect(main().getByRole("link", { name: "New character" })).toHaveAttribute("href", `${base}/characters/new`)
   })
@@ -502,7 +503,7 @@ describe("New-character family", () => {
       trail: [{ route: "campaign.world", params: { campaignId: "mundivita" } }],
       list: { route: "campaign.world", search: "?category=character&q=mira" },
     })
-    expect(app.router.state.location.state).toMatchObject({ worldSearch: "?category=character&q=mira" })
+    expect(app.router.state.location.state).not.toHaveProperty("worldSearch")
     expect(JSON.stringify(app.router.state.location.state)).not.toContain("Mira")
     // Back goes to the page before the create page: exactly one history entry was used.
     await act(() => app.router.navigate(-1))

@@ -23,6 +23,11 @@ const reader = new RegExp(`^${RUNTIME}(\\?.*)?$`)
 const writes = (server: ReturnType<typeof setupQuestWorkspace>["server"]) =>
     server.calls.filter((c) => c.method !== "GET")
 
+// The state a link out of the Review queue carries: the Review task with the queue as it was left.
+const reviewTask = (search: string) => ({
+    task: { v: 1, root: "review", scope: { campaignId: "c1" }, trail: [], list: { route: "review.queue", search } },
+})
+
 describe("Quest workspace: header and workflow", () => {
     it("shows the quest, its real lifecycle status, and a three-phase workflow without a progress status", async () => {
         setupQuestWorkspace({ section: "details", view: questView({ canon_status: "canon" }) })
@@ -400,22 +405,22 @@ describe("Quest workspace: where the quest was opened from", () => {
 
     it("returns to the Review queue as it was left, and carries that through every link", async () => {
         const ctx = setupQuestWorkspace({
-            entry: { pathname: "/app/c1/quests/q1", search: "?section=review", state: { reviewSearch: "?status=proposed" } },
+            entry: { pathname: "/app/c1/quests/q1", search: "?section=review", state: reviewTask("?status=in_review") },
         })
         expect(await screen.findByRole("link", { name: "Back to Review queue" })).toHaveAttribute(
             "href",
-            "/app/c1/review?status=proposed",
+            "/app/c1/review?status=in_review",
         )
         expect(screen.queryByRole("link", { name: "Back to Quests" })).toBeNull()
         fireEvent.click(screen.getByRole("link", { name: "Publication" }))
-        expect(ctx.router.state.location.state).toEqual({ reviewSearch: "?status=proposed" })
+        expect(ctx.router.state.location.state).toEqual(reviewTask("?status=in_review"))
         fireEvent.click(screen.getByRole("link", { name: /Use in play/ }))
-        expect(ctx.router.state.location.state).toEqual({ reviewSearch: "?status=proposed" })
+        expect(ctx.router.state.location.state).toEqual(reviewTask("?status=in_review"))
     })
 
     it("ignores a crafted return address", async () => {
         setupQuestWorkspace({
-            entry: { pathname: "/app/c1/quests/q1", search: "?section=review", state: { reviewSearch: "//evil.example" } },
+            entry: { pathname: "/app/c1/quests/q1", search: "?section=review", state: reviewTask("//evil.example") },
         })
         expect(await screen.findByRole("link", { name: "Back to Quests" })).toBeInTheDocument()
     })
@@ -560,7 +565,7 @@ describe("QuestSectionRedirect", () => {
             initialEntry: {
                 pathname: `/app/c1/quests/q1/${suffix}`,
                 search: "?character_id=c9&party_id=p9",
-                state: { reviewSearch: "?status=proposed" },
+                state: reviewTask("?status=in_review"),
             },
             routes: [
                 { path: "/app/:campaignId/quests/:questId/edit", element: <QuestSectionRedirect section="details" /> },
@@ -570,7 +575,7 @@ describe("QuestSectionRedirect", () => {
         })
         expect(
             await screen.findByText(
-                `at /app/c1/quests/q1?character_id=c9&party_id=p9&section=${section} state {"reviewSearch":"?status=proposed"}`,
+                `at /app/c1/quests/q1?character_id=c9&party_id=p9&section=${section} state ${JSON.stringify(reviewTask("?status=in_review"))}`,
             ),
         ).toBeInTheDocument()
         expect(ctx.router.state.historyAction).toBe("REPLACE")
@@ -582,11 +587,11 @@ describe("Quest workspace: the provenance round trip", () => {
 
     it("returns to Sources with the perspective, and to the Review queue the quest was opened from", async () => {
         const ctx = setupQuestWorkspace({
-            entry: { pathname: "/app/c1/quests/q1", search: sources, state: { reviewSearch: "?status=proposed&type=quest" } },
+            entry: { pathname: "/app/c1/quests/q1", search: sources, state: reviewTask("?status=in_review&type=quest") },
         })
         expect(await screen.findByRole("link", { name: "Back to Review queue" })).toHaveAttribute(
             "href",
-            "/app/c1/review?status=proposed&type=quest",
+            "/app/c1/review?status=in_review&type=quest",
         )
         fireEvent.click(await screen.findByRole("link", { name: "View provenance" }))
         expect(await screen.findByRole("heading", { level: 1, name: "Provenance" })).toBeInTheDocument()
@@ -598,28 +603,28 @@ describe("Quest workspace: the provenance round trip", () => {
         expect(screen.getByRole("heading", { level: 2, name: "Sources" })).toBeVisible()
         expect(screen.getByRole("link", { name: "Back to Review queue" })).toHaveAttribute(
             "href",
-            "/app/c1/review?status=proposed&type=quest",
+            "/app/c1/review?status=in_review&type=quest",
         )
         expect(screen.queryByRole("link", { name: "Back to Quests" })).toBeNull()
     })
 
     it("carries the queue through the history link too", async () => {
         const ctx = setupQuestWorkspace({
-            entry: { pathname: "/app/c1/quests/q1", search: sources, state: { reviewSearch: "?status=proposed" } },
+            entry: { pathname: "/app/c1/quests/q1", search: sources, state: reviewTask("?status=in_review") },
         })
         fireEvent.click(await screen.findByRole("link", { name: "View provenance" }))
         fireEvent.click(await screen.findByRole("link", { name: "Revision history and comparison" }))
         await waitFor(() => expect(ctx.router.state.location.pathname).toBe("/app/c1/world/record/q1/history"))
-        expect(ctx.router.state.location.state).toMatchObject({ reviewSearch: "?status=proposed" })
+        expect(ctx.router.state.location.state).toMatchObject(reviewTask("?status=in_review"))
     })
 
     it("opened directly, still returns to Quests, and ignores a crafted queue address", async () => {
         const ctx = setupQuestWorkspace({
-            entry: { pathname: "/app/c1/quests/q1", search: sources, state: { reviewSearch: "//evil.example" } },
+            entry: { pathname: "/app/c1/quests/q1", search: sources, state: reviewTask("//evil.example") },
         })
         fireEvent.click(await screen.findByRole("link", { name: "View provenance" }))
         fireEvent.click(await screen.findByRole("link", { name: "The Lost Amulet" }))
         expect(await screen.findByRole("link", { name: "Back to Quests" })).toBeInTheDocument()
-        expect(ctx.router.state.location.state ?? {}).not.toHaveProperty("reviewSearch")
+        expect(ctx.router.state.location.state ?? {}).not.toHaveProperty("task")
     })
 })

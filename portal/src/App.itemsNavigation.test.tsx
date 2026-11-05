@@ -231,7 +231,7 @@ describe("Items: inventory, item workspace, edit and create", () => {
         await itemHeading()
         expect(entryState(app)?.task).toMatchObject({ root: "items", scope: { campaignId: "mundivita" } })
         expect(entryState(app)?.task?.trail.map((entry) => entry.route)).toEqual(["items.list"])
-        expect(entryState(app)?.itemsSearch).toBe("")
+        expect(entryState(app)).not.toHaveProperty("itemsSearch")
         expect(JSON.stringify(entryState(app))).not.toContain("Moonblade")
         expect(trail()).toEqual(["Items", "Moonblade"])
         expect(trailLinks()).toEqual([`${base}/items`])
@@ -424,7 +424,7 @@ describe("Items: inventory, item workspace, edit and create", () => {
         expect(notGet()).toEqual([])
     })
 
-    it("a legacy itemsSearch key the inventory does not produce is no task, but its query still reaches the edit page's back link", async () => {
+    it("a legacy itemsSearch key the inventory does not produce is ignored: no task, and the edit page's back link is the plain inventory", async () => {
         const app = openApp(`${base}/items`)
         await screen.findByRole("link", { name: "Moonblade" })
         await act(async () => {
@@ -435,9 +435,8 @@ describe("Items: inventory, item workspace, edit and create", () => {
         expect(trailLinks()).toEqual([`${base}/items`])
         fireEvent.click(await screen.findByRole("link", { name: "Edit item" }))
         await screen.findByRole("heading", { level: 1, name: "Edit item" })
-        expect(entryState(app)?.itemsSearch).toBe("?x=1")
         expect(entryState(app)?.task).toBeUndefined()
-        expect(screen.getByRole("link", { name: "Item inventory" })).toHaveAttribute("href", `${base}/items?x=1`)
+        expect(screen.getByRole("link", { name: "Item inventory" })).toHaveAttribute("href", `${base}/items`)
     })
 
     it("an item opened from the World page inside World's task shows its breadcrumb; edit, which World's task cannot reach, keeps its own links", async () => {
@@ -481,7 +480,7 @@ describe("Item definitions: catalog, form and create", () => {
             root: "items",
             list: { route: "itemDefinitions.list", search: "?homebrew=1&category=weapon" },
         })
-        expect(entryState(app)?.definitionsSearch).toBe("?homebrew=1&category=weapon")
+        expect(entryState(app)).not.toHaveProperty("definitionsSearch")
         expect(JSON.stringify(entryState(app))).not.toContain("Moonblade")
         expect(trail()).toEqual(["Items", "Item definitions", "Moonblade pattern"])
         expect(trailLinks()).toEqual([`${base}/items`, `${base}/item-definitions?homebrew=1&category=weapon`])

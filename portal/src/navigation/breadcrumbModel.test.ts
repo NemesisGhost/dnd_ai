@@ -1,12 +1,10 @@
 import { describe, expect, it } from "vitest"
-import { readCharactersReturn } from "../hooks/useCharactersBackPath"
 import {
     breadcrumbModel,
     continuedListState,
     continuedState,
     continuedStateVia,
     inWorldTask,
-    legacyKeys,
     outsideTaskOf,
     retainedState,
     taskOf,
@@ -245,31 +243,24 @@ describe("legacy return keys are adapted, not trusted", () => {
     })
 })
 
-describe("legacy dual writing", () => {
-    it("writes charactersReturn for a Characters list task, and it validates with the canonical reader", () => {
-        const task: TaskOriginV1 = {
-            ...startTask("characters", { campaignId: C }),
-            list: { route: "characters.browse", search: "?type=npc&q=mira" },
-        }
-        const keys = legacyKeys(task)
-        expect(keys).toEqual({ charactersReturn: `${base}/characters/all?type=npc&q=mira` })
-        expect(readCharactersReturn(C, keys)).toBe(keys.charactersReturn)
+describe("no legacy key is written", () => {
+    it.each<[string, TaskOriginV1["root"], string, string]>([
+        ["the Characters browser", "characters", "characters.browse", "?type=npc&q=mira"],
+        ["the World browser", "world", "campaign.world", "?category=location"],
+        ["the Review queue", "review", "review.queue", "?status=pending"],
+        ["the item definitions catalog", "items", "itemDefinitions.list", "?homebrew=1"],
+    ])("a link from %s carries the task and nothing else, with the list as the task's list state", (_name, root, route, search) => {
+        const pathOf = { "characters.browse": `${base}/characters/all`, "campaign.world": `${base}/world`, "review.queue": `${base}/review`, "itemDefinitions.list": `${base}/item-definitions` }[route]!
+        const link = continuedListState(pathOf, { task: { ...startTask(root, { campaignId: C }) } }, search)!
+        expect(Object.keys(link)).toEqual(["task"])
+        expect(link.task.list).toEqual({ route, search })
+        for (const crumb of modelOf(`${base}/parties/${P}`, link).ancestors) expect(Object.keys(crumb.state)).toEqual(["task"])
     })
 
-    it("writes worldSearch and reviewSearch for their list tasks, and nothing without list state", () => {
-        expect(
-            legacyKeys({ ...startTask("world", { campaignId: C }), list: { route: "campaign.world", search: "?category=location" } }),
-        ).toEqual({ worldSearch: "?category=location" })
-        expect(
-            legacyKeys({ ...startTask("review", { campaignId: C }), list: { route: "review.queue", search: "?status=pending" } }),
-        ).toEqual({ reviewSearch: "?status=pending" })
-        expect(legacyKeys(startTask("parties", { campaignId: C }))).toEqual({})
-    })
-
-    it("continuing a legacy Characters origin keeps charactersReturn beside the task", () => {
+    it("continuing a legacy Characters origin (an entry written before the task) carries the task only", () => {
         const from = `${base}/characters/all?type=npc`
         const chooser = continuedState(`${base}/characters/new`, { charactersReturn: from })!
-        expect(chooser.charactersReturn).toBe(from)
+        expect(Object.keys(chooser)).toEqual(["task"])
         expect(chooser.task.root).toBe("characters")
         expect(chooser.task.trail.map((entry) => entry.route)).toContain("characters.new")
         const npc = modelOf(`${base}/characters/npc/new`, chooser)
@@ -279,7 +270,7 @@ describe("legacy dual writing", () => {
 })
 
 describe("what a link's state may contain", () => {
-    const ALLOWED = new Set(["task", "charactersReturn", "worldSearch", "reviewSearch"])
+    const ALLOWED = new Set(["task"])
     const TASK_KEYS = new Set(["v", "root", "scope", "trail", "list", "campaignId", "worldId", "route", "params", "search", "section", "transition"])
     const PARAM_KEYS = new Set(["campaignId", "partyId", "characterId", "worldId"])
 
@@ -335,10 +326,10 @@ describe("retainedState: a link that stays on the record inside its task", () =>
         expect(kept?.task).not.toHaveProperty("transition")
     })
 
-    it("regenerates the legacy keys from an adapted legacy entry", () => {
+    it("re-expresses an adapted legacy entry as the task alone", () => {
         const kept = retainedState(record, { charactersReturn: `${base}/characters/all?type=npc` })
         expect(kept?.task).toMatchObject({ root: "characters", list: { route: "characters.browse", search: "?type=npc" } })
-        expect(kept?.charactersReturn).toBe(`${base}/characters/all?type=npc`)
+        expect(Object.keys(kept!)).toEqual(["task"])
     })
 })
 
@@ -452,7 +443,7 @@ describe("Items and Item definitions (P02-7c)", () => {
         const search = "?category=weapon&homebrew=1"
         const link = continuedListState(definitions, undefined, search)
         expect(link?.task.list).toEqual({ route: "itemDefinitions.list", search })
-        expect(link?.definitionsSearch).toBe(search)
+        expect(Object.keys(link!)).toEqual(["task"])
         const model = modelOf(`${definitions}/d1`, link)
         expect(summary(model.ancestors)).toEqual([
             ["Items", items],
@@ -464,7 +455,6 @@ describe("Items and Item definitions (P02-7c)", () => {
     it("a query the catalog does not produce is not recorded, and the link still continues the task", () => {
         const link = continuedListState(definitions, undefined, "?category=weapon&evil=1")
         expect(link?.task.list).toBeUndefined()
-        expect(link?.definitionsSearch).toBeUndefined()
         expect(link?.task.trail.map((entry) => entry.route)).toEqual(["itemDefinitions.list"])
     })
 
@@ -473,18 +463,10 @@ describe("Items and Item definitions (P02-7c)", () => {
         expect(continuedListState(`${base}/unknown`, undefined, "")).toBeNull()
     })
 
-    it("the inventory declares no list state: its link records none and keeps the older key", () => {
+    it("the inventory declares no list state: its link records none", () => {
         const link = continuedListState(items, undefined, "")
         expect(link?.task.list).toBeUndefined()
         expect(summary(modelOf(`${items}/i1`, link).ancestors)).toEqual([["Items", items]])
-    })
-
-    it("the older definitionsSearch and itemsSearch keys are written beside a recorded list", () => {
-        const task = { ...startTask("items", { campaignId: C }), list: { route: "itemDefinitions.list", search: "?homebrew=1" } }
-        expect(legacyKeys(task)).toEqual({ definitionsSearch: "?homebrew=1" })
-        expect(legacyKeys({ ...task, list: { route: "items.list", search: "" } })).toEqual({ itemsSearch: "" })
-        // Not for another root.
-        expect(legacyKeys({ ...task, root: "characters" })).toEqual({})
     })
 
     it("an item opened inside a Characters task keeps that root, and the edit page continues it", () => {

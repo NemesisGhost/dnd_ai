@@ -128,7 +128,7 @@ afterEach(() => {
 
 type Opened = ReturnType<typeof openApp>
 type EntryState = {
-    task?: { root: string; scope: unknown; trail: Array<{ route: string }>; list?: { route: string; search: string } }
+    task?: { root: string; scope: unknown; trail: Array<{ route: string; params?: unknown; section?: string }>; list?: { route: string; search: string } }
     ctx?: unknown
     charactersReturn?: string
     worldSearch?: string
@@ -552,9 +552,12 @@ describe("New PC stays discoverable from the selected-character entry point (PD-
 
         fireEvent.click(link)
         await screen.findByRole("heading", { level: 1, name: "New player character" })
-        expect(
-            (app.router.state.location.state as EntryState).charactersReturn,
-        ).toBe(`${base}/characters/${UUID}`)
+        // The record is the task's most recent page, so Cancel and the breadcrumb return to it.
+        expect((app.router.state.location.state as EntryState).task?.trail.at(-1)).toMatchObject({
+            route: "characters.detail",
+            params: { campaignId: "mundivita", characterId: UUID },
+        })
+        expect(app.router.state.location.state).not.toHaveProperty("charactersReturn")
         // The page's breadcrumb is the Characters task's root; Cancel is what honors the record return.
         expect(within(screen.getByRole("main")).getByRole("link", { name: "Characters" })).toHaveAttribute(
             "href",
@@ -573,9 +576,16 @@ describe("New PC stays discoverable from the selected-character entry point (PD-
         await screen.findByRole("link", { name: "Longsword" })
         fireEvent.click(screen.getByRole("link", { name: "New PC" }))
         await screen.findByRole("heading", { level: 1, name: "New player character" })
-        expect((app.router.state.location.state as EntryState).charactersReturn).toBe(
-            `${base}/characters/${UUID}?section=inventory`,
-        )
+        expect((app.router.state.location.state as EntryState).task?.trail.at(-1)).toMatchObject({
+            route: "characters.detail",
+            params: { characterId: UUID },
+            section: "inventory",
+        })
+        // Cancel returns to the section the record was left on.
+        fireEvent.click(await screen.findByRole("button", { name: "Cancel" }))
+        await screen.findByRole("link", { name: "Longsword" })
+        expect(app.router.state.location.pathname).toBe(`${base}/characters/${UUID}`)
+        expect(app.router.state.location.search).toBe("?section=inventory")
     })
 
     it("is not offered without canon.edit, on the record or after the redirect", async () => {

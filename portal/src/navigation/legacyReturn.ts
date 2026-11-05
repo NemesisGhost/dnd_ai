@@ -1,4 +1,4 @@
-import { readCharactersReturn } from "../hooks/useCharactersBackPath"
+import { readCharactersReturn } from "./legacyCharactersReturn"
 import { readQueryState } from "../hooks/returnState"
 import { isIdShaped } from "./contexts"
 import { isValidListSearch } from "./listState"
@@ -9,10 +9,12 @@ import type { RouteMatch } from "./routeMeta"
 
 // Resolution steps 2 and 3 for a history entry with no valid `state.task` (docs/UI_DESIGN.md §4.8).
 //
-// Until each route family migrates, links still carry the older router-state keys. This adapter reads
-// them, validates them with the validators that already guard them, and expresses them as a task, so
-// a reader of the new contract sees one shape. It is read-only: nothing here writes state, and a key
-// that fails validation is ignored, never repaired.
+// No link writes the older router-state keys any more (every family has migrated to the task). This
+// adapter remains for one reason: a history entry written before the migration, still in a tab's
+// session history, carries only those keys (plan H6). It reads them, validates them with the validators
+// that already guard them, and expresses them as a task, so a reader of the new contract sees one
+// shape. It is read-only: nothing here writes state, and a key that fails validation is ignored, never
+// repaired. Whether to retire it is an open owner decision (reconciliation F-3).
 //
 //   charactersReturn -> root characters, with the list (or the character page) it names
 //   reviewSearch     -> root review, list = the Review queue
@@ -21,9 +23,8 @@ import type { RouteMatch } from "./routeMeta"
 //   worldSearch      -> root world, list = the World browser
 //   returnTo         -> no task; the page's own Back target only
 //
-// When several are present the first in that order wins (a record opened from the Review queue carries
-// `reviewSearch` and may also carry `worldSearch`; Back goes to the queue). Legacy writers stay until
-// their last reader is migrated, so these keys keep working.
+// When several are present the first in that order wins (an old record opened from the Review queue
+// carried `reviewSearch` and might also carry `worldSearch`; Back goes to the queue).
 
 export interface LegacyReturn {
     task: TaskOriginV1 | null

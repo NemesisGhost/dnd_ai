@@ -15,7 +15,7 @@ import { combineRefetchOutcomes } from "../../utils/refreshOutcome"
 import { useCampaignCapability } from "../../hooks/useCampaignCapability"
 import { useHeldWorldCapability, WORLD_CANON_READ_PRIVATE } from "../../hooks/useWorldCapability"
 import { usePageArrival } from "../../hooks/usePageArrival"
-import { pickWorldReturnState, useReviewBackPath, useWorldBackPath } from "../../hooks/useWorldBackPath"
+import { useReviewBackPath, useWorldBackPath } from "../../hooks/useWorldBackPath"
 import { CharacterPanels } from "../../pages/CharacterDetailPage"
 import { LocationPanels } from "../../pages/WorldLocationDetailPage"
 import { OrganizationPanels } from "../../pages/WorldOrganizationDetailPage"
@@ -41,6 +41,7 @@ import { CharacterInventoryPanel } from "../InventoryPanels"
 import { BuildsLink, PlayerAccessLink, PortrayalLink } from "../NpcAuthoringControls"
 import { useBreadcrumbLabel } from "../../navigation/BreadcrumbLabelContext"
 import { continuedState, outsideTaskOf, taskOf } from "../../navigation/breadcrumbModel"
+import { carriedState } from "../../navigation/taskReturn"
 import { navTaskState } from "../../navigation/navStart"
 import { TaskBreadcrumb } from "../navigation/TaskBreadcrumb"
 import { NpcRuntimePanel } from "../NpcRuntimePanel"
@@ -392,16 +393,13 @@ function Workspace({
     // carry the validated task. A character opened from World, the Review queue or directly is unchanged.
     // Every other record keeps the task it was opened in whatever its root (the World browser with its
     // filters, the Review queue, a related record, a character's inventory): the breadcrumb replaces the
-    // back link, and the section links carry the task with the older keys beside it. After a direct
+    // back link, and the section links carry the task. After a direct
     // entry there is no origin on evidence and the back link stays.
     const taskBack =
         category === "character" ? outsideTaskOf(location.pathname, location.state) : taskOf(location.pathname, location.state)
-    const linkState =
-        taskBack === null
-            ? pickWorldReturnState(location.state)
-            : category === "character"
-              ? taskBack.state
-              : { ...pickWorldReturnState(location.state), ...taskBack.state }
+    // Where the person started rides along even in the roots this page keeps its own back link for
+    // (World's own task, the Review queue).
+    const linkState = taskBack !== null ? taskBack.state : carriedState(location.pathname, location.state)
     // Edit continues the task with this page added, so the edit page's breadcrumb names the record. Only
     // World's own task is valid on the edit routes; any other, and a direct entry, carries the section links' state.
     const editTask = taskBack !== null && category !== "character" && taskBack.nearest.state.task.root === "world"

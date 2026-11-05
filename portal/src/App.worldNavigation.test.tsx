@@ -198,7 +198,8 @@ describe("World browser to record: task origin", () => {
             scope: { campaignId: "mundivita" },
             list: { route: "campaign.world", search: FILTERED },
         })
-        expect(entryState(app)?.worldSearch).toBe(FILTERED)
+        // The list rides in the task alone: no older key is written beside it.
+        expect(entryState(app)).not.toHaveProperty("worldSearch")
         expect(JSON.stringify(entryState(app))).not.toContain("Old Mill")
         expect(trail()).toEqual(["World", "Old Mill"])
         expect(trailLinks()).toEqual([`${base}/world${FILTERED}`])
@@ -268,7 +269,41 @@ describe("World browser to record: task origin", () => {
         expect(screen.queryByRole("navigation", { name: "Breadcrumb" })).toBeNull()
     })
 
-    it("a Review queue record keeps the Review queue's task and its filters", async () => {
+    it("a record opened from the Review queue keeps the Review task and its filters, with no older key beside it", async () => {
+        server.on("GET", /\/campaigns\/mundivita\/review-queue/, {
+            body: {
+                items: [
+                    {
+                        entity_id: "l1",
+                        name: "Old Mill",
+                        entity_type_code: "settlement",
+                        category: "location",
+                        canon_status: "draft",
+                        lifecycle_status: "active",
+                        row_version: 2,
+                        updated_at: "2026-01-02T10:00:00Z",
+                        last_change_by: "Gina",
+                        last_change_by_me: false,
+                    },
+                ],
+                next_cursor: null,
+                status: "draft",
+                statuses: [{ value: "draft", label: "Drafts" }],
+                types: ["settlement"],
+                counts: { draft: 1 },
+            },
+        })
+        const app = openApp(`${base}/review?status=draft`, ["access.manage", "canon.edit"])
+        fireEvent.click(await screen.findByRole("link", { name: "Old Mill" }))
+        await screen.findByRole("heading", { level: 1, name: "Old Mill" })
+        expect(entryState(app)?.task).toMatchObject({ root: "review", list: { route: "review.queue", search: "?status=draft" } })
+        expect(entryState(app)).not.toHaveProperty("reviewSearch")
+        expect(trail()).toEqual(["Review queue", "Old Mill"])
+        expect(trailLinks()).toEqual([`${base}/review?status=draft`])
+        expect(screen.queryByRole("link", { name: "Back to World" })).toBeNull()
+    })
+
+    it("a Review queue record entered with only the older key (an entry written before the task) still leads back to the queue", async () => {
         const app = openApp(`${base}/review?status=draft`)
         await act(async () => {
             await app.router.navigate(`${base}/world/location/l1?section=details`, {

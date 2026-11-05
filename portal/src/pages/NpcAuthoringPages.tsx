@@ -7,12 +7,11 @@ import {
     updatePlayerCharacter,
 } from "../api/playerCharacterAuthoring"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
-import { pickCharactersReturnState, readCharactersReturn } from "../hooks/useCharactersBackPath"
-import { pickWorldReturnState } from "../hooks/useWorldBackPath"
-import { Link, useLocation, useParams } from "react-router"
+import { Link, useParams } from "react-router"
 import { TaskBreadcrumb } from "../components/navigation/TaskBreadcrumb"
 import { breadcrumbModel } from "../navigation/breadcrumbModel"
 import { hasTaskEvidence, resolveTask } from "../navigation/resolveTask"
+import { carriedListSearch } from "../navigation/taskReturn"
 import { useTaskLinkState } from "../navigation/useTaskLinkState"
 import { ContentCreatePage } from "../components/authoring/ContentCreatePage"
 import type { ContentCreateConfig } from "../components/authoring/ContentCreatePage"
@@ -275,6 +274,17 @@ const renderCreateFields: ContentCreateConfig<
     />
 )
 
+// Where a create page was opened from inside the Characters task: the nearest page of the task that is
+// not the chooser (a step on the way, not an origin), as the task's trail names it, with the list
+// filters it was left on. Undefined after a direct entry and for any other root, where the page keeps
+// its World navigation.
+function charactersOrigin(pathname: string, state: unknown): string | undefined {
+    const resolved = resolveTask(pathname, state)
+    if (!hasTaskEvidence(resolved) || resolved.task.root !== "characters") return undefined
+    const origin = breadcrumbModel(pathname, state)?.ancestors.filter((crumb) => crumb.ref.route !== "characters.new").at(-1)
+    return origin?.to
+}
+
 const createConfig: ContentCreateConfig<NpcOptions, NpcFormValues, CreateNpcBody, NpcReceipt> = {
     noun: "NPC",
     heading: "New NPC",
@@ -287,12 +297,11 @@ const createConfig: ContentCreateConfig<NpcOptions, NpcFormValues, CreateNpcBody
     // From World -> People the person returns to that same view, and the new NPC's workspace
     // starts with it, so Back to World lands on People again.
     // From Characters (the New character chooser) the breadcrumb and Cancel return there instead.
-    listPath: (campaignId, state) =>
-        readCharactersReturn(campaignId, state) ??
-        `${worldBase(campaignId)}${pickWorldReturnState(state)?.worldSearch ?? ""}`,
-    breadcrumbLabelFor: (campaignId, state) =>
-        readCharactersReturn(campaignId, state) === undefined ? "World" : "Characters",
-    resultState: (state) => pickWorldReturnState(state),
+    listPath: (campaignId, state, pathname) =>
+        charactersOrigin(pathname, state) ??
+        `${worldBase(campaignId)}${carriedListSearch(pathname, state, "world", "campaign.world") ?? ""}`,
+    breadcrumbLabelFor: (_campaignId, state, pathname) =>
+        charactersOrigin(pathname, state) === undefined ? "World" : "Characters",
     optionsPath: npcOptionsPath,
     canCreate: (options) => options.can_create,
     initialValues: () => EMPTY,
@@ -327,11 +336,9 @@ const playerCharacterCreateConfig: ContentCreateConfig<
     // From Characters the breadcrumb and Cancel return there, with its filters. Opened any other
     // way they fall back to World. The new record still opens in its World workspace, where
     // publication lives.
-    listPath: (campaignId, state) =>
-        readCharactersReturn(campaignId, state) ?? worldBase(campaignId),
-    breadcrumbLabelFor: (campaignId, state) =>
-        readCharactersReturn(campaignId, state) === undefined ? "World" : "Characters",
-    resultState: () => undefined,
+    listPath: (campaignId, state, pathname) => charactersOrigin(pathname, state) ?? worldBase(campaignId),
+    breadcrumbLabelFor: (_campaignId, state, pathname) =>
+        charactersOrigin(pathname, state) === undefined ? "World" : "Characters",
     optionsPath: playerCharacterOptionsPath,
     create: createPlayerCharacter,
     resultPath: (campaignId, created) =>
@@ -385,6 +392,7 @@ const characterEditPath = (campaignId: string, characterId: string): string =>
 function characterEditNavigation(context: {
     campaignId: string
     entityId: string
+    pathname?: string
     state: unknown
     params: Record<string, string | undefined>
 }): EditNavigation {
@@ -490,12 +498,9 @@ export function ChooseCharacterTypePage() {
     const params = useParams()
     const campaignId = params.campaignId ?? ""
     const base = `/app/${encodeURIComponent(campaignId)}/characters`
-    const state = useLocation().state
-    // Only a validated Characters address is honoured and forwarded; otherwise the browser.
-    // The legacy key is still forwarded (the create pages' Cancel reads it); the task rides beside it,
-    // but only when this page itself has an origin: after a direct entry the create pages keep their
-    // existing fallback.
-    const returnState = { ...pickCharactersReturnState(campaignId, state), ...useTaskLinkState({ requireOrigin: true }) }
+    // The task rides along to the create pages (Cancel and the breadcrumb read it), but only when this
+    // page itself has an origin: after a direct entry the create pages keep their existing fallback.
+    const returnState = useTaskLinkState({ requireOrigin: true })
     return (
         <section className="authoring-page" aria-labelledby="choose-character-heading">
             <TaskBreadcrumb />

@@ -7,6 +7,18 @@ import { ReviewQueuePage, RevisionHistoryPage } from "./ReviewPages"
 const QUEUE = "/campaigns/c1/review-queue"
 const REVISIONS = "/campaigns/c1/entities/e1/revisions"
 
+// The state a link out of the queue carries: the Review task with the list as it was left. (A seeded
+// entry has no trail; the queue itself leaves itself in it.)
+const queueTask = (search: string, fromQueue = true) => ({
+    task: {
+        v: 1,
+        root: "review",
+        scope: { campaignId: "c1" },
+        trail: fromQueue ? [{ route: "review.queue", params: { campaignId: "c1" } }] : [],
+        list: { route: "review.queue", search },
+    },
+})
+
 const row = (id: string, name: string, overrides: object = {}) => ({
     entity_id: id,
     name,
@@ -130,7 +142,7 @@ describe("ReviewQueuePage", () => {
         expect(screen.getByRole("link", { name: "Open Old Mill" })).toBeInTheDocument()
         fireEvent.click(link)
         await vi.waitFor(() => expect(router.state.location.pathname).toBe("/app/c1/world/location/e6"))
-        expect(router.state.location.state).toEqual({ reviewSearch: "?status=draft" })
+        expect(router.state.location.state).toEqual(queueTask("?status=draft"))
     })
 
     it("shows the count of each status, in the order a reviewer works", async () => {
@@ -220,7 +232,7 @@ describe("ReviewQueuePage", () => {
             await router.navigate("/app/c1/review?status=in_review")
             fireEvent.click(await screen.findByRole("link", { name: `History of ${name}` }))
             await vi.waitFor(() => expect(router.state.location.pathname).toMatch(/\/history$/))
-            expect(router.state.location.state).toEqual({ reviewSearch: "?status=in_review" })
+            expect(router.state.location.state).toEqual(queueTask("?status=in_review"))
         }
     })
 
@@ -376,7 +388,7 @@ describe("RevisionHistoryPage", () => {
     })
 
     it("keeps the queue it came from through a comparison, and into the record", async () => {
-        const state = { reviewSearch: "?status=approved&type=npc" }
+        const state = queueTask("?status=approved&type=npc", false)
         const { router } = setup(history, ["canon.edit"], { pathname: "/app/c1/world/location/e1/history", state })
         expect(await screen.findByRole("link", { name: "Review queue" })).toHaveAttribute(
             "href",
@@ -395,7 +407,7 @@ describe("RevisionHistoryPage", () => {
     })
 
     it("ignores a crafted return state", async () => {
-        setup(history, ["canon.edit"], { pathname: "/app/c1/world/location/e1/history", state: { reviewSearch: "//evil.example" } })
+        setup(history, ["canon.edit"], { pathname: "/app/c1/world/location/e1/history", state: queueTask("//evil.example", false) })
         expect(await screen.findByRole("link", { name: "Review queue" })).toHaveAttribute("href", "/app/c1/review")
     })
 

@@ -27,14 +27,9 @@ const CAMPAIGN_ROOT: Readonly<Record<NavRoot, { route: string; label: string }>>
     access: { route: "access.overview", label: "Access" },
 }
 
+// The router state a link carries to a page of the same task: the task, and nothing else.
 export interface CrumbState {
     task: TaskOriginV1
-    // Legacy return keys that readers not yet migrated still use (dual writing, see legacyKeys).
-    charactersReturn?: string
-    worldSearch?: string
-    reviewSearch?: string
-    itemsSearch?: string
-    definitionsSearch?: string
 }
 
 export interface Crumb {
@@ -63,30 +58,8 @@ function pathFor(ref: RouteRef): string | null {
     }
 }
 
-/**
- * The older router-state keys that equal a task's list state, for destinations that have not migrated.
- * Written beside `task` while a family is migrating; removed with the last reader of each key.
- */
-export function legacyKeys(task: TaskOriginV1): Omit<CrumbState, "task"> {
-    const list = task.list
-    if (list === undefined) return {}
-    const campaignId = "campaignId" in task.scope ? task.scope.campaignId : null
-    if (campaignId === null) return {}
-    const meta = routeMetaById(list.route)
-    if (meta === undefined) return {}
-    if (task.root === "characters" && (list.route === "characters.browse" || list.route === "characters.index")) {
-        const path = pathFor({ route: list.route, params: { campaignId } })
-        return path === null ? {} : { charactersReturn: `${path}${list.search}` }
-    }
-    if (task.root === "world" && list.route === "campaign.world") return { worldSearch: list.search }
-    if (task.root === "review" && list.route === "review.queue") return { reviewSearch: list.search }
-    if (task.root === "items" && list.route === "items.list") return { itemsSearch: list.search }
-    if (task.root === "items" && list.route === "itemDefinitions.list") return { definitionsSearch: list.search }
-    return {}
-}
-
 function withState(task: TaskOriginV1): CrumbState {
-    return { task, ...legacyKeys(task) }
+    return { task }
 }
 
 function trailEntryRef(entry: TrailEntry): RouteRef {
@@ -136,7 +109,7 @@ function ancestorsOf(task: TaskOriginV1, match: RouteMatch): Crumb[] {
     const here: RouteRef = { route: match.meta.id, params: match.params }
     const crumbs: Crumb[] = []
     const seen: RouteRef[] = [here]
-    const push = (ref: RouteRef, generic: string, named: boolean, upTo: TrailEntry[]) => {
+    const push = (ref: RouteRef, generic: string, named: boolean, upTo: TrailEntry[], section?: string) => {
         if (seen.some((other) => sameRef(other, ref))) return
         const to = pathFor(ref)
         if (to === null) return
@@ -148,7 +121,9 @@ function ancestorsOf(task: TaskOriginV1, match: RouteMatch): Crumb[] {
             trail: upTo.map((entry) => ({ ...entry, params: { ...entry.params } })),
         }
         if (task.list !== undefined) truncated.list = { ...task.list }
-        const target = ref.route === task.list?.route ? `${to}${task.list.search}` : to
+        const listed = ref.route === task.list?.route ? `${to}${task.list.search}` : to
+        // A page left on a section is reopened on it.
+        const target = section === undefined ? listed : `${listed}?section=${encodeURIComponent(section)}`
         crumbs.push({ ref, generic, named, to: target, state: withState(truncated) })
     }
 
@@ -166,7 +141,7 @@ function ancestorsOf(task: TaskOriginV1, match: RouteMatch): Crumb[] {
         // The root's own page is already the first crumb (possibly as a different list route with the
         // recorded filters); it is never shown twice.
         if (root !== null && "campaignId" in task.scope && entry.route === CAMPAIGN_ROOT[task.root].route) return
-        push(trailEntryRef(entry), meta.label, meta.kind === "detail", task.trail.slice(0, index))
+        push(trailEntryRef(entry), meta.label, meta.kind === "detail", task.trail.slice(0, index), entry.section)
     })
     return crumbs
 }
@@ -174,15 +149,15 @@ function ancestorsOf(task: TaskOriginV1, match: RouteMatch): Crumb[] {
 /**
  * The task state for a link from the current page to a related page within the same task: the same
  * root, list state and scope, with the current page added to the trail. Null when the current page has
- * no task (not a task page). Legacy keys are written beside it.
+ * no task (not a task page). `section` is the section the page is showing, for a return to reopen it.
  */
-export function continuedState(pathname: string, state: unknown): CrumbState | null {
+export function continuedState(pathname: string, state: unknown, section?: string): CrumbState | null {
     const match = matchRouteMeta(pathname)
     if (match === null) return null
     const resolved = resolveTask(pathname, state)
     if (resolved === null) return null
     const here: RouteRef = { route: match.meta.id, params: match.params }
-    return withState(continueTask(resolved.task, here))
+    return withState(continueTask(resolved.task, here, section))
 }
 
 /**
@@ -248,7 +223,7 @@ export function continuedStateVia(
 /**
  * The task state for a link that stays on the same record inside the same task (a section of a record,
  * the same record on its other route): the entry's validated task as it is, without the one-shot
- * `transition` hint, plus the legacy keys beside it. Null for a page that is not a task page and after a
+ * `transition` hint. Null for a page that is not a task page and after a
  * direct entry, where a link carries nothing and the destination's defaults apply (a link must not turn
  * "no evidence of an origin" into one).
  */

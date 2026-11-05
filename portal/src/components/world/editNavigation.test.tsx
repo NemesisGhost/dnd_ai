@@ -5,7 +5,16 @@ import { installMockServer, renderAuthoringRoutes } from "../../test/authoringHa
 import { worldEditNavigation } from "./editNavigation"
 
 const navigate = worldEditNavigation("location")
-const ctx = (state: unknown) => ({ campaignId: "c1", entityId: "l1", state })
+const ctx = (state: unknown) => ({ campaignId: "c1", entityId: "l1", pathname: "/app/c1/world/location/l1/edit", state })
+
+// The task a link out of a list carries (the entry's own, as the producers write it).
+const taskOf = (root: string, list: { route: string; search: string }, trail: object[] = []) => ({
+    v: 1,
+    root,
+    scope: { campaignId: "c1" },
+    trail,
+    list,
+})
 
 describe("worldEditNavigation", () => {
     it("returns to the World page of the record when it was opened some other way", () => {
@@ -20,17 +29,38 @@ describe("worldEditNavigation", () => {
             navigate(
                 ctx({
                     returnTo: { pathname: "/app/c1/world/location/l1", search: "?section=details" },
-                    worldSearch: "?category=location",
-                    reviewSearch: "?status=draft",
+                    task: taskOf("world", { route: "campaign.world", search: "?category=location" }),
                 }),
             ),
         ).toEqual({
             listPath: "/app/c1/world?category=location",
             detail: {
                 to: "/app/c1/world/location/l1?section=details",
-                state: { worldSearch: "?category=location", reviewSearch: "?status=draft" },
+                state: { task: taskOf("world", { route: "campaign.world", search: "?category=location" }) },
             },
         })
+    })
+
+    it("hands a Review-queue origin back to the record although this route accepts no Review task", () => {
+        const review = taskOf("review", { route: "review.queue", search: "?status=draft" })
+        const result = navigate(ctx({ task: review }))
+        expect(result.listPath).toBe("/app/c1/world")
+        expect(result.detail.state).toEqual({ task: review })
+    })
+
+    it("drops a task that names another campaign, and a transition hint", () => {
+        const foreign = { ...taskOf("world", { route: "campaign.world", search: "?category=location" }), scope: { campaignId: "c2" } }
+        expect(navigate(ctx({ task: foreign })).detail.state).toBeUndefined()
+        const hinted = { ...taskOf("world", { route: "campaign.world", search: "?category=location" }), transition: "context" }
+        expect(navigate(ctx({ task: hinted })).detail.state).toEqual({
+            task: taskOf("world", { route: "campaign.world", search: "?category=location" }),
+        })
+    })
+
+    it("still carries the origin of an entry written before the task existed", () => {
+        const result = navigate(ctx({ worldSearch: "?category=location" }))
+        expect(result.listPath).toBe("/app/c1/world?category=location")
+        expect(result.detail.state).toMatchObject({ task: { root: "world" } })
     })
 
     it("honours only an address of this very record", () => {
@@ -106,13 +136,15 @@ describe("the location edit page", () => {
     it("sends Cancel back to the workspace section it was opened from", async () => {
         const { router } = open({
             returnTo: { pathname: "/app/c1/world/location/l1", search: "?section=details" },
-            reviewSearch: "?status=draft",
+            task: taskOf("review", { route: "review.queue", search: "?status=draft" }),
         })
         fireEvent.click(await screen.findByRole("button", { name: "Cancel" }))
         await screen.findByText("Location page")
         expect(router.state.location.pathname).toBe("/app/c1/world/location/l1")
         expect(router.state.location.search).toBe("?section=details")
-        expect(router.state.location.state).toMatchObject({ reviewSearch: "?status=draft" })
+        expect(router.state.location.state).toMatchObject({
+            task: { root: "review", list: { route: "review.queue", search: "?status=draft" } },
+        })
     })
 
     it("still goes to the plain location page when opened any other way", async () => {
@@ -123,8 +155,14 @@ describe("the location edit page", () => {
     })
 
     it("builds its breadcrumb from the same place", async () => {
-        open({ returnTo: { pathname: "/app/c1/world/location/l1", search: "?section=details" }, worldSearch: "?category=location" })
+        // Opened from the record inside World's task: the record is in the trail, so the shared breadcrumb names it.
+        open({
+            returnTo: { pathname: "/app/c1/world/location/l1", search: "?section=details" },
+            task: taskOf("world", { route: "campaign.world", search: "?category=location" }, [
+                { route: "world.record", params: { campaignId: "c1", category: "location", entityId: "l1" } },
+            ]),
+        })
         expect(await screen.findByRole("link", { name: "World" })).toHaveAttribute("href", "/app/c1/world?category=location")
-        expect(screen.getByRole("link", { name: "Hollow" })).toHaveAttribute("href", "/app/c1/world/location/l1?section=details")
+        expect(screen.getByRole("link", { name: "Record" })).toHaveAttribute("href", "/app/c1/world/location/l1")
     })
 })

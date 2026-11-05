@@ -67,13 +67,9 @@ export function ItemDefinitionsPage() {
     // link restore them.
     const [params, setParams] = useSearchParams()
     const location = useLocation()
-    // What a definition opened from here returns to: the task (with this list and the filters it is on, when
-    // the list's contract accepts them) and, beside it, the older `definitionsSearch` key that the form's
-    // own Back and Cancel still read.
-    const linkState = {
-        ...(continuedListState(location.pathname, location.state, location.search) ?? {}),
-        definitionsSearch: location.search,
-    }
+    // What a definition opened from here returns to: the task, with this list and the filters it is on
+    // when the list's contract accepts them; the form's own Back and Cancel read it.
+    const linkState = continuedListState(location.pathname, location.state, location.search) ?? undefined
     const category = params.get("category") ?? ""
     const homebrewOnly = params.get("homebrew") === "1"
     const setFilter = (key: string, value: string | null) => {

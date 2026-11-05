@@ -1,6 +1,7 @@
 import { useEffect, useId, useState } from "react"
-import { Link } from "react-router"
+import { Link, useLocation } from "react-router"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
+import { continuedListState } from "../navigation/breadcrumbModel"
 import { useCharactersBrowseState } from "../hooks/useCharactersBrowseState"
 import { characterKindLabel, characterKindOfTypeCode } from "../utils/characterKind"
 import type { CharacterType } from "../types/world"
@@ -25,6 +26,10 @@ const TYPE_FILTERS: readonly { type: CharacterType | null; label: string }[] = [
 // perspective (which is derived from the person's own character access).
 export function CharactersBrowser({ campaignId }: { campaignId: string }) {
     const browse = useCharactersBrowseState()
+    // What a sheet opened from here returns to: the task with this list and the type, search and page it
+    // is on (when the list's contract accepts them).
+    const location = useLocation()
+    const taskState = continuedListState(location.pathname, location.state, location.search) ?? undefined
     const searchId = useId()
     const [input, setInput] = useState(browse.query)
     const [seenUrlQuery, setSeenUrlQuery] = useState(browse.query)
@@ -126,7 +131,7 @@ export function CharactersBrowser({ campaignId }: { campaignId: string }) {
                                                 title={entity.name}
                                                 summary={entity.summary}
                                                 to={`${base}/${encodeURIComponent(entity.entity_id)}`}
-                                                linkState={{ charactersReturn: browse.returnTo }}
+                                                linkState={taskState}
                                                 eyebrowAfterTitle
                                                 className="world-card"
                                                 linkLabel={

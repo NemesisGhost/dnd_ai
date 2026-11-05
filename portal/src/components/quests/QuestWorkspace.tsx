@@ -8,9 +8,10 @@ import { useAuthoringResource } from "../../hooks/useAuthoringResource"
 import type { RefetchOutcome, UseAuthoringResourceResult } from "../../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../../hooks/useCampaignCapability"
 import { usePageArrival } from "../../hooks/usePageArrival"
-import { pickWorldReturnState, useReviewBackPath } from "../../hooks/useWorldBackPath"
+import { useReviewBackPath } from "../../hooks/useWorldBackPath"
 import { useBreadcrumbLabel } from "../../navigation/BreadcrumbLabelContext"
 import { outsideTaskOf } from "../../navigation/breadcrumbModel"
+import { carriedState } from "../../navigation/taskReturn"
 import type { EntityLifecycleView } from "../../types/entityLifecycle"
 import type { QuestAuthoringView, QuestOptions } from "../../types/questAuthoring"
 import type { RevisionHistory } from "../../types/review"
@@ -193,7 +194,7 @@ function Workspace({
     // and its links carry the task. Opened from the Review queue or World, or directly, it keeps the
     // single back link it had (and the Review queue's return state).
     const taskBack = outsideTaskOf(location.pathname, location.state)
-    const linkState = taskBack !== null ? taskBack.state : pickWorldReturnState(location.state)
+    const linkState = taskBack !== null ? taskBack.state : carriedState(location.pathname, location.state)
     const reviewBack = useReviewBackPath(campaignId)
     const back = reviewBack !== null
         ? { href: reviewBack, label: "Back to Review queue" }

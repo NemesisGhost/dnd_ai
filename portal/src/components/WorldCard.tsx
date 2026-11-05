@@ -7,10 +7,8 @@ import { EntityCard } from "./EntityCard"
 interface WorldCardProps {
     campaignId: string
     entity: WorldEntityCard
-    // The browser's query string, so the entry's "Back to World" returns to
-    // the same category, search and page.
-    returnSearch?: string
-    // The task the record is opened in, carried beside the older `worldSearch` key.
+    // The task the record is opened in: the World browser with the category, search and page it is
+    // on, so the entry's "Back to World" returns to the same view.
     taskState?: object
 }
 
@@ -20,7 +18,7 @@ interface WorldCardProps {
 // (UI_STYLE_GUIDE.md §10.2); "organization" (no display name in the detail
 // response yet — see this workstream's report) stays a non-interactive,
 // visually consistent card.
-export function WorldCard({ campaignId, entity, returnSearch, taskState }: WorldCardProps) {
+export function WorldCard({ campaignId, entity, taskState }: WorldCardProps) {
     const eyebrow = describeWorldType(entity.category, entity.entity_type_code)
     // Only a canon.edit holder's preview ever returns a non-canon or archived
     // row; the badge says so in text, never by color alone.
@@ -41,9 +39,7 @@ export function WorldCard({ campaignId, entity, returnSearch, taskState }: World
             title={entity.name}
             summary={entity.summary}
             to={to}
-            linkState={
-                returnSearch === undefined ? taskState : { ...taskState, worldSearch: returnSearch }
-            }
+            linkState={taskState}
             eyebrowAfterTitle
             className="world-card"
             linkLabel={

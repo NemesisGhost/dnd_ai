@@ -169,6 +169,13 @@ afterEach(() => {
     vi.unstubAllGlobals()
 })
 
+// The state a link out of a list carries: the task with the list as it was left (the producers' shape).
+const listTask = (root: string, route: string, search: string) => ({
+    task: { v: 1, root, scope: { campaignId: "c1" }, trail: [] as object[], list: { route, search } },
+})
+const worldTask = (search: string) => listTask("world", "campaign.world", search)
+const reviewTask = (search: string) => listTask("review", "review.queue", search)
+
 describe("World record workspace: a place", () => {
     it("gives an editor the workspace, opened at the details of a draft, with the reader's own panels", async () => {
         const { server } = setup()
@@ -278,13 +285,12 @@ describe("World record workspace: a place", () => {
 
     it("carries where it was opened from to the edit page, and back", async () => {
         const { router } = setup({
-            entry: { pathname: "/app/c1/world/location/l1", search: "?section=details", state: { worldSearch: "?category=location" } },
+            entry: { pathname: "/app/c1/world/location/l1", search: "?section=details", state: worldTask("?category=location") },
         })
         fireEvent.click(await screen.findByRole("link", { name: "Edit location" }))
         await screen.findByText("Location edit page")
-        // The older keys beside the task, which now names the record the edit page was opened from.
+        // The task names the record the edit page was opened from.
         expect(router.state.location.state).toMatchObject({
-            worldSearch: "?category=location",
             returnTo: { pathname: "/app/c1/world/location/l1", search: "?section=details" },
             task: {
                 root: "world",
@@ -297,7 +303,16 @@ describe("World record workspace: a place", () => {
 })
 
 describe("World record workspace: where it leads back to", () => {
-    it("leads back to the World browser the record was opened from", async () => {
+    it("leads back to the World browser the record was opened from, by the task a link carries", async () => {
+        setup({ entry: { pathname: "/app/c1/world/location/l1", state: worldTask("?category=location&q=mill") } })
+        expect(await screen.findByRole("link", { name: "World" })).toHaveAttribute(
+            "href",
+            "/app/c1/world?category=location&q=mill",
+        )
+        expect(screen.queryByRole("link", { name: "Back to World" })).not.toBeInTheDocument()
+    })
+
+    it("leads back to the World browser an entry written before the task existed was opened from", async () => {
         setup({ entry: { pathname: "/app/c1/world/location/l1", state: { worldSearch: "?category=location&q=mill" } } })
         // A legacy `worldSearch` entry is adapted: the shared breadcrumb replaces the back link and its World
         // crumb returns to the same browser view.
@@ -315,7 +330,7 @@ describe("World record workspace: where it leads back to", () => {
     })
 
     it("leads back to the Review queue, with its filters, when opened from there", async () => {
-        setup({ entry: { pathname: "/app/c1/world/location/l1", state: { reviewSearch: "?status=approved&type=settlement" } } })
+        setup({ entry: { pathname: "/app/c1/world/location/l1", state: reviewTask("?status=approved&type=settlement") } })
         expect(await screen.findByRole("link", { name: "Review queue" })).toHaveAttribute(
             "href",
             "/app/c1/review?status=approved&type=settlement",
@@ -325,12 +340,14 @@ describe("World record workspace: where it leads back to", () => {
 
     it("keeps the return state on its own links", async () => {
         const { router } = setup({
-            entry: { pathname: "/app/c1/world/location/l1", state: { reviewSearch: "?status=draft" } },
+            entry: { pathname: "/app/c1/world/location/l1", state: reviewTask("?status=draft") },
         })
         await opened("Old Mill")
         fireEvent.click(screen.getByRole("link", { name: "Sources" }))
         await waitFor(() => expect(router.state.location.search).toBe("?section=sources"))
-        expect(router.state.location.state).toMatchObject({ reviewSearch: "?status=draft", task: { root: "review", trail: [] } })
+        expect(router.state.location.state).toMatchObject({
+            task: { root: "review", trail: [], list: { route: "review.queue", search: "?status=draft" } },
+        })
     })
 })
 
@@ -738,7 +755,7 @@ describe("World record workspace: a dungeon", () => {
                 entry: {
                     pathname: "/app/c1/world/location/l1",
                     search: "?section=areas",
-                    state: { reviewSearch: "?status=draft" },
+                    state: reviewTask("?status=draft"),
                 },
             },
         )
@@ -746,7 +763,9 @@ describe("World record workspace: a dungeon", () => {
         expect(list.getByRole("link", { name: "Entry Hall" })).toHaveAttribute("href", "/app/c1/world/location/a1")
         fireEvent.click(list.getByRole("link", { name: "Entry Hall" }))
         await waitFor(() => expect(router.state.location.pathname).toBe("/app/c1/world/location/a1"))
-        expect(router.state.location.state).toMatchObject({ reviewSearch: "?status=draft", task: { root: "review", trail: [] } })
+        expect(router.state.location.state).toMatchObject({
+            task: { root: "review", trail: [], list: { route: "review.queue", search: "?status=draft" } },
+        })
     })
 
     it("offers Edit only for the areas the server says can be edited, and returns to this list", async () => {
@@ -756,7 +775,7 @@ describe("World record workspace: a dungeon", () => {
                 entry: {
                     pathname: "/app/c1/world/location/l1",
                     search: "?section=areas",
-                    state: { worldSearch: "?category=location" },
+                    state: worldTask("?category=location"),
                 },
             },
         )
@@ -769,7 +788,6 @@ describe("World record workspace: a dungeon", () => {
         await screen.findByText("Area edit page")
         expect(router.state.location.pathname).toBe("/app/c1/world/dungeon/l1/areas/a1/edit")
         expect(router.state.location.state).toMatchObject({
-            worldSearch: "?category=location",
             returnTo: { pathname: "/app/c1/world/location/l1", search: "?section=areas" },
             task: {
                 root: "world",
@@ -858,13 +876,13 @@ describe("World record workspace: a dungeon", () => {
                 entry: {
                     pathname: "/app/c1/world/location/l1",
                     search: "?section=structure&x=1",
-                    state: { worldSearch: "?category=location" },
+                    state: worldTask("?category=location"),
                 },
             },
         )
         await screen.findByRole("heading", { level: 2, name: "Areas" })
         await waitFor(() => expect(router.state.location.search).toBe("?section=areas&x=1"))
-        expect(router.state.location.state).toEqual({ worldSearch: "?category=location" })
+        expect(router.state.location.state).toEqual(worldTask("?category=location"))
         expect(router.state.historyAction).toBe("REPLACE")
     })
 
@@ -1545,7 +1563,7 @@ describe("World record workspace: a dungeon area", () => {
 
     it("names the dungeon it is in, with a link up to the dungeon's Areas that keeps the return state", async () => {
         const { router } = area("canon", "active", {}, {
-            entry: { pathname: "/app/c1/world/location/l1", state: { reviewSearch: "?status=draft" } },
+            entry: { pathname: "/app/c1/world/location/l1", state: reviewTask("?status=draft") },
         })
         await opened("Entry hall")
         const link = screen.getByRole("link", { name: "Crypt" })
@@ -1553,7 +1571,9 @@ describe("World record workspace: a dungeon area", () => {
         fireEvent.click(link)
         await waitFor(() => expect(router.state.location.pathname).toBe("/app/c1/world/location/d1"))
         expect(router.state.location.search).toBe("?section=areas")
-        expect(router.state.location.state).toMatchObject({ reviewSearch: "?status=draft", task: { root: "review", trail: [] } })
+        expect(router.state.location.state).toMatchObject({
+            task: { root: "review", trail: [], list: { route: "review.queue", search: "?status=draft" } },
+        })
     })
 
     it("shows what the area holds in three compact groups, without any runtime status", async () => {
