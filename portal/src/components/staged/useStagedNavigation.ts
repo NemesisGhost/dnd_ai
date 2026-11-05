@@ -1,6 +1,6 @@
-import { useLayoutEffect, useState } from "react"
-import { useLocation, useSearchParams } from "react-router"
-import { markNormalization } from "../../navigation/entryStamp"
+import { useContext, useLayoutEffect, useState } from "react"
+import { UNSAFE_DataRouterContext, useLocation, useNavigate, useSearchParams } from "react-router"
+import { replaceOwnEntry } from "../../navigation/replaceOwnEntry"
 
 export interface StagedSectionRef<S extends string, K extends string> {
     key: K
@@ -28,9 +28,11 @@ export function useStagedNavigation<S extends string, K extends string>(
     defaultSection: K,
     { ready, aliases }: { ready: boolean; aliases?: Readonly<Record<string, K>> },
 ): StagedNavigation<S, K> {
-    const [params, setParams] = useSearchParams()
-    // The router state names where the record was opened from; replacing the address must keep it.
-    const { state, key } = useLocation()
+    const [params] = useSearchParams()
+    const navigate = useNavigate()
+    const dataRouter = useContext(UNSAFE_DataRouterContext)?.router ?? null
+    // The entry this render is for. The write below is owned by it (see the effect).
+    const location = useLocation()
     const requested = params.get("section")
     const aliased: string | null =
         requested !== null && aliases !== undefined && Object.prototype.hasOwnProperty.call(aliases, requested)
@@ -46,18 +48,38 @@ export function useStagedNavigation<S extends string, K extends string>(
     // followed a section link (React runs a pending one at the start of the render that link causes),
     // and its closure still holds the address from before, so it would replace the section they just
     // chose with the default. In a layout effect nothing can happen between the render and this.
+    //
+    // The write belongs to this entry (navigation/replaceOwnEntry.ts, the one implementation of entry-bound
+    // replacements): it is made only while the router's actual current location is still this entry and
+    // nothing is pending or waiting on a decision, and it is abandoned the moment a newer location exists
+    // (PUSH, POP, another REPLACE) or the effect is cleaned up. The query and state are taken from the
+    // router's own copy of the entry, so a render that lags a departure can neither overwrite the
+    // destination nor cut across a blocked navigation. A kept (Stay) entry is normalized afterwards; a left
+    // one is never touched. The mark (navigation/entryStamp.ts) only declares what the write is.
     useLayoutEffect(() => {
         if (ready && (parsed === null || parsed !== requested)) {
-            const next = new URLSearchParams(params)
-            next.set("section", section)
-            // The write declares itself (navigation/entryStamp.ts) before the router sees it: a copy of the
-            // router state for this entry, marked as this entry's section normalization. An object is needed
-            // to carry the mark; an entry with no object state has no selection arrival to keep.
-            const written: unknown = typeof state === "object" && state !== null ? { ...state } : state
-            if (typeof written === "object" && written !== null) markNormalization({ key, state }, written)
-            setParams(next, { replace: true, state: written })
+            return replaceOwnEntry({
+                router: dataRouter,
+                navigate,
+                location,
+                entryKey: location.key,
+                writer: "normalization",
+                next: (current) => {
+                    const query = new URLSearchParams(current.search)
+                    query.set("section", section)
+                    // The router state names where the record was opened from; replacing the address must
+                    // keep it. An object is needed to carry the mark; an entry with no object state has no
+                    // selection arrival to keep.
+                    const state: unknown =
+                        typeof current.state === "object" && current.state !== null ? { ...current.state } : current.state
+                    // The address is rewritten without a fragment, as before: an older address may carry one
+                    // that the page maps to a section (aliases).
+                    return { search: `?${query.toString()}`, state, hash: "" }
+                },
+            })
         }
-    }, [ready, parsed, requested, section, params, setParams, state, key])
+        return undefined
+    }, [ready, parsed, requested, section, dataRouter, navigate, location])
 
     // Remember the section last shown in each stage (adjusted during render, not in an effect).
     if (remembered[stage] !== section) {

@@ -621,3 +621,90 @@ describe("Authorization, reads and states", () => {
         expect(notGet()).toEqual([])
     })
 })
+
+// P02-7d correction: a lone `returnTo` is a page's own Back address. It is not evidence of a task origin,
+// so it must neither turn into a breadcrumb nor be forwarded as a synthesized task.
+describe("returnTo is a back address, not a task origin", () => {
+    const RETURN = { pathname: `${base}/characters/c1`, search: "?section=notes" }
+    const ownTask = {
+        v: 1,
+        root: "world",
+        scope: { campaignId: "mundivita" },
+        trail: [],
+        list: { route: "campaign.world", search: FILTERED },
+    }
+
+    it("a record entered with only returnTo keeps its single back link and forwards no task", async () => {
+        const app = openApp(`${base}/world`)
+        await act(async () => {
+            await app.router.navigate(`${base}/world/location/l1?section=details`, { state: { returnTo: RETURN } })
+        })
+        const back = await screen.findByRole("link", { name: "Back to World" })
+        expect(back).toHaveAttribute("href", `${base}/world`)
+        expect(screen.queryByRole("navigation", { name: "Breadcrumb" })).toBeNull()
+        fireEvent.click(await screen.findByRole("link", { name: "Sources" }))
+        await waitFor(() => expect(app.router.state.location.search).toBe("?section=sources"))
+        expect(entryState(app)?.task).toBeUndefined()
+        expect(screen.queryByRole("navigation", { name: "Breadcrumb" })).toBeNull()
+        expect(screen.getByRole("link", { name: "Back to World" })).toBeInTheDocument()
+    })
+
+    it("a related-record link from a returnTo-only entry carries no task", async () => {
+        server.on("GET", `${API}/world/organizations/o1`, { body: organizationDetail() })
+        const app = openApp(`${base}/world`)
+        await act(async () => {
+            await app.router.navigate(`${base}/world/organization/o1?section=details`, { state: { returnTo: RETURN } })
+        })
+        await screen.findByRole("heading", { level: 1, name: "The Guild" })
+        fireEvent.click(await screen.findByRole("link", { name: /Old Mill/ }))
+        await waitFor(() => expect(app.router.state.location.pathname).toBe(`${base}/world/location/l1`))
+        expect(entryState(app)?.task).toBeUndefined()
+    })
+
+    it("worldSearch / reviewSearch beside a returnTo still adapt to their task", async () => {
+        const app = openApp(`${base}/world`)
+        await act(async () => {
+            await app.router.navigate(`${base}/world/location/l1?section=details`, {
+                state: { worldSearch: FILTERED, returnTo: RETURN },
+            })
+        })
+        await screen.findByRole("heading", { level: 1, name: "Old Mill" })
+        expect(trail()).toEqual(["World", "Old Mill"])
+        expect(trailLinks()).toEqual([`${base}/world${FILTERED}`])
+        await act(async () => {
+            await app.router.navigate(`${base}/world/location/l1?section=details`, {
+                state: { reviewSearch: "?status=draft", returnTo: RETURN },
+            })
+        })
+        await waitFor(() => expect(trail()).toEqual(["Review queue", "Old Mill"]))
+    })
+
+    it("an explicit task keeps precedence over a returnTo beside it", async () => {
+        const app = openApp(`${base}/world`)
+        await act(async () => {
+            await app.router.navigate(`${base}/world/location/l1?section=details`, {
+                state: { task: ownTask, returnTo: RETURN },
+            })
+        })
+        await screen.findByRole("heading", { level: 1, name: "Old Mill" })
+        expect(trail()).toEqual(["World", "Old Mill"])
+        expect(trailLinks()).toEqual([`${base}/world${FILTERED}`])
+    })
+
+    it("a malformed or foreign returnTo fails safely to the single back link", async () => {
+        const app = openApp(`${base}/world`)
+        const bad = [
+            { pathname: "//evil.example/x", search: "" },
+            { pathname: "/app/other/characters/c1", search: "" },
+            { pathname: 7, search: null },
+            "https://evil.example",
+        ]
+        for (const returnTo of bad) {
+            await act(async () => {
+                await app.router.navigate(`${base}/world/location/l1?section=details`, { state: { returnTo } })
+            })
+            await screen.findByRole("link", { name: "Back to World" })
+            expect(screen.queryByRole("navigation", { name: "Breadcrumb" })).toBeNull()
+        }
+    })
+})

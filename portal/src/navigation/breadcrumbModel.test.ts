@@ -5,9 +5,11 @@ import {
     continuedListState,
     continuedState,
     continuedStateVia,
+    inWorldTask,
     legacyKeys,
     outsideTaskOf,
     retainedState,
+    taskOf,
 } from "./breadcrumbModel"
 import type { Crumb } from "./breadcrumbModel"
 import { startTask } from "./taskOrigin"
@@ -496,5 +498,41 @@ describe("Items and Item definitions (P02-7c)", () => {
         ])
         expect(outsideTaskOf(`${items}/i1/edit`, edit)?.nearest.ref.route).toBe("items.detail")
         expect(retainedState(`${items}/i1`, fromCharacter)?.task.root).toBe("characters")
+    })
+})
+
+// P02-7d correction: a lone `returnTo` is a page's own Back address, never evidence of a task origin.
+describe("returnTo alone is not task evidence", () => {
+    const record = `${base}/world/location/l1`
+    const returnTo = { pathname: `${base}/characters/c9`, search: "?section=notes" }
+    const worldTask = startTask("world", { campaignId: C })
+
+    it("taskOf, outsideTaskOf, retainedState and inWorldTask treat it like a direct entry", () => {
+        expect(taskOf(record, { returnTo })).toBeNull()
+        expect(outsideTaskOf(`${base}/characters/c1/edit`, { returnTo })).toBeNull()
+        expect(retainedState(record, { returnTo })).toBeNull()
+        expect(inWorldTask(`${record}/edit`, { returnTo })).toBe(false)
+        expect(taskOf(record, undefined)).toBeNull()
+    })
+
+    it("the supported adapters beside a returnTo still count, and an explicit task wins", () => {
+        const world = taskOf(record, { worldSearch: "?category=location", returnTo })
+        expect(world?.nearest.ref.route).toBe("campaign.world")
+        expect(taskOf(record, { reviewSearch: "?status=draft", returnTo })?.nearest.ref.route).toBe("review.queue")
+        expect(taskOf(record, { task: worldTask, returnTo })?.nearest.ref.route).toBe("campaign.world")
+        expect(inWorldTask(`${record}/edit`, { task: worldTask, returnTo })).toBe(true)
+    })
+
+    it("malformed and foreign state fails safely", () => {
+        const bad = [
+            null,
+            "x",
+            { returnTo: "https://evil.example" },
+            { returnTo: { pathname: "//evil.example", search: "" } },
+            { returnTo: { pathname: "/app/other/characters/c1", search: "" } },
+            { task: { v: 1, root: "world", scope: { campaignId: "other" }, trail: [] } },
+            { task: { v: 2 }, returnTo },
+        ]
+        for (const state of bad) expect(taskOf(record, state)).toBeNull()
     })
 })

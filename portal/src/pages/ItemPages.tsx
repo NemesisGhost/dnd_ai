@@ -11,7 +11,7 @@ import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { readQueryState, resolveReturnTo } from "../hooks/returnState"
 import { continuedListState, outsideTaskOf } from "../navigation/breadcrumbModel"
-import { resolveTask } from "../navigation/resolveTask"
+import { hasTaskEvidence, resolveTask } from "../navigation/resolveTask"
 import { pickReturnState } from "../hooks/useItemsBackPath"
 import { usePageArrival } from "../hooks/usePageArrival"
 import { useHeldWorldCapability, WORLD_CANON_READ_PRIVATE } from "../hooks/useWorldCapability"
@@ -59,7 +59,7 @@ function editNavigation({
 // own `returnTo` alone (the item page it came from, which says nothing about a task).
 function itemTaskOf(pathname: string, state: unknown) {
     const resolved = resolveTask(pathname, state)
-    if (resolved === null || resolved.source === "default" || resolved.backTarget !== undefined) return null
+    if (!hasTaskEvidence(resolved)) return null
     return outsideTaskOf(pathname, state)
 }
 

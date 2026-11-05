@@ -1,17 +1,16 @@
 import { useLocation } from "react-router"
 import { breadcrumbModel, continuedState } from "./breadcrumbModel"
 import type { CrumbState } from "./breadcrumbModel"
-import { resolveTask } from "./resolveTask"
+import { hasTaskEvidence, resolveTask } from "./resolveTask"
 
 /**
  * Whether the current history entry carries evidence of where the person came from: its own valid
- * task, or a legacy return key that validates. False after a direct entry, for state that fails
+ * task, or a legacy return key that adapts into one (a lone `returnTo` is only a back address). False after a direct entry, for state that fails
  * validation, and on a page that is not a task page; the route's defaults then apply.
  */
 export function useHasTaskOrigin(): boolean {
     const { pathname, state } = useLocation()
-    const resolved = resolveTask(pathname, state)
-    return resolved !== null && resolved.source !== "default"
+    return hasTaskEvidence(resolveTask(pathname, state))
 }
 
 /**
@@ -26,8 +25,7 @@ export function useHasTaskOrigin(): boolean {
 export function useTaskLinkState(options: { requireOrigin?: boolean } = {}): CrumbState | undefined {
     const { pathname, state } = useLocation()
     if (options.requireOrigin === true) {
-        const resolved = resolveTask(pathname, state)
-        if (resolved === null || resolved.source === "default") return undefined
+        if (!hasTaskEvidence(resolveTask(pathname, state))) return undefined
     }
     return continuedState(pathname, state) ?? undefined
 }

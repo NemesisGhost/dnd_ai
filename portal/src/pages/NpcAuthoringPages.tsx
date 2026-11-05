@@ -12,7 +12,7 @@ import { pickWorldReturnState } from "../hooks/useWorldBackPath"
 import { Link, useLocation, useParams } from "react-router"
 import { TaskBreadcrumb } from "../components/navigation/TaskBreadcrumb"
 import { breadcrumbModel } from "../navigation/breadcrumbModel"
-import { resolveTask } from "../navigation/resolveTask"
+import { hasTaskEvidence, resolveTask } from "../navigation/resolveTask"
 import { useTaskLinkState } from "../navigation/useTaskLinkState"
 import { ContentCreatePage } from "../components/authoring/ContentCreatePage"
 import type { ContentCreateConfig } from "../components/authoring/ContentCreatePage"
@@ -375,7 +375,7 @@ const summarize: ContentEditConfig<
 // the World navigation it has always had.
 function editTaskOf(pathname: string, state: unknown) {
     const resolved = resolveTask(pathname, state)
-    if (resolved === null || resolved.source === "default") return null
+    if (!hasTaskEvidence(resolved)) return null
     return resolved.task.root === "world" || resolved.task.root === "review" ? null : resolved.task
 }
 

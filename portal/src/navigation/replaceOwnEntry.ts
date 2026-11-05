@@ -1,11 +1,12 @@
 import type { Location, NavigateFunction } from "react-router"
 import type { DataRouter } from "react-router"
 import { runPermissionLossCleanup } from "../hooks/navigationHolds"
-import { markStamp } from "./entryStamp"
+import { markNormalization, markStamp } from "./entryStamp"
 
 // A replacement that belongs to one history entry (the one place stamps and clean-ups are written).
 // It runs only while that entry is still the router's current location and nothing is pending or
-// waiting on a decision, and is dropped the moment a newer location exists (which stamps itself), so
+// waiting on a decision (a blocker that is blocked, or proceeding because the person has answered and the
+// departure is under way), and is dropped the moment a newer location exists (which stamps itself), so
 // it can never overwrite a newer PUSH, REPLACE or POP, or cut across a blocked one. State and the
 // rest of the address are carried over from the router's own copy of the entry. It is a same-path,
 // same-context REPLACE: no question, no remount, no new entry, no session refresh, scroll kept.
@@ -21,6 +22,9 @@ import { markStamp } from "./entryStamp"
 // like it. The declaration is the state object itself: a replacement that is blocked, superseded or
 // abandoned leaves nothing behind but an object that is never committed.
 //
+// `writer` is only the kind of declaration the state carries (a context stamp, or a staged record page's
+// section normalization: same ownership, distinct mark). A mark identifies a write; it never authorizes one.
+//
 // Returns what abandons it.
 export function replaceOwnEntry({
     router,
@@ -29,18 +33,22 @@ export function replaceOwnEntry({
     entryKey,
     next,
     permissionLoss = false,
+    writer = "stamp",
 }: {
     router: DataRouter | null
     navigate: NavigateFunction
     location: Location
     entryKey: string
-    next: (current: Location) => { search: string; state: unknown }
+    // `hash` is kept unless the writer says otherwise (a staged page consumes a legacy fragment by mapping it to a section).
+    next: (current: Location) => { search: string; state: unknown; hash?: string }
     permissionLoss?: boolean
+    writer?: "stamp" | "normalization"
 }): (() => void) | undefined {
+    const mark = writer === "stamp" ? markStamp : markNormalization
     if (router === null) {
-        const { search, state } = next(location)
-        if (typeof state === "object" && state !== null) markStamp(location, state)
-        navigate({ pathname: location.pathname, search, hash: location.hash }, { replace: true, state })
+        const { search, state, hash = location.hash } = next(location)
+        if (typeof state === "object" && state !== null) mark(location, state)
+        navigate({ pathname: location.pathname, search, hash }, { replace: true, state })
         return undefined
     }
     let finished = false
@@ -57,14 +65,14 @@ export function replaceOwnEntry({
         }
         const waiting =
             current.navigation.state !== "idle" ||
-            (!permissionLoss && [...current.blockers.values()].some((blocker) => blocker.state === "blocked"))
+            (!permissionLoss && [...current.blockers.values()].some((blocker) => blocker.state !== "unblocked"))
         if (waiting) return
         finish()
-        const { search, state } = next(current.location)
-        if (typeof state === "object" && state !== null) markStamp(current.location, state)
+        const { search, state, hash = current.location.hash } = next(current.location)
+        if (typeof state === "object" && state !== null) mark(current.location, state)
         const apply = () =>
             void router.navigate(
-                { pathname: current.location.pathname, search, hash: current.location.hash },
+                { pathname: current.location.pathname, search, hash },
                 { replace: true, state, preventScrollReset: true },
             )
         if (permissionLoss) runPermissionLossCleanup(entryKey, apply)

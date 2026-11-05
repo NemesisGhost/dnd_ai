@@ -3,7 +3,7 @@ import { defaultAncestors, matchRouteMeta, patternParams, routeMetaById } from "
 import { isIdShaped } from "./contexts"
 import type { NavRoot, RouteMatch, RouteRef } from "./routeMeta"
 import { isValidListSearch } from "./listState"
-import { resolveTask } from "./resolveTask"
+import { hasTaskEvidence, resolveTask } from "./resolveTask"
 import { continueTask, isSafeSearch, validateTask } from "./taskOrigin"
 import type { TaskOriginV1, TrailEntry } from "./taskOrigin"
 
@@ -254,7 +254,7 @@ export function continuedStateVia(
  */
 export function retainedState(pathname: string, state: unknown): CrumbState | null {
     const resolved = resolveTask(pathname, state)
-    if (resolved === null || resolved.source === "default") return null
+    if (!hasTaskEvidence(resolved)) return null
     const task: TaskOriginV1 = {
         v: 1,
         root: resolved.task.root,
@@ -273,7 +273,7 @@ export function retainedState(pathname: string, state: unknown): CrumbState | nu
  */
 export function outsideTaskOf(pathname: string, state: unknown): { state: CrumbState; nearest: Crumb } | null {
     const resolved = resolveTask(pathname, state)
-    if (resolved === null || resolved.source === "default") return null
+    if (!hasTaskEvidence(resolved)) return null
     if (resolved.task.root === "world" || resolved.task.root === "review") return null
     return taskOf(pathname, state)
 }
@@ -286,7 +286,7 @@ export function outsideTaskOf(pathname: string, state: unknown): { state: CrumbS
  */
 export function taskOf(pathname: string, state: unknown): { state: CrumbState; nearest: Crumb } | null {
     const resolved = resolveTask(pathname, state)
-    if (resolved === null || resolved.source === "default") return null
+    if (!hasTaskEvidence(resolved)) return null
     const kept = retainedState(pathname, state)
     const nearest = breadcrumbModel(pathname, state)?.ancestors.at(-1)
     return kept === null || nearest === undefined ? null : { state: kept, nearest }

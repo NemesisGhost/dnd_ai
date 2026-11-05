@@ -13,6 +13,17 @@ export type { ResolvedTask } from "./legacyReturn"
  * Pure and total over any input: tampered state falls through to the next step. Returns null only for a
  * route that is not a task page. Evaluating it grants nothing and writes nothing.
  */
+/**
+ * Whether a resolution is evidence of where the person came from: the entry's own valid task, or a legacy
+ * key that adapted into one (worldSearch, reviewSearch, a characters return...). A lone `returnTo` is the
+ * page's own Back address, resolved onto the route's default task with a `backTarget`; it names no task,
+ * so it is no evidence, exactly like a direct entry.
+ */
+export function hasTaskEvidence(resolved: ResolvedTask | null): resolved is ResolvedTask {
+    if (resolved === null || resolved.source === "default") return false
+    return !(resolved.source === "legacy" && resolved.backTarget !== undefined)
+}
+
 export function resolveTask(pathname: string, state: unknown): ResolvedTask | null {
     const match = matchRouteMeta(pathname)
     if (match === null) return null
