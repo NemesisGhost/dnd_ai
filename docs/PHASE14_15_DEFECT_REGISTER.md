@@ -207,3 +207,20 @@ Found by the Phase 14/15 app-interaction investigation (planning ID ENC-01; inve
 | Fix | Projection inside `get_encounter_view` for non-`canon.edit` callers: started encounters only (`aborted` counts as started only with a `resulting_event_id`), `summary` and `notes` null, hidden participants and their turns removed, dense per-round `turn_order`, location/event/item ids nulled unless discoverable. Editor output unchanged. Fixed in the commit titled "fix: audience-project the campaign encounter detail read (DEF-009 / ENC-01)". |
 | Disposition | **Open — fix implemented and automated-tested; scripted API retest and owner acceptance pending.** Coverage variant `22.encounter-member` (Unexecuted). |
 | Follow-up, not fixed here | (1) `GET …/integration/external-systems/{id}/sync-state?target_encounter_id=` (`api/integration.py`, `queries/integration.py`) returns sync status for an encounter id under `campaign.view`. (2) Character detail's timeline-scoped `active_encounter_id` (`queries/character.py`). (3) `location_id` of a dungeon area follows the World Explorer rule, not campaign dungeon discovery state. (4) A started-aborted encounter whose abort event is physically deleted reads as unstarted for members (`resulting_event_id` is `ON DELETE SET NULL`; fails closed). Inventory for P03-A. |
+
+## 8. Found by the P02-7e review (2026-11-04)
+
+Source-confirmed by reading `InvitationsSection.tsx`, `useCreateCampaignInvitation.ts` and `CampaignInvitationsPage.tsx`; **not observed in a browser**. Pre-existing: P02 did not change these files. The proposed grading is for the owner to confirm; nothing here is accepted.
+
+### DEF-010 — Leaving the Invitations page can abandon an accepted issue response and lose the one-time token
+
+| Field | Value |
+|---|---|
+| ID / title | DEF-010 — Invitations issue operation is not owned across departure |
+| Trigger and affected persona/workflow | A GM or Admin issues an invitation on `/app/:c/access/invitations` and leaves the page (breadcrumb, Access tab, Navbar, Back) while the request is pending, or after the token is shown. |
+| Expected versus actual | Expected: the page asks before a departure that would abandon a pending write, keeps the idempotency key until the outcome is known, and never discards an accepted response. Actual (by code reading): the section has no guard or hold; `useCreateCampaignInvitation` aborts on unmount and ignores a response that arrives after the abort, and its unmount cleanup clears the reserved idempotency key; the shown token lives in the page's state and is gone after departure. |
+| Practical impact (who, what data) | The invitation may exist on the server while the issuer never sees its token (the token is returned once; a replay with the same key returns no token). A later submit after the cleared key uses a new key; whether that creates a second pending invitation for the same address is a backend question not examined. No data is exposed. |
+| Rubric: exposure / impact / triggerability / detection / blast → total, band | Proposed: 2 (normal path, narrow timing) + 1 (minor degradation, recoverable by revoking and reissuing) + 1 (needs authenticated issuer and timing) + 1 (silent) + 0 (one invitation) → **5, Medium**. |
+| Reproduction and evidence | Source reading only. No browser reproduction; no test reproduces it. Follow-up F-1 in [the reconciliation record](PHASE14_15_P02_RECONCILIATION_2026-11-04.md) §7 holds the acceptance criteria. |
+| Affected coverage and required retest | `InvitationsSection.test.tsx`, `CampaignInvitationsPage*.test.tsx`; the Access navigation tests in `App.setupAccessNavigation.test.tsx` do not cover it. Retest: issue then depart (pending and settled), Stay/Leave, late response, replay wording. |
+| Disposition | Open. Not fixed in P02-8 (out of scope: an invitation recovery redesign needs an owner decision on how a one-time token is surfaced after departure). |

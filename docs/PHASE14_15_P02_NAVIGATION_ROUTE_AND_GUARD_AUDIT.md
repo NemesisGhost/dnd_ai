@@ -225,7 +225,7 @@ Legacy keys: `sessions.list` has no list state, so no legacy key is written or r
 
 Guard audit: **no new guard caller, hold or declaring key.** `SessionDetailPage` (row 15) and `CreateSessionPage` (row 16) keep their declarations; their breadcrumb ancestors are plain links covered by the pathname predicate. The Run page's forms are not page-guarded (existing; pending and unknown-outcome writes are held by their `useAuthoringMutation` owners, and the pickers by `PickerRecordTime`'s blocker). `useRunNavigation` now delegates to `useStagedNavigation`, which keeps the entry's state when it normalizes `?section=`; `section` stays the only query key and every `RunSectionPanel` stays mounted, so it disposes nothing. `EncounterPages` and `RecordEventPage` are unchanged as guard callers.
 
-Reads: none were added. Labels come from the session read of the session page, the Run page and the two encounter pages, and from the event page's own read; the member's session read stays member-shaped. Remaining exceptions: `events.new` keeps its **Campaign Home** breadcrumb (it is reached from Campaign Home's tools), a direct entry to `events.detail` keeps its **Campaign Home** link, the World event page's `EventExplanation` links carry no task (P02-7d), and Home and other-family links to sessions carry none.
+Reads: none were added. Labels come from the session read of the session page, the Run page and the two encounter pages, and from the event page's own read; the member's session read stays member-shaped. Remaining exceptions: `events.new` keeps its **Campaign Home** breadcrumb (it is reached from Campaign Home's tools), a direct entry to `events.detail` keeps its **Campaign Home** link, the World event page's `EventExplanation` links carry no task (P02-7d) *(Superseded by P02-7d, which adopted these; see the reconciliation record R-1/R-2. Kept as written at that checkpoint.)*, and Home and other-family links to sessions carry none.
 
 
 ## 10. Quests and Knowledge after P02-7b
@@ -248,7 +248,7 @@ Guard audit: **no new caller or declaring key.** Row 12 (`KnowledgeClaimPage`) k
 
 Reads: none were added. The P02-7a `continuedStateVia` follow-up (§4.8.7) validates its parent against the destination's declared ancestors and the stored-task validation, and returns null otherwise.
 
-Remaining exceptions: the World event page and the World record workspace for non-character categories keep their links (P02-7d); a quest or claim opened from Campaign Home or another family's pages without task state shows the route defaults; `MemberPreviewShell`'s in-page **Return to Knowledge** / **Back to Member preview** links keep their plain hrefs.
+Remaining exceptions: the World event page and the World record workspace for non-character categories keep their links (P02-7d) *(Superseded by P02-7d, which adopted these; see the reconciliation record R-1/R-2. Kept as written at that checkpoint.)*; a quest or claim opened from Campaign Home or another family's pages without task state shows the route defaults; `MemberPreviewShell`'s in-page **Return to Knowledge** / **Back to Member preview** links keep their plain hrefs.
 
 
 ## 11. Items and Item definitions after P02-7c
@@ -271,7 +271,7 @@ Guard audit: **no new caller or declaring key.** Row 18 (`ItemWorkspace`'s `Unsa
 
 Reads: none were added. The definition catalog's filters are replaced in place by the page itself, as before (no router state is carried by that REPLACE; the list is the top of its task).
 
-Remaining exceptions: the World item page (`origin="world"`, **Back to World**), the character and party inventory panels' links to it, and an edit page reached from the World page keep their links (P02-7d); an edit page reached by a direct entry or by the item page's `returnTo` alone keeps its single back link; the definition catalog's own filter REPLACE and create destination are unchanged.
+Remaining exceptions: the World item page (`origin="world"`, **Back to World**), the character and party inventory panels' links to it, and an edit page reached from the World page keep their links (P02-7d) *(Superseded by P02-7d, which adopted these; see the reconciliation record R-1/R-2. Kept as written at that checkpoint.)*; an edit page reached by a direct entry or by the item page's `returnTo` alone keeps its single back link; the definition catalog's own filter REPLACE and create destination are unchanged.
 
 ## 12. World authoring and reader after P02-7d
 
@@ -309,3 +309,7 @@ Routes now rendering the shared breadcrumb (`routeMeta` ids): `campaign.settings
 Guard audit: **no new caller or declaring key.** Row 1 (`CampaignDetails`, `worldId` / `timelineId` disposing query, confirmed-create recovery hold) and row 2 (`CampaignSettingsPage`, dirty edits, no query) were re-inspected and are unchanged; the Access pages hold no navigation guard of their own beyond the mutation components' existing ones, which were not touched. The recovery contract (single create, created id owned until listed, Stay/Leave, release on successful read) is covered by `campaignSetup.test.tsx` (pending, rejected, superseded and stale confirming reads) and was re-run.
 
 Reads: none were added; the breadcrumb is static. Compatibility exceptions: the setup wizard's and `/campaigns`'s own links; Cancel returns to `/campaigns` whatever page opened the wizard (World overview, timeline page); `GetStartedCard` and the character panel's **Link a player** link carry no explicit task (the route's default root is the same).
+
+## 14. Status after P02-8
+
+No route, guard caller or declaring key changed in P02-8. Rows 1 and 2 (campaign setup and settings) and every row above stand as audited at their checkpoint. Two facts the earlier sections do not state: the legacy return keys are still read by the pages listed in the reconciliation record R-3, and `InvitationsSection` (reached from `access.invitations`) declares no guard or hold, so a departure during or just after an issue request can abandon the response (DEF-010, follow-up F-1). Neither was introduced by P02. No browser check has run; see [the reconciliation record](PHASE14_15_P02_RECONCILIATION_2026-11-04.md) §4.

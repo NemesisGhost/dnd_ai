@@ -299,3 +299,16 @@ Evidence methods: **H** human/manual in the portal · **S** scripted real-browse
 | TC-02 "revoked memberships absent", TC-21 "Player B owns Campaign B" | The old dev-campaign state no longer exists in the accounts-only baseline; the equivalents are E4/G2/G4 and SR-M9. |
 | TC-53 operator script | Replaced by the **Sharing** UI (`observer` → Viewer on Empty Marsh). |
 | Scripted real-browser evidence for the imported accounts | **Blocked pending owner login** — no credential was invented or reset (see environment doc §7). |
+
+## 7. Proposed P02 navigation variants (added 2026-11-04 by P02-8)
+
+Proposed by plan §8 (P02-8). **All four are marked *not executed*: no browser, scripted-browser, human or owner run has been performed for them.** Representative automated coverage (jsdom) is named for traceability only and is not evidence for these variants. Method codes as in the legend above.
+
+| Variant | Title | Scope | Methods | Status | Representative automated coverage |
+|---|---|---|---|---|---|
+| 03.nav-split | Navbar split controls, menu and drawer lifecycle | Main control vs disclosure, menu open/dismiss, focus to first child, modified-link activation, narrow drawer, collapsed rail, touch | H, S, A | **Not executed** | portal `NavbarMenu.integration`, `PortalSidebar`, `navbarDestinations` tests |
+| 05.task-origin | Breadcrumb and task origin across families | Hierarchy, task starts, direct entry, legacy adapters, wrapping at 320 px / 400% zoom, screen-reader landmark and `aria-current` | H, S, A | **Not executed** | portal `breadcrumbModel`, `taskOrigin`, per-family `App.*Navigation` tests |
+| 23.history | History retention and restoration | Back/Forward, reload, new tab, bfcache, `history.state` retention of `task` and `ctx` | H, S, A | **Not executed** | portal `selectedContext.history.integration`, `entryStamp` tests |
+| 55.context-guard | Selection departure, guards and loss handling | Dirty Stay/Leave, native modal close, destination-heading focus, immediate and deferred arrival, announcements, withdrawal after authority loss, two-tab revocation | H, S, A | **Not executed** | portal `selectionDeparture.integration`, `selectionArrival*` tests |
+
+The full checklist and required evidence fields are in [the P02 reconciliation record](PHASE14_15_P02_RECONCILIATION_2026-11-04.md) §4.
