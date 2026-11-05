@@ -307,8 +307,8 @@ Proposed by plan §8 (P02-8). **All four are marked *not executed*: no browser, 
 | Variant | Title | Scope | Methods | Status | Representative automated coverage |
 |---|---|---|---|---|---|
 | 03.nav-split | Navbar split controls, menu and drawer lifecycle | Main control vs disclosure, menu open/dismiss, focus to first child, modified-link activation, narrow drawer, collapsed rail, touch | H, S, A | **Not executed** | portal `NavbarMenu.integration`, `PortalSidebar`, `navbarDestinations` tests |
-| 05.task-origin | Breadcrumb and task origin across families | Hierarchy, task starts, direct entry, legacy adapters, wrapping at 320 px / 400% zoom, screen-reader landmark and `aria-current` | H, S, A | **Not executed** | portal `breadcrumbModel`, `taskOrigin`, per-family `App.*Navigation` tests |
+| 05.task-origin | Breadcrumb and task origin across families | Hierarchy, task starts, direct entry, legacy adapters, wrapping at 320 px, 200% zoom and 400% zoom, screen-reader landmark and `aria-current` | H, S, A | **Not executed** | portal `breadcrumbModel`, `taskOrigin`, per-family `App.*Navigation` tests |
 | 23.history | History retention and restoration | Back/Forward, reload, new tab, bfcache, `history.state` retention of `task` and `ctx` | H, S, A | **Not executed** | portal `selectedContext.history.integration`, `entryStamp` tests |
 | 55.context-guard | Selection departure, guards and loss handling | Dirty Stay/Leave, native modal close, destination-heading focus, immediate and deferred arrival, announcements, withdrawal after authority loss, two-tab revocation | H, S, A | **Not executed** | portal `selectionDeparture.integration`, `selectionArrival*` tests |
 
-The full checklist and required evidence fields are in [the P02 reconciliation record](PHASE14_15_P02_RECONCILIATION_2026-11-04.md) §4.
+The actionable checklist (prerequisites, action, expected result, evidence and failure criteria per item, B1-B22) is in [PHASE14_15_P02_RECONCILIATION_2026-11-04.md](PHASE14_15_P02_RECONCILIATION_2026-11-04.md) §6.1; every item is **not executed**. DOM or live-region inspection is not screen-reader evidence.
