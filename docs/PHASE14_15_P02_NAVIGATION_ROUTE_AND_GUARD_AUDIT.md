@@ -295,3 +295,17 @@ Reads: none were added. `useWorldDetail` now also returns the authority captured
 Remaining exceptions: the standalone `/worlds/*` pages; the character on `world.record` opened from World, the Review queue or directly; delete destinations; an edit entered with only legacy keys or a Review-queue task.
 
 Correction after review: (1) `hasTaskEvidence` separates task evidence from a return address, so `taskOf` / `outsideTaskOf` / `retainedState` / `useTaskLinkState` and the item and NPC edit readers treat a lone `returnTo` like a direct entry (single back link, no forwarded task); (2) `useStagedNavigation`'s section normalization is an entry-owned `replaceOwnEntry` write (writer mark `normalization`), checked against the router's current entry, waiting on pending navigation and on blocked or proceeding blockers, abandoned by a newer location, and never written over a destination after Leave. `replaceOwnEntry` now also waits on a `proceeding` blocker (the stamp writer shares it). Guard audit unchanged: no new caller, hold or declaring key. Shared-hook consumers re-run: Character (`CharacterRecordNav`), Quest, Knowledge claim, Item, Run, Calendar creation and the World workspace; defaults, aliases and stage availability are unchanged.
+
+## 13. Campaign setup, settings and Access after P02-7e
+
+Routes now rendering the shared breadcrumb (`routeMeta` ids): `campaign.settings` (Campaign Home › Campaign settings), `access.invitations` and `access.audit` (Access › page). `access.overview` is the Access root (no ancestors, nothing rendered). The unscoped `campaigns.list` / `campaigns.new` pages keep their own links and destinations.
+
+| From | To | State carried |
+|---|---|---|
+| Settings / Invitations / Audit crumb | Campaign Home / Access | `breadcrumbModel` crumb state: the task (root only) cut back to the ancestor; no list, no name |
+| Access tab strip | the three Access routes | none (peer routes; trail identical) |
+| Campaign Home, Navbar | settings, Invitations | none (route default root = the explicit start) |
+
+Guard audit: **no new caller or declaring key.** Row 1 (`CampaignDetails`, `worldId` / `timelineId` disposing query, confirmed-create recovery hold) and row 2 (`CampaignSettingsPage`, dirty edits, no query) were re-inspected and are unchanged; the Access pages hold no navigation guard of their own beyond the mutation components' existing ones, which were not touched. The recovery contract (single create, created id owned until listed, Stay/Leave, release on successful read) is covered by `campaignSetup.test.tsx` (pending, rejected, superseded and stale confirming reads) and was re-run.
+
+Reads: none were added; the breadcrumb is static. Compatibility exceptions: the setup wizard's and `/campaigns`'s own links; Cancel returns to `/campaigns` whatever page opened the wizard (World overview, timeline page); `GetStartedCard` and the character panel's **Link a player** link carry no explicit task (the route's default root is the same).

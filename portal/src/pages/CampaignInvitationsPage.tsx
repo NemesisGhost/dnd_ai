@@ -1,6 +1,7 @@
 import { useState } from "react"
 import { useParams } from "react-router"
 import { AccessTabNav } from "../components/AccessTabNav"
+import { TaskBreadcrumb } from "../components/navigation/TaskBreadcrumb"
 import { InvitationsSection } from "../components/InvitationsSection"
 import PlaceholderPage from "./PlaceholderPage"
 
@@ -76,6 +77,7 @@ export function CampaignInvitationsPage() {
 
     return (
         <>
+            <TaskBreadcrumb />
             <AccessTabNav campaignId={activeCampaignId} />
 
             <p

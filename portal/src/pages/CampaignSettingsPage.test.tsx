@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react"
+import { fireEvent, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import { bootstrapWith, installMockServer, renderAuthoringRoutes } from "../test/authoringHarness"
@@ -269,7 +269,7 @@ describe("campaign settings: edits after a confirmed save whose re-read failed",
         await saveRenamed()
         void state
         // Nothing typed since the save: leaving is not discarding anything.
-        fireEvent.click(screen.getByRole("link", { name: "Back to Campaign Home" }))
+        fireEvent.click(within(screen.getByRole("navigation", { name: "Breadcrumb" })).getByRole("link", { name: "Campaign Home" }))
         expect(await screen.findByRole("heading", { name: "Home stub" })).toBeInTheDocument()
     })
 
@@ -277,7 +277,7 @@ describe("campaign settings: edits after a confirmed save whose re-read failed",
         afterConfirmedSave()
         await saveRenamed()
         rename("Typed after the save")
-        fireEvent.click(screen.getByRole("link", { name: "Back to Campaign Home" }))
+        fireEvent.click(within(screen.getByRole("navigation", { name: "Breadcrumb" })).getByRole("link", { name: "Campaign Home" }))
         expect(await screen.findByRole("button", { name: "Keep editing" })).toBeInTheDocument()
         expect(screen.queryByRole("heading", { name: "Home stub" })).toBeNull()
         fireEvent.click(screen.getByRole("button", { name: "Keep editing" }))
