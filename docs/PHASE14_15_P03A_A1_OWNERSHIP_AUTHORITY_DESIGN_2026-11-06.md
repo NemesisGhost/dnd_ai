@@ -85,6 +85,8 @@ So a non-owner can hold `access.manage` only through a custom role capability: a
    - The recipient's account row is not locked early. The audit insert's foreign key to the caller's account needs a key-share lock, so an early `FOR UPDATE` on that account in the other half of a mutual transfer produced a deadlock only visible through the HTTP route. `assign_membership_role` locks the account under the membership lock, which is enough.
    - `end_campaign_membership` stamps every revocation and the closure with one `clock_timestamp()` read after its locks. `now()` is the transaction start time; an end that queued behind a transfer stamped `revoked_at` earlier than the assignment the transfer had just created and failed the `revoked_at >= granted_at` check (a 400).
 
+   **Recipient's expired owner row (DEF-011).** `transfer_campaign_ownership` first locks the recipient's expired, unrevoked owner rows (`expires_at <= now()`, in the recipient's campaign, ordered by id) with the caller's own owner assignment already held, and before the recipient's membership row, so it joins the role-rows-then-membership order that `end_campaign_membership` uses. Only expired rows are locked: a live recipient row is the other half of a mutual transfer's own lock, and locking it would deadlock the pair. The expired rows are then closed with `revoke_membership_role` and a live row is assigned, all under the locks above; if assignment is refused the transaction rolls back and the caller keeps ownership.
+
    Remaining, not changed here: `change_membership_role` locks its role row, membership and current role in one statement, whose internal order follows the query plan rather than a stated rule; it has always been so, and it follows the same role-row-then-membership order in practice.
 
 3. **Server-side role list.** `list_assignable_campaign_roles` ([access_overview.py:436](../src/dnd_ai/queries/access_overview.py#L436)) takes the caller's membership and leaves out the built-in owner role unless the caller is a live owner. The portal is never offered an action that would be refused.
@@ -155,9 +157,9 @@ If either count is not zero, the deployment would see the gate change behavior, 
 
 ## 7. Follow-ups recorded outside D3
 
-Both are recorded in the [defect register](PHASE14_15_DEFECT_REGISTER.md) §9 as proposed gradings, are not fixed here, and are checked by `scripts/preflight_campaign_owner_gate.py`.
+Both were recorded in the [defect register](PHASE14_15_DEFECT_REGISTER.md) §9 as proposed gradings, are not fixed here, and are checked by `scripts/preflight_campaign_owner_gate.py`.
 
-- **F1 (DEF-011), expired-target transfer.** `transfer_campaign_ownership` looks for the target's existing owner row using only `revoked_at IS NULL` (the `already` query in [memberships.py](../src/dnd_ai/commands/memberships.py)). A target whose owner assignment expired but was never revoked reads as already owning: the transfer reports `assigned: false` and still lets the caller relinquish. The retention rule then refuses (400) or leaves the campaign with whoever else manages it. Assigning a fresh row would instead hit `ux_membership_roles_active`, because the expired row is still unrevoked. Reachable today: `POST …/memberships/{id}/roles` accepts `expires_at`.
+- **F1 (DEF-011), expired-target transfer.** Fixed in a later checkpoint: see the defect register and §3 ("Recipient's expired owner row"). A transfer now replaces the recipient's expired, unrevoked owner row with a live one, or is refused atomically.
 - **F2 (DEF-012), recovery gap.** `recover_campaign_access_manager` and the stranded-campaign report look for any non-expiring `access.manage` holder. When a custom role is the only `access.manage` holder and no live built-in owner exists, an administrator cannot restore an owner and the campaign permanently loses owner-derived reveal authority. Not reachable through an application path today (no endpoint writes custom role capabilities).
 
 ## 8. Implementation record (2026-11-06)

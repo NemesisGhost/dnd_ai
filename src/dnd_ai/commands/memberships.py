@@ -1368,6 +1368,10 @@ class TransferCampaignOwnershipResult:
     target_campaign_membership_id: uuid.UUID
     assigned_membership_role_id: uuid.UUID | None
     revoked_membership_role_ids: tuple[uuid.UUID, ...]
+    # The recipient's own expired, unrevoked owner rows that this transfer closed so a live one
+    # could be assigned in their place (DEF-011). Not part of `revoked_membership_role_ids`, which
+    # is only the caller's relinquished ownership.
+    replaced_expired_membership_role_ids: tuple[uuid.UUID, ...] = ()
 
 
 def transfer_campaign_ownership(
@@ -1411,6 +1415,24 @@ def transfer_campaign_ownership(
         )
     ).scalar()
     assert isinstance(owner_role_id, uuid.UUID)
+    # The recipient's expired, unrevoked owner rows are role rows, so they are locked before the
+    # recipient's membership row (the order `end_campaign_membership` uses). Only expired rows are
+    # locked: a live row is the other half of a mutual transfer's own lock and locking it here
+    # would deadlock the pair.
+    connection.execute(
+        text("""
+            SELECT mr.membership_role_id
+            FROM security.membership_roles mr
+            JOIN security.campaign_memberships cm
+                ON cm.campaign_membership_id = mr.campaign_membership_id
+            WHERE mr.campaign_membership_id = :m AND cm.campaign_id = :campaign
+              AND mr.role_id = :r AND mr.revoked_at IS NULL
+              AND mr.expires_at IS NOT NULL AND mr.expires_at <= now()
+            ORDER BY mr.membership_role_id
+            FOR UPDATE OF mr
+        """),
+        {"m": target_campaign_membership_id, "r": owner_role_id, "campaign": campaign_id},
+    ).all()
     if relinquish_own_ownership and actor_membership_id != target_campaign_membership_id:
         _lock_for_relinquishing_transfer(
             connection,
@@ -1418,13 +1440,30 @@ def transfer_campaign_ownership(
             target_campaign_membership_id=target_campaign_membership_id,
             owner_role_id=owner_role_id,
         )
-    already = connection.execute(
-        text("""
-            SELECT membership_role_id FROM security.membership_roles
-            WHERE campaign_membership_id = :m AND role_id = :r AND revoked_at IS NULL
-        """),
-        {"m": target_campaign_membership_id, "r": owner_role_id},
-    ).scalar()
+    current = (
+        connection.execute(
+            text("""
+                SELECT membership_role_id,
+                       (expires_at IS NOT NULL AND expires_at <= now()) AS is_expired
+                FROM security.membership_roles
+                WHERE campaign_membership_id = :m AND role_id = :r AND revoked_at IS NULL
+                ORDER BY membership_role_id
+            """),
+            {"m": target_campaign_membership_id, "r": owner_role_id},
+        )
+        .mappings()
+        .all()
+    )
+    # An expired row that was never revoked still occupies `ux_membership_roles_active`, so a new
+    # assignment cannot be inserted beside it, and it grants nothing: close it (the same
+    # revocation `revoke_membership_role` makes) and give the recipient a live row. Only a live
+    # row counts as "already an owner".
+    replaced = [row["membership_role_id"] for row in current if row["is_expired"]]
+    for membership_role_id in replaced:
+        revoke_membership_role(
+            connection, membership_role_id=membership_role_id, campaign_id=campaign_id
+        )
+    already = next((row["membership_role_id"] for row in current if not row["is_expired"]), None)
     assigned: uuid.UUID | None = None
     if already is None:
         assigned = assign_membership_role(
@@ -1453,4 +1492,5 @@ def transfer_campaign_ownership(
         target_campaign_membership_id=target_campaign_membership_id,
         assigned_membership_role_id=assigned,
         revoked_membership_role_ids=tuple(revoked),
+        replaced_expired_membership_role_ids=tuple(replaced),
     )

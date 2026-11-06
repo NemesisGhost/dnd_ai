@@ -664,6 +664,7 @@ def transfer_campaign_ownership_endpoint(
             changed_fields={
                 "assigned": result.assigned_membership_role_id is not None,
                 "relinquished": bool(result.revoked_membership_role_ids),
+                "replaced_expired_assignment": bool(result.replaced_expired_membership_role_ids),
             },
         )
     return TransferCampaignOwnershipResponse(
