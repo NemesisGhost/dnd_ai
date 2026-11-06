@@ -16,6 +16,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Connection, Engine, text
 
+from dnd_ai.commands.local_auth import _disable_local_account_impl
 from dnd_ai.commands.memberships import (
     MembershipNotActiveError,
     end_campaign_membership,
@@ -47,6 +48,7 @@ from tests.factories import (
     make_campaign,
     make_campaign_membership,
     make_membership_role,
+    make_system_role_assignment,
     make_user,
 )
 
@@ -509,3 +511,115 @@ def test_ending_a_live_owner_recipient_first_refuses_the_transfer(
     assert _live_owners(postgres_engine, g) == {g.o1}
     assert _ended(postgres_engine, g) == {g.o2}
     assert _transfer_audit(postgres_engine, g) == []
+
+
+# --- recipient account deactivation against a relinquishing transfer -------------------------
+
+
+def _platform_admin(engine: Engine) -> uuid.UUID:
+    with engine.begin() as connection:
+        admin = make_user(connection, "Platform Admin")
+        make_system_role_assignment(connection, admin, "admin")
+    return admin
+
+
+def _account_active(engine: Engine, user_id: uuid.UUID) -> bool:
+    with engine.connect() as connection:
+        return bool(
+            connection.execute(
+                text("""
+                    SELECT ls.code = 'active'
+                    FROM security.users u
+                    JOIN core.lifecycle_statuses ls
+                        ON ls.lifecycle_status_id = u.lifecycle_status_id
+                    WHERE u.user_id = :u
+                """),
+                {"u": user_id},
+            ).scalar_one()
+        )
+
+
+def _disable_audit_count(engine: Engine, user_id: uuid.UUID) -> int:
+    with engine.connect() as connection:
+        return int(
+            connection.execute(
+                text("""
+                    SELECT count(*) FROM audit.change_log
+                    WHERE command_name = 'local_auth.disable_account' AND record_id = :u
+                """),
+                {"u": user_id},
+            ).scalar_one()
+        )
+
+
+def test_a_recipient_deactivated_first_refuses_the_handoff(
+    client_factory: Callable[[uuid.UUID], TestClient], postgres_engine: Engine, g: Gate
+) -> None:
+    """The deactivation holds the recipient's account row (`FOR UPDATE`) when the relinquishing
+    transfer arrives. The transfer waits for that row, then finds an inactive account: the
+    recipient is not a live owner, the assignment refuses the account, and the whole transfer
+    rolls back with the caller still the owner. Before the fix the transfer never touched the
+    recipient's account, read it as active from its snapshot and relinquished at once."""
+    admin = _platform_admin(postgres_engine)
+    disabling = _park_command(
+        postgres_engine,
+        lambda c: _disable_local_account_impl(c, admin_user_id=admin, target_user_id=g.o2_user_id),
+    )
+    assert disabling.error is None
+    transfer = _transfer_to(client_factory, g, g.o2)
+    _wait_until_waiting(postgres_engine, 1)
+    assert not transfer.done, "the transfer must wait for the deactivation"
+    disabling.end(commit=True)
+    response = transfer.join()
+
+    assert _status(response) == 409, response.text  # type: ignore[attr-defined]
+    assert response.json()["error"]["code"] == "conflict"  # type: ignore[attr-defined]
+    assert not _account_active(postgres_engine, g.o2_user_id)
+    assert _live_owners(postgres_engine, g) == {g.o1}
+    assert _row_state(postgres_engine, g.o1_role) == (False, False)
+    assert _row_state(postgres_engine, g.o2_role) == (False, False)
+    assert _transfer_audit(postgres_engine, g) == []
+
+
+def test_a_handoff_that_wins_makes_the_recipient_deactivation_wait_for_its_commit(
+    client_factory: Callable[[uuid.UUID], TestClient], postgres_engine: Engine, g: Gate
+) -> None:
+    """The transfer is paused after its final recipient check, at its audit insert (the test holds
+    the `updated` change-action row the audit row's foreign key needs), so it has relinquished but
+    not committed. The deactivation, over HTTP, must then wait for the recipient's account row
+    until the transfer commits; it applies afterwards, the serial order. Before the fix the
+    deactivation committed inside that window and the transfer then committed a handoff to an
+    inactive account."""
+    admin = _platform_admin(postgres_engine)
+    pause = _Hold(
+        postgres_engine,
+        "SELECT 1 FROM audit.change_actions WHERE code = 'updated' FOR UPDATE",
+        {},
+    )
+    transfer = _transfer_to(client_factory, g, g.o2)
+    _wait_until_waiting(postgres_engine, 1)
+    disable = _post(client_factory, admin, f"/admin/accounts/{g.o2_user_id}/disable", {})
+    _wait_until_waiting(postgres_engine, 2)
+    assert not disable.done, "the deactivation must wait for the transfer to commit"
+    assert _account_active(postgres_engine, g.o2_user_id)
+    pause.release()
+    response = transfer.join()
+    assert _status(response) == 200, response.text  # type: ignore[attr-defined]
+    assert response.json() == {  # type: ignore[attr-defined]
+        "target_campaign_membership_id": str(g.o2),
+        "assigned": False,
+        "relinquished": True,
+    }
+    assert _status(disable.join()) == 200
+
+    # The handoff committed to a live owner; the deactivation then applied after it. That a later
+    # deactivation can leave no live built-in owner while a custom manager remains is outside
+    # DEF-011 (design §3, "Left out on purpose").
+    assert not _account_active(postgres_engine, g.o2_user_id)
+    assert _row_state(postgres_engine, g.o1_role) == (True, False)
+    assert _row_state(postgres_engine, g.o2_role) == (False, False)
+    assert _live_owners(postgres_engine, g) == set()
+    assert _transfer_audit(postgres_engine, g) == [
+        {"assigned": False, "relinquished": True, "replaced_expired_assignment": False}
+    ]
+    assert _disable_audit_count(postgres_engine, g.o2_user_id) == 1

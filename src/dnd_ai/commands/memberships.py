@@ -1343,11 +1343,21 @@ def _lock_for_relinquishing_transfer(
     owner_role_id: uuid.UUID,
 ) -> None:
     """Takes, in the codebase's one lock order, every lock a relinquishing transfer needs before it
-    reads who currently owns the campaign: the recipient's membership, the owner role template and,
-    last, the campaign row. The caller's own owner assignment is already held. The recipient's
-    account row is deliberately not locked here: `assign_membership_role` locks it under the
-    membership lock, and locking it earlier made the audit insert's foreign key to the caller's own
-    account wait on the other side of a mutual transfer.
+    reads who currently owns the campaign: the recipient's membership, the recipient's account,
+    the owner role template and, last, the campaign row. The caller's own owner assignment is
+    already held.
+
+    Why the recipient's account, and why `FOR KEY SHARE` (DEF-011): deactivating an account locks
+    its row `FOR UPDATE` before changing its status (`dnd_ai.commands.local_auth`), and an account
+    deactivated between the recipient check and commit would leave the caller relinquished to an
+    inactive owner. `FOR KEY SHARE` is the weakest lock that conflicts with `FOR UPDATE`, so a
+    deactivation that holds the row first makes the transfer wait and then see the inactive
+    account, and one that comes later waits for this transfer's commit. It does not conflict with
+    another key-share lock, which is all the other side of a mutual transfer takes on this row
+    (its audit row's foreign key to its own account), nor with a login's `last_login_at` update. An
+    earlier version took `FOR UPDATE` here and deadlocked exactly that mutual pair. When the
+    recipient is not yet an owner, `assign_membership_role` later raises this to `FOR UPDATE`
+    under the same membership lock.
 
     Why the campaign row: two owners relinquishing to each other at once each see the other as the
     remaining owner and would both commit, leaving the campaign with no built-in owner (the
@@ -1365,6 +1375,16 @@ def _lock_for_relinquishing_transfer(
             SELECT 1 FROM security.campaign_memberships
             WHERE campaign_membership_id = :membership AND campaign_id = :campaign
             FOR UPDATE
+        """),
+        {"membership": target_campaign_membership_id, "campaign": campaign_id},
+    ).all()
+    connection.execute(
+        text("""
+            SELECT 1
+            FROM security.users u
+            JOIN security.campaign_memberships cm ON cm.user_id = u.user_id
+            WHERE cm.campaign_membership_id = :membership AND cm.campaign_id = :campaign
+            FOR KEY SHARE OF u
         """),
         {"membership": target_campaign_membership_id, "campaign": campaign_id},
     ).all()
@@ -1404,11 +1424,16 @@ def _require_live_recipient_at_completion(
     The only other step before commit is the retention trigger's campaign row lock, which a
     relinquishing transfer already holds.
 
-    A concurrent revocation of the recipient's assignment takes that campaign row at commit, and
-    ending the recipient's membership needs the recipient's membership row, which a relinquishing
-    transfer also holds. Either one that committed before the check is seen by it; one that had not
-    committed is ordered after this transfer. A non-relinquishing transfer gives nothing up, so a
-    later change to the recipient only makes its result older, never wrong at commit."""
+    A concurrent revocation of the recipient's assignment takes that campaign row at commit, ending
+    the recipient's membership needs the recipient's membership row, and deactivating the
+    recipient's account needs the account row `FOR UPDATE`, which conflicts with the key-share lock
+    `_lock_for_relinquishing_transfer` holds. A relinquishing transfer holds all three. Any of them
+    that committed before the check is seen by it; one that had not committed is ordered after this
+    transfer. A non-relinquishing transfer gives nothing up, so a later change to the recipient
+    only makes its result older, never wrong at commit.
+
+    Row locks cannot stop a finite `expires_at` from passing: a recipient whose live assignment has
+    one is guaranteed live at this check, not at commit (design §3, "Time boundary")."""
     connection.execute(
         text("""
             SELECT 1
