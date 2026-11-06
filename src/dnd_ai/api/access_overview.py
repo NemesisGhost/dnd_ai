@@ -292,7 +292,11 @@ def get_campaign_access_overview_endpoint(
     members = get_campaign_access_overview(
         connection, campaign_id=campaign_id, timeline_id=access.timeline_id
     )
-    assignable_roles = list_assignable_campaign_roles(connection, campaign_id=campaign_id)
+    assignable_roles = list_assignable_campaign_roles(
+        connection,
+        campaign_id=campaign_id,
+        caller_campaign_membership_id=access.campaign_membership_id,
+    )
     assignable_characters = list_assignable_campaign_characters(
         connection, world_id=timeline_world_id(connection, access.timeline_id)
     )

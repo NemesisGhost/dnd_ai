@@ -73,6 +73,10 @@ Two further gaps follow: a campaign `canon.edit` holder can write the shared can
 
 **Defaults approved (decision register DR-7, 2026-10-24).** Q2, Q5, Q8, Q11, Q12, Q13, the lifecycle of the campaign-originated records, Viewer/Reader coexistence and the Q4 interpretation ("no campaign role requires system GM") are implemented as the defaults above. The owner approved them as a set on 2026-10-24: "For now I accept the defaults." The approval covers exactly the defaults described in this ADR as implemented; it adds nothing, and it is not approval to land or deploy.
 
+## Amendment: granting the campaign owner role (2026-11-06)
+
+Owner decision D3 (P03-A). Four commands hand out the built-in `campaign_owner` role: assigning it, changing a member to it, adding a member with it and transferring ownership. Each now requires a live built-in owner assignment in the same campaign **in addition to** `access.manage`. "Live" is the single definition `find_live_builtin_owner_assignment` (the built-in template matched by identity, assignment unrevoked and unexpired, membership open and active, account active). Every other role stays assignable with `access.manage` alone, and campaign creation and administrative recovery are unchanged. The built-in owner role is also left out of the assignable-role list for a caller who is not a live owner. Decisions 7 and 9 are unchanged; this narrows only who may confer owner-derived authority, so a custom `access.manage` holder cannot make themselves an owner. See [PHASE14_15_P03A_A1_OWNERSHIP_AUTHORITY_DESIGN_2026-11-06.md](../PHASE14_15_P03A_A1_OWNERSHIP_AUTHORITY_DESIGN_2026-11-06.md).
+
 ## References
 
 - [SCOPED_ROLE_IMPLEMENTATION_PLAN.md](../SCOPED_ROLE_IMPLEMENTATION_PLAN.md)

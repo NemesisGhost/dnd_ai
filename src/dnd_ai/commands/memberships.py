@@ -98,7 +98,12 @@ from datetime import datetime
 
 from sqlalchemy import Connection, text
 
-from dnd_ai.domain.access import LOCAL_AUTH_ISSUER
+from dnd_ai.domain.access import (
+    LOCAL_AUTH_ISSUER,
+    OwnerAssignmentLock,
+    find_live_builtin_owner_assignment,
+    is_builtin_campaign_owner_role,
+)
 from dnd_ai.domain.errors import DomainAuthorizationError, SafeMessageError
 
 from ._shared import lookup_id
@@ -299,6 +304,73 @@ class ChangeMembershipRoleNoOpError(SafeMessageError):
     safe_message = "The selected role is already this member's current role for this assignment."
 
 
+class CampaignOwnerRequiredError(DomainAuthorizationError):
+    """Raised when a caller who is not a live built-in `campaign_owner` of the campaign tries to
+    grant that role: assign it, change a role to it, add a member with it, or transfer ownership
+    (P03-A decision D3, docs/PHASE14_15_P03A_A1_OWNERSHIP_AUTHORITY_DESIGN_2026-11-06.md).
+    `access.manage` alone no longer reaches those four paths. 403 `campaign_owner_required`, not the
+    base 404: the caller is an authorized campaign member and learns nothing about any target from
+    being told the role is owner-only."""
+
+    safe_status_code = 403
+    safe_error_code = "campaign_owner_required"
+    safe_message = "Only a campaign owner may grant the campaign owner role."
+
+
+def _require_builtin_campaign_owner(
+    connection: Connection,
+    *,
+    campaign_id: uuid.UUID,
+    actor_membership_id: uuid.UUID,
+    lock: OwnerAssignmentLock = "share",
+) -> None:
+    """The D3 ownership gate. Locks the caller's live owner assignment (see
+    `find_live_builtin_owner_assignment`) so that revoking it, ending the membership or
+    relinquishing it waits for this transaction, and a revocation that committed first refuses
+    this one. Checked against the database, never a request-time `AccessContext`.
+
+    Lock order: every gated command takes this lock first, before any other row lock it needs, so
+    two gated commands by the same owner cannot wait on each other, and a revocation (which also
+    takes the campaign row lock at commit, through the access-manager retention trigger) cannot
+    cycle with a gated command that holds the campaign row."""
+    if (
+        find_live_builtin_owner_assignment(
+            connection,
+            campaign_id=campaign_id,
+            campaign_membership_id=actor_membership_id,
+            lock=lock,
+        )
+        is None
+    ):
+        raise CampaignOwnerRequiredError(
+            f"membership {actor_membership_id} holds no live campaign_owner assignment in "
+            f"campaign {campaign_id}"
+        )
+
+
+def _require_owner_if_granting_owner_role(
+    connection: Connection,
+    *,
+    campaign_id: uuid.UUID,
+    actor_membership_id: uuid.UUID,
+    role_id: uuid.UUID,
+) -> None:
+    """Applies the D3 gate when `role_id` is the built-in owner template and does nothing for any
+    other role. The template's `campaign_id` and `code` never change, so this unlocked read can
+    safely run before the caller's other locks; a missing or unusable role is left for the
+    command's own later check."""
+    role = connection.execute(
+        text("SELECT campaign_id, code FROM security.roles WHERE role_id = :role"),
+        {"role": role_id},
+    ).one_or_none()
+    if role is not None and is_builtin_campaign_owner_role(
+        role_campaign_id=role.campaign_id, role_code=role.code
+    ):
+        _require_builtin_campaign_owner(
+            connection, campaign_id=campaign_id, actor_membership_id=actor_membership_id
+        )
+
+
 @dataclass(frozen=True)
 class CreateCampaignMembershipResult:
     campaign_membership_id: uuid.UUID
@@ -379,7 +451,17 @@ def assign_membership_role(
     of-check snapshot. Locks are always acquired membership-then-role (the
     same order `change_membership_role()` uses for its own target-row/
     candidate-role pair), so the two commands can never deadlock against
-    each other."""
+    each other.
+
+    Granting the built-in `campaign_owner` role additionally requires the caller to be a live
+    built-in owner of `campaign_id` (`CampaignOwnerRequiredError`, 403; decision D3). That check is
+    the first lock this function takes, ahead of the membership and role locks above."""
+    _require_owner_if_granting_owner_role(
+        connection,
+        campaign_id=campaign_id,
+        actor_membership_id=granted_by_membership_id,
+        role_id=role_id,
+    )
     membership_row = (
         connection.execute(
             text("""
@@ -659,7 +741,17 @@ def change_membership_role(
     manager()`'s `campaign.campaigns` row lock, invoked by the `DEFERRABLE
     INITIALLY DEFERRED` constraint trigger on `security.membership_roles`
     (migration 080) — which this function relies on rather than duplicates;
-    see `docs/PHASE13E_ACCESS_CONTRACT.md` §3a for the full argument."""
+    see `docs/PHASE13E_ACCESS_CONTRACT.md` §3a for the full argument.
+
+    Changing a role to the built-in `campaign_owner` additionally requires the caller to be a live
+    built-in owner of `campaign_id` (`CampaignOwnerRequiredError`, 403; decision D3), checked first,
+    before the row locks above and before the no-op check, so a non-owner learns nothing from it."""
+    _require_owner_if_granting_owner_role(
+        connection,
+        campaign_id=campaign_id,
+        actor_membership_id=granted_by_membership_id,
+        role_id=new_role_id,
+    )
     row = (
         connection.execute(
             text("""
@@ -850,7 +942,17 @@ def add_campaign_member(
     No access-manager retention check is needed here (unlike `revoke_
     membership_role`/`change_membership_role`/`end_campaign_membership`):
     granting a new membership and role can only ever add to a campaign's
-    set of qualifying managers, never remove from it."""
+    set of qualifying managers, never remove from it.
+
+    Adding a member with the built-in `campaign_owner` role additionally requires the caller to be
+    a live built-in owner of `campaign_id` (`CampaignOwnerRequiredError`, 403; decision D3), taken
+    before the campaign-row lock below."""
+    _require_owner_if_granting_owner_role(
+        connection,
+        campaign_id=campaign_id,
+        actor_membership_id=added_by_membership_id,
+        role_id=role_id,
+    )
     campaign_status_code = connection.execute(
         text("""
             SELECT ls.code FROM campaign.campaigns c
@@ -1221,7 +1323,33 @@ def transfer_campaign_ownership(
     and everything they authored stay as they were, and the target's system roles
     are neither read nor written (any active account may own a campaign, D11).
     Idempotent: a target who already owns the campaign is not given a second
-    assignment."""
+    assignment.
+
+    The caller must be a live built-in owner (`CampaignOwnerRequiredError`, 403; decision D3),
+    checked first so a non-owner gets no `assigned: false` answer to probe with. When
+    `relinquish_own_ownership` is set the caller's assignment is locked `FOR UPDATE` up front,
+    because it is rewritten below: taking a shared lock first would deadlock two identical
+    concurrent requests on the upgrade."""
+    _require_builtin_campaign_owner(
+        connection,
+        campaign_id=campaign_id,
+        actor_membership_id=actor_membership_id,
+        lock=(
+            "update"
+            if relinquish_own_ownership and actor_membership_id != target_campaign_membership_id
+            else "share"
+        ),
+    )
+    if relinquish_own_ownership and actor_membership_id != target_campaign_membership_id:
+        # Two owners relinquishing to each other at once each see the other as the remaining
+        # owner and would both commit, leaving the campaign with no built-in owner (the
+        # commit-time retention rule only needs some `access.manage` holder). The campaign row is
+        # the lock that rule already takes at commit; holding it from here makes the second
+        # transfer re-read the first's committed result. Order: owner assignment, then campaign.
+        connection.execute(
+            text("SELECT 1 FROM campaign.campaigns WHERE campaign_id = :campaign FOR UPDATE"),
+            {"campaign": campaign_id},
+        )
     owner_role_id = connection.execute(
         text(
             "SELECT role_id FROM security.roles WHERE code = 'campaign_owner' AND campaign_id IS NULL"

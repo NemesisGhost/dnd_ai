@@ -52,6 +52,7 @@ Deferred to later Phase 10 workstreams, per §19.7's own step list:
 import hashlib
 import uuid
 from dataclasses import dataclass, field
+from typing import Literal
 
 from sqlalchemy import Connection, text
 
@@ -1144,3 +1145,76 @@ def resolve_access_context(
         grant_effects=grant_effects,
         campaign_lifecycle_status=campaign_lifecycle_status,
     )
+
+
+BUILTIN_CAMPAIGN_OWNER_ROLE_CODE = "campaign_owner"
+
+OwnerAssignmentLock = Literal["none", "share", "update"]
+
+_OWNER_ASSIGNMENT_LOCK_CLAUSES: dict[str, str] = {
+    "none": "",
+    "share": "FOR SHARE OF mr",
+    "update": "FOR UPDATE OF mr",
+}
+
+
+def is_builtin_campaign_owner_role(*, role_campaign_id: uuid.UUID | None, role_code: str) -> bool:
+    """Whether a `security.roles` row is the built-in owner template. `security.roles.code` is
+    unique only among templates, so the code alone never identifies it: a campaign-scoped role may
+    be named `campaign_owner` and is not this role."""
+    return role_campaign_id is None and role_code == BUILTIN_CAMPAIGN_OWNER_ROLE_CODE
+
+
+def find_live_builtin_owner_assignment(
+    connection: Connection,
+    *,
+    campaign_id: uuid.UUID,
+    campaign_membership_id: uuid.UUID,
+    lock: OwnerAssignmentLock = "none",
+) -> uuid.UUID | None:
+    """The `membership_role_id` of this membership's live built-in `campaign_owner` assignment in
+    `campaign_id`, or `None`. The single definition of "is a current campaign owner", shared by the
+    ownership gate on the commands that hand out the owner role and by the reveal-authority
+    resolver, so the two cannot drift.
+
+    Live means: the role row is the built-in template (matched by `role_id` through
+    `campaign_id IS NULL`, never by code alone) and is active; the assignment is neither revoked nor
+    expired; the membership belongs to `campaign_id`, is open and in the `active` status; and the
+    account is active.
+
+    `lock` takes a row lock on the assignment: `share` for a caller that only needs it to stay live
+    until commit (revoking, ending or relinquishing it waits for the caller), `update` for a caller
+    that goes on to change that same row (taking `share` first would turn the later write into a
+    lock upgrade that deadlocks against a concurrent identical request)."""
+    return connection.execute(
+        text(f"""
+            SELECT mr.membership_role_id
+            FROM security.membership_roles mr
+            JOIN security.roles r ON r.role_id = mr.role_id
+            JOIN security.campaign_memberships cm
+                ON cm.campaign_membership_id = mr.campaign_membership_id
+            JOIN security.membership_statuses ms
+                ON ms.membership_status_id = cm.membership_status_id
+            JOIN security.users u ON u.user_id = cm.user_id
+            JOIN core.lifecycle_statuses uls ON uls.lifecycle_status_id = u.lifecycle_status_id
+            WHERE mr.campaign_membership_id = :membership
+              AND cm.campaign_id = :campaign
+              AND r.campaign_id IS NULL
+              AND r.code = :owner_code
+              AND r.is_active
+              AND mr.revoked_at IS NULL
+              AND (mr.expires_at IS NULL OR mr.expires_at > now())
+              AND cm.ended_at IS NULL
+              AND ms.code = 'active'
+              AND ms.is_active
+              AND uls.code = 'active'
+            ORDER BY mr.membership_role_id
+            LIMIT 1
+            {_OWNER_ASSIGNMENT_LOCK_CLAUSES[lock]}
+        """),  # noqa: S608 - the lock clause comes from a closed literal mapping
+        {
+            "membership": campaign_membership_id,
+            "campaign": campaign_id,
+            "owner_code": BUILTIN_CAMPAIGN_OWNER_ROLE_CODE,
+        },
+    ).scalar()

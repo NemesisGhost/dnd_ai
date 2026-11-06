@@ -81,7 +81,7 @@ None of the campaign-scoped rows above pass `allow_foundry_access=True` to `requ
   - `roles: [{ membership_role_id, role_id, code, display_name }]` — active (non-revoked, non-expired, `is_active`) roles only. `membership_role_id` (13E-B) is the identifier the portal's role-change control targets — identity only, never rendered as page text, matching `campaign_membership_id`'s own contract.
   - `character_relationships: [{ membership_character_relationship_id, character_id, character_display_name, relationship_type_code, relationship_type_display_name, granted_at, expires_at }]` — current (non-revoked, non-expired, timeline-scoped, fictional-time-unbounded — checkpoint-4 correction) relationships **whose character is itself currently active** (checkpoint-4 review correction: a relationship to a character deactivated/archived after the relationship was granted is now excluded here too, matching `dnd_ai.domain.access.resolve_access_context`'s own identical exclusion) only
   - `grants: [{ resource_grant_id, capability_code, capability_display_name, effect, target_type, target_id, target_display_name, reason, granted_at, expires_at }]` — current, membership-targeted (not access-group-targeted), active-capability resource grants **whose target is itself currently active** (checkpoint 5, the identical generalization of the character-relationship exclusion above — see §3k) only (see the capability-parity correction below). `target_id` (checkpoint 5) is identity only, never rendered as page text, matching every other raw id in this response — populated for all six target kinds so the portal can detect an exact active duplicate combination when adding a new grant. `target_display_name` (checkpoint 5) is populated only for a `character` target (`core.entities.canonical_name`, the same safe name `character_relationships` already uses) and `null` for every other target kind — see the audience-safe-fields note below.
-  - `assignable_roles: [{ role_id, code, display_name }]` (13E-B) — every role currently usable by this campaign (`dnd_ai.queries.access_overview.list_assignable_campaign_roles`: a system template or a role scoped to this campaign, `is_active`), campaign-level rather than per-member since this codebase's role model carries no hierarchy — the read-contract counterpart to §3a's mutation, so the portal never hardcodes or guesses the assignable set.
+  - `assignable_roles: [{ role_id, code, display_name }]` (13E-B) — every role currently usable by this campaign (`dnd_ai.queries.access_overview.list_assignable_campaign_roles`: a system template or a role scoped to this campaign, `is_active`; the built-in `campaign_owner` template only for a live owner, §3t), campaign-level rather than per-member since this codebase's role model carries no hierarchy — the read-contract counterpart to §3a's mutation, so the portal never hardcodes or guesses the assignable set.
 - **Pagination/filtering:** none. Per-campaign membership/role/relationship/grant counts are expected to stay small (matching the existing precedent in `dnd_ai.api.memberships`/`.access_grants`, neither of which paginates); no cursor, no limit, no total count.
 - **401:** unauthenticated requests never reach this route's own logic — `dnd_ai.api.auth.get_authenticated_user_id` (the same dependency every other route uses) rejects them first; this route adds no separate 401 handling.
 - **403:** an authenticated member of the campaign who does not hold `access.manage`.
@@ -124,7 +124,11 @@ access-management mutation).
   every role usable by this campaign (system template or campaign-scoped),
   currently `is_active`. No hierarchy or delegation narrows this further:
   this codebase's role model is flat, so every role `access.manage` may
-  assign is equally assignable to any member, including the actor's own.
+  assign is equally assignable to any member, including the actor's own —
+  with one exception (P03-A D3, 2026-11-06): the built-in `campaign_owner`
+  template is omitted unless the caller holds a live built-in owner
+  assignment in the campaign, because the four commands that grant it refuse
+  anyone else (see §3t).
 - **Self-change:** permitted, with no special-case check anywhere in the
   stack. The only thing that can block a self-change is the retention
   invariant below — including when the caller is changing their own last
@@ -1494,3 +1498,20 @@ otherwise exist to confirm.
 - **Cross-campaign isolation:** Player A never sees Campaign B in their campaign list (no membership, no relationship reaching it); Player B never sees Campaign A, and vice versa.
 - **Grants:** on Campaign A's Access overview, Observer A shows exactly one grant (`View Character Full Detail`); Player A shows none — the revoked grant is excluded, proving the same exclusion `tests/database/test_api_access_overview.py` already covers automatically.
 - **Disabled account:** `phase13e.disabled` cannot authenticate and holds no usable browser session, but its Campaign A membership still appears on the Access overview with an ordinary "Active" *membership* status — `dnd_ai.queries.access_overview` deliberately never consults account-wide `security.users.lifecycle_status_id` (see §3 above). This is the documented contract, not a defect; the fixture does not invent a "disabled" label the implemented response does not provide.
+
+## 3t. Campaign-owner gate (P03-A decision D3, 2026-11-06)
+
+`access.manage` alone no longer reaches the built-in `campaign_owner` role. These four commands require, in addition, that the caller holds a **live built-in owner assignment** in the same campaign (`dnd_ai.domain.access.find_live_builtin_owner_assignment`: the built-in template matched by identity rather than by code, assignment unrevoked and unexpired, membership open and `active`, account active):
+
+| Route | Gated when |
+|---|---|
+| `POST /campaigns/{id}/memberships/{membership_id}/roles` | `role_id` is the built-in owner |
+| `POST /campaigns/{id}/memberships/roles/{membership_role_id}/change` | `new_role_id` is the built-in owner |
+| `POST /campaigns/{id}/memberships` | `role_id` is the built-in owner |
+| `POST /campaigns/{id}/ownership-transfer` | always |
+
+- **Refusal:** `403`, error code `campaign_owner_required`, fixed message; nothing is written, no audit row, no idempotency reservation. The check runs against the database inside the command, not the request's `AccessContext`, so a revocation that committed first refuses the request, and direct command calls are gated too.
+- **Unchanged:** every other role, campaign creation, administrative recovery, invitation acceptance, revoke and end-membership.
+- **Read contract:** `assignable_roles` omits the built-in owner role for a caller who is not a live owner (campaign-scoped roles that merely reuse the code `campaign_owner` stay listed and are not the built-in).
+- **Locking:** the caller's owner assignment is the first lock a gated command takes; a relinquishing transfer takes it `FOR UPDATE` and then the campaign row. See the design record §3.
+- **Tests:** `tests/database/test_campaign_owner_gate.py`. Preflight: `scripts/preflight_campaign_owner_gate.py`.

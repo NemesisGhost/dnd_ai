@@ -119,7 +119,12 @@ from datetime import datetime
 from sqlalchemy import Connection, text
 
 from dnd_ai.commands.local_auth import normalize_login_name
-from dnd_ai.domain.access import LOCAL_AUTH_ISSUER, RESOURCE_GRANT_CAPABILITY_CATALOG
+from dnd_ai.domain.access import (
+    BUILTIN_CAMPAIGN_OWNER_ROLE_CODE,
+    LOCAL_AUTH_ISSUER,
+    RESOURCE_GRANT_CAPABILITY_CATALOG,
+    find_live_builtin_owner_assignment,
+)
 
 _GRANT_TARGET_COLUMNS = (
     "character_id",
@@ -434,7 +439,7 @@ def get_campaign_access_overview(
 
 
 def list_assignable_campaign_roles(
-    connection: Connection, *, campaign_id: uuid.UUID
+    connection: Connection, *, campaign_id: uuid.UUID, caller_campaign_membership_id: uuid.UUID
 ) -> tuple[AssignableRoleView, ...]:
     """Every role `dnd_ai.commands.memberships.assign_membership_role()`/
     `change_membership_role()` would actually accept for `campaign_id`
@@ -448,7 +453,19 @@ def list_assignable_campaign_roles(
     delegation narrows this further — this codebase's role model is flat
     (`dnd_ai.commands.memberships`' own module docstring), so every role
     `access.manage` may assign is equally assignable regardless of which
-    membership holds `access.manage`, including the caller's own."""
+    membership holds `access.manage`, including the caller's own — with one
+    exception (P03-A decision D3): the built-in `campaign_owner` template is
+    left out unless the caller is a live built-in owner of this campaign
+    (`find_live_builtin_owner_assignment`), because those commands refuse it
+    to anyone else and the portal must not offer an action that would fail."""
+    caller_is_owner = (
+        find_live_builtin_owner_assignment(
+            connection,
+            campaign_id=campaign_id,
+            campaign_membership_id=caller_campaign_membership_id,
+        )
+        is not None
+    )
     return tuple(
         AssignableRoleView(
             role_id=row["role_id"], code=row["code"], display_name=row["display_name"]
@@ -459,9 +476,14 @@ def list_assignable_campaign_roles(
                 FROM security.roles
                 WHERE (campaign_id IS NULL OR campaign_id = :campaign_id)
                   AND is_active
+                  AND (:caller_is_owner OR campaign_id IS NOT NULL OR code <> :owner_code)
                 ORDER BY sort_order, display_name
             """),
-            {"campaign_id": campaign_id},
+            {
+                "campaign_id": campaign_id,
+                "caller_is_owner": caller_is_owner,
+                "owner_code": BUILTIN_CAMPAIGN_OWNER_ROLE_CODE,
+            },
         ).mappings()
     )
 

@@ -231,3 +231,33 @@ Source-confirmed by reading `InvitationsSection.tsx`, `useCreateCampaignInvitati
 | Reproduction and evidence | Source reading only. No browser reproduction; no test reproduces it. Follow-up F-1 in [the reconciliation record](PHASE14_15_P02_RECONCILIATION_2026-11-04.md) §7 holds the acceptance criteria. |
 | Affected coverage and required retest | `InvitationsSection.test.tsx`, `CampaignInvitationsPage*.test.tsx`; the Access navigation tests in `App.setupAccessNavigation.test.tsx` do not cover it. Retest: issue then depart (pending and settled), Stay/Leave, late response, replay wording. |
 | Disposition | Open. Classified by the P02-7e code review (conversation-supplied) as a nonblocking, **pre-existing** limitation. Not fixed in P02-8 or its correction (an invitation recovery redesign needs the owner decisions above). Recovery criteria, including the authorization boundary, are follow-up F-1 in [PHASE14_15_P02_RECONCILIATION_2026-11-04.md](PHASE14_15_P02_RECONCILIATION_2026-11-04.md) §9. |
+
+## 9. Found while implementing the D3 ownership gate (2026-11-06)
+
+Source-confirmed while tracing the owner-granting paths for the P03-A A1 ownership gate. **Pre-existing, not changed by the gate, not fixed there.** Gradings are proposed for the owner to confirm. The read-only preflight `scripts/preflight_campaign_owner_gate.py` found no affected row in the local development database (2026-11-06).
+
+### DEF-011 — Ownership transfer to a member whose owner assignment expired
+
+| Field | Value |
+|---|---|
+| ID / title | DEF-011 — `transfer_campaign_ownership` treats an expired, unrevoked owner assignment as current |
+| Trigger and affected persona/workflow | A campaign owner transfers ownership to a member whose built-in owner assignment carries a past `expires_at` and was never revoked. Reachable: `POST …/memberships/{id}/roles` accepts `expires_at`. |
+| Expected versus actual | Expected: the target gets a live owner assignment. Actual (source): the existence check filters only `revoked_at IS NULL`, so the transfer returns `assigned: false` and, with `relinquish_own_ownership`, still ends the caller's own assignment. Inserting a fresh row would instead hit `ux_membership_roles_active` because the expired row stays unrevoked. |
+| Practical impact (who, what data) | A campaign can lose its only live owner while the response says nothing was assigned. The commit-time retention rule refuses (400) only when no other `access.manage` holder remains; with one, the campaign is left without an owner. No data is disclosed. |
+| Rubric: exposure / impact / triggerability / detection / blast → total, band | Proposed: 1 + 1 + 1 + 0 + 0 → **3, Low**. |
+| Reproduction and evidence | Source reading of `commands/memberships.py` (`already` query). No test reproduces it yet; the preflight counts expired unrevoked owner rows (0 locally). |
+| Affected coverage and required retest | Add a test: owner transfers to a member with an expired unrevoked owner row; expect a live assignment and an unchanged-or-restored owner set. |
+| Disposition | Open follow-up. Fix: treat an expired row as not current, revoke it, then assign. |
+
+### DEF-012 — Recovery cannot restore an owner when a custom role is the only access manager
+
+| Field | Value |
+|---|---|
+| ID / title | DEF-012 — recovery and the stranded report look for any `access.manage` holder, not an owner |
+| Trigger and affected persona/workflow | An administrator runs `recover_campaign_access_manager` for a campaign whose only non-expiring `access.manage` holder is a custom role and which has no live built-in owner. |
+| Expected versus actual | Expected: the administrator can restore an owner. Actual (source): the precondition (`commands/recovery.py`) and `queries/stranded.py` treat the custom manager as sufficient, so the campaign is neither reported as stranded nor recoverable. |
+| Practical impact (who, what data) | The campaign permanently lacks owner-derived authority (including `character.reveal` once A1 lands). The database retention rule (`security.campaign_has_access_manager`, migration 080) guarantees an access manager, not an owner. No data is disclosed. |
+| Rubric: exposure / impact / triggerability / detection / blast → total, band | Proposed: 0 (no application path writes custom role capabilities) + 2 + 1 + 0 + 0 → **3, Low**. |
+| Reproduction and evidence | Source reading; the preflight's `active_campaign_without_live_owner` count is 0 locally. |
+| Affected coverage and required retest | Add a recovery test with a custom manager and no owner. |
+| Disposition | Open follow-up, to be resolved before any application path can grant `access.manage` to a non-owner role. |

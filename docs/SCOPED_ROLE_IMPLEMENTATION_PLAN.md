@@ -315,8 +315,8 @@ System GM is required to **create worlds**, to **create campaigns**, and to **ma
 | Assign/end Editor/Reviewer/Reader; issue/revoke use grants | World Owner with system GM (`world.share`) | Target must be an active account; non-disclosing account lookup by exact login name (reuse `find_eligible_campaign_account`'s pattern in [queries/access_overview.py](../src/dnd_ai/queries/access_overview.py)) |
 | Add/remove world Owner; transfer ownership | World Owner with system GM (`world.transfer`) | New Owner must hold system GM when added (D11); DB retains ≥1 owner |
 | Create/branch/edit/archive timelines | World Owner or Editor (`timeline.manage`, Q6) | Use-grant holders, Reviewers and Readers cannot |
-| Invite to a campaign; assign campaign roles | Campaign `access.manage` (unchanged) | No system-role requirement (D11); DB keeps ≥1 access manager |
-| Transfer campaign ownership | Campaign `access.manage` | New `transfer_campaign_ownership` wraps assign + optional revoke in one transaction and one audit record |
+| Invite to a campaign; assign campaign roles | Campaign `access.manage` (unchanged), **except** the built-in `campaign_owner` role, which also needs a live built-in owner assignment in the campaign (D3, 2026-11-06) | No system-role requirement (D11); DB keeps ≥1 access manager |
+| Transfer campaign ownership | Campaign `access.manage` **and** a live built-in owner assignment (D3, 2026-11-06) | New `transfer_campaign_ownership` wraps assign + optional revoke in one transaction and one audit record |
 
 ### 4.3 Invitations
 
@@ -419,7 +419,7 @@ All mutations: human principals only, CSRF + allowed Origin for cookie callers, 
 **Campaigns**
 - `POST /campaigns`: D7 authorization; response unchanged; errors `system_gm_required` (403, the caller lacks system `campaign.host`) and the existing non-disclosing `TimelineNotAuthorizedError`.
 - Role-assignment endpoints are unchanged: campaign roles carry no system-role requirement (D11).
-- `POST /campaigns/{id}/ownership-transfer` (`access.manage`).
+- `POST /campaigns/{id}/ownership-transfer` (`access.manage` and a live built-in owner; 403 `campaign_owner_required` otherwise, D3).
 
 **Authoring and review routes** keep their paths; their dependency/command gains the D6 world check. Error for a campaign GM without world authority: the existing non-disclosing `CampaignNotAuthorizedError` mapping is **not** reused (the user can see the record); return 403 `world_authority_required` so the UI can explain.
 
