@@ -1,6 +1,6 @@
 # Phase 19 foundation implementation plan (R19-P0 to R19-P4)
 
-**Status:** Proposed. This is the R19-P0 planning deliverable, first drafted at `10a1a4e` and corrected after independent reviews (findings R19-01 to R19-13; see §13). **This revision (R19-10 to R19-13) is proposed design only. Nothing in it is implemented, enabled, tested or accepted.** Nothing here is implemented or accepted. **Owner decisions recorded (all 2026-11-02, all Owner-approved):**
+**Status:** Proposed. This is the R19-P0 planning deliverable, first drafted at `10a1a4e`. Independent reviews covered findings R19-01 through R19-16 (see §13). This revision records owner-decision reconciliations through 2026-11-04. It remains proposed design only: nothing in it is implemented, enabled, tested or accepted. **Owner decisions recorded (all 2026-11-02, all Owner-approved):**
 
 - **OD-1:** campaigns sharing a world or timeline maintain independent mechanical character state (ADR 0021 §3).
 - **OD-20:** character location and fictional/legal item ownership are shared narrative; mechanical possession, inventory, equipment, attunement, charges and quantities are per campaign (ADR 0021 §3.1.1).
