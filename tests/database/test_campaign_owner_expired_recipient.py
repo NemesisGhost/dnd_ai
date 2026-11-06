@@ -513,6 +513,85 @@ def test_ending_a_live_owner_recipient_first_refuses_the_transfer(
     assert _transfer_audit(postgres_engine, g) == []
 
 
+# --- approved policy: a relinquishing handoff needs a non-expiring recipient assignment ---------
+
+
+def _expires_at(engine: Engine, membership_role_id: uuid.UUID) -> object:
+    with engine.connect() as connection:
+        return connection.execute(
+            text("SELECT expires_at FROM security.membership_roles WHERE membership_role_id = :r"),
+            {"r": membership_role_id},
+        ).scalar_one()
+
+
+@pytest.fixture
+def finite_o2(postgres_engine: Engine, g: Gate) -> object:
+    """`o2`'s owner row, live for another hour: live at every check the transfer makes."""
+    with postgres_engine.begin() as connection:
+        connection.execute(
+            text("""
+                UPDATE security.membership_roles
+                SET granted_at = clock_timestamp() - interval '1 hour',
+                    expires_at = clock_timestamp() + interval '1 hour'
+                WHERE membership_role_id = :r
+            """),
+            {"r": g.o2_role},
+        )
+    return _expires_at(postgres_engine, g.o2_role)
+
+
+def test_a_relinquishing_transfer_to_a_live_finite_owner_assignment_is_refused(
+    client_factory: Callable[[uuid.UUID], TestClient],
+    postgres_engine: Engine,
+    g: Gate,
+    finite_o2: object,
+) -> None:
+    """Approved policy (option b): handing ownership over requires the recipient to hold a live,
+    non-expiring owner assignment, so the handoff cannot lapse between final validation and
+    commit. The recipient's row is live at final validation and for an hour after, and the
+    transfer is still refused before anything is written: the caller keeps ownership, the
+    recipient's row is neither revoked nor extended, and no transfer audit is written. Before the
+    policy the transfer returned `assigned: false, relinquished: true`."""
+    response = _transfer_to(client_factory, g, g.o2).join()
+
+    assert _status(response) == 409, response.text  # type: ignore[attr-defined]
+    assert (
+        response.json()["error"]["code"]  # type: ignore[attr-defined]
+        == "ownership_transfer_recipient_assignment_expires"
+    )
+    assert _row_state(postgres_engine, g.o1_role) == (False, False)
+    assert _expires_at(postgres_engine, g.o1_role) is None
+    assert _row_state(postgres_engine, g.o2_role) == (False, False)
+    assert _expires_at(postgres_engine, g.o2_role) == finite_o2
+    assert _live_owners(postgres_engine, g) == {g.o1, g.o2}
+    assert _transfer_audit(postgres_engine, g) == []
+
+
+def test_a_non_relinquishing_transfer_to_a_live_finite_owner_is_unchanged(
+    client_factory: Callable[[uuid.UUID], TestClient],
+    postgres_engine: Engine,
+    g: Gate,
+    finite_o2: object,
+) -> None:
+    """The caller gives nothing up, so the existing behavior stands: the recipient is already an
+    owner, nothing is assigned or written, and the finite row keeps its expiry."""
+    with client_factory(g.o1_user_id) as client:
+        response = client.post(
+            _urls(g)["transfer"],
+            json={"target_campaign_membership_id": str(g.o2)},
+        )
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "target_campaign_membership_id": str(g.o2),
+        "assigned": False,
+        "relinquished": False,
+    }
+    assert _row_state(postgres_engine, g.o2_role) == (False, False)
+    assert _expires_at(postgres_engine, g.o2_role) == finite_o2
+    assert _live_owners(postgres_engine, g) == {g.o1, g.o2}
+    assert _transfer_audit(postgres_engine, g) == []
+
+
 # --- recipient account deactivation against a relinquishing transfer -------------------------
 
 

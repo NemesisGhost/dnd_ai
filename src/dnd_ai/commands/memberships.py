@@ -332,6 +332,23 @@ class OwnershipTransferRecipientChangedError(SafeMessageError):
     )
 
 
+class OwnershipTransferRecipientAssignmentExpiresError(SafeMessageError):
+    """Raised by a relinquishing `transfer_campaign_ownership` when the recipient's live owner
+    assignment has an `expires_at` (DEF-011, owner-approved policy option b, 2026-11-06). Handing
+    ownership over requires a live, non-expiring recipient assignment: row locks cannot stop a
+    finite expiry from passing between final validation and commit, so a finite one could leave
+    the campaign without the owner the caller handed it to. The transfer is refused before any
+    write, both assignments stay as they are, and the recipient's assignment is never extended.
+    409."""
+
+    safe_status_code = 409
+    safe_error_code = "ownership_transfer_recipient_assignment_expires"
+    safe_message = (
+        "The recipient's owner role has an end date, so ownership cannot be handed over to them. "
+        "Nothing was changed."
+    )
+
+
 def _require_builtin_campaign_owner(
     connection: Connection,
     *,
@@ -1411,10 +1428,13 @@ def _require_live_recipient_at_completion(
     campaign_id: uuid.UUID,
     actor_membership_id: uuid.UUID,
     target_campaign_membership_id: uuid.UUID,
+    require_non_expiring: bool,
 ) -> None:
     """A transfer's last check, made after the caller's own assignment has been revoked: the
     recipient must still be a live owner by the shared definition, judged at a fresh instant, or
-    the whole transfer is refused and rolled back with the caller's assignment intact.
+    the whole transfer is refused and rolled back with the caller's assignment intact. With
+    `require_non_expiring` (a relinquishing transfer, approved policy option b) that live
+    assignment must also have no `expires_at`.
 
     Nothing may wait between this check and commit, or an assignment could expire during the wait
     and the caller would already have relinquished. The endpoint's audit row has a foreign key to
@@ -1432,8 +1452,10 @@ def _require_live_recipient_at_completion(
     transfer. A non-relinquishing transfer gives nothing up, so a later change to the recipient
     only makes its result older, never wrong at commit.
 
-    Row locks cannot stop a finite `expires_at` from passing: a recipient whose live assignment has
-    one is guaranteed live at this check, not at commit (design §3, "Time boundary")."""
+    Row locks cannot stop a finite `expires_at` from passing, which is why a relinquishing
+    transfer requires a non-expiring assignment: with no expiry and those three writes held off,
+    the recipient that is live at this check is still live at commit (design §3, "Time
+    boundary"). No command changes an existing assignment's `expires_at`."""
     connection.execute(
         text("""
             SELECT 1
@@ -1444,19 +1466,35 @@ def _require_live_recipient_at_completion(
         """),
         {"actor": actor_membership_id},
     ).all()
-    if (
-        find_live_builtin_owner_assignment(
-            connection,
-            campaign_id=campaign_id,
-            campaign_membership_id=target_campaign_membership_id,
-            as_of=_database_clock(connection),
-        )
-        is None
-    ):
+    live = find_live_builtin_owner_assignment(
+        connection,
+        campaign_id=campaign_id,
+        campaign_membership_id=target_campaign_membership_id,
+        as_of=_database_clock(connection),
+    )
+    if live is None:
         raise OwnershipTransferRecipientChangedError(
             f"membership {target_campaign_membership_id} is no longer a live owner of campaign "
             f"{campaign_id} at the end of the transfer"
         )
+    if require_non_expiring and _owner_assignment_expires(connection, membership_role_id=live):
+        raise OwnershipTransferRecipientAssignmentExpiresError(
+            f"membership {target_campaign_membership_id}'s owner assignment {live} has an expiry "
+            "at the end of the transfer"
+        )
+
+
+def _owner_assignment_expires(connection: Connection, *, membership_role_id: uuid.UUID) -> bool:
+    """Whether an assignment carries a finite `expires_at` (whether or not it has passed)."""
+    return bool(
+        connection.execute(
+            text(
+                "SELECT expires_at IS NOT NULL FROM security.membership_roles "
+                "WHERE membership_role_id = :r"
+            ),
+            {"r": membership_role_id},
+        ).scalar_one()
+    )
 
 
 @dataclass(frozen=True)
@@ -1502,8 +1540,12 @@ def transfer_campaign_ownership(
     an ended or inactive membership or with an inactive account. An owner row that had already
     expired is locked before the recipient's membership and replaced. One that expires while the
     transfer waits cannot be locked again under the lock order, so the transfer is refused
-    (`OwnershipTransferRecipientChangedError`, 409). The recipient is checked once more after the
-    caller's own assignment is revoked (`_require_live_recipient_at_completion`)."""
+    (`OwnershipTransferRecipientChangedError`, 409). A relinquishing transfer also requires the
+    recipient's live assignment to have no `expires_at` (owner-approved policy option b): a live,
+    finite one is refused before any write (`OwnershipTransferRecipientAssignmentExpiresError`,
+    409) and never extended; a non-relinquishing transfer is unchanged. The recipient is checked
+    once more after the caller's own assignment is revoked
+    (`_require_live_recipient_at_completion`)."""
     relinquishing = (
         relinquish_own_ownership and actor_membership_id != target_campaign_membership_id
     )
@@ -1599,6 +1641,19 @@ def transfer_campaign_ownership(
         campaign_membership_id=target_campaign_membership_id,
         as_of=checked_at,
     )
+    # Approved policy (option b): a handoff needs a non-expiring recipient assignment, because no
+    # lock can stop a finite one from passing between the final check and commit. Refused here,
+    # before any write; never extended. A recipient has at most one unrevoked owner row, so a live
+    # finite one means nothing was replaced above. A newly assigned row never expires.
+    if (
+        relinquishing
+        and already is not None
+        and _owner_assignment_expires(connection, membership_role_id=already)
+    ):
+        raise OwnershipTransferRecipientAssignmentExpiresError(
+            f"membership {target_campaign_membership_id}'s live owner assignment {already} has an "
+            "expiry"
+        )
     assigned: uuid.UUID | None = None
     if already is None:
         assigned = assign_membership_role(
@@ -1628,6 +1683,7 @@ def transfer_campaign_ownership(
         campaign_id=campaign_id,
         actor_membership_id=actor_membership_id,
         target_campaign_membership_id=target_campaign_membership_id,
+        require_non_expiring=relinquishing,
     )
     return TransferCampaignOwnershipResult(
         target_campaign_membership_id=target_campaign_membership_id,
