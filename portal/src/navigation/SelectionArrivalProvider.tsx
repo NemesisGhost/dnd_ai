@@ -6,7 +6,7 @@ import { useSession } from "../context/SessionContext"
 import { useWorkspaceHierarchy } from "../context/WorkspaceHierarchyContext"
 import type { WorkspaceHierarchy } from "../context/WorkspaceHierarchyContext"
 import type { SessionBootstrap } from "../types/bootstrap"
-import { LinkArrivalContext, SelectionArrivalContext, notePushedEntry } from "./selectionArrival"
+import { LinkArrivalContext, SelectionArrivalContext, notePoppedEntry, notePushedEntry } from "./selectionArrival"
 import type { SelectionArrival } from "./selectionArrival"
 import { createArrivalTracker } from "./selectionArrivalTracker"
 import type { ArrivalTracker } from "./selectionArrivalTracker"
@@ -121,7 +121,8 @@ export function SelectionArrivalProvider({ children }: PropsWithChildren) {
     // PUSH already finds it noted (navigation/selectionArrival.ts, link arrivals).
     useLayoutEffect(() => {
         if (navigationType === NavigationType.Push) notePushedEntry(locationKey)
-    }, [locationKey, navigationType])
+        else if (navigationType === NavigationType.Pop) notePoppedEntry({ key: locationKey, state: locationState })
+    }, [locationKey, locationState, navigationType])
     const announceOwned = useAnnounceOwned()
     const { state } = useSession()
     const snapshot = useSelectedContextSnapshot()

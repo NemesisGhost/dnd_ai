@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react"
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { openApp } from "../test/campaignRoutes"
 import { installMockServer } from "../test/authoringHarness"
@@ -89,6 +89,58 @@ describe("heading focus after an ordinary link", () => {
         crumb.focus()
         fireEvent.click(crumb)
         await waitFor(() => expect(app.router.state.location.pathname).toBe(`${base}/characters/all`))
+        await screen.findByRole("heading", { level: 1, name: "Characters" })
+        await waitFor(() => expect(heading("Characters")).toHaveFocus())
+    })
+})
+
+describe("history traversal is not a link arrival", () => {
+    // A is Campaign Home, B the Characters browser. Both settle with only `ArrivalHeadingFocus`.
+    async function pushTwo() {
+        const app = openApp(`${base}/settings`)
+        await screen.findByRole("textbox", { name: /Campaign name/ })
+        fireEvent.click(breadcrumb().getByRole("link", { name: "Campaign Home" }))
+        await screen.findByRole("heading", { level: 1, name: "Campaign Home" })
+        await waitFor(() => expect(heading("Campaign Home")).toHaveFocus())
+        await act(() => app.router.navigate(`${base}/characters/all`))
+        await screen.findByRole("heading", { level: 1, name: "Characters" })
+        await waitFor(() => expect(heading("Characters")).toHaveFocus())
+        return app
+    }
+    const park = () => {
+        act(() => (document.activeElement as HTMLElement | null)?.blur())
+        expect(document.body).toHaveFocus()
+    }
+    const settled = async (app: Awaited<ReturnType<typeof pushTwo>>) => {
+        await waitFor(() => expect(app.router.state.navigation.state).toBe("idle"))
+        // The context stamp (a REPLACE of the entry arrived at) lands after the POP.
+        await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+
+    it("PUSH A and PUSH B focus their headings once; Back to A and Forward to B claim nothing", async () => {
+        const app = await pushTwo()
+        park()
+        await act(() => app.router.navigate(-1))
+        await screen.findByRole("heading", { level: 1, name: "Campaign Home" })
+        await settled(app)
+        expect(app.router.state.location.pathname).toBe(`${base}/home`)
+        expect(document.body).toHaveFocus()
+        await act(() => app.router.navigate(1))
+        await screen.findByRole("heading", { level: 1, name: "Characters" })
+        await settled(app)
+        expect(app.router.state.location.pathname).toBe(`${base}/characters/all`)
+        expect(document.body).toHaveFocus()
+    })
+
+    it("a person's own focus survives a POP and its stamp, and a fresh PUSH afterwards still focuses once", async () => {
+        const app = await pushTwo()
+        await act(() => app.router.navigate(-1))
+        await screen.findByRole("heading", { level: 1, name: "Campaign Home" })
+        const link = screen.getAllByRole("link")[0]!
+        link.focus()
+        await settled(app)
+        expect(link).toHaveFocus()
+        await act(() => app.router.navigate(`${base}/characters/all?type=npc`))
         await screen.findByRole("heading", { level: 1, name: "Characters" })
         await waitFor(() => expect(heading("Characters")).toHaveFocus())
     })

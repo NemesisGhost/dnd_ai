@@ -144,6 +144,18 @@ export function notePushedEntry(key: string): void {
 }
 
 /**
+ * The shell's declaration for a POP (Back, Forward): the entry it lands on, and the chain it restates, are
+ * no longer a link arrival, so neither the page rendered there nor a stamp or normalization written over it
+ * afterwards can claim the heading focus the earlier PUSH once had.
+ */
+export function notePoppedEntry(entry: { key: string; state: unknown }): void {
+    for (const key of [entry.key, entryRoot(entry)]) {
+        const at = pushedEntries.indexOf(key)
+        if (at !== -1) pushedEntries.splice(at, 1)
+    }
+}
+
+/**
  * The heading focus of an ordinary link arrival (a Navbar link, a breadcrumb, an accepted departure after
  * Leave): a destination that settled with no selection arrival in force, under an entry that is, or only
  * restates, a PUSH. Like `focusHeading` it acts once, only when nothing in the content is still loading and
