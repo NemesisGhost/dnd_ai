@@ -522,7 +522,7 @@ describe("editors' character pages keep the task and their guards", () => {
     })
 })
 
-describe("New PC stays discoverable from the selected-character entry point (PD-8 pending)", () => {
+describe("New character is the one create action of the Characters workspace (PD-8 approved)", () => {
     const OPTIONS = {
         can_create: true,
         species: [{ species_id: "sp-human", name: "Human", ruleset_name: "D&D 5e" }],
@@ -538,22 +538,27 @@ describe("New PC stays discoverable from the selected-character entry point (PD-
     beforeEach(() => {
         installCharacter(UUID, "Ixamarra")
         server.on("GET", `${API}/authoring/player-characters/options`, { body: OPTIONS })
+        server.on("GET", `${API}/authoring/npcs/options`, { body: OPTIONS })
     })
 
-    it("/characters redirects to the selected record, which offers New PC to an editor with the record as its return", async () => {
+    it("/characters redirects to the selected record, which offers one New character action to an editor with the record as its return", async () => {
         const app = openApp(`${base}/characters`, ["access.manage", "canon.edit"], SELECTED)
         await ready()
         expect(app.router.state.location.pathname).toBe(`${base}/characters/${UUID}`)
         expect(app.router.state.historyAction).toBe("REPLACE")
-        const link = within(screen.getByRole("navigation", { name: "Create character" })).getByRole("link", { name: "New PC" })
-        expect(link).toHaveAttribute("href", `${base}/characters/pc/new`)
+        const link = within(screen.getByRole("navigation", { name: "Create character" })).getByRole("link", { name: "New character" })
+        expect(link).toHaveAttribute("href", `${base}/characters/new`)
+        expect(screen.getAllByRole("link", { name: "New character" })).toHaveLength(1)
+        expect(screen.queryByRole("link", { name: "New PC" })).toBeNull()
         // The shared record navigation is unchanged beside it.
         expect(screen.getByRole("navigation", { name: "Character sections" })).toBeInTheDocument()
 
         fireEvent.click(link)
+        await screen.findByRole("heading", { level: 1, name: "New character" })
+        fireEvent.click(within(screen.getByRole("main")).getByRole("link", { name: "New player character" }))
         await screen.findByRole("heading", { level: 1, name: "New player character" })
         // The record is the task's most recent page, so Cancel and the breadcrumb return to it.
-        expect((app.router.state.location.state as EntryState).task?.trail.at(-1)).toMatchObject({
+        expect((app.router.state.location.state as EntryState).task?.trail.find((entry) => entry.route === "characters.detail")).toMatchObject({
             route: "characters.detail",
             params: { campaignId: "mundivita", characterId: UUID },
         })
@@ -570,13 +575,15 @@ describe("New PC stays discoverable from the selected-character entry point (PD-
         expect(server.calls.filter((call) => call.method !== "GET")).toEqual([])
     })
 
-    it("carries the section the person was on, as a validated return", async () => {
+    it.each(["New NPC", "New player character"])("carries the section the person was on through the chooser to %s, as a validated return", async (option) => {
         installCharacter(UUID, "Ixamarra")
         const app = openApp(`${base}/characters/${UUID}?section=inventory`, ["access.manage", "canon.edit"], SELECTED)
         await screen.findByRole("link", { name: "Longsword" })
-        fireEvent.click(screen.getByRole("link", { name: "New PC" }))
-        await screen.findByRole("heading", { level: 1, name: "New player character" })
-        expect((app.router.state.location.state as EntryState).task?.trail.at(-1)).toMatchObject({
+        fireEvent.click(screen.getByRole("link", { name: "New character" }))
+        await screen.findByRole("heading", { level: 1, name: "New character" })
+        fireEvent.click(within(screen.getByRole("main")).getByRole("link", { name: option }))
+        await screen.findByRole("heading", { level: 1, name: option })
+        expect((app.router.state.location.state as EntryState).task?.trail.find((entry) => entry.route === "characters.detail")).toMatchObject({
             route: "characters.detail",
             params: { characterId: UUID },
             section: "inventory",
@@ -606,12 +613,45 @@ describe("New PC stays discoverable from the selected-character entry point (PD-
         openApp(`${base}/characters`, ["campaign.view"], SELECTED)
         await ready()
         expect(screen.queryByRole("navigation", { name: "Create character" })).toBeNull()
+        expect(screen.queryByRole("link", { name: "New character" })).toBeNull()
+    })
+
+    it("is still offered on /characters/all, once", async () => {
+        openApp(`${base}/characters/all`)
+        expect(await screen.findByRole("link", { name: "New character" })).toHaveAttribute("href", `${base}/characters/new`)
+        expect(screen.getAllByRole("link", { name: "New character" })).toHaveLength(1)
         expect(screen.queryByRole("link", { name: "New PC" })).toBeNull()
     })
 
-    it("is still offered on /characters/all", async () => {
-        openApp(`${base}/characters/all`)
-        expect(await screen.findByRole("link", { name: "New PC" })).toHaveAttribute("href", `${base}/characters/pc/new`)
+    it("keeps each option's own permission answer: a kind the server refuses shows its refusal while the other still opens", async () => {
+        server.on("GET", `${API}/authoring/npcs/options`, { body: { ...OPTIONS, can_create: false } })
+        const app = openApp(`${base}/characters/all`)
+        fireEvent.click(await screen.findByRole("link", { name: "New character" }))
+        await screen.findByRole("heading", { level: 1, name: "New character" })
+        fireEvent.click(within(screen.getByRole("main")).getByRole("link", { name: "New NPC" }))
+        expect(await screen.findByRole("alert")).toHaveTextContent(/do not have permission/)
+        await act(() => app.router.navigate(-1))
+        fireEvent.click(await within(screen.getByRole("main")).findByRole("link", { name: "New player character" }))
+        await screen.findByRole("heading", { level: 1, name: "New player character" })
+    })
+
+    it.each<[string, unknown]>([
+        ["no task", undefined],
+        ["a malformed task", { task: { v: 2 } }],
+        ["a task of another campaign", { task: { v: 1, root: "characters", scope: { campaignId: "other" }, trail: [], list: { route: "characters.browse", search: "?type=npc" } } }],
+        ["a crafted older key", { charactersReturn: "/app/other/characters/all" }],
+    ])("falls back safely to the World through the chooser to either form, from %s", async (_name, seed) => {
+        const app = openApp(`${base}/characters/new`, ["canon.edit"], SELECTED)
+        await screen.findByRole("heading", { level: 1, name: "New character" })
+        for (const option of ["New NPC", "New player character"]) {
+            await act(() => app.router.navigate(`${base}/characters/new`, { state: seed }))
+            await screen.findByRole("heading", { level: 1, name: "New character" })
+            fireEvent.click(within(screen.getByRole("main")).getByRole("link", { name: option }))
+            await screen.findByRole("heading", { level: 1, name: option })
+            expect(within(screen.getByRole("main")).getByRole("link", { name: "World" })).toHaveAttribute("href", `${base}/world`)
+            fireEvent.click(await screen.findByRole("button", { name: "Cancel" }))
+            await waitFor(() => expect(app.router.state.location.pathname).toBe(`${base}/world`))
+        }
     })
 
     it.each([[["campaign.view"]], [["campaign.view", "canon.edit"]]])(
@@ -620,6 +660,7 @@ describe("New PC stays discoverable from the selected-character entry point (PD-
             server.on("GET", `${API}/characters/pc-1`, FORBIDDEN)
             openApp(`${base}/characters/pc-1/inventory`, capabilities, NO_PERSPECTIVE)
             expect(await screen.findByRole("link", { name: "Longsword" })).toBeInTheDocument()
+            expect(screen.queryByRole("link", { name: "New character" })).toBeNull()
             expect(screen.queryByRole("link", { name: "New PC" })).toBeNull()
             expect(screen.queryByRole("navigation", { name: "Create character" })).toBeNull()
             expect(reads("/characters/pc-1")).toHaveLength(0)

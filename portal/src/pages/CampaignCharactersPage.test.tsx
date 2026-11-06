@@ -167,26 +167,27 @@ describe("CampaignCharactersPage", () => {
         expect(useCharacterSheetMock).not.toHaveBeenCalled()
     })
 
-    it("offers New PC to editors only, carrying the view to return to", () => {
+    it("offers one New character action to editors only, carrying the view to return to", () => {
         getSelectedCharacterIdMock.mockReturnValue(null)
         canEditMock.mockReturnValue(true)
 
         renderAt("/app/campaign-a/characters", "/app/:campaignId/characters")
 
-        expect(screen.getByRole("link", { name: "New PC" })).toHaveAttribute(
+        expect(screen.getAllByRole("link", { name: "New character" })).toHaveLength(1)
+        expect(screen.getByRole("link", { name: "New character" })).toHaveAttribute(
             "href",
-            "/app/campaign-a/characters/pc/new",
+            "/app/campaign-a/characters/new",
         )
-        expect(screen.queryByRole("link", { name: "New character" })).not.toBeInTheDocument()
+        expect(screen.queryByRole("link", { name: "New PC" })).not.toBeInTheDocument()
         expect(screen.queryByRole("link", { name: "New NPC" })).not.toBeInTheDocument()
     })
 
-    it("hides New PC without canon.edit", () => {
+    it("hides New character without canon.edit", () => {
         getSelectedCharacterIdMock.mockReturnValue(null)
 
         renderAt("/app/campaign-a/characters", "/app/:campaignId/characters")
 
-        expect(screen.queryByRole("link", { name: "New PC" })).not.toBeInTheDocument()
+        expect(screen.queryByRole("link", { name: "New character" })).not.toBeInTheDocument()
     })
 
     it("shows the browser at /characters/all even with a perspective, linking to the record as a new task", () => {

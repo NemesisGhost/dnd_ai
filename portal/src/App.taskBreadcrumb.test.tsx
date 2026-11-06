@@ -378,13 +378,15 @@ describe("New-character family", () => {
     expect(main().getByRole("link", { name: "Characters" })).toHaveAttribute("href", `${base}/characters/all`)
   })
 
-  it("from Characters with filters: Characters > New PC, and the crumb returns to the same filtered view", async () => {
+  it("from Characters with filters: Characters > New character > New PC, and the crumb returns to the same filtered view", async () => {
     const FROM = `${base}/characters/all?type=npc&q=mira`
     server.on("GET", /\/campaigns\/mundivita\/characters(\/all)?(\?.*)?$/, { body: { items: [], next_cursor: null } })
     const app = openApp("/app/mundivita/characters/all?type=npc&q=mira")
-    fireEvent.click(await screen.findByRole("link", { name: "New PC" }))
+    fireEvent.click(await screen.findByRole("link", { name: "New character" }))
+    await screen.findByRole("heading", { level: 1, name: "New character" })
+    fireEvent.click(main().getByRole("link", { name: "New player character" }))
     await screen.findByRole("heading", { level: 1, name: "New player character" })
-    await waitFor(() => expect(trail()).toEqual(["Characters", "New PC"]))
+    await waitFor(() => expect(trail()).toEqual(["Characters", "New character", "New PC"]))
     expect(main().getByRole("link", { name: "Characters" })).toHaveAttribute("href", FROM)
     expect(state(app).task).toMatchObject({ root: "characters", list: { route: "characters.browse", search: "?type=npc&q=mira" } })
     expect(app.router.state.location.state).not.toHaveProperty("charactersReturn")
