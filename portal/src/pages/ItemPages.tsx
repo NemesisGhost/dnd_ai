@@ -41,8 +41,9 @@ function editNavigation({
     state: unknown
     pathname: string
 }): EditNavigation {
-    const carried = carriedState(pathname, state)
     const own = itemPath(campaignId, entityId)
+    const to = resolveReturnTo(state, [own, worldItemPath(campaignId, entityId)], own)
+    const carried = carriedState(pathname, state, to)
     // Inside a task of its own (the inventory, a character, a session) the item page it returns to keeps the
     // task: the validated task only. Reached from the World page, or
     // directly, the state is exactly what it was.
@@ -50,7 +51,7 @@ function editNavigation({
     return {
         listPath: `${itemsListPath(campaignId)}${carriedListSearch(pathname, state, "items", "items.list") ?? ""}`,
         detail: {
-            to: resolveReturnTo(state, [own, worldItemPath(campaignId, entityId)], own),
+            to,
             state: outside === null ? carried : outside.state,
         },
     }

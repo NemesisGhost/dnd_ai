@@ -35,7 +35,6 @@ export function worldEditNavigation(
         state: unknown
         params?: Record<string, string | undefined>
     }): EditNavigation => {
-        const carried = pathname === undefined ? undefined : carriedState(pathname, state)
         const browserSearch =
             pathname === undefined ? undefined : carriedListSearch(pathname, state, "world", "campaign.world")
         const own = worldRecordPath(campaignId, category, entityId)
@@ -45,10 +44,13 @@ export function worldEditNavigation(
                       (crumb) => crumb.ref.route === "world.record" && crumb.ref.params.entityId === entityId,
                   )
                 : undefined
+        const to = resolveReturnTo(state, [own, ...(alsoReturnTo?.({ campaignId, params }) ?? [])], own)
+        // The task is chosen for the record this link actually leads to.
+        const carried = pathname === undefined ? undefined : carriedState(pathname, state, to)
         return {
             listPath: `/app/${encodeURIComponent(campaignId)}/world${browserSearch ?? ""}`,
             detail: {
-                to: resolveReturnTo(state, [own, ...(alsoReturnTo?.({ campaignId, params }) ?? [])], own),
+                to,
                 state: recordCrumb === undefined ? carried : recordCrumb.state,
             },
         }

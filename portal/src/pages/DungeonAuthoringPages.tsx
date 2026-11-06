@@ -58,7 +58,7 @@ function WorkspaceLinks({
             <ul className="world-detail__links">
                 {sections.map(({ section, label }) => (
                     <li key={section}>
-                        <Link to={`${locationDetail(campaignId, entityId)}?section=${section}`} state={carriedState(pathname, state)}>
+                        <Link to={`${locationDetail(campaignId, entityId)}?section=${section}`} state={carriedState(pathname, state, locationDetail(campaignId, entityId))}>
                             {label}
                         </Link>
                     </li>
@@ -476,7 +476,7 @@ function DungeonLink({ campaignId, dungeonId, name }: { campaignId: string; dung
         <p>
             <Link
                 to={`${locationDetail(campaignId, dungeonId)}?section=areas`}
-                state={carriedState(pathname, state)}
+                state={carriedState(pathname, state, locationDetail(campaignId, dungeonId))}
             >
                 Back to {name}
             </Link>

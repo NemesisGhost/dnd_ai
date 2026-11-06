@@ -110,6 +110,41 @@ describe("an explicit task that does not hold up does not hide a valid historica
     })
 })
 
+describe("the task is chosen for the destination the link leads to", () => {
+    const edit = "/app/c1/world/location/l1/edit"
+    const record = "/app/c1/world/location/l1?section=details"
+    const access = { v: 1, root: "access", scope: { campaignId: "c1" }, trail: [] }
+    const review = task({ root: "review", list: { route: "review.queue", search: "?status=draft" } })
+    const world = { v: 1, root: "world", scope: { campaignId: "c1" }, trail: [], list: { route: "campaign.world", search: "?category=location&q=mill" } }
+
+    it("an Access task the edit page may pass on, which the World record does not accept, yields to a valid worldSearch", () => {
+        const state = { task: access, worldSearch: "?category=location&q=mill" }
+        // Without a destination the intermediate page alone judges it (the Access task stands) ...
+        expect(carriedState(edit, state)).toEqual({ task: access })
+        // ... with the record as the destination, the usable fallback is chosen instead.
+        expect(carriedState(edit, state, record)).toEqual({ task: world })
+    })
+
+    it("a destination-valid explicit Review task keeps precedence over conflicting legacy state", () => {
+        expect(carriedState(edit, { task: review, worldSearch: "?category=location" }, record)).toEqual({ task: review })
+    })
+
+    it("a legacy candidate is also judged by the destination", () => {
+        // The adapted World origin passes the edit page but the Review queue accepts no World task.
+        expect(carriedState(edit, { worldSearch: "?category=location&q=mill" })).toEqual({ task: world })
+        expect(carriedState(edit, { worldSearch: "?category=location" }, "/app/c1/review")).toBeUndefined()
+    })
+
+    it("two candidates the destination rejects leave nothing forwarded, and the default return intact", () => {
+        expect(carriedState(edit, { task: access, worldSearch: "?token=abc" }, record)).toBeUndefined()
+        expect(carriedState(edit, { task: access }, record)).toBeUndefined()
+    })
+
+    it("a destination that is not a route of the app accepts nothing", () => {
+        expect(carriedState(edit, { task: review }, "/elsewhere")).toBeUndefined()
+    })
+})
+
 describe("a trail entry records the section it was left on", () => {
     const sheet = "/app/c1/characters/ch1"
 

@@ -445,6 +445,20 @@ describe("Related records and edit pages", () => {
         await waitFor(() => expect(trail()).toEqual(["World", "Record", "Edit location"]))
     })
 
+    it("an Access task the World record does not accept does not hide a valid worldSearch: Cancel leads to a record whose World crumb returns to the filtered list", async () => {
+        const app = openApp(`${base}/world`)
+        const access = { v: 1, root: "access", scope: { campaignId: "mundivita" }, trail: [] }
+        await act(async () => {
+            await app.router.navigate(`${base}/world/location/l1/edit`, { state: { task: access, worldSearch: FILTERED } })
+        })
+        fireEvent.click(await screen.findByRole("button", { name: "Cancel" }))
+        await screen.findByRole("heading", { level: 1, name: "Old Mill" })
+        expect(app.router.state.location.pathname).toBe(`${base}/world/location/l1`)
+        expect(entryState(app)?.task).toMatchObject({ root: "world", list: { route: "campaign.world", search: FILTERED } })
+        expect(entryState(app)).not.toHaveProperty("worldSearch")
+        await waitFor(() => expect(trailLinks()).toEqual([`${base}/world${FILTERED}`]))
+    })
+
     it("an edit page entered with only the older keys keeps its single World / record links", async () => {
         const app = openApp(`${base}/world`)
         await act(async () => {

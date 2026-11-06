@@ -349,10 +349,10 @@ function LoadedHistory() {
     const { pathname, state: routerState } = useLocation()
     // Where the person came from (the Review queue's filters, the World browser), validated; it
     // rides along every link out of this page and every comparison.
-    const returnState = carriedState(pathname, routerState)
     const queueHref = `${base(campaignId)}/review${carriedListSearch(pathname, routerState, "review", "review.queue") ?? ""}`
     const detail =
         state.kind === "ready" ? recordPath(campaignId, entityId, state.data.entity_type_code, category) : null
+    const returnState = carriedState(pathname, routerState, detail ?? undefined)
     return (
         <>
             <p className="authoring-page__breadcrumb">
