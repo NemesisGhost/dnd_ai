@@ -119,9 +119,14 @@ from pydantic import BaseModel
 from sqlalchemy import Connection, text
 
 from dnd_ai.domain.access import AccessContext
-from dnd_ai.queries.character import get_character_view
+from dnd_ai.queries.character import (
+    UNFILTERED_ENCOUNTER_READER,
+    EncounterReader,
+    get_character_view,
+)
 from dnd_ai.queries.character_relationships import list_character_relationships_for_reader
 from dnd_ai.queries.character_sheet import get_character_sheet_view
+from dnd_ai.queries.encounter import EncounterAudience
 from dnd_ai.queries.entity_lifecycle import (
     get_entity_status_summary,
     lifecycle_hidden_entity_ids,
@@ -508,12 +513,26 @@ def get_character_endpoint(
 
     include_full = resolve_character_view_tier(access, character_id=character_id)
 
+    world_id = timeline_world_id(connection, access.timeline_id)
+    # The encounter detail route's own split (api.encounters.get_encounter_endpoint):
+    # `canon.edit` reads unfiltered, every other member through a discovery audience.
+    encounter_reader: EncounterReader = (
+        UNFILTERED_ENCOUNTER_READER
+        if access.has_capability("canon.edit")
+        else EncounterAudience(
+            visibility=resolve_world_entity_visibility(access, connection),
+            world_id=world_id,
+            timeline_id=access.timeline_id,
+        )
+    )
     view = get_character_view(
         connection,
         character_id=character_id,
         timeline_id=access.timeline_id,
-        expected_world_id=timeline_world_id(connection, access.timeline_id),
+        expected_world_id=world_id,
         include_full=include_full,
+        campaign_id=access.campaign_id,
+        encounter_reader=encounter_reader,
     )
 
     status = get_entity_status_summary(

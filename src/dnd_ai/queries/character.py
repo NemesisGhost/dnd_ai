@@ -17,10 +17,14 @@ here, the same "authorization happens at the API/access boundary, the
 query only filters" split `dnd_ai.queries.dungeon` established.
 
 `active_encounter_id` (Phase 11 workstream 5, "retrieve party-visible
-state for the current location or encounter") is resolved the same way as
-`current_location_id` right above it: a plain, current-state lookup, gated
-behind the identical `include_full` tier rather than a new capability or
-a separate endpoint. Deliberately just the id, not the encounter's own
+state for the current location or encounter") is a plain, current-state
+lookup gated behind the identical `include_full` tier rather than a new
+capability or a separate endpoint. It is additionally scoped to the
+requested campaign and to the encounter read policy of
+`dnd_ai.queries.encounter` (DEF-009, P03-A slice A0): an encounter of another
+campaign sharing the timeline, a campaign-less encounter, or one the caller's
+audience could not discover is never returned, and a caller with no audience
+context gets `None`. Deliberately just the id, not the encounter's own
 content — a caller who needs the full encounter already has
 `dnd_ai.api.encounters.get_encounter_endpoint` (already Foundry-reachable
 since Phase 11 workstream 2), and duplicating that content here would be
@@ -35,10 +39,14 @@ more consistent than a parallel resolver endpoint would have been.
 
 import uuid
 from dataclasses import dataclass
+from typing import Literal
 
 from sqlalchemy import Connection, text
 
 from dnd_ai.domain.errors import DomainAuthorizationError
+
+from .encounter import EncounterAudience, member_may_read_encounter
+from .world_explorer import discoverable_entity_ids
 
 
 class CharacterNotFoundError(DomainAuthorizationError):
@@ -95,6 +103,39 @@ class CharacterView:
     resources: tuple[CharacterResourceView, ...] | None
 
 
+UNFILTERED_ENCOUNTER_READER: Literal["unfiltered"] = "unfiltered"
+"""The `encounter_reader` for a caller holding `canon.edit`, who reads
+encounters without an audience projection (`api.encounters.get_encounter_endpoint`)."""
+
+EncounterReader = EncounterAudience | Literal["unfiltered"] | None
+
+
+def _may_reference_active_encounter(
+    connection: Connection, *, character_id: uuid.UUID, encounter_reader: EncounterReader
+) -> bool:
+    """Whether this caller may be handed an encounter id on the character's page,
+    by the same rule the encounter detail route applies: an unfiltered
+    (`canon.edit`) reader always; an audience reader only when an active
+    encounter is member-readable (`member_may_read_encounter`) and the
+    audience can discover the character, since the member projection of that
+    encounter would otherwise not name it. A caller with no audience context
+    (`None`) is never given the id."""
+    if encounter_reader is None:
+        return False
+    if encounter_reader == UNFILTERED_ENCOUNTER_READER:
+        return True
+    assert isinstance(encounter_reader, EncounterAudience)
+    if not member_may_read_encounter("active", None):
+        return False
+    return character_id in discoverable_entity_ids(
+        connection,
+        [character_id],
+        world_id=encounter_reader.world_id,
+        timeline_id=encounter_reader.timeline_id,
+        visibility=encounter_reader.visibility,
+    )
+
+
 def get_character_view(
     connection: Connection,
     *,
@@ -102,12 +143,20 @@ def get_character_view(
     timeline_id: uuid.UUID,
     expected_world_id: uuid.UUID,
     include_full: bool,
+    campaign_id: uuid.UUID,
+    encounter_reader: EncounterReader = None,
 ) -> CharacterView:
     """The effective, tier-filtered state of one character. Raises
     `CharacterNotFoundError` for a nonexistent character or one belonging
     to a different world than `expected_world_id` (always the caller's own
     resolved-timeline world — `dnd_ai.api._shared.timeline_world_id`, never
-    caller-supplied)."""
+    caller-supplied).
+
+    `active_encounter_id` (full tier only) is an active encounter of
+    `campaign_id` the caller may discover: `encounter_reader` is the
+    caller's `EncounterAudience`, `UNFILTERED_ENCOUNTER_READER` for a
+    `canon.edit` holder, or `None` (the default) for a caller with no
+    audience context — such as AI context assembly — which gets `None`."""
     row = (
         connection.execute(
             text("""
@@ -173,24 +222,32 @@ def get_character_view(
         {"timeline": timeline_id, "character": character_id},
     ).scalar()
 
-    # The character's currently active encounter, if any — deterministic
-    # via world_time_id even in the edge case of more than one active
-    # encounter naming this character as a participant (nothing in this
-    # domain model prevents that, unlike character_location_history's own
-    # EXCLUDE constraint for location).
-    active_encounter_id = connection.execute(
-        text("""
-            SELECT e.encounter_id
-            FROM narrative.encounters e
-            JOIN narrative.encounter_participants ep ON ep.encounter_id = e.encounter_id
-            WHERE ep.participant_entity_id = :character
-              AND e.timeline_id = :timeline
-              AND e.status = 'active'
-            ORDER BY e.world_time_id DESC
-            LIMIT 1
-        """),
-        {"timeline": timeline_id, "character": character_id},
-    ).scalar()
+    # The character's currently active encounter in this campaign, if any —
+    # deterministic via world_time_id even in the edge case of more than one
+    # active encounter naming this character as a participant (nothing in
+    # this domain model prevents that, unlike character_location_history's
+    # own EXCLUDE constraint for location). The campaign and audience
+    # filters are decided before the query, so they apply ahead of
+    # ORDER BY/LIMIT: another campaign's later encounter on a shared
+    # timeline can never displace this campaign's.
+    active_encounter_id = None
+    if _may_reference_active_encounter(
+        connection, character_id=character_id, encounter_reader=encounter_reader
+    ):
+        active_encounter_id = connection.execute(
+            text("""
+                SELECT e.encounter_id
+                FROM narrative.encounters e
+                JOIN narrative.encounter_participants ep ON ep.encounter_id = e.encounter_id
+                WHERE ep.participant_entity_id = :character
+                  AND e.timeline_id = :timeline
+                  AND e.campaign_id = :campaign
+                  AND e.status = 'active'
+                ORDER BY e.world_time_id DESC
+                LIMIT 1
+            """),
+            {"timeline": timeline_id, "character": character_id, "campaign": campaign_id},
+        ).scalar()
 
     condition_rows = connection.execute(
         text("""

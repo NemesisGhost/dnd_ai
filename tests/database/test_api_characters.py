@@ -16,6 +16,7 @@ and cross-world ownership.
 
 import uuid
 from collections.abc import Callable, Iterator
+from dataclasses import replace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -25,6 +26,13 @@ from dnd_ai.api.app import create_app
 from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
 from dnd_ai.domain.access import FOUNDRY_ACCESS_AUTH_METHOD, AuthenticatedPrincipal
+from dnd_ai.queries.character import (
+    UNFILTERED_ENCOUNTER_READER,
+    EncounterReader,
+    get_character_view,
+)
+from dnd_ai.queries.encounter import EncounterAudience
+from dnd_ai.queries.world_explorer import CharacterVisibility, WorldEntityVisibility
 from tests.factories import (
     lookup_id,
     make_access_group,
@@ -651,14 +659,211 @@ def test_character_kind_names_an_npc_or_a_player_character(
 def test_full_tier_returns_the_active_encounter_id(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
 ) -> None:
+    # P03-A slice A0 (DEF-009): the encounter must belong to the route campaign. This fixture used
+    # to build a campaign-less encounter, which is now deliberately withheld (test below).
     with postgres_engine.begin() as connection:
-        encounter_id = make_encounter(connection, f.timeline_id, f.world_time_id, status="active")
+        encounter_id = make_encounter(
+            connection, f.timeline_id, f.world_time_id, campaign_id=f.campaign_id, status="active"
+        )
         make_encounter_participant(connection, encounter_id, f.character_id)
 
     with client_factory(f.full_view_user_id) as client:
         response = client.get(_character_url(f))
     assert response.status_code == 200, response.text
     assert response.json()["active_encounter_id"] == str(encounter_id)
+
+
+def test_a_gm_gets_the_same_campaign_active_encounter_id(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as connection:
+        encounter_id = make_encounter(
+            connection, f.timeline_id, f.world_time_id, campaign_id=f.campaign_id, status="active"
+        )
+        make_encounter_participant(connection, encounter_id, f.character_id)
+
+    with client_factory(f.gm_user_id) as client:
+        response = client.get(_character_url(f))
+    assert response.status_code == 200, response.text
+    assert response.json()["active_encounter_id"] == str(encounter_id)
+
+
+def test_a_campaign_less_active_encounter_is_returned_to_nobody(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as connection:
+        encounter_id = make_encounter(connection, f.timeline_id, f.world_time_id, status="active")
+        make_encounter_participant(connection, encounter_id, f.character_id)
+
+    for user_id in (f.gm_user_id, f.full_view_user_id):
+        with client_factory(user_id) as client:
+            response = client.get(_character_url(f))
+        assert response.status_code == 200, response.text
+        assert response.json()["active_encounter_id"] is None
+
+
+def test_a_pending_same_campaign_encounter_is_ignored(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as connection:
+        encounter_id = make_encounter(
+            connection, f.timeline_id, f.world_time_id, campaign_id=f.campaign_id
+        )
+        make_encounter_participant(connection, encounter_id, f.character_id)
+
+    for user_id in (f.gm_user_id, f.full_view_user_id):
+        with client_factory(user_id) as client:
+            assert client.get(_character_url(f)).json()["active_encounter_id"] is None
+
+
+def test_another_campaigns_later_encounter_on_the_same_timeline_never_displaces_this_ones(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """The campaign filter runs before ORDER BY ... LIMIT 1: campaign B's encounter has the later
+    world time, so an unfiltered query would pick it. When campaign A has none, A's readers get
+    null rather than B's id."""
+    with postgres_engine.begin() as connection:
+        other_campaign_id = make_campaign(
+            connection, f.timeline_id, lifecycle_status_code="pending"
+        )
+        foreign_id = make_encounter(
+            connection,
+            f.timeline_id,
+            f.later_world_time_id,
+            campaign_id=other_campaign_id,
+            status="active",
+        )
+        make_encounter_participant(connection, foreign_id, f.character_id)
+
+    for user_id in (f.gm_user_id, f.full_view_user_id):
+        with client_factory(user_id) as client:
+            assert client.get(_character_url(f)).json()["active_encounter_id"] is None
+
+    with postgres_engine.begin() as connection:
+        own_id = make_encounter(
+            connection, f.timeline_id, f.world_time_id, campaign_id=f.campaign_id, status="active"
+        )
+        make_encounter_participant(connection, own_id, f.character_id)
+
+    for user_id in (f.gm_user_id, f.full_view_user_id):
+        with client_factory(user_id) as client:
+            assert client.get(_character_url(f)).json()["active_encounter_id"] == str(own_id)
+
+
+def test_the_summary_tier_still_returns_no_encounter_id(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as connection:
+        encounter_id = make_encounter(
+            connection, f.timeline_id, f.world_time_id, campaign_id=f.campaign_id, status="active"
+        )
+        make_encounter_participant(connection, encounter_id, f.character_id)
+
+    with client_factory(f.summary_view_user_id) as client:
+        assert client.get(_character_url(f)).json()["active_encounter_id"] is None
+
+
+def test_a_foundry_paired_device_gets_the_same_filtered_encounter_id(
+    foundry_client_factory: Callable[[AuthenticatedPrincipal], TestClient],
+    f: Fixture,
+    postgres_engine: Engine,
+) -> None:
+    """The paired device resolves the bound user's own `AccessContext`, so it is filtered exactly
+    like the portal: the same-campaign encounter is returned, another campaign's is not."""
+    with postgres_engine.begin() as connection:
+        other_campaign_id = make_campaign(
+            connection, f.timeline_id, lifecycle_status_code="pending"
+        )
+        foreign_id = make_encounter(
+            connection,
+            f.timeline_id,
+            f.later_world_time_id,
+            campaign_id=other_campaign_id,
+            status="active",
+        )
+        make_encounter_participant(connection, foreign_id, f.character_id)
+
+    for user_id in (f.gm_user_id, f.full_view_user_id):
+        principal = _foundry_access_principal(
+            user_id=user_id, world_id=f.world_id, campaign_id=f.campaign_id
+        )
+        with foundry_client_factory(principal) as client:
+            assert client.get(_character_url(f)).json()["active_encounter_id"] is None
+
+    with postgres_engine.begin() as connection:
+        own_id = make_encounter(
+            connection, f.timeline_id, f.world_time_id, campaign_id=f.campaign_id, status="active"
+        )
+        make_encounter_participant(connection, own_id, f.character_id)
+
+    for user_id in (f.gm_user_id, f.full_view_user_id):
+        principal = _foundry_access_principal(
+            user_id=user_id, world_id=f.world_id, campaign_id=f.campaign_id
+        )
+        with foundry_client_factory(principal) as client:
+            assert client.get(_character_url(f)).json()["active_encounter_id"] == str(own_id)
+
+
+def _hidden_character_audience(f: Fixture) -> EncounterAudience:
+    return EncounterAudience(
+        visibility=WorldEntityVisibility(
+            campaign_view_denied_entity_ids=frozenset(),
+            character_visibility=CharacterVisibility(
+                discover_all=True,
+                force_visible=frozenset(),
+                force_hidden=frozenset({f.character_id}),
+            ),
+            include_draft_events=False,
+            draft_event_allowed_ids=frozenset(),
+            draft_event_denied_ids=frozenset(),
+        ),
+        world_id=f.world_id,
+        timeline_id=f.timeline_id,
+    )
+
+
+def test_the_encounter_id_is_withheld_from_an_audience_that_cannot_discover_the_character(
+    f: Fixture, postgres_engine: Engine
+) -> None:
+    """Query-level only. Through the API a full-tier reader always discovers the character
+    (`character.view_full` and `canon.edit` are themselves discover capabilities, and an
+    entity-level `campaign.view` deny 404s the route first), so an undiscoverable same-campaign
+    encounter cannot be built at the HTTP layer. This pins the shared-policy behavior for any
+    caller whose audience hides the character; the unfiltered and discovering readers on the
+    same encounter still receive the id."""
+    with postgres_engine.begin() as connection:
+        encounter_id = make_encounter(
+            connection, f.timeline_id, f.world_time_id, campaign_id=f.campaign_id, status="active"
+        )
+        make_encounter_participant(connection, encounter_id, f.character_id)
+
+    def view_for(reader: EncounterReader) -> uuid.UUID | None:
+        with postgres_engine.connect() as connection:
+            return get_character_view(
+                connection,
+                character_id=f.character_id,
+                timeline_id=f.timeline_id,
+                expected_world_id=f.world_id,
+                include_full=True,
+                campaign_id=f.campaign_id,
+                encounter_reader=reader,
+            ).active_encounter_id
+
+    assert view_for(_hidden_character_audience(f)) is None
+    assert view_for(None) is None
+    assert view_for(UNFILTERED_ENCOUNTER_READER) == encounter_id
+    discovering = replace(
+        _hidden_character_audience(f),
+        visibility=replace(
+            _hidden_character_audience(f).visibility,
+            character_visibility=CharacterVisibility(
+                discover_all=True,
+                force_visible=frozenset({f.character_id}),
+                force_hidden=frozenset(),
+            ),
+        ),
+    )
+    assert view_for(discovering) == encounter_id
 
 
 def test_full_tier_ignores_a_non_active_encounter(

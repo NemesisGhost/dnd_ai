@@ -39,7 +39,12 @@ from dnd_ai.commands.encounters import EncounterNotFoundError
 
 from .world_explorer import WorldEntityVisibility, discoverable_entity_ids
 
-__all__ = ["EncounterAudience", "EncounterNotFoundError", "get_encounter_view"]
+__all__ = [
+    "EncounterAudience",
+    "EncounterNotFoundError",
+    "get_encounter_view",
+    "member_may_read_encounter",
+]
 
 
 @dataclass(frozen=True)
@@ -93,7 +98,7 @@ class EncounterView:
 
 # Statuses a member without `canon.edit` may read. `pending` is unstarted GM
 # preparation; `aborted` is readable only when it was started (see
-# `_member_may_read`).
+# `member_may_read_encounter`).
 _MEMBER_READABLE_STATUSES = frozenset({"active", "completed"})
 
 
@@ -107,8 +112,10 @@ class EncounterAudience:
     timeline_id: uuid.UUID
 
 
-def _member_may_read(status: str, resulting_event_id: uuid.UUID | None) -> bool:
-    """`aborted` records an event only when the encounter was `active`
+def member_may_read_encounter(status: str, resulting_event_id: uuid.UUID | None) -> bool:
+    """The member (non-`canon.edit`) read rule, shared with
+    `dnd_ai.queries.character.get_character_view`'s `active_encounter_id` so the
+    two surfaces cannot drift. `aborted` records an event only when the encounter was `active`
     (`commands.encounter_operations.abort_encounter`; no other writer sets the
     status), so an aborted row with no `resulting_event_id` never started. The
     column is `ON DELETE SET NULL`, so a started encounter whose abort event
@@ -162,7 +169,9 @@ def get_encounter_view(
         raise EncounterNotFoundError(
             f"encounter {encounter_id} does not exist in campaign {campaign_id}"
         )
-    if audience is not None and not _member_may_read(row["status"], row["resulting_event_id"]):
+    if audience is not None and not member_may_read_encounter(
+        row["status"], row["resulting_event_id"]
+    ):
         raise EncounterNotFoundError(
             f"encounter {encounter_id} does not exist in campaign {campaign_id}"
         )
