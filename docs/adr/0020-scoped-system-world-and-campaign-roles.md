@@ -5,6 +5,7 @@
 - **Supersedes**: [ADR 0018](0018-world-creation-eligibility.md) entirely.
 - **Amends**: [ADR 0014](0014-world-authoring-authority.md) decisions 2, 4 and 5 (world roles, the closed capability mapping, owner-only authority); [ADR 0015](0015-typed-world-content-authoring.md) decision 3 (world-definition writes were authorized by campaign `canon.edit`).
 - **Plan**: [SCOPED_ROLE_IMPLEMENTATION_PLAN.md](../SCOPED_ROLE_IMPLEMENTATION_PLAN.md) holds the verified findings (§2), the schema (§6), the API (§7), and the delivery checkpoints (§11).
+- **Pending proposal (no effect yet)**: [ADR 0021](0021-shared-actor-identity-control-and-authoring-responsibility.md) (Proposed) would amend decision 6 for player-character identity only. Decision 6 stays in force unchanged until ADR 0021 is accepted *and* the P03-C cutover completes for each character.
 
 ## Context
 
