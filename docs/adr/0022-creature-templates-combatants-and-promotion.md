@@ -1,6 +1,6 @@
 # ADR 0022: Creature templates, encounter combatants, and promotion
 
-- **Status**: Proposed. R19-P0 architecture deliverable, corrected after independent review (finding R19-07). Not accepted. It implements owner Decision 3 (hybrid creature representation) and is the creature-model ADR that [PLANv2.md](../PLANv2.md) 19.3 and §18 item 8 require.
+- **Status**: Accepted by the owner on 2026-11-06, as reviewed at `2ca4648` (the ADR file is unchanged from that revision). R19-P0 architecture deliverable, corrected after independent review (finding R19-07). It implements owner Decision 3 (hybrid creature representation) and is the creature-model ADR that [PLANv2.md](../PLANv2.md) 19.3 and §18 item 8 require.
 - **Owner decisions applied (Owner-approved 2026-11-03)**: OD-5 (no delegation for creating and publishing a promoted character, §6) and OD-11 (no promotion during an active encounter, §6). These are policy approvals, not acceptance of this ADR.
 - **Date**: 2026-11-02
 - **Extends**: [ADR 0005](0005-separate-rules-definitions-from-world-instances.md). A creature template is a rules definition; a persistent creature is a world instance.

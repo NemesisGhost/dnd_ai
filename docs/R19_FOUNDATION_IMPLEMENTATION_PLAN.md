@@ -1,20 +1,22 @@
 # Phase 19 foundation implementation plan (R19-P0 to R19-P4)
 
-**Status:** Proposed. This is the R19-P0 planning deliverable, first drafted at `10a1a4e`. Independent reviews covered findings R19-01 through R19-16 (see §13). This revision records owner-decision reconciliations through 2026-11-04. It remains proposed design only: nothing in it is implemented, enabled, tested or accepted. **Owner decisions recorded (all 2026-11-02, all Owner-approved):**
+**Status:** Proposed. This is the R19-P0 planning deliverable, first drafted at `10a1a4e`. Independent reviews covered findings R19-01 through R19-16 (see §13). This revision records owner-decision reconciliations through 2026-11-04. The plan remains Proposed and unimplemented; ADR acceptance is recorded separately below. **Owner decisions recorded (all 2026-11-02, all Owner-approved):**
 
 - **OD-1:** campaigns sharing a world or timeline maintain independent mechanical character state (ADR 0021 §3).
 - **OD-20:** character location and fictional/legal item ownership are shared narrative; mechanical possession, inventory, equipment, attunement, charges and quantities are per campaign (ADR 0021 §3.1.1).
 - **OD-21:** lineage seeding and cross-campaign copy are separately authorized and stay disabled until enablement acceptance (ADR 0021 §3.6).
 
-- **2026-11-03:** OD-2, OD-3, OD-4, OD-5, OD-7, OD-9, OD-10, OD-11, OD-12, OD-14, OD-17, OD-18, OD-19 and OD-22 are Owner-approved (§9, §13.4). These are policy approvals; the ADRs stay Proposed.
+- **2026-11-03:** OD-2, OD-3, OD-4, OD-5, OD-7, OD-9, OD-10, OD-11, OD-12, OD-14, OD-17, OD-18, OD-19 and OD-22 are Owner-approved (§9, §13.4). These were policy approvals recorded while the ADRs were Proposed; formal acceptance is recorded below.
 
-- **2026-11-04:** OD-4a (assistant-GM delegation of control assignment), OD-7a (the existing public seed treated as potentially distributed) and OD-12a (only the contributor authorizes access to a contributor-private source) are Owner-approved, and OD-18 is clarified (controllers edit the campaign-scoped player profile; this is not `character.edit_narrative`) (§9, §13.5). These are policy approvals; the ADRs stay Proposed, and OD-7a is not licensing clearance.
+- **2026-11-04:** OD-4a (assistant-GM delegation of control assignment), OD-7a (the existing public seed treated as potentially distributed) and OD-12a (only the contributor authorizes access to a contributor-private source) are Owner-approved, and OD-18 is clarified (controllers edit the campaign-scoped player profile; this is not `character.edit_narrative`) (§9, §13.5). These were policy approvals recorded while the ADRs were Proposed; formal acceptance is recorded below. OD-7a is not licensing clearance.
 
 As instructed, OD-6 is reconciled to permit campaign-scoped builds. **No owner question remains open for R19-P0.**
 
+**ADR acceptance record (separate from P03-A design-input acceptance):** On 2026-11-06, the owner accepted ADRs 0021–0023 as reviewed at `2ca4648`. Their contents were verified unchanged from that reviewed revision. Acceptance does not claim implementation or Phase 19 completion. R19-P0 completion still requires the primary PC acknowledgment of ADR 0021 listed in §3.
+
 **Branch:** `planning/r19-p0-architecture`, from `main` at `defe3f7`.
 
-**Governing documents:** [PLANv2.md](PLANv2.md) §6.1, §8 (15H), §12 (19.0–19.8) and three Proposed ADRs:
+**Governing documents:** [PLANv2.md](PLANv2.md) §6.1, §8 (15H), §12 (19.0–19.8) and three Accepted ADRs:
 
 - [ADR 0021](adr/0021-shared-actor-identity-control-and-authoring-responsibility.md): actor identity, control, authoring responsibility. Phase 15 owns it.
 - [ADR 0022](adr/0022-creature-templates-combatants-and-promotion.md): creature templates, combatants, promotion.
@@ -1065,7 +1067,7 @@ P2a and P3a keep their independent begin and merge eligibility (§3). Their late
 | OD-19 | Existing access preserved until per-character reviewed disposition, with reasons and affected principals | ADR 0021 §4.1, §4.5, §8; T26 | P03-C cutover (OD-19 part) | P03-C manifest review per character |
 | OD-22 | No world-shared whereabouts record now; campaign-specific under OD-20; a future feature needs its own proposal | ADR 0021 §3.1.1 | None (it was non-blocking) | None |
 
-The ADRs stay Proposed. OD-1, OD-20 and OD-21 are unchanged, and the OD-21 commands stay disabled pending their enablement review.
+At the time of the 2026-11-04 reconciliation the ADRs remained Proposed. OD-1, OD-20 and OD-21 are unchanged, and the OD-21 commands stay disabled pending their enablement review.
 
 ### 13.5 Final owner decision reconciliation (Owner-approved 2026-11-04), against `1cfb943`
 
@@ -1076,7 +1078,7 @@ The ADRs stay Proposed. OD-1, OD-20 and OD-21 are unchanged, and the OD-21 comma
 | OD-12a | Only the contributor authorizes access; no GM self-grant; world ownership and system administration grant nothing automatically; explicit sharing governs citations and AI retrieval | ADR 0023 §9; T17, T87 | The Phase 18 intake grantor question | Phase 18 intake design; ED-8 citation link |
 | OD-18 (clarification) | Primary and co-controllers edit their own campaign-scoped player profile; no `character.edit_narrative`, world-canon edit or GM-private portrayal access; publication under OD-17 and OD-5 | ADR 0021 §2.5 (capability table), §2.8 (profile lock row), §4.7 (`edit_narrative` profile grant withdrawn; `edit_narrative` is canonical narrative editing), §7, acceptance list; plan §6 R19-P1, §7, §9, §11; PLANv2 16A; T82, T85 | None (OD-18 was approved) | P03-A, P03-B and Phase 16 tests |
 
-Unchanged by this reconciliation: OD-1, OD-2, OD-3 (the closed `CONTROLLER_OPERATIONS` list; profile editing is not added to it), OD-5 and the existing authoring permissions of ADR 0021 §4.1–§4.5, the OD-19 per-character review requirement, OD-17, the R19-14 attribution architecture (ADR 0021 §3.3, ED-16, T70–T77), OD-21 (seeding and cross-campaign copy stay disabled) and the seed's `unknown` / `unreviewed` rights status. The ADRs stay Proposed.
+Unchanged by this reconciliation: OD-1, OD-2, OD-3 (the closed `CONTROLLER_OPERATIONS` list; profile editing is not added to it), OD-5 and the existing authoring permissions of ADR 0021 §4.1–§4.5, the OD-19 per-character review requirement, OD-17, the R19-14 attribution architecture (ADR 0021 §3.3, ED-16, T70–T77), OD-21 (seeding and cross-campaign copy stay disabled) and the seed's `unknown` / `unreviewed` rights status. The ADRs were Proposed at the time of this reconciliation; formal acceptance is recorded above.
 
 ## 14. Self-review
 
@@ -1089,5 +1091,5 @@ Unchanged by this reconciliation: OD-1, OD-2, OD-3 (the closed `CONTROLLER_OPERA
 - **No new source access:** citations stay on `core.sources` until ED-8.
 - **Reproduction limits** are stated.
 - **IDs and history** are preserved.
-- **No owner approval is claimed** beyond the recorded policy decisions, and every ADR remains Proposed.
+- Owner approvals are recorded in their decision entries. ADRs 0021–0023 were formally accepted on 2026-11-06 as stated above; the architecture remains unimplemented.
 - **No owner question is open** for R19-P0 after the 2026-11-04 decisions (§9, §13.5).
