@@ -762,7 +762,7 @@ describe("an arrival belongs to the destination its note names", () => {
     ["a campaign note", campaignNote("alpha")],
     ["a world note", { selection: { level: "world", id: "w1" } }],
     ["a character note", { selection: { level: "character", id: "a2", campaignId: "alpha" } }],
-  ])("%s on an unrelated route announces nothing and claims no focus even when the store matches it", async (_name, note) => {
+  ])("%s on an unrelated route announces nothing even when the store matches it", async (_name, note) => {
     mount("/app/alpha/characters/a2", false, { ctx: ctxOf("a2") })
     await heading("Character a2")
     await waitFor(() => expect(stamp()).toMatchObject({ characterId: "a2" }))
@@ -779,8 +779,10 @@ describe("an arrival belongs to the destination its note names", () => {
     await waitFor(() => expect(stamp()).toBeDefined())
     await settle()
     expect(said).toEqual([])
-    expect(browse).not.toHaveFocus()
-    expect(document.body).toHaveFocus()
+    // The note claims nothing. The heading holds focus only because the navigation itself is an ordinary
+    // link arrival (a PUSH, navigation/selectionArrival.ts `focusLinkArrival`), which the note neither
+    // causes nor changes; the announcer being silent is what shows the note was refused.
+    expect(browse).toHaveFocus()
   })
 
   describe("a same-path REPLACE that is not the entry's own stamp ends the arrival", () => {

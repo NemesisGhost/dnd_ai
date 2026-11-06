@@ -1,6 +1,6 @@
 import { createContext, useContext } from "react"
 import { activationFor, releaseActivation } from "./activationOwner"
-import { differsOnlyInSection, normalizationRoot, sameStateButCtx, stampRoot } from "./entryStamp"
+import { differsOnlyInSection, entryRoot, normalizationRoot, sameStateButCtx, stampRoot } from "./entryStamp"
 import type { SelectionChange, SelectionScope } from "./selectionChange"
 
 // One accepted selection arrival (docs/UI_DESIGN.md §4.8.4): the Infobox choice the router has accepted
@@ -126,6 +126,45 @@ export class SelectionArrival {
     }
 }
 
+// A link arrival is a chain of entries that began with a PUSH: the entry the person's link created, and the
+// stamp-only REPLACEs the selected-context owners write over it (navigation/entryStamp.ts) before a slow
+// destination has settled. The shell notes each PUSH here as it is committed; a reload or Back/Forward
+// (POP) is never noted, so it is never an arrival. Bounded: only recent entries can still be settling.
+const pushedEntries: string[] = []
+const PUSHED_LIMIT = 64
+// The chain root a link arrival has already claimed. One navigation is one claim, so a remount, a re-read,
+// a second boundary on the same page or a stamp never moves focus twice.
+let claimedLinkArrival: string | null = null
+
+/** The shell's declaration, made as each location is committed: `key` was reached by a PUSH. */
+export function notePushedEntry(key: string): void {
+    if (pushedEntries.includes(key)) return
+    pushedEntries.push(key)
+    if (pushedEntries.length > PUSHED_LIMIT) pushedEntries.shift()
+}
+
+/**
+ * The heading focus of an ordinary link arrival (a Navbar link, a breadcrumb, an accepted departure after
+ * Leave): a destination that settled with no selection arrival in force, under an entry that is, or only
+ * restates, a PUSH. Like `focusHeading` it acts once, only when nothing in the content is still loading and
+ * the page shows a heading. It takes focus from the page the person left (`body`, or a control outside the
+ * content such as the Navbar link or the Infobox) and leaves focus the person has already placed inside the
+ * content alone.
+ */
+export function focusLinkArrival(entry: { key: string; state: unknown }): void {
+    const root = entryRoot(entry)
+    if (claimedLinkArrival === root || !pushedEntries.includes(root)) return
+    const content = document.querySelector<HTMLElement>(CONTENT)
+    if (content === null || content.querySelector(`[${LOADING_ATTRIBUTE}]`) !== null) return
+    const heading = content.querySelector<HTMLElement>("h1")
+    if (heading === null) return
+    claimedLinkArrival = root
+    const active = document.activeElement
+    if (active instanceof HTMLElement && active !== document.body && content.contains(active)) return
+    if (!heading.hasAttribute("tabindex")) heading.setAttribute("tabindex", "-1")
+    heading.focus()
+}
+
 // The arrival in force with the location being rendered (a destination reads both without needing a
 // router of its own).
 export interface CurrentSelectionArrival {
@@ -135,6 +174,11 @@ export interface CurrentSelectionArrival {
 }
 
 export const SelectionArrivalContext = createContext<CurrentSelectionArrival | null>(null)
+
+// The entry a destination is rendered under, offered for a link arrival only while no selection arrival of
+// any kind is in force (an arrival that is pending or not eligible keeps its own rules and gets no fallback).
+// Null outside the shell.
+export const LinkArrivalContext = createContext<{ key: string; state: unknown } | null>(null)
 
 /** The accepted selection arrival in force, or null (no choice, a superseded one, or outside the shell). */
 export function useSelectionArrival(): CurrentSelectionArrival | null {

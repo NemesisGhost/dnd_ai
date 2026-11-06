@@ -1,12 +1,12 @@
-import { useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
+import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 import type { PropsWithChildren } from "react"
-import { UNSAFE_DataRouterContext, useLocation } from "react-router"
+import { NavigationType, UNSAFE_DataRouterContext, useLocation, useNavigationType } from "react-router"
 import { useAnnounceOwned } from "../components/authoring/announcer"
 import { useSession } from "../context/SessionContext"
 import { useWorkspaceHierarchy } from "../context/WorkspaceHierarchyContext"
 import type { WorkspaceHierarchy } from "../context/WorkspaceHierarchyContext"
 import type { SessionBootstrap } from "../types/bootstrap"
-import { SelectionArrivalContext } from "./selectionArrival"
+import { LinkArrivalContext, SelectionArrivalContext, notePushedEntry } from "./selectionArrival"
 import type { SelectionArrival } from "./selectionArrival"
 import { createArrivalTracker } from "./selectionArrivalTracker"
 import type { ArrivalTracker } from "./selectionArrivalTracker"
@@ -115,7 +115,13 @@ interface Announced {
 export function SelectionArrivalProvider({ children }: PropsWithChildren) {
     const router = useContext(UNSAFE_DataRouterContext)?.router ?? null
     const store = useSelectedContextStore()
-    const { key: locationKey } = useLocation()
+    const { key: locationKey, state: locationState } = useLocation()
+    const navigationType = useNavigationType()
+    // Layout effects run before any destination's effect, so a page that settles in the same commit as the
+    // PUSH already finds it noted (navigation/selectionArrival.ts, link arrivals).
+    useLayoutEffect(() => {
+        if (navigationType === NavigationType.Push) notePushedEntry(locationKey)
+    }, [locationKey, navigationType])
     const announceOwned = useAnnounceOwned()
     const { state } = useSession()
     const snapshot = useSelectedContextSnapshot()
@@ -171,5 +177,13 @@ export function SelectionArrivalProvider({ children }: PropsWithChildren) {
         () => (arrival === null || !eligible ? null : { arrival, locationKey }),
         [arrival, eligible, locationKey],
     )
-    return <SelectionArrivalContext.Provider value={current}>{children}</SelectionArrivalContext.Provider>
+    const linkEntry = useMemo(
+        () => (arrival === null ? { key: locationKey, state: locationState } : null),
+        [arrival, locationKey, locationState],
+    )
+    return (
+        <SelectionArrivalContext.Provider value={current}>
+            <LinkArrivalContext.Provider value={linkEntry}>{children}</LinkArrivalContext.Provider>
+        </SelectionArrivalContext.Provider>
+    )
 }
