@@ -11,8 +11,8 @@ import PlaceholderPage from "./PlaceholderPage"
 // list of every character the person may see, and the create action. The create offer uses the
 // same rule as the World's creation links: canon.edit from the bootstrap decides what to show, the
 // server re-checks every request, and it is independent of the selected character, so it is also
-// there with none selected. New PC opens player-character creation directly; NPCs are created from
-// the World's People category.
+// there with none selected. New character opens the existing NPC / player-character chooser, which
+// carries the Characters view on to either form.
 function CharactersHeader({
     campaignId,
     selectedCharacterId,
