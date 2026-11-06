@@ -403,6 +403,32 @@ def _require_owner_if_granting_owner_role(
         )
 
 
+def _recheck_caller_is_live_owner(
+    connection: Connection, *, campaign_id: uuid.UUID, actor_membership_id: uuid.UUID
+) -> None:
+    """DEF-013. The gate judged the caller at the transaction's start `now()`, before the command's
+    other lock waits, and a finite owner assignment can expire during them. Called after the
+    command's last lock wait and before its first protected write, this judges the same shared
+    predicate at a fresh database instant. The caller's assignment is already locked by the gate
+    (it cannot be revoked, and its membership cannot end, before this transaction finishes), so no
+    lock is taken and nothing here can wait: only the passing of `expires_at` can change the
+    answer. Refuses with the gate's own `CampaignOwnerRequiredError` (403); the command has written
+    nothing yet, and a caller that rolls back on the error leaves no change and no audit row."""
+    if (
+        find_live_builtin_owner_assignment(
+            connection,
+            campaign_id=campaign_id,
+            campaign_membership_id=actor_membership_id,
+            as_of=_database_clock(connection),
+        )
+        is None
+    ):
+        raise CampaignOwnerRequiredError(
+            f"membership {actor_membership_id} no longer holds a live campaign_owner assignment "
+            f"in campaign {campaign_id}"
+        )
+
+
 @dataclass(frozen=True)
 class CreateCampaignMembershipResult:
     campaign_membership_id: uuid.UUID
@@ -546,7 +572,8 @@ def assign_membership_role(
     role_row = (
         connection.execute(
             text(
-                "SELECT campaign_id, is_active FROM security.roles WHERE role_id = :role FOR UPDATE"
+                "SELECT campaign_id, code, is_active FROM security.roles "
+                "WHERE role_id = :role FOR UPDATE"
             ),
             {"role": role_id},
         )
@@ -561,6 +588,14 @@ def assign_membership_role(
         raise RoleNotUsableByCampaignError(
             f"role {role_id} is not usable by campaign {campaign_id} "
             f"(actual campaign: {role_row['campaign_id'] if role_row is not None else None})"
+        )
+
+    # DEF-013: every lock wait above is behind us; judge the caller again before the first write.
+    if is_builtin_campaign_owner_role(
+        role_campaign_id=role_row["campaign_id"], role_code=role_row["code"]
+    ):
+        _recheck_caller_is_live_owner(
+            connection, campaign_id=campaign_id, actor_membership_id=granted_by_membership_id
         )
 
     membership_role_id = connection.execute(
@@ -854,6 +889,14 @@ def change_membership_role(
             f"{membership_role_id}"
         )
 
+    # DEF-013: every lock wait above is behind us; judge the caller again before the first write.
+    if is_builtin_campaign_owner_role(
+        role_campaign_id=new_role_row["campaign_id"], role_code=new_role_row["code"]
+    ):
+        _recheck_caller_is_live_owner(
+            connection, campaign_id=campaign_id, actor_membership_id=granted_by_membership_id
+        )
+
     connection.execute(
         text(
             "UPDATE security.membership_roles SET revoked_at = now() "
@@ -1027,7 +1070,8 @@ def add_campaign_member(
     role_row = (
         connection.execute(
             text(
-                "SELECT campaign_id, is_active FROM security.roles WHERE role_id = :role FOR UPDATE"
+                "SELECT campaign_id, code, is_active FROM security.roles "
+                "WHERE role_id = :role FOR UPDATE"
             ),
             {"role": role_id},
         )
@@ -1042,6 +1086,14 @@ def add_campaign_member(
         raise RoleNotUsableByCampaignError(
             f"role {role_id} is not usable by campaign {campaign_id} "
             f"(actual campaign: {role_row['campaign_id'] if role_row is not None else None})"
+        )
+
+    # DEF-013: every lock wait above is behind us; judge the caller again before the first write.
+    if is_builtin_campaign_owner_role(
+        role_campaign_id=role_row["campaign_id"], role_code=role_row["code"]
+    ):
+        _recheck_caller_is_live_owner(
+            connection, campaign_id=campaign_id, actor_membership_id=added_by_membership_id
         )
 
     campaign_membership_id = create_campaign_membership(
@@ -1627,6 +1679,11 @@ def transfer_campaign_ownership(
             f"membership {target_campaign_membership_id}'s owner assignment expired while the "
             "transfer was waiting"
         )
+    # DEF-013: every lock wait of the transfer's own is behind us; judge the caller again, at a
+    # fresh instant, before the first write (closing the recipient's expired row below).
+    _recheck_caller_is_live_owner(
+        connection, campaign_id=campaign_id, actor_membership_id=actor_membership_id
+    )
     for membership_role_id in replaced:
         revoke_membership_role(
             connection, membership_role_id=membership_role_id, campaign_id=campaign_id
@@ -1665,6 +1722,11 @@ def transfer_campaign_ownership(
         ).membership_role_id
     revoked: list[uuid.UUID] = []
     if relinquishing:
+        # DEF-013: the assignment above may have waited; recheck immediately before giving up the
+        # caller's own ownership. A failure raises, rolling back the recipient's assignment too.
+        _recheck_caller_is_live_owner(
+            connection, campaign_id=campaign_id, actor_membership_id=actor_membership_id
+        )
         own = connection.execute(
             text("""
                 SELECT membership_role_id FROM security.membership_roles
