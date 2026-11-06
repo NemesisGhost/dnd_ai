@@ -52,6 +52,7 @@ Deferred to later Phase 10 workstreams, per §19.7's own step list:
 import hashlib
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Literal
 
 from sqlalchemy import Connection, text
@@ -1171,6 +1172,7 @@ def find_live_builtin_owner_assignment(
     campaign_id: uuid.UUID,
     campaign_membership_id: uuid.UUID,
     lock: OwnerAssignmentLock = "none",
+    as_of: datetime | None = None,
 ) -> uuid.UUID | None:
     """The `membership_role_id` of this membership's live built-in `campaign_owner` assignment in
     `campaign_id`, or `None`. The single definition of "is a current campaign owner", shared by the
@@ -1185,7 +1187,12 @@ def find_live_builtin_owner_assignment(
     `lock` takes a row lock on the assignment: `share` for a caller that only needs it to stay live
     until commit (revoking, ending or relinquishing it waits for the caller), `update` for a caller
     that goes on to change that same row (taking `share` first would turn the later write into a
-    lock upgrade that deadlocks against a concurrent identical request)."""
+    lock upgrade that deadlocks against a concurrent identical request).
+
+    `as_of` is the instant expiry is judged at; the default is the transaction's start (`now()`).
+    A caller that has waited on locks passes a fresh `clock_timestamp()` read taken after the
+    waits, because an assignment can expire during a wait and `now()` would still call it live
+    (DEF-011)."""
     return connection.execute(
         text(f"""
             SELECT mr.membership_role_id
@@ -1203,7 +1210,10 @@ def find_live_builtin_owner_assignment(
               AND r.code = :owner_code
               AND r.is_active
               AND mr.revoked_at IS NULL
-              AND (mr.expires_at IS NULL OR mr.expires_at > now())
+              AND (
+                  mr.expires_at IS NULL
+                  OR mr.expires_at > COALESCE(CAST(:as_of AS timestamptz), now())
+              )
               AND cm.ended_at IS NULL
               AND ms.code = 'active'
               AND ms.is_active
@@ -1216,5 +1226,6 @@ def find_live_builtin_owner_assignment(
             "membership": campaign_membership_id,
             "campaign": campaign_id,
             "owner_code": BUILTIN_CAMPAIGN_OWNER_ROLE_CODE,
+            "as_of": as_of,
         },
     ).scalar()

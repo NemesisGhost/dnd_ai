@@ -8,6 +8,7 @@ in a campaign that also has a custom `access.manage` holder (`Gate.manager`), th
 commit-time retention rule would be satisfied even with no owner left.
 """
 
+import time
 import uuid
 from collections.abc import Callable
 
@@ -15,7 +16,13 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Connection, Engine, text
 
-from dnd_ai.commands.memberships import MembershipNotActiveError, transfer_campaign_ownership
+from dnd_ai.commands.memberships import (
+    MembershipNotActiveError,
+    end_campaign_membership,
+    revoke_membership_role,
+    transfer_campaign_ownership,
+)
+from dnd_ai.domain.access import find_live_builtin_owner_assignment
 from tests.database.test_campaign_owner_gate import (  # noqa: F401 - fixtures used by name
     Gate,
     _live_owner_memberships,
@@ -23,15 +30,24 @@ from tests.database.test_campaign_owner_gate import (  # noqa: F401 - fixtures u
     g,
 )
 from tests.database.test_campaign_owner_lock_order import (  # noqa: F401 - autouse fixture
+    _WAIT_SECONDS,
     _audit,
     _ended,
+    _Hold,
     _owners,
     _park_command,
     _post,
     _release_everything,
+    _Request,
     _status,
     _urls,
     _wait_until_waiting,
+)
+from tests.factories import (
+    make_campaign,
+    make_campaign_membership,
+    make_membership_role,
+    make_user,
 )
 
 pytestmark = pytest.mark.database
@@ -251,4 +267,245 @@ def test_ending_the_recipient_first_refuses_the_transfer_without_a_deadlock(
     assert _owners(postgres_engine, g) == {g.o1}
     assert _ended(postgres_engine, g) == {g.o2}
     assert _audit(postgres_engine, g).get("transfer_campaign_ownership") is None
+    assert _transfer_audit(postgres_engine, g) == []
+
+
+# --- review probes: the recipient check is the shared live-owner definition, read late -----------
+
+
+def _live_owners(engine: Engine, g: Gate) -> set[uuid.UUID]:
+    """Memberships of the campaign that are live built-in owners by the shared definition
+    (`find_live_builtin_owner_assignment`), not merely holders of an unrevoked row."""
+    with engine.connect() as connection:
+        memberships = list(
+            connection.execute(
+                text(
+                    "SELECT campaign_membership_id FROM security.campaign_memberships "
+                    "WHERE campaign_id = :c"
+                ),
+                {"c": g.campaign_id},
+            ).scalars()
+        )
+        return {
+            membership
+            for membership in memberships
+            if find_live_builtin_owner_assignment(
+                connection, campaign_id=g.campaign_id, campaign_membership_id=membership
+            )
+            is not None
+        }
+
+
+def _row_state(engine: Engine, membership_role_id: uuid.UUID) -> tuple[bool, bool]:
+    """(revoked, expired now) for one assignment row."""
+    with engine.connect() as connection:
+        row = connection.execute(
+            text("""
+                SELECT revoked_at IS NOT NULL,
+                       expires_at IS NOT NULL AND expires_at <= clock_timestamp()
+                FROM security.membership_roles WHERE membership_role_id = :r
+            """),
+            {"r": membership_role_id},
+        ).one()
+    return (bool(row[0]), bool(row[1]))
+
+
+def _wait_until_expired(engine: Engine, membership_role_id: uuid.UUID) -> None:
+    """Polls the database clock (not a fixed sleep) until the row's `expires_at` has passed."""
+    deadline = time.monotonic() + _WAIT_SECONDS
+    while time.monotonic() < deadline:
+        if _row_state(engine, membership_role_id)[1]:
+            return
+        time.sleep(0.05)
+    raise AssertionError("the assignment did not expire in time")
+
+
+def _hold_membership(engine: Engine, membership: uuid.UUID) -> _Hold:
+    return _Hold(
+        engine,
+        "SELECT 1 FROM security.campaign_memberships WHERE campaign_membership_id = :m FOR SHARE",
+        {"m": membership},
+    )
+
+
+def _transfer_to(
+    client_factory: Callable[[uuid.UUID], TestClient], g: Gate, target: uuid.UUID
+) -> _Request:
+    return _post(
+        client_factory,
+        g.o1_user_id,
+        _urls(g)["transfer"],
+        {"target_campaign_membership_id": str(target), "relinquish_own_ownership": True},
+    )
+
+
+def test_a_recipient_assignment_that_expires_while_the_transfer_waits_refuses_it(
+    client_factory: Callable[[uuid.UUID], TestClient], postgres_engine: Engine, g: Gate
+) -> None:
+    """Probe 1. The recipient's owner row is live when the transfer starts and expires while the
+    transfer waits for the recipient's membership lock. Replacing it would mean locking a role row
+    after the membership, against the reviewed order, so the transfer is refused and the caller
+    keeps ownership. Before the fix the check used the transaction-start `now()`, saw the row as
+    live, reported `assigned: false` and relinquished."""
+    with postgres_engine.begin() as connection:
+        connection.execute(
+            text("""
+                UPDATE security.membership_roles
+                SET granted_at = clock_timestamp() - interval '1 hour',
+                    expires_at = clock_timestamp() + interval '3 seconds'
+                WHERE membership_role_id = :r
+            """),
+            {"r": g.o2_role},
+        )
+    hold = _hold_membership(postgres_engine, g.o2)
+    transfer = _transfer_to(client_factory, g, g.o2)
+    _wait_until_waiting(postgres_engine, 1)
+    assert _row_state(postgres_engine, g.o2_role) == (False, False), "set-up too slow"
+    _wait_until_expired(postgres_engine, g.o2_role)
+    hold.release()
+    response = transfer.join()
+
+    assert _status(response) == 409, response.text  # type: ignore[attr-defined]
+    assert response.json()["error"]["code"] == "ownership_transfer_recipient_changed"  # type: ignore[attr-defined]
+    assert _live_owners(postgres_engine, g) == {g.o1}
+    assert _row_state(postgres_engine, g.o1_role) == (False, False)
+    assert _row_state(postgres_engine, g.o2_role) == (False, True)  # untouched, still unrevoked
+    assert _transfer_audit(postgres_engine, g) == []
+
+
+def test_a_recipient_with_an_owner_row_but_an_inactive_account_is_refused(
+    client_factory: Callable[[uuid.UUID], TestClient], postgres_engine: Engine, g: Gate
+) -> None:
+    """Probe 2. An unrevoked, unexpired owner row on an inactive account is not a live owner. The
+    transfer must try to assign, which refuses the account, instead of reporting an existing owner
+    and relinquishing."""
+    with postgres_engine.begin() as connection:
+        connection.execute(
+            text("""
+                UPDATE security.users SET lifecycle_status_id = (
+                    SELECT lifecycle_status_id FROM core.lifecycle_statuses WHERE code = 'inactive')
+                WHERE user_id = :u
+            """),
+            {"u": g.o2_user_id},
+        )
+    response = _transfer_to(client_factory, g, g.o2).join()
+
+    assert _status(response) == 409, response.text  # type: ignore[attr-defined]
+    assert response.json()["error"]["code"] == "conflict"  # type: ignore[attr-defined]
+    assert _live_owners(postgres_engine, g) == {g.o1}
+    assert _row_state(postgres_engine, g.o1_role) == (False, False)
+    assert _row_state(postgres_engine, g.o2_role) == (False, False)
+    assert _transfer_audit(postgres_engine, g) == []
+
+
+def test_a_recipient_whose_owner_row_belongs_to_another_campaign_is_refused(
+    client_factory: Callable[[uuid.UUID], TestClient], postgres_engine: Engine, g: Gate
+) -> None:
+    """Probe 3. The target membership owns a different campaign and is not a member here. The
+    transfer is refused as not found, and the caller, left as the only built-in owner (the custom
+    manager alone would satisfy the retention rule), keeps ownership."""
+    with postgres_engine.begin() as connection:
+        revoke_membership_role(connection, membership_role_id=g.o2_role, campaign_id=g.campaign_id)
+        other_campaign = make_campaign(
+            connection, g.timeline_id, "Other Campaign", lifecycle_status_code="active"
+        )
+        outsider_user = make_user(connection, "Owner Elsewhere")
+        outsider = make_campaign_membership(connection, other_campaign, outsider_user)
+        outsider_role = make_membership_role(connection, outsider, g.owner_role_id)
+    response = _transfer_to(client_factory, g, outsider).join()
+
+    assert _status(response) == 404, response.text  # type: ignore[attr-defined]
+    assert _live_owners(postgres_engine, g) == {g.o1}
+    assert _row_state(postgres_engine, g.o1_role) == (False, False)
+    assert _row_state(postgres_engine, outsider_role) == (False, False)
+    assert _transfer_audit(postgres_engine, g) == []
+
+
+def test_a_recipient_revocation_committed_during_the_wait_is_seen_and_replaced(
+    client_factory: Callable[[uuid.UUID], TestClient], postgres_engine: Engine, g: Gate
+) -> None:
+    """A revocation of the recipient's owner row that commits while the transfer waits for the
+    recipient's membership is read by the check after the wait: the recipient gets a fresh live
+    row and only then does the caller relinquish."""
+    hold = _hold_membership(postgres_engine, g.o2)
+    transfer = _transfer_to(client_factory, g, g.o2)
+    _wait_until_waiting(postgres_engine, 1)
+    with postgres_engine.begin() as connection:
+        revoke_membership_role(connection, membership_role_id=g.o2_role, campaign_id=g.campaign_id)
+    hold.release()
+    response = transfer.join()
+
+    assert _status(response) == 200, response.text  # type: ignore[attr-defined]
+    assert response.json() == {  # type: ignore[attr-defined]
+        "target_campaign_membership_id": str(g.o2),
+        "assigned": True,
+        "relinquished": True,
+    }
+    assert _live_owners(postgres_engine, g) == {g.o2}
+    assert _row_state(postgres_engine, g.o2_role) == (True, False)
+    assert _transfer_audit(postgres_engine, g) == [
+        {"assigned": True, "relinquished": True, "replaced_expired_assignment": False}
+    ]
+
+
+def test_a_recipient_revocation_in_flight_cannot_commit_before_the_transfer(
+    client_factory: Callable[[uuid.UUID], TestClient], postgres_engine: Engine, g: Gate
+) -> None:
+    """The transfer holds the campaign row from before its recipient check until it commits. A
+    revocation of the recipient takes that row at commit (the retention trigger), so it cannot
+    commit between the check and the caller's relinquishment: it waits, then applies after the
+    handoff, which is the serial order. That a later revocation may remove the last built-in owner
+    while a custom manager remains is outside DEF-011 (design §3, "Left out on purpose")."""
+    transferring = _park_command(
+        postgres_engine,
+        lambda c: transfer_campaign_ownership(
+            c,
+            campaign_id=g.campaign_id,
+            actor_membership_id=g.o1,
+            target_campaign_membership_id=g.o2,
+            relinquish_own_ownership=True,
+        ),
+    )
+    assert transferring.error is None
+    revoke = _post(
+        client_factory,
+        g.manager_user_id,
+        f"/campaigns/{g.campaign_id}/memberships/roles/{g.o2_role}/revoke",
+        {},
+    )
+    _wait_until_waiting(postgres_engine, 1)
+    assert not revoke.done, "the revocation must wait for the transfer to commit"
+    assert _live_owners(postgres_engine, g) == {g.o1, g.o2}
+    transferring.end(commit=True)
+    assert _status(revoke.join()) == 200
+
+    assert _row_state(postgres_engine, g.o1_role) == (True, False)
+    assert _row_state(postgres_engine, g.o2_role) == (True, False)
+    assert _audit(postgres_engine, g).get("revoke_membership_role") == 1
+
+
+def test_ending_a_live_owner_recipient_first_refuses_the_transfer(
+    client_factory: Callable[[uuid.UUID], TestClient], postgres_engine: Engine, g: Gate
+) -> None:
+    """The recipient is already an owner. Its membership end commits while the transfer waits for
+    that membership, so the check after the wait finds no live owner, the assignment refuses the
+    ended membership and the caller keeps ownership."""
+    ending = _park_command(
+        postgres_engine,
+        lambda c: end_campaign_membership(
+            c,
+            campaign_membership_id=g.o2,
+            campaign_id=g.campaign_id,
+            ended_by_membership_id=g.manager,
+        ),
+    )
+    assert ending.error is None
+    transfer = _transfer_to(client_factory, g, g.o2)
+    _wait_until_waiting(postgres_engine, 1)
+    ending.end(commit=True)
+    response = transfer.join()
+
+    assert _status(response) == 409, response.text  # type: ignore[attr-defined]
+    assert _live_owners(postgres_engine, g) == {g.o1}
+    assert _ended(postgres_engine, g) == {g.o2}
     assert _transfer_audit(postgres_engine, g) == []
