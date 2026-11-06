@@ -103,6 +103,8 @@ Net effect, source-derived and **not observed in a browser**: leaving during or 
 
 ## 6. Browser and assistive-technology verification: not executed
 
+*Update (R-20): the owner deferred assistive-technology testing for P02. Items that need a screen reader (B21 and the screen-reader states of other items) stay unverified; they are not passed. The applicable browser items remain unexecuted.*
+
 **Executed in P02-8: none.**
 
 Observations and their sources:
