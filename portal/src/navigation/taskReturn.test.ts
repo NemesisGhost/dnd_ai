@@ -140,6 +140,15 @@ describe("the task is chosen for the destination the link leads to", () => {
         expect(carriedState(edit, { task: access }, record)).toBeUndefined()
     })
 
+    it("the Quest page, which supports a Review return though its breadcrumb metadata excludes the root, accepts a Review task and no other foreign root", () => {
+        const history = "/app/c1/world/record/q1/history"
+        expect(carriedState(history, { task: review }, "/app/c1/quests/q1")).toEqual({ task: review })
+        expect(carriedState(history, { task: access }, "/app/c1/quests/q1")).toBeUndefined()
+        expect(carriedState(history, { task: world }, "/app/c1/quests/q1")).toBeUndefined()
+        // The exemption is for that route: a Review task is still judged by the rules of any other destination.
+        expect(carriedState(edit, { task: review }, "/app/c1/world/location/l1/edit")).toBeUndefined()
+    })
+
     it("a destination that is not a route of the app accepts nothing", () => {
         expect(carriedState(edit, { task: review }, "/elsewhere")).toBeUndefined()
     })

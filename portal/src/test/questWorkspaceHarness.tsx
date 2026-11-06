@@ -2,6 +2,7 @@
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import { CampaignQuestDetailPage } from "../pages/CampaignQuestDetailPage"
 import { ProvenancePage } from "../pages/ProvenancePage"
+import { RevisionHistoryPage } from "../pages/ReviewPages"
 import { bootstrapWith, installMockServer, renderAuthoringRoutes } from "./authoringHarness"
 import { installRecordReads } from "./worldWorkspaceMocks"
 
@@ -250,6 +251,7 @@ export function setupQuestWorkspace(setup: QuestWorkspaceSetup = {}) {
         routes: [
             { path: "/app/:campaignId/quests/:questId", element: <CampaignQuestDetailPage /> },
             { path: "/app/:campaignId/world/:category/:entityId/provenance", element: <ProvenancePage /> },
+            { path: "/app/:campaignId/world/:category/:entityId/history", element: <RevisionHistoryPage /> },
             { path: "/app/:campaignId/quests", element: <p>Quests list page</p> },
             { path: "/app/:campaignId/review", element: <p>Review queue page</p> },
         ],

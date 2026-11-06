@@ -23,6 +23,17 @@ function campaignOf(pathname: string): string | null {
     return scope.kind === "campaign" ? scope.campaignId : null
 }
 
+// Destinations that do not render a Review task as their breadcrumb (their route metadata excludes the Review
+// root) but explicitly support it as a return: the Quest workspace offers "Back to Review queue" with the
+// original filters (QuestWorkspace, useReviewBackPath). A Review task is acceptable there for that purpose
+// only; every other root is still judged by the route's own rules.
+const REVIEW_RETURN_ROUTES: ReadonlySet<string> = new Set(["quests.detail"])
+
+function acceptedAt(task: TaskOriginV1, target: RouteMatch): boolean {
+    if (task.root === "review" && REVIEW_RETURN_ROUTES.has(target.meta.id)) return validateCarriedTask(task, target) !== null
+    return validateTask(task, target) !== null
+}
+
 // The route a link goes to, for the task to be judged against: the address without its query or fragment.
 function destinationMatch(destination: string | undefined): RouteMatch | null | undefined {
     if (destination === undefined) return undefined
@@ -44,7 +55,7 @@ function carriedTask(pathname: string, state: unknown, destination?: string): Ta
         const passed = validateCarriedTask(candidate, match)
         if (passed === null) return null
         if (target === undefined) return passed
-        return target !== null && validateTask(passed, target) !== null ? passed : null
+        return target !== null && acceptedAt(passed, target) ? passed : null
     }
     // Same precedence as `resolveTask`: the entry's own task if it holds up, otherwise the legacy adapter.
     const own = acceptable(parseTask(state))

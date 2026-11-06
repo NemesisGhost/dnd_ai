@@ -618,6 +618,33 @@ describe("Quest workspace: the provenance round trip", () => {
         expect(ctx.router.state.location.state).toMatchObject(reviewTask("?status=in_review"))
     })
 
+    it("returns to the filtered Review queue after the history page's record link, with the quest's own back-link presentation", async () => {
+        const queue = "?status=in_review&type=quest"
+        const ctx = setupQuestWorkspace({
+            entry: { pathname: "/app/c1/world/record/q1/history", state: reviewTask(queue) },
+        })
+        ctx.server.on("GET", "/campaigns/c1/entities/q1/revisions", {
+            body: {
+                entity_id: "q1",
+                name: "The Lost Amulet",
+                entity_type_code: "quest",
+                canon_status: "proposed",
+                lifecycle_status: "active",
+                row_version: 1,
+                revisions: [{ row_version: 1, kind: "created", created_at: "2026-01-01T10:00:00Z", created_by_name: "Gina", canon_status: null, lifecycle_status: null }],
+            },
+        })
+        fireEvent.click(await screen.findByRole("link", { name: "The Lost Amulet" }))
+        await waitFor(() => expect(ctx.router.state.location.pathname).toBe("/app/c1/quests/q1"))
+        expect(ctx.router.state.location.state).toMatchObject(reviewTask(queue))
+        const back = await screen.findByRole("link", { name: "Back to Review queue" })
+        expect(back).toHaveAttribute("href", `/app/c1/review${queue}`)
+        expect(screen.queryByRole("link", { name: "Back to Quests" })).toBeNull()
+        fireEvent.click(back)
+        await waitFor(() => expect(ctx.router.state.location.pathname).toBe("/app/c1/review"))
+        expect(ctx.router.state.location.search).toBe(queue)
+    })
+
     it("opened directly, still returns to Quests, and ignores a crafted queue address", async () => {
         const ctx = setupQuestWorkspace({
             entry: { pathname: "/app/c1/quests/q1", search: sources, state: reviewTask("//evil.example") },
