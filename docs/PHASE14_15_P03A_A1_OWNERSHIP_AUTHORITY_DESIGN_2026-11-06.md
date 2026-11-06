@@ -1,6 +1,6 @@
 # P03-A A1 design: campaign-owner authority (D3)
 
-- **Status:** D3 **approved by the owner on 2026-11-06** (policy in §5) and **implemented** as the first A1 change (the ownership gate only; the reveal-delegation migration and API are the next A1 change). Awaiting independent review.
+- **Status:** D3 **approved by the owner on 2026-11-06** (policy in §5) and **implemented** as the first A1 change (the ownership gate only; the reveal-delegation migration and API are the next A1 change). A review found two deadlocks in the first implementation's lock order; the corrected order is in §3. Awaiting independent re-review.
 - **Baseline:** `phase15/completion` at `fca3ac7df7e7a88822cc90acbed052ca07a1026c` (A0 committed).
 - **Audience:** the owner deciding D3; the A1 implementer and reviewers.
 - **Parent plan:** [PHASE14_15_P03A_IMPLEMENTATION_PLAN_2026-11-06.md](PHASE14_15_P03A_IMPLEMENTATION_PLAN_2026-11-06.md), decision D3 and slice A1.
@@ -54,14 +54,38 @@ So a non-owner can hold `access.manage` only through a custom role capability: a
 
    Every role other than owner stays exactly as it is today. The commands already receive the caller's membership as `granted_by_membership_id` or `actor_membership_id`, so no signatures change.
 
-   **Lock order (as implemented; this replaces the proposal's "after the existing locks").** The caller's owner assignment is the **first** lock every gated command takes. Revoke, change, end-membership and relinquish all update that row, so whichever commits first wins: a revocation that commits first gets the assignment refused, and nothing is checked against a cached `AccessContext`. Taking it last, as first proposed, was traced against the real paths and rejected: `change_membership_role` (holding the target's membership and the owner template, then wanting the owner row) and a relinquishing `transfer_campaign_ownership` (holding the owner row, then wanting the target's membership) wait on each other when the same owner issues both, and `add_campaign_member` (holding the campaign row, then wanting the owner row) cycles with a revocation's commit-time retention trigger, which takes the campaign row. Owner-first removes both cycles.
+   **Lock order (verified; corrected 2026-11-06 after review).** One order for every command that touches these rows. A command takes only the locks it needs, always in this sequence:
 
-   Two further rules came out of the same trace and are pinned by `tests/database/test_campaign_owner_gate.py`:
+   1. the member's role rows (for a gated command, the caller's own live owner assignment, `FOR SHARE`, or `FOR UPDATE` when it will rewrite that row);
+   2. the membership row(s);
+   3. the account row and the role template rows (`security.users`, `security.roles`);
+   4. the campaign row, which the retention trigger takes at commit and a relinquishing transfer takes explicitly.
 
-   - A relinquishing transfer takes the owner row `FOR UPDATE` (not `FOR SHARE`) up front. A shared lock followed by the later revoke is a lock upgrade, which deadlocks two identical concurrent requests.
-   - A relinquishing transfer then locks the campaign row before reading current owners. Without it, two owners relinquishing to each other at once each saw the other as the remaining owner and both committed, leaving the campaign with no built-in owner (the commit-time retention rule needs only some `access.manage` holder, and a custom manager satisfied it). The order is owner assignment, then campaign, the same order the retention trigger uses.
+   The trigger (`tr_membership_roles_retain_access_manager`, `tr_campaign_memberships_retain_access_manager`, migration 080) fires only on UPDATE or DELETE, so it takes the campaign row at commit for revoke, change, end-membership and relinquish, and not for an INSERT-only assign. Every command that holds a membership row therefore reaches the campaign row after it.
 
-   Known residual: an owner assigning the owner role to their own membership while that membership is being ended can still be resolved by PostgreSQL's deadlock detector (one request fails and can be retried). Assigning the owner role to a membership that already holds it is a unique-index conflict anyway.
+   | Command | Locks, in order |
+   |---|---|
+   | `assign_membership_role` (owner role) | caller's owner assignment (S) → target membership → target account → role template; insert only, no campaign lock |
+   | `change_membership_role` (to owner) | caller's owner assignment (S) → target role row + membership + current role → new role template → campaign at commit |
+   | `add_campaign_member` (owner role) | caller's owner assignment (S) → campaign (FOR UPDATE) → account → role template |
+   | `transfer_campaign_ownership` (relinquishing) | caller's owner assignment (U) → recipient's membership → owner template → campaign (FOR UPDATE) → `assign_membership_role`'s own locks (already held) → revoke of the caller's row |
+   | `transfer_campaign_ownership` (not relinquishing) | caller's owner assignment (S) → `assign_membership_role` |
+   | `end_campaign_membership` | the member's active role rows (U, by id) → membership → character relationships, grants, groups → campaign at commit |
+   | `revoke_membership_role` | the role row → campaign at commit |
+
+   Two reported races, both now ordinary outcomes and pinned by `tests/database/test_campaign_owner_lock_order.py`:
+
+   - **Relinquishing transfer against ending the recipient's membership.** The first version of the zero-owner guard took the campaign row before the recipient's membership, while `end_campaign_membership` holds the membership and takes the campaign row at commit: each waited on the other. Now the transfer takes the membership first and the campaign last. Whichever runs first wins. A recipient ended first is refused under the locks by `assign_membership_role`'s eligibility check (409, the caller keeps ownership, no audit row). A transfer that runs first leaves the end to end a recipient who has become an owner.
+   - **Owner assigning themselves the owner role against ending that owner's membership.** The assignment held the owner assignment and wanted the membership; the end held the membership and wanted the owner assignment. The end now locks the member's role rows before the membership row, so it queues behind the assignment. An assignment that wins the lock fails on the unique index (409); an end that wins makes the assignment fail its owner check (403).
+
+   Other rules from the same trace:
+
+   - A relinquishing transfer takes the caller's owner assignment `FOR UPDATE` up front. A shared lock followed by the later revoke is a lock upgrade, which deadlocks two identical concurrent requests.
+   - The zero-owner guard is the campaign row, taken after the recipient's membership and the owner template. Two owners relinquishing to each other at once then serialize, and the second re-reads the first's committed result: both succeed and exactly one owner remains.
+   - The recipient's account row is not locked early. The audit insert's foreign key to the caller's account needs a key-share lock, so an early `FOR UPDATE` on that account in the other half of a mutual transfer produced a deadlock only visible through the HTTP route. `assign_membership_role` locks the account under the membership lock, which is enough.
+   - `end_campaign_membership` stamps every revocation and the closure with one `clock_timestamp()` read after its locks. `now()` is the transaction start time; an end that queued behind a transfer stamped `revoked_at` earlier than the assignment the transfer had just created and failed the `revoked_at >= granted_at` check (a 400).
+
+   Remaining, not changed here: `change_membership_role` locks its role row, membership and current role in one statement, whose internal order follows the query plan rather than a stated rule; it has always been so, and it follows the same role-row-then-membership order in practice.
 
 3. **Server-side role list.** `list_assignable_campaign_roles` ([access_overview.py:436](../src/dnd_ai/queries/access_overview.py#L436)) takes the caller's membership and leaves out the built-in owner role unless the caller is a live owner. The portal is never offered an action that would be refused.
 

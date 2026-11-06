@@ -1162,9 +1162,11 @@ def end_campaign_membership(
     case, since an already-ended membership cannot newly violate an
     invariant nothing about this call changed.
 
-    Locks the target membership row (`FOR UPDATE`) before evaluating
-    anything, matching `revoke_membership_role`'s identical discipline for
-    its own target row — so a concurrent removal of the same membership,
+    Locks the membership's active role rows (`FOR UPDATE`, by id) and then
+    the target membership row (`FOR UPDATE`) before evaluating anything —
+    role rows first, the order every other command that holds both uses
+    (design record §3) — matching `revoke_membership_role`'s identical
+    discipline for its own target row — so a concurrent removal of the same membership,
     or a concurrent role add/change/revoke against one of its role rows
     (each of which independently locks that specific `membership_roles`
     row, and, for `assign_membership_role`, the membership row itself), or
@@ -1182,6 +1184,21 @@ def end_campaign_membership(
     has no command anywhere in this codebase that mutates an existing row
     (only inserts new ones), so there is no concurrent writer for this
     `UPDATE` to race against."""
+    # Lock order (docs/PHASE14_15_P03A_A1_OWNERSHIP_AUTHORITY_DESIGN_2026-11-06.md §3): this
+    # membership's active role rows first, then the membership row. Every command that holds a
+    # role row and later wants its membership (change, a gated assign) takes them in that order, so
+    # ending a membership can no longer wait on a role row the other side holds while holding the
+    # membership row that side wants. The campaign row comes last, at commit, from the retention
+    # trigger.
+    connection.execute(
+        text("""
+            SELECT membership_role_id FROM security.membership_roles
+            WHERE campaign_membership_id = :membership AND revoked_at IS NULL
+            ORDER BY membership_role_id
+            FOR UPDATE
+        """),
+        {"membership": campaign_membership_id},
+    ).all()
     row = (
         connection.execute(
             text("""
@@ -1211,14 +1228,18 @@ def end_campaign_membership(
             removed_access_group_membership_ids=(),
         )
 
+    # `now()` is the transaction's start time, which can precede a grant another request created
+    # while this one waited on the locks above; a revocation stamped earlier than its own grant
+    # violates the table's `revoked_at >= granted_at` check. Read the clock once, after the locks.
+    closed_at = connection.execute(text("SELECT clock_timestamp()")).scalar()
     revoked_role_ids = (
         connection.execute(
             text("""
-                UPDATE security.membership_roles SET revoked_at = now()
+                UPDATE security.membership_roles SET revoked_at = :closed_at
                 WHERE campaign_membership_id = :membership AND revoked_at IS NULL
                 RETURNING membership_role_id
             """),
-            {"membership": campaign_membership_id},
+            {"membership": campaign_membership_id, "closed_at": closed_at},
         )
         .scalars()
         .all()
@@ -1227,11 +1248,11 @@ def end_campaign_membership(
     revoked_relationship_ids = (
         connection.execute(
             text("""
-                UPDATE security.membership_character_relationships SET revoked_at = now()
+                UPDATE security.membership_character_relationships SET revoked_at = :closed_at
                 WHERE campaign_membership_id = :membership AND revoked_at IS NULL
                 RETURNING membership_character_relationship_id
             """),
-            {"membership": campaign_membership_id},
+            {"membership": campaign_membership_id, "closed_at": closed_at},
         )
         .scalars()
         .all()
@@ -1240,11 +1261,11 @@ def end_campaign_membership(
     revoked_resource_grant_ids = (
         connection.execute(
             text("""
-                UPDATE security.resource_grants SET revoked_at = now()
+                UPDATE security.resource_grants SET revoked_at = :closed_at
                 WHERE grantee_campaign_membership_id = :membership AND revoked_at IS NULL
                 RETURNING resource_grant_id
             """),
-            {"membership": campaign_membership_id},
+            {"membership": campaign_membership_id, "closed_at": closed_at},
         )
         .scalars()
         .all()
@@ -1253,11 +1274,11 @@ def end_campaign_membership(
     removed_access_group_membership_ids = (
         connection.execute(
             text("""
-                UPDATE security.access_group_memberships SET removed_at = now()
+                UPDATE security.access_group_memberships SET removed_at = :closed_at
                 WHERE campaign_membership_id = :membership AND removed_at IS NULL
                 RETURNING access_group_membership_id
             """),
-            {"membership": campaign_membership_id},
+            {"membership": campaign_membership_id, "closed_at": closed_at},
         )
         .scalars()
         .all()
@@ -1269,13 +1290,14 @@ def end_campaign_membership(
     connection.execute(
         text("""
             UPDATE security.campaign_memberships
-            SET ended_at = now(), ended_by_membership_id = :actor, membership_status_id = :status
+            SET ended_at = :closed_at, ended_by_membership_id = :actor, membership_status_id = :status
             WHERE campaign_membership_id = :membership
         """),
         {
             "actor": ended_by_membership_id,
             "status": revoked_status_id,
             "membership": campaign_membership_id,
+            "closed_at": closed_at,
         },
     )
 
@@ -1296,6 +1318,49 @@ def end_campaign_membership(
         revoked_resource_grant_ids=tuple(revoked_resource_grant_ids),
         removed_access_group_membership_ids=tuple(removed_access_group_membership_ids),
     )
+
+
+def _lock_for_relinquishing_transfer(
+    connection: Connection,
+    *,
+    campaign_id: uuid.UUID,
+    target_campaign_membership_id: uuid.UUID,
+    owner_role_id: uuid.UUID,
+) -> None:
+    """Takes, in the codebase's one lock order, every lock a relinquishing transfer needs before it
+    reads who currently owns the campaign: the recipient's membership, the owner role template and,
+    last, the campaign row. The caller's own owner assignment is already held. The recipient's
+    account row is deliberately not locked here: `assign_membership_role` locks it under the
+    membership lock, and locking it earlier made the audit insert's foreign key to the caller's own
+    account wait on the other side of a mutual transfer.
+
+    Why the campaign row: two owners relinquishing to each other at once each see the other as the
+    remaining owner and would both commit, leaving the campaign with no built-in owner (the
+    commit-time retention rule only needs some `access.manage` holder). Holding the campaign row
+    makes the second transfer re-read the first's committed result.
+
+    Why last: the retention trigger takes the campaign row at commit, after the membership rows, so
+    a command that held the campaign row while waiting for a membership (the first version of this
+    guard) deadlocked against `end_campaign_membership`. A recipient who is ended first is then
+    refused by `assign_membership_role`'s eligibility check, under the locks taken here. A
+    recipient that does not exist or is in another campaign is left for that same check to refuse.
+    """
+    connection.execute(
+        text("""
+            SELECT 1 FROM security.campaign_memberships
+            WHERE campaign_membership_id = :membership AND campaign_id = :campaign
+            FOR UPDATE
+        """),
+        {"membership": target_campaign_membership_id, "campaign": campaign_id},
+    ).all()
+    connection.execute(
+        text("SELECT 1 FROM security.roles WHERE role_id = :role FOR UPDATE"),
+        {"role": owner_role_id},
+    ).all()
+    connection.execute(
+        text("SELECT 1 FROM campaign.campaigns WHERE campaign_id = :campaign FOR UPDATE"),
+        {"campaign": campaign_id},
+    ).all()
 
 
 @dataclass(frozen=True)
@@ -1340,22 +1405,19 @@ def transfer_campaign_ownership(
             else "share"
         ),
     )
-    if relinquish_own_ownership and actor_membership_id != target_campaign_membership_id:
-        # Two owners relinquishing to each other at once each see the other as the remaining
-        # owner and would both commit, leaving the campaign with no built-in owner (the
-        # commit-time retention rule only needs some `access.manage` holder). The campaign row is
-        # the lock that rule already takes at commit; holding it from here makes the second
-        # transfer re-read the first's committed result. Order: owner assignment, then campaign.
-        connection.execute(
-            text("SELECT 1 FROM campaign.campaigns WHERE campaign_id = :campaign FOR UPDATE"),
-            {"campaign": campaign_id},
-        )
     owner_role_id = connection.execute(
         text(
             "SELECT role_id FROM security.roles WHERE code = 'campaign_owner' AND campaign_id IS NULL"
         )
     ).scalar()
     assert isinstance(owner_role_id, uuid.UUID)
+    if relinquish_own_ownership and actor_membership_id != target_campaign_membership_id:
+        _lock_for_relinquishing_transfer(
+            connection,
+            campaign_id=campaign_id,
+            target_campaign_membership_id=target_campaign_membership_id,
+            owner_role_id=owner_role_id,
+        )
     already = connection.execute(
         text("""
             SELECT membership_role_id FROM security.membership_roles
