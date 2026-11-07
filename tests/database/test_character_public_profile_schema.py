@@ -62,6 +62,8 @@ def _draft(connection: Any, g: Gate, character: uuid.UUID, **overrides: object) 
         "a_version": None,
         "b_origin": authored,
         "b_version": None,
+        "a_mark": None,
+        "b_mark": None,
         "created_by": g.o1,
     }
     values.update(overrides)
@@ -71,9 +73,10 @@ def _draft(connection: Any, g: Gate, character: uuid.UUID, **overrides: object) 
                 campaign_id, character_id, public_appearance, public_appearance_origin_id,
                 public_appearance_origin_entity_row_version, public_background,
                 public_background_origin_id, public_background_origin_entity_row_version,
+                public_appearance_restricted_row_version, public_background_restricted_row_version,
                 created_by_membership_id, updated_by_membership_id)
             VALUES (:campaign, :character, :appearance, :a_origin, :a_version, :background,
-                    :b_origin, :b_version, :created_by, :created_by)
+                    :b_origin, :b_version, :a_mark, :b_mark, :created_by, :created_by)
             RETURNING character_public_profile_id
         """),  # noqa: S608
         values,
@@ -379,7 +382,8 @@ def test_the_origin_rules_hold(
         lambda c: _draft(c, g, character, appearance=None, a_origin=legacy_appearance, a_version=3),
     )
     with postgres_engine.begin() as connection:  # a well-formed legacy origin is accepted
-        _draft(connection, g, character, a_origin=legacy_appearance, a_version=3)
+        # A migration-143 database also needs the watermark (equal to row_version on insert).
+        _draft(connection, g, character, a_origin=legacy_appearance, a_version=3, a_mark=1)
 
 
 # --- a character with a profile is never physically deleted --------------------------------------------

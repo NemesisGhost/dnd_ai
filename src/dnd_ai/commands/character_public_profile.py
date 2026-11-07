@@ -14,8 +14,10 @@ no `canon.edit` deny on the character), takes the character's `core.entities` ro
 locks the draft `FOR UPDATE` (or races the unique index on a first save). `expected_row_version`
 `None` means "there is no draft yet".
 
-**Release** (`release_character_public_profile`). Lock order (plan section 5.8; it reverses no row of
-the A1 design's section 3): the caller's reveal-authority rows (`resolve_reveal_authority(lock=
+**Release** (`release_character_public_profile`). Lock order (plan sections 5.8 and 9.6; it reverses
+no row of the A1 design's section 3): the world row `FOR SHARE` (the head of the global order, taken
+on every release so the order is static and the releaser's world capability stands until commit),
+then the caller's reveal-authority rows (`resolve_reveal_authority(lock=
 "share")`: the owner assignment, or the `gm` assignment and the delegation row), then the caller's
 membership `FOR SHARE`, the campaign `FOR KEY SHARE`, the character's `core.entities` row `FOR KEY
 SHARE`, the draft `FOR UPDATE`. The membership is `FOR SHARE`, not `KEY SHARE`, so an access-group
@@ -25,6 +27,15 @@ grantee membership, campaign, then target. After the last wait the command reads
 and re-judges the authority at that instant (DEF-013): it must be the same source as the locked
 read. It then re-resolves the `AccessContext` for the whole-character deny (404, before a stored
 release can be returned) and writes.
+
+**Restricted (copied) fields** (A2b-1, decision D7). Text copied from a character's legacy description
+keeps the source-read restriction until a release covers it, tracked by a per-field restriction
+watermark (migration 143). A save refuses text for a field withheld from the caller with 403
+`public_profile_field_withheld`, after the token check and before the no-op comparison; it allows
+clearing; and editing copied text keeps its origin and advances its watermark. A release that would
+write a new snapshot refuses when any field would be withheld from the releaser. A retry of an
+already released version does not (D7-d). `queries/public_profile_restrictions.py` derives which
+fields are withheld; nothing per reader is stored.
 
 Both commands raise only classified errors, write nothing on a refusal, and leave the audit row to
 the route (one row per real change, never carrying profile text).
@@ -56,12 +67,14 @@ from dnd_ai.domain.public_profiles import (
     PublicProfileCharacterNotActiveError,
     PublicProfileDraftMissingError,
     PublicProfileEditDeniedError,
+    PublicProfileFieldWithheldError,
     PublicProfileNotFoundError,
     has_effective_character_canon_edit,
     may_read_profile,
     whole_character_denied,
 )
 from dnd_ai.domain.reveal_authority import resolve_reveal_authority
+from dnd_ai.queries.public_profile_restrictions import withheld_fields
 
 from ._content import lock_authoring_scope
 from ._shared import lifecycle_code, lookup_id
@@ -70,10 +83,12 @@ _ORIGIN_COLUMNS = {
     FIELD_APPEARANCE: (
         "public_appearance_origin_id",
         "public_appearance_origin_entity_row_version",
+        "public_appearance_restricted_row_version",
     ),
     FIELD_BACKGROUND: (
         "public_background_origin_id",
         "public_background_origin_entity_row_version",
+        "public_background_restricted_row_version",
     ),
 }
 
@@ -275,7 +290,9 @@ def save_character_public_profile_draft(
 
     draft = connection.execute(
         text("""
-            SELECT character_public_profile_id, row_version, public_appearance, public_background
+            SELECT character_public_profile_id, row_version, public_appearance, public_background,
+                   public_appearance_origin_entity_row_version,
+                   public_background_origin_entity_row_version
             FROM campaign.character_public_profiles
             WHERE campaign_id = :campaign AND character_id = :character
             FOR UPDATE
@@ -284,8 +301,24 @@ def save_character_public_profile_draft(
     ).one_or_none()
     if draft is None:
         raise PublicProfileDraftMissingError(f"{character_id} has no draft")
+    # 1. The token first: whether a field is withheld depends on the locked draft, which may differ
+    #    from what a stale caller read, so a stale caller is told to reload (409) before anything
+    #    about the draft's contents.
     if int(draft.row_version) != expected_row_version:
         raise StaleWriteError(f"the draft of {character_id} is at {draft.row_version}")
+    # 2. Text for a field withheld from this caller refuses the whole request (D7-a), before the
+    #    no-op comparison so a caller cannot learn whether a guess matched. Clearing (`None`) is
+    #    allowed. The draft is held `FOR UPDATE`, which every release also takes, so the releases
+    #    this sees cannot change under it.
+    withheld = withheld_fields(
+        connection,
+        profile_id=draft.character_public_profile_id,
+        access=access,
+        character_id=character_id,
+        world_id=scope.world_id,
+    )
+    if any(clean.get(name) is not None for name in withheld):
+        raise PublicProfileFieldWithheldError(f"{character_id} holds copied text withheld from you")
     changed = tuple(
         name
         for name in PUBLIC_PROFILE_FIELDS
@@ -306,15 +339,24 @@ def save_character_public_profile_draft(
         "profile": draft.character_public_profile_id,
         "authored": authored,
     }
+    new_version = int(draft.row_version) + 1  # what `core.bump_row_version()` gives the row
     for name in changed:
-        origin_column, version_column = _ORIGIN_COLUMNS[name]
+        origin_column, version_column, watermark_column = _ORIGIN_COLUMNS[name]
         assignments.append(f"{name} = :{name}")
         params[name] = clean[name]
         if clean[name] is None:
-            # Clearing a field resets its origin; editing text keeps the origin (it over-attributes
-            # rather than under-attributes: plan section 5.6).
+            # Clearing ends the lineage (I6): the origin, its source version and the watermark go
+            # together. Allowed even for a withheld field (D7-a).
             assignments.append(f"{origin_column} = :authored")
             assignments.append(f"{version_column} = NULL")
+            assignments.append(f"{watermark_column} = NULL")
+        elif draft._mapping[version_column] is not None:
+            # Editing copied text keeps the origin (it over-attributes rather than under-
+            # attributes) and advances the watermark to the new row_version (I2), so the field is
+            # restricted again until a release covers the new text. The database refuses a content
+            # change that does not.
+            assignments.append(f"{watermark_column} = :new_version")
+            params["new_version"] = new_version
     updated = connection.execute(
         text(
             "UPDATE campaign.character_public_profiles SET "  # noqa: S608
@@ -370,6 +412,13 @@ def release_character_public_profile(
     if world_id is None:
         raise CampaignNotAuthorizedError(f"campaign {campaign_id} does not exist")
     assert isinstance(world_id, uuid.UUID)
+
+    # The world row `FOR SHARE` first, the head of the global lock order (A2b-1): it pins the
+    # releaser's world capability for the withheld check below, and every command that changes a
+    # world role or ownership takes the world `FOR UPDATE` before anything this release holds.
+    connection.execute(
+        text("SELECT 1 FROM core.worlds WHERE world_id = :world FOR SHARE"), {"world": world_id}
+    ).all()
 
     source = resolve_reveal_authority(
         connection,
@@ -457,6 +506,19 @@ def release_character_public_profile(
     if int(draft.row_version) != expected_draft_row_version:
         raise StaleWriteError(f"the draft of {character_id} is at {draft.row_version}")
     _require_canon_and_active(character, character_id)
+    # A new snapshot would publish every field of this draft version, so the releaser must be able
+    # to read each one (D7 item 3). Retries and natural retries returned above, without this check
+    # (D7-d).
+    if withheld_fields(
+        connection,
+        profile_id=profile_id,
+        access=access,
+        character_id=character_id,
+        world_id=world_id,
+    ):
+        raise PublicProfileFieldWithheldError(
+            f"{character_id} holds copied text withheld from membership {actor_membership_id}"
+        )
 
     delegation_id: uuid.UUID | None = None
     if source == "delegation":

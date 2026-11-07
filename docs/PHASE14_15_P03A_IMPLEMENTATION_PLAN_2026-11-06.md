@@ -1220,7 +1220,7 @@ So the guard blocks the only representation the readers use. The other own-colum
 
 ## 9. A2b design: the legacy copy aid under approved D7 (2026-11-07, revised after review)
 
-**Status:** design reviewed; A2b-1 is being implemented (see the A2b-1 implementation record); A2b-2 is not.
+**Status:** design reviewed; A2b-1 is implemented locally and awaits independent review (see the A2b-1 implementation record); A2b-2 is not implemented.
 
 - **Baseline.** `523ae5cbf947af230e1d7a5409912c1039e43a69` (the A2a handoff, directly on A2a-R `f66240a`). Every claim was checked by reading source at that commit; nothing was run.
 - **Supersedes.** This section replaces the D7-dependent parts of §5.6, §5.8 (copy row) and §5.10 ("Design"). Where they differ, this section wins.
@@ -1746,6 +1746,28 @@ A2a is the §5 design without the copy aid, D5/D6 columns, portal or revelations
       - an observer;
       - campaign B's GM;
       - a whole-character-denied owner.
+
+## A2b-1 implementation record (2026-11-07)
+
+**Parent:** `5fb2608` (the reviewed design commit; its parent is the A2a handoff `523ae5c`). One local commit; nothing is pushed and CI is pending.
+
+**Built.**
+
+- **Migration `143_profile_watermarks`** (§9.3): the two watermark columns, the pairing, positivity and bound CHECKs, and `campaign.enforce_public_profile_restriction_watermarks()` (INSERT: `watermark = row_version`; UPDATE of a legacy field's content: `watermark = OLD.row_version + 1`; never a decrease). The preflight refuses the upgrade, and a guard refuses the downgrade, while any draft or release carries a legacy origin; both are atomic (the revision, the schema and every row are unchanged after a refusal).
+- **Domain/queries/commands/API:** the source-read rule and the restriction predicate (`domain/public_profiles.py`), `queries/public_profile_restrictions.py` (which fields are withheld from a caller; nothing stored), withholding in the profile read (`<field>: null`, `<field>_withheld`, origin and `origin_entity_row_version`; `can_release` false while any field is withheld), the save rule (token, then 403 `public_profile_field_withheld`, then the no-op comparison, then the write with watermark advance; clearing resets the lineage), and the release's world-row `FOR SHARE` first and withheld check before a new snapshot. A natural retry and a keyed replay do not consult the source read (D7-d).
+- **Invariants.** I1/I2 are enforced by the database (CHECKs and trigger), I3/I4 are pinned by a unit model of the predicate and by HTTP scenarios, I5 by the release refusal, I6 by clearing, I7 because no request field names an origin or watermark.
+
+**Deviations from §9.**
+
+- **Revision id.** `143_profile_watermarks`, not `143_public_profile_restriction_watermarks`: Alembic's `version_num` is 32 characters and the longer id does not fit.
+- **`COLUMN_CLASSES` does not list the two new columns.** The registry classifies text columns only and a test rejects entries for columns that are not text; both are `BIGINT`.
+- **Seeding.** No copy route exists, so scenarios seed copied text with one test helper (`seed_copy`) that writes what the copy command will, subject to the CHECKs and trigger. A2b-2 replaces it.
+
+**Races executed** (`test_character_public_profile_restriction_races.py`, with the real `end_world_membership` command; each wait observed as blocked by the intended session): the releaser's world role against a release of uncovered copied content, and the saver's world role against a save that writes text into the copied field, each with both winners; and a permitted edit of the released field against a restricted releaser's release of the earlier version, both winners. For each the text and the draft version the waiting command observed are asserted. **Not executed, because the copy command does not exist:** a copy against `update_npc`, a copy against a save and a release, and the copier's world role against a copy. They share the world-row `FOR SHARE`-then-capability and the draft `FOR UPDATE` paths exercised above; A2b-2 must add them and may not claim them passed.
+
+**Verification** is in the commit message and the implementation report. Pending: independent review and CI.
+
+---
 
 ## A2a and A2a-R review outcome and handoff (2026-11-07)
 

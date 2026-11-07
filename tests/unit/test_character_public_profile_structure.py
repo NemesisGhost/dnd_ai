@@ -28,6 +28,7 @@ PROFILE_TABLE_MODULES = {
     "persistence/tables/__init__.py",
     "persistence/tables/campaign.py",
     "queries/character_public_profile.py",
+    "queries/public_profile_restrictions.py",
 }
 # The only modules that may name the legacy description table. A2a adds none; A2b adds the copy
 # command.
@@ -44,6 +45,7 @@ PROFILE_MODULES = (
     "commands/character_public_profile.py",
     "domain/public_profiles.py",
     "queries/character_public_profile.py",
+    "queries/public_profile_restrictions.py",
 )
 FORBIDDEN_IMPORT_PARTS = ("character_sheet", "character_calculations", "rules")
 
@@ -104,3 +106,30 @@ def test_every_new_text_column_is_classified() -> None:
             COLUMN_CLASSES[f"campaign.public_profile_field_origins.{column}"]
             is DataClass.STRUCTURAL
         )
+
+
+def test_the_source_read_rule_matches_the_legacy_authoring_reads() -> None:
+    """The world capability the source-read rule needs for each kind equals the one the kind's
+    legacy authoring GET requires today (D7-e): none for a player character, and
+    `world.canon.read_private` for an NPC. If either authoring read changes, the rule must too."""
+    from dnd_ai.api.app import create_app
+    from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
+    from tests.unit.test_world_gate_registry import _iter_api_routes
+
+    required: dict[str, str | None] = {}
+    for route in _iter_api_routes(create_app().routes):
+        if "GET" not in (route.methods or ()):
+            continue
+        if route.path not in (
+            "/campaigns/{campaign_id}/authoring/player-characters/{player_character_id}",
+            "/campaigns/{campaign_id}/authoring/npcs/{npc_id}",
+        ):
+            continue
+        capabilities = [
+            getattr(dependency.call, "world_capability", None)
+            for dependency in route.dependant.dependencies
+            if "require_campaign_capability" in getattr(dependency.call, "__qualname__", "")
+        ]
+        assert len(capabilities) == 1, route.path
+        required[route.path.rsplit("/", 2)[-2]] = capabilities[0]
+    assert required == {"player-characters": None, "npcs": WORLD_CANON_READ_PRIVATE}

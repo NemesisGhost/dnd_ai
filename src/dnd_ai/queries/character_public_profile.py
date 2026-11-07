@@ -21,6 +21,7 @@ from dnd_ai.domain.public_profiles import (
     may_read_profile,
 )
 from dnd_ai.domain.reveal_authority import resolve_reveal_authority
+from dnd_ai.queries.public_profile_restrictions import withheld_fields
 
 
 @dataclass(frozen=True)
@@ -64,7 +65,8 @@ def _character(
     """The character's label and status when it is a canon character of the campaign's world."""
     row = connection.execute(
         text("""
-            SELECT e.canonical_name, e.summary, cs.code AS canon_code, ls.code AS lifecycle_code
+            SELECT e.world_id, e.canonical_name, e.summary, cs.code AS canon_code,
+                   ls.code AS lifecycle_code
             FROM core.entities e
             JOIN character.characters ch ON ch.character_id = e.entity_id
             JOIN core.canon_statuses cs ON cs.canon_status_id = e.canon_status_id
@@ -77,6 +79,7 @@ def _character(
     if row is None or row.canon_code != "canon":
         return None
     return {
+        "world_id": row.world_id,
         "name": row.canonical_name,
         "summary": row.summary,
         "active": row.lifecycle_code == "active",
@@ -160,7 +163,9 @@ def read_character_public_profile(
         text("""
             SELECT character_public_profile_id, row_version, updated_at,
                    public_appearance, public_appearance_origin_id,
-                   public_background, public_background_origin_id
+                   public_appearance_origin_entity_row_version,
+                   public_background, public_background_origin_id,
+                   public_background_origin_entity_row_version
             FROM campaign.character_public_profiles
             WHERE campaign_id = :campaign AND character_id = :character
         """),
@@ -176,16 +181,44 @@ def read_character_public_profile(
     ).all()
     latest = releases[0] if releases else None
     draft: dict[str, Any] | None = None
+    withheld: frozenset[str] = frozenset()
     if draft_row is not None:
+        # Copied text still under its source-read restriction is withheld from a caller who may
+        # not read the source (A2b-1, D7). The flag, the origin code and the source version are
+        # disclosed (D7-f), never the text. Releases are never withheld.
+        withheld = withheld_fields(
+            connection,
+            profile_id=draft_row.character_public_profile_id,
+            access=access,
+            character_id=character_id,
+            world_id=character["world_id"],
+        )
         draft = {
             "character_public_profile_id": str(draft_row.character_public_profile_id),
             "row_version": int(draft_row.row_version),
             "updated_at": draft_row.updated_at.isoformat(),
-            "public_appearance": draft_row.public_appearance,
-            "public_appearance_origin": origins[draft_row.public_appearance_origin_id],
-            "public_background": draft_row.public_background,
-            "public_background_origin": origins[draft_row.public_background_origin_id],
         }
+        for field_name, text_value, origin_id, source_version in (
+            (
+                "public_appearance",
+                draft_row.public_appearance,
+                draft_row.public_appearance_origin_id,
+                draft_row.public_appearance_origin_entity_row_version,
+            ),
+            (
+                "public_background",
+                draft_row.public_background,
+                draft_row.public_background_origin_id,
+                draft_row.public_background_origin_entity_row_version,
+            ),
+        ):
+            is_withheld = field_name in withheld
+            draft[field_name] = None if is_withheld else text_value
+            draft[f"{field_name}_withheld"] = is_withheld
+            draft[f"{field_name}_origin"] = origins[origin_id]
+            draft[f"{field_name}_origin_entity_row_version"] = (
+                None if source_version is None else int(source_version)
+            )
     unreleased = draft is not None and (
         latest is None or int(latest.from_draft_row_version) != draft["row_version"]
     )
@@ -200,7 +233,8 @@ def read_character_public_profile(
         "releases": [_release_json(row, origins, with_text=False) for row in releases],
         "can_edit": character["active"]
         and has_effective_character_canon_edit(access, character_id),
-        "can_release": character["active"] and can_reveal,
+        # A release would publish every field, so it needs the releaser to read each one (D7 item 3).
+        "can_release": character["active"] and can_reveal and not withheld,
     }
 
 

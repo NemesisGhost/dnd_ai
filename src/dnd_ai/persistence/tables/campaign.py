@@ -1729,6 +1729,24 @@ character_public_profiles = Table(
         ),
     ),
     Column(
+        "public_appearance_restricted_row_version",
+        BigInteger(),
+        comment=(
+            "The draft row_version at which this field's current content was last written while it "
+            "had a legacy origin (the restriction watermark). A release covers the field when its "
+            "from_draft_row_version is at or above it. NULL exactly when the field is not copied."
+        ),
+    ),
+    Column(
+        "public_background_restricted_row_version",
+        BigInteger(),
+        comment=(
+            "The draft row_version at which this field's current content was last written while it "
+            "had a legacy origin (the restriction watermark). A release covers the field when its "
+            "from_draft_row_version is at or above it. NULL exactly when the field is not copied."
+        ),
+    ),
+    Column(
         "created_by_membership_id",
         UUID(),
         ForeignKey("security.campaign_memberships.campaign_membership_id", ondelete="SET NULL"),

@@ -212,7 +212,7 @@ Each is recorded in the [defect register](PHASE14_15_DEFECT_REGISTER.md) §9 wit
 
 A2a adds two commands that read these rows and reverse none of the rows above (plan section 5.8, verified by `tests/database/test_character_public_profile_concurrency.py`):
 
-- `release_character_public_profile`: the reveal-authority rows as `resolve_reveal_authority(lock="share")` takes them (owner assignment `S`, or the `gm` assignment `S` then the delegation row `S`) → the caller's membership `FOR SHARE` → the campaign `KEY SHARE` → the character's `core.entities` row `KEY SHARE` → the draft `FOR UPDATE` → fresh-instant re-judgement of the authority (the same source as the locked read, or `403 character_reveal_required`) → the whole-character deny re-resolved → write.
+- `release_character_public_profile` (since A2b-1 it takes the **world row `FOR SHARE`** first, ahead of everything below; no world `FOR UPDATE` taker takes any later row of the release before the world): the reveal-authority rows as `resolve_reveal_authority(lock="share")` takes them (owner assignment `S`, or the `gm` assignment `S` then the delegation row `S`) → the caller's membership `FOR SHARE` → the campaign `KEY SHARE` → the character's `core.entities` row `KEY SHARE` → the draft `FOR UPDATE` → fresh-instant re-judgement of the authority (the same source as the locked read, or `403 character_reveal_required`) → the whole-character deny re-resolved → write.
 - `save_character_public_profile_draft`: `lock_authoring_scope` (P0/P1 order) → the `AccessContext` re-resolved → the character's entity `FOR SHARE` → the draft `FOR UPDATE` (or the unique-index wait of a first save).
 
 ## 8. Implementation record (2026-11-06)
