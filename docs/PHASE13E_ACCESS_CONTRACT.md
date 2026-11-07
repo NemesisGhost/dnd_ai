@@ -859,6 +859,19 @@ that already existed.
   — a caller cannot distinguish this from "wrong world" or "not active." A
   genuine `location`/`organization`/`religion`/`item` `entity_id` target is
   unaffected. Covered by `tests/database/test_resource_grant_target_column.py`.
+  **One exception (P03-A A2a-R, DEF-018):** a `character`, `npc` or `player_character` entity is
+  accepted as an `entity_id` target for a **deny** of `campaign.view` (the whole-character deny)
+  or `canon.edit` (the per-character `canon.edit` deny), because every reader looks those two up
+  under `entity_id` and `character_id`'s catalog cannot carry them. An `allow` on a character
+  entity stays refused, as does any `character.*` code under `entity_id`; `event`, `quest` and
+  `knowledge_item` entities stay refused for both effects. The deny is scoped to the route
+  campaign, applies on the campaign's own timeline (`timeline_id` null), needs an active
+  character of the campaign's world, and is revoked like any grant; an identical active deny is a
+  `409`. The access overview and the effective-access explanation name the character for such a
+  grant (`target_type` stays `entity`). The portal offers no control for it until A6. The
+  `canon.edit` deny's contract in this slice is the public-profile draft's edit and read path
+  only: character view tiers, inventory and other character authoring do not consult it
+  (DEF-016, unfixed).
 - **Portal: every target kind, both grantee kinds.** `ResourceTargetSelector`
   (new shared component) switches over target kind and reuses four existing
   read hooks, each fired only for the currently selected kind (never all
@@ -1546,7 +1559,7 @@ A campaign's draft of a character's public profile, and immutable releases of it
 - **Read rule (D8, approved 2026-11-07):** effective character-scoped `canon.edit` **or** current `character.reveal` authority. Reveal authority confers reading only.
 - **Edit rule:** the role `canon.edit`, re-checked under lock, with no whole-character `campaign.view` deny and no `canon.edit` deny on the character (an `entity_id` resource grant; a `character_id`-keyed row counts too). A `canon.edit` *allow* grant never confers editing. A caller who can still read gets `403 public_profile_edit_denied`; anyone else `404`.
 - **Release rule:** `character.reveal` authority (`resolve_reveal_authority`: a live built-in owner, or a live delegation bound to the caller's live `gm` assignment); `403 character_reveal_required` otherwise (the code says nothing about the character). A `canon.edit` deny does not stop a release.
-- **Whole-character deny:** an `entity_id` `campaign.view` deny blocks reading, editing and releasing for every source, an owner included, and a retry (keyed or not) never hands a denied caller a stored release.
+- **Whole-character deny:** an `entity_id` `campaign.view` deny blocks reading, editing and releasing for every source, an owner included, and a retry (keyed or not) never hands a denied caller a stored release. Both D8 denies are creatable through `POST /campaigns/{id}/resource-grants` with `entity_id` and effect `deny` (A2a-R); the `canon.edit` deny covers public-profile drafting only.
 - **Concurrency token:** the draft's `row_version`. A save needs `expected_row_version` (`null` = no draft yet); a mismatch or a lost first-save race is `409 stale_write`. A release names `expected_draft_row_version` and snapshots exactly that locked version; a moved draft is `409 stale_write` unless that version was already released (then `200`, never a false stale write); no draft is `409 public_profile_draft_missing`; an archived character is `409 public_profile_character_not_active`.
 - **Idempotency:** the path's `character_id` is part of every fingerprint, so a key reused on another character is the existing non-disclosing `409`.
 - **Releases outlive authority:** ending a delegation, a GM role or ownership leaves earlier releases unchanged and listed; it ends future release authority.

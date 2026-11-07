@@ -195,6 +195,7 @@ def resolve_member_effective_access(
         text(f"""
             SELECT cap.code, cap.display_name AS capability_display_name, rg.effect, rg.reason,
                    target_entity.canonical_name AS target_entity_display_name,
+                   target_character.character_id IS NOT NULL AS entity_target_is_character,
                    {target_column_list}
             FROM security.resource_grants rg
             JOIN security.capabilities cap ON cap.capability_id = rg.capability_id
@@ -202,6 +203,8 @@ def resolve_member_effective_access(
               ON target_entity.entity_id = COALESCE(
                      rg.character_id, rg.entity_id, rg.knowledge_item_id, rg.quest_id, rg.event_id
                  )
+            LEFT JOIN character.characters target_character
+              ON target_character.character_id = rg.entity_id
             LEFT JOIN core.lifecycle_statuses target_entity_status
               ON target_entity_status.lifecycle_status_id = target_entity.lifecycle_status_id
             LEFT JOIN campaign.sessions target_session ON target_session.session_id = rg.session_id
@@ -227,8 +230,14 @@ def resolve_member_effective_access(
     ).mappings():
         target_column = next(column for column in _GRANT_TARGET_COLUMNS if row[column] is not None)
         target_type = target_column.removesuffix("_id")
+        # A character is named whether it is a `character_id` target or the `entity_id` target
+        # of a deny (P03-A A2a-R, DEF-018): a whole-character deny lists as `campaign.view` and a
+        # `canon.edit` deny (which blocks drafting a public profile, nothing else) as `canon.edit`.
         target_display_name = (
-            str(row["target_entity_display_name"]) if target_column == "character_id" else None
+            str(row["target_entity_display_name"])
+            if target_column == "character_id"
+            or (target_column == "entity_id" and row["entity_target_is_character"])
+            else None
         )
         code = str(row["code"])
         capability_display_name = str(row["capability_display_name"])
@@ -256,6 +265,7 @@ def resolve_member_effective_access(
             SELECT cap.code, cap.display_name AS capability_display_name, rg.effect, rg.reason,
                    ag.name AS access_group_name,
                    target_entity.canonical_name AS target_entity_display_name,
+                   target_character.character_id IS NOT NULL AS entity_target_is_character,
                    {target_column_list}
             FROM security.resource_grants rg
             JOIN security.capabilities cap ON cap.capability_id = rg.capability_id
@@ -266,6 +276,8 @@ def resolve_member_effective_access(
               ON target_entity.entity_id = COALESCE(
                      rg.character_id, rg.entity_id, rg.knowledge_item_id, rg.quest_id, rg.event_id
                  )
+            LEFT JOIN character.characters target_character
+              ON target_character.character_id = rg.entity_id
             LEFT JOIN core.lifecycle_statuses target_entity_status
               ON target_entity_status.lifecycle_status_id = target_entity.lifecycle_status_id
             LEFT JOIN campaign.sessions target_session ON target_session.session_id = rg.session_id
@@ -297,8 +309,14 @@ def resolve_member_effective_access(
     ).mappings():
         target_column = next(column for column in _GRANT_TARGET_COLUMNS if row[column] is not None)
         target_type = target_column.removesuffix("_id")
+        # A character is named whether it is a `character_id` target or the `entity_id` target
+        # of a deny (P03-A A2a-R, DEF-018): a whole-character deny lists as `campaign.view` and a
+        # `canon.edit` deny (which blocks drafting a public profile, nothing else) as `canon.edit`.
         target_display_name = (
-            str(row["target_entity_display_name"]) if target_column == "character_id" else None
+            str(row["target_entity_display_name"])
+            if target_column == "character_id"
+            or (target_column == "entity_id" and row["entity_target_is_character"])
+            else None
         )
         code = str(row["code"])
         capability_display_name = str(row["capability_display_name"])

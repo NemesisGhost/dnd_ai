@@ -1360,12 +1360,23 @@ A2a is the §5 design without the copy aid, D5/D6 columns, portal or revelations
 
 - **Pre-checks as dependencies.** The release's authority check (and both routes' deny checks) run in a FastAPI dependency after the capability dependency, before the body is read and before the idempotency lookup, so a player gets `403` rather than `422` and a caller who lost authority cannot replay a stored response. The whole-character deny is in the release pre-check as well as under lock, so a denied caller cannot replay a keyed release either (the owner's instruction: a deny blocks release retries).
 - **`version_number` is a `str` path segment** on the release read: a non-number is the same `404` as a missing release (the route manifest's generic probes substitute a UUID).
-- **A whole-character deny cannot be created through `create_resource_grant`** (it refuses `entity_id` for a character). The A2a review classed this as a defect, not a test convenience; it is corrected by A2a-R (§8). Meanwhile the "deny that commits first is honoured" races are exercised through the way a deny actually reaches a member: an access-group addition carrying a raw `entity_id` deny grant, in both orders against the release and the save (the P1 lock order). Direct deny rows in the API tests are inserted as the inventory tests do.
+- **A whole-character deny cannot be created through `create_resource_grant`** (it refuses `entity_id` for a character). The A2a review classed this as a defect, not a test convenience; it is corrected by A2a-R (§8). Meanwhile the "deny that commits first is honoured" races are exercised through the way a deny actually reaches a member: an access-group addition carrying a raw `entity_id` deny grant, in both orders against the release and the save (the P1 lock order). Direct deny rows in the API tests are inserted as the inventory tests do. **Superseded by A2a-R (below):** both denies are now creatable through the application, and the group-addition races create their deny with the command.
 - **No character archive command exists**; the archive race holds the lock the lifecycle commands take (`FOR UPDATE` on the entity) and writes the archived status.
 - **`campaign.public_profile_field_origins`** is not in the frozen reporting allowlist, so its columns are classified in `COLUMN_CLASSES` rather than listed as reference data. `save_character_public_profile_draft` is a registered `world_capability=None` scope (`test_world_gate_registry.py`): the draft is a campaign's, not shared world canon.
 - **D5, D6, D7 are not applied.** A release carries no name, summary, species or size; no legacy text is copied (A2b).
 
 **Verification.** Recorded in the commit message and the implementation report (focused and full suites, migration up/down and drift, static checks, and the configuration isolation of `docs/DEVELOPMENT.md` §6.2). Pending: independent review and CI on the final head. A real-browser check does not apply (no UI).
+
+---
+
+## A2a-R implementation record (2026-11-07)
+
+**Parent:** `07d69b1` (the design commit recording the owner's Q1-Q3 answers; its parent is A2a, `0b4704c`). One local commit; nothing is pushed and CI is pending.
+
+- **Built:** `_validate_resource_grant_target` takes the grant's `effect`; a `character`, `npc` or `player_character` entity is an accepted `entity_id` target for a deny (the catalog then leaves `campaign.view` and `canon.edit`); allows, `character.*` codes and the other own-column kinds are still refused. The access overview (member and group grants) and the effective-access explanation name the character for such a grant. Docstrings, the access contract and the register (DEF-018 fixed; DEF-016 registered, open) are updated. No schema, route, request or response shape changed.
+- **Existing raw allow rows were measured, not assumed.** A raw `allow` of `campaign.view` or `canon.edit` under `entity_id` on a character changes no response of the profile, character detail, sheet, inventory, relationships, party and World Explorer search and count readers, for a player and for a manager (the party route is a 404 for both before and after, so it adds little). They are inert today, which does not change A2a-R's scope; deny-only keeps it that way.
+- **Races.** Ten new races create the deny through the HTTP route (audit checked) or the command, against a save and a release, in both orders, for a membership grantee and a group grantee, and a `canon.edit` deny against a save. The command that waited resolves its access afresh and is refused with nothing written; the deny that waited commits after.
+- **Not done, by decision:** portal controls (A6), DEF-016, DEF-017, A2b.
 
 ---
 

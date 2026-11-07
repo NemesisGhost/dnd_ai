@@ -225,6 +225,11 @@ def relationship_capability_permitted(type_code: str, capability_code: str) -> b
     return capability_code in BUILTIN_RELATIONSHIP_CAPABILITIES.get(type_code, frozenset())
 
 
+# For a character, `campaign.view` and `canon.edit` are *not* in the `character_id` entry: every
+# reader looks them up under `entity_id` (the whole-character deny and the per-character
+# `canon.edit` deny, ADR 0021 section 2.9 and plan decision D8). `create_resource_grant` therefore
+# accepts a character as an `entity_id` target for a `deny` only (P03-A A2a-R, DEF-018); an
+# `allow` of either code on a character stays refused.
 RESOURCE_GRANT_CAPABILITY_CATALOG: dict[str, frozenset[str]] = {
     "character_id": CHARACTER_TARGET_CAPABILITY_CODES,
     "entity_id": GENERIC_TARGET_CAPABILITY_CODES,

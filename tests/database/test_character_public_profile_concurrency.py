@@ -33,6 +33,7 @@ from dnd_ai.domain.authoring import CampaignNotAuthorizedError, StaleWriteError
 from dnd_ai.domain.public_profiles import (
     CharacterRevealRequiredError,
     PublicProfileCharacterNotActiveError,
+    PublicProfileEditDeniedError,
     PublicProfileNotFoundError,
 )
 from tests.database.test_campaign_owner_gate import (  # noqa: F401 - fixtures used by name
@@ -52,7 +53,6 @@ from tests.database.test_character_reveal_delegation import (  # noqa: F401 - fi
     Members,
     m,
 )
-from tests.factories import lookup_id, make_resource_grant
 from tests.lock_race_support import LockRace
 
 pytestmark = pytest.mark.database
@@ -530,14 +530,16 @@ def _group_with_a_whole_character_deny(
         group = create_access_group(
             connection, campaign_id=g.campaign_id, name=name, description=None
         ).access_group_id
-        make_resource_grant(
+        create_resource_grant(
             connection,
-            g.campaign_id,
-            lookup_id(connection, "security", "capabilities", "capability_id", "campaign.view"),
-            timeline_id=g.timeline_id,
+            campaign_id=g.campaign_id,
+            grantee_campaign_membership_id=None,
             grantee_access_group_id=group,
-            entity_id=character,
+            capability_code="campaign.view",
             effect="deny",
+            expected_world_id=g.world_id,
+            granted_by_membership_id=g.o2,
+            entity_id=character,
         )
     return group
 
@@ -657,3 +659,241 @@ def test_a_save_that_waited_for_the_loss_of_canon_edit_is_refused_and_writes_not
         race.join_all()
     assert isinstance(saving.error, CampaignNotAuthorizedError)
     assert counts(postgres_engine, g) == before
+
+
+# --- creating the deny itself, against a save and a release (A2a-R, DEF-018) -------------------------------------
+#
+# The deny is created with the application's own command (`create_resource_grant`, or the HTTP route
+# when the audit row is part of what is checked), no longer a raw INSERT. The grant locks the grantee's
+# membership `FOR UPDATE` (or the group), the campaign `FOR UPDATE`, the account and the character's
+# entity `FOR UPDATE`, in that order. A membership grantee serializes with the save and the release at
+# the membership (`FOR SHARE` from `lock_authoring_scope` and from the release); a group grantee at the
+# campaign row (their `KEY SHARE`). Neither order forms a cycle, and the command that waited re-resolves
+# its access afterwards, so it sees a deny that committed during the wait.
+
+
+def _deny(
+    g: Gate,
+    capability: str,
+    character: uuid.UUID,
+    *,
+    member: uuid.UUID | None = None,
+    group: uuid.UUID | None = None,
+) -> Callable[[Connection], Any]:
+    return lambda c: create_resource_grant(
+        c,
+        campaign_id=g.campaign_id,
+        grantee_campaign_membership_id=member,
+        grantee_access_group_id=group,
+        capability_code=capability,
+        effect="deny",
+        expected_world_id=g.world_id,
+        granted_by_membership_id=g.o2,
+        entity_id=character,
+    )
+
+
+def _http_deny(
+    client_factory: Callable[[uuid.UUID], Any],
+    g: Gate,
+    capability: str,
+    character: uuid.UUID,
+    *,
+    member: uuid.UUID | None = None,
+    group: uuid.UUID | None = None,
+) -> Callable[[Connection], Any]:
+    def run(_connection: Connection) -> Any:
+        request: dict[str, object] = {
+            "capability_code": capability,
+            "effect": "deny",
+            "entity_id": str(character),
+        }
+        if member is not None:
+            request["grantee_campaign_membership_id"] = str(member)
+        if group is not None:
+            request["grantee_access_group_id"] = str(group)
+        with client_factory(g.o2_user_id) as client:
+            return client.post(f"/campaigns/{g.campaign_id}/resource-grants", json=request)
+
+    return run
+
+
+def _group_holding_the_owner(engine: Engine, g: Gate, name: str) -> uuid.UUID:
+    with engine.begin() as connection:
+        group = create_access_group(
+            connection, campaign_id=g.campaign_id, name=name, description=None
+        ).access_group_id
+        add_access_group_members(
+            connection,
+            access_group_id=group,
+            campaign_membership_ids=(g.o1,),
+            campaign_id=g.campaign_id,
+            added_by_membership_id=g.o2,
+        )
+    return group
+
+
+def _grantee(engine: Engine, g: Gate, kind: str, name: str) -> dict[str, uuid.UUID]:
+    if kind == "member":
+        return {"member": g.o1}
+    return {"group": _group_holding_the_owner(engine, g, name)}
+
+
+def _grant_audit_count(engine: Engine, g: Gate) -> int:
+    with engine.connect() as connection:
+        return int(
+            connection.execute(
+                text(
+                    "SELECT count(*) FROM audit.change_log "
+                    "WHERE world_id = :w AND command_name = 'create_resource_grant'"
+                ),
+                {"w": g.world_id},
+            ).scalar_one()
+        )
+
+
+def _live_denies(engine: Engine, g: Gate, capability: str) -> int:
+    with engine.connect() as connection:
+        return int(
+            connection.execute(
+                text("""
+                    SELECT count(*) FROM security.resource_grants rg
+                    JOIN security.capabilities c ON c.capability_id = rg.capability_id
+                    WHERE rg.campaign_id = :c AND rg.effect = 'deny' AND rg.revoked_at IS NULL
+                      AND c.code = :cap
+                """),
+                {"c": g.campaign_id, "cap": capability},
+            ).scalar_one()
+        )
+
+
+@pytest.mark.parametrize("grantee_kind", ["member", "group"])
+@pytest.mark.parametrize("operation", ["release", "save"])
+def test_a_whole_character_deny_created_while_the_command_runs_waits_and_both_commit(
+    client_factory: Callable[[uuid.UUID], Any],
+    postgres_engine: Engine,
+    g: Gate,
+    prof: Prof,
+    operation: str,
+    grantee_kind: str,
+) -> None:
+    """Command first: the deny's creation waits for the command and then commits, so the command
+    succeeded under the access it began with and the next one is refused."""
+    c = prof.character_id
+    seed(postgres_engine, g, c)
+    grantee = _grantee(postgres_engine, g, grantee_kind, f"First {operation}")
+    with LockRace(postgres_engine) as race:
+        if operation == "release":
+            pause = race.pause(thread_name="command", pattern=CLOCK)
+            command = race.start("command", do_release(g, c, g.o1, 1))
+        else:
+            pause = race.pause(thread_name="command", pattern=SAVE_UPDATE)
+            command = race.start(
+                "command", do_save(g, c, g.o1_user_id, 1, public_appearance="saved first")
+            )
+        pause.wait_reached(command)
+        denial = race.start("denial", _http_deny(client_factory, g, "campaign.view", c, **grantee))
+        race.wait_blocked_by(pause, denial)
+        pause.release()
+        race.join_all()
+    assert command.error is None, command.error
+    assert denial.error is None and denial.result.status_code == 201, denial.result.text
+    assert _live_denies(postgres_engine, g, "campaign.view") == 1
+    assert _grant_audit_count(postgres_engine, g) == 1
+    if operation == "release":
+        assert len(release_rows(postgres_engine, g, c)) == 1
+    else:
+        assert draft_row(postgres_engine, g, c)["public_appearance"] == "saved first"  # type: ignore[index]
+    # The deny now applies to the next command, resolved fresh.
+    before = counts(postgres_engine, g)
+    with LockRace(postgres_engine) as race:
+        again = race.start(
+            "again",
+            do_release(g, c, g.o1, 2)
+            if operation == "release"
+            else do_save(g, c, g.o1_user_id, 2, public_appearance="x"),
+        )
+        race.join_all()
+    assert isinstance(again.error, PublicProfileNotFoundError)
+    nothing_written_beyond(postgres_engine, g, before)
+
+
+@pytest.mark.parametrize("grantee_kind", ["member", "group"])
+@pytest.mark.parametrize("operation", ["release", "save"])
+def test_a_command_that_waited_for_a_whole_character_deny_is_refused_with_nothing_written(
+    postgres_engine: Engine,
+    g: Gate,
+    prof: Prof,
+    operation: str,
+    grantee_kind: str,
+) -> None:
+    """Deny first (created and held uncommitted): the command queues behind it, then resolves its
+    access afresh after the wait and finds the character removed: 404, nothing written."""
+    c = prof.character_id
+    seed(postgres_engine, g, c)
+    grantee = _grantee(postgres_engine, g, grantee_kind, f"Held {operation}")
+    before = counts(postgres_engine, g)
+    with LockRace(postgres_engine) as race:
+        holding = race.hold(_deny(g, "campaign.view", c, **grantee))
+        command = race.start(
+            "command",
+            do_release(g, c, g.o1, 1)
+            if operation == "release"
+            else do_save(g, c, g.o1_user_id, 1, public_appearance="never"),
+        )
+        race.wait_blocked_by(holding, command)
+        holding.commit()
+        race.join_all()
+    assert isinstance(command.error, PublicProfileNotFoundError)
+    nothing_written_beyond(postgres_engine, g, before)
+    assert draft_row(postgres_engine, g, c)["public_appearance"] == APPEARANCE  # type: ignore[index]
+    assert _live_denies(postgres_engine, g, "campaign.view") == 1
+
+
+def test_a_canon_edit_deny_created_around_a_save_applies_to_the_next_save_only(
+    client_factory: Callable[[uuid.UUID], Any],
+    postgres_engine: Engine,
+    g: Gate,
+    prof: Prof,
+) -> None:
+    c = prof.character_id
+    seed(postgres_engine, g, c)
+    # Save first: the deny waits, the save commits, the deny then commits.
+    with LockRace(postgres_engine) as race:
+        pause = race.pause(thread_name="save", pattern=SAVE_UPDATE)
+        saving = race.start("save", do_save(g, c, g.o1_user_id, 1, public_appearance="two"))
+        pause.wait_reached(saving)
+        denial = race.start("denial", _http_deny(client_factory, g, "canon.edit", c, member=g.o1))
+        race.wait_blocked_by(pause, denial)
+        pause.release()
+        race.join_all()
+    assert saving.error is None and saving.result.row_version == 2
+    assert denial.error is None and denial.result.status_code == 201
+    assert _grant_audit_count(postgres_engine, g) == 1
+    with LockRace(postgres_engine) as race:
+        later = race.start("later", do_save(g, c, g.o1_user_id, 2, public_appearance="three"))
+        race.join_all()
+    assert isinstance(later.error, PublicProfileEditDeniedError)
+    assert draft_row(postgres_engine, g, c)["public_appearance"] == "two"  # type: ignore[index]
+
+
+def test_a_save_that_waited_for_a_canon_edit_deny_is_refused_and_a_release_still_succeeds(
+    postgres_engine: Engine,
+    g: Gate,
+    prof: Prof,
+) -> None:
+    c = prof.character_id
+    seed(postgres_engine, g, c)
+    before = counts(postgres_engine, g)
+    with LockRace(postgres_engine) as race:
+        holding = race.hold(_deny(g, "canon.edit", c, member=g.o1))
+        saving = race.start("save", do_save(g, c, g.o1_user_id, 1, public_appearance="never"))
+        race.wait_blocked_by(holding, saving)
+        holding.commit()
+        race.join_all()
+    assert isinstance(saving.error, PublicProfileEditDeniedError)
+    nothing_written_beyond(postgres_engine, g, before)
+    with LockRace(postgres_engine) as race:
+        releasing = race.start("release", do_release(g, c, g.o1, 1))
+        race.join_all()
+    assert releasing.error is None and releasing.result.created is True

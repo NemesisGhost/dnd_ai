@@ -1059,10 +1059,20 @@ _RESOURCE_GRANT_TARGET_FIELDS = (
 # core.entities(entity_id) via class-table inheritance (P-8, this module's
 # own "CTI column trap" docstring below), so an entity_id target resolving
 # to one of these codes must be rejected rather than silently accepted into
-# the wrong column.
+# the wrong column (except a character's `campaign.view`/`canon.edit` deny, below).
 _OWN_COLUMN_ENTITY_TYPE_CODES = frozenset(
     {"character", "npc", "player_character", "event", "quest", "knowledge_item"}
 )
+
+# The three entity types with a `character.characters` row. A character is the one own-column
+# kind with a second, legitimate representation under `entity_id` (P03-A A2a-R, DEF-018): the
+# whole-character deny (`campaign.view`) and the per-character `canon.edit` deny are looked up by
+# every reader under `("entity_id", character_id)`, and `character_id` cannot carry those two
+# capability codes at all (`RESOURCE_GRANT_CAPABILITY_CATALOG`). So an `entity_id` target that is
+# a character is accepted for a `deny` and refused for an `allow`; the catalog then confines the
+# deny to `campaign.view` and `canon.edit`. The other three own-column kinds stay refused: their
+# readers key their dedicated column.
+_CHARACTER_ENTITY_TYPE_CODES = frozenset({"character", "npc", "player_character"})
 
 
 def _resource_grant_target_field_name(
@@ -1111,6 +1121,7 @@ def _validate_resource_grant_target(
     quest_id: uuid.UUID | None,
     session_id: uuid.UUID | None,
     event_id: uuid.UUID | None,
+    effect: str,
 ) -> None:
     """Pre-checks whichever one of the six target columns is non-`None`
     against `security.enforce_resource_grant_scope()`'s own rules
@@ -1205,12 +1216,23 @@ def _validate_resource_grant_target(
         # Rejected here, folded into the same non-disclosing
         # TargetNotInCampaignWorldError this function already raises for
         # "wrong world"/"not active", rather than a new error shape.
+        #
+        # One exception (P03-A A2a-R, DEF-018): a character may be the `entity_id` target of a
+        # `deny`. `campaign.view` and `canon.edit` on a character are read by every reader under
+        # `entity_id` (never `character_id`, whose catalog refuses both codes), so the guard
+        # above would make the whole-character deny and the `canon.edit` deny on a character
+        # impossible to create. An `allow` stays refused: it would be the same inert-but-
+        # displayed row the guard exists to prevent, and a later reader change could promote it
+        # into authority by mistake. A `character.*` deny under `entity_id` passes this step and
+        # is refused by the capability catalog.
+        entity_type_code = target_row["entity_type_code"]
         if (
             entity_id is not None
-            and target_row["entity_type_code"] in _OWN_COLUMN_ENTITY_TYPE_CODES
+            and entity_type_code in _OWN_COLUMN_ENTITY_TYPE_CODES
+            and not (entity_type_code in _CHARACTER_ENTITY_TYPE_CODES and effect == "deny")
         ):
             raise TargetNotInCampaignWorldError(
-                f"entity {entity_id} is a {target_row['entity_type_code']!r} entity, which has its "
+                f"entity {entity_id} is a {entity_type_code!r} entity, which has its "
                 "own resource-grant target column and must not be granted through entity_id"
             )
 
@@ -1463,6 +1485,7 @@ def create_resource_grant(
         quest_id=quest_id,
         session_id=session_id,
         event_id=event_id,
+        effect=effect,
     )
 
     target_field_name = _resource_grant_target_field_name(

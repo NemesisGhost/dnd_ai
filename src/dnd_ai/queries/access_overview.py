@@ -44,7 +44,8 @@ active (checkpoint 5) — the same generalization `dnd_ai.domain.access.
 resolve_access_context`'s own docstring describes in full, applied here so
 this overview can never show a grant targeting a resource that resolver
 would no longer authorize through. `MemberResourceGrantView.target_
-display_name` (checkpoint 5) is populated only for a `character_id` target
+display_name` (checkpoint 5) is populated only for a `character_id` target (and, since P03-A
+A2a-R, for an `entity_id` target that is a character: the whole-character and `canon.edit` denies)
 — resolved from `core.entities.canonical_name`, the identical safe display
 name `character_relationships` already uses — and left `None` for every
 other target kind, per this module's own "specific display identity...is a
@@ -370,6 +371,7 @@ def get_campaign_access_overview(
                    cap.code AS capability_code, cap.display_name AS capability_display_name,
                    rg.effect, rg.reason, rg.granted_at, rg.expires_at,
                    target_entity.canonical_name AS target_entity_display_name,
+                   target_character.character_id IS NOT NULL AS entity_target_is_character,
                    {target_column_list}
             FROM security.resource_grants rg
             JOIN security.capabilities cap ON cap.capability_id = rg.capability_id
@@ -379,6 +381,8 @@ def get_campaign_access_overview(
               ON target_entity.entity_id = COALESCE(
                      rg.character_id, rg.entity_id, rg.knowledge_item_id, rg.quest_id, rg.event_id
                  )
+            LEFT JOIN character.characters target_character
+              ON target_character.character_id = rg.entity_id
             LEFT JOIN core.lifecycle_statuses target_entity_status
               ON target_entity_status.lifecycle_status_id = target_entity.lifecycle_status_id
             LEFT JOIN campaign.sessions target_session ON target_session.session_id = rg.session_id
@@ -401,8 +405,13 @@ def get_campaign_access_overview(
     ).mappings():
         target_column = next(column for column in _GRANT_TARGET_COLUMNS if row[column] is not None)
         target_type = target_column.removesuffix("_id")
+        # A character is named whether it is a `character_id` target or the `entity_id` target
+        # of a deny (P03-A A2a-R, DEF-018); `target_type` stays what the grant was written under.
         target_display_name = (
-            row["target_entity_display_name"] if target_column == "character_id" else None
+            row["target_entity_display_name"]
+            if target_column == "character_id"
+            or (target_column == "entity_id" and row["entity_target_is_character"])
+            else None
         )
         grants_by_membership.setdefault(row["grantee_campaign_membership_id"], []).append(
             MemberResourceGrantView(
@@ -566,7 +575,10 @@ def list_grantable_resource_capabilities(
     by `campaign_id`/`world_id` — see that constant's own docstring for the
     full delegation-policy rationale (which capability codes apply to which
     target kind, and why `access.manage`/`import.approve`/`rules_source.
-    manage` are excluded from every kind entirely). The portal's own
+    manage` are excluded from every kind entirely). The `(code, target_type)` grain is coarser
+    than one sub-rule `create_resource_grant` applies: an `entity` target that is a character is
+    accepted for a `deny` of `campaign.view` or `canon.edit` only (P03-A A2a-R, DEF-018); the
+    portal's `entity` selector excludes characters until A6. The portal's own
     resource-grant management UI only offers `character` as a selectable
     resource type this checkpoint (see `dnd_ai.commands.access_grants`'
     module docstring for why the other five target kinds are deferred), so
@@ -755,6 +767,7 @@ def list_campaign_access_groups(
                    cap.code AS capability_code, cap.display_name AS capability_display_name,
                    rg.effect, rg.reason, rg.granted_at, rg.expires_at,
                    target_entity.canonical_name AS target_entity_display_name,
+                   target_character.character_id IS NOT NULL AS entity_target_is_character,
                    {target_column_list}
             FROM security.resource_grants rg
             JOIN security.capabilities cap ON cap.capability_id = rg.capability_id
@@ -765,6 +778,8 @@ def list_campaign_access_groups(
               ON target_entity.entity_id = COALESCE(
                      rg.character_id, rg.entity_id, rg.knowledge_item_id, rg.quest_id, rg.event_id
                  )
+            LEFT JOIN character.characters target_character
+              ON target_character.character_id = rg.entity_id
             LEFT JOIN core.lifecycle_statuses target_entity_status
               ON target_entity_status.lifecycle_status_id = target_entity.lifecycle_status_id
             LEFT JOIN campaign.sessions target_session ON target_session.session_id = rg.session_id
@@ -787,8 +802,13 @@ def list_campaign_access_groups(
     ).mappings():
         target_column = next(column for column in _GRANT_TARGET_COLUMNS if row[column] is not None)
         target_type = target_column.removesuffix("_id")
+        # A character is named whether it is a `character_id` target or the `entity_id` target
+        # of a deny (P03-A A2a-R, DEF-018); `target_type` stays what the grant was written under.
         target_display_name = (
-            row["target_entity_display_name"] if target_column == "character_id" else None
+            row["target_entity_display_name"]
+            if target_column == "character_id"
+            or (target_column == "entity_id" and row["entity_target_is_character"])
+            else None
         )
         grants_by_group.setdefault(row["grantee_access_group_id"], []).append(
             AccessGroupResourceGrantView(
