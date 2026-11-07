@@ -1531,3 +1531,25 @@ otherwise exist to confirm.
 - **Transfer:** delegations survive an ownership transfer. A former owner keeps only a separate delegation bound to their own live `gm` assignment.
 - **Audit:** one `audit.change_log` row per actual change (`grant_character_reveal_delegation`, `revoke_character_reveal_delegation`).
 - **Tests:** `tests/database/test_character_reveal_delegation.py`. Design: `docs/PHASE14_15_P03A_A1_OWNERSHIP_AUTHORITY_DESIGN_2026-11-06.md` §3 and §8.
+
+## 3v. Character public profile (P03-A A2a)
+
+A campaign's draft of a character's public profile, and immutable releases of it. Routes are under `/campaigns/{id}/characters/{character_id}/public-profile`; a character outside the campaign's world, a non-character entity and a non-canon character are `404`.
+
+| Route | Route filter | Authority | Result |
+|---|---|---|---|
+| `GET …/public-profile` | `campaign.view` | read rule (below); failing it is `404` | draft or `null`, `row_version`, `has_unreleased_changes`, latest release, release summaries, `can_edit`, `can_release`, the canonical name and summary as the read-only label |
+| `GET …/public-profile/releases/{version_number}` | `campaign.view` | read rule; `404` otherwise | one release snapshot |
+| `POST …/public-profile/draft` | role `canon.edit` | edit rule, re-resolved under lock | `201` created or `200` (`changed` false for a no-op); `Idempotency-Key` supported |
+| `POST …/public-profile/releases` | `campaign.view` | `character.reveal` authority, then no whole-character deny, before the idempotency lookup, then re-judged under lock | `201 created: true`, or `200 created: false` for a retry of a released draft version; `Idempotency-Key` supported |
+
+- **Read rule (D8, approved 2026-11-07):** effective character-scoped `canon.edit` **or** current `character.reveal` authority. Reveal authority confers reading only.
+- **Edit rule:** the role `canon.edit`, re-checked under lock, with no whole-character `campaign.view` deny and no `canon.edit` deny on the character (an `entity_id` resource grant; a `character_id`-keyed row counts too). A `canon.edit` *allow* grant never confers editing. A caller who can still read gets `403 public_profile_edit_denied`; anyone else `404`.
+- **Release rule:** `character.reveal` authority (`resolve_reveal_authority`: a live built-in owner, or a live delegation bound to the caller's live `gm` assignment); `403 character_reveal_required` otherwise (the code says nothing about the character). A `canon.edit` deny does not stop a release.
+- **Whole-character deny:** an `entity_id` `campaign.view` deny blocks reading, editing and releasing for every source, an owner included, and a retry (keyed or not) never hands a denied caller a stored release.
+- **Concurrency token:** the draft's `row_version`. A save needs `expected_row_version` (`null` = no draft yet); a mismatch or a lost first-save race is `409 stale_write`. A release names `expected_draft_row_version` and snapshots exactly that locked version; a moved draft is `409 stale_write` unless that version was already released (then `200`, never a false stale write); no draft is `409 public_profile_draft_missing`; an archived character is `409 public_profile_character_not_active`.
+- **Idempotency:** the path's `character_id` is part of every fingerprint, so a key reused on another character is the existing non-disclosing `409`.
+- **Releases outlive authority:** ending a delegation, a GM role or ownership leaves earlier releases unchanged and listed; it ends future release authority.
+- **Audit:** one `audit.change_log` row per real change (`save_character_public_profile_draft`: field names and the new `row_version`; `release_character_public_profile`: `version_number`, `from_draft_row_version`, `authority_source`), none for a no-op, refusal or replay, and never profile text. No `core.entity_revisions` row is written.
+- **Not in A2a:** the legacy copy aid (A2b), audience revelations (A3), the audience read (A4), the portal (A6).
+- **Tests:** `tests/database/test_character_public_profile_{api,schema,concurrency,markers}.py`, `test_character_public_profiles_migration.py`, `tests/unit/test_character_public_profile_structure.py`. Design: `docs/PHASE14_15_P03A_IMPLEMENTATION_PLAN_2026-11-06.md` §5 and §7.

@@ -478,6 +478,30 @@ Two rules that matter more here than in a typical project:
 - **Every nontrivial constraint gets a positive *and* a negative test** (§32.1). The schema encodes domain invariants; an untested `CHECK` is an unverified rule.
 - **Build test data through the same commands production uses** (§32.3). Inserting rows directly bypasses the subtype and state invariants that are the thing under test. Exception: a test whose subject *is* invalid data.
 
+### 6.2 Running the suite against the code defaults, not your `.env`
+
+A developer's `.env` may override settings that a few unit tests assert the *default* of; `tests/unit/test_config.py::test_local_session_allowed_origins_defaults_to_dev_topology_outside_production` fails when `DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS` is set to anything but the default. A reviewer reproducing a full run should exercise the defaults without pinning the expected value (setting the variable to the default would make that test pass by construction). Two things are needed, because `tests/conftest.py` loads the repository `.env` into the process environment and `Settings()` also reads `.env` from the current directory:
+
+1. remove the variable from the environment after conftest has loaded it, with a one-line pytest plugin kept **outside** the repository (so the test files and their per-test temporary dotenv handling stay as they are);
+2. run pytest from a directory that contains no `.env`, naming the repository's config explicitly.
+
+```python
+# default_config_plugin.py  (any directory; put it on PYTHONPATH)
+import os
+
+
+def pytest_sessionstart(session):
+    os.environ.pop("DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS", None)
+```
+
+```bash
+cd /path/to/an/empty/directory
+PYTHONPATH=. python -m pytest -p default_config_plugin /path/to/dnd_ai/tests \
+    --rootdir=/path/to/dnd_ai -c /path/to/dnd_ai/pyproject.toml -q -p no:cacheprovider
+```
+
+`DATABASE_URL` still comes from the repository `.env` through conftest, so the database tests run unchanged. Report a run made this way as "defaults, `.env` override removed", and a run made from the repository root with your `.env` as it is separately.
+
 ---
 
 ## 7. Code quality

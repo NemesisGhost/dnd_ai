@@ -116,8 +116,25 @@ COLUMN_CLASSES: dict[str, DataClass] = {
     **_table("campaign.area_feature_state", {"condition_notes": _G}),
     **_table("campaign.campaigns", {"description": _C, "name": _C}),
     **_table("campaign.character_conditions", {"source_description": _G}),
+    # A2: the draft is GM-only; a release is campaign-visible once revealed (A3/A4), its note is not.
+    **_table(
+        "campaign.character_public_profiles", {"public_appearance": _G, "public_background": _G}
+    ),
+    **_table(
+        "campaign.character_public_profile_releases",
+        {
+            "authority_source_code": _S,
+            "public_appearance": _C,
+            "public_background": _C,
+            "release_note": _G,
+        },
+    ),
     **_table("campaign.location_state", {"condition_notes": _G}),
     **_table("campaign.parties", {"description": _C, "name": _C}),
+    **_table(
+        "campaign.public_profile_field_origins",
+        {"code": _S, "description": _S, "display_name": _S},
+    ),
     **_table("campaign.party_knowledge", {"awareness_level": _S, "interpretation": _Y}),
     **_table("campaign.party_memberships", {"joined_reason": _G, "left_reason": _G}),
     **_table("campaign.relationship_state", {"emotional_tone": _G, "private_interpretation": _G}),

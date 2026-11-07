@@ -1,6 +1,6 @@
 # P03-A implementation plan: public profiles, revelation and audience-safe character reads
 
-**Status:** Approved planning document. A0, A1, P0 and P1 are implemented and independently reviewed. D8 is approved (recorded 2026-11-07). A2a is the next implementation checkpoint; this file is committed on its own as the design commit before A2a's code.
+**Status:** Approved planning document. A0, A1, P0 and P1 are implemented and independently reviewed. D8 is approved (recorded 2026-11-07). A2a is implemented locally (see "A2a implementation record") and awaits independent review; the plan was committed on its own as the design commit (`3b3d637`) before A2a's code.
 
 - **A0** is implemented at `fca3ac7`.
 - **A1** is implemented at `68dc902` through `6a5773d`. That covers the D3 ownership gate, DEF-011, DEF-013 and the reveal delegation. Its record is in [the A1 design](PHASE14_15_P03A_A1_OWNERSHIP_AUTHORITY_DESIGN_2026-11-06.md) §8. The independent re-review passed at `fc20e8d`. CI is pending until push, and an intermittent race-test timeout is still unresolved.
@@ -45,7 +45,7 @@ Every code claim was checked by reading source at the stated commit. No applicat
 
 ## Recommendation
 
-**Next: slice A2a.** Prerequisites P0 and P1 are implemented and reviewed, and D8 is approved.
+**Next: independent review of slice A2a, then A2b, A3.** A2a is implemented (see "A2a implementation record"). Prerequisites P0 and P1 were implemented and reviewed, and D8 is approved.
 
 - **P0** (§6) fixes the deadlock between `lock_authoring_scope` and administrative recovery. It is implemented at `4dd56fd`; its independent review is complete.
 - **P1** (§7) fixes DEF-015: adding a member to an access group deadlocks with that member's authoring write (SQLSTATE 40P01, reproduced in both orders).
@@ -221,7 +221,7 @@ The second caller, AI NPC context ([domain/context_assembly.py:362-396](../src/d
 | **A1** (done, `68dc902`–`6a5773d`; CI pending) | `character.reveal` vocabulary, delegation table, resolver, grant/revoke commands and API (owner only), eligibility closure in the membership, ownership and recovery commands, audit | D3 (approved) | Every row of the §1 table as a database test; concurrency tests (revoke `gm` vs grant; revoke delegation vs release); assistant GM, `canon.edit` and custom `access.manage` refused; cross-campaign refusal; migration up/down; the full suite. The release race moves to A2a, because no release existed in A1 |
 | **P0** (implemented at `4dd56fd`; independent review complete) | `lock_authoring_scope` takes the campaign row `FOR KEY SHARE` (DEF-014, §6) | none | §6.4–§6.5 |
 | **P1** (implemented at `edf46ca`; independent review complete) | `add_access_group_members` locks memberships before the campaign row, in weaker modes (DEF-015, §7); race harness cleanup | P0 | §7.5–§7.8 |
-| **A2a** | Migration 142 (§5.3); draft save; release under A1 authority; GM reads (§5.7, §5.7a). No copy aid | A1, P0, P1, D1 and D2 (approved), D8 | The criteria in the last section |
+| **A2a** (implemented; awaiting independent review) | Migration 142 (§5.3); draft save; release under A1 authority; GM reads (§5.7, §5.7a). No copy aid | A1, P0, P1, D1 and D2 (approved), D8 | The criteria in the last section |
 | **A2b** | Legacy copy aid (§5.10), with per-field origin and D7 withholding | A2a, D7 | Copy allowed exactly when the kind's authoring read is allowed (one shared rule, parity test); origin recorded and carried into the release; withheld fields per D7; legacy text never in any non-authoring response |
 | **A3** | Revelations: audience kinds, snapshot, create/revoke, membership-end and group-deactivate hooks, `AccessContext` source, discovery bundle | A2 (a revelation requires an existing release, recommended), D5 | T82 audiences, including the late joiner; T6 independent-grant survival; whole vs operation deny; cross-surface matrix from investigation D6.4 (lists, counts, pagination, relationships, organizations, roster, events, encounters, Knowledge, preview), with **response-body ID assertions**; bootstrap, inventory and sheet unchanged |
 | **A4** | Projection tier, public-profile read in the detail route, `sections`, `can_open` | A3 | Browse/detail agreement; public tier carries no species, size or mechanics unless released; revocation takes effect on the next request |
@@ -1107,6 +1107,28 @@ A2a is the §5 design without the copy aid, D5/D6 columns, portal or revelations
       - an observer;
       - campaign B's GM;
       - a whole-character-denied owner.
+
+## A2a implementation record (2026-11-07)
+
+**Parent:** `3b3d637` (the design commit; its parent is P1, `edf46ca`). The implementation is one local commit on `phase15/completion`; nothing is pushed and CI is pending.
+
+**What was built.**
+
+- **Migration `142_character_public_profiles`** (additive, no backfill): the lookup `campaign.public_profile_field_origins`, the draft `campaign.character_public_profiles` and the append-only `campaign.character_public_profile_releases`, with the scope, origin and immutability triggers of §5.3, `ON DELETE RESTRICT` on the campaign and character foreign keys, UPDATE/DELETE/TRUNCATE revoked on releases and DELETE/TRUNCATE on drafts from the application roles, and nothing readable by `app_read_only`. Down: drops the three tables and three functions (lossy by design); up/down/up and `alembic check` are pinned by `test_character_public_profiles_migration.py`.
+- **Domain** `domain/public_profiles.py` (errors and the pure D8 policy), **commands** `commands/character_public_profile.py` (`save_character_public_profile_draft`, `release_character_public_profile`, and the two route pre-checks `require_may_edit` / `require_may_release`), **queries** `queries/character_public_profile.py` (the two GM reads and `latest_character_public_profile_release`, which has no caller yet), **API** `api/character_public_profile.py` (four routes), registries (persistence metadata, `ENTITY_REFERENCE_CLASSIFICATION` `BLOCKING` entries, `COLUMN_CLASSES`, the route manifest, `test_role_grants`).
+
+**Where the implementation settles points the plan left open or tightened.**
+
+- **Pre-checks as dependencies.** The release's authority check (and both routes' deny checks) run in a FastAPI dependency after the capability dependency, before the body is read and before the idempotency lookup, so a player gets `403` rather than `422` and a caller who lost authority cannot replay a stored response. The whole-character deny is in the release pre-check as well as under lock, so a denied caller cannot replay a keyed release either (the owner's instruction: a deny blocks release retries).
+- **`version_number` is a `str` path segment** on the release read: a non-number is the same `404` as a missing release (the route manifest's generic probes substitute a UUID).
+- **A whole-character deny cannot be created through `create_resource_grant`** (it refuses `entity_id` for a character), so the "deny that commits first is honoured" races are exercised through the way a deny actually reaches a member: an access-group addition carrying a raw `entity_id` deny grant, in both orders against the release and the save (the P1 lock order). Direct deny rows in the API tests are inserted as the inventory tests do.
+- **No character archive command exists**; the archive race holds the lock the lifecycle commands take (`FOR UPDATE` on the entity) and writes the archived status.
+- **`campaign.public_profile_field_origins`** is not in the frozen reporting allowlist, so its columns are classified in `COLUMN_CLASSES` rather than listed as reference data. `save_character_public_profile_draft` is a registered `world_capability=None` scope (`test_world_gate_registry.py`): the draft is a campaign's, not shared world canon.
+- **D5, D6, D7 are not applied.** A release carries no name, summary, species or size; no legacy text is copied (A2b).
+
+**Verification.** Recorded in the commit message and the implementation report (focused and full suites, migration up/down and drift, static checks, and the configuration isolation of `docs/DEVELOPMENT.md` §6.2). Pending: independent review and CI on the final head. A real-browser check does not apply (no UI).
+
+---
 
 ## A0 acceptance criteria (implemented at `fca3ac7`)
 

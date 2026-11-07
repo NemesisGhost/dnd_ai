@@ -436,6 +436,10 @@ Shared character data includes:
 - conditions
 - current resources
 
+### 8.1a Public profile (P03-A A2a)
+
+A **public-profile draft** is a campaign's working copy of what an audience may eventually be told about a character: two text fields, `public_appearance` and `public_background`, each with a **field origin** (authored by a GM, or copied by the server from a legacy description field). A **release** is an immutable, numbered snapshot of the draft at a draft version, made by someone holding `character.reveal` (an owner or a delegated GM) and recording which authority they used. The latest release is the profile's current public text. A draft and its releases belong to a campaign: another campaign has its own, and nothing written in one changes the other. A release makes nothing visible by itself; an audience sees it only through a revelation (A3). The definition, the draft, the release and the revelation stay four separate concerns.
+
 ### 8.2 Character build
 
 A **Character Build** is a versioned mechanical configuration.

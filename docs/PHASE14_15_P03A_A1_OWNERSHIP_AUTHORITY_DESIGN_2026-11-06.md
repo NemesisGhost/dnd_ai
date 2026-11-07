@@ -208,6 +208,13 @@ Each is recorded in the [defect register](PHASE14_15_DEFECT_REGISTER.md) §9 wit
 - **F3 (DEF-013), caller expiry during a lock wait.** Fixed in a later checkpoint: see the defect register and §3 ("Caller's expiry during a lock wait").
 - **F2 (DEF-012), recovery gap.** `recover_campaign_access_manager` and the stranded-campaign report look for any non-expiring `access.manage` holder. When a custom role is the only `access.manage` holder and no live built-in owner exists, an administrator cannot restore an owner and the campaign permanently loses owner-derived reveal authority. Not reachable through an application path today (no endpoint writes custom role capabilities).
 
+### A2a additions to the section 3 order (2026-11-07)
+
+A2a adds two commands that read these rows and reverse none of the rows above (plan section 5.8, verified by `tests/database/test_character_public_profile_concurrency.py`):
+
+- `release_character_public_profile`: the reveal-authority rows as `resolve_reveal_authority(lock="share")` takes them (owner assignment `S`, or the `gm` assignment `S` then the delegation row `S`) → the caller's membership `FOR SHARE` → the campaign `KEY SHARE` → the character's `core.entities` row `KEY SHARE` → the draft `FOR UPDATE` → fresh-instant re-judgement of the authority (the same source as the locked read, or `403 character_reveal_required`) → the whole-character deny re-resolved → write.
+- `save_character_public_profile_draft`: `lock_authoring_scope` (P0/P1 order) → the `AccessContext` re-resolved → the character's entity `FOR SHARE` → the draft `FOR UPDATE` (or the unique-index wait of a first save).
+
 ## 8. Implementation record (2026-11-06)
 
 - Shared check: `dnd_ai.domain.access.find_live_builtin_owner_assignment` (optional row lock; optional `as_of` instant for expiry, default the transaction's `now()`) and `is_builtin_campaign_owner_role`. The reveal resolver reuses the first. A caller that has waited on locks passes a fresh `clock_timestamp()` as `as_of`.

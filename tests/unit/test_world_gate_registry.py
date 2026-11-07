@@ -77,12 +77,15 @@ EXPECTED_PRIVATE_READS: frozenset[str] = frozenset(
 
 # `lock_authoring_scope` call sites that pass `world_capability=None`: item instances (decision
 # E2), the campaign-state wrapper `lock_operation_scope` (world-time points E1 and every runtime
-# operation), and the shared identity helper, which passes None only for a player character (E3).
+# operation), the shared identity helper, which passes None only for a player character (E3), and
+# the campaign-scoped public-profile draft save (P03-A A2a: a campaign's draft, not shared world
+# canon, so campaign `canon.edit` plus the D8 character rule is the authority).
 EXPECTED_CAMPAIGN_ONLY_SCOPES: frozenset[tuple[str, str]] = frozenset(
     {
         ("item_instances.py", "create_item_instance"),
         ("item_instances.py", "update_item_instance"),
         ("_operations.py", "lock_operation_scope"),
+        ("character_public_profile.py", "save_character_public_profile_draft"),
     }
 )
 

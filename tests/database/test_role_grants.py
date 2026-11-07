@@ -252,6 +252,8 @@ MANAGED_TABLES = [
     ("security", "world_use_grants"),
     # P03-A A1 reveal delegations (migration 141)
     ("security", "character_reveal_delegations"),
+    # P03-A A2a public-profile origins lookup (migration 142)
+    ("campaign", "public_profile_field_origins"),
     ("security", "actor_idempotent_requests"),
 ]
 
@@ -278,6 +280,15 @@ EXCLUDED_TABLES: dict[tuple[str, str], str] = {
     ("core", "entity_revisions"): (
         "append-only revision history (Phase 15, revision 117): app roles hold SELECT/INSERT "
         "only, and the reporting role holds nothing — asserted in test_entity_revisions.py"
+    ),
+    ("campaign", "character_public_profiles"): (
+        "the public-profile draft (P03-A A2a, revision 142): app roles hold SELECT/INSERT/UPDATE "
+        "but never DELETE or TRUNCATE, and the reporting role holds nothing — asserted in "
+        "test_character_public_profile_schema.py"
+    ),
+    ("campaign", "character_public_profile_releases"): (
+        "append-only releases (P03-A A2a, revision 142): app roles hold SELECT/INSERT only, and "
+        "the reporting role holds nothing — asserted in test_character_public_profile_schema.py"
     ),
     ("core", "alembic_version"): (
         "Alembic's own migration-bookkeeping table, not project data — owned and used "

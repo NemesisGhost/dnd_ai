@@ -119,6 +119,28 @@ def drop_gate(engine: Engine, fixture: Gate) -> None:
         params = {"t": fixture.timeline_id, "w": fixture.world_id}
         campaigns = "SELECT campaign_id FROM campaign.campaigns WHERE timeline_id = :t"
         cleanup.execute(text("DELETE FROM audit.change_log WHERE world_id = :w"), params)
+        # P03-A A2a public profiles and the grants/groups tests attach to a campaign.
+        for table in (
+            "campaign.character_public_profile_releases",
+            "campaign.character_public_profiles",
+            "security.resource_grants",
+        ):
+            cleanup.execute(
+                text(f"DELETE FROM {table} WHERE campaign_id IN ({campaigns})"),  # noqa: S608
+                params,
+            )
+        cleanup.execute(
+            text(f"""
+                DELETE FROM security.access_group_memberships WHERE access_group_id IN (
+                    SELECT access_group_id FROM security.access_groups
+                    WHERE campaign_id IN ({campaigns}))
+            """),  # noqa: S608
+            params,
+        )
+        cleanup.execute(
+            text(f"DELETE FROM security.access_groups WHERE campaign_id IN ({campaigns})"),  # noqa: S608
+            params,
+        )
         cleanup.execute(
             text(
                 f"DELETE FROM security.character_reveal_delegations WHERE campaign_id IN ({campaigns})"

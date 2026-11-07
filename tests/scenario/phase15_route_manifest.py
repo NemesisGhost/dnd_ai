@@ -71,12 +71,21 @@ _GM_FAMILIES: dict[str, tuple[str, str, bool]] = {
     "settings": ("campaign administration", "canon.edit", False),
 }
 
+_PUBLIC_PROFILE = f"{CAMPAIGN}/characters/{{character_id}}/public-profile"
+_PUBLIC_PROFILE_FAMILY = (
+    "character public profile (draft save, release)",
+    "canon.edit (draft save); character.reveal (release)",
+    True,
+)
+
 # Reads open to every member: each is player-safe (content is filtered for the caller).
 _MEMBER_READS = frozenset(
     {
         f"{CAMPAIGN}/characters/{{character_id}}",
         f"{CAMPAIGN}/characters/{{character_id}}/inventory",
         f"{CAMPAIGN}/characters/{{character_id}}/parties",
+        f"{CAMPAIGN}/characters/{{character_id}}/public-profile",
+        f"{CAMPAIGN}/characters/{{character_id}}/public-profile/releases/{{version_number}}",
         f"{CAMPAIGN}/characters/{{character_id}}/relationships",
         f"{CAMPAIGN}/characters/{{character_id}}/sheet",
         f"{CAMPAIGN}/clock",
@@ -209,6 +218,10 @@ def classify(openapi_paths: dict) -> tuple[list[Entry], list[tuple[str, str]]]:
                 continue
             segment = template[len(CAMPAIGN) + 1 :].split("/", 1)[0]
             family = _GM_FAMILIES.get(segment)
+            if template.startswith(_PUBLIC_PROFILE):
+                # The draft save (role `canon.edit`) and the release (`character.reveal`); the two
+                # reads above are member reads that a player gets a non-disclosing 404 from.
+                family = _PUBLIC_PROFILE_FAMILY
             if family is None:
                 unclassified.append((method_name, template))
                 continue
