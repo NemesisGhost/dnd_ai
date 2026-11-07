@@ -12,9 +12,9 @@ instant after their last lock wait and before the write (DEF-013), reusing the D
 shared live-owner predicate. Lock order (design section 3, never inverted): the caller's owner
 assignment (`FOR SHARE`); the grantee's built-in `gm` assignment rows (`FOR UPDATE`); the grantee's
 membership (`FOR NO KEY UPDATE`); the grantee's delegation rows (`FOR UPDATE`); then, only for the
-foreign keys of the row about to be written, the campaign row and the caller's membership (`FOR KEY
-SHARE`). Revoking takes the owner assignment, the delegation row and the caller's membership (`FOR
-KEY SHARE`). This is the order `revoke_membership_role`, `change_membership_role` and
+foreign keys of the row about to be written, the caller's membership and then the campaign row
+(`FOR KEY SHARE`, in that order; `_lock_foreign_key_targets`). Revoking takes the owner assignment, the delegation row and the
+caller's membership (`FOR KEY SHARE`). This is the order `revoke_membership_role`, `change_membership_role` and
 `end_campaign_membership` reach the same rows in: role rows, then the membership, then the
 delegation, then the campaign (the retention trigger takes it at commit).
 
