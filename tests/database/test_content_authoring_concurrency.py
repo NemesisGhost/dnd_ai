@@ -61,6 +61,11 @@ from tests.database.test_authoring_concurrency import (
     _purge_user_worlds,
     _wait_until_blocked,
 )
+from tests.database.test_character_reveal_delegation_deadlocks import (
+    _join,
+    _run_command,
+    _wait_until_blocked_by,
+)
 from tests.factories import make_campaign_party, make_party, make_user, make_world_time
 
 pytestmark = pytest.mark.database
@@ -183,6 +188,39 @@ def race(
     thread.join(timeout=20)
     assert not thread.is_alive()
     return out
+
+
+@dataclass(frozen=True)
+class _HolderPid:
+    pid: int
+
+
+def observed_race(
+    engine: Engine,
+    hold: Callable[[Connection], object],
+    racer: Callable[[Connection], object],
+) -> dict[str, Any]:
+    """Like `race`, but proves the intended blocker: the racer's session must be blocked, through
+    `pg_blocking_pids`, by the *holder's own session* (not merely waiting on some lock whose text
+    matches). A racer that finishes or fails before it blocks is reported as that, not as a
+    timeout. The holder's transaction is rolled back if anything fails."""
+    holder = engine.connect()
+    tx = holder.begin()
+    try:
+        hold(holder)
+        pid = holder.connection.driver_connection.info.backend_pid  # type: ignore[union-attr]
+        command = _run_command(engine, racer)
+        _wait_until_blocked_by(engine, _HolderPid(pid), 1, command)  # type: ignore[arg-type]
+        tx.commit()
+    except BaseException:
+        tx.rollback()
+        raise
+    finally:
+        holder.close()
+    _join(command)
+    if command.error is not None:
+        return {"error": command.error}
+    return {"value": command.result}
 
 
 # --- edit vs edit / archive / publish / submit ---------------------------------------
@@ -555,7 +593,9 @@ def test_a_role_revocation_waits_for_an_in_flight_creation_and_the_write_stands(
 
 
 def test_a_creation_waits_for_an_in_flight_campaign_archive_and_is_refused(fx: Fixture) -> None:
-    out = race(
+    # The wait is observed through `pg_blocking_pids`, not through the text of the author's lock
+    # statement, which changed from `FOR SHARE` to `FOR KEY SHARE` (DEF-014).
+    out = observed_race(
         fx.engine,
         lambda c: archive_campaign(
             c,
@@ -564,7 +604,6 @@ def test_a_creation_waits_for_an_in_flight_campaign_archive_and_is_refused(fx: F
             expected_row_version=fx.campaign_version,
         ),
         _create_as(fx, fx.owner, "Too late"),
-        "query LIKE '%FROM campaign.campaigns WHERE campaign_id = %FOR SHARE%'",
     )
     assert isinstance(out["error"], CampaignArchivedError)
     assert fx.count("SELECT count(*) FROM core.entities WHERE canonical_name = 'Too late'") == 0
