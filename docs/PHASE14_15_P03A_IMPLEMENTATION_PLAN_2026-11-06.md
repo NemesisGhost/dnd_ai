@@ -1220,7 +1220,7 @@ So the guard blocks the only representation the readers use. The other own-colum
 
 ## 9. A2b design: the legacy copy aid under approved D7 (2026-11-07, revised after review)
 
-**Status:** design reviewed; A2b-1 is implemented locally and awaits independent review (see the A2b-1 implementation record); A2b-2 is not implemented.
+**Status:** design reviewed; A2b-1 is implemented locally and was returned CHANGES REQUIRED by the independent review (provenance relabel hole) and is corrected by revision 144 (see the A2b-1 provenance correction); A2b-2 is not implemented.
 
 - **Baseline.** `523ae5cbf947af230e1d7a5409912c1039e43a69` (the A2a handoff, directly on A2a-R `f66240a`). Every claim was checked by reading source at that commit; nothing was run.
 - **Supersedes.** This section replaces the D7-dependent parts of §5.6, §5.8 (copy row) and §5.10 ("Design"). Where they differ, this section wins.
@@ -1281,7 +1281,7 @@ Each draft field holds:
 
 **Invariants:**
 
-- **I1, provenance travels with content.** A legacy origin, its `origin_entity_row_version` and its watermark are present together, or absent together. Only the copy sets them; only clearing removes them.
+- **I1, provenance travels with content.** A legacy origin, its `origin_entity_row_version` and its watermark are present together, or absent together. Only the copy sets them; only clearing removes them (the database refuses removal while text remains, revision 144).
 - **I2, every content change advances the watermark.** Any write that changes a legacy-origin field's text, origin or `origin_entity_row_version` sets that field's watermark to the new `row_version`. A copy sets it even when the text happens to be identical (a copy always starts new restricted content). The watermark never decreases and never exceeds `row_version`.
 - **I3, other fields leave it alone.** A write that does not change a field's content does not move that field's watermark. Editing field A therefore never re-restricts an unchanged, released field B.
 - **I4, coverage means the released text is the current text.** A release from draft version *r* snapshots the draft exactly at *r* (§5.5). If *r* ≥ the watermark *w* of field B, B's content did not change between *w* and *r* (by I2, a change would have moved the watermark past *r*). So the released B is the current B. Conversely, any later change to B moves the watermark past every existing release, and B is restricted again until a release covers it (D7-c).
@@ -1755,7 +1755,7 @@ A2a is the §5 design without the copy aid, D5/D6 columns, portal or revelations
 
 - **Migration `143_profile_watermarks`** (§9.3): the two watermark columns, the pairing, positivity and bound CHECKs, and `campaign.enforce_public_profile_restriction_watermarks()` (INSERT: `watermark = row_version`; UPDATE of a legacy field's content: `watermark = OLD.row_version + 1`; never a decrease). The preflight refuses the upgrade, and a guard refuses the downgrade, while any draft or release carries a legacy origin; both are atomic (the revision, the schema and every row are unchanged after a refusal).
 - **Domain/queries/commands/API:** the source-read rule and the restriction predicate (`domain/public_profiles.py`), `queries/public_profile_restrictions.py` (which fields are withheld from a caller; nothing stored), withholding in the profile read (`<field>: null`, `<field>_withheld`, origin and `origin_entity_row_version`; `can_release` false while any field is withheld), the save rule (token, then 403 `public_profile_field_withheld`, then the no-op comparison, then the write with watermark advance; clearing resets the lineage), and the release's world-row `FOR SHARE` first and withheld check before a new snapshot. A natural retry and a keyed replay do not consult the source read (D7-d).
-- **Invariants.** I1/I2 are enforced by the database (CHECKs and trigger), I3/I4 are pinned by a unit model of the predicate and by HTTP scenarios, I5 by the release refusal, I6 by clearing, I7 because no request field names an origin or watermark.
+- **Invariants.** I1/I2 are enforced by the database (CHECKs and trigger; I1's removal of provenance only from revision 144, see the correction below), I3/I4 are pinned by a unit model of the predicate and by HTTP scenarios, I5 by the release refusal, I6 by clearing, I7 because no request field names an origin or watermark.
 
 **Deviations from §9.**
 
@@ -1766,6 +1766,18 @@ A2a is the §5 design without the copy aid, D5/D6 columns, portal or revelations
 **Races executed** (`test_character_public_profile_restriction_races.py`, with the real `end_world_membership` command; each wait observed as blocked by the intended session): the releaser's world role against a release of uncovered copied content, and the saver's world role against a save that writes text into the copied field, each with both winners; and a permitted edit of the released field against a restricted releaser's release of the earlier version, both winners. For each the text and the draft version the waiting command observed are asserted. **Not executed, because the copy command does not exist:** a copy against `update_npc`, a copy against a save and a release, and the copier's world role against a copy. They share the world-row `FOR SHARE`-then-capability and the draft `FOR UPDATE` paths exercised above; A2b-2 must add them and may not claim them passed.
 
 **Verification** is in the commit message and the implementation report. Pending: independent review and CI.
+
+### A2b-1 provenance correction (2026-11-07)
+
+**Finding (independent review, CHANGES REQUIRED, conversation-supplied).** Invariant I1 was not enforced by the database as §9.3 and the record above claimed. Migration 143's trigger inspected a field only when the NEW row still carried a legacy source version, so an UPDATE that set a legacy-origin field to the authored origin, cleared its source version and watermark, and kept the text (unchanged or replaced) satisfied every CHECK and the trigger. Restricted copied text became unrestricted authored text. No application path does this, but the claim "I1/I2 are enforced by the database" was false for removal of provenance.
+
+**Correction.** Revision `144_profile_provenance_guard` replaces the trigger function. Per field, an UPDATE whose OLD row has a legacy source version and whose NEW row has none is refused unless the NEW text is NULL (`integrity_constraint_violation`, "cannot be relabelled authored; clear the field instead"). Removing origin, source version and watermark is therefore possible only in the write that clears the field, which is what the save command already does. All 143 rules are kept.
+
+**Why a new revision and not an edit of 143.** 143 is on no pushed branch (`origin/phase15/completion` is at `ea85b2c`), but a developer database may already be at 143, and Alembic does not re-run an edited revision: that database would keep the weaker function under the same revision id as a fresh one. A forward revision reaches both. The downgrade restores 143's function body (a loss of protection, not of data, so it is not refused).
+
+**Regressions** (`test_character_public_profile_watermarks.py`, through the real trigger and CHECKs, both fields): unchanged copied text relabelled authored, and replacement text relabelled authored, are each refused with text, origins, watermark and `row_version` unchanged (full-row comparison); partial removal of provenance is refused and leaves the row unchanged; clearing text and provenance together succeeds (`row_version` 2); an authored edit of the other field, a valid copied-text edit (watermark = new version) and further authored edits keep their behaviour; and one migration test on a disposable database at 143 shows the relabel accepted before 144, refused after it, accepted again after the downgrade, and `alembic check` clean at head.
+
+**Stated limit.** A relabelled row written by hand at 143 before this revision is neither detected nor repaired by 144.
 
 ---
 

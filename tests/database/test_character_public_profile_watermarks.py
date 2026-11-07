@@ -465,3 +465,182 @@ def _seed_143(engine: Engine, *, legacy: str) -> bool:
             },
         )
     return True
+
+
+# --- provenance cannot be relabelled while text remains (revision 144) --------------------------------------
+
+
+FIELDS = ["appearance", "background"]
+
+
+def _copied_draft(connection: Connection, g: Gate, character: uuid.UUID, field: str) -> uuid.UUID:
+    """A draft whose `field` holds copied text (source version 3, watermark 1) and whose other
+    field holds authored text, inserted the way the copy command will."""
+    other = "background" if field == "appearance" else "appearance"
+    value = connection.execute(
+        text(f"""
+            INSERT INTO {DRAFTS} (
+                campaign_id, character_id, public_{field}, public_{field}_origin_id,
+                public_{field}_origin_entity_row_version, public_{field}_restricted_row_version,
+                public_{other}, public_{other}_origin_id)
+            VALUES (:c, :ch, 'copied text', :legacy, 3, 1, 'authored text', :authored)
+            RETURNING character_public_profile_id
+        """),  # noqa: S608
+        {
+            "c": g.campaign_id,
+            "ch": character,
+            "legacy": _origin(connection, f"legacy_{field}"),
+            "authored": _origin(connection, "authored"),
+        },
+    ).scalar_one()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def _state(engine: Engine, profile: uuid.UUID) -> tuple[Any, ...]:
+    with engine.connect() as connection:
+        return tuple(
+            connection.execute(
+                text(f"SELECT * FROM {DRAFTS} WHERE character_public_profile_id = :p"),  # noqa: S608
+                {"p": profile},
+            ).one()
+        )
+
+
+def _update(profile: uuid.UUID, set_clause: str, **params: Any) -> Any:
+    return lambda c: c.execute(
+        text(f"UPDATE {DRAFTS} SET {set_clause} WHERE character_public_profile_id = :p"),  # noqa: S608
+        {"p": profile, **params},
+    )
+
+
+@pytest.mark.parametrize("field", FIELDS)
+@pytest.mark.parametrize("replacement", [None, "replacement text"])
+def test_copied_text_cannot_be_relabelled_authored_with_or_without_new_text(
+    postgres_engine: Engine, g: Gate, character: uuid.UUID, field: str, replacement: str | None
+) -> None:
+    with postgres_engine.begin() as connection:
+        profile = _copied_draft(connection, g, character, field)
+        authored = _origin(connection, "authored")
+    before = _state(postgres_engine, profile)
+    text_clause = f"public_{field} = :t, " if replacement is not None else ""
+    message = _refused(
+        postgres_engine,
+        _update(
+            profile,
+            f"{text_clause}public_{field}_origin_id = :a, "
+            f"public_{field}_origin_entity_row_version = NULL, "
+            f"public_{field}_restricted_row_version = NULL",
+            a=authored,
+            **({"t": replacement} if replacement is not None else {}),
+        ),
+    )
+    assert "cannot be relabelled authored" in message
+    assert _state(postgres_engine, profile) == before  # text, provenance, watermark, row_version
+
+
+@pytest.mark.parametrize("field", FIELDS)
+def test_a_partial_removal_of_provenance_is_refused_by_the_checks(
+    postgres_engine: Engine, g: Gate, character: uuid.UUID, field: str
+) -> None:
+    with postgres_engine.begin() as connection:
+        profile = _copied_draft(connection, g, character, field)
+    before = _state(postgres_engine, profile)
+    # Dropping only some of the provenance is refused (the CHECKs and the triggers, as they stand).
+    for clause in (
+        f"public_{field}_restricted_row_version = NULL",
+        f"public_{field}_origin_entity_row_version = NULL",
+    ):
+        _refused(postgres_engine, _update(profile, clause))
+    assert _state(postgres_engine, profile) == before
+
+
+@pytest.mark.parametrize("field", FIELDS)
+def test_clearing_text_and_provenance_together_succeeds(
+    postgres_engine: Engine, g: Gate, character: uuid.UUID, field: str
+) -> None:
+    with postgres_engine.begin() as connection:
+        profile = _copied_draft(connection, g, character, field)
+        authored = _origin(connection, "authored")
+        _update(
+            profile,
+            f"public_{field} = NULL, public_{field}_origin_id = :a, "
+            f"public_{field}_origin_entity_row_version = NULL, "
+            f"public_{field}_restricted_row_version = NULL",
+            a=authored,
+        )(connection)
+        row = connection.execute(
+            text(
+                f"SELECT public_{field}, public_{field}_origin_entity_row_version, "  # noqa: S608
+                f"public_{field}_restricted_row_version, row_version FROM {DRAFTS} "
+                "WHERE character_public_profile_id = :p"
+            ),
+            {"p": profile},
+        ).one()
+    assert tuple(row) == (None, None, None, 2)
+
+
+@pytest.mark.parametrize("field", FIELDS)
+def test_authored_edits_valid_copied_edits_and_the_other_field_keep_their_behaviour(
+    postgres_engine: Engine, g: Gate, character: uuid.UUID, field: str
+) -> None:
+    other = "background" if field == "appearance" else "appearance"
+    with postgres_engine.begin() as connection:
+        profile = _copied_draft(connection, g, character, field)
+        # An authored edit of the other field leaves the copied field and its watermark alone.
+        _update(profile, f"public_{other} = 'edited authored'")(connection)
+        # A valid copied-text edit keeps the origin and advances the watermark to the new version.
+        _update(
+            profile,
+            f"public_{field} = 'edited copy', public_{field}_restricted_row_version = 3",
+        )(connection)
+        row = connection.execute(
+            text(
+                f"SELECT public_{field}, public_{field}_restricted_row_version, "  # noqa: S608
+                f"public_{other}, public_{other}_restricted_row_version, row_version "
+                f"FROM {DRAFTS} WHERE character_public_profile_id = :p"
+            ),
+            {"p": profile},
+        ).one()
+    assert tuple(row) == ("edited copy", 3, "edited authored", None, 3)
+    # An ordinary authored field (never copied) is edited freely.
+    with postgres_engine.begin() as connection:
+        _update(profile, f"public_{other} = 'again'")(connection)
+
+
+def test_revision_144_closes_the_relabel_hole_on_a_database_already_at_143() -> None:
+    """A database that applied 143 keeps its weaker function until 144 replaces it; the
+    downgrade puts 143's function back and changes no row."""
+    admin_url, test_url = _provision_database()
+    relabel = text(f"""
+        UPDATE {DRAFTS} SET public_background_origin_id = (
+                SELECT public_profile_field_origin_id FROM campaign.public_profile_field_origins
+                WHERE code = 'authored'),
+            public_background_origin_entity_row_version = NULL,
+            public_background_restricted_row_version = NULL
+    """)  # noqa: S608
+    try:
+        _alembic_upgrade(test_url, REVISION)
+        engine = create_engine(test_url, connect_args=_connect_args())
+        _seed_143(engine, legacy="draft")
+        # At 143 the relabel is (wrongly) accepted; roll it back so the row stays copied.
+        with engine.connect() as connection:
+            transaction = connection.begin()
+            connection.execute(relabel)
+            transaction.rollback()
+        _alembic_upgrade(test_url, "144_profile_provenance_guard")
+        with pytest.raises(DBAPIError) as raised, engine.begin() as connection:
+            connection.execute(relabel)
+        assert "cannot be relabelled authored" in str(raised.value)
+        downgraded = _alembic(test_url, "downgrade", REVISION)
+        assert downgraded.returncode == 0, downgraded.stderr
+        with engine.connect() as connection:
+            transaction = connection.begin()
+            connection.execute(relabel)  # accepted again at 143
+            transaction.rollback()
+        _alembic_upgrade(test_url, "head")
+        checked = _alembic(test_url, "check")
+        assert checked.returncode == 0, checked.stdout + checked.stderr
+        engine.dispose()
+    finally:
+        _drop_database(admin_url, test_url)
