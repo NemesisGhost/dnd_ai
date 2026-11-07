@@ -608,39 +608,147 @@ def test_authored_edits_valid_copied_edits_and_the_other_field_keep_their_behavi
         _update(profile, f"public_{other} = 'again'")(connection)
 
 
+REVISION_144 = "144_profile_provenance_guard"
+_RELABEL = text(f"""
+    UPDATE {DRAFTS} SET public_background_origin_id = (
+            SELECT public_profile_field_origin_id FROM campaign.public_profile_field_origins
+            WHERE code = 'authored'),
+        public_background_origin_entity_row_version = NULL,
+        public_background_restricted_row_version = NULL
+""")  # noqa: S608
+
+
 def test_revision_144_closes_the_relabel_hole_on_a_database_already_at_143() -> None:
-    """A database that applied 143 keeps its weaker function until 144 replaces it; the
-    downgrade puts 143's function back and changes no row."""
+    """A database that applied 143 keeps its weaker function until 144 replaces it."""
     admin_url, test_url = _provision_database()
-    relabel = text(f"""
-        UPDATE {DRAFTS} SET public_background_origin_id = (
-                SELECT public_profile_field_origin_id FROM campaign.public_profile_field_origins
-                WHERE code = 'authored'),
-            public_background_origin_entity_row_version = NULL,
-            public_background_restricted_row_version = NULL
-    """)  # noqa: S608
     try:
         _alembic_upgrade(test_url, REVISION)
         engine = create_engine(test_url, connect_args=_connect_args())
         _seed_143(engine, legacy="draft")
-        # At 143 the relabel is (wrongly) accepted; roll it back so the row stays copied.
-        with engine.connect() as connection:
+        with engine.connect() as connection:  # at 143 the relabel is (wrongly) accepted
             transaction = connection.begin()
-            connection.execute(relabel)
+            connection.execute(_RELABEL)
             transaction.rollback()
-        _alembic_upgrade(test_url, "144_profile_provenance_guard")
+        _alembic_upgrade(test_url, REVISION_144)
         with pytest.raises(DBAPIError) as raised, engine.begin() as connection:
-            connection.execute(relabel)
+            connection.execute(_RELABEL)
         assert "cannot be relabelled authored" in str(raised.value)
-        downgraded = _alembic(test_url, "downgrade", REVISION)
-        assert downgraded.returncode == 0, downgraded.stderr
-        with engine.connect() as connection:
-            transaction = connection.begin()
-            connection.execute(relabel)  # accepted again at 143
-            transaction.rollback()
         _alembic_upgrade(test_url, "head")
         checked = _alembic(test_url, "check")
         assert checked.returncode == 0, checked.stdout + checked.stderr
+        engine.dispose()
+    finally:
+        _drop_database(admin_url, test_url)
+
+
+def _function_and_state(engine: Engine) -> dict[str, Any]:
+    """The Alembic revision, the trigger function's definition and comment, the draft and release
+    tables' full rows (every column) and the audit count."""
+    with engine.connect() as connection:
+        return {
+            "revision": _revision(engine),
+            "function": connection.execute(
+                text(
+                    "SELECT pg_get_functiondef(p.oid) || coalesce(obj_description(p.oid), '') "
+                    "FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
+                    "WHERE n.nspname = 'campaign' "
+                    "AND p.proname = 'enforce_public_profile_restriction_watermarks'"
+                )
+            ).scalar_one(),
+            "drafts": [
+                tuple(r)
+                for r in connection.execute(
+                    text(f"SELECT * FROM {DRAFTS} ORDER BY character_public_profile_id")  # noqa: S608
+                )
+            ],
+            "releases": [
+                tuple(r)
+                for r in connection.execute(
+                    text(f"SELECT * FROM {RELEASES} ORDER BY character_public_profile_release_id")  # noqa: S608
+                )
+            ],
+            "columns": connection.execute(
+                text(
+                    "SELECT string_agg(table_name || '.' || column_name, ',' ORDER BY table_name, "
+                    "column_name) FROM information_schema.columns WHERE table_schema = 'campaign'"
+                )
+            ).scalar_one(),
+            "audit": connection.execute(text("SELECT count(*) FROM audit.change_log")).scalar_one(),
+        }
+
+
+def test_the_144_downgrade_refuses_while_a_draft_holds_copied_text_and_changes_nothing() -> None:
+    admin_url, test_url = _provision_database()
+    try:
+        _alembic_upgrade(test_url, REVISION_144)
+        engine = create_engine(test_url, connect_args=_connect_args())
+        _seed_143(engine, legacy="draft")
+        before = _function_and_state(engine)
+        assert before["revision"] == REVISION_144
+        refused = _alembic(test_url, "downgrade", REVISION)
+        assert refused.returncode != 0
+        assert "Refusing to downgrade 144_profile_provenance_guard" in (
+            refused.stdout + refused.stderr
+        )
+        assert _function_and_state(engine) == before  # revision, function, schema, every row
+        with pytest.raises(DBAPIError) as raised, engine.begin() as connection:
+            connection.execute(_RELABEL)  # the correction is still in force
+        assert "cannot be relabelled authored" in str(raised.value)
+        engine.dispose()
+    finally:
+        _drop_database(admin_url, test_url)
+
+
+def test_the_144_downgrade_guard_also_reads_the_origin_code() -> None:
+    """A draft whose origin code is legacy but whose source version is NULL (reachable only with
+    triggers off, which the 142 origin trigger otherwise forbids) still blocks the downgrade."""
+    admin_url, test_url = _provision_database()
+    try:
+        _alembic_upgrade(test_url, REVISION_144)
+        engine = create_engine(test_url, connect_args=_connect_args())
+        _seed_143(engine, legacy="release")
+        with engine.begin() as connection:
+            connection.execute(text("SET LOCAL session_replication_role = replica"))
+            connection.execute(
+                text(f"""
+                    UPDATE {DRAFTS} SET public_background_origin_id = (
+                        SELECT public_profile_field_origin_id
+                        FROM campaign.public_profile_field_origins
+                        WHERE code = 'legacy_background')
+                """)  # noqa: S608
+            )
+        before = _function_and_state(engine)
+        refused = _alembic(test_url, "downgrade", REVISION)
+        assert refused.returncode != 0
+        assert "Refusing to downgrade 144_profile_provenance_guard" in (
+            refused.stdout + refused.stderr
+        )
+        assert _function_and_state(engine) == before
+        engine.dispose()
+    finally:
+        _drop_database(admin_url, test_url)
+
+
+def test_the_144_downgrade_allows_authored_drafts_and_legacy_releases_and_reupgrades_unchanged() -> (
+    None
+):
+    admin_url, test_url = _provision_database()
+    try:
+        _alembic_upgrade(test_url, REVISION_144)
+        engine = create_engine(test_url, connect_args=_connect_args())
+        _seed_143(
+            engine, legacy="release"
+        )  # authored draft; the legacy row is an immutable release
+        rows = _function_and_state(engine)
+        downgraded = _alembic(test_url, "downgrade", REVISION)
+        assert downgraded.returncode == 0, downgraded.stdout + downgraded.stderr
+        at_143 = _function_and_state(engine)
+        assert at_143["revision"] == REVISION
+        assert at_143["function"] != rows["function"]  # 143's function is back
+        assert at_143["drafts"] == rows["drafts"] and at_143["releases"] == rows["releases"]
+        assert at_143["columns"] == rows["columns"] and at_143["audit"] == rows["audit"]
+        _alembic_upgrade(test_url, REVISION_144)
+        assert _function_and_state(engine) == rows  # the re-upgrade restores everything
         engine.dispose()
     finally:
         _drop_database(admin_url, test_url)

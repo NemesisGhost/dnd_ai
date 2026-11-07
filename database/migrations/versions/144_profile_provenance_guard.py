@@ -26,8 +26,13 @@ Why a follow-up revision and not an edit of 143:
     while reporting the same revision as a fresh one. A new revision reaches both.
 
 Rollback:
-    Restores revision 143's function body. That is a loss of protection and not of data, so it is not
-    refused; on a database that holds copied text the rows themselves are unchanged.
+    Restores revision 143's function body, which lacks the relabel rule. A guard runs first, before
+    any function or schema change, and refuses (changing nothing) while any DRAFT has a legacy
+    provenance in either field (a source version, or an origin other than `authored`): at 143 such a
+    draft could be relabelled authored, so copied text would become unrestricted. Immutable releases
+    do not block this downgrade; the guarded function protects mutable drafts only (the releases'
+    own legacy rows are guarded by revision 143's downgrade). Clear or release the copied fields
+    first, or stay at 144.
 
 Data implications:
     None. No row is read or rewritten. Existing rows that already carry a relabelled field (possible
@@ -113,7 +118,30 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Revert to revision 143's function (less protective; no data changes)."""
+    """Revert to revision 143's function, refused while any draft holds copied text's provenance."""
+    op.execute("""
+        DO $guard$
+        DECLARE
+            v_legacy BIGINT;
+        BEGIN
+            SELECT count(*) INTO v_legacy
+              FROM campaign.character_public_profiles d
+             WHERE d.public_appearance_origin_entity_row_version IS NOT NULL
+                OR d.public_background_origin_entity_row_version IS NOT NULL
+                OR EXISTS (SELECT 1 FROM campaign.public_profile_field_origins o
+                            WHERE o.public_profile_field_origin_id
+                                  IN (d.public_appearance_origin_id, d.public_background_origin_id)
+                              AND o.code <> 'authored');
+            IF v_legacy > 0 THEN
+                RAISE EXCEPTION
+                    'Refusing to downgrade 144_profile_provenance_guard: % public-profile draft(s) '
+                    'carry a legacy provenance, and the older trigger would let their copied text '
+                    'be relabelled authored. Clear or release those fields first.', v_legacy
+                    USING ERRCODE = 'integrity_constraint_violation';
+            END IF;
+        END
+        $guard$;
+    """)
     op.execute(_function(guard_relabel=False))
     op.execute("""
         COMMENT ON FUNCTION campaign.enforce_public_profile_restriction_watermarks() IS
