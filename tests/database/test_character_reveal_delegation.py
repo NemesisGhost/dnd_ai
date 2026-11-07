@@ -56,18 +56,6 @@ from tests.factories import make_campaign_membership, make_membership_role, make
 pytestmark = pytest.mark.database
 
 
-@pytest.fixture(autouse=True)
-def _generous_lock_order_windows(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The lock-order harness gives a parked scenario 15 seconds. In a long full-suite process a
-    request thread has been seen taking longer than that to reach the database (alive, waiting on
-    no lock), which ended the parked command before the interleaving existed. These scenarios wait
-    on PostgreSQL's own report, never on the clock, so a wider window costs nothing when the
-    request is prompt."""
-    from tests.database import test_campaign_owner_lock_order as lock_order
-
-    monkeypatch.setattr(lock_order, "_WAIT_SECONDS", 90.0)
-
-
 _REASON = "Trusted to run the table's reveals"
 
 

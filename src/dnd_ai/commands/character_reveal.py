@@ -11,11 +11,26 @@ Both commands re-read the caller's owner assignment under lock and again at a fr
 instant after their last lock wait and before the write (DEF-013), reusing the D3 gate and the
 shared live-owner predicate. Lock order (design section 3, never inverted): the caller's owner
 assignment (`FOR SHARE`); the grantee's built-in `gm` assignment rows (`FOR UPDATE`); the grantee's
-membership (`FOR UPDATE`); the grantee's delegation rows (`FOR UPDATE`); the campaign row (`FOR
-UPDATE`). Revoking takes the owner assignment, the delegation rows and the campaign row. This is
-the order `revoke_membership_role`, `change_membership_role` and `end_campaign_membership` reach
-the same rows in: role rows, then the membership, then the delegation, then the campaign (the
-retention trigger takes it at commit).
+membership (`FOR NO KEY UPDATE`); the grantee's delegation rows (`FOR UPDATE`); then, only for the
+foreign keys of the row about to be written, the campaign row and the caller's membership (`FOR KEY
+SHARE`). Revoking takes the owner assignment, the delegation row and the caller's membership (`FOR
+KEY SHARE`). This is the order `revoke_membership_role`, `change_membership_role` and
+`end_campaign_membership` reach the same rows in: role rows, then the membership, then the
+delegation, then the campaign (the retention trigger takes it at commit).
+
+Why these modes (the two deadlocks found in review):
+
+- The grantee's membership is locked `FOR NO KEY UPDATE`, never `FOR UPDATE`. The delegation
+  insert's foreign key takes `FOR KEY SHARE` on the *granting* membership. Two owners granting each
+  other each held `FOR UPDATE` on the membership the other request's foreign key needed, and
+  deadlocked. `FOR NO KEY UPDATE` still excludes every command that locks the membership `FOR
+  UPDATE` (ending it, assigning it a role) and does not conflict with a key share.
+- The campaign row is taken only `FOR KEY SHARE`, the mode the insert needs anyway, and taken here
+  so that any wait for it is behind the caller re-check (DEF-013). It conflicts only with `FOR
+  UPDATE` takers (a relinquishing transfer, adding a member, the retention trigger at commit), none
+  of which waits for what a grant holds. It must not be `FOR UPDATE`: administrative recovery holds
+  the campaign row `FOR NO KEY UPDATE` while it waits for the membership it promotes, and a grant
+  holding that membership and wanting the campaign row `FOR UPDATE` made the two wait on each other.
 """
 
 import uuid
@@ -89,6 +104,32 @@ def _require_grantee_in_campaign(
         )
 
 
+def _lock_foreign_key_targets(
+    connection: Connection,
+    *,
+    campaign_id: uuid.UUID,
+    actor_membership_id: uuid.UUID,
+    include_campaign: bool,
+) -> None:
+    """Takes `FOR KEY SHARE` on the rows the write's foreign keys will touch (the caller's
+    membership, and the campaign for an insert) before the caller re-check, so that a wait for
+    them cannot fall between the re-check and the write (DEF-013). The mode is the weakest there
+    is and is what the foreign-key check takes itself; see the module docstring for why it must
+    not be stronger."""
+    connection.execute(
+        text(
+            "SELECT 1 FROM security.campaign_memberships "
+            "WHERE campaign_membership_id = :actor FOR KEY SHARE"
+        ),
+        {"actor": actor_membership_id},
+    ).all()
+    if include_campaign:
+        connection.execute(
+            text("SELECT 1 FROM campaign.campaigns WHERE campaign_id = :campaign FOR KEY SHARE"),
+            {"campaign": campaign_id},
+        ).all()
+
+
 def grant_character_reveal_delegation(
     connection: Connection,
     *,
@@ -134,7 +175,7 @@ def grant_character_reveal_delegation(
     connection.execute(
         text(
             "SELECT 1 FROM security.campaign_memberships "
-            "WHERE campaign_membership_id = :grantee FOR UPDATE"
+            "WHERE campaign_membership_id = :grantee FOR NO KEY UPDATE"
         ),
         {"grantee": grantee_campaign_membership_id},
     ).all()
@@ -152,10 +193,12 @@ def grant_character_reveal_delegation(
         .mappings()
         .all()
     )
-    connection.execute(
-        text("SELECT 1 FROM campaign.campaigns WHERE campaign_id = :campaign FOR UPDATE"),
-        {"campaign": campaign_id},
-    ).all()
+    _lock_foreign_key_targets(
+        connection,
+        campaign_id=campaign_id,
+        actor_membership_id=actor_membership_id,
+        include_campaign=True,
+    )
 
     # Every lock wait is behind us: judge the caller and the grantee at a fresh database instant.
     now = _database_clock(connection)
@@ -250,10 +293,12 @@ def revoke_character_reveal_delegation(
         """),
         {"grantee": grantee_campaign_membership_id, "campaign": campaign_id},
     ).scalar()
-    connection.execute(
-        text("SELECT 1 FROM campaign.campaigns WHERE campaign_id = :campaign FOR UPDATE"),
-        {"campaign": campaign_id},
-    ).all()
+    _lock_foreign_key_targets(
+        connection,
+        campaign_id=campaign_id,
+        actor_membership_id=actor_membership_id,
+        include_campaign=False,
+    )
     _recheck_caller_is_live_owner(
         connection, campaign_id=campaign_id, actor_membership_id=actor_membership_id
     )
