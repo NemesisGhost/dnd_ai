@@ -52,6 +52,7 @@ from tests.database.test_campaign_owner_lock_order import (  # noqa: F401 - auto
     _wait_until_waiting,
 )
 from tests.factories import make_campaign_membership, make_membership_role, make_role, make_user
+from tests.lock_race_support import LockRace
 
 pytestmark = pytest.mark.database
 
@@ -739,20 +740,36 @@ def test_a_gm_role_revocation_that_waits_on_a_grant_closes_the_new_delegation(
 def test_a_grant_that_waits_on_ending_the_gms_membership_is_refused(
     client_factory: Callable[[uuid.UUID], TestClient], postgres_engine: Engine, g: Gate, m: Members
 ) -> None:
-    ending = _park_command(
-        postgres_engine,
-        lambda c: end_campaign_membership(
-            c,
-            campaign_membership_id=m.gm,
-            campaign_id=g.campaign_id,
-            ended_by_membership_id=g.o2,
-        ),
-    )
-    assert ending.error is None
-    grant = _post(client_factory, g.o1_user_id, _grant_url(g), _grant_body(m.gm))
-    _wait_until_waiting_on(postgres_engine, grant)
-    ending.end(commit=True)
-    assert _status(grant.join()) == 409
+    """The grant waits for the end of the GM's membership, then is refused.
+
+    This test used `_wait_until_waiting_on`, which counts sessions waiting on *any* lock in the
+    database (`_wait_until_waiting`), so it could neither say that the waiter was the grant nor that
+    the blocker was the parked end, and a run in which the request was alive but no session waited
+    (seen in two full suites) could only time out. It now observes the intended blocker through
+    `pg_blocking_pids` (`LockRace.wait_blocked_by`), reports a request that finishes or fails before
+    it blocks with its status and body, and releases the held transaction and joins the request
+    before fixture teardown. The race and the assertions are unchanged. Why the request sometimes
+    did not reach its lock within the window is still unexplained."""
+    with LockRace(postgres_engine) as race:
+        ending = race.hold(
+            lambda c: end_campaign_membership(
+                c,
+                campaign_membership_id=m.gm,
+                campaign_id=g.campaign_id,
+                ended_by_membership_id=g.o2,
+            )
+        )
+
+        def request_grant(_connection: object) -> object:
+            with client_factory(g.o1_user_id) as client:
+                return client.post(_grant_url(g), json=_grant_body(m.gm))
+
+        grant = race.start("grant", request_grant)
+        race.wait_blocked_by(ending, grant)
+        ending.commit()
+        race.join_all()
+    assert grant.error is None, grant.error
+    assert _status(grant.result) == 409
     assert _delegations(postgres_engine, g) == []
     assert _audit(postgres_engine, g) == {}
 

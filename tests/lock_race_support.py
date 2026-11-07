@@ -62,7 +62,11 @@ class Worker:
         return self.finished.is_set()
 
     def describe(self) -> str:
-        return f"{self.name} finished with result={self.result!r} error={self.error!r}"
+        result: object = self.result
+        status = getattr(result, "status_code", None)
+        if status is not None:  # an HTTP response: say what it was, not its repr
+            result = f"HTTP {status} {getattr(result, 'text', '')}"
+        return f"{self.name} finished with result={result!r} error={self.error!r}"
 
 
 class Hold:

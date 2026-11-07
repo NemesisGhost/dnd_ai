@@ -3,7 +3,7 @@
 **Status:** Approved planning document. A0, A1, P0 and P1 are implemented and independently reviewed. D8 is approved (recorded 2026-11-07). A2a is implemented locally (see "A2a implementation record") and awaits independent review; the plan was committed on its own as the design commit (`3b3d637`) before A2a's code.
 
 - **A0** is implemented at `fca3ac7`.
-- **A1** is implemented at `68dc902` through `6a5773d`. That covers the D3 ownership gate, DEF-011, DEF-013 and the reveal delegation. Its record is in [the A1 design](PHASE14_15_P03A_A1_OWNERSHIP_AUTHORITY_DESIGN_2026-11-06.md) §8. The independent re-review passed at `fc20e8d`. CI is pending until push, and an intermittent race-test timeout is still unresolved.
+- **A1** is implemented at `68dc902` through `6a5773d`. That covers the D3 ownership gate, DEF-011, DEF-013 and the reveal delegation. Its record is in [the A1 design](PHASE14_15_P03A_A1_OWNERSHIP_AUTHORITY_DESIGN_2026-11-06.md) §8. The independent re-review passed at `fc20e8d`. CI is pending until push, and an intermittent race-test timeout is still unresolved. It has now been seen in the A1 lock-wait tests twice in full suites (`test_campaign_owner_caller_expiry.py` once, and `test_character_reveal_delegation.py::test_a_grant_that_waits_on_ending_the_gms_membership_is_refused` once: the request was alive but no session waited on a lock within 15 s), each passing on every rerun. That test now observes its blocker through `pg_blocking_pids` (A2 handoff, below); the cause of the missing wait is not established.
 - **D1 and D2** were approved by the owner and recorded on 2026-11-07 (see "Decisions still needed").
 - **D3** was approved on 2026-11-06.
 - **D8** was approved by the owner on 2026-11-07 as proposed (see "Decisions still needed").
@@ -479,7 +479,7 @@ The release now takes membership, then campaign, then entity. That is the order 
 | A save commits before a release of the previous version | The release is 409 `stale_write`, with no release row. The releaser reloads, reviews and releases the new version |
 | A release commits before a save | The save proceeds, because its token is unchanged. The release holds the earlier content |
 | Two releases of the same draft version, under different keys or no key, including one by the owner and one by a delegated GM | One gets 201 with version *n*. The other waits on the draft row, then gets 200 `created: false` with the same release, and the first releaser as provenance. Exactly one row and one audit row |
-| The response to a successful release is lost; retried with the same `Idempotency-Key` | The stored 201 body is replayed, and nothing is written, after the authority pre-check (§5.7). If the caller has lost authority meanwhile, 403; the release is still visible in the GM read (releaser, time, draft version) |
+| The response to a successful release is lost; retried with the same `Idempotency-Key` | The stored receipt is replayed, and nothing is written, after the authority pre-check (§5.7). The receipt is minimal (`replay_body`): the status code, ids, version numbers and flags survive (`character_public_profile_release_id`, `version_number`, `from_draft_row_version`, `created`, `is_latest`); free-text metadata such as `authority_source` is omitted, and the client refetches it from the GM read. If the caller has lost authority meanwhile, 403; the release is still visible in that read (releaser, time, draft version) |
 | The same, retried without a key or with a new key | 200 `created: false`, with the release made from that draft version. `is_latest` says whether a later release exists. This is never a false `stale_write`, even when the draft has since moved on |
 | The same key with a different body | The existing non-disclosing idempotency 409 |
 | The same key **and the same body** on a different character's path (release, draft save or copy) | The existing non-disclosing idempotency 409, because `character_id` is in the fingerprint (§5.7). Nothing is written for the second character, and the first character's stored response is never replayed for it |
@@ -1125,7 +1125,7 @@ So the guard blocks the only representation the readers use. The other own-colum
    - `GET` profile and `GET` release are 404.
    - Draft save is 404, and release is 404, with nothing written.
    - A release retried with an `Idempotency-Key` first used before the deny is 404, not a replay.
-   - After revocation: `GET` is 200, and that key replays the stored 201 (same release, no new row).
+   - After revocation: `GET` is 200, and that key replays the stored receipt: the 201 and the same ids, versions and flags, no new row (omitted metadata such as `authority_source` is refetched).
 3. **The same for a delegated GM**, and for the deny created by the owner against themselves; the owner can still revoke it.
 4. **A `canon.edit` deny on an owner.**
    - `GET` is 200 with `can_edit: false` and `can_release: true`.
@@ -1336,7 +1336,7 @@ A2a is the §5 design without the copy aid, D5/D6 columns, portal or revelations
 13. **Idempotency across characters (review correction).** The fingerprint covers `character_id` (§5.7).
     - **Release.** Release character X with key K and body B: 201. Then post the same K and the same B to character Y's release route: the non-disclosing idempotency 409. Y has no release row and no audit row, and its GM read shows no release. The stored X response is unchanged.
     - **Draft save.** The same check for the draft save: K and B on X, then K and B on Y, gives 409, and Y has no draft.
-    - **Same character still replays.** K and B repeated on X replays X's stored response.
+    - **Same character still replays.** K and B repeated on X replays X's stored receipt (status, ids, versions and flags).
 14. **D8 reads.**
     - Allowed:
       - a reveal holder with a `canon.edit` deny on the character reads the draft and releases (200, `can_edit: false`, `can_release: true`);
@@ -1346,6 +1346,14 @@ A2a is the §5 design without the copy aid, D5/D6 columns, portal or revelations
       - an observer;
       - campaign B's GM;
       - a whole-character-denied owner.
+
+## A2a and A2a-R review outcome and handoff (2026-11-07)
+
+- **Verdicts.** The independent review of A2a (`0b4704c`) and of A2a-R (`f66240a`) each returned **PASS WITH NONBLOCKING FINDINGS**. The reviewer's independent run covered **80 tests**. The verdicts and the 80-test result were supplied to this session by the owner in conversation; the review text and its run output are not in the repository, so neither is reproduced here.
+- **Release replay.** Corrected above (§5.9, §8.6): a stored release replays the minimal receipt, not the full response body.
+- **The A1 timeout.** The full suites after A2a and A2a-R each failed one A1 wait test (listed in the status lines). The helper involved is `_wait_until_waiting_on` in `test_character_reveal_delegation.py`, which calls `_wait_until_waiting` and `_waiting_on_locks` in `test_campaign_owner_lock_order.py`: a count of every session in the test database waiting on any lock, whoever it is and whatever it waits for. The failing test's grant request is now observed through `LockRace.wait_blocked_by` against the held end-of-membership transaction, with early response diagnostics and cleanup; the other tests that still use the global count keep it. **Whether the request failed to reach its lock, reached it late, or waited in a way the count missed is not established**, and the cause stays recorded as unresolved.
+
+---
 
 ## A2a implementation record (2026-11-07)
 
