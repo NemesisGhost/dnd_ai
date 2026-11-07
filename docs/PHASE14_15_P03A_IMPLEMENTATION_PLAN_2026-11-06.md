@@ -22,12 +22,17 @@
   - It was reproduced on a disposable database in both orders.
   - It also deadlocks with ending the added member's membership, ending the adding manager's membership, and the A2a release path.
   - It changes A2a in one place: the release takes the caller's membership `FOR SHARE`, not `KEY SHARE` (§5.8, §7.6).
+- **Revision of 2026-11-07, after the independent A2a review.** The review text is not in the repository; this revision follows the owner's summary of it.
+  - Neither D8 deny can be created through the application: `create_resource_grant` refuses a character entity under `entity_id`, the only key every reader consults (§8, proposed DEF-018).
+  - The correction is A2a-R (§8), one bounded commit for Sonnet, required before A2a's review closes.
+  - Three policy points that D8 does not settle are listed in §8.8 (Q1–Q3).
 
 **Baseline:**
 
 - §1–§4 and the A0 criteria were checked at `phase15/completion` `e1619db2aee132666705c2d7372fcc0a1769394e`.
 - The A2 design (§5) was checked at `6a5773d89fc085f705c860825cb69d75de4db1dd`. No later configuration-verification commit exists.
 - The DEF-015 design (§7) was checked at `4dd56fda34c5136ff1e288b7a180ba981dd7f41e`.
+- The grant-target correction (§8) was checked by reading source at `0b4704cacef5a49ed24c65068938d28ad6eefc93` (A2a). Nothing was run for it.
 
 Every code claim was checked by reading source at the stated commit. No application code, schema or committed test was changed to produce this plan. The DEF-014 and DEF-015 reproductions ran throwaway probes, deleted afterwards, on the test suite's per-run disposable PostgreSQL 18 database (§6.1, §7.1).
 
@@ -45,7 +50,7 @@ Every code claim was checked by reading source at the stated commit. No applicat
 
 ## Recommendation
 
-**Next: independent review of slice A2a, then A2b, A3.** A2a is implemented (see "A2a implementation record"). Prerequisites P0 and P1 were implemented and reviewed, and D8 is approved.
+**Next: correction A2a-R (§8, for Sonnet), then the close of A2a's review, then A2b, A3.** A2a is implemented (see "A2a implementation record"). Its independent review found that the D8 denies cannot be created through the application. A2a-R makes both creatable through the normal resource-grant command and pins them with HTTP tests. It needs the owner's answer to Q1 in §8.8; Q2 and Q3 have recommended defaults. Prerequisites P0 and P1 were implemented and reviewed, and D8 is approved.
 
 - **P0** (§6) fixes the deadlock between `lock_authoring_scope` and administrative recovery. It is implemented at `4dd56fd`; its independent review is complete.
 - **P1** (§7) fixes DEF-015: adding a member to an access group deadlocks with that member's authoring write (SQLSTATE 40P01, reproduced in both orders).
@@ -221,7 +226,8 @@ The second caller, AI NPC context ([domain/context_assembly.py:362-396](../src/d
 | **A1** (done, `68dc902`–`6a5773d`; CI pending) | `character.reveal` vocabulary, delegation table, resolver, grant/revoke commands and API (owner only), eligibility closure in the membership, ownership and recovery commands, audit | D3 (approved) | Every row of the §1 table as a database test; concurrency tests (revoke `gm` vs grant; revoke delegation vs release); assistant GM, `canon.edit` and custom `access.manage` refused; cross-campaign refusal; migration up/down; the full suite. The release race moves to A2a, because no release existed in A1 |
 | **P0** (implemented at `4dd56fd`; independent review complete) | `lock_authoring_scope` takes the campaign row `FOR KEY SHARE` (DEF-014, §6) | none | §6.4–§6.5 |
 | **P1** (implemented at `edf46ca`; independent review complete) | `add_access_group_members` locks memberships before the campaign row, in weaker modes (DEF-015, §7); race harness cleanup | P0 | §7.5–§7.8 |
-| **A2a** (implemented; awaiting independent review) | Migration 142 (§5.3); draft save; release under A1 authority; GM reads (§5.7, §5.7a). No copy aid | A1, P0, P1, D1 and D2 (approved), D8 | The criteria in the last section |
+| **A2a** (implemented; review open, correction A2a-R required) | Migration 142 (§5.3); draft save; release under A1 authority; GM reads (§5.7, §5.7a). No copy aid | A1, P0, P1, D1 and D2 (approved), D8 | The criteria in the last section |
+| **A2a-R** (designed; for Sonnet) | The D8 denies become creatable: `entity_id` may name a character for a `campaign.view` or `canon.edit` deny (§8); overview and explanation name the character | A2a, Q1 (§8.8) | §8.6–§8.7 |
 | **A2b** | Legacy copy aid (§5.10), with per-field origin and D7 withholding | A2a, D7 | Copy allowed exactly when the kind's authoring read is allowed (one shared rule, parity test); origin recorded and carried into the release; withheld fields per D7; legacy text never in any non-authoring response |
 | **A3** | Revelations: audience kinds, snapshot, create/revoke, membership-end and group-deactivate hooks, `AccessContext` source, discovery bundle | A2 (a revelation requires an existing release, recommended), D5 | T82 audiences, including the late joiner; T6 independent-grant survival; whole vs operation deny; cross-surface matrix from investigation D6.4 (lists, counts, pagination, relationships, organizations, roster, events, encounters, Knowledge, preview), with **response-body ID assertions**; bootstrap, inventory and sheet unchanged |
 | **A4** | Projection tier, public-profile read in the detail route, `sections`, `can_open` | A3 | Browse/detail agreement; public tier carries no species, size or mechanics unless released; revocation takes effect on the next request |
@@ -398,6 +404,8 @@ All routes are under `/campaigns/{campaign_id}/characters/{character_id}/public-
 ### 5.7a Reading, editing and releasing under denies (proposed, D8)
 
 **Which deny keys apply.** `campaign.view` and `canon.edit` are generic-target capabilities. A resource grant can name them for a character only through the `entity_id` target (`RESOURCE_GRANT_CAPABILITY_CATALOG`, [access.py:228](../src/dnd_ai/domain/access.py#L228)).
+
+*Correction (A2a review, §8):* the catalog permits that key, but `create_resource_grant`'s CTI guard refuses a character entity under `entity_id`. So at `0b4704c` neither deny below can be created through the application, only by direct SQL. A2a-R (§8) removes that refusal for exactly these two denies. The read keys below are unchanged.
 
 - **Whole-character deny:** `not access.has_capability("campaign.view", entity_id=character_id)`. This is the test `resolve_character_inventory_access` uses ([api/access.py:514](../src/dnd_ai/api/access.py#L514)).
 - **`canon.edit` deny on the character:** a `deny` for `canon.edit` under `("entity_id", character_id)` in `grant_effects`. A deny under `("character_id", character_id)` counts too, so that a stray row also fails closed.
@@ -961,6 +969,237 @@ with LockRace(engine) as race:
 
 ---
 
+## 8. A2a review correction A2a-R: making the D8 denies creatable (proposed DEF-018)
+
+**Status:** designed 2026-11-07 by reading source at `0b4704c`. Not implemented, and no probe was run. It is one bounded commit on `phase15/completion`, on top of A2a, and the A2a review cannot close until it lands. It changes no schema, no route and no request or response shape: one response field is filled in where it was `null`. The owner answered Q1, Q2 and Q3 on 2026-11-07 (§8.8); the answers are applied below.
+
+### 8.1 The defect
+
+**The readers.** D8 and every existing character reader look for both denies under the `("entity_id", character_id)` key:
+
+- [public_profiles.py:88](../src/dnd_ai/domain/public_profiles.py#L88) (`whole_character_denied`) and `:94` (`canon_edit_denied_for_character`, which also counts a stray `character_id` row);
+- character detail, parties, relationships and sheet: [api/characters.py](../src/dnd_ai/api/characters.py) `:498`, `:625`, `:721`, `:875`;
+- inventory: [api/access.py:513](../src/dnd_ai/api/access.py#L513);
+- party rosters: [api/parties.py:167](../src/dnd_ai/api/parties.py#L167);
+- event explanations: [api/event_explanations.py:200](../src/dnd_ai/api/event_explanations.py#L200);
+- World Explorer search and reference mode: `_grant_denied_entity_ids` in [api/world_explorer.py:133](../src/dnd_ai/api/world_explorer.py#L133).
+
+**The writer refuses both keys.**
+
+- **`character_id` target.** The catalog allows only the nine `character.*` codes ([access.py:131](../src/dnd_ai/domain/access.py#L131), `:229`). `campaign.view` and `canon.edit` are refused with `ResourceGrantCapabilityNotGrantableError` (404).
+- **`entity_id` target.** The catalog allows `campaign.view` and `canon.edit`. But the P-8 CTI guard ([access_grants.py:1063](../src/dnd_ai/commands/access_grants.py#L1063), applied at `:1192`–`:1214`) refuses any entity whose type is `character`, `npc` or `player_character`, with `TargetNotInCampaignWorldError` (404).
+
+**The database permits it.** `ck_resource_grants_exactly_one_target`, the `entity_id → core.entities` foreign key and `enforce_resource_grant_scope()`, which checks only the world, all accept such a row. That is how the inventory tests and A2a's tests create these denies: directly, with `make_resource_grant`.
+
+**Why the guard is wrong here, and only here.** Its rationale is that the read side keys off the dedicated column, so a grant in `entity_id` would be inert. That holds for `character.*` codes, which readers check under `character_id`. It is false for `campaign.view` and `canon.edit` on a character:
+
+- every reader above checks them under `entity_id`;
+- `character_id` cannot carry them at all.
+
+So the guard blocks the only representation the readers use. The other own-column kinds (`event`, `quest`, `knowledge_item`) are unaffected: their readers do key the dedicated column, for example `resource_grant_targets(cap, "event_id")`.
+
+**Consequence.** ADR 0021 §2.9's whole-character deny and D8's per-character `canon.edit` deny exist only as raw SQL. An owner cannot apply either through the API, and A2a's deny tests and races prove behaviour that no application path can reach.
+
+**Grade (proposed):** 0 + 1 + 2 + 0 + 1 = **4, Medium**.
+
+- Exposure 0: not deployed.
+- Impact 1: a documented access restriction cannot be applied; nothing leaks.
+- Triggerability 2: every attempt fails.
+- Detection 0: the refusal is visible.
+- Blast radius 1: every character.
+
+### 8.2 The correction, and the alternatives rejected
+
+**Recommended: narrow the CTI guard for exactly these two denies.** In `_validate_resource_grant_target`, an `entity_id` target whose entity is a character is accepted when the effect is `deny`. The capability catalog then confines it, as today, to `campaign.view` and `canon.edit`. Everything else the guard refuses stays refused.
+
+- **The change:**
+  - `create_resource_grant` passes `effect` to `_validate_resource_grant_target`;
+  - add `_CHARACTER_ENTITY_TYPE_CODES = frozenset({"character", "npc", "player_character"})`, the subset of `_OWN_COLUMN_ENTITY_TYPE_CODES` with a `character.characters` row;
+  - the guard raises unless `entity_type_code in _CHARACTER_ENTITY_TYPE_CODES and effect == "deny"`.
+- **Lock order and error precedence are unchanged:** grantee, campaign, account, target `FOR UPDATE`, capability.
+- **The resulting refusals:**
+  - an allow on a character entity is still refused at the target step (404);
+  - a `character.*` deny under `entity_id` passes the target step and is refused at the capability step (404);
+  - both are non-disclosing and write nothing.
+
+**Rejected alternatives.**
+
+| Alternative | Why rejected |
+|---|---|
+| **B.** Add `campaign.view` and `canon.edit` to the `character_id` catalog, and have readers, or `resolve_access_context`, read both keys | Two representations of one fact. `ux_resource_grants_active` cannot detect a deny duplicated across keys. Ten or more readers, or a resolver-wide remap, change, as do `resource_grant_targets(…, "entity_id")` sets, World Explorer search, the portal's duplicate detection and the overview's `target_type` |
+| **C.** Accept the request under `character_id` and store it under `entity_id` | The stored row and the audit's `target_kind` would contradict the request; the portal's duplicate detection compares the request's target type |
+| **D.** Remove the guard for characters entirely, allows included | Creates allow rows that every reader ignores today and that would silently become authority under a careless DEF-016 fix (§8.4). See Q1 |
+
+### 8.3 Valid combinations after the correction
+
+| Target column | Target entity | Capability | Effect | Before | After |
+|---|---|---|---|---|---|
+| `entity_id` | character, npc or player character | `campaign.view` | `deny` | Refused, 404 | **Accepted**: the whole-character deny (ADR 0021 §2.9; D8 item 4) |
+| `entity_id` | character, npc or player character | `canon.edit` | `deny` | Refused, 404 | **Accepted**: the `canon.edit` deny on the character (D8 item 5) |
+| `entity_id` | character, npc or player character | `campaign.view` or `canon.edit` | `allow` | Refused, 404 | Refused, 404 (Q1) |
+| `entity_id` | character, npc or player character | any `character.*` code | either | Refused, 404 | Refused, 404 (catalog) |
+| `entity_id` | event, quest or knowledge item | any | either | Refused, 404 | Unchanged |
+| `entity_id` | any other entity (location, item, organization, …) | `campaign.view` or `canon.edit` | either | Accepted | Unchanged |
+| `character_id` | a character | a `character.*` code | either | Accepted | Unchanged |
+| `character_id` | a character | `campaign.view` or `canon.edit` | either | Refused, 404 | Unchanged (the catalog) |
+| any | any | `character.reveal`, `access.manage`, `import.approve`, `rules_source.manage` | either | Refused | Unchanged (the catalog; A1's trigger for `character.reveal`) |
+
+### 8.4 Who, scope, lifecycle, duplicates, revocation, existing rows
+
+- **Who may create a deny.** Any caller who passes the route filter `access.manage`, on `POST /campaigns/{id}/resource-grants`, for a membership or an access-group grantee. Today that means the built-in owners: custom `access.manage` has no application path (A1 F1). No new gate is added.
+  - An owner may deny a co-owner, or themselves. D8 item 4 already says the whole-character deny binds an owner.
+  - A denied owner keeps `access.manage` (a resource deny never touches it, migration 080's comment on `effect`), so they can still revoke the deny.
+- **Grantee eligibility is unchanged:** an open, active membership on an active account, or an active group, in the route campaign.
+- **Campaign scope.** The row carries the route campaign, and `resolve_access_context` reads only that campaign's grants. A deny in campaign A has no effect on the same character's profile or reads in campaign B of the same world.
+- **World scope.** The character must belong to the campaign's world. The command checks it, and the scope trigger checks it again; a character from another world is 404.
+- **Timeline scope.** The command writes `timeline_id = NULL`, so the deny applies on the campaign's own timeline.
+- **Lifecycle.**
+  - **At creation:** the character must be active, as for every entity target today (archived → 404). A non-canon character is accepted; the profile routes already 404 it.
+  - **Later:** the resolver ignores grants whose target is not active. A deny on a character archived later stops applying while it is archived, and applies again on reactivation. For a deny that is fail-closed. A save or release of an archived character is refused anyway (409 `public_profile_character_not_active`).
+- **Duplicates.** `ux_resource_grants_active` (grantee, all target columns, `timeline_id`, capability, effect; `NULLS NOT DISTINCT`) makes an identical active deny a 409. These are distinct rows, and all of them count, with deny winning in `grant_effects`:
+  - a deny next to a raw row that has `timeline_id` set;
+  - a deny next to a stray `character_id` `canon.edit` deny;
+  - one membership deny plus one group deny.
+- **Revocation.** It is unchanged, by id, through `POST …/resource-grants/{id}/revoke`, and takes effect on the next request (`AccessContext` is resolved per request).
+- **Existing rows.** None can have come from the command since checkpoint 12 introduced the guard. Rows written before that, or by direct SQL, keep their present meaning:
+  - their denies already apply;
+  - allows on a character under `entity_id` stay inert (below);
+  - the overview now names their character (§8.5).
+
+  No migration and no backfill.
+- **Access-group changes take effect on the next request.** The resolver counts a group deny only through an open `access_group_memberships` row of an active group. So:
+  - adding a member to the group denies them on their next request;
+  - removing them, or deactivating the group (which revokes its grants), lifts the deny;
+  - reactivating the group does not restore the revoked grants.
+- **Does the correction enable new allow grants? No.** Under Q1's recommended answer it creates no allow path. If the owner instead permits allows:
+  - a `campaign.view` allow under `entity_id` makes `has_capability` true where the baseline is false, which is inert today, because every route also requires role `campaign.view`;
+  - a `canon.edit` allow is read today only by `has_effective_character_canon_edit`, which ignores allows (D8 item 2 is kept either way);
+  - but DEF-016's view-tier and inventory checks would turn such an allow into GM-tier visibility if they were ever switched to `entity_id` without restricting them to denies.
+
+  The deny-only rule removes that trap.
+- **D8 item 2 is preserved.** `has_effective_character_canon_edit` requires role `canon.edit`, and no change here touches it. The existing test `test_an_allow_grant_of_canon_edit_does_not_confer_editing_or_reading` keeps its raw allow row (stray-row defence) and stays.
+
+### 8.5 Affected routes, options, explanations, resolvers
+
+| Surface | Change |
+|---|---|
+| `POST /campaigns/{id}/resource-grants` ([api/access_grants.py:457](../src/dnd_ai/api/access_grants.py#L457)), membership and group grantees | Accepts the two new combinations. Request, response, fingerprint (`campaign_id` plus body) and audit (`target_kind: "entity_id"`, `effect: "deny"`) are unchanged |
+| `POST …/resource-grants/{id}/revoke` | Unchanged |
+| Grant options (`list_grantable_resource_capabilities`, [queries/access_overview.py:553](../src/dnd_ai/queries/access_overview.py#L553)) | Unchanged. `(campaign.view, entity)` and `(canon.edit, entity)` are already listed, and the character-and-deny sub-rule is finer than its `(code, target_type)` grain. Its docstring gains one sentence naming the sub-rule |
+| `GET …/access-overview`: member grants (`:404`) and group grants (`:790`) | `target_display_name` is filled in for an `entity_id` target that is a character (`LEFT JOIN character.characters` on `rg.entity_id`), using the same audience-safe `canonical_name` rule as a `character_id` target. `target_type` stays `"entity"`, so the portal's duplicate detection keeps working |
+| `GET …/members/{id}/effective-access`: the direct-grant query (`:230`) and the group-grant query (`:300`) of [queries/effective_access.py](../src/dnd_ai/queries/effective_access.py), each feeding both sources and denials | The same rule. A whole-character deny lists as `campaign.view — <character>`; a `canon.edit` deny as `canon.edit — <character>` |
+| Resolvers: `resolve_access_context`, `has_capability`, `resource_grant_targets`, `public_profiles`, and the readers in §8.1 | No change. They already read `entity_id`; the deny becomes reachable for them |
+| DEF-016 sites (`resolve_character_view_tier` at [api/access.py:482](../src/dnd_ai/api/access.py#L482); inventory at `:515`) | No change (Q3). They read `canon.edit` under `character_id`, so a `canon.edit` deny does not lower a GM's view tier or inventory access. This is now reachable, not hypothetical |
+| Audit history | No change; it labels grants by capability, effect and grantee, never by target |
+| Portal | No change in A2a-R (Q2). Its `entity` selector deliberately excludes characters ([ResourceTargetSelector.tsx:38](../portal/src/components/ResourceTargetSelector.tsx#L38)); its `character` type maps to `character_id`, whose catalog refuses these codes. So the portal cannot create these denies until it changes |
+| Docs | `access_grants.py` module docstring and the guard comment; the catalog comment in `domain/access.py` (for characters, `campaign.view` and `canon.edit` are read under `entity_id`); `test_resource_grant_target_column.py`'s docstring; [PHASE13E_ACCESS_CONTRACT.md](PHASE13E_ACCESS_CONTRACT.md) resource-grant section and §3v ("creatable through `POST …/resource-grants` with `entity_id`, effect `deny`"); this plan's A2a record; a **DEF-018** entry in the defect register |
+
+### 8.6 Tests
+
+**Command level** (`tests/database/test_resource_grant_target_column.py`):
+
+1. `entity_id` naming a `character`, an `npc` and a `player_character` entity:
+   - a `campaign.view` deny and a `canon.edit` deny are each accepted;
+   - the row has the entity in `entity_id`, `character_id` null, `timeline_id` null and `effect = 'deny'`.
+2. The same targets with `allow` are refused with `TargetNotInCampaignWorldError`. The existing `test_entity_id_rejects_a_character_target` stays, and a `canon.edit` variant is added.
+3. A `character.view_full` deny under `entity_id` on a character is refused with `ResourceGrantCapabilityNotGrantableError`.
+4. Quest, event and knowledge-item entities are still refused under `entity_id`, for a deny too.
+5. An archived character, and a character from another world, are refused.
+6. An identical second active deny is a unique-index `IntegrityError`. After the first is revoked, the same deny can be created again.
+
+**HTTP** (new `tests/database/test_character_public_profile_grant_denies.py`, on the `Gate`/`Members` fixtures used by `test_character_public_profile_api.py`):
+
+- Every deny in this file is created with `POST /campaigns/{id}/resource-grants` by an access manager, never with `make_resource_grant`, and lifted with `POST …/resource-grants/{id}/revoke`.
+- "Nothing written" means no draft or release row change and no audit row.
+
+1. **The grant route itself.**
+   - A whole-character deny for a member: 201, with the row and the audit `changed_fields` as above.
+   - The same `Idempotency-Key` and body replays the same `resource_grant_id`, with one row and one audit row.
+   - The same key with another body is the idempotency 409.
+   - Without a key, a duplicate is 409.
+   - The `allow` body is 404, with nothing written.
+   - A `character.view_full` deny under `entity_id` is 404.
+   - A group grantee gets 201.
+   - A player's attempt is refused by the route filter.
+2. **A whole-character deny on an owner (`o1`, created by `o2`).**
+   - `GET` profile and `GET` release are 404.
+   - Draft save is 404, and release is 404, with nothing written.
+   - A release retried with an `Idempotency-Key` first used before the deny is 404, not a replay.
+   - After revocation: `GET` is 200, and that key replays the stored 201 (same release, no new row).
+3. **The same for a delegated GM**, and for the deny created by the owner against themselves; the owner can still revoke it.
+4. **A `canon.edit` deny on an owner.**
+   - `GET` is 200 with `can_edit: false` and `can_release: true`.
+   - Draft save is 403 `public_profile_edit_denied`, with nothing written. A save retried with a pre-deny key is also 403, not a replay.
+   - Release is 201.
+   - After revocation, the save key replays.
+5. **A `canon.edit` deny on an assistant GM** (no reveal authority): `GET` 404 and save 404.
+6. **Campaign scope.** A deny in campaign A leaves campaign B's GM free to read, save and release B's profile of the same character.
+7. **The deny is the one other readers honour.** `GET /campaigns/{id}/characters/{character}` is 404 for the denied member and 200 for an undenied GM. This pins that the created key matches an existing reader.
+8. **Explanations.**
+   - The access overview shows the deny (member and group) with `target_type: "entity"` and the character's name.
+   - The effective-access explanation lists it under `denials` with the name.
+   - A non-character `entity_id` grant still has `target_display_name: null`.
+
+**Access-group changes take effect on the next request (HTTP).**
+
+9. **A group holding a whole-character deny** (created through the route with `grantee_access_group_id`). A delegated GM outside it reads (200). Then:
+   - `POST …/access-groups/{group}/members` adds them, and the next `GET`, save and release are 404; a keyed release retry is 404.
+   - `POST …/access-group-memberships/{id}/remove` removes them, and the next `GET` is 200, the keyed retry replays, and a new release is 201.
+10. **Deactivating that group** lifts the deny on the next request. Reactivating it does not restore the deny, because its grant stays revoked. A new grant restores it.
+11. **A group holding a `canon.edit` deny.** Adding an owner makes the next save 403 while release stays 201; removing them makes the next save 200.
+
+**Concurrency** (`tests/database/test_character_public_profile_concurrency.py`, `LockRace`):
+
+12. `_group_with_a_whole_character_deny` creates its grant with `create_resource_grant`, not `make_resource_grant`. The races themselves are unchanged.
+13. **The races A2a criterion 6 had to substitute, now possible:** `create_resource_grant` of a whole-character deny naming the character, against a release and against a draft save, in both orders, for a membership grantee and for a group the actor belongs to. Expected:
+    - **deny first:** the command waits, then is refused (404) with nothing written;
+    - **command first:** the grant waits, then both commit.
+
+    **Lock trace, with no cycle:**
+    - **The grant:** grantee membership U (or group U) → campaign U → account U → character entity U → capability → insert.
+    - **The release:** authority rows S → membership S → campaign KS → entity KS → draft U.
+    - **The save:** `lock_authoring_scope` (… → campaign KS) → entity S → draft U.
+    - **Where they meet:** a membership grantee serializes at the membership; a group grantee serializes at the campaign row.
+
+**Existing suites, passing unchanged except where named:**
+
+- `test_resource_grant_target_column.py` (the docstring and the added cases);
+- `test_api_access_grants.py`, `test_resource_grant_concurrency.py`, `test_access_resolution.py`;
+- `test_api_characters_inventory.py`;
+- the A2a suites. In `test_character_public_profile_api.py`, the `deny()` helper switches to the route for `entity_id` denies and keeps direct SQL only for a stray `character_id` row and an allow row, which the application cannot create.
+
+### 8.7 A2a-R scope and acceptance (for Sonnet)
+
+- **Code.**
+  - `create_resource_grant` / `_validate_resource_grant_target` (the `effect` parameter, `_CHARACTER_ENTITY_TYPE_CODES`, the narrowed guard and its comment);
+  - the two `access_overview` queries and the two `effective_access` queries (the character name for a character under `entity_id`);
+  - the docstrings and comments listed in §8.5.
+  - Nothing else in `src/`.
+- **Not in A2a-R:**
+  - the portal (Q2), DEF-016 (Q3), DEF-017, A2b and later slices;
+  - any migration; any change to D8's policy code;
+  - push.
+- **Tests:** §8.6. The new command and HTTP tests must fail at `0b4704c` where they create a deny through the command. Run them once against the parent and record the result.
+- **Docs:** §8.5, plus the DEF-018 register entry. If the owner answers Q3 by registering DEF-016, that entry is recorded too, unfixed.
+- **Checks:**
+  - the focused suites, then the full `pytest`;
+  - `ruff format --check`, `ruff check`, `mypy src`, `git diff --check`.
+- **Commit locally and stop for independent review,** naming the parent (`0b4704c`) and the target SHA. Then rerun the A2a review's open items.
+
+### 8.8 Policy points D8 does not settle
+
+- **Q1 — May allow grants of `campaign.view` / `canon.edit` name a character? Owner's answer (2026-11-07): no, deny-only, as recommended.**
+  - D8 settles only that an allow cannot confer draft editing. It is silent on whether an allow row may exist.
+  - Deny-only keeps the CTI guard's purpose (no inert grants shown as active) and creates no allow path anywhere. It leaves no allow rows for a future reader to promote by mistake (§8.4).
+  - The alternative accepts allows that do nothing today.
+- **Q2 — Must the portal offer these denies in this correction? Owner's answer (2026-11-07): no; the portal controls wait for A6.** The application API offers them in A2a-R; the portal control follows with A6, which already owns the profile and effective-access UI. If the owner wants the portal control now, A2a-R grows by a portal change: the `entity` selector admits characters for a deny of these two codes, and requests map to `entity_id`.
+- **Q3 — Should a `canon.edit` deny on a character also lower a GM's view tier or inventory access (DEF-016), or block other character authoring? Owner's answer (2026-11-07): not in A2a-R. The deny's contract here covers public-profile drafting only; DEF-016 is registered for a separate decision about other character authoring, view tiers and inventory.**
+  - D8 limits the deny to the profile draft's edit and read path.
+  - The view tier, inventory and identity authoring keep their current behaviour, which A2a-R makes reachable. So register DEF-016 now, and decide it separately.
+  - The contract text in §3v and the explanation label should say the deny applies to the public-profile draft, so an owner does not expect more.
+
+---
+
 ## Decisions still needed
 
 - **D1: Public profile scope. Approved by the owner (recorded 2026-11-07).** Public-profile drafts and releases belong to a campaign. Applied in §5.1.
@@ -1121,7 +1360,7 @@ A2a is the §5 design without the copy aid, D5/D6 columns, portal or revelations
 
 - **Pre-checks as dependencies.** The release's authority check (and both routes' deny checks) run in a FastAPI dependency after the capability dependency, before the body is read and before the idempotency lookup, so a player gets `403` rather than `422` and a caller who lost authority cannot replay a stored response. The whole-character deny is in the release pre-check as well as under lock, so a denied caller cannot replay a keyed release either (the owner's instruction: a deny blocks release retries).
 - **`version_number` is a `str` path segment** on the release read: a non-number is the same `404` as a missing release (the route manifest's generic probes substitute a UUID).
-- **A whole-character deny cannot be created through `create_resource_grant`** (it refuses `entity_id` for a character), so the "deny that commits first is honoured" races are exercised through the way a deny actually reaches a member: an access-group addition carrying a raw `entity_id` deny grant, in both orders against the release and the save (the P1 lock order). Direct deny rows in the API tests are inserted as the inventory tests do.
+- **A whole-character deny cannot be created through `create_resource_grant`** (it refuses `entity_id` for a character). The A2a review classed this as a defect, not a test convenience; it is corrected by A2a-R (§8). Meanwhile the "deny that commits first is honoured" races are exercised through the way a deny actually reaches a member: an access-group addition carrying a raw `entity_id` deny grant, in both orders against the release and the save (the P1 lock order). Direct deny rows in the API tests are inserted as the inventory tests do.
 - **No character archive command exists**; the archive race holds the lock the lifecycle commands take (`FOR UPDATE` on the entity) and writes the archived status.
 - **`campaign.public_profile_field_origins`** is not in the frozen reporting allowlist, so its columns are classified in `COLUMN_CLASSES` rather than listed as reference data. `save_character_public_profile_draft` is a registered `world_capability=None` scope (`test_world_gate_registry.py`): the draft is a campaign's, not shared world canon.
 - **D5, D6, D7 are not applied.** A release carries no name, summary, species or size; no legacy text is copied (A2b).
