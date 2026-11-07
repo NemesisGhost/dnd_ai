@@ -1,13 +1,15 @@
 # P03-A implementation plan: public profiles, revelation and audience-safe character reads
 
-**Status:** Approved planning document. A0, A1, P0 and P1 are implemented and independently reviewed. D8 is approved (recorded 2026-11-07). A2a is implemented locally (see "A2a implementation record") and awaits independent review; the plan was committed on its own as the design commit (`3b3d637`) before A2a's code.
+**Status:** Approved planning document. A0, A1, P0, P1, A2a and A2a-R are implemented and independently reviewed (A2a and A2a-R: PASS WITH NONBLOCKING FINDINGS; handoff `523ae5c`). D7 and D8 are approved (recorded 2026-11-07). A2b is designed (§9) and not implemented. The plan was committed on its own as the design commit (`3b3d637`) before A2a's code.
 
 - **A0** is implemented at `fca3ac7`.
 - **A1** is implemented at `68dc902` through `6a5773d`. That covers the D3 ownership gate, DEF-011, DEF-013 and the reveal delegation. Its record is in [the A1 design](PHASE14_15_P03A_A1_OWNERSHIP_AUTHORITY_DESIGN_2026-11-06.md) §8. The independent re-review passed at `fc20e8d`. CI is pending until push, and an intermittent race-test timeout is still unresolved. It has now been seen in the A1 lock-wait tests twice in full suites (`test_campaign_owner_caller_expiry.py` once, and `test_character_reveal_delegation.py::test_a_grant_that_waits_on_ending_the_gms_membership_is_refused` once: the request was alive but no session waited on a lock within 15 s), each passing on every rerun. That test now observes its blocker through `pg_blocking_pids` (A2 handoff, below); the cause of the missing wait is not established.
 - **D1 and D2** were approved by the owner and recorded on 2026-11-07 (see "Decisions still needed").
 - **D3** was approved on 2026-11-06.
 - **D8** was approved by the owner on 2026-11-07 as proposed (see "Decisions still needed").
-- **Still open:** D4 and D5, plus two decisions from the A2 design: D6 and D7. D5 and D6 are additive and block A3/A4; D7 blocks A2b only.
+- **D7** was approved by the owner on 2026-11-07 (see "Decisions still needed"); A2b's design follows it (§9).
+- **D7-a to D7-f**, the points D7 left open, were approved by the owner in conversation and recorded on 2026-11-07 (§9.10).
+- **Still open:** D4, D5 and D6. D5 and D6 are additive and block A3/A4.
 - **Revision of 2026-11-07, after an independent CHANGES REQUIRED review.** The review text is not in the repository; this revision follows the owner's summary of it.
   - The recovery deadlock is now a prerequisite commit, P0 (§6).
   - The draft-read and deny policy is now proposed decision D8.
@@ -26,6 +28,17 @@
   - Neither D8 deny can be created through the application: `create_resource_grant` refuses a character entity under `entity_id`, the only key every reader consults (§8, proposed DEF-018).
   - The correction is A2a-R (§8), one bounded commit for Sonnet, required before A2a's review closes.
   - Three policy points that D8 does not settle are listed in §8.8 (Q1–Q3).
+- **Revision of 2026-11-07, A2b design under approved D7 (§9).**
+  - The design restricts copied legacy text by deriving the restriction from the field's origin plus a per-field restriction watermark (one additive migration).
+  - It withholds restricted fields from readers who fail the source's read rule, and refuses text writes into them.
+  - It refuses a release that would include a withheld field.
+  - The release now takes the world row `FOR SHARE` first.
+  - It is split into A2b-1 (the restriction) and A2b-2 (the copy).
+- **Revision of 2026-11-07, after an independent CHANGES REQUIRED review of the A2b design.** The review text is not in the repository; this revision follows the owner's summary of it.
+  - **The defect.** The first version lifted a field's restriction once any release came at or after its copy. A permitted GM could then append, or restore, unreleased source text after a release, and restricted readers would see it at once.
+  - **The rule now.** Every content change to a copied field advances that field's restriction watermark, and the database enforces this. A release lifts the restriction only when it covers the watermark, which means it holds the field's current text. Editing another field never moves it.
+  - **Tests and migration.** The tests gain the excerpt-append and restore regressions, plus mixed-field, unchanged-field, clear, recopy, stale-write and keyed-retry cases. The migration gains a preflight and a fail-closed downgrade.
+  - **Recorded.** D7-a to D7-f are now owner-approved (§9.10), and kind stability is recorded as an application-path assumption (§9.1).
 
 **Baseline:**
 
@@ -33,6 +46,7 @@
 - The A2 design (§5) was checked at `6a5773d89fc085f705c860825cb69d75de4db1dd`. No later configuration-verification commit exists.
 - The DEF-015 design (§7) was checked at `4dd56fda34c5136ff1e288b7a180ba981dd7f41e`.
 - The grant-target correction (§8) was checked by reading source at `0b4704cacef5a49ed24c65068938d28ad6eefc93` (A2a). Nothing was run for it.
+- The A2b design (§9) was checked by reading source at `523ae5cbf947af230e1d7a5409912c1039e43a69` (the A2a handoff, on A2a-R `f66240a`). Nothing was run for it.
 
 Every code claim was checked by reading source at the stated commit. No application code, schema or committed test was changed to produce this plan. The DEF-014 and DEF-015 reproductions ran throwaway probes, deleted afterwards, on the test suite's per-run disposable PostgreSQL 18 database (§6.1, §7.1).
 
@@ -50,7 +64,9 @@ Every code claim was checked by reading source at the stated commit. No applicat
 
 ## Recommendation
 
-**Next: correction A2a-R (§8, for Sonnet), then the close of A2a's review, then A2b, A3.** A2a is implemented (see "A2a implementation record"). Its independent review found that the D8 denies cannot be created through the application. A2a-R makes both creatable through the normal resource-grant command and pins them with HTTP tests. It needs the owner's answer to Q1 in §8.8; Q2 and Q3 have recommended defaults. Prerequisites P0 and P1 were implemented and reviewed, and D8 is approved.
+**Next: A2b-1, then A2b-2 (§9, for Sonnet), then A3.** A2a and its correction A2a-R are implemented and reviewed (handoff `523ae5c`). D7 is approved. A2b-1 adds the D7 restriction (withholding, the save rule, the release check and the release's world lock) before A2b-2 adds the copy itself, so no commit has a copy path without its restriction. D7 and D7-a to D7-f are approved (§9.10); nothing in A2b waits on a further decision. The design was revised after an independent CHANGES REQUIRED review, and the revised design has not yet been re-reviewed.
+
+*Previous recommendation (2026-11-07, done):* correction A2a-R (§8), then the close of A2a's review. A2a-R was implemented at `f66240a`.
 
 - **P0** (§6) fixes the deadlock between `lock_authoring_scope` and administrative recovery. It is implemented at `4dd56fd`; its independent review is complete.
 - **P1** (§7) fixes DEF-015: adding a member to an access group deadlocks with that member's authoring write (SQLSTATE 40P01, reproduced in both orders).
@@ -62,7 +78,7 @@ Every code claim was checked by reading source at the stated commit. No applicat
 The rest of the A2 track:
 
 - **A2a** covers storage, draft editing, release under `character.reveal`, and the GM reads.
-- **A2b** is the legacy copy aid. It waits on D7: whether copied NPC legacy text may be shown to draft readers who could not read it at its source.
+- **A2b** is the legacy copy aid under approved D7 (§9): copied text stays withheld from readers who cannot read its source until it is released.
 - **D5 and D6** decide whether a release carries a display name, summary, species or size. Each would be an additive column, so neither blocks A2a. Both must be answered before A4 fixes the audience response shape.
 - **D4** waits until A3.
 
@@ -226,9 +242,10 @@ The second caller, AI NPC context ([domain/context_assembly.py:362-396](../src/d
 | **A1** (done, `68dc902`–`6a5773d`; CI pending) | `character.reveal` vocabulary, delegation table, resolver, grant/revoke commands and API (owner only), eligibility closure in the membership, ownership and recovery commands, audit | D3 (approved) | Every row of the §1 table as a database test; concurrency tests (revoke `gm` vs grant; revoke delegation vs release); assistant GM, `canon.edit` and custom `access.manage` refused; cross-campaign refusal; migration up/down; the full suite. The release race moves to A2a, because no release existed in A1 |
 | **P0** (implemented at `4dd56fd`; independent review complete) | `lock_authoring_scope` takes the campaign row `FOR KEY SHARE` (DEF-014, §6) | none | §6.4–§6.5 |
 | **P1** (implemented at `edf46ca`; independent review complete) | `add_access_group_members` locks memberships before the campaign row, in weaker modes (DEF-015, §7); race harness cleanup | P0 | §7.5–§7.8 |
-| **A2a** (implemented; review open, correction A2a-R required) | Migration 142 (§5.3); draft save; release under A1 authority; GM reads (§5.7, §5.7a). No copy aid | A1, P0, P1, D1 and D2 (approved), D8 | The criteria in the last section |
-| **A2a-R** (designed; for Sonnet) | The D8 denies become creatable: `entity_id` may name a character for a `campaign.view` or `canon.edit` deny (§8); overview and explanation name the character | A2a, Q1 (§8.8) | §8.6–§8.7 |
-| **A2b** | Legacy copy aid (§5.10), with per-field origin and D7 withholding | A2a, D7 | Copy allowed exactly when the kind's authoring read is allowed (one shared rule, parity test); origin recorded and carried into the release; withheld fields per D7; legacy text never in any non-authoring response |
+| **A2a** (done, `0b4704c`; reviewed, handoff `523ae5c`) | Migration 142 (§5.3); draft save; release under A1 authority; GM reads (§5.7, §5.7a). No copy aid | A1, P0, P1, D1 and D2 (approved), D8 | The criteria in the A2a acceptance section |
+| **A2a-R** (done, `f66240a`; reviewed) | The D8 denies become creatable: `entity_id` may name a character for a `campaign.view` or `canon.edit` deny (§8); overview and explanation name the character | A2a, Q1 (§8.8) | §8.6–§8.7 |
+| **A2b-1** (designed, revised after review; for Sonnet) | The D7 restriction: migration 143 (restriction watermarks, preflight, enforcement trigger), the source-read rule, withholding in the GM read, the save rule and watermark advance, the release's world lock and withheld check (§9.1–§9.7) | A2a-R, D7 and D7-a to D7-f (approved) | §9.8–§9.9, with legacy-origin rows seeded by a test helper |
+| **A2b-2** (designed, revised after review; for Sonnet) | The copy command and route, `legacy_copy` in the GM read, the copy audit row (§9.4, §9.6) | A2b-1 | §9.8–§9.9: copy rules, recopy, excerpt regressions through the real copy, disclosure sweep, copy races |
 | **A3** | Revelations: audience kinds, snapshot, create/revoke, membership-end and group-deactivate hooks, `AccessContext` source, discovery bundle | A2 (a revelation requires an existing release, recommended), D5 | T82 audiences, including the late joiner; T6 independent-grant survival; whole vs operation deny; cross-surface matrix from investigation D6.4 (lists, counts, pagination, relationships, organizations, roster, events, encounters, Knowledge, preview), with **response-body ID assertions**; bootstrap, inventory and sheet unchanged |
 | **A4** | Projection tier, public-profile read in the detail route, `sections`, `can_open` | A3 | Browse/detail agreement; public tier carries no species, size or mechanics unless released; revocation takes effect on the next request |
 | **A5** | OD-18 player-profile storage plus GM read (editing is P03-B, T85); publishing a selected field via A2 provenance | A2 | Readable only by A's GMs; nothing in B; no write path for players yet |
@@ -364,7 +381,7 @@ Constraints:
 
 ### 5.6 Provenance
 
-- **Field origin, kept across edits.** A2b's copy sets a field's origin to its legacy origin and records the source's `core.entities.row_version`. Later edits keep that origin, so editing never removes the record that the text came from legacy material. Clearing the field resets it. Under D7, so does a blind replacement by a reader who could not see the field.
+- **Field origin, kept across edits.** A2b's copy sets a field's origin to its legacy origin and records the source's `core.entities.row_version`. Later edits keep that origin, so editing never removes the record that the text came from legacy material. Clearing the field resets it. *Superseded in part by §9 (approved D7):* there is no blind replacement. A reader the field is withheld from may only clear it (§9.4, D7-a). Every content change to a copied field also advances its restriction watermark, and a release lifts the restriction only when it covers that watermark (§9.2).
   - The rule over-attributes rather than under-attributes. A2a has no copy, so every origin is `authored`.
 - **On each release:** the per-field origins, `from_draft_row_version`, `released_by_membership_id`, `released_at`, the authority source (owner or delegation), and the delegation's id when there is one.
 - **Releases outlive authority.** A release made under a delegation stays after the delegation ends. The approved policy of 2026-11-06 says ending a GM's grant ends *future* release authority. A1's lifecycle hooks never touch releases.
@@ -385,7 +402,7 @@ All routes are under `/campaigns/{campaign_id}/characters/{character_id}/public-
 | `GET …/public-profile/releases/{version_number}` | `campaign.view` | The §5.7a read rule; failing it gives 404 | One release snapshot |
 | `POST …/public-profile/draft` | `canon.edit` (role; a coarse first filter) | `lock_authoring_scope(world_capability=None)`, then the §5.7a edit rule, re-resolved under those locks. A caller who can still read gets 403 `public_profile_edit_denied`; anyone else gets 404 | 201 created, or 200 with `changed`; supports `Idempotency-Key` |
 | `POST …/public-profile/releases` | `campaign.view` | A reveal-authority pre-check before the idempotency lookup (below); then authority locked and re-judged at a fresh instant (§5.8); then the whole-character deny re-resolved under lock, which gives 404 | 201 `created: true`, or 200 `created: false` (§5.9); supports `Idempotency-Key` |
-| `POST …/public-profile/draft/copy-legacy` (A2b) | `canon.edit` | The edit rule, plus the kind's legacy read rule (§5.10). D7 stays separate | 200 with the new draft `row_version`; supports `Idempotency-Key` |
+| `POST …/public-profile/draft/copy-legacy` (A2b) | `canon.edit` | The edit rule, plus the kind's source-read rule, before the idempotency lookup and again under lock (§9.4, §9.6) | 201 if it created the draft, else 200, with the new draft `row_version`; supports `Idempotency-Key` |
 
 **Why `campaign.view` for the reads and the release.** D8 lets a reveal holder read and release without `canon.edit`, so neither path may require `canon.edit` at the route. Players also hold `campaign.view`. They fail the read rule with a 404, which discloses nothing, and they fail the release pre-check with a 403 that names no character (next paragraph).
 
@@ -443,7 +460,8 @@ Each command is one transaction, and the audit row commits with the write. The o
 |---|---|
 | `save_character_public_profile_draft` | `lock_authoring_scope`: world (S) → caller's role rows and membership (S) → account (S) → campaign (**KEY SHARE**, after P0), then the role `canon.edit` re-check → the `AccessContext` re-resolved for the §5.7a edit rule → character's `core.entities` row (S) → the draft row (U), or the insert's unique-index wait |
 | `release_character_public_profile` (**corrected**) | Caller's authority rows, as in `resolve_reveal_authority(lock="share")`: the owner assignment (S), or else the `gm` assignment (S) then the delegation row (S) → **caller's membership (S; `KEY SHARE` in the first revision, changed by P1, §7.6) → campaign row (KEY SHARE) → character's `core.entities` row (KEY SHARE)** → the draft row (U) → `clock_timestamp()` → `resolve_reveal_authority(as_of=<that instant>)`, which must return the **same** source as the locked read, or the release is refused with 403 `character_reveal_required` → the `AccessContext` re-resolved for the whole-character deny → write |
-| `copy_legacy_text_to_public_profile_draft` (A2b) | As for a draft save, with the world capability resolved under the world lock. The source text and the character's `row_version` are read in one statement, after the entity lock |
+| `copy_legacy_text_to_public_profile_draft` (A2b) | As for a draft save, with the kind's world capability resolved under the world lock. The character's `row_version` and its source text are read in separate statements under the entity `FOR SHARE` lock, which every description writer conflicts with (§9.6) |
+| `release_character_public_profile` after A2b-1 | **World (S) first**, then the row above unchanged; the withheld check runs after the natural-retry and stale steps (§9.6) |
 
 **Correction to the first A2a design.** The first design locked the character's entity before the caller's membership. `create_resource_grant` locks the grantee's membership `FOR UPDATE`, then the campaign `FOR UPDATE`, then the target entity `FOR UPDATE` ([access_grants.py:1341](../src/dnd_ai/commands/access_grants.py#L1341)). A grant to the releaser naming the character would therefore hold the membership and wait for the entity, while the release held the entity and waited for the membership: a deadlock.
 
@@ -505,7 +523,7 @@ The release now takes membership, then campaign, then entity. That is the order 
 - **What may be copied.** Only `appearance` → `public_appearance` and `background` → `public_background`. `notes` is never copyable.
 - **How the copy writes.** It replaces the target field with the whole source text. The GM then cuts it down to the safe excerpt. It requires `expected_row_version`, sets the origin (§5.6), and bumps `row_version`. An empty source gives 409 `public_profile_legacy_text_missing`.
 - **Copying is done on the server,** so the origin is a fact about the copy. Text a GM pastes by hand is `authored`. The origin is a record, not a safety label: nothing is published without a release.
-- **D7.** With the recommended answer, the GM read and the release apply the withholding rule (see D7). The release then also takes the world row `FOR SHARE` before its authority rows, the same position `lock_authoring_scope` uses.
+- **D7 (approved).** The GM read, the save and the release apply the restriction; the release takes the world row `FOR SHARE` before its authority rows, the same position `lock_authoring_scope` uses. The full design is §9, which supersedes this section's design bullets where they differ.
 
 ### 5.11 Drafts and legacy text stay out of audience responses
 
@@ -1200,6 +1218,387 @@ So the guard blocks the only representation the readers use. The other own-colum
 
 ---
 
+## 9. A2b design: the legacy copy aid under approved D7 (2026-11-07, revised after review)
+
+**Status:** design reviewed; A2b-1 is being implemented (see the A2b-1 implementation record); A2b-2 is not.
+
+- **Baseline.** `523ae5cbf947af230e1d7a5409912c1039e43a69` (the A2a handoff, directly on A2a-R `f66240a`). Every claim was checked by reading source at that commit; nothing was run.
+- **Supersedes.** This section replaces the D7-dependent parts of §5.6, §5.8 (copy row) and §5.10 ("Design"). Where they differ, this section wins.
+- **Revision after an independent CHANGES REQUIRED review (2026-11-07), then reviewed again.** Neither review's text is in the repository. This revision follows the owner's summary of the first; the second design review, after which A2b-1 was approved for implementation, is recorded here as conversation-supplied evidence only (no review text or verdict wording was available to this session).
+  - **What was wrong.** The first version lifted a field's restriction once any release came at or after the copy. A permitted GM could then append, or restore, unreleased source text after that release, and it would be shown at once to readers without source permission.
+  - **What replaces it.** Per-field release coverage, tied to the current text through a restriction watermark that every content change advances (§9.2–§9.3).
+  - **Also recorded.** D7-a to D7-f are now owner-approved (§9.10).
+
+### 9.1 The approved rule, the source read, and an assumption
+
+D7 (approved; recorded under "Decisions still needed"):
+
+1. Copying a legacy field requires current permission to read its source.
+2. Before release, copied fields retain that source-read restriction.
+3. A releaser must currently be allowed to read every field included in the release snapshot.
+4. Deliberate release makes the snapshot eligible for the later audience mechanism under its release policy.
+
+The owner's answers to D7-a to D7-f (§9.10) are applied throughout.
+
+**The source-read rule** ("may read the source") is one function in `domain/public_profiles.py`. It is keyed by the character's kind, never by the caller's choice, and equals the gate of that kind's legacy authoring read today (D7-e):
+
+| Character kind (`core.entity_types.code`) | Source read requires | Today's authoring read |
+|---|---|---|
+| `player_character` | role `canon.edit` in the route campaign | `GET …/authoring/player-characters/{id}` ([player_character_authoring.py:191](../src/dnd_ai/api/player_character_authoring.py#L191)): `require_campaign_capability("canon.edit")` |
+| `npc` | role `canon.edit` **and** world `world.canon.read_private` on the campaign's world (held by `world_owner`, `world_editor`, `world_reviewer`) | `GET …/authoring/npcs/{id}` ([npc_authoring.py:192](../src/dnd_ai/api/npc_authoring.py#L192)): `_PrivateRead` |
+| `character` or any other | nobody | no authoring read exists, so nothing can be copied. The copy route is 404, as an authoring route of the wrong kind is |
+
+- `has_capability("canon.edit")` with no target is role-only ([access.py:334](../src/dnd_ai/domain/access.py#L334)), so per-character denies do not enter the rule. That matches the authoring reads (D7-e). A whole-character deny still removes the profile entirely (D8).
+- **Only the current authoring text is a source.** Revision history ([review_queue.py:120](../src/dnd_ai/api/review_queue.py#L120)) is never read by the copy, and no profile response links to it.
+- **Only two fields are sources.** `appearance` → `public_appearance` and `background` → `public_background`. `notes` never is.
+
+**Assumption: a character's kind is stable on every application path.** The rule is evaluated with the character's *current* kind at each check, so a kind change would change who may read existing copies. Checked at `523ae5c`:
+
+- No `src/` code sets `core.entities.entity_type_id` or deletes a `character.npcs` or `character.player_characters` row. The only `UPDATE core.entities` statements set name and summary ([_content.py:325](../src/dnd_ai/commands/_content.py#L325)) or canon and lifecycle status ([entity_lifecycle.py:434](../src/dnd_ai/commands/entity_lifecycle.py#L434), [:683](../src/dnd_ai/commands/entity_lifecycle.py#L683), [:707](../src/dnd_ai/commands/entity_lifecycle.py#L707)).
+- ADR 0021 §1 item 2: "No code converts one marker into the other."
+- **The database does not guarantee it.** Migration 048's `core.enforce_entity_type_change()` refuses a type change only while a subtype row of the old type exists. Direct SQL that first deletes the `character.npcs` row could still change the type.
+
+So this is an **application-path assumption**, not a database invariant. A2b relies on it, as A1's unlocked campaign-of-membership read relies on membership scope. If a later slice (for example P03-C's marker work) makes kind mutable, the copy must first snapshot the source rule (the kind) into the field. Record the assumption in the A2b-1 domain docstring and in `PHASE13E_ACCESS_CONTRACT`.
+
+### 9.2 Field state and the invariants
+
+Each draft field holds:
+
+- **text;**
+- **origin** (`authored`, `legacy_appearance` or `legacy_background`, migration 142);
+- **`origin_entity_row_version`:** the source character's `core.entities.row_version` at the copy (142);
+- **new: the restriction watermark** `public_<field>_restricted_row_version BIGINT NULL`. It is the draft `row_version` at which this field's current content was last written while it had a legacy origin.
+
+**Coverage, per field.** A release *covers* a field when its `from_draft_row_version >= ` that field's watermark.
+
+**Restricted.** A draft field is restricted when all of these hold:
+
+- its text is not NULL;
+- its origin is legacy;
+- no release of the profile covers it.
+
+**Withheld.** A restricted field is withheld from a caller who fails the source-read rule for the character's kind. Restriction and withholding are derived on every read and command. Nothing stores them, and no request sets them.
+
+**Invariants:**
+
+- **I1, provenance travels with content.** A legacy origin, its `origin_entity_row_version` and its watermark are present together, or absent together. Only the copy sets them; only clearing removes them.
+- **I2, every content change advances the watermark.** Any write that changes a legacy-origin field's text, origin or `origin_entity_row_version` sets that field's watermark to the new `row_version`. A copy sets it even when the text happens to be identical (a copy always starts new restricted content). The watermark never decreases and never exceeds `row_version`.
+- **I3, other fields leave it alone.** A write that does not change a field's content does not move that field's watermark. Editing field A therefore never re-restricts an unchanged, released field B.
+- **I4, coverage means the released text is the current text.** A release from draft version *r* snapshots the draft exactly at *r* (§5.5). If *r* ≥ the watermark *w* of field B, B's content did not change between *w* and *r* (by I2, a change would have moved the watermark past *r*). So the released B is the current B. Conversely, any later change to B moves the watermark past every existing release, and B is restricted again until a release covers it (D7-c).
+- **I5, only a releaser who could read the field covers it.** A release that would include a field withheld from its releaser is refused (§9.4). So every covering release written after A2b-1 was made by someone who could read that text (D7 item 3). The migration preflight (§9.3) establishes that no earlier release carries a legacy origin.
+- **I6, clearing ends the lineage.** Clearing sets the text NULL, the origin `authored`, and both versions NULL. Copying again starts a new lineage at a new watermark.
+- **I7, nothing is relabelled by request.** The save and copy bodies have no origin or watermark field. The database enforces I1 and I2 (§9.3), so a command that forgets to advance a watermark fails rather than silently lifting a restriction.
+
+**Why releases need no new column.** Coverage is fully determined by the draft's per-field watermark and the release's existing `from_draft_row_version`, because releases are immutable exact snapshots (I4). Releases keep their per-field origin and `origin_entity_row_version` as provenance. A test pins I4 against the release snapshot (§9.8).
+
+**Over-restriction is accepted.** Editing a released field back to exactly its released text still advances the watermark, and it stays withheld until released again. That is safe, and simpler than comparing text.
+
+### 9.3 Migration `143_public_profile_restriction_watermarks`
+
+The next revision after 142. It is additive.
+
+**Preflight.** Before any change, the upgrade counts draft and release rows whose either field has a legacy origin.
+
+- If any exist, it raises with a message and changes nothing.
+- No application path at `523ae5c` writes a legacy origin: no `src/` file names `legacy_appearance` or `legacy_background`, and A2a's commands write only `authored`. Only `test_character_public_profile_schema.py` inserts legacy origins, on disposable test databases.
+- So on every application-written database the count is zero. A non-zero count means hand-written rows whose disclosure history is unknown, and the operator must decide. The migration does not guess a watermark or a coverage.
+
+**Columns.** On `campaign.character_public_profiles` only:
+
+- `public_appearance_restricted_row_version BIGINT NULL`;
+- `public_background_restricted_row_version BIGINT NULL`.
+
+Both are `STRUCTURAL` in `COLUMN_CLASSES`, with column comments.
+
+**CHECKs (table-local):** each watermark is
+
+- NULL exactly when that field's `origin_entity_row_version` is NULL (through 142's origin trigger, exactly when the origin is not legacy);
+- `>= 1`;
+- `<= row_version`.
+
+**Trigger `campaign.enforce_public_profile_restriction_watermarks()`**, `BEFORE INSERT OR UPDATE` on drafts. It enforces I2 and does not set anything. For each field:
+
+- **INSERT.** A legacy origin needs `watermark = NEW.row_version`.
+- **UPDATE.** If `NEW` has a legacy origin and the text, origin or `origin_entity_row_version` is distinct from `OLD`, the watermark must equal `OLD.row_version + 1`. That is the value `core.bump_row_version()` gives `NEW.row_version`, so the rule does not depend on trigger firing order.
+- **UPDATE, unchanged content.** If old and new are both legacy-origin and the content is unchanged, the watermark must not decrease.
+
+A violation raises `integrity_constraint_violation`.
+
+**Existing rows.**
+
+- **Authored drafts (every A2a draft):** both watermarks NULL, which satisfies the CHECKs and the trigger. No row is rewritten, no `row_version` changes, and no audit row is written.
+- **Releases:** no change of any kind. Every existing release is authored-only (preflight), so it covers nothing and loses nothing.
+
+**Downgrade.** Drops the trigger, the function and the two columns. It is lossless for authored-only data. After A2b-2 has copied text, a downgrade drops the watermarks, and the down-level code would show copied text to every D8 reader. So a downgrade with legacy-origin rows present raises, the mirror of the preflight.
+
+### 9.4 What each operation does
+
+| Operation | Rule (on top of D8, §5.7a) | Result |
+|---|---|---|
+| **GET profile** | For each field withheld from the caller: `"<field>": null`, `"<field>_withheld": true`, and the origin code and `origin_entity_row_version` (D7-f). Otherwise the text and `"<field>_withheld": false` | Releases (`latest_release`, the list, `GET …/releases/{n}`) are never withheld (D7 item 4). `can_release` is false while any field is withheld from the caller. `legacy_copy` says, for each copyable field, whether the source text is non-empty. It is present only for a caller who passes both the edit rule and the source read; otherwise it is `null` |
+| **Save** (`POST …/draft`) | Under lock, in order: (1) the token: stale → 409 `stale_write`; (2) **text sent for any field withheld from the caller → 403 `public_profile_field_withheld` for the whole request**, nothing written, other fields included, whatever the text; (3) the no-op comparison; (4) the write | A field left out: untouched. Explicit `null`: clears it (I6), allowed even when withheld (D7-a). Text for a field not withheld: written. If that field has a legacy origin, the origin is kept and its watermark advances (I2). A field not named keeps its watermark (I3) |
+| **Copy** (`POST …/draft/copy-legacy`, body `{expected_row_version, field}`) | The D8 edit rule and the source read, both in the route pre-check (before the idempotency lookup) and again under lock (§9.6). Empty source text: 409 `public_profile_legacy_text_missing` | Replaces the whole target field with the source text. Sets the origin, `origin_entity_row_version` and watermark = the new `row_version`, and bumps `row_version`. 201 if it created the draft (`expected_row_version: null`), else 200. The response and stored receipt hold ids, `row_version`, `created` and `changed`, never text |
+| **Release** | After the natural-retry and stale steps (§5.5 steps 3–4), and only when a new snapshot would be written: if any field at that draft version is withheld from the releaser, **403 `public_profile_field_withheld`**, nothing written (D7 item 3) | The new release covers every field whose watermark ≤ its version, so it lifts their restriction (D7-c). An owner or delegated GM without `world.canon.read_private` cannot release an NPC draft holding uncovered copied content |
+| **Audit** | A copy writes one `audit.change_log` row (`copy_legacy_text_to_public_profile_draft`): target field, origin code, `origin_entity_row_version`, new `row_version`. A save's row is unchanged: field names and the new `row_version` | Never text; no row for a refusal, no-op or replay |
+
+**Why the token comes first in a save.** Whether a field is withheld depends on the locked draft, which may differ from what a stale caller read. A stale token is answered 409 first, so the caller reloads and sees the current state.
+
+**Why withholding comes before the no-op comparison.** A caller the field is withheld from would otherwise learn whether a guess matched, from `changed: false`.
+
+**Error codes.**
+
+- The copy refusal for a missing world capability is the existing 403 `world_authority_required`, the same answer the NPC authoring read gives.
+- `public_profile_field_withheld` is new: 403, safe message "This draft holds copied text you cannot read."
+- Neither code names the hidden content. A caller only reaches either after reading the profile, where `withheld: true` has already been disclosed (D7-f).
+
+**Player characters.** Every D8 reader holds role `canon.edit` today (§5.1), so a player character's copied field is never withheld from anyone who can read the profile. The rule is still applied generally.
+
+### 9.5 Edits, provenance and attempts to bypass the restriction
+
+- **Editing copied text keeps it restricted.**
+  - Every edit of a legacy-origin field keeps the origin and advances its watermark, however small the edit (I2).
+  - An edit after a release makes the field restricted again until a release covers the new text.
+  - Cutting a copy down to an excerpt, releasing the excerpt, then appending source text or restoring the full copy therefore never shows the added text to a restricted reader before it is released.
+- **Editing a different field never re-restricts a released one** (I3).
+- **No request can relabel a field** (I7). The database rejects a content change that does not advance the watermark.
+- **Read and resave.**
+  - A caller the field is withheld from cannot read it, cannot send text into it (403 for the whole request), and cannot probe it (the 403 comes before the comparison).
+  - A caller who can read it and resaves it with changes advances the watermark; an unchanged resave is a no-op.
+- **Clearing** removes the text and resets provenance (I6). A restricted caller may clear (D7-a).
+- **Copying again** always starts new restricted content at a new watermark, even from the same source version, even if an earlier copy was released.
+- **Manual authoring is accepted (D7-b).** A caller who may read the source and types it in by hand, into an empty field or after clearing a copied one, writes authored text. That is the same as pasting from the NPC authoring view today. The rule protects server-copied content and every edit of it, not what an entitled reader knows.
+
+### 9.6 Source-version consistency and locks
+
+**Copy.** `copy_legacy_text_to_public_profile_draft` uses the save's lock order, with the kind's world capability:
+
+1. Read the character's kind, unlocked (§9.1 assumption).
+2. `lock_authoring_scope(world_capability=WORLD_CANON_READ_PRIVATE` for an `npc`, `None` for a `player_character`): world `FOR SHARE` → role rows and membership (S) → account (S) → campaign (KEY SHARE) → role `canon.edit` and the world capability re-checked from committed state.
+3. Re-resolve the `AccessContext` for the D8 edit rule.
+4. Lock the character's `core.entities` row `FOR SHARE`. Read `row_version` and the canon and lifecycle status in separate statements, as A2a's `_character_row` does.
+5. Read `appearance` or `background` from `character.character_descriptions` in a separate statement under that lock.
+6. Lock the draft `FOR UPDATE` and compare the token, or insert (the unique-index race, as in a save).
+7. Write the text, origin and `origin_entity_row_version`, and set the watermark to `expected_row_version + 1`, or to 1 for an insert.
+
+**Why the text and the version match.** The only writer of `character_descriptions` is `update_character_identity` (and creation). It holds the entity `FOR UPDATE` and bumps `core.entities.row_version` through `touch_entity` in the same transaction ([npcs.py:225](../src/dnd_ai/commands/npcs.py#L225), [:303](../src/dnd_ai/commands/npcs.py#L303)). Under the copy's `FOR SHARE`, no edit can commit between steps 4 and 5. If one was in flight, the copy waited, and it reads that edit's committed text with its new version, never one without the other. No client-side source token is needed: the copier sees the copied text in the draft, and the release is the review step.
+
+**World capability.** Ending or changing a world role (`world_memberships.py:70`), and world ownership recovery or transfer, take the world row `FOR UPDATE`. The world row is the head of the global lock order ([worlds.py](../src/dnd_ai/commands/worlds.py) module docstring). The copy's world `FOR SHARE` is held before it judges `world.canon.read_private`, so that judgement stands until commit. World roles have no time-based expiry, so no fresh-instant re-check is needed for them.
+
+**Save.**
+
+- The save already holds world `FOR SHARE` through `lock_authoring_scope(world_capability=None)`.
+- It resolves `resolve_world_authority` after those locks, only for an `npc`, to decide which fields are withheld.
+- The set of releases is fixed while the draft is held `FOR UPDATE`, because every release takes that lock. No new lock is needed.
+
+**Release (changed in A2b-1).** The release takes the **world row `FOR SHARE` first**, before its authority rows:
+
+> world (S) → authority rows (S) → caller's membership (S) → campaign (KEY SHARE) → character's entity (KEY SHARE) → draft (U) → `clock_timestamp()` and the same-source re-check → `AccessContext` re-resolve (whole-character deny) → world authority resolved → natural retry → stale → character → **withheld check** → write.
+
+- **Taken on every release.** The world lock is taken for every release, so the order is static.
+- **No new deadlock.** The world row comes first in every command that takes it. Every world `FOR UPDATE` taker starts with it and takes none of the release's later rows before it. Every campaign command that takes the world takes it `FOR SHARE` (compatible). So the A1 §3 table and §5.8 gain an edge only at their head, and none is reversed.
+- **Kept from A2a.** The fresh-instant re-check still follows the last wait (the draft).
+- **Not locked.** Account deactivation is not locked by the release, as A1 accepted (§1 table).
+
+**Reads** judge the source read at the moment of the read, with no locks, as A2a's reads do.
+
+### 9.7 Retries and permission changes
+
+Retries of an existing release survive loss of source permission, but the current D8 access and release-authority checks still apply (D7-d). The same holds for replays of a save.
+
+| Situation | Outcome |
+|---|---|
+| A copy retried with the same key after the copier lost `world.canon.read_private` | 403 `world_authority_required` from the pre-check, before the idempotency lookup; no replay. The source read *is* the copy's authority (D7 item 1; DATABASE_CONVENTIONS §26.4) |
+| A copy retried with the same key while still permitted | The stored receipt; nothing written |
+| A copy whose world role is ended while it waits for the world lock | The end commits first; the copy's re-check under lock refuses it with 403; nothing written |
+| A save with key K that wrote text into copied field B, retried with K after the saver lost the source read | The stored receipt (ids, `row_version`, flags; no text); nothing written. The D8 edit pre-check still runs first: under a whole-character deny it is 404; under a `canon.edit` deny it is 403 or 404 |
+| A save refused 403 `public_profile_field_withheld`, retried with the same key after the role is restored | Runs afresh (a refusal stores nothing); stale 409 if the draft moved |
+| A releaser loses `world.canon.read_private`, then retries a release of a version **already released**, with or without a key | The stored receipt, or 200 `created: false`; no snapshot written; no text (D7-d). The pre-check still refuses a caller who has lost reveal authority (403 `character_reveal_required`), or who is under a whole-character deny (404) |
+| The same releaser releases a **new** version holding uncovered copied content | 403 `public_profile_field_withheld`; nothing written |
+| A world role is ended while a release waits for the world lock | The end commits first; the release then finds the field withheld: 403, nothing written |
+| A world role is ended while a release holds the world lock | The end waits; the release commits (201) |
+| The world role is restored | The field is visible again on the next read. Nothing is stored per reader |
+| The source is edited after the copy | The draft keeps the copied text and its source version. A new copy takes the new text and starts a new watermark |
+| A whole-character deny | Unchanged: 404 for read, save, copy and release (D8) |
+
+### 9.8 Tests (A2b)
+
+Every scenario uses the HTTP routes with namespaced fixtures. World roles are granted and ended with the world-membership commands, and D8 denies are created with A2a-R's route. "Restricted reader" means a D8 reader without `world.canon.read_private` (the campaign-only owner, an assistant GM with no world role, a `world_reader` GM). "Permitted GM" means one with `world_editor`.
+
+**PostgreSQL: migration and schema.**
+
+- Up, down and up again. `alembic check` is clean.
+- **Preflight.** A database holding a hand-inserted legacy-origin draft, or a legacy-origin release, refuses the upgrade and is left unchanged. The downgrade refuses with legacy-origin rows present.
+- **Existing rows.** An authored A2a draft and its releases keep `row_version`, text and origins, and gain NULL watermarks, with no audit row.
+- **CHECKs.** They refuse:
+  - a watermark without a legacy origin;
+  - a legacy origin without a watermark;
+  - a watermark above `row_version`;
+  - a watermark below 1.
+- **Trigger.** It refuses:
+  - an UPDATE that changes a legacy-origin field's text, origin or source version without setting its watermark to `OLD.row_version + 1`;
+  - lowering a watermark;
+  - a legacy-origin INSERT whose watermark is not `row_version`.
+
+  It accepts an UPDATE of the other field that leaves this field's watermark unchanged (I3).
+- 142's origin trigger is unchanged.
+
+**The excerpt regressions (the review's case).** For an NPC background copy (markers: F for the full source, E for an excerpt of it, X for source text not in E):
+
+1. A permitted GM copies (version *c*). A restricted reader sees B withheld.
+2. The permitted GM edits B down to E (*c*+1). Still withheld.
+3. A permitted owner releases *c*+1. The restricted reader now sees E in the draft and in the release.
+4. **Append:** the permitted GM appends X to B. B is withheld from the restricted reader again, and the release still shows only E. A release by a restricted releaser is refused 403. After a permitted release, B (E plus X) is visible.
+5. **Restore:** from step 3 again, the permitted GM replaces B with F. B is withheld until a permitted release of that version, then visible.
+6. **Restore exactly the released text:** the permitted GM edits B away from E and back to E. B is withheld (accepted over-restriction, §9.2) until released again.
+
+No body seen by the restricted reader contains X or F before the covering release.
+
+**Unchanged-field visibility.**
+
+- After B is released (step 3), the permitted GM and then a restricted GM each edit appearance A. B stays visible to the restricted reader, and B's watermark is unchanged in the row.
+- Then B is edited: only B becomes withheld. A stays visible.
+
+**Mixed-field atomic refusal.** A restricted GM sends one save that changes A and puts text into withheld B.
+
+- The result is 403 `public_profile_field_withheld`.
+- The draft is unchanged: `row_version`, A, B, origins and watermarks. No audit row.
+- The same is true when the B text equals the stored text (no oracle), and when it differs.
+- The same GM saving A alone, with B left out, gets 200. B is unchanged.
+
+**Clear.**
+
+- A restricted GM clears withheld B (D7-a). Result: 200, B NULL, origin `authored`, both versions NULL; A untouched.
+- Then the same GM writes new text into B: 200, authored and visible to all.
+- A permitted GM clears and types the source by hand: authored, and visible (D7-b, documented behaviour).
+
+**Recopy.**
+
+- Copying again after a covering release: withheld again, with a new watermark, even from the same source version.
+- Copying again after a source edit: the new `origin_entity_row_version`, withheld.
+- Copying over authored A: A becomes legacy-origin and withheld.
+
+**Stale writes.**
+
+- **Stale token first.** A restricted GM's save with a stale token and text into B gets 409 `stale_write` (not 403); nothing written.
+- **Copy against save.** A copy and a save with the same token: the second gets 409.
+- **Release after a move.** A release named at a version whose B was later edited gets 409 `stale_write`, or, if that version was already released, 200 `created: false`. Nothing new is covered.
+- **Clear against edit.** A restricted GM's clear races a permitted GM's edit: the second gets 409.
+
+**Keyed retries** (every row of §9.7). In particular:
+
+- **Copy replay after losing the world role:** 403, not a replay.
+- **Save replay after losing it:** the receipt, writing nothing and holding no text.
+- **Keyed release replay and natural retry after losing it:** the receipt, and 200. Both are refused after a whole-character deny (404) and after losing reveal authority (403).
+- **Retry of a refused 403 save** after the role is restored: it executes.
+
+**Readers with different source permissions.** On one NPC draft with authored A (marker A) and an uncovered copied B (marker B):
+
+- `world_editor` GM: sees both.
+- Owner with no world role, and assistant GM with no world role: see A; B is withheld, with its origin and `origin_entity_row_version` shown; `can_release: false`.
+- `world_reader` GM: B withheld.
+- Player, observer, campaign B's GM: 404.
+- A reveal holder with a `canon.edit` deny on the character and `world_editor`: reads B, cannot edit.
+- A player-character copy: shown to every D8 reader.
+
+**Copy rules.**
+
+- **Allowed:**
+  - an owner, GM or assistant GM with `world.canon.read_private`, for an NPC;
+  - any `canon.edit` holder, for a player character.
+- **Refused:**
+  - 403 `world_authority_required` without the world capability (NPC);
+  - 403 `public_profile_edit_denied` or 404 under a `canon.edit` deny;
+  - 404 under a whole-character deny;
+  - 409 `public_profile_legacy_text_missing` for empty source text;
+  - 404 for a plain `character` kind, and for a character outside the world;
+  - 409 `public_profile_character_not_active` when archived;
+  - 409 `stale_write`;
+  - 422 for `field: "notes"` or any other value.
+- **Same key, same body, different character:** the non-disclosing 409.
+
+**Response-body disclosure** (extends A2a criterion 8). The NPC's `background`, `appearance` and `notes` carry distinct markers, and the first two are copied. For every restricted reader, and for players, observers and campaign B's GM, no body contains a marker until a covering release. That covers:
+
+- the profile GET, the release list and `GET …/releases/{n}`;
+- the save, copy and release responses and their stored receipts;
+- every 403, 404 and 409 body;
+- the A2a marker-sweep surfaces;
+- the audit history.
+
+`notes` appears in no profile response for anyone. The copy's audit row holds no marker.
+
+**Concurrency** (LockRace, both orders, no deadlock):
+
+- **A copy against `update_npc` on the same character, both winners.**
+  - *Update first:* the copy waits on the entity, then records the new text with the new version, never a mix.
+  - *Copy first:* the update waits for the copy's `FOR SHARE` on the entity. The copy has recorded the old text with the old version, the update then commits, and a later copy reads the new pair.
+- **Same draft.** A copy against a save, and a copy against a release.
+- **Ending the copier's world role against a copy, both winners.**
+  - *End first:* the copy's re-check under lock refuses it with 403 `world_authority_required`; nothing is written.
+  - *Copy first:* the end waits on the world row the copy holds `FOR SHARE`; the copy commits, then the end.
+- **Ending the releaser's world role against a release of uncovered copied content, both winners** (§9.7 rows).
+  - *End first:* the release finds the field withheld: 403 `public_profile_field_withheld`, nothing written.
+  - *Release first:* the end waits; the release commits (201).
+- **Ending the saver's world role against a save that writes text into the copied field, both winners.**
+  - *End first:* the save finds the field withheld: 403, nothing written.
+  - *Save first:* the end waits for the save's world lock; the save commits.
+- **A permitted GM's edit of released B against a restricted releaser's release of the earlier version.** Either the release is stale (409) or it covers only the earlier text, and B is withheld afterwards.
+- **Rerun unchanged:** A1's, P0's, P1's and A2a's race suites, with the release's world lock.
+
+**Structural tests.**
+
+- `test_character_public_profile_structure.py` admits the copy module as a reader of `character_descriptions`.
+- `test_world_gate_registry.py` lists the copy's kind-dependent `lock_authoring_scope` call, as it does the identity helper.
+- A parity test pins the source rule's world capability for each kind against the NPC and player-character authoring GET dependencies.
+- The route manifest gains the copy route.
+- `COLUMN_CLASSES` covers the two new columns.
+- A unit test of the restriction predicate covers I3 and I4 over synthetic histories.
+
+### 9.9 Slices and acceptance (for Sonnet)
+
+**A2b-1: the restriction, before any copy exists.**
+
+- **Code:**
+  - migration 143 (§9.3);
+  - the source-read rule and the restriction predicate in `domain/public_profiles.py`, with the kind assumption in the docstring;
+  - withholding in `read_character_public_profile`;
+  - the save rule and its watermark advance;
+  - the release's world lock and withheld check;
+  - `public_profile_field_withheld`.
+- **Tests.** Legacy-origin drafts are seeded through a test helper that writes a row satisfying the CHECKs and trigger, because no copy path exists yet. This is the only raw-row seeding, and A2b-2 replaces it with the route. Covers §9.8 except the copy-specific cases, including the excerpt regressions (seeding the copy), unchanged-field visibility, mixed refusal, clear, stale writes, save and release keyed retries, and the release races.
+- **Why first:** no commit ever has a copy path without its restriction.
+
+**A2b-2: the copy command and route.**
+
+- **Code:** `copy_legacy_text_to_public_profile_draft`, `POST …/draft/copy-legacy`, `legacy_copy` in the GET, and the audit row.
+- **Tests:** the copy rules, recopy, copy keyed retries, the excerpt regressions rerun through the real copy, the disclosure sweep, and the copy races.
+
+**Both slices:**
+
+- The new tests fail at the parent.
+- Run `ruff format --check`, `ruff check` and `mypy src`; the focused tests, then the full `pytest`; migration up/down; `git diff --check`; CI on the final head.
+- Docs in the same change:
+  - `PHASE13E_ACCESS_CONTRACT`: withholding, watermarks and coverage, the copy route, the new error code, the kind assumption;
+  - `DATABASE_MODEL`: the two columns and the trigger;
+  - `DOMAIN_MODEL`: restriction watermark, coverage, withheld field;
+  - the `ENTITY_LIFECYCLE` command list: the copy;
+  - this plan's records.
+- One local commit each. Stop for independent review naming the parent and target SHAs. No push.
+
+**Out of scope:** the portal (A6); revelations and audience reads (A3/A4); DEF-016 and DEF-017; a "source changed since copy" indicator; D5 and D6 columns; making kind mutable.
+
+### 9.10 D7-a to D7-f: owner-approved (recorded 2026-11-07, from conversation)
+
+The owner approved these in conversation. The approval text is not otherwise in the repository.
+
+- **D7-a.** Withheld fields may be cleared, but restricted callers cannot replace their text. Applied in §9.4 (save) and §9.5.
+- **D7-b.** Manual authoring by someone allowed to read the source is accepted. Such text is authored, and nothing in A2b tries to detect it (§9.5).
+- **D7-c.** A release lifts restrictions only on the text actually released. Applied as per-field coverage of the restriction watermark (§9.2, I2–I4). A later content change restricts the field again until a release covers it.
+- **D7-d.** Retries of an existing release survive loss of source permission, while the current D8 access and release-authority checks still apply. A natural retry and a keyed replay return the existing release without a source check. The release pre-check (reveal authority, whole-character deny) is unchanged. The withheld check runs only when a new snapshot would be written (§9.4, §9.7). Save replays follow the same rule. A copy replay does not, because the source read is the copy's own authority (D7 item 1).
+- **D7-e.** Source-read rules match the existing authoring reads: role `canon.edit`, plus `world.canon.read_private` for an NPC, with per-character denies not entering the rule (§9.1).
+- **D7-f.** Withheld flags and field-origin metadata may be disclosed: `withheld`, the origin code and `origin_entity_row_version`, never text (§9.4).
+
+---
+
 ## Decisions still needed
 
 - **D1: Public profile scope. Approved by the owner (recorded 2026-11-07).** Public-profile drafts and releases belong to a campaign. Applied in §5.1.
@@ -1228,14 +1627,15 @@ So the guard blocks the only representation the readers use. The other own-colum
   **Recommend:** a per-release opt-in, off by default. The draft holds `shows_species` and `shows_size`. When a flag is set, the release snapshots `released_species_id` and `released_size_category` from the definition at release time. Later identity edits then reach audiences only through a new release.
 
   The alternative is never showing them in the public tier. Either answer is additive to A2a and blocks only A4.
-- **D7: Copied NPC legacy text and draft readers (new, 2026-11-07).** Reading legacy text needs different permissions for each kind of character (§5.10 trace). An NPC's text needs campaign `canon.edit` **and** world `world.canon.read_private`; a player character's needs `canon.edit` only. Drafts are readable by every campaign `canon.edit` holder. Under D2, a GM who holds `world.canon.read_private` may copy an NPC's background into the draft. A campaign-only GM without that world capability could then read world-private text the existing read refuses them. D2 says who may copy, but not who may read the copy.
+- **D7: Copied legacy text and draft readers. Approved by the owner (recorded 2026-11-07).** The approved policy:
+  1. Copying a legacy field requires current permission to read its source.
+  2. Before release, copied fields retain that source-read restriction.
+  3. A releaser must currently be allowed to read every field included in the release snapshot.
+  4. Deliberate release makes the snapshot eligible for the later audience mechanism under its release policy.
 
-  **Recommend:** withhold until released.
-  - A draft field whose origin is an NPC legacy field is withheld from any draft reader who fails that kind's read rule. The reader sees `withheld: true` and the origin, never the text.
-  - Such a reader may only clear the field or replace it entirely. A replacement resets the origin to `authored`.
-  - A release requires the releaser to be able to read every field it publishes. Otherwise it is refused with 403 `world_authority_required` and nothing is written.
+  Applied in §9. The points D7 left open, D7-a to D7-f, were approved by the owner in conversation and are recorded in §9.10. Nothing about D7 remains open.
 
-  The alternative is that a copy is a deliberate disclosure to the campaign's draft readers. Player-character text is unaffected under either answer, because its read rule equals the draft-edit rule. D7 blocks A2b only.
+  *The question, as first put (2026-11-07), for the record.* Reading legacy text needs different permissions for each kind of character (§5.10 trace). An NPC's text needs campaign `canon.edit` **and** world `world.canon.read_private`; a player character's needs `canon.edit` only. Drafts are readable by every campaign `canon.edit` holder. So a GM holding `world.canon.read_private` could copy an NPC's background into the draft, and a campaign-only GM could then read world-private text the existing read refuses them. The first recommendation (withhold until released; let a restricted reader replace the field; refuse a release with `world_authority_required`) is superseded by the approved policy and §9: a restricted reader may only clear, a release is refused with `public_profile_field_withheld`, and only a release covering the field's current text lifts the restriction.
 - **D8: Draft and release reads, and denies. Approved by the owner (recorded 2026-11-07), as proposed.** Policy, detailed in §5.1 and §5.7a:
   1. **Read.** A member may read the draft and the release snapshots if they hold effective character-scoped `canon.edit`, **or** current `character.reveal` authority. Reveal authority confers reading only, never editing.
   2. **Edit.** Editing requires effective character-scoped `canon.edit`: role `canon.edit`, re-checked under lock, with no whole-character deny and no `canon.edit` deny on the character. A per-character `canon.edit` *allow* grant does not confer editing without role `canon.edit`.
@@ -1349,7 +1749,7 @@ A2a is the §5 design without the copy aid, D5/D6 columns, portal or revelations
 
 ## A2a and A2a-R review outcome and handoff (2026-11-07)
 
-- **Verdicts.** The independent review of A2a (`0b4704c`) and of A2a-R (`f66240a`) each returned **PASS WITH NONBLOCKING FINDINGS**. The reviewer's independent run covered **80 tests**. The verdicts and the 80-test result were supplied to this session by the owner in conversation; the review text and its run output are not in the repository, so neither is reproduced here.
+- **Verdicts.** The independent review of A2a (`0b4704c`) and of A2a-R (`f66240a`) each returned **PASS WITH NONBLOCKING FINDINGS**. The reviewer's independent run: **80 passed**, reported by the owner from the independent review in conversation. The review text and the raw run output are not in the repository, so neither is reproduced here.
 - **Release replay.** Corrected above (§5.9, §8.6): a stored release replays the minimal receipt, not the full response body.
 - **The A1 timeout.** The full suites after A2a and A2a-R each failed one A1 wait test (listed in the status lines). The helper involved is `_wait_until_waiting_on` in `test_character_reveal_delegation.py`, which calls `_wait_until_waiting` and `_waiting_on_locks` in `test_campaign_owner_lock_order.py`: a count of every session in the test database waiting on any lock, whoever it is and whatever it waits for. The failing test's grant request is now observed through `LockRace.wait_blocked_by` against the held end-of-membership transaction, with early response diagnostics and cleanup; the other tests that still use the global count keep it. **Whether the request failed to reach its lock, reached it late, or waited in a way the count missed is not established**, and the cause stays recorded as unresolved.
 
