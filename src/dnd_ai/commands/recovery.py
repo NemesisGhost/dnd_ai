@@ -33,6 +33,10 @@ from dnd_ai.queries.stranded import campaign_has_active_access_manager, world_ha
 from dnd_ai.queries.system_authority import has_system_capability
 
 from ._shared import lookup_id
+from .reveal_delegation_lifecycle import (
+    END_REASON_MEMBERSHIP_STATUS_CHANGED,
+    close_reveal_delegations_for_membership,
+)
 from .world_access import (
     TargetRequiresSystemGmError,
     WorldRoleTargetIneligibleError,
@@ -172,13 +176,22 @@ def recover_campaign_access_manager(
             {"c": campaign_id, "u": new_user_id, "s": active_status},
         ).scalar()
     else:
-        connection.execute(
+        status_changed = connection.execute(
             text(
                 "UPDATE security.campaign_memberships SET membership_status_id = :s "
-                "WHERE campaign_membership_id = :m"
+                "WHERE campaign_membership_id = :m AND membership_status_id <> :s "
+                "RETURNING 1"
             ),
             {"s": active_status, "m": membership_id},
-        )
+        ).first()
+        if status_changed is not None:
+            # A status flip back to `active` must not revive a reveal delegation bound to a gm
+            # assignment that is still live: authority returns only by a fresh grant.
+            close_reveal_delegations_for_membership(
+                connection,
+                grantee_campaign_membership_id=membership_id,
+                end_reason=END_REASON_MEMBERSHIP_STATUS_CHANGED,
+            )
     assert isinstance(membership_id, uuid.UUID)
     role_id = connection.execute(
         text(

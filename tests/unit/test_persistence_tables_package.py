@@ -277,6 +277,7 @@ EXPECTED_TABLES = {
         "security.capabilities",
         "security.character_relationship_type_capabilities",
         "security.character_relationship_types",
+        "security.character_reveal_delegations",
         "security.external_identities",
         "security.idempotent_requests",
         "security.invitation_onboarding_sessions",

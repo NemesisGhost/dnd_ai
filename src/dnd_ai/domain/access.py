@@ -1149,6 +1149,7 @@ def resolve_access_context(
 
 
 BUILTIN_CAMPAIGN_OWNER_ROLE_CODE = "campaign_owner"
+BUILTIN_CAMPAIGN_GM_ROLE_CODE = "gm"
 
 OwnerAssignmentLock = Literal["none", "share", "update"]
 
@@ -1193,6 +1194,50 @@ def find_live_builtin_owner_assignment(
     A caller that has waited on locks passes a fresh `clock_timestamp()` read taken after the
     waits, because an assignment can expire during a wait and `now()` would still call it live
     (DEF-011)."""
+    return _find_live_builtin_assignment(
+        connection,
+        role_code=BUILTIN_CAMPAIGN_OWNER_ROLE_CODE,
+        campaign_id=campaign_id,
+        campaign_membership_id=campaign_membership_id,
+        lock=lock,
+        as_of=as_of,
+    )
+
+
+def find_live_builtin_gm_assignment(
+    connection: Connection,
+    *,
+    campaign_id: uuid.UUID,
+    campaign_membership_id: uuid.UUID,
+    lock: OwnerAssignmentLock = "none",
+    as_of: datetime | None = None,
+) -> uuid.UUID | None:
+    """The `membership_role_id` of this membership's live built-in `gm` assignment in
+    `campaign_id`, or `None`: the same definition of "live" as
+    `find_live_builtin_owner_assignment` (built-in template matched by `role_id` through
+    `campaign_id IS NULL`, active; assignment neither revoked nor expired; membership open and
+    `active`; account active) applied to the `gm` template. A campaign-scoped role named `gm`
+    and the `assistant_gm` role are not this role. A reveal delegation binds to the row this
+    returns."""
+    return _find_live_builtin_assignment(
+        connection,
+        role_code=BUILTIN_CAMPAIGN_GM_ROLE_CODE,
+        campaign_id=campaign_id,
+        campaign_membership_id=campaign_membership_id,
+        lock=lock,
+        as_of=as_of,
+    )
+
+
+def _find_live_builtin_assignment(
+    connection: Connection,
+    *,
+    role_code: str,
+    campaign_id: uuid.UUID,
+    campaign_membership_id: uuid.UUID,
+    lock: OwnerAssignmentLock,
+    as_of: datetime | None,
+) -> uuid.UUID | None:
     return connection.execute(
         text(f"""
             SELECT mr.membership_role_id
@@ -1207,7 +1252,7 @@ def find_live_builtin_owner_assignment(
             WHERE mr.campaign_membership_id = :membership
               AND cm.campaign_id = :campaign
               AND r.campaign_id IS NULL
-              AND r.code = :owner_code
+              AND r.code = :role_code
               AND r.is_active
               AND mr.revoked_at IS NULL
               AND (
@@ -1225,7 +1270,7 @@ def find_live_builtin_owner_assignment(
         {
             "membership": campaign_membership_id,
             "campaign": campaign_id,
-            "owner_code": BUILTIN_CAMPAIGN_OWNER_ROLE_CODE,
+            "role_code": role_code,
             "as_of": as_of,
         },
     ).scalar()

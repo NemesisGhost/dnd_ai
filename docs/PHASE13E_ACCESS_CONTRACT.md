@@ -1515,3 +1515,19 @@ otherwise exist to confirm.
 - **Read contract:** `assignable_roles` omits the built-in owner role for a caller who is not a live owner (campaign-scoped roles that merely reuse the code `campaign_owner` stay listed and are not the built-in).
 - **Locking:** one order everywhere: the member's role rows (a gated command's own owner assignment first), then membership rows, then account and role-template rows, then the campaign row (taken at commit by the retention trigger, and explicitly by a relinquishing transfer). `end_campaign_membership` now locks the member's role rows before the membership row and stamps its writes with one `clock_timestamp()` read taken after its locks. See the design record §3 for the verified table.
 - **Tests:** `tests/database/test_campaign_owner_gate.py`. Preflight: `scripts/preflight_campaign_owner_gate.py`.
+
+## 3u. Reveal delegation (P03-A A1)
+
+`character.reveal` is the authority to publish a character's public profile. Its only sources are a live built-in `campaign_owner` assignment and a delegation from such an owner to a member holding the built-in `gm` role. A custom role, `canon.edit`, `access.manage` and assistant-GM status confer none of it, and it is never carried by `role_capabilities`, a relationship type or a resource grant (the database refuses such a row).
+
+| Route | Body | Result |
+|---|---|---|
+| `POST /campaigns/{id}/reveal-delegations` | `grantee_campaign_membership_id`, `reason` | 200 `{grantee_campaign_membership_id, character_reveal_delegation_id, granted}`; `granted` is false for a repeat |
+| `POST /campaigns/{id}/reveal-delegations/{grantee_campaign_membership_id}/revoke` | `reason` | 200 `{grantee_campaign_membership_id, revoked}`; `revoked` is false when none was live |
+
+- **Authorization:** the route requires `access.manage` (a coarse filter); the command requires a live built-in owner, `403 campaign_owner_required`, re-read under lock and again at a fresh instant before the write. A refused call writes nothing and no audit row.
+- **Recipient:** a member of the campaign holding a live built-in `gm` assignment; otherwise `409 reveal_delegation_recipient_not_gm`. A membership of another campaign is `404`.
+- **Binding:** a delegation is bound to the grantee's specific `gm` assignment and authorizes only while it is live. Revoking or changing that assignment, ending the membership or changing its status closes the delegation; regaining GM status needs a fresh grant. A lapsed (expired) assignment leaves no authority and does not block a fresh grant.
+- **Transfer:** delegations survive an ownership transfer. A former owner keeps only a separate delegation bound to their own live `gm` assignment.
+- **Audit:** one `audit.change_log` row per actual change (`grant_character_reveal_delegation`, `revoke_character_reveal_delegation`).
+- **Tests:** `tests/database/test_character_reveal_delegation.py`. Design: `docs/PHASE14_15_P03A_A1_OWNERSHIP_AUTHORITY_DESIGN_2026-11-06.md` §3 and §8.

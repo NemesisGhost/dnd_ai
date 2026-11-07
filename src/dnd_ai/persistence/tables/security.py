@@ -1660,6 +1660,102 @@ Index(
 )
 
 # ---------------------------------------------------------------------------
+# Character reveal delegations (revision 141)
+# ---------------------------------------------------------------------------
+
+character_reveal_delegations = Table(
+    "character_reveal_delegations",
+    metadata,
+    _uuid_pk("character_reveal_delegation_id"),
+    Column(
+        "campaign_id",
+        UUID(),
+        ForeignKey("campaign.campaigns.campaign_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "grantee_campaign_membership_id",
+        UUID(),
+        ForeignKey("security.campaign_memberships.campaign_membership_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "gm_membership_role_id",
+        UUID(),
+        ForeignKey("security.membership_roles.membership_role_id", ondelete="CASCADE"),
+        nullable=False,
+        comment=(
+            "The grantee's built-in gm assignment this delegation is bound to. Immutable; the "
+            "delegation authorizes only while this exact row is live."
+        ),
+    ),
+    Column(
+        "granted_by_membership_id",
+        UUID(),
+        ForeignKey("security.campaign_memberships.campaign_membership_id", ondelete="SET NULL"),
+        comment=(
+            "The owner membership that granted it. Provenance, not authority: the delegation "
+            "survives the grantor losing ownership. NULL only if that membership row was "
+            "physically deleted."
+        ),
+    ),
+    Column("granted_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    Column("reason", Text(), nullable=False),
+    Column("revoked_at", TIMESTAMP(timezone=True)),
+    Column(
+        "revoked_by_membership_id",
+        UUID(),
+        ForeignKey("security.campaign_memberships.campaign_membership_id", ondelete="SET NULL"),
+    ),
+    Column("revocation_reason", Text()),
+    Column(
+        "end_reason",
+        Text(),
+        comment=(
+            "Why the row was closed; NULL while it is live. revoked_by_owner is an explicit "
+            "revocation (revoked_by_membership_id and revocation_reason set); the others are "
+            "closed by the membership and role commands, or by a later grant that found the "
+            "bound gm assignment lapsed (gm_assignment_lapsed)."
+        ),
+    ),
+    *_timestamps(),
+    schema="security",
+    comment=(
+        "A campaign owner's delegation of character.reveal to a member holding the built-in gm "
+        "role (P03-A A1). Bound to the grantee's specific gm assignment (gm_membership_role_id): "
+        "it authorizes only while that assignment is live, and losing it, ending the membership "
+        "or regaining GM status later ends the grant, which needs a fresh row. Closed rows are "
+        "kept as history (never deleted by commands). One live row per grantee."
+    ),
+)
+
+Index("ix_character_reveal_delegations_campaign_id", character_reveal_delegations.c.campaign_id)
+Index(
+    "ix_character_reveal_delegations_grantee",
+    character_reveal_delegations.c.grantee_campaign_membership_id,
+)
+Index(
+    "ix_character_reveal_delegations_gm_membership_role_id",
+    character_reveal_delegations.c.gm_membership_role_id,
+)
+Index(
+    "ix_character_reveal_delegations_granted_by",
+    character_reveal_delegations.c.granted_by_membership_id,
+    postgresql_where=character_reveal_delegations.c.granted_by_membership_id.isnot(None),
+)
+Index(
+    "ix_character_reveal_delegations_revoked_by",
+    character_reveal_delegations.c.revoked_by_membership_id,
+    postgresql_where=character_reveal_delegations.c.revoked_by_membership_id.isnot(None),
+)
+Index(
+    "ux_character_reveal_delegations_live",
+    character_reveal_delegations.c.grantee_campaign_membership_id,
+    unique=True,
+    postgresql_where=character_reveal_delegations.c.revoked_at.is_(None),
+)
+
+# ---------------------------------------------------------------------------
 # System roles (revision 137)
 # ---------------------------------------------------------------------------
 

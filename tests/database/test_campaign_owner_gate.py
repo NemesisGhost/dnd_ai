@@ -112,16 +112,19 @@ class Gate:
         )
 
 
-@pytest.fixture
-def g(postgres_engine: Engine) -> Iterator[Gate]:
-    with postgres_engine.begin() as connection:
-        fixture = Gate(connection, f"owner-gate-{uuid.uuid4().hex[:8]}")
-    yield fixture
-    with postgres_engine.begin() as cleanup:
+def drop_gate(engine: Engine, fixture: Gate) -> None:
+    """Removes everything a `Gate` (and the tests using it) committed."""
+    with engine.begin() as cleanup:
         cleanup.execute(text("SET LOCAL session_replication_role = replica"))
         params = {"t": fixture.timeline_id, "w": fixture.world_id}
         campaigns = "SELECT campaign_id FROM campaign.campaigns WHERE timeline_id = :t"
         cleanup.execute(text("DELETE FROM audit.change_log WHERE world_id = :w"), params)
+        cleanup.execute(
+            text(
+                f"DELETE FROM security.character_reveal_delegations WHERE campaign_id IN ({campaigns})"
+            ),  # noqa: S608
+            params,
+        )
         cleanup.execute(
             text(f"""
                 DELETE FROM security.membership_roles WHERE campaign_membership_id IN (
@@ -149,6 +152,14 @@ def g(postgres_engine: Engine) -> Iterator[Gate]:
         cleanup.execute(text("DELETE FROM campaign.timelines WHERE timeline_id = :t"), params)
         cleanup.execute(text("DELETE FROM core.entities WHERE world_id = :w"), params)
         cleanup.execute(text("DELETE FROM core.worlds WHERE world_id = :w"), params)
+
+
+@pytest.fixture
+def g(postgres_engine: Engine) -> Iterator[Gate]:
+    with postgres_engine.begin() as connection:
+        fixture = Gate(connection, f"owner-gate-{uuid.uuid4().hex[:8]}")
+    yield fixture
+    drop_gate(postgres_engine, fixture)
 
 
 @pytest.fixture

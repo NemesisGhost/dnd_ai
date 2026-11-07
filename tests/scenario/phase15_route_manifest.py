@@ -54,6 +54,7 @@ _GM_FAMILIES: dict[str, tuple[str, str, bool]] = {
     "invitations": ("campaign invitations", "access.manage", False),
     "memberships": ("memberships and roles", "access.manage", False),
     "ownership-transfer": ("campaign ownership transfer", "access.manage", False),
+    "reveal-delegations": ("character reveal delegation", "access.manage", False),
     "character-relationships": ("character-relationship administration", "access.manage", True),
     "resource-grants": ("resource grants", "access.manage", False),
     "access-groups": ("access groups", "access.manage", False),

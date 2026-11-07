@@ -1049,6 +1049,10 @@ Revision 138. Permission for a user to host a campaign on a world and nothing el
 
 A world is **stranded** when it has no Owner who can manage it: an Owner needs an active account and the system `gm` role. The retention trigger above counts only assignment rows, so it does not notice; `dnd_ai.queries.stranded` reports such worlds and `scripts/recover_world_ownership.py` repairs them (§4.5 of the scoped-role plan).
 
+##### `security.character_reveal_delegations`
+
+Revision 141 (P03-A A1). A campaign owner's delegation of `character.reveal` to a member holding the built-in `gm` role. Columns: `character_reveal_delegation_id PK`, `campaign_id` (immutable), `grantee_campaign_membership_id` (immutable), `gm_membership_role_id` (immutable; the grantee's specific built-in `gm` assignment), `granted_by_membership_id` (provenance, `ON DELETE SET NULL`), `granted_at`, `reason`, `revoked_at`, `revoked_by_membership_id`, `revocation_reason`, `end_reason`, `created_at`, `updated_at`. One live row (`revoked_at IS NULL`) per grantee. A delegation authorizes only while its bound `gm` assignment is live; the membership and role commands close it with an `end_reason`. A trigger keeps the grantee, bound assignment and acting memberships in the delegation's campaign and requires the bound assignment to be the built-in `gm` template's. `character.reveal` itself is a `security.capabilities` row for vocabulary only: triggers refuse it on `role_capabilities`, `character_relationship_type_capabilities` and `resource_grants`.
+
 #### 19.3 Roles and capabilities
 
 Primary tables:

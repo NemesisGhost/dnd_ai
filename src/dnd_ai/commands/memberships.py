@@ -107,6 +107,13 @@ from dnd_ai.domain.access import (
 from dnd_ai.domain.errors import DomainAuthorizationError, SafeMessageError
 
 from ._shared import lookup_id
+from .reveal_delegation_lifecycle import (
+    END_REASON_GM_ROLE_CHANGED,
+    END_REASON_GM_ROLE_REVOKED,
+    END_REASON_MEMBERSHIP_ENDED,
+    close_reveal_delegations_for_membership,
+    close_reveal_delegations_for_role,
+)
 
 
 class MembershipNotInCampaignError(DomainAuthorizationError):
@@ -685,6 +692,13 @@ def revoke_membership_role(
         ),
         {"membership_role": membership_role_id},
     )
+    # A reveal delegation is bound to one gm assignment: closing it here ends the grant (the role
+    # row is already locked; the delegation row is the next lock, ahead of the campaign row).
+    close_reveal_delegations_for_role(
+        connection,
+        gm_membership_role_id=membership_role_id,
+        end_reason=END_REASON_GM_ROLE_REVOKED,
+    )
 
     _assert_active_campaign_retains_access_manager(
         connection,
@@ -903,6 +917,11 @@ def change_membership_role(
             "WHERE membership_role_id = :membership_role AND revoked_at IS NULL"
         ),
         {"membership_role": membership_role_id},
+    )
+    close_reveal_delegations_for_role(
+        connection,
+        gm_membership_role_id=membership_role_id,
+        end_reason=END_REASON_GM_ROLE_CHANGED,
     )
 
     new_membership_role_id = connection.execute(
@@ -1366,6 +1385,15 @@ def end_campaign_membership(
         )
         .scalars()
         .all()
+    )
+
+    # The member's role rows and the membership row are held: the delegation row is next, ahead of
+    # the campaign row the retention trigger takes at commit. Delegations this member granted stay.
+    close_reveal_delegations_for_membership(
+        connection,
+        grantee_campaign_membership_id=campaign_membership_id,
+        end_reason=END_REASON_MEMBERSHIP_ENDED,
+        closed_at=closed_at,
     )
 
     revoked_status_id = lookup_id(

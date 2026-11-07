@@ -250,6 +250,8 @@ MANAGED_TABLES = [
     ("security", "system_roles"),
     ("security", "user_system_roles"),
     ("security", "world_use_grants"),
+    # P03-A A1 reveal delegations (migration 141)
+    ("security", "character_reveal_delegations"),
     ("security", "actor_idempotent_requests"),
 ]
 
