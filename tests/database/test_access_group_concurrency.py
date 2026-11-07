@@ -16,7 +16,9 @@ mocked delay.
    concurrent renames to the identical name**: resolved by `ux_access_
    groups_campaign_name`'s own unique-index insertion/update lock.
 2. **`add_access_group_member` eligibility-check/write races**: its own
-   row locks (group, membership, campaign, owning user — in that order)
+   row locks (group, memberships `FOR NO KEY UPDATE`, acting membership and
+   campaign `FOR KEY SHARE`, owning user — in that order, DEF-015; the
+   cross-command orders are in `test_access_group_member_add_locks.py`)
    must make a concurrent group-deactivation, membership-ending, or
    account-disablement targeting the same row block.
 3. **Two concurrent additions of the identical (group, membership) pair**:

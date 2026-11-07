@@ -168,7 +168,9 @@ def lock_authoring_scope(
     # FOR KEY SHARE, not FOR SHARE (DEF-014). It still conflicts with every FOR UPDATE
     # taker, which is what keeps the campaign active for this command: archive,
     # reactivate and settings edits (`_lock_campaign_for_manage`), the retention trigger
-    # at commit, the resource-grant, relationship and access-group writes. It does not
+    # at commit, the resource-grant and relationship writes, access-group creation and
+    # reactivation. (Adding access-group members takes the campaign `FOR KEY SHARE` too, after
+    # the members' memberships, and serializes with an author at the membership.) It does not
     # conflict with FOR NO KEY UPDATE, which `recover_campaign_access_manager` holds
     # while it waits for the membership row this command already holds FOR SHARE above;
     # FOR SHARE here made the two wait on each other (SQLSTATE 40P01). Nothing locks

@@ -10,34 +10,25 @@ with every `FOR UPDATE` taker (archive, settings, the retention trigger, resourc
 but not with recovery's `FOR NO KEY UPDATE`.
 
 Every scenario is made deterministic with real PostgreSQL locks. Where a command must stop between
-two of its own statements, a `before_cursor_execute` listener on that command's thread holds it
-there. A wait is observed through `pg_blocking_pids` (the intended session, followed along the
-queue), a request that finishes or fails before it blocks is reported as that, and every pause and
-held lock is released on failure. No scenario relies on a longer timeout.
+two of its own statements, `LockRace` (tests/lock_race_support.py) holds it there with a `before_cursor_execute` listener on
+that command's thread. A wait is observed through `pg_blocking_pids` (the intended session,
+followed along the queue), a request that finishes or fails before it blocks is reported as that,
+and on exit, success or failure, every pause and held lock is released and every worker joined
+before fixture teardown. No scenario relies on a longer timeout.
 """
 
-import re
-import threading
 import uuid
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
 from typing import Any
 
 import pytest
-from sqlalchemy import Connection, Engine, event, text
+from sqlalchemy import Connection, text
 
 from dnd_ai.commands.access_grants import create_resource_grant
 from dnd_ai.commands.campaigns import archive_campaign, update_campaign
 from dnd_ai.commands.memberships import end_campaign_membership, revoke_membership_role
 from dnd_ai.commands.recovery import recover_campaign_access_manager
 from dnd_ai.domain.authoring import CampaignArchivedError, CampaignNotAuthorizedError
-from tests.database.test_campaign_owner_lock_order import _WAIT_SECONDS
-from tests.database.test_character_reveal_delegation_deadlocks import (
-    _Command,
-    _describe,
-    _join,
-    _wait_until_blocked_by,
-)
 from tests.database.test_content_authoring_concurrency import (  # noqa: F401 - fixture by name
     Fixture,
     _create_as,
@@ -54,6 +45,7 @@ from tests.factories import (
     make_system_role_assignment,
     make_user,
 )
+from tests.lock_race_support import LockRace, Worker
 
 pytestmark = pytest.mark.database
 
@@ -65,96 +57,8 @@ RECOVERY_MEMBERSHIP = r"FROM security\.campaign_memberships WHERE .* FOR UPDATE"
 AFTER_CAMPAIGN_LOCK = r"FROM core\.lifecycle_statuses"
 
 
-# --- harness ----------------------------------------------------------------------------------
-
-
-def _start(engine: Engine, operation: Callable[[Connection], object], name: str) -> _Command:
-    """Runs `operation` in its own transaction on a thread called `name` (so a pause can single
-    it out); it commits on success."""
-    command = _Command(thread=threading.Thread())
-
-    def run() -> None:
-        try:
-            with engine.begin() as connection:
-                command.result = operation(connection)
-        except BaseException as exc:  # noqa: BLE001 - surfaced to the test
-            command.error = exc
-        finally:
-            command._done.set()
-
-    command.thread = threading.Thread(target=run, name=name, daemon=True)
-    command.thread.start()
-    return command
-
-
-class _Pause:
-    """Holds the named thread just before it executes the first statement matching `pattern`
-    (after `after` has been seen, when given), with whatever locks it holds by then."""
-
-    def __init__(
-        self, engine: Engine, *, thread_name: str, pattern: str, after: str | None = None
-    ) -> None:
-        self.engine = engine
-        self.thread_name = thread_name
-        self.pattern = re.compile(pattern)
-        self.after = re.compile(after) if after is not None else None
-        self.reached = threading.Event()
-        self.resume = threading.Event()
-        self.pid = 0
-        self._seen_after = after is None
-        self._fired = False
-        event.listen(engine, "before_cursor_execute", self._hook)
-
-    def _hook(
-        self,
-        conn: Connection,
-        cursor: Any,
-        statement: Any,
-        parameters: Any,
-        context: Any,
-        executemany: Any,
-    ) -> None:
-        if self._fired or threading.current_thread().name != self.thread_name:
-            return
-        flat = " ".join(str(statement).split())
-        if not self._seen_after:
-            assert self.after is not None
-            self._seen_after = bool(self.after.search(flat))
-            return
-        if self.pattern.search(flat):
-            self._fired = True
-            self.pid = conn.connection.driver_connection.info.backend_pid  # type: ignore[union-attr]
-            self.reached.set()
-            if not self.resume.wait(_WAIT_SECONDS):
-                raise AssertionError("the pause was never released")
-
-    def wait_reached(self, command: _Command) -> None:
-        """Waits until the paused thread is at the pause point; a command that ended first is
-        reported as it ended."""
-        for _ in range(int(_WAIT_SECONDS / 0.02)):
-            if self.reached.wait(0.02):
-                return
-            if command.done:
-                raise AssertionError(f"ended before the pause point: {_describe(command)}")
-        raise AssertionError("the command never reached the pause point")
-
-    def release(self) -> None:
-        self.resume.set()
-
-    def close(self) -> None:
-        self.resume.set()
-        event.remove(self.engine, "before_cursor_execute", self._hook)
-
-
-@contextmanager
-def _paused(
-    engine: Engine, *, thread_name: str, pattern: str, after: str | None = None
-) -> Iterator[_Pause]:
-    pause = _Pause(engine, thread_name=thread_name, pattern=pattern, after=after)
-    try:
-        yield pause
-    finally:
-        pause.close()
+def _start(race: LockRace, operation: Callable[[Connection], object], name: str) -> Worker:
+    return race.start(name, operation)
 
 
 # --- fixtures ---------------------------------------------------------------------------------
@@ -300,14 +204,14 @@ def test_recovery_waits_for_an_author_paused_before_its_campaign_lock_and_both_c
     campaign statement; recovery takes the campaign and queues for that membership. Released, the
     author asks for the campaign: `FOR SHARE` waited for recovery (a deadlock), `FOR KEY SHARE`
     does not."""
-    with _paused(fx.engine, thread_name="author", pattern=CAMPAIGN_LOCK) as pause:
-        author = _start(fx.engine, _create_as(fx, editor, "Beside recovery"), "author")
+    with LockRace(fx.engine) as race:
+        pause = race.pause(thread_name="author", pattern=CAMPAIGN_LOCK)
+        author = _start(race, _create_as(fx, editor, "Beside recovery"), "author")
         pause.wait_reached(author)
-        recovery = _start(fx.engine, _recover(fx, stranded, editor), "recovery")
-        _wait_until_blocked_by(fx.engine, pause, 1, recovery)  # type: ignore[arg-type]
+        recovery = _start(race, _recover(fx, stranded, editor), "recovery")
+        race.wait_blocked_by(pause, recovery)
         pause.release()
-        _join(author)
-        _join(recovery)
+        race.join_all()
     assert author.error is None, author.error
     assert recovery.error is None, recovery.error
     assert _location_count(fx, "Beside recovery") == 1
@@ -320,28 +224,18 @@ def test_an_author_completes_while_recovery_is_paused_after_its_campaign_lock(
     """Recovery holds the campaign `FOR NO KEY UPDATE` and stops before its membership statement.
     The author must run to completion meanwhile: that is what `FOR KEY SHARE` allows and
     `FOR SHARE` did not. Then recovery resumes and commits."""
-    with _paused(fx.engine, thread_name="recovery", pattern=RECOVERY_MEMBERSHIP) as pause:
-        recovery = _start(fx.engine, _recover(fx, stranded, editor), "recovery")
+    with LockRace(fx.engine) as race:
+        pause = race.pause(thread_name="recovery", pattern=RECOVERY_MEMBERSHIP)
+        recovery = _start(race, _recover(fx, stranded, editor), "recovery")
         pause.wait_reached(recovery)
-        author = _start(fx.engine, _create_as(fx, editor, "During recovery"), "author")
-        author.thread.join(timeout=_WAIT_SECONDS)
-        if not author.done:
-            raise AssertionError(
-                "the author is waiting for recovery's campaign lock; "
-                f"waiting sessions: {_waiting_summary(fx.engine)}"
-            )
+        author = _start(race, _create_as(fx, editor, "During recovery"), "author")
+        race.wait_done(author, why="the author is waiting for recovery's campaign lock")
         pause.release()
-        _join(recovery)
+        race.join_all()
     assert author.error is None, author.error
     assert recovery.error is None, recovery.error
     assert _location_count(fx, "During recovery") == 1
     assert _owner_roles(fx, editor) == 1
-
-
-def _waiting_summary(engine: Engine) -> list[tuple[object, ...]]:
-    from tests.database.test_character_reveal_delegation_deadlocks import _waiting_sessions
-
-    return _waiting_sessions(engine)
 
 
 # --- 3. archive and settings still serialize with an author --------------------------------------
@@ -372,16 +266,14 @@ def test_a_campaign_archive_or_settings_edit_waits_for_an_author_that_holds_the_
             description=None,
         )
 
-    with _paused(
-        fx.engine, thread_name="author", pattern=AFTER_CAMPAIGN_LOCK, after=CAMPAIGN_LOCK
-    ) as pause:
-        author = _start(fx.engine, _create_as(fx, fx.owner, "Before the campaign change"), "author")
+    with LockRace(fx.engine) as race:
+        pause = race.pause(thread_name="author", pattern=AFTER_CAMPAIGN_LOCK, after=CAMPAIGN_LOCK)
+        author = _start(race, _create_as(fx, fx.owner, "Before the campaign change"), "author")
         pause.wait_reached(author)
-        change = _start(fx.engine, campaign_operation, "campaign-change")
-        _wait_until_blocked_by(fx.engine, pause, 1, change)  # type: ignore[arg-type]
+        change = _start(race, campaign_operation, "campaign-change")
+        race.wait_blocked_by(pause, change)
         pause.release()
-        _join(author)
-        _join(change)
+        race.join_all()
     assert author.error is None, author.error
     assert change.error is None, change.error
     assert _location_count(fx, "Before the campaign change") == 1
@@ -430,22 +322,22 @@ def test_revoking_a_built_in_owner_role_waits_for_an_author_past_the_campaign_lo
     then takes the campaign `FOR UPDATE` at commit, which must not deadlock with the author."""
     deputy, role = _deputy(fx)
     try:
-        with _paused(
-            fx.engine, thread_name="author", pattern=AFTER_CAMPAIGN_LOCK, after=CAMPAIGN_LOCK
-        ) as pause:
-            author = _start(fx.engine, _create_as(fx, deputy, "Before the role loss"), "author")
+        with LockRace(fx.engine) as race:
+            pause = race.pause(
+                thread_name="author", pattern=AFTER_CAMPAIGN_LOCK, after=CAMPAIGN_LOCK
+            )
+            author = _start(race, _create_as(fx, deputy, "Before the role loss"), "author")
             pause.wait_reached(author)
             revoke = _start(
-                fx.engine,
+                race,
                 lambda c: revoke_membership_role(
                     c, membership_role_id=role, campaign_id=fx.campaign_id
                 ),
                 "revoke",
             )
-            _wait_until_blocked_by(fx.engine, pause, 1, revoke)  # type: ignore[arg-type]
+            race.wait_blocked_by(pause, revoke)
             pause.release()
-            _join(author)
-            _join(revoke)
+            race.join_all()
         assert author.error is None, author.error
         assert revoke.error is None, revoke.error
         assert _location_count(fx, "Before the role loss") == 1
@@ -483,13 +375,14 @@ def test_ending_a_membership_waits_for_its_authors_in_flight_write_and_the_write
     ended_by = _membership_of(fx, fx.owner)
     target = _membership_of(fx, deputy)
     try:
-        with _paused(
-            fx.engine, thread_name="author", pattern=AFTER_CAMPAIGN_LOCK, after=CAMPAIGN_LOCK
-        ) as pause:
-            author = _start(fx.engine, _create_as(fx, deputy, "Before the end"), "author")
+        with LockRace(fx.engine) as race:
+            pause = race.pause(
+                thread_name="author", pattern=AFTER_CAMPAIGN_LOCK, after=CAMPAIGN_LOCK
+            )
+            author = _start(race, _create_as(fx, deputy, "Before the end"), "author")
             pause.wait_reached(author)
             end = _start(
-                fx.engine,
+                race,
                 lambda c: end_campaign_membership(
                     c,
                     campaign_membership_id=target,
@@ -498,10 +391,9 @@ def test_ending_a_membership_waits_for_its_authors_in_flight_write_and_the_write
                 ),
                 "end",
             )
-            _wait_until_blocked_by(fx.engine, pause, 1, end)  # type: ignore[arg-type]
+            race.wait_blocked_by(pause, end)
             pause.release()
-            _join(author)
-            _join(end)
+            race.join_all()
         assert author.error is None, author.error
         assert end.error is None, end.error
         assert _location_count(fx, "Before the end") == 1
@@ -563,16 +455,16 @@ def test_account_deactivation_waits_for_an_in_flight_author_and_the_write_stands
 ) -> None:
     deputy, _ = _deputy(fx)
     try:
-        with _paused(
-            fx.engine, thread_name="author", pattern=AFTER_CAMPAIGN_LOCK, after=CAMPAIGN_LOCK
-        ) as pause:
-            author = _start(fx.engine, _create_as(fx, deputy, "Before deactivation"), "author")
+        with LockRace(fx.engine) as race:
+            pause = race.pause(
+                thread_name="author", pattern=AFTER_CAMPAIGN_LOCK, after=CAMPAIGN_LOCK
+            )
+            author = _start(race, _create_as(fx, deputy, "Before deactivation"), "author")
             pause.wait_reached(author)
-            deactivation = _start(fx.engine, _deactivate(deputy), "deactivation")
-            _wait_until_blocked_by(fx.engine, pause, 1, deactivation)  # type: ignore[arg-type]
+            deactivation = _start(race, _deactivate(deputy), "deactivation")
+            race.wait_blocked_by(pause, deactivation)
             pause.release()
-            _join(author)
-            _join(deactivation)
+            race.join_all()
         assert author.error is None, author.error
         assert deactivation.error is None, deactivation.error
         assert _location_count(fx, "Before deactivation") == 1

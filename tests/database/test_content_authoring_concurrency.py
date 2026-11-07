@@ -61,12 +61,8 @@ from tests.database.test_authoring_concurrency import (
     _purge_user_worlds,
     _wait_until_blocked,
 )
-from tests.database.test_character_reveal_delegation_deadlocks import (
-    _join,
-    _run_command,
-    _wait_until_blocked_by,
-)
 from tests.factories import make_campaign_party, make_party, make_user, make_world_time
+from tests.lock_race_support import LockRace
 
 pytestmark = pytest.mark.database
 
@@ -190,11 +186,6 @@ def race(
     return out
 
 
-@dataclass(frozen=True)
-class _HolderPid:
-    pid: int
-
-
 def observed_race(
     engine: Engine,
     hold: Callable[[Connection], object],
@@ -203,24 +194,17 @@ def observed_race(
     """Like `race`, but proves the intended blocker: the racer's session must be blocked, through
     `pg_blocking_pids`, by the *holder's own session* (not merely waiting on some lock whose text
     matches). A racer that finishes or fails before it blocks is reported as that, not as a
-    timeout. The holder's transaction is rolled back if anything fails."""
-    holder = engine.connect()
-    tx = holder.begin()
-    try:
-        hold(holder)
-        pid = holder.connection.driver_connection.info.backend_pid  # type: ignore[union-attr]
-        command = _run_command(engine, racer)
-        _wait_until_blocked_by(engine, _HolderPid(pid), 1, command)  # type: ignore[arg-type]
-        tx.commit()
-    except BaseException:
-        tx.rollback()
-        raise
-    finally:
-        holder.close()
-    _join(command)
-    if command.error is not None:
-        return {"error": command.error}
-    return {"value": command.result}
+    timeout. On exit, success or failure, the holder is rolled back and the racer joined before
+    any fixture teardown (`LockRace`)."""
+    with LockRace(engine) as lock_race:
+        holder = lock_race.hold(hold)
+        worker = lock_race.start("racer", racer)
+        lock_race.wait_blocked_by(holder, worker)
+        holder.commit()
+        lock_race.join_all()
+    if worker.error is not None:
+        return {"error": worker.error}
+    return {"value": worker.result}
 
 
 # --- edit vs edit / archive / publish / submit ---------------------------------------
