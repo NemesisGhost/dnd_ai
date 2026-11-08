@@ -1,6 +1,6 @@
 # P03-A implementation plan: public profiles, revelation and audience-safe character reads
 
-**Status:** Approved planning document. A0, A1, P0, P1, A2a and A2a-R are implemented and independently reviewed (A2a and A2a-R: PASS WITH NONBLOCKING FINDINGS; handoff `523ae5c`). D7 and D8 are approved (recorded 2026-11-07). A2b is designed (§9) and not implemented. The plan was committed on its own as the design commit (`3b3d637`) before A2a's code.
+**Status:** Approved planning document. A0, A1, P0, P1, A2a and A2a-R are implemented and independently reviewed (A2a and A2a-R: PASS WITH NONBLOCKING FINDINGS; handoff `523ae5c`). D7 and D8 are approved (recorded 2026-11-07). A2b-1 and A2b-2 are implemented and reviewed (handoff `a9ec4c4`). A3 is designed and finalized (§10; D4, D5 and D9–D12 approved, §10.15, including the D9-a candidate-statement cutoff approved 2026-11-08) and not implemented. P2, the shared idempotency key lock, is implemented at `d36d565` and independently reviewed (PASS WITH NONBLOCKING FINDINGS; record below §10). A3a now needs P3, committing the request transaction before the response (DEF-022, §11), which is designed and not implemented. The plan was committed on its own as the design commit (`3b3d637`) before A2a's code.
 
 - **A0** is implemented at `fca3ac7`.
 - **A1** is implemented at `68dc902` through `6a5773d`. That covers the D3 ownership gate, DEF-011, DEF-013 and the reveal delegation. Its record is in [the A1 design](PHASE14_15_P03A_A1_OWNERSHIP_AUTHORITY_DESIGN_2026-11-06.md) §8. The independent re-review passed at `fc20e8d`. CI is pending until push, and an intermittent race-test timeout is still unresolved. It has now been seen in the A1 lock-wait tests twice in full suites (`test_campaign_owner_caller_expiry.py` once, and `test_character_reveal_delegation.py::test_a_grant_that_waits_on_ending_the_gms_membership_is_refused` once: the request was alive but no session waited on a lock within 15 s), each passing on every rerun. That test now observes its blocker through `pg_blocking_pids` (A2 handoff, below); the cause of the missing wait is not established.
@@ -9,7 +9,9 @@
 - **D8** was approved by the owner on 2026-11-07 as proposed (see "Decisions still needed").
 - **D7** was approved by the owner on 2026-11-07 (see "Decisions still needed"); A2b's design follows it (§9).
 - **D7-a to D7-f**, the points D7 left open, were approved by the owner in conversation and recorded on 2026-11-07 (§9.10).
-- **Still open:** D4, D5 and D6. D5 and D6 are additive and block A3/A4.
+- **D4-C, D5-c, D9, D10-a, D11-a and D12-a** were approved by the owner in conversation and recorded on 2026-11-07 (§10.15).
+- **D9-a's candidate-statement cutoff** (§10.4) was approved by the owner on 2026-11-08.
+- **Still open:** D6, which blocks A4 only.
 - **Revision of 2026-11-07, after an independent CHANGES REQUIRED review.** The review text is not in the repository; this revision follows the owner's summary of it.
   - The recovery deadlock is now a prerequisite commit, P0 (§6).
   - The draft-read and deny policy is now proposed decision D8.
@@ -39,6 +41,79 @@
   - **The rule now.** Every content change to a copied field advances that field's restriction watermark, and the database enforces this. A release lifts the restriction only when it covers the watermark, which means it holds the field's current text. Editing another field never moves it.
   - **Tests and migration.** The tests gain the excerpt-append and restore regressions, plus mixed-field, unchanged-field, clear, recopy, stale-write and keyed-retry cases. The migration gains a preflight and a fail-closed downgrade.
   - **Recorded.** D7-a to D7-f are now owner-approved (§9.10), and kind stability is recorded as an application-path assumption (§9.1).
+- **Revision of 2026-11-07, A3 design (§10).**
+  - **What it designs.** The four audience kinds: storage (migration 145), commands, revocation, lifecycle hooks, audit, retries and same-campaign checks.
+  - **Source-tagged.** Revelations sit in `AccessContext` as a source of their own.
+  - **Every consumer traced.** The design traces every consumer of the shared discovery bundle.
+  - **One lock-order change.** `end_campaign_membership` takes the actor's membership `FOR KEY SHARE`, then the campaign row `FOR UPDATE`, before it closes revelations. Without this, a `campaign_current` snapshot taken concurrently keeps a departing member, who would regain the revelation on rejoining.
+  - **Split.** A3 becomes A3a (inert storage and commands) and A3b (discovery).
+  - **Decisions.** D4 and D5 are set out with concrete options. Four new owner decisions, D9–D12, cover what OD-17 and the code leave open.
+- **Revision of 2026-11-07, A3 finalized after the owner's approvals (§10.15).**
+  - **D5-c, release summaries (§10.12):** how release summaries are authored and snapshotted; how older releases without one display (`null`, no fallback); and how search, counts and sorting use the caller's projection.
+  - **D4-C, the party roster (§10.13):** the exception is reconciled with the shared discovery rule. It is confined to one route and one function, and kept out of discovery by structural tests and a containment regression.
+  - **D11, released profiles (§10.14):** the reader rule is specified.
+- **Revision of 2026-11-08, the membership-end concurrency matrix (§10.8).**
+  - **What it traces.** Membership end against recovery, role assignment, revocation and change, both kinds of ownership transfer, revelation creation and revocation, snapshots and direct grants, keyed and unkeyed. It was probed on the disposable test database.
+  - **Two corrections to A3 (§10.4).**
+    - `campaign_current` creation locks the campaign's open memberships before the campaign row. Its snapshot insert otherwise deadlocked with ending a member, in both orders.
+    - Both revelation routes reserve their idempotency key after the lock phase. Reserving first deadlocked with ending a membership.
+  - **The explicit campaign lock in end stays, for a new reason.** Snapshots no longer depend on it. It is needed because a revocation takes the campaign row before the revelation row (A3-V3).
+  - **Three pre-existing cycles** were found and proposed as DEF-019 to DEF-021 (§10.11). None blocks A3.
+  - **The untraced-cycle deferral is removed.**
+- **Revision of 2026-11-08, after the independent review of the matrix.** The review text is not in the repository; this revision follows the owner's summary of it.
+  - **Reservation and replay moved (§10.3, §10.4).** For create and revoke they now come after the fresh, under-lock reveal-authority check and the whole-character deny check. A replay is therefore refused to a caller who lost authority, or came under a deny, after the route's pre-check.
+  - **Reservation waits traced (§10.4).**
+    - The caller's account is now locked after the campaign row (step 5a). Locked before it, it deadlocked with `add_campaign_member` (probe ACC-1b).
+    - The reservation's remaining wait, on a same-key request, can outlast an expiry, so authority is judged again after it (step 8b). *Withdrawn by the next revision: with the key lock the reservation cannot wait.*
+  - **Keyed HTTP regressions** are now explicit A3a acceptance criteria (§10.10, criterion 4).
+  - **Every A3a race is real.** Each is a command or HTTP race on migration 145's schema and the real request transaction, asserting the audit, receipt, snapshot, revelation, membership and role state (§10.9). The §10.8 SQL probes are design evidence only.
+  - **The D9-a candidate-statement cutoff was stated (§10.4) and marked pending owner confirmation.** The owner approved it later the same day (next revision).
+- **Revision of 2026-11-08, after the second independent review: the cross-route idempotency deadlock.** The review text is not in the repository; this revision follows the owner's summary of it.
+  - **The cycle, reproduced (§10.8.9).**
+    - A same-actor keyed request on an existing route reserves key K before its locks. A3, holding its lock phase, then waits for K at its late reservation, and the existing request waits for A3's locks.
+    - The reproduction used the real `POST …/memberships/{id}/end` route through `TestClient`, against an A3 SQL stand-in (design evidence).
+    - It gave 40P01 in both orders. In one variant the end route returned 200 although its transaction rolled back.
+  - **The fix:** a transaction-scoped advisory key lock, taken before any row lock: inside `begin_idempotent_request` for every route, and at A3's new step 0.
+    - A3's reservation then cannot wait, so step 8b is withdrawn.
+    - It is a shared prerequisite, **P2** (§10.11). Every reserving route was evaluated.
+  - **Outcomes and acceptance.** Same-route and cross-route outcomes are specified, including different payloads and a first request that rolls back (§10.8.9). They are A3a acceptance cases (§10.9 item 5, §10.10 criterion 4).
+  - **API contract changes** are surfaced (§10.3).
+  - **New pre-existing defect, proposed DEF-022:** a failure at commit reaches the client as the handler's success, because the request transaction commits after the response (probe HEAD-C1).
+  - **D9-a's cutoff is approved.**
+  - **The lock wording is narrowed.** Held locks stop allowed decisions from becoming refused; they need not stop changes that only remove restrictions.
+- **P2** is implemented at `d36d565`. Its independent review returned PASS WITH NONBLOCKING FINDINGS: the 15 P2 tests and a 55-test focused run passed, and three nonblocking findings were recorded (caller-order coverage, the A3 call-site guard, the outer-transaction harness). The record is in "P2 implementation and review record", below §10.
+- **Revision of 2026-11-08 at `c705ee7`: the commit-before-response correction, P3 (§11).** The owner made DEF-022's correction a requirement for A3a.
+  - **Traced.** FastAPI 0.141.1 exits `scope="function"` dependencies after the handler and serialization and before the response is sent. It exits request-scoped dependencies, including `get_connection`, after the response is sent.
+  - **Reproduced** through the real membership-end route, with a deterministic commit-time failure (a test-only deferred trigger). HEAD answers 200 with nothing persisted, for keyed (23000) and unkeyed (40P01) requests and for the real retention-trigger race. At HEAD a success is not yet visible when the response starts, and P2's key lock is still held then.
+  - **The correction:**
+    - one function-scoped `commit_request_transaction` dependency installed app-wide in `create_app`;
+    - `get_connection` takes `Request` and registers its connection.
+    - No route signature changes. A per-declaration scope was rejected because a mixed declaration opens a second transaction (probe M1).
+  - **A prototype** in a throwaway copy returned 500 and persisted nothing in the same cases. It made every success visible, and released the key lock, before the response.
+  - **New finding.** P2's `test_a_different_key_takes_its_own_key_lock_without_queueing_behind_a_held_request` passed only because of DEF-022. Its second request is a DEF-019 K1 deadlock victim at COMMIT; at HEAD it answers 200 and persists nothing. P3 corrects the test (§11.8, T8).
+  - *Parts of this revision were wrong and are corrected by the next one:* the claim that engine-backed routes do not use the request transaction, the claim that no route signature changes, and the prototype failure totals.
+  - **DEF-022 is regraded to 6, Medium, and is blocking for A3a** (§10.11).
+- **Revision of 2026-11-08, after the independent CHANGES REQUIRED review of P3.** The review text is not in the repository; this revision follows the owner's summary of it. §11 is rewritten.
+  - **Routes classified by their full effective dependency graph** (§11.2): 333 request-transaction routes, 8 engine-backed routes, `readyz` and `healthz`.
+    - The eight engine-backed routes are `ai_npc` ×2, `ai_synthesis`, combat sync and `reference_corpus` ×4.
+    - They do hold a request transaction through their authorization dependency. At HEAD it stays idle in transaction across the AI provider call; for a cookie session it locks `security.browser_sessions` throughout.
+  - **Engine-backed routes end their authorization transaction before any engine-side effect** (`end_request_transaction`, §11.4.3). No transaction is held across a provider call, and an authorization-commit failure precedes every engine effect (probes AE1, AE2).
+  - **Guarantees are stated per class** (§11.5): which failures guarantee rollback, and which can follow committed effects.
+  - **Serialization, rollback failure, cancellation and an uncertain commit are designed and probed** (§11.4.4–§11.4.7; S1, RB1, CX1, U1). The commit dependency becomes async, so it sees a cancellation; its COMMIT or ROLLBACK runs in a shielded worker thread.
+  - **New tests:** T10, uncertain commit then a same-key replay; T9, a deterministic DEF-019 two-ends regression, kept separate from T8's independent-key test; T12, real-route engine-backed coverage; T16, `uv lock --check`.
+  - **`uv.lock`:** the FastAPI floor changes one `requires-dist` line, verified in a throwaway copy (§11.7).
+  - **The P2 review record is corrected** to the review's findings: caller-order coverage, the A3 call-site guard, and the outer-transaction harness.
+  - **The prototype failure totals are reconciled from the log** (§11.9). The earlier "54" was 67, the 40 handshake timeouts are left unattributed, and reruns are kept separate.
+- **Amendment of 2026-11-08: P3's cancellation acceptance (§11.4.2, §11.4.6, §11.8).** It follows the latest review, whose text is not in the repository.
+  - **Barrier-held tests now cancel the request while COMMIT or ROLLBACK is actually executing in the worker thread.** They are specified by a common barrier protocol: observe entry, deliver the cancellation, hold, prove no close or pool return, release, assert order, no response and lock release, with bounded waits and guaranteed release.
+  - **Split by what each layer can prove:**
+    - T11b, mocked lifecycle ordering with a fake connection;
+    - T11c, real PostgreSQL connection state, pool return, locks and outcome;
+    - T11a, the existing handler-phase cancellation test, kept as distinct coverage.
+  - **Rollback failure is covered after a handler exception (T7, T11b) and after a cancellation (T11b, T11c).** The original exception or the cancellation is preserved, the failure is logged by class, and the connection is invalidated.
+  - **T15 is extended** to the FastAPI and anyio behaviours P3 relies on.
+  - **Design change from the probes:** `checkpoint_if_cancelled()` after a successful shielded commit. Without it, a cancellation delivered during COMMIT surfaced only at Starlette's later send (probe L1).
+  - **Probed on prototype v2** (L1–L4, B1–B5; §11.3).
 
 **Baseline:**
 
@@ -47,8 +122,11 @@
 - The DEF-015 design (§7) was checked at `4dd56fda34c5136ff1e288b7a180ba981dd7f41e`.
 - The grant-target correction (§8) was checked by reading source at `0b4704cacef5a49ed24c65068938d28ad6eefc93` (A2a). Nothing was run for it.
 - The A2b design (§9) was checked by reading source at `523ae5cbf947af230e1d7a5409912c1039e43a69` (the A2a handoff, on A2a-R `f66240a`). Nothing was run for it.
+- The A3 design (§10) was checked by reading source at `a9ec4c4b7a14d7c5236525b2121da8ba6f01475d` (the A2b review handoff). Nothing was run for it.
+- The membership-end matrix (§10.8, with §10.4 and §10.11) was traced and probed on 2026-11-08 at the same commit (§10.8, "Method").
+- The P3 design (§11) was traced and probed on 2026-11-08 at `c705ee79351ac84d6ac23ff8340aa07278881ac7`, which contains P2 (`d36d565`). The installed and locked versions are FastAPI 0.141.1, Starlette 1.3.1, SQLAlchemy 2.0.51, psycopg 3.3.4 and Uvicorn 0.52.0. Its prototype ran only in a throwaway copy outside the repository.
 
-Every code claim was checked by reading source at the stated commit. No application code, schema or committed test was changed to produce this plan. The DEF-014 and DEF-015 reproductions ran throwaway probes, deleted afterwards, on the test suite's per-run disposable PostgreSQL 18 database (§6.1, §7.1).
+Every code claim was checked by reading source at the stated commit. No application code, schema or committed test was changed to produce this plan. The DEF-014 and DEF-015 reproductions, and the §10.8 probes, ran throwaway probes on the test suite's per-run disposable PostgreSQL 18 database (§6.1, §7.1, §10.8). The §10.8 probes are kept outside the repository and are not committed.
 
 **Audience:** the owner, P03-A implementers and independent reviewers.
 
@@ -64,7 +142,19 @@ Every code claim was checked by reading source at the stated commit. No applicat
 
 ## Recommendation
 
-**Next: A2b-1, then A2b-2 (§9, for Sonnet), then A3.** A2a and its correction A2a-R are implemented and reviewed (handoff `523ae5c`). D7 is approved. A2b-1 adds the D7 restriction (withholding, the save rule, the release check and the release's world lock) before A2b-2 adds the copy itself, so no commit has a copy path without its restriction. D7 and D7-a to D7-f are approved (§9.10); nothing in A2b waits on a further decision. The design was revised after an independent CHANGES REQUIRED review, and the revised design has not yet been re-reviewed.
+**Next: P3, commit before the response (§11, for Sonnet); then A3a, then A3b (§10, for Sonnet); then A4 once D6 is decided.** P2 is done (`d36d565`, reviewed).
+
+- **A3a** has no effect on any audience response.
+- **A3b** makes revealed characters discoverable through the one shared bundle. They cannot be opened until A4.
+- **Decisions:** D4-C, D5-c, D9, D10-a, D11-a and D12-a are approved (§10.15). The D9-a candidate-statement cutoff (§10.4) is approved (2026-11-08).
+- **Concurrency (2026-11-08):**
+  - A3a carries §10.4's two lock corrections and §10.9's race tests.
+  - The pre-existing DEF-019 to DEF-021 (§10.11) are not prerequisites.
+  - **P2, the idempotency key lock, is a prerequisite for A3a's keyed routes** (§10.11). Without it, a same-key request on another route deadlocks with A3 (§10.8.9). *Done: `d36d565`, reviewed.*
+  - **P3, commit before the response (DEF-022), is a prerequisite for A3a** (§11), by the owner's direction of 2026-11-08. Without it, a request whose commit fails, including a DEF-019 deadlock victim, answers 2xx with nothing persisted.
+  - DEF-019, keyed requests deadlocking on the portal path, should be fixed before A6.
+
+*Previous recommendation (2026-11-07, done; A2b-1 and A2b-2 implemented and reviewed, handoff `a9ec4c4`):* A2b-1, then A2b-2 (§9, for Sonnet), then A3. A2a and its correction A2a-R are implemented and reviewed (handoff `523ae5c`). D7 is approved. A2b-1 adds the D7 restriction (withholding, the save rule, the release check and the release's world lock) before A2b-2 adds the copy itself, so no commit has a copy path without its restriction. D7 and D7-a to D7-f are approved (§9.10); nothing in A2b waits on a further decision. The design was revised after an independent CHANGES REQUIRED review, and the revised design has not yet been re-reviewed.
 
 *Previous recommendation (2026-11-07, done):* correction A2a-R (§8), then the close of A2a's review. A2a-R was implemented at `f66240a`.
 
@@ -242,11 +332,13 @@ The second caller, AI NPC context ([domain/context_assembly.py:362-396](../src/d
 | **A1** (done, `68dc902`–`6a5773d`; CI pending) | `character.reveal` vocabulary, delegation table, resolver, grant/revoke commands and API (owner only), eligibility closure in the membership, ownership and recovery commands, audit | D3 (approved) | Every row of the §1 table as a database test; concurrency tests (revoke `gm` vs grant; revoke delegation vs release); assistant GM, `canon.edit` and custom `access.manage` refused; cross-campaign refusal; migration up/down; the full suite. The release race moves to A2a, because no release existed in A1 |
 | **P0** (implemented at `4dd56fd`; independent review complete) | `lock_authoring_scope` takes the campaign row `FOR KEY SHARE` (DEF-014, §6) | none | §6.4–§6.5 |
 | **P1** (implemented at `edf46ca`; independent review complete) | `add_access_group_members` locks memberships before the campaign row, in weaker modes (DEF-015, §7); race harness cleanup | P0 | §7.5–§7.8 |
+| **P2** (implemented at `d36d565`; independent review: PASS WITH NONBLOCKING FINDINGS) | `begin_idempotent_request` takes a transaction-scoped key lock before its insert; a shared `lock_idempotency_key` helper; structural guards on the helper (§10.11) | none | §10.11, P2; record below §10 |
+| **P3** (designed 2026-11-08, revised after CHANGES REQUIRED; before A3a; for Sonnet) | The request transaction ends before the response: one app-wide function-scoped async `commit_request_transaction` dependency; `get_connection` registers its connection; the eight engine-backed handlers end their authorization transaction before engine-side effects; `pyproject.toml` and `uv.lock` raise the FastAPI floor (§11, DEF-022) | P2 | §11.8, §11.11 |
 | **A2a** (done, `0b4704c`; reviewed, handoff `523ae5c`) | Migration 142 (§5.3); draft save; release under A1 authority; GM reads (§5.7, §5.7a). No copy aid | A1, P0, P1, D1 and D2 (approved), D8 | The criteria in the A2a acceptance section |
 | **A2a-R** (done, `f66240a`; reviewed) | The D8 denies become creatable: `entity_id` may name a character for a `campaign.view` or `canon.edit` deny (§8); overview and explanation name the character | A2a, Q1 (§8.8) | §8.6–§8.7 |
 | **A2b-1** (designed, revised after review; for Sonnet) | The D7 restriction: migration 143 (restriction watermarks, preflight, enforcement trigger), the source-read rule, withholding in the GM read, the save rule and watermark advance, the release's world lock and withheld check (§9.1–§9.7) | A2a-R, D7 and D7-a to D7-f (approved) | §9.8–§9.9, with legacy-origin rows seeded by a test helper |
 | **A2b-2** (designed, revised after review; for Sonnet) | The copy command and route, `legacy_copy` in the GM read, the copy audit row (§9.4, §9.6) | A2b-1 | §9.8–§9.9: copy rules, recopy, excerpt regressions through the real copy, disclosure sweep, copy races |
-| **A3** | Revelations: audience kinds, snapshot, create/revoke, membership-end and group-deactivate hooks, `AccessContext` source, discovery bundle | A2 (a revelation requires an existing release, recommended), D5 | T82 audiences, including the late joiner; T6 independent-grant survival; whole vs operation deny; cross-surface matrix from investigation D6.4 (lists, counts, pagination, relationships, organizations, roster, events, encounters, Knowledge, preview), with **response-body ID assertions**; bootstrap, inventory and sheet unchanged |
+| **A3** (designed in §10; split into A3a and A3b, §10.10) | Revelations: audience kinds, snapshot, create/revoke, membership-end and group-deactivate hooks, `AccessContext` source, discovery bundle | A2 (a revelation requires an existing release, D9-d); D4-C, D5-c, D9, D10 (approved) | T82 audiences, including the late joiner; T6 independent-grant survival; whole vs operation deny; cross-surface matrix from investigation D6.4 (lists, counts, pagination, relationships, organizations, roster, events, encounters, Knowledge, preview), with **response-body ID assertions**; bootstrap, inventory and sheet unchanged |
 | **A4** | Projection tier, public-profile read in the detail route, `sections`, `can_open` | A3 | Browse/detail agreement; public tier carries no species, size or mechanics unless released; revocation takes effect on the next request |
 | **A5** | OD-18 player-profile storage plus GM read (editing is P03-B, T85); publishing a selected field via A2 provenance | A2 | Readable only by A's GMs; nothing in B; no write path for players yet |
 | **A6** | Portal: reveal/delegation management, draft and release editor, revelation list and revoke, public character view, effective-access sources | A4 (A5 optional) | jsdom; type contract; non-disclosing errors; real-browser checks recorded as pending |
@@ -984,6 +1076,7 @@ with LockRace(engine) as race:
 3. **Other late foreign-key locks on an actor's membership.** `create_resource_grant` (`granted_by_membership_id`) and `end_campaign_membership` (`ended_by_membership_id`) take `KEY SHARE` on the actor's membership after their target or campaign locks. P1 does not change them.
    - **Against an add.** P1's member mode `FOR NO KEY UPDATE` makes those late locks compatible with an add (S11, S12).
    - **Elsewhere.** Whether they cycle with other commands was not traced. That is a candidate for a later lock-order audit, not part of DEF-015.
+   - **Traced 2026-11-08.** Both do cycle: see §10.8.5 and §10.8.6, and proposed DEF-019 and DEF-021 in §10.11.
 
 ---
 
@@ -1599,6 +1692,1705 @@ The owner approved these in conversation. The approval text is not otherwise in 
 
 ---
 
+## 10. A3 design: audience revelations (2026-11-07)
+
+**Status:** design only, **finalized 2026-11-07** with the owner's approval of D4-C, D5-c, D9, D10, D11 and D12 (§10.15). It was checked by reading source at `a9ec4c4b7a14d7c5236525b2121da8ba6f01475d` (the A2b review handoff). Nothing was run for it, and nothing in it is implemented.
+
+**What it replaces.** §2's revelation outline and §3's consumer list are kept as context. Where they differ, this section governs. The main changes from §2 and §3 are:
+
+- one more lock, taken explicitly in `end_campaign_membership`;
+- a release is required before a revelation (D9-d);
+- one live revelation per character, kind and target (D9-e);
+- A3 is split into an inert storage slice (A3a) and a discovery slice (A3b).
+
+**Audience:** Sonnet and the reviewer for A3a and A3b; the owner for the record of the approved decisions (§10.15).
+
+### 10.1 The rules A3 applies
+
+- **OD-17.** A revelation names one member, one access group, or the whole campaign.
+  - A campaign-wide revelation states whether it covers **current members only** or **current and future members**. There is no default.
+  - An audience receives only deliberately released versions. A revelation follows later releases.
+  - Revoking a revelation is independent of every other capability source (ADR 0021 §2.9).
+- **ADR 0021 §6.** Publication is not revelation, and one discovery and profile predicate serves every consumer.
+- **ADR 0021 §2.9.** A whole-character `campaign.view` deny suppresses discovery and profiles from every source. An operation-specific deny blocks only its operation.
+- **D2 and D8.** Creating and revoking a revelation needs `character.reveal` authority (owner, or a live delegation), re-checked under lock at a fresh instant.
+  - A whole-character deny on the actor refuses it with 404.
+  - A `canon.edit` deny on the character does not refuse it, because revealing is not editing.
+- **What a revelation confers.** `character.discover` and the new `character.view_public_profile`, for that character only. Nothing else: never `view_summary`, `view_full`, `view_inventory`, `view_knowledge`, `view_private`, control or play.
+
+### 10.2 Storage: migration `145_character_revelations`
+
+The migration is additive, with no backfill. After it runs, no character has a revelation and every response is unchanged.
+
+**`security.revelation_audience_kinds`** is a lookup table with the 142 origin lookup's shape: id, `code`, `display_name`, `sort_order`, timestamps, and code format and length CHECKs. It is seeded with `member`, `access_group`, `campaign_current` and `campaign_current_and_future`. It is not an ENUM (DATABASE_CONVENTIONS §11), and there is no default.
+
+**`security.character_revelations`** is closed at most once and never edited otherwise. Columns:
+
+- `character_revelation_id` (PK);
+- `campaign_id` → `campaign.campaigns`, `ON DELETE RESTRICT`;
+- `character_id` → `character.characters`, `ON DELETE RESTRICT`;
+- `revelation_audience_kind_id` → the lookup table;
+- `target_campaign_membership_id` and `target_access_group_id`, both nullable;
+- `created_by_membership_id` (NOT NULL);
+- `authority_source`, either `owner` or `delegation`, and `character_reveal_delegation_id`, which is nullable. Together these are provenance, the same pair a release records;
+- `reason` (TEXT NOT NULL, 1–1000 characters, as for a delegation);
+- `created_at`;
+- `ended_at`, `ended_by_membership_id` (NULL for a closure the system makes), `end_reason`, `revocation_reason`;
+- `updated_at`.
+
+`end_reason` is one of:
+
+- `revoked`;
+- `target_membership_ended`;
+- `access_group_deactivated`.
+
+**Constraints on `character_revelations`:**
+
+- **Target shape.** A trigger enforces it by kind code:
+  - `member` has exactly the membership target;
+  - `access_group` has exactly the group target;
+  - both campaign kinds have neither.
+
+  This is a local integrity rule under §20.4, because a CHECK cannot read the lookup table.
+- **Closure consistency.** These CHECKs follow migration 141's delegation table:
+  - `ended_at` and `end_reason` are set together;
+  - `ended_by_membership_id` and `revocation_reason` are set only for `revoked`;
+  - `ended_at >= created_at`.
+- **Immutability.** A trigger refuses any change to a structural column, and any change to a row that is already closed. A row can therefore be closed once and never reopened. Application roles have UPDATE, DELETE and TRUNCATE revoked except UPDATE of the closure columns, and `app_read_only` gets nothing (as 141).
+- **One live row per audience** (D9-e): `CREATE UNIQUE INDEX ux_character_revelations_live ON security.character_revelations (campaign_id, character_id, revelation_audience_kind_id, target_campaign_membership_id, target_access_group_id) NULLS NOT DISTINCT WHERE ended_at IS NULL`. This index is PostgreSQL 15 or later, which PostgreSQL 18 satisfies.
+
+**Same-campaign scope triggers**, following the scope triggers in migrations 141 and 142:
+
+- the character belongs to the campaign's world;
+- the target membership, the target group, the creator and the revoker belong to `campaign_id`;
+- a delegation named as provenance belongs to the campaign, and its grantee is the creator;
+- **a release exists** for (`campaign_id`, `character_id`) when the row is inserted (D9-d). Releases are immutable and cannot be deleted (`ON DELETE RESTRICT`, revoked DELETE), so the condition can never later become false. A release in campaign B does not satisfy it for campaign A.
+
+**`security.character_revelation_members`** is the `campaign_current` snapshot. Columns:
+
+- `character_revelation_member_id` (PK);
+- `character_revelation_id`;
+- `campaign_id`, copied from the revelation for the scope trigger;
+- `campaign_membership_id`;
+- `added_at`;
+- `removed_at`, `removal_reason` (`membership_ended`).
+
+**Snapshot rules:**
+
+- `UNIQUE (character_revelation_id, campaign_membership_id)`.
+- A trigger refuses a row unless:
+  - its revelation's kind is `campaign_current`;
+  - the membership belongs to the revelation's campaign;
+  - the revelation's `created_at = now()`, so only the transaction that created the revelation can insert snapshot rows. No later transaction can add members.
+- The only permitted update is setting `removed_at` and `removal_reason` once. DELETE and TRUNCATE are revoked.
+
+**Release summary (D5-c, approved).** The migration also adds a nullable, authored-only `public_summary` to the draft and the release. Authoring, snapshotting, older releases and the search projection are in §10.12.
+
+**Vocabulary.** `character.view_public_profile` is inserted into `security.capabilities`, following migration 139's frozen-seed pattern. A trigger refuses any `security.role_capabilities` row naming it, and any `allow` resource grant naming it, by the "two sources only" rule A1 applied to `character.reveal`.
+
+- Its only allow source is a revelation. When A4 reads a profile, it also admits the summary and higher tiers (D11, §10.14).
+- A `deny` resource grant is accepted by the database and honoured. Creating one through the application is deferred (D12).
+
+**Registries:**
+
+- `reason` and `revocation_reason` are classified as the delegation table's are.
+- `character_id` gets a `BLOCKING` entity-reference entry.
+- The two tables are listed in persistence metadata, `test_role_grants`, and the module-access structural test.
+
+**Downgrade.** It drops the three tables, the functions and the capability row, which loses data by design, as in 141 and 142. It first refuses, atomically, while any `role_capabilities` row or resource grant names `character.view_public_profile`.
+
+### 10.3 Commands, routes and audit
+
+All routes are under `/campaigns/{campaign_id}/characters/{character_id}/revelations`.
+
+| Route | Command | Pre-check (dependency, before body and idempotency lookup) | Body | Success |
+|---|---|---|---|---|
+| `GET` | `list_character_revelations` (query) | D8 read rule (`canon.edit` on the character, or reveal authority); whole-character deny → 404 | none | Live and ended revelations (see the list below) |
+| `POST` | `create_character_revelation` | Reveal authority and whole-character deny, as the release pre-check (`require_may_release`) | `{audience_kind, target_campaign_membership_id?, target_access_group_id?, reason}`; extra fields refused | 201 with a minimal receipt `{character_revelation_id, created: true}`; a natural retry returns 200 `created: false` with the existing id |
+| `POST …/{character_revelation_id}/revoke` | `revoke_character_revelation` | As for create | `{reason}` | 200 `{character_revelation_id, revoked}`; an already-ended revelation is `revoked: false` with no audit row |
+
+**Each list entry carries:**
+
+- kind;
+- target id and display name;
+- creator, `authority_source` and times;
+- `end_reason`;
+- for `campaign_current`, the `audience_size` and the snapshot's current and removed members.
+
+**Who sees what in the list.** Membership display names are already visible to GMs in the session roster and the access overview. The list never appears in any audience response.
+
+**Errors:**
+
+| Status | Code or condition |
+|---|---|
+| 403 | `character_reveal_required` |
+| 404 | non-disclosing: a whole-character deny, a character outside the world or not canon, a target membership or group outside this campaign or nonexistent, a revelation id belonging to another character |
+| 409 | `public_profile_not_released` |
+| 409 | `public_profile_character_not_active` (archived) |
+| 409 | `revelation_target_not_active`: an ended or non-active membership, or an archived group |
+| 422 | a body whose target shape does not match its kind |
+
+**Idempotency** (DATABASE_CONVENTIONS §26.4):
+
+- The fingerprint holds `character_id`, kind, the target ids and `reason`.
+- The receipt is minimal, as with `replay_body`.
+- **Where the reservation and replay happen (revised 2026-11-08, after review).** The reservation insert and the replay lookup are one statement, `begin_idempotent_request`. It runs inside the command, after the command's locks and after its fresh, under-lock reveal-authority check and whole-character deny check (§10.4, create steps 7–8 and the revoke row). It never runs in the route before the command.
+  - **Mechanics.** The route passes its idempotency start (`start_campaign_idempotency` with the fingerprint) to the command as a callback, and the command calls it at step 8a.
+  - The command returns either the replay or its own result. On a result, the route writes the audit row and then completes the reservation, as today. Without a key, the callback does nothing.
+- **A replay is refused for a caller who has since lost authority or come under a deny.** This holds even when the loss committed after the route's pre-check but before the command took its locks:
+  - lost authority returns 403 `character_reveal_required`;
+  - a whole-character deny returns 404.
+
+  No receipt is returned and nothing is written. The stored receipt is kept for a caller who is still authorized.
+- **Key lock first (prerequisite P2).** A keyed create or revoke takes the idempotency key lock at step 0, before any row lock (§10.4). Every other route takes the same lock inside `begin_idempotent_request`, also before any row lock.
+  - So a same-key request on any route waits at the key lock while holding no row lock, and A3's later reservation cannot wait at all.
+  - Step 8b's post-reservation re-check is therefore withdrawn. An expiry during the key-lock wait is judged at step 7, which comes after it.
+- **Scope and conflict detection are unchanged.**
+  - The scope is still `(actor_user_id, campaign_id, idempotency_key)` in `security.idempotent_requests`, shared with every campaign route.
+  - The fingerprint still includes the command name, so a key reused on another route is a conflict.
+- **Why not in the route.** The reservation's foreign key locks the campaign row. Taking it before the command's locks deadlocks with ending a membership (§10.8.6).
+- **A rollback frees the key.** The reservation is part of the request's one transaction. Any refusal or failure after it rolls it back, including validation errors and 40P01, and the rollback also releases the key lock. A valid retry with the same key then runs the command.
+
+**API conflict and retry contract: changes (2026-11-08).** These are A3-specific unless stated. None adds a status code, a header or a retry hint.
+
+1. **A3 replays are conditional on current authorization.**
+   - A stored response is returned only after the under-lock authority and deny checks pass. Otherwise the caller gets 403 or 404 and no receipt.
+   - Other routes replay after their route pre-check only, and are unchanged.
+2. **Authorization is reported before key conflicts.** A caller who reuses a key across routes and has lost authority sees 403 or 404 from an A3 route, not 409.
+3. **Cross-route reuse of one key.** With P2 (done, `d36d565`), the later request gets the documented non-disclosing 409, whichever route it is on. Without P2, an A3 route could instead deadlock (a 500) or, through DEF-022, return a success that never committed.
+4. **Waiting is unchanged in kind** for every route. A same-key request still waits until the first ends, then replays, conflicts or runs. Only the place it waits moves: from the unique index to the key lock (§10.8.9 E1, E2).
+5. **All routes, corrected by P3 before A3a (DEF-022, §11.5–§11.6).** A 2xx is sent only after the request's commit succeeds, and its receipt is then visible and its key lock released. A commit-time failure gets the response the same exception would get inside the handler; it never follows a 2xx. At HEAD a commit-time failure can follow a 2xx.
+
+**Audit:**
+
+- One `audit.change_log` row per real create or revoke. It carries ids, kind, `authority_source` and `audience_size`, and never the reason text in `changed_fields`. A1's delegation commands set this pattern.
+- There is no row for a natural retry, a replay, a refusal or an already-ended revoke.
+- System closures add their ids to the closing command's existing audit row: `closed_character_revelation_ids`, and `removed_character_revelation_member_ids`.
+
+### 10.4 Locks and transactions
+
+Each command is one transaction. The orders below extend A1 §3 and §5.8. They reverse no existing edge.
+
+**Revised 2026-11-08** after the membership-end trace and disposable-database probes (§10.8):
+
+- `campaign_current` creation now locks the campaign's open memberships before the campaign row (step 4a).
+- Both revelation routes reserve their idempotency key after the command's lock phase.
+
+The design as first written deadlocked in both cases (§10.8.4, §10.8.6).
+
+**Revised again 2026-11-08, after the independent review.**
+
+- The reservation and the replay lookup now come after the fresh, under-lock authority and whole-character deny checks, not merely after the locks (step 8a).
+- The caller's account is locked in the lock phase (step 5a), so the reservation's foreign key cannot wait on it.
+- Authority is judged again after the reservation, whose same-key wait can outlast an expiry (step 8b). *Withdrawn in the next revision.*
+
+**Revised a third time 2026-11-08, after the second review: the cross-route cycle.**
+
+- A keyed create or revoke takes the idempotency key lock at step 0, before any row lock. This requires P2, which makes every route's reservation take the same lock first.
+- With every reserver holding the key lock, the late reservation cannot wait, so step 8b is withdrawn.
+
+The waits are traced under "What the reservation can wait on", and the cross-route outcomes are in §10.8.9.
+
+| Command | Locks, in order |
+|---|---|
+| `create_character_revelation` | (0) **when a key was given:** the idempotency key lock (`lock_idempotency_key`, P2), before any row lock → (1) caller's authority rows `FOR SHARE`, as for a release: the owner assignment, or the `gm` assignment then the delegation → (2) **group target only:** the group row `FOR KEY SHARE`, locked with no join (§7.3 pattern; avoids DEF-017) → (3) caller's membership `FOR SHARE` → (4) **member target only:** the target membership `FOR KEY SHARE`, with no join → (4a) **`campaign_current` only:** every open membership of the campaign (`campaign_id = :c AND ended_at IS NULL`) `FOR KEY SHARE`, with no join, ordered by `campaign_membership_id`; the ids this statement returns are the snapshot candidates (the approved D9-a cutoff, below) → (5) campaign `FOR KEY SHARE` → (5a) **the caller's `security.users` row `FOR KEY SHARE`**, after the campaign row (see "What the reservation can wait on" for why not before it) → (6) character's `core.entities` row `FOR KEY SHARE` → (7) `clock_timestamp()` and `resolve_reveal_authority(as_of=…)` with the same-source rule (§5.8); refusal is 403 → (8) `AccessContext` re-resolved for the actor's whole-character deny; refusal is 404 → (8a) **the idempotency reservation, or the replay lookup** (`begin_idempotent_request`, when the request carries a key); it cannot wait (below), so no further authorization check follows it → (9) validate the character (canon, active, in this world), the release, and the target (open, active, same campaign; group active), reading statuses in separate statements → (10) look up the live duplicate, which gives a natural retry → (11) **`campaign_current` only:** read the membership statuses of the step 4a set; the snapshot is those that are `active` → (12) insert the revelation, any snapshot rows and the audit row. Two concurrent first creations meet at the unique index; the second waits, then returns 200 `created: false` |
+| `revoke_character_revelation` | (0) **when a key was given:** the key lock (P2) → (1)–(3) as for create → campaign `FOR KEY SHARE` → the caller's account `FOR KEY SHARE` → the revelation row `FOR UPDATE`, with no join → fresh-instant authority re-check (403) → whole-character deny (404) → **the reservation or replay lookup**, which cannot wait → close |
+| `end_campaign_membership` (**changed**) | Unchanged up to and including `close_reveal_delegations_for_membership`. Then two new explicit locks: **the actor's membership (`ended_by_membership_id`) `FOR KEY SHARE`**, then **`campaign.campaigns … FOR UPDATE`**. Then closing member-target revelations and setting `removed_at` on that membership's snapshot rows. Then the existing status update, retention check and commit-time trigger, which finds the campaign row already held |
+| `deactivate_access_group` (**changed**) | Unchanged, plus closing that group's live revelations (`access_group_deactivated`) after its grant revocations |
+
+**Why step 4a exists (probed).** Without it, the snapshot insert at step 12 takes a foreign-key `FOR KEY SHARE` on each member's membership row *after* the campaign row.
+
+- `end_campaign_membership` of a current member N holds N `FOR UPDATE` from its second statement, and then waits for the campaign row: its explicit lock after A3, or the retention trigger at HEAD.
+- So creation holds the campaign and waits for N, while end holds N and waits for the campaign. PostgreSQL aborts one with 40P01, in both orders:
+  - **A3-E1:** creation holds the campaign; end is aborted.
+  - **A3-E2:** end holds N; creation is aborted.
+- With step 4a, creation and end meet at N before either holds the campaign row, and both commit (A3-F1 to F4).
+
+**Step 4a's mode and form:**
+
+- **`FOR KEY SHARE`** is the mode the snapshot insert's foreign keys need anyway.
+  - It conflicts only with `FOR UPDATE`, which every relevant writer takes on a membership: end, assign, the grants, the relationship grant, a transfer's recipient lock, recovery, and invitation reopen.
+  - It is compatible with `FOR NO KEY UPDATE` (P1's group add, the delegation grant) and with `FOR SHARE` (authoring, the release, the caller's own lock at step 3).
+- **No join.** Statuses are read at step 11, so a membership whose status changed while the lock waited is not misread (DEF-017).
+- **Id order.** Two creations take only `FOR SHARE` and `FOR KEY SHARE` on memberships, which never conflict. Ordering keeps a `FOR UPDATE` taker of any one row waiting in one place.
+
+**Why step 4a adds no cycle.**
+
+- Every command that locks a membership `FOR UPDATE` and later needs the campaign row takes the membership first. That covers end, the grant, the relationship grant and the relinquishing transfer. Step 4a also takes memberships first.
+- Recovery takes the campaign `FOR NO KEY UPDATE` before its membership. That mode does not conflict with step 5's `FOR KEY SHARE`, so creation passes it (A3-F5, F6).
+- `add_campaign_member` takes the campaign `FOR UPDATE` first. Creation waits for it at step 5, and the new member is not in the step 4a set (A3-F10).
+- Probed against a relinquishing transfer (A3-F7, F8) and a grant to a member (A3-F9).
+
+**Why the reservation and the replay lookup come after the under-lock checks (revised after review).**
+
+- **Not before the locks (probed).** `security.idempotent_requests.campaign_id` references `campaign.campaigns`, so the reservation insert takes the campaign row `FOR KEY SHARE`.
+  - A route that reserves first therefore holds the campaign before any role or membership lock.
+  - If that request then waits on a row an end holds, and the end waits for the campaign `FOR UPDATE`, the two deadlock. The row may be the ending revealer's role rows, or a member in step 4a.
+  - This was probed for both routes' prefixes:
+    - **KEYED-K3:** `campaign_current` creation; creation is aborted.
+    - **KEYED-K4:** member creation by the ending revealer; end is aborted.
+  - Reserving after the lock phase removed the cycle, and both commit (KEYED-L1 to L3).
+  - Those probes reserved after step 6. Moving the reservation further, after steps 7–8, adds no lock: those steps only read. Step 5a's account lock is traced below.
+- **Not before the checks (authorization).** The route's pre-check runs before any lock and can be stale by the time the command holds its locks.
+  - A revocation of the caller's role or delegation that commits in that gap is seen by step 1's locking read and refused at step 7 (403).
+  - A whole-character deny that commits in that gap is seen by step 8's re-resolution and refused there (404). A deny can be committed directly to the caller's membership, or to a group the caller belongs to, or by adding the caller to a denying group.
+  - Because the replay lookup comes after both steps, a caller refused there gets no stored receipt. Before this revision, a replay could have been returned after the lock phase but before steps 7–8.
+- **What the held locks guarantee, and what they do not.**
+  - Steps 1–6 make an *allowed* decision at steps 7 and 8 stay allowed until commit. Each conflicting write that would turn it into a refusal must wait for the request's locks:
+    - revoking or changing the caller's role or delegation;
+    - ending the caller's membership;
+    - a new deny on the caller or a group, or adding the caller to a denying group;
+    - deactivating the caller's account;
+    - archiving the character, or changing its canon status.
+  - The locks need not, and do not always, stop changes that only remove restrictions: revoking a deny, granting a delegation, removing the caller from a denying group. Such a change can commit while the request runs. It cannot turn an allowed decision into a refused one, and a request that was refused is simply refused under the older, stricter state.
+  - Time is not a write. An expiry is judged at step 7, after every wait that precedes it.
+
+**What the reservation can wait on, and what that invalidates.** The reservation insert, `INSERT … ON CONFLICT (actor_user_id, campaign_id, idempotency_key) DO NOTHING`, has three possible waits:
+
+1. **Its foreign key to `campaign.campaigns`** (`FOR KEY SHARE`). Already held from step 5, so it does not wait.
+2. **Its foreign key to `security.users`** (the caller, `FOR KEY SHARE`).
+   - **Without step 5a**, account deactivation (`_set_local_account_lifecycle_status_impl`: advisory lock, then the account `FOR UPDATE`, then the status update) could hold that row. The reservation would wait, and the deactivation's commit makes step 7's answer wrong: the owner and `gm` predicates require an active account.
+   - **With step 5a** the row is already held, so the reservation does not wait. Deactivation waits for the request instead, so the request commits first, or the request waits and step 7 refuses it (probes ACC-2a, ACC-3a).
+   - **Why after the campaign row, not before it.** `add_campaign_member` locks the campaign `FOR UPDATE` and then the target account `FOR UPDATE`. Aimed at an existing member who is creating a revelation, it deadlocked with an account lock taken before the campaign (ACC-1b, 40P01). With the lock after the campaign row, the add waits at the campaign row and then fails on `ux_campaign_memberships_open` as it always would (ACC-1a).
+   - **Every other account `FOR UPDATE` taker** locks the account's membership first: assign, the grants, the relationship grant and a transfer's nested assign. Step 3 holds that membership, so those commands wait for the request before reaching the account.
+3. **Its unique index.** The index waits when the same caller has an uncommitted reservation for the same key in this campaign, on any route.
+   - **Without a key lock this forms a cycle across routes (reproduced, §10.8.9).**
+     - Every existing keyed route reserves before its own row locks (P2 evaluation, §10.11).
+     - A same-actor, same-key request on such a route can therefore hold an uncommitted reservation while A3 holds its lock phase. A3 waits for that row at step 8a.
+     - The other request then needs a lock that conflicts with A3's: the caller's role rows `FOR UPDATE`, or the campaign `FOR UPDATE` (end's retention lock, the grants, add member).
+     - So each waits for the other. The reviewed case is a keyed end of the caller (HEAD-X1, HEAD-X3). Ending another member does the same at the end's commit (HEAD-X2, HEAD-X4).
+     - Same-route A3 pairs do not cycle, because both hold only shared modes (HEAD-S1). The waiting request still holds its locks for the whole wait.
+   - **With the key lock (step 0 and P2), this wait cannot happen.**
+     - Every uncommitted row in `security.idempotent_requests` belongs to a transaction holding that scope's key lock, and A3 holds it from step 0. So step 8a finds no uncommitted conflicting row.
+     - Its foreign keys are already held (steps 5, 5a). The reservation therefore cannot wait at all.
+
+**Step 0: the idempotency key lock (requires P2).**
+
+- **The lock.** `SELECT pg_advisory_xact_lock(:namespace, hashtext(:actor || ':' || :campaign || ':' || :key))`, through a shared helper `lock_idempotency_key(connection, *, actor_user_id, campaign_id, idempotency_key)` in `dnd_ai.api.idempotency`.
+  - It is exclusive and transaction-scoped: it is released at commit or rollback, the instant the reservation row becomes visible or disappears.
+  - `namespace` is one fixed integer constant, registered beside the helper and in DATABASE_CONVENTIONS §26.4. The two-key form keeps it apart from single-key advisory locks such as `local_auth`'s.
+- **Who takes it:**
+  - **P2:** `begin_idempotent_request`, immediately before its `INSERT`, for every route.
+  - **A3:** create and revoke, at step 0. Their later `begin_idempotent_request` at step 8a re-takes it, which is reentrant within a transaction and does not wait.
+  - **Without a key,** nothing is taken.
+- **The invariant: a key lock is only ever requested by a transaction that holds no row lock.**
+  - Existing routes call `begin_idempotent_request` before their command. They hold no row lock then, because their dependencies only read; the release pre-check calls `resolve_reveal_authority` with `lock="none"`.
+  - A3 calls the helper at step 0.
+  - A request waiting on a key lock therefore holds nothing anyone else waits for, and cannot be part of a deadlock.
+  - P2's structural test pins the invariant.
+- **Collisions.** Two scopes whose `hashtext` values collide share a lock and serialize briefly. Nothing else changes: uniqueness and the fingerprint still decide the answer, and the waiter still holds no row lock.
+- **Waits it moves.** A same-key request now waits at the key lock instead of at the unique index. It waits for the same transaction and reaches the same result (§10.8.9 E1, E2).
+
+**What stays the same.**
+
+- A replay still returns the stored status and body.
+- The unkeyed path skips steps 0 and 8a.
+- Every other keyed campaign route still reserves first, and with P2 takes the key lock at that moment.
+  - P2 removes same-key cycles between any two routes.
+  - It does **not** remove DEF-019, whose cycles are between *different* keys on existing routes (§10.11).
+  - A3's own routes form no DEF-019 cycle: different keys by KEYED-L1 to L3, and the same key by the key lock. That holds only once P2 is in place (§10.8.9).
+
+**Why the group comes before the caller's membership.**
+
+- After P1, `add_access_group_members` locks the group `FOR UPDATE`, then the added members' memberships `FOR NO KEY UPDATE`. `FOR NO KEY UPDATE` conflicts with the creator's membership `FOR SHARE`.
+- So if creation took the membership first and the group second, adding the revealer to the target group would deadlock.
+- With the group first, the two meet at the group row.
+- `deactivate_access_group` and `update_access_group` take only the group row, so the order cannot form a cycle with them.
+
+**Why the campaign is `KEY SHARE`.** It is the mode A2a's release, `lock_authoring_scope` (after P0) and A1 take.
+
+- It is compatible with recovery's `FOR NO KEY UPDATE`, so recovering a membership for the revealer cannot deadlock with a creation (the DEF-014 cycle).
+- It still conflicts with every campaign `FOR UPDATE`:
+  - `add_campaign_member`;
+  - archive;
+  - `create_resource_grant`;
+  - the commit-time retention trigger, which every membership UPDATE fires, invitation reopen included;
+  - the new explicit lock in `end_campaign_membership`.
+
+**Why `end_campaign_membership` needs the explicit campaign lock (probed).**
+
+- **Revoke against end's closure.**
+  - `revoke_character_revelation` takes the campaign `FOR KEY SHARE` and then the revelation row. End closes the same member-target row.
+  - If end closed it before taking the campaign row, which at HEAD it takes only at commit, then end would hold the revelation row and wait for the campaign, while the revoke holds the campaign and waits for the row. That is 40P01 (A3-V3, the rejected variant: the revoke is aborted).
+  - With the campaign lock before the closures, the two meet at the campaign row, and both commit in either order:
+    - **A3-V1:** the revoke first, then end's closure is a no-op;
+    - **A3-V2:** end first, then the revoke returns `revoked: false`.
+- **Snapshots.** Step 4a is now what keeps a departing member out of a snapshot. The explicit lock is not needed for that any more.
+  - **Creation reaches N first.** End waits at N, after locking N's role rows. Creation inserts N's snapshot row and commits. End's closure then runs as a fresh statement after its own campaign lock, and sets `removed_at` on that row (A3-F1, F4).
+  - **End reaches N first.** Creation waits at N in step 4a. End commits. The locking statement re-reads N as ended and skips it, so N is not a candidate (A3-F2, F3).
+  - Invitation reopening reuses the same `campaign_membership_id` and does not change `joined_at`. That is why a stale open snapshot row would matter: the member would regain the revelation on reopen.
+
+**Why the explicit lock adds no new cycle.**
+
+- End already waits for the campaign row at commit, while holding everything it holds at the new point and more.
+- **The actor's key-share lock must come first.** Today that lock is taken by the status UPDATE's foreign key, before the commit-time campaign lock.
+  - If the campaign lock moved ahead of it, end would hold the campaign and wait for the actor's membership, while `create_resource_grant` to the actor held that membership `FOR UPDATE` and waited for the campaign.
+  - Locking `ended_by_membership_id` `FOR KEY SHARE` explicitly, just before the campaign, keeps today's relative order: actor, then campaign. This was probed in both orders, and both commit (A3-X1, X2).
+  - The status UPDATE then needs no new lock. For a self-removal the row is already held `FOR UPDATE`.
+- The only rows end locks after the new point are revelation and snapshot rows.
+  - Every writer of member-target revelation rows takes the campaign row first: create and revoke at `KEY SHARE`, and end itself.
+  - Snapshot rows are inserted only by creation, under step 4a and step 5.
+  - The exception is `deactivate_access_group`, which locks only group-target revelations. End never touches those.
+- The trace of every command that holds a row end wants, or wants a row end holds, is §10.8. The three cycles it found already exist at HEAD and are unchanged by this lock (§10.8.1, §10.8.5, §10.8.6).
+- The A1 §3 table's `end_campaign_membership` row changes to show this lock. P0's, P1's and A1's lock regressions must pass unchanged (§10.8.8).
+
+**Behaviour that changes for an end in flight.**
+
+- After A3, an `end_campaign_membership` that has passed its new campaign lock holds the campaign row `FOR UPDATE` until it commits.
+- So a command that takes the campaign row before any membership now waits for it, where at HEAD it ran alongside until end's commit. Those commands are `add_campaign_member`, recovery, archive, and any keyed route's reservation.
+- Only the position of the wait changes; neither order deadlocks. A grep at `a9ec4c4` found no existing test that parks an end and expects such a command to finish beside it. The parked-end tests in §10.8.8 all have their second command wait at a membership or role row first.
+
+**D9-a candidate-statement cutoff (approved by the owner, recorded 2026-11-08).** D9-a says the snapshot is taken at "the moment the revelation is created". This design pins that moment to **the start of the step 4a statement**.
+
+- **Candidate.** A membership is a candidate if and only if the step 4a statement returns it. That means its row is open (`ended_at IS NULL`) in the version that statement reads:
+  - committed before the statement began; or,
+  - for a row whose end was in flight when the statement reached it, still open once that end resolved. The statement waits: an end that commits excludes the member, and one that rolls back keeps them.
+- **In the snapshot.** A candidate is in the snapshot if and only if its status is `active` when step 11 reads it. A status change in flight is waited for at step 4a and decided at step 11.
+- **Excluded,** even when it commits before the revelation does: any membership created or reopened by a transaction that had not committed when the step 4a statement began.
+- **Consequence.** The revelation's `created_at` is the transaction's start, which is earlier than the cutoff. So a snapshot member's `joined_at` can be later than the revelation's `created_at`, by at most the creation's own lock waits. The GM list shows both times as they are.
+- **Alternative not recommended:** "every membership committed before the revelation commits". That is achievable only by blocking every join for the whole creation (a campaign `FOR UPDATE` in creation). It would reverse the lock order this section relies on, and reopen the cycles §10.8.4 removed.
+- **Status.** Approved. A3a's snapshot rows (§10.8.4 S1–S9) and the T82 matrix's L and X columns are specified against it and are final.
+
+**Joins and the meaning of "current".**
+
+- "Current" (D9-a, D9-b) is the open memberships returned by the step 4a statement that are `active` when read at step 11, under the cutoff above.
+- **`add_campaign_member`** takes the campaign `FOR UPDATE` and inserts a membership.
+  - An add that committed before step 4a is included.
+  - An add in flight is excluded: creation waits for it at step 5, and its membership is not in the locked set (A3-F10).
+- **Invitation acceptance** takes the campaign `FOR SHARE`, which is compatible with creation's `KEY SHARE`.
+  - **A reopen** is an UPDATE of an ended row. A reopen in flight is skipped by step 4a without waiting, because its committed version is still ended. Its commit-time trigger then waits for the creation, so the member rejoined after the snapshot and is excluded. A reopen that committed first is included. (By trace.)
+  - **A new membership** is an INSERT and does not fire the trigger. It is included exactly when it committed before the step 4a statement. (By trace.)
+
+**Not locked.**
+
+- Account deactivation of anyone but the caller. The caller's own account is locked at step 5a.
+- Role changes. A revelation's audience is membership-based, so changing a member from GM to player alters nothing.
+- Reads: the resolver judges at the moment of reading, with no locks, as every other access read does.
+
+### 10.5 Audiences and the lifecycle hooks
+
+| Path | `member` | `access_group` | `campaign_current` | `campaign_current_and_future` |
+|---|---|---|---|---|
+| Created | The target, if open and active | Live members of an active group | Snapshot: the open memberships locked at §10.4 step 4a that are `active` (D9-a, D9-b), including GMs and the revealer | Every open, active membership, at every read |
+| A member joins the campaign later | n/a | Included if added to the group | **Not included** | Included |
+| `end_campaign_membership` | Revelation closed (`target_membership_ended`) | The member's group links are closed by the existing code, so they are excluded | Snapshot row: `removed_at`, `membership_ended` | Excluded, because the membership is not active |
+| Rejoining through invitation reopen (same membership UUID) | Not restored | Not restored: a reopened membership starts in no groups | Not restored | **Included**, because the membership is active again (D9-c) |
+| `add_access_group_members` / `remove_access_group_member` | n/a | Included / excluded from the next read | n/a | n/a |
+| `deactivate_access_group` | n/a | Revelation closed (`access_group_deactivated`) | n/a | n/a |
+| `reactivate_access_group` | n/a | Not restored. The group starts empty and powerless, as its grants do | n/a | n/a |
+| The revealer loses reveal authority (role, delegation, transfer) | Survives (D9-f) | Survives | Survives | Survives |
+| The character is archived, or stops being canon | Inert. The resolver's filter (active, canon) matches relationships and grants, and closes nothing. The revelation applies again if the character is restored | same | same | same |
+| Recovery sets an open membership's status to `active` | Members were never targeted while not active (creation refuses non-active targets) | Group links unchanged | That membership was not in the snapshot when it was not active | Included |
+| Suspended membership (database-only) | `resolve_access_context` returns None, so nothing applies | same | same | same |
+
+**Resolution.** `resolve_access_context` gains one query, keyed by the route campaign and the caller's membership. It returns live revelations whose character is active and canon and whose audience matches:
+
+- **`member`:** the target is the caller.
+- **`access_group`:** the caller has an open link to an active group that is the target. This is the same subquery the resource-grant query uses.
+- **`campaign_current`:** an unremoved snapshot row names the caller.
+- **`campaign_current_and_future`:** every live row applies.
+
+### 10.6 Source-tagged authority inside `AccessContext`
+
+- **New field.** `AccessContext` gains `revelations: Mapping[UUID, frozenset[RevelationSource]]`, keyed by character. Each source records the revelation id and its kind. The field is separate from `character_capabilities`, so a revelation never becomes a relationship capability and the reverse never happens.
+- **`has_capability(code, character_id=X)`.** The baseline gains `code in {character.discover, character.view_public_profile} and X in revelations`. The grant lookup then runs unchanged, so:
+  - a resource-grant `deny` under `character_id` still wins;
+  - a role-only check (no `character_id`) gains nothing.
+- **`resolve_world_character_visibility`.** It adds the revelation keys to `mentioned`. Without this, a caller with `discover_all` false would never test the revealed characters. The SQL predicate is unchanged: `disc_cv_denied` (the whole-character deny and lifecycle-hidden rows) already overrides `force_visible`.
+- **Independence (T6).** Revoking a revelation closes only its own row.
+  - A relationship, a resource grant, or a second revelation of another kind still supplies whatever it supplied.
+  - A relationship or grant never needs a revelation.
+  - The effective-access explanation and the access overview show each revelation as its own source, of kind `revelation`, labelled with its audience kind. No source is merged into another.
+
+### 10.7 The shared discovery policy, surface by surface
+
+Almost every consumer reads the bundle that `resolve_world_entity_visibility` builds. So A3b's change to `mentioned` reaches them all at once. Lines were checked at `a9ec4c4`.
+
+| Surface | Where it decides | Effect of A3b on a caller whose only path is a revelation | Depends on A4 |
+|---|---|---|---|
+| World search list, category counts, pagination | `_VISIBLE_ENTITIES_SQL` via `search_world_entities` and `count_world_entities` ([queries/world_explorer.py](../src/dnd_ai/queries/world_explorer.py)) | Listed and counted. Name matching, the sort and the cursor are unchanged. The card's summary and the summary match use the released summary (§10.12) | The card link (`can_open`) |
+| Direct character detail | [api/characters.py](../src/dnd_ai/api/characters.py) (`resolve_character_view_tier`) | **Unchanged: 404.** Discover-only callers already list without opening (`can_open_participant`); a revelation does the same until A4 | Yes: A4 adds the `public_profile` tier |
+| World relationships list and detail; the character page's Relationships section | `all_participants_discoverable_sql`, `discoverable_entity_ids` ([queries/world_explorer.py](../src/dnd_ai/queries/world_explorer.py), [queries/relationship.py:159](../src/dnd_ai/queries/relationship.py#L159), [queries/character_relationships.py:156](../src/dnd_ai/queries/character_relationships.py#L156)) | A reader-visible relationship now appears when every participant is discoverable, the revealed character included (D10) | No |
+| Organization members | [api/organization_members.py:68](../src/dnd_ai/api/organization_members.py#L68), [queries/organization_members.py:99](../src/dnd_ai/queries/organization_members.py#L99) | Listed in public memberships (D10) | No |
+| Session roster | [api/sessions.py:184](../src/dnd_ai/api/sessions.py#L184); `_can_open_character` [:169](../src/dnd_ai/api/sessions.py#L169) | Named; `can_open_character` false | Yes: the link |
+| Session travel | [queries/session_travel.py:112](../src/dnd_ai/queries/session_travel.py#L112) | Named | No |
+| Event explanations | [api/event_explanations.py:197-211](../src/dnd_ai/api/event_explanations.py#L197-L211), [queries/event_explanations.py:405](../src/dnd_ai/queries/event_explanations.py#L405), [:710](../src/dnd_ai/queries/event_explanations.py#L710) | Named as a participant (D10) | No |
+| Encounters | [api/encounters.py:431](../src/dnd_ai/api/encounters.py#L431), [queries/encounter.py:285](../src/dnd_ai/queries/encounter.py#L285) | Named in the member projection of a member-readable encounter (D10) | No |
+| `active_encounter_id` on the character page | `_may_reference_active_encounter` ([queries/character.py:113](../src/dnd_ai/queries/character.py#L113)) | Not reached, because the detail route is a 404 | **A4 must keep the public tier free of it** (as the summary tier, A0) |
+| Knowledge subjects | [api/knowledge.py:347](../src/dnd_ai/api/knowledge.py#L347), [:405](../src/dnd_ai/api/knowledge.py#L405) | The subject label of an item the caller may already read (D10). It grants no knowledge visibility | No |
+| Campaign clock | [api/campaign_clock.py:107](../src/dnd_ai/api/campaign_clock.py#L107), [:195](../src/dnd_ai/api/campaign_clock.py#L195) | None: it uses only the event deny set | No |
+| Audience preview | [api/preview.py](../src/dnd_ai/api/preview.py) `resolve_preview_subject` → `resolve_access_context` | Inherits the subject's revelations. The quest and Knowledge adapters show exactly what the subject sees | The character-profile preview (A7) |
+| Party roster | [api/parties.py:134-178](../src/dnd_ai/api/parties.py#L134-L178) | D4-C (§10.13): the party's current controllers see its current members; everyone else gets shared discovery. A revelation reaches the roster only through discovery | No |
+| Bootstrap perspectives, inventory, sheet, builds, calculations | `view_knowledge`, `resolve_character_inventory_access`, the sheet's tier | **Unchanged.** Regression tests only | No |
+| World-level canon search with no campaign | [api/world_canon.py:86](../src/dnd_ai/api/world_canon.py#L86) (`discover_all=False`, no revelations) | Unchanged: revelations are campaign-scoped | No |
+| AI context assembly | [domain/context_assembly.py](../src/dnd_ai/domain/context_assembly.py) | Unchanged: no revelation input | No |
+
+**Summary.**
+
+- **A3b:** wiring the bundle, the party roster (D4-C, §10.13), the explanation and overview, and the released-summary projection in search (D5-c, §10.12).
+- **A4:** the public tier in direct detail, `can_open` and the roster links, `sections.public_profile`, D6 and D11.
+- **Safe meantime:** between A3b and A4 a revealed character is listed but cannot be opened. That is how discover-only callers behave today, so no list and detail pair disagrees in a new way.
+
+### 10.8 Membership end: the concurrency matrix, and retry outcomes
+
+**Revised 2026-11-08.** This section replaces the 2026-11-07 outcome table and the untraced-cycle deferral that §10.11 carried.
+
+**Method.** Each pair was run on the test suite's per-run disposable PostgreSQL 18 database, which is created and dropped by `tests/conftest.py`. The probes ran outside the repository and none is committed.
+
+**Status of this evidence.**
+
+- The probes are **design evidence only**. They chose the lock order; they do not accept it.
+- The A3 rows ran against probe tables and SQL that imitate the design, not against migration 145 or the A3a commands.
+- Acceptance is the A3a command and HTTP races of §10.9. Those run on the real schema (145's tables, triggers, constraints and foreign keys), with the real commands, and through the real request transaction.
+- Where an A3a test and a probe disagree, the A3a test decides, and the design is corrected.
+
+- Each pair uses `LockRace` (§7.7): the first command is paused just before a named statement, the second is started, and the probe waits until the second's session reports the first's in `pg_blocking_pids`. The first is then released.
+- **HEAD probes** call the real commands at `a9ec4c4`.
+- **A3 probes** run the §10.4 order in SQL, with end's code at `a9ec4c4` plus the §10.4 change. They use probe tables carrying the foreign keys §10.2 specifies: revelation → campaign, character, target membership and creator; snapshot → revelation, campaign and membership.
+- **Keyed** means the route's prefix ran first: `begin_idempotent_request`, whose insert takes the campaign row `FOR KEY SHARE`. Unkeyed is the command alone. Every existing race test posts without a key; the portal always sends one (`portal/src/api/*`).
+
+**Reading the tables.**
+
+- *Waits:* `waiter → holder` means `pg_blocking_pids(waiter)` contains the holder's pid while the first command is paused. Every observed row wait was on the holder's transaction id (`ShareLock`).
+- *40P01:*
+  - PostgreSQL aborted the session that had waited longest. In every probe, that was the one blocked first.
+  - The API maps 40P01 to 500, and the recovery script exits with an error.
+  - An aborted transaction writes nothing: no row, no audit row and no idempotency reservation.
+- *Audit:* each committed command writes its usual single row:
+  - `end_campaign_membership` when `ended`;
+  - `create_resource_grant` per grant;
+  - `transfer_campaign_ownership` when something changed;
+  - the recovery script on success;
+  - A3's create and revoke per real change.
+
+  A refusal or a no-op writes none.
+- *Scene:*
+  - A and B are built-in owners with non-expiring assignments; M and N are players; X is a character.
+  - "Stranded" means A's owner assignment is finite and B's account is archived. Recovery may then run, because it needs a non-expiring manager on an *active* account. A can still act, and end's retention check still passes through B's row, because `campaign_has_access_manager` ignores account status.
+  - E(M by A) is `end_campaign_membership` of M with A as the actor.
+- *Pause points:*
+  - **HEAD end, "holding M":** before its status UPDATE. It holds M's role rows and M `FOR UPDATE`, and no campaign lock.
+  - **A3 end:** "before its campaign lock" (holding M and its closures) or "after its campaign lock" (before the revelation closure).
+
+#### 10.8.1 Against administrative recovery that targets the ending membership
+
+| # | First, paused | Second | Waits | Outcome | Final state | Evidence |
+|---|---|---|---|---|---|---|
+| R1 | E(M by A), stranded, holding M (A3: before its campaign lock) | recovery for M's user | recovery → end. Recovery holds the campaign `FOR NO KEY UPDATE` and waits for M | **40P01.** On release, end requests the campaign row (at commit at HEAD; explicitly after A3), which recovery holds. Recovery is aborted; end commits | M ended, its roles revoked. No recovered owner, and the campaign is still stranded. Audit: end ×1 | HEAD-R1, A3-X3 |
+| R2 | recovery, holding the campaign, before its membership lock | E(M by A) | end → recovery, at the campaign row | **40P01.** On release, recovery waits for M. End is aborted (500); recovery commits | M open and active, holding owner and player. Audit: recovery ×1 | HEAD-R2, A3-X4 |
+| R3 | recovery, holding the campaign and M, before its role insert | E(M by A) | end → recovery at M, after locking M's role rows | Recovery commits, then end commits | M ended. End's role closure, a fresh statement, also revokes the owner row recovery has just inserted, so the campaign is stranded again. Audit: recovery ×1, end ×1 | HEAD-R3; A3 by trace (end's new locks come after M) |
+| R4 | E(A by A), the stranded finite owner removing themself, holding A | recovery for A's user | recovery → end | As R1: recovery 40P01, end commits | A ended. Only B's owner row is left, on an archived account | HEAD-R4 |
+| R5 | E(M by A), holding M | recovery for N's user | none: recovery finishes while end is paused | Both commit | N an owner; M ended | HEAD-R5 |
+
+**Status.** R1, R2 and R4 are a pre-existing cycle, proposed DEF-020 (§10.11).
+
+- Recovery locks the campaign row first and the membership second. Every other command locks the membership first.
+- A3 changes neither order: its explicit lock replaces the commit-time one at the same relative position.
+- A3 tests must not assert that both commands commit in R1, R2 or R4.
+
+#### 10.8.2 Against role assignment, revocation and change (unkeyed)
+
+| Pair | Lock winner first | Other first | Evidence |
+|---|---|---|---|
+| E(M) against `assign_membership_role` to M | **Assign holds M:** end waits at M; assign commits; end then revokes the new row too. Final: M ended, no live role. Audit: assign ×1, end ×1 | **End holds M:** assign waits at M, then gets 409 (`MembershipNotActiveError`) and writes nothing | `test_membership_role_concurrency.py::test_a_membership_ending_cannot_race_an_assign_targeting_it`. A3: unchanged, because assign takes no campaign lock |
+| E(M) against `change_membership_role` of M's role | They meet at M's role row. **Change first:** end waits, then ends M and revokes the new row | **End first:** change gets 409 (`MembershipRoleNotActiveError`) | `test_membership_lifecycle_concurrency.py::test_a_role_change_cannot_race_a_removal_of_the_same_membership` |
+| E(M) against `revoke_membership_role` of M's role | They meet at the role row. **Revoke first:** end closes the rest | **End first:** the revoke returns `revoked: false`, with no audit row | By trace. A3 does not affect it, because both meet before any campaign lock |
+| E(M by A) against a revoke or change of N's role | The two serialize at the campaign row: at commit at HEAD, at end's explicit lock after A3. Both commit, and the retention check sees the other's result | — | UNKEYED-K13 (the revoke finished while end was paused, at HEAD). After A3, a revoke reaching commit while end holds the campaign waits for it (by trace) |
+| E(A) against A's own owner self-assignment | `test_campaign_owner_lock_order.py::test_ending_an_owners_membership_while_they_assign_themselves_the_owner_role`, `::test_an_owner_ended_first_cannot_then_assign_themselves_the_owner_role`, `::test_a_self_assignment_that_wins_the_lock_is_a_conflict_not_a_deadlock` | | Pass unchanged |
+| E(A) against an assign or change *by* A for N | The write locks N, then waits at its insert's foreign-key `KEY SHARE` on A (`granted_by`), which end holds. End needs nothing the write holds (assign takes no campaign lock; change takes it only at commit), so end commits. The write then commits, naming an ended `granted_by` (§7.9 item 1, unchanged) | — | By trace |
+| Two ends, or self-removals | `test_membership_lifecycle_concurrency.py::test_two_concurrent_removals_of_the_identical_membership_serialize`, `::test_two_managers_concurrently_removing_their_own_memberships_cannot_both_leave_zero_managers`, `::test_self_removal_racing_another_managers_removal_of_the_same_membership` | | Pass unchanged. Keyed: §10.8.6 |
+
+#### 10.8.3 Against ownership transfer
+
+**Ending the recipient (unkeyed).** Every case is pinned by existing tests, which pass unchanged:
+
+- `test_campaign_owner_lock_order.py`:
+  - `::test_ending_the_recipient_while_a_relinquishing_transfer_is_in_flight`
+  - `::test_a_recipient_ended_first_refuses_the_transfer_without_losing_the_owner`
+  - `::test_a_transfer_in_flight_makes_ending_its_recipient_wait_for_it`
+  - `::test_a_relinquishing_transfer_command_leaves_no_partial_state_when_its_recipient_is_gone`
+- `test_campaign_owner_expired_recipient.py`:
+  - `::test_ending_the_recipient_first_refuses_the_transfer_without_a_deadlock`
+  - `::test_ending_a_live_owner_recipient_first_refuses_the_transfer`
+
+A3 changes none of them, because the transfer waits at the recipient's role rows or membership before end's new locks. A **keyed** end of the recipient deadlocks with a relinquishing transfer (KEYED-K5, §10.8.6).
+
+| # | First, paused | Second | Waits | Outcome | Final state | Evidence |
+|---|---|---|---|---|---|---|
+| T1 | relinquishing transfer A → M, after its gate (A's owner row `FOR UPDATE`) | E(A by B) | end → transfer, at A's role rows | Transfer commits (`assigned`, `relinquished`), then end commits | M is an owner; A's owner row is revoked by the transfer and A is ended. Audit: transfer ×1, end ×1 | HEAD-T1 |
+| T2 | E(A by B), holding A's role rows and A | relinquishing transfer A → M | transfer → end, at the gate | End commits; the transfer gets 403 `campaign_owner_required` and writes nothing | A ended; M still a player; B the owner. Audit: end ×1 | HEAD-T2 |
+| T3 | non-relinquishing transfer A → M, after its gate (`FOR SHARE`) | E(A by B) | end → transfer, at A's role rows | Both commit | M an owner; A ended | HEAD-T3 |
+| T4 | E(A by B), holding A | non-relinquishing transfer A → M | transfer → end, at the gate | End commits; the transfer gets 403 | A ended; M still a player | HEAD-T4 |
+| T5 | relinquishing transfer A → M, after its campaign `FOR UPDATE` | E(N by A) | end → transfer, at the campaign row (at commit at HEAD; explicitly after A3) | Both commit. End's `KEY SHARE` on A is compatible with the transfer's locks | M an owner; N ended | HEAD-T5 |
+
+A3's end reaches its new locks only after A's role rows and membership, so T1–T5 are unchanged by A3 (by trace). A non-relinquishing transfer that replaces an expired recipient row revokes that row and takes the campaign row at commit. It serializes with end like a role revoke (by trace).
+
+#### 10.8.4 Against revelation creation, snapshots and revocation (A3)
+
+| # | First, paused | Second | Waits | Outcome | Final state | Evidence |
+|---|---|---|---|---|---|---|
+| M1 | create (member M) by A, before step 5 (holding M `KEY SHARE`) | E(M by B) | end → create, at M | Create commits; end commits | M ended. The revelation is closed `target_membership_ended`. Audit: create ×1, end ×1 with `closed_character_revelation_ids` | A3-M1 |
+| M2 | E(M by B), before its campaign lock | create (member M) by A | create → end, at M (step 4) | End commits; create gets 409 `revelation_target_not_active` and writes nothing | M ended; no revelation | A3-M2 |
+| M3 | create (member M) by A, before step 5 (holding A's owner row `FOR SHARE`) | E(A by B), the revealer | end → create, at A's role rows | Create commits; end commits | A ended; the revelation stays live (D9-f) | A3-M3 |
+| M3′ | E(A by B), holding A's role rows | create by A | create → end, at step 1 | End commits; create's fresh re-check (step 7) refuses with 403 `character_reveal_required` and writes nothing | A ended; no revelation | By trace (the emulation has no re-check); keyed: KEYED-L2 |
+| S1 | create (`campaign_current`) by A, step 4a, paused before step 5 or before step 12 | E(N by B) | end → create, at N | Create commits with N in the snapshot; then end commits | The snapshot holds A, B and M, plus N with `removed_at` and `membership_ended` | A3-F4, A3-F1 |
+| S2 | E(N by B), before or after its campaign lock | create (`campaign_current`) by A, step 4a | create → end, at N in step 4a | End commits; create commits without N | The snapshot holds A, B and M | A3-F2, A3-F3 |
+| S3 | create, step 4a, before step 5 | recovery for M's user, stranded | recovery → create, at M (recovery holds the campaign `FOR NO KEY UPDATE`) | Create commits (M in the snapshot); recovery commits | M an owner and in the snapshot | A3-F5 |
+| S4 | recovery, holding the campaign and M | create, step 4a | create → recovery, at M | Recovery commits; create includes M | M an owner and in the snapshot | A3-F6 |
+| S5 | create by B, before step 5 | relinquishing transfer A → M | transfer → create, at M | Both commit | M an owner and in the snapshot | A3-F7 |
+| S6 | relinquishing transfer A → M, after its campaign lock | create by B | create → transfer, at M in step 4a | Both commit | as S5 | A3-F8 |
+| S7 | create by A, before step 5 | `create_resource_grant` to N by B | grant → create, at N | Both commit | — | A3-F9 |
+| S8 | `add_campaign_member` by B, before its role insert (holding the campaign `FOR UPDATE`) | create by A | create → add, at step 5 | Both commit; the new member is not in the snapshot | — | A3-F10 |
+| S9 | invitation reopen or insert of N | create | — | §10.4 "Joins": a reopen or insert in flight is excluded; one committed before step 4a is included | — | By trace |
+| V1 | revoke (member revelation of M) by A, after its row lock | E(M by B) | end → revoke, at the campaign row | The revoke commits; end's closure is a no-op | Revelation `revoked`; M ended. Audit: revoke ×1, end ×1, with no closed revelation ids | A3-V1 |
+| V2 | E(M by B), after its campaign lock | revoke by A | revoke → end, at the campaign row | End commits; the revoke returns `revoked: false` with no audit row | Revelation `target_membership_ended` | A3-V2 |
+| AC1 | create by A, after step 5, before step 5a | `add_campaign_member` of A's user (already a member) by B | add → create, at the campaign row | Create commits; the add then fails on `ux_campaign_memberships_open` (409) and writes nothing | One revelation; A's membership unchanged | ACC-1a. With the account lock *before* the campaign row: **40P01**, the add aborted (ACC-1b), which is why step 5a sits after step 5 |
+| AC2 | account deactivation of A, holding A's account `FOR UPDATE` | create by A | create → deactivation, at step 5a | Deactivation commits; create's step 7 refuses (403; the owner predicate needs an active account) and writes nothing | A's account inactive; no revelation | ACC-2a |
+| AC3 | create by A, past step 5a | account deactivation of A | deactivation → create, at A's account | Create commits; deactivation commits after it | One revelation; A's account inactive | ACC-3a |
+
+**What the probes rejected.**
+
+- **The first §10.4 order** (no step 4a) deadlocks S1 and S2:
+  - **A3-E1:** creation holds the campaign; end is aborted, and the snapshot keeps N.
+  - **A3-E2:** end holds N; creation is aborted.
+  - It commits only when end holds the campaign before creation reaches it (A3-E3).
+- **An end that closes revelations without the explicit campaign lock** deadlocks with a revoke (A3-V3: the revoke is aborted).
+
+**Unchanged rows, by trace.**
+
+- **A group creation against an add of the revealer to the group:** they meet at the group row.
+- **A creation against revoking the revealer's delegation or `gm` role:** as for a release (§5.8). First come, first served; a creation that waited gets 403.
+- **A group revocation against `deactivate_access_group`:** exactly one closure, at the revelation row.
+
+#### 10.8.5 Against direct grants
+
+| # | First, paused | Second | Waits | Outcome | Final state | Evidence |
+|---|---|---|---|---|---|---|
+| G5 | `create_resource_grant` to M by A, before its insert | E(M by B) | end → grant, at M | Both commit; end revokes the new grant | M ended; the grant revoked and listed in `revoked_resource_grant_ids` | HEAD-G5. Also `test_resource_grant_concurrency.py::test_a_membership_ending_cannot_race_a_create_targeting_it` and `test_character_relationship_concurrency.py::test_a_membership_ending_cannot_race_a_grant_targeting_it`, which pass unchanged |
+| G6 / X1 | grant to A by B, before its insert (holding A `FOR UPDATE` and the campaign) | E(M by A) | end → grant, at A: through the status UPDATE's foreign key at HEAD, and at the explicit `KEY SHARE` after A3 | Both commit | M ended; A's grant live | HEAD-G6, A3-X1 |
+| G7 / X2 | E(M by A), at its last statement (HEAD) or after its campaign lock (A3) | grant to A by B | grant → end, at A (`FOR UPDATE` against `KEY SHARE`) | Both commit | as G6 | HEAD-G7, A3-X2. **A3a pins this pair in both orders** |
+| G1 / X5 | grant to N *by A*, before its insert (holding N and the campaign `FOR UPDATE`) | E(A by B) | end → grant, at the campaign row | **40P01.** On release, the grant's foreign-key `KEY SHARE` on A (`granted_by`) waits for end. End is aborted; the grant commits | A open; the grant live | HEAD-G1, A3-X5 |
+| G2 | E(A by B), holding A | grant to N by A | grant → end, at its foreign key on A | **40P01.** End then requests the campaign row, which the grant holds. The grant is aborted; end commits | A ended; no grant | HEAD-G2 |
+| G3 | `grant_character_relationship` to N by A, before its insert | E(A by B) | end → relationship grant, at the campaign row | **40P01**: end is aborted | relationship live; A open | HEAD-G3 |
+| G4 | `add_campaign_member` by A, before its role insert | E(A by B) | end → add, at the campaign row | **40P01**: end is aborted | new member added; A open | HEAD-G4 |
+
+**Status.** G1–G4 are a pre-existing cycle, proposed DEF-021 (§10.11).
+
+- §7.9 item 3 left it untraced; it is now traced and probed.
+- The same cycle follows by trace for `change_character_relationship` (it revokes, then inserts with `granted_by` after its campaign lock) and for a group-target `create_resource_grant`.
+- A3's commands lock the caller's membership before the campaign row, so they are not part of it.
+
+**Access-group adds and authoring.** The P1 and P0 orders are unchanged by A3. These tests pass unchanged:
+
+- `test_access_group_member_add_locks.py`:
+  - `::test_an_add_that_waited_for_the_end_of_the_members_membership_is_refused_as_not_active`
+  - `::test_ending_a_membership_waits_for_an_add_and_closes_the_row_the_add_wrote`
+  - `::test_ending_the_actors_membership_waits_for_an_add_paused_before_its_insert`
+  - `::test_an_add_waits_for_the_end_of_the_actors_membership_and_both_commit`
+- `test_access_group_concurrency.py`:
+  - `::test_add_member_cannot_race_membership_ending`
+  - `::test_batch_add_locks_every_selected_membership`
+- `test_authoring_scope_recovery_locks.py`:
+  - `::test_ending_a_membership_waits_for_its_authors_in_flight_write_and_the_write_stands`
+  - `::test_an_author_whose_membership_is_being_ended_is_refused_and_writes_nothing`
+
+#### 10.8.6 Keyed requests (the portal path)
+
+| # | First, paused | Second | Waits | Outcome | Evidence |
+|---|---|---|---|---|---|
+| K1 | keyed E(M by A), holding M | keyed E(N by B) | end2 → end1, at the campaign row: both hold `KEY SHARE` from their reservations, and end2 wants `FOR UPDATE` | **40P01**: end2 is aborted. M ended, N open | KEYED-K1; after A3, KEYED-K8 (same) |
+| K2 | keyed E(M by A) | unkeyed E(N by B) | end2 → end1 | Both commit; the unkeyed end holds no campaign lock to upgrade | KEYED-K2 |
+| K10 | keyed E(M by A) | keyed revoke of N's role | revoke → end | **40P01**: the revoke is aborted | KEYED-K10 |
+| K11 | keyed E(M by A) | keyed change of N's role | change → end | **40P01**: the change is aborted | KEYED-K11 |
+| K12 | keyed E(M by A) | keyed grant to N by B | grant → end | **40P01**: the grant is aborted | KEYED-K12 |
+| K5 | relinquishing transfer A → M (route takes no key), holding M, before its campaign lock | keyed E(M by B) | end → transfer, at M | **40P01** on the transfer's campaign `FOR UPDATE`: end is aborted; the transfer commits | KEYED-K5 |
+| K6 | grant to M by A, holding M, before its campaign lock | keyed E(M by B) | end → grant, at M | **40P01**: end is aborted; the grant commits | KEYED-K6 |
+| K3 / K4 | E(N) or E(A) | A3 create, reserving *first* | create → end | **40P01** (§10.4) | KEYED-K3, K4 |
+| L1–L3 | E(N), E(A) or create | A3 create, reserving after its lock phase | as S1, S2 and M3′ | Both commit; snapshot correct | KEYED-L1 to L3. The probes reserved after step 6; the revised position, after steps 7–8, adds no lock |
+
+**Status.** K1, K5, K6 and K10–K12 are pre-existing, proposed DEF-019 (§10.11).
+
+**A candidate fix that was rejected: deferring the reservation's campaign foreign key.**
+
+- Deferred, the foreign key is checked at commit. That removed every keyed cycle above (DEFERRED-K1 to K7, L1 to L3).
+- But it creates a new deadlock that HEAD does not have: a keyed `assign_membership_role` of `gm` against an `add_campaign_member` with `gm`. The assign holds the role row and, at commit, wants the campaign; the add holds the campaign and wants the role row (DEFERRED-K9: the add is aborted; KEYED-K9 at HEAD: both commit).
+
+#### 10.8.7 Retries and receipts (A3)
+
+| Situation | Outcome |
+|---|---|
+| Two creations for the same character, kind and target | One 201. The other waits on the unique index, then returns 200 `created: false` with the same id. Exactly one row, one snapshot and one audit row |
+| A creation or revoke retried with the same key and body | The stored status and body. They come after the pre-check, the key lock, the lock phase and the under-lock authority and deny checks (steps 7–8). Nothing is written |
+| The same key with a different body, on another character, or on the other revelation route | The existing non-disclosing idempotency 409. Nothing is written and the stored receipt is unchanged |
+| A creation retried with no key after a lost response | 200 `created: false`; the snapshot is not refreshed (D9-e) |
+| A keyed retry after the revealer lost reveal authority | 403 `character_reveal_required` and no replay. If the loss committed before the pre-check, the pre-check refuses. If it committed after the pre-check but before step 1's lock, step 7 refuses. The stored receipt is kept |
+| A keyed retry after a whole-character deny on the revealer | 404 and no replay. A deny that committed after the pre-check is caught at step 8. A deny still being committed waits for the request's membership (or campaign) lock and applies to the next request |
+| Two concurrent requests with the same key and body | The second waits at the key lock (step 0) holding no row lock. It then passes steps 1–8 and replays the first's receipt. There is one mutation, one audit row and one receipt |
+| A keyed request refused or failing after its reservation (a validation 409 or 40P01) | The whole request rolls back, the reservation included. A later valid request with the same key runs the command |
+| The caller's finite assignment expires while the request waits at the key lock | Step 7, which follows the wait, refuses with 403 and nothing is written. If the other request committed, its receipt is kept |
+| A same-key request on another route, concurrent | §10.8.9 |
+| A revoke retried | 200 `revoked: false`; no audit row |
+| A creation against revoking the revealer's delegation, or `gm` role, in both orders | As for a release (§5.8): first come, first served; a creation that waited returns 403 |
+
+#### 10.8.8 Existing tests that must pass unchanged after A3a
+
+These are the named tests in §10.8.2, §10.8.3 and §10.8.5, plus:
+
+- P0's `test_authoring_scope_recovery_locks.py` (all);
+- P1's `test_access_group_member_add_locks.py` (all);
+- A1's `test_campaign_owner_lock_order.py`, `test_campaign_owner_expired_recipient.py`, `test_campaign_owner_caller_expiry.py` and `test_character_reveal_delegation_deadlocks.py`;
+- A2a's `test_character_public_profile_concurrency.py`;
+- `test_membership_lifecycle_concurrency.py`, `test_membership_role_concurrency.py`, `test_resource_grant_concurrency.py`, `test_character_relationship_concurrency.py`, `test_access_group_concurrency.py` and `test_campaign_invitation_concurrency.py`.
+
+Each covers its intended behaviour through an unkeyed path, and A3's end change moves no wait they observe (§10.4, "Behaviour that changes for an end in flight"). A failure there is a defect in A3a, not a test to update.
+
+#### 10.8.9 The same key across routes (probed 2026-11-08)
+
+**What these probes are.**
+
+- The existing route is real: `POST /campaigns/{c}/memberships/{m}/end` through `TestClient`, in its own request transaction, with its real pre-check, reservation, command, audit and receipt.
+- The A3 request is a SQL stand-in for `create_character_revelation` in the §10.4 order. It writes to a probe table, so it is **design evidence only**.
+- **HEAD** rows use `begin_idempotent_request` as it is at `a9ec4c4`. **KEYLOCK** rows replace it in-process with P2's version: the key lock, then the original insert. A3's step 0 is added in the stand-in; the repository is unchanged.
+- The actor is A, a built-in owner, in every row, and the key is the same within each row.
+- Waits are `pg_blocking_pids`, with the lock type taken from `pg_locks`.
+
+| # | First | Second | Waits | HTTP end | A3 | Final receipt for K, audit and state |
+|---|---|---|---|---|---|---|
+| HEAD-X1 (the reviewed cycle) | A3 create by A, paused before its late reservation (holding A's owner row `FOR SHARE` and the campaign `KEY SHARE`) | keyed end(A by A) | end → A3, at A's role rows (after the end reserved K) | 200 | **40P01** at the reservation | The end's receipt; audit end ×1; A ended; no revelation |
+| HEAD-X2 | as X1 | keyed end(N by A) | end → A3, at **COMMIT** (the retention trigger's campaign `FOR UPDATE`) | **200, but rolled back** (the deadlock victim at commit, after the response; DEF-022) | 201 | **A3's** receipt; no audit; N **not** ended |
+| HEAD-X3 | keyed end(A by A), reserved K, waiting on a held lock of A's role row | A3 create by A | end → hold; A3 → end, at the reservation's unique index | 200 | **40P01** | The end's receipt; audit end ×1; A ended |
+| HEAD-X4 | keyed end(N by A), as X3 | A3 create by A | as X3 | 200 | **40P01** | The end's receipt; audit end ×1; N ended |
+| HEAD-X5 | keyed end(B by A) with A finite, as X3; the end then fails its retention check | A3 create by A | as X3 | 400 (rolled back) | 201 | A3's receipt; no end audit; B open |
+| KEYLOCK-X1 | as HEAD-X1, plus the key lock at step 0 | keyed end(A by A) | end → A3, on an **advisory** lock, before the end holds any row | **409** | 201 | A3's receipt; no audit; A open; three live role rows |
+| KEYLOCK-X2 | as KEYLOCK-X1 | keyed end(N by A) | end → A3, advisory | **409** | 201 | A3's receipt; N open |
+| KEYLOCK-X3 | keyed end(A by A), holding the key lock and K, waiting on the held lock | A3 create by A | end → hold; A3 → end, **advisory** (A3 holds no row lock) | 200 | **403** at step 7 (A's owner row revoked by the end) | The end's receipt; audit end ×1; A ended; no revelation |
+| KEYLOCK-X4 | keyed end(N by A), as KEYLOCK-X3 | A3 create by A | as KEYLOCK-X3 | 200 | **409** at step 8a (K holds the end's receipt) | The end's receipt; audit end ×1; N ended; no revelation |
+| KEYLOCK-X5 | keyed end(B by A), A finite, as KEYLOCK-X3; it then fails retention | A3 create by A | A3 → end, advisory | 400 (rolled back) | 201 (K was free again) | A3's receipt; no end audit; B open |
+
+**Same route (the A3 stand-in twice) and existing routes:**
+
+| # | Pair | Waits | Outcome | Final |
+|---|---|---|---|---|
+| HEAD-S1 | two A3 creates, same key and body | the second, at the unique index, **while holding its lock phase** | 201, then an identical replay | one receipt, one revelation |
+| KEYLOCK-S1 | the same pair | the second, at the advisory lock, holding nothing | 201, then an identical replay | one receipt, one revelation |
+| KEYLOCK-S2 | the same key, a different audience | advisory | 201, then 409 | one receipt, one revelation |
+| KEYLOCK-S3 | the first fails after reserving | advisory | the first fails; the second 201 | one receipt (the second's), one revelation |
+| HEAD-E1 / KEYLOCK-E1 | two keyed ends of N, same key | HEAD: the unique index. KEYLOCK: advisory | 200, then an identical replay, in both | one receipt; audit end ×1 |
+| HEAD-E2 / KEYLOCK-E2 | a keyed end of N, then a keyed end of B, same key | as E1 | 200, then 409, in both | one receipt; N ended, B open |
+| HEAD-C1 | an unkeyed end of A whose commit-time retention trigger fails | end → hold, at COMMIT | **200**, with nothing persisted | no audit; A open (DEF-022) |
+
+**What the probes show.**
+
+- Without the key lock, a same-key A3 request deadlocks with an existing keyed route in both orders.
+- With P2 and step 0, every pairing ends in the documented result:
+  - the first commits;
+  - the second replays, gets 409, or is refused by current authorization;
+  - when the first rolls back, the second runs.
+- Existing routes behave identically with the lock; only the lock type of the wait changes.
+
+### 10.9 Tests
+
+Database and HTTP tests use namespaced fixtures. Race tests use `LockRace` (§7.7), and every wait is observed as blocked by the intended session through `pg_blocking_pids`.
+
+**Migration and constraints:**
+
+- `145` upgrades, downgrades and re-upgrades, and `alembic check` is clean.
+- The downgrade refuses atomically while a role capability or resource grant names the new capability.
+- **Each CHECK and trigger refusal:**
+  - a target shape that does not match its kind;
+  - cross-campaign targets, creators, revokers and delegations;
+  - a character from another world;
+  - a revelation with no release in its own campaign, including when only campaign B has a release;
+  - an update to a structural column;
+  - reopening a closed row;
+  - a second live row for the same audience;
+  - a snapshot row for a non-`campaign_current` revelation, for another campaign's membership, or inserted in a later transaction;
+  - a snapshot update other than the single removal;
+  - a role capability or `allow` grant naming `character.view_public_profile`.
+- A character with a revelation cannot be physically deleted.
+
+**T82 audience matrix.** Members:
+
+- **P1:** a player in group G;
+- **P2:** a player not in G;
+- **O:** an observer;
+- **L:** joins after the revelations;
+- **X:** left, then rejoined through the invitation reopen;
+- **R:** another campaign's GM, with a membership on the same world and the same timeline.
+
+Expected visibility for one revealed character, in world search:
+
+| Kind | P1 | P2 | O | L | X after rejoin | R (campaign B) |
+|---|---|---|---|---|---|---|
+| `member` (P1) | yes | no | no | no | no (if targeted before leaving) | no |
+| `access_group` (G) | yes | no | no | only if added to G | no, until re-added | no |
+| `campaign_current` | yes | yes | yes | **no** | **no** | no |
+| `campaign_current_and_future` | yes | yes | yes | **yes** | **yes** | no |
+
+The matrix also covers:
+
+- group removal and deactivation followed by reactivation;
+- revocation of each kind;
+- a character archived and then restored.
+
+**Independent sources (T6), each through the real commands:**
+
+- an `observer_approved_viewer` relationship plus a revelation, with the revelation revoked: still discovered. With the relationship revoked instead: still discovered.
+- a resource grant `allow` of `character.view_summary` plus a revelation, with the revelation revoked: the summary tier is unchanged.
+- a `member` and a `campaign_current_and_future` revelation for one caller, with one revoked: still discovered through the other.
+- the explanation lists each source separately before and after.
+
+**Denies:**
+
+- A whole-character `campaign.view` deny, created through the A2a-R route, to the member and to a group: the character is absent from every surface in §10.7 despite each revelation kind, and present again after the deny is revoked.
+- A raw `character.discover` deny under `character_id` (D12): hidden from discovery, while bootstrap and other operations are unaffected.
+- A `canon.edit` deny on the character for the revealer: creating and revoking still succeed (D8 item 5).
+
+**What a revelation never grants.** For a revealed-only caller:
+
+- `resolve_character_view_tier` refuses;
+- inventory is `none`;
+- the sheet, build and calculation routes return 404;
+- bootstrap perspectives are unchanged;
+- `can_open_participant` and the session roster's `can_open_character` are false;
+- party-perspective Knowledge is refused.
+
+**Authority:**
+
+| Caller | Create and revoke |
+|---|---|
+| Owner | 201 / 200 |
+| Delegated GM | 201 / 200 |
+| Assistant GM | 403 `character_reveal_required` |
+| GM without a delegation | 403 `character_reveal_required` |
+| Custom `access.manage` holder | 403 `character_reveal_required` |
+| Revoked delegation | 403 `character_reveal_required` |
+| Expired `gm` assignment | 403 `character_reveal_required` |
+| Player, observer | 403 from the route filter |
+| Campaign B's owner on campaign A's route | 404 |
+
+- No refusal writes a row or an audit row.
+- A revelation made by a GM whose delegation was later revoked keeps applying, and the new owner can revoke it (D9-f).
+
+**Rules and receipts:**
+
+- the release precondition (409);
+- archived character (409);
+- target shapes (422);
+- ended or inactive targets (409);
+- cross-campaign targets (404);
+- natural retry and keyed replay;
+- the same key on another character (409);
+- the audit row's content.
+
+**Concurrency** (the §10.8 matrix; revised 2026-11-08):
+
+- **Real races only (revised after review).** Every A3a race is an actual race on the migrated schema: migration 145's tables, triggers, CHECKs, unique indexes and foreign keys, and every earlier migration. The §10.8 SQL probes are design evidence and are not acceptance. Two forms are required:
+  - **Command races.** The real A3a commands (`create_character_revelation`, `revoke_character_revelation`, the changed `end_campaign_membership`), and the real competing commands, each in its own `LockRace` worker transaction. The first is paused at the named statement.
+  - **HTTP races.** For every row that involves an A3 route or the end route, the race is also run through `TestClient`. The request runs in the route's own single transaction (`get_connection`), with its dependencies, pre-check, idempotency, audit and commit.
+    - The request is made to wait by a row lock that the test holds in its own transaction (`LockRace.hold`). That held transaction is a real command, left uncommitted, never a statement pause inside the request, because the request does not run on a named thread.
+- **What every race asserts.** Before release, the stated `pg_blocking_pids` relationship. After release:
+  - each command's result or HTTP status and body;
+  - **audit:** `audit.change_log` rows, by count and command name, for the campaign's world;
+  - **receipt:** `security.idempotent_requests` rows for the caller, campaign and key, by count, status, body and `completed_at`;
+  - **revelation:** live or ended, and `end_reason`;
+  - **snapshot:** members, `removed_at` and `removal_reason`;
+  - **membership:** `ended_at` and status;
+  - **roles:** the live role set of each membership involved.
+- **Rows required:**
+  - §10.8.4 M1, M2, M3, M3′, S1–S8 (S9's reopen and insert cases included), V1, V2 and AC1–AC3;
+  - §10.8.5 X1 and X2, the explicit actor lock in both orders;
+  - the KEYED-L rows as HTTP races.
+- **Keyed HTTP regressions.** These are A3a acceptance criterion 4 (§10.10). Each is run for both create and revoke.
+  1. **Authority or deny lost after the pre-check, before the locks: no replay.**
+     - First, a keyed request K commits, storing receipt R and writing one audit row.
+     - The test then holds, uncommitted, one of these real commands:
+       - `revoke_character_reveal_delegation` of the caller's delegation, which holds the delegation row;
+       - `revoke_membership_role` of the caller's owner or `gm` row, which holds the role row;
+       - `create_resource_grant` of a whole-character `campaign.view` deny to the caller's membership, which holds that membership;
+       - the same deny to a group the caller belongs to, which holds the group and the campaign.
+     - A second request with K and the same body passes the route pre-check, which reads without locks and so cannot see the uncommitted change. It then blocks in the command: at step 1, step 3 or step 5. The test asserts `pg_blocking_pids` names the held transaction.
+     - The test commits the hold. The request gets 403 `character_reveal_required` (authority) or 404 (deny), with no receipt fields in the body.
+     - Afterwards: R is unchanged (same `completed_at`); the audit count is unchanged; the revelation, snapshot, membership and role state is unchanged.
+  2. **Authorized same key, different payload: conflict.** The caller's key is reused with each of these:
+     - another target or kind;
+     - another character;
+     - the other revelation route.
+
+     Each returns the non-disclosing 409. Nothing is written, there is no audit row, and the stored receipt is unchanged.
+  3. **Concurrent same-key requests: one mutation, one audit row, one receipt.**
+     - The test holds the `audit.change_actions` row for `created` (for revoke, `updated`) `FOR UPDATE`, as `test_campaign_owner_expired_recipient.py` does. Request 1 then stops at its audit insert, past its reservation and its writes.
+     - Request 2, with the same key and body, blocks on request 1 at the key lock (`pg_blocking_pids`; `pg_locks` shows an `advisory` wait).
+     - On release, request 1 returns 201 (or 200) and request 2 returns the identical status and body.
+     - Afterwards there is exactly one revelation (or closure), one snapshot set, one audit row and one completed receipt row.
+     - **Expiry variant.** The caller's finite assignment expires while request 2 waits at the key lock, using the technique of `test_campaign_owner_caller_expiry.py::test_a_caller_who_expires_during_the_lock_wait_is_refused_and_nothing_is_written`. Request 2 gets 403 from step 7, and request 1's state and receipt stand.
+  4. **A rollback leaves the key available.**
+     - A keyed request fails after its reservation:
+       - with 409 `public_profile_not_released` (create, before any release);
+       - with step 7's 403, after the caller's finite assignment expired during a key-lock wait;
+       - with 409 `revelation_target_not_active` (a member target whose membership has ended).
+     - The test asserts that no `security.idempotent_requests` row exists for that key, and that nothing else was written.
+     - The cause is then removed: the release is made, a new delegation is granted, or the target rejoins through invitation reopen, which keeps the same membership id and therefore the same body. The same key and body then succeed (201 or 200) with exactly one receipt row and one audit row.
+  5. **Cross-route keys (requires P2): one route wins, the other conflicts or is refused, and nothing deadlocks.** These are run through the real routes, with the same actor and the same key K.
+     - **XR1, A3 first.**
+       - The test holds the `audit.change_actions` `created` row `FOR UPDATE`. A keyed create by A then stops at its audit insert, holding the key lock, its lock phase, its reservation and its writes.
+       - A keyed `POST …/memberships/{A}/end` by A with K blocks on the create at the key lock (`pg_blocking_pids`; an `advisory` wait). Variant XR1b ends N instead.
+       - On release: the create returns 201 and the end returns 409.
+       - Final state:
+         - one revelation and its snapshot set;
+         - one audit row (`create_character_revelation`);
+         - one receipt for K, holding the create's body;
+         - A's (or N's) membership open, and the role set unchanged.
+     - **XR2, end first.**
+       - The test holds A's (or N's) role row `FOR SHARE`. The keyed end by A then stops after its reservation.
+       - A keyed create by A with K blocks on the end at the key lock, holding no row lock: the end's own wait is on the hold alone (`pg_blocking_pids`).
+       - On commit of the hold, the end returns 200. The create then returns:
+         - **ending A:** 403 `character_reveal_required` from step 7, because A's owner row is now revoked;
+         - **ending N:** 409, because K holds the end's receipt.
+       - Final state:
+         - one audit row (`end_campaign_membership`);
+         - one receipt for K, holding the end's body;
+         - the membership ended and its roles revoked;
+         - no revelation.
+     - **XR3, the first request rolls back.**
+       - A's owner row is finite, and the keyed end is of B, the last non-expiring manager. The end stops after its reservation, as in XR2, then fails its retention check (400) and rolls back.
+       - The waiting create gets K fresh and returns 201.
+       - Final state: no end audit row; B open; one receipt for K, the create's; one revelation.
+     - **XR4.** XR1 to XR3 repeated with the revoke route in place of create.
+     - **XR5, A3 create against A3 revoke, both orders.** Same key: the second waits at the key lock, then gets 409, or 403/404 if its authorization has gone.
+     - **XR6, same route, same key.** Two keyed creates, ordered by the audit-row hold:
+       - same body: one 201 and an identical replay;
+       - different body: one 201 and one 409;
+       - the first fails after its reservation: the second gets 201.
+
+       Each case ends with one receipt and at most one audit row and one revelation.
+- **P2's own tests** are listed with P2 (§10.11). A3a relies on them and does not repeat them.
+- **Unchanged tests.** The §10.8.8 tests pass unchanged.
+- **Not A3 tests.** The rows marked as pre-existing defects are excluded:
+  - DEF-020: §10.8.1 R1, R2 and R4;
+  - DEF-021: §10.8.5 G1–G4;
+  - DEF-019: §10.8.6 K1, K5, K6 and K10–K12.
+
+  No A3 test asserts that both commands commit in those rows. Their regressions belong to the fixes (§10.11).
+
+**Response-body disclosure sweep.**
+
+- **Markers:**
+  - the revealed character's canonical name and summary;
+  - a second, unrevealed character's name;
+  - the revelation `reason`;
+  - the draft and release text markers from A2a.
+- **Readers:** P2, O, R, and a revealed-only P1.
+- **Surfaces:** world search, counts and pagination across a page boundary, character detail, relationships, organization members, the session roster and travel, event explanations, encounters, Knowledge, preview (as each subject), bootstrap, the sheet, inventory and the party roster.
+- **Assertions:**
+  - an unrevealed or revoked character's id and name appear nowhere for a caller without another source;
+  - a revealed character's id appears only where §10.7 says;
+  - no audience body contains a revelation id, a kind, a target, a reason, a snapshot member or any release text;
+  - counts equal listed rows;
+  - after revocation, the next request shows nothing;
+  - stored receipts and audit rows contain no reason text in `changed_fields`.
+
+**Release summary (D5-c, §10.12):**
+
+- **Authoring:**
+  - save, clear and no-op of `public_summary`;
+  - the length CHECK;
+  - the release snapshot equals the draft at the token;
+  - the copy aid cannot target it, and a request naming it as a copy field gets 422;
+  - the audit names the field without its text.
+- **A revelation-only reader:**
+  - the card shows the latest release's summary;
+  - a later release without a summary shows `null` (no fallback to an earlier release or to the canonical text);
+  - a release made before 145 shows `null`.
+- **Search and counts,** with a marker word only in the canonical summary and another only in the released one:
+  - the revelation-only reader matches the released word and not the canonical one, and the count agrees;
+  - a relationship discoverer and the GM match the canonical word, and their count agrees;
+  - the name matches for both.
+- **Paging:** across a page boundary the order and cursor are identical for a revelation-only reader and a relationship discoverer, and the cursor contains no summary text.
+- **Two campaigns:** campaign B's release summary never appears for a campaign A reader.
+- **Gaining a relationship** moves the reader to the canonical summary on the next request.
+
+**Party roster (D4-C, §10.13):**
+
+- **Who qualifies:**
+  - a controller of a current party member (each of `owner`, `primary_controller`, `co_controller`) sees every current member;
+  - a controller of a former or future member does not;
+  - a controller in campaign B of the same party's character does not;
+  - with no effective clock, nobody is listed;
+  - a controller under a whole-character deny on their own character does not qualify through it.
+- **Denies on a listed member:** a whole-character deny, or a raw `character.discover` deny, on M omits M for that reader only, and `member_count` agrees.
+- **Other readers:**
+  - a non-controller player and an observer see only discoverable members (a revealed M appears, an unrevealed M does not);
+  - the GM's roster is unchanged.
+- **No leak beyond the roster:** the containment regression in §10.13 (search, counts, relationships, organization members, events, encounters, Knowledge, session roster, detail, sheet, inventory, profile, preview). The roster's key set is pinned, and the qualifying function has a single caller.
+
+**Released-profile readers (D11, §10.14; A4 tests, listed here so A4 inherits them):**
+
+- **Readable:** by a revelation holder; by a `viewer` (summary tier); by a GM.
+- **Not readable:** by a bare relationship discoverer (`character.discover` only) or by a D4-C roster reader.
+- **Denies:**
+  - a raw `character.view_public_profile` deny blocks it on every path and leaves the summary tier;
+  - a whole-character deny blocks everything.
+
+**Structural tests:**
+
+- only the revelation command, query and resolver modules reference the new tables;
+- the route manifest gains three routes;
+- the classification registry covers every new text column;
+- the world-gate registry lists the new commands as `world_capability=None` scopes.
+
+### 10.10 Slices and acceptance
+
+| Slice | Scope | Depends on | Safe between commits because |
+|---|---|---|---|
+| **A3a** | Migration 145 (with the `public_summary` pair and its draft-save and release fields, §10.12); the create, revoke and list commands, routes and audit, with step 4a's membership lock and both routes reserving their key, and looking up replays, only after the lock phase and the under-lock authority and deny checks, with the caller's account lock and the post-reservation re-check (§10.4); the membership-end lock and closure; the group-deactivation closure; registries; docs | D5-c, D9 (including the D9-a cutoff), D12 (approved); P2 (done, `d36d565`); P3 (§11) | `AccessContext` is not changed. No audience surface reads the tables, so a revelation is visible only in the GM list and in audit |
+| **A3b** | The `AccessContext` source and `has_capability` (with `include_revelations`); `resolve_world_character_visibility` and `released_summary_ids`; the party roster under D4-C (§10.13); the explanation and overview sources; the released-summary projection in search and counts (§10.12); the §10.7 matrix, disclosure sweep and T6 tests; the ADR 0021 §6 and access-contract clarification for the roster | A3a; D4-C, D5-c, D10 (approved) | Revealed characters are listed, named and counted, but cannot be opened (the existing discover-only behaviour). No release text is served |
+| **A4** | The public tier, the direct-detail public response with the released summary, `can_open`, `sections.public_profile`, the session links, D6, and the D11 reader rule (§10.14). The roster gets no links (§10.13) | A3b, D6 (open), D11 (approved) | — |
+
+**A3a acceptance:**
+
+1. Migration 145 behaves as §10.2 says, pinned by its migration test.
+2. Every §10.9 constraint and authority test passes, as do the §10.12 authoring tests.
+3. **Real concurrency tests pass.** The rules-and-receipts tests and every §10.9 concurrency test pass, as command races and as HTTP races on the real schema and request transaction. Each asserts the audit, receipt, revelation, snapshot, membership and role state listed in §10.9; A3b adds only their visibility assertions.
+   - No §10.8 SQL probe counts toward this criterion.
+   - The §10.8.8 tests pass unchanged.
+   - No test asserts success for a row §10.8 marks as a pre-existing defect.
+4. **Keyed HTTP regressions pass, for both create and revoke** (§10.9, keyed items 1–5):
+   1. **No replay after a loss.** When authority loss, or a whole-character deny, commits after the route pre-check but before the command acquires its locks, the keyed retry is refused (403 or 404). It returns no replay, and the stored receipt, audit and state are unchanged.
+   2. **Different payload conflicts.** An authorized caller reusing a key with a different payload, character or route gets the non-disclosing 409, and nothing is written.
+   3. **Concurrent same-key requests.** They produce exactly one mutation, one audit row and one completed receipt, and both responses are identical. A caller whose assignment expires during the wait is refused by step 7.
+   5. **Cross-route keys (requires P2).** The XR1–XR6 cases pass with the final receipt, audit and mutation state §10.9 states. No pairing deadlocks, and none returns a success that did not commit.
+   4. **A rollback frees the key.** A request that fails after its reservation leaves no reservation row, and a later valid request with the same key and body succeeds once.
+5. The audience matrix passes as **stored state**: snapshot rows, closure reasons, and resolver input rows read directly. No API response changes.
+6. A sweep of the existing audience surfaces shows byte-identical bodies before and after creating each kind of revelation.
+7. **P2 is merged and reviewed before A3a's keyed routes** (done: `d36d565`, PASS WITH NONBLOCKING FINDINGS). **P3 is merged and reviewed before A3a** (§11.11). The snapshot follows the approved D9-a cutoff (§10.4).
+   - With P3, criterion 4's statement "none returns a success that did not commit" is enforced by the request transaction itself.
+   - A3a's HTTP tests still assert persisted state.
+8. Docs:
+   - `DATABASE_MODEL` §19;
+   - `DOMAIN_MODEL` (revelation, audience kind, snapshot);
+   - the `ENTITY_LIFECYCLE` command list;
+   - `PHASE13E_ACCESS_CONTRACT` (the new routes and errors);
+   - the A1 §3 lock table's `end_campaign_membership` row;
+   - this plan.
+9. The standard checks; the focused tests, then the full suite; migration up and down; `git diff --check`. Then stop for independent review.
+
+**A3b acceptance:**
+
+1. The full §10.9 matrix through HTTP.
+2. The T6, deny and never-grants tests.
+3. The disclosure sweep.
+4. The §10.13 roster tests and the containment regression.
+5. The §10.12 projection tests (search, counts, paging, older releases).
+6. The explanation and overview show each revelation as a distinct source and stop showing it after revocation.
+7. Preview matches the subject's own request.
+8. No test that passed at A3a's head changes, except where this design names the change.
+9. The same checks, then independent review.
+
+### 10.11 Gaps found while tracing (not fixed by A3)
+
+- **Access-management commands are not re-checked under lock** (§7.9 item 1). This is unchanged by A3, because A3's commands re-check reveal authority themselves.
+- **DEF-017** (the stale group join) is avoided in A3's own group and membership locks. It is not fixed in the group commands.
+- **The late foreign-key locks (§7.9 item 3), now traced and probed** (2026-11-08, §10.8). The trace found three cycles that already exist at HEAD. A3 introduces none of them and widens none, and none involves A3's own commands.
+  - **Proposed DEF-019: keyed campaign requests deadlock.**
+    - **Mechanism.** The idempotency reservation's foreign key takes the campaign row `FOR KEY SHARE` before the command's own locks. Two keyed requests in one campaign therefore deadlock when the first later needs the campaign `FOR UPDATE`. That covers ending a membership, revoking or changing a role, the grant commands and adding a member (K1, K10–K12).
+    - **With an unkeyed command.** A keyed end also deadlocks with an unkeyed command that holds the ending membership and then needs the campaign `FOR UPDATE`: a relinquishing transfer (K5) or a grant (K6).
+    - **Exposure.** The portal sends a key on every one of these routes, and the existing race tests send none.
+    - **Reached by an existing test since P2 (2026-11-08).** Two keyed ends by the same owner with different keys (K1) are run by P2's different-key test. They deadlock in every run, and the second request is the victim at COMMIT; at HEAD it answers 200 through DEF-022 (§11.3, P2DK). P3 adds a deterministic regression for this cycle, kept separate from P2's independent-key test (§11.8, T9).
+    - **Proposed grade:** 2 + 1 + 1 + 0 + 0 = 4, Medium. It is on a normal path; one request fails with a 500 and nothing is written; it needs overlapping requests in one campaign; it is visible; it affects one request.
+    - **Fix.** It needs its own design. The per-route form A3 uses (lock phase, then reservation) is one option. Deferring the foreign key was probed and rejected (§10.8.6).
+  - **Proposed DEF-020: ending a membership deadlocks with the recovery that promotes it** (R1, R2, R4).
+    - **Mechanism.** Recovery locks the campaign row before the membership. Every other command locks the membership first.
+    - **Direction of a fix:** lock the target user's open membership before the campaign row, and re-read it after. That needs its own design, because a membership can be inserted for the same user concurrently.
+    - **Proposed grade:** 0 + 1 + 1 + 0 + 0 = 2, Low. It needs an administrator's script on a stranded campaign while a finite owner acts.
+  - **Proposed DEF-021: ending an actor's membership deadlocks with that actor's own write** (G1–G4; by trace also `change_character_relationship` and group-target grants).
+    - **Mechanism.** The write holds the campaign row `FOR UPDATE` and then takes `KEY SHARE` on its actor through `granted_by`.
+    - **Direction of a fix:** lock the actor's membership `FOR KEY SHARE` before the campaign row, the order end and P1's add already use. It is best designed together with §7.9 item 1's re-check.
+    - **Proposed grade:** 1 + 1 + 1 + 0 + 0 = 3, Low.
+  - **Can A3 proceed?** Yes, with §10.4's two corrections. None of the three defects is a prerequisite for A3a or A3b:
+    - A3's change to end keeps each cycle's lock positions: the explicit campaign lock sits where the commit-time lock sat, after the same rows (A3-X3, X4, X5 and KEYED-K8 match their HEAD probes).
+    - A3's routes form no DEF-019 cycle **only once P2 is in place**: different keys by KEYED-L1 to L3, and the same key by the key lock (§10.8.9). Until then, a same-key request on another route deadlocks with them (HEAD-X1 to X4), so the claim is not made for A3 without P2.
+  - **Recommended.**
+    - Fix DEF-019 before A6, because the portal is how revelations will be created and revoked.
+    - Enter all three in the defect register. This revision does not edit the register.
+- **The new order's own races** (the explicit actor lock in end, step 4a and the reservation position) are pinned by §10.9's A3a race tests.
+- **Prerequisite P2: the idempotency key lock (shared; designed 2026-11-08; required before A3a's keyed routes).**
+  - **Why it is shared.**
+    - A3 cannot see another route's uncommitted reservation without waiting for it, and it cannot reserve before its locks (KEYED-K3, K4).
+    - So the same-key cycle (§10.8.9) can be prevented only if *every* reserver serializes on the key before taking row locks. A lock taken by A3 alone leaves an existing route's insert free to create the uncommitted row A3 later waits on.
+  - **Change.**
+    - `begin_idempotent_request` takes `lock_idempotency_key` immediately before its insert.
+    - The helper is public, for A3's step 0.
+    - The module docstring's "no advisory lock" sentence and DATABASE_CONVENTIONS §26.4 are updated to describe the lock.
+    - No schema change and no migration.
+  - **Not changed.** The two other stores, `campaign_creation_reservations` and `actor_idempotent_requests`, have no A3 caller and no cross-store scope.
+  - **Routes affected, all evaluated at `a9ec4c4`.** Every campaign-keyed route function was checked by syntax tree: 134 route functions in 39 modules. They reserve directly, through `_authoring.start_campaign_idempotency`, or through a module helper such as `_run`, `_write` or `_operate`.
+    - **The modules:** `access_grants`, `access_groups`, `campaign_clock`, `campaign_invitations`, `campaigns`, `character_builds`, `character_public_profile`, `character_state`, `dungeon_authoring`, `encounter_preparation`, `encounters`, `entity_lifecycle`, `event_corrections`, `events`, `integration`, `interactions`, `item_authoring`, `item_definition_authoring`, `items`, `knowledge_authoring`, `knowledge_runtime`, `location_authoring`, `memberships`, `movement`, `npc_authoring`, `npc_portrayal`, `organization_authoring`, `parties`, `player_character_authoring`, `quest_authoring`, `quest_runtime`, `quests`, `relationship_authoring`, `relationships`, `session_authoring`, `session_play`, `sources`, `travel` and `world_time`.
+    - **In every one,** nothing touches the database before the reservation. The only earlier calls build request models (`character_builds.create_build_endpoint`) or read an attribute (`knowledge_runtime.belief_endpoint`). Each helper reserves before calling its operation. No route takes a row lock directly, and the route dependencies only read: the release pre-check resolves reveal authority with `lock="none"`.
+    - So each route takes the key lock while holding no row lock, and only the location of its same-key wait moves.
+    - **Probed on the real end route:** same key and same body gives the identical replay; same key and a different target gives an identical 409 (HEAD-E1/E2 against KEYLOCK-E1/E2).
+  - **Tests (P2's own acceptance).**
+    - **A structural test, failing on violation:**
+      - every route function that reserves, and every helper it reserves through, makes no database call before the reservation;
+      - no route or dependency takes a row lock;
+      - the only insert into `security.idempotent_requests` is in `begin_idempotent_request`;
+      - the only other caller of `lock_idempotency_key` is a command's first statement.
+    - **HTTP races on two existing routes** (membership end and role revoke):
+      - same key and same body: one mutation, one audit row, one receipt and an identical replay;
+      - same key and different body: 409, nothing written;
+      - the first rolls back: the second runs;
+      - the same key across the two routes: the second gets 409.
+
+      Each asserts the advisory wait through `pg_locks` and `pg_blocking_pids`.
+    - **The full suite passes unchanged.**
+  - **What P2 does not do.** It does not fix DEF-019, whose cycles are between different keys and stay open. It does not fix DEF-022.
+  - **Implemented at `d36d565` and independently reviewed (PASS WITH NONBLOCKING FINDINGS).** The tests, the results and the review's findings are in "P2 implementation and review record", below §10:
+    - structural caller-order coverage;
+    - the external A3 call-site guard;
+    - the outer-transaction harness limitation.
+
+    Separately, **the different-key test asserts a success that did not commit** (§11.3, P2DK). P3 corrects it (§11.8, T8) and adds the DEF-019 regression (T9).
+  - **Alternatives rejected:**
+    - **A3 without keys:** contrary to DATABASE_CONVENTIONS §26.4, and it loses receipts.
+    - **A separate A3 key store:** loses cross-route conflict detection, because a key would no longer be shared with other routes.
+    - **A `lock_timeout` on A3's late reservation, mapped to a retryable 409:** nondeterministic, and it changes the contract for ordinary same-route retries.
+    - **Deferring the reservation's foreign key:** probed in §10.8.6 and rejected.
+- **Proposed DEF-022: a commit failure is reported to the client as success (pre-existing, all routes).**
+  - **Mechanism.** `get_connection` commits on leaving its `yield` dependency, which FastAPI 0.141 runs after the response is produced. A failure at commit therefore reaches no client: a deferred trigger such as the access-manager retention check, a deadlock detected there, or a lost connection.
+  - **Probed (HEAD-C1).** An unkeyed end of the caller returned 200 while its commit-time retention trigger failed. Nothing persisted: the membership was open, and there was no audit row.
+  - **Also seen (HEAD-X2).** A keyed end returned 200 and was then the deadlock victim at commit. Its receipt never existed, and K held the other request's receipt.
+  - **Effect.** For a keyed request, the client holds a body that no receipt backs, and a retry runs the command again.
+  - **Reproduced deterministically through the real route (§11.3):**
+    - a test-only deferred trigger failing COMMIT with 23000 (keyed) or 40P01 (unkeyed) gives 200 at HEAD, with nothing persisted;
+    - at HEAD the response starts before the commit, while P2's key lock is still held.
+  - **Also behind a false pass.** P2's test `test_a_different_key_takes_its_own_key_lock_without_queueing_behind_a_held_request` asserts `(200, 200)`. Its second request is the DEF-019 K1 deadlock victim at COMMIT, and nothing of it persists (§11.3, P2DK).
+  - **Grade, revised 2026-11-08** under the revised rubric (`docs/ISSUE_GRADING_RUBRIC.md`): 2 + 2 + 1 + 1 + 0 = **6, Medium**. It was proposed as 5. The new evidence is that the lost write can be an access change the caller is told succeeded: ending a membership leaves the member's access in place behind a 200 (D1, C1, P2DK).
+    - **Exposure 2:** a normal but limited application path. Any route whose commit fails qualifies. The deferred retention triggers fire on ordinary membership and role writes, and DEF-019's cycles reach COMMIT on the portal's keyed path.
+    - **Impact 2:** loss of meaningful work behind a success. Nothing partial persists, but the requested change, including an access removal, is silently not made.
+    - **Triggerability 1:** it needs a commit-time failure: a deferred trigger, a deadlock at commit, or a lost connection.
+    - **Detection 1:** the response is misleading. The rubric names "a misleading completed receipt" under request preservation.
+    - **Blast 0:** one request.
+  - **Disposition: blocking for A3a, as prerequisite P3** (owner's direction, 2026-11-08; §11). It was previously recorded as a follow-up required before deployment.
+    - After A3a, `end_campaign_membership` holds the campaign row before its in-command retention check, so for end the commit-time check can no longer differ from it (by trace). Other routes, and deadlocks at commit, keep the defect until P3.
+    - The grades proposed above for DEF-019 to DEF-021 predate the rubric's revision; the owner should re-check them against it.
+  - **Fix: P3 (§11), revised after CHANGES REQUIRED.**
+    - A single app-wide async `Depends(commit_request_transaction, scope="function")` ends the request transaction after serialization and before the response is sent, including on a cancellation.
+    - `get_connection` keeps its default scope at all 174 declarations, so no class R route signature changes.
+    - The eight engine-backed handlers gain `request: Request` and end their authorization transaction before engine-side effects (§11.4.3).
+    - The earlier note that about 174 route signatures would be affected is withdrawn: only a per-declaration scope would need that, and §11.4.1 rejects it.
+    - The first P3 draft's claim that "no route signature changes" was also wrong, for the eight engine-backed handlers.
+- **No character archive command exists.** The "archived and restored" tests write the status under the entity lock, as A2a's archive race did.
+
+### 10.12 Release summaries and the caller's projection (D5-c, approved)
+
+**The rule.**
+
+- The canonical name stays the live identity label, for every caller and every surface. That covers display, search matching, sorting and the cursor.
+- A **revelation-only** reader of character X receives a summary only from a deliberate release. They are never given X's canonical `core.entities.summary`, and never matched against it.
+
+**Who counts as revelation-only.** A reader is revelation-only for X when both hold:
+
+- X is in their `AccessContext.revelations`;
+- no discovery-tier capability (`character.discover`, `character.view_summary`, `character.view_full`, `canon.edit`) reaches X through any other source, with denies applied as usual.
+
+`has_capability` gains a keyword, `include_revelations` (default `True`). This test calls it with `False`.
+
+| Caller | Revelation-only? |
+|---|---|
+| GMs (role `canon.edit`, so `discover_all`) | Never |
+| A relationship discoverer | No |
+| A grant `allow` of `view_summary` | No |
+| A player whose only path is a member, group or campaign revelation | Yes |
+
+A revelation-only reader who later gains a relationship sees the canonical summary from their next request.
+
+**Authoring (an A2 change carried by A3a).**
+
+- **Columns.** Migration 145 adds `public_summary TEXT NULL` to `campaign.character_public_profiles` and to `campaign.character_public_profile_releases`, with `CHECK (public_summary IS NULL OR char_length(public_summary) <= 4000)`. That is the limit `public_appearance` and `public_background` have.
+- **No provenance.** There is no origin, watermark or copy source: the field is always authored.
+  - `LEGACY_COPY_SOURCES` is unchanged, so the copy aid cannot fill it.
+  - The 143/144 trigger inspects only the two legacy fields.
+  - Nothing ever withholds it.
+- **Save.** The draft save body gains `public_summary` with the same rules as `public_appearance`: optional and partial, explicit `null` clears it, the same validation and length, and the same token, no-op comparison, idempotency fingerprint and audit. Audit names the field in `changed_fields`, never its text.
+- **Release.** The release snapshots `public_summary` from the draft at `expected_draft_row_version`, together with the other fields. Release immutability already covers every column.
+- **GM read.** It returns `public_summary` for the draft and each release. Beside it, read-only, it shows the canonical name and summary as "canonical, shown to readers with another path".
+- **No automatic publication.** No backfill, no default from the canonical summary, and no copy action. A GM who wants the canonical text released types or pastes it. Copying needs no restriction, because the canonical summary is `PUBLIC_WORLD`.
+- **Registries.**
+  - Classification: the draft column is `GM_ONLY` and the release column is `CAMPAIGN_VISIBLE`, as in 142.
+  - Module access: `queries/world_explorer.py` (and A4's public read) become admitted readers of the releases table, read-only.
+- **Downgrade.** It drops both columns, losing data by design, like the rest of 145's downgrade. Older code never serves the column, so dropping it discloses nothing.
+
+**Older releases, and releases without a summary.**
+
+- **What counts.** The latest release wins as a whole snapshot. A revelation-only reader sees that release's `public_summary`, or `summary: null` when it has none. That covers every release made before 145, and a later release whose draft summary was cleared.
+- **No fallback.** Nothing falls back to an earlier release's summary, or to the canonical one.
+- **Search.** Such a card matches search on its name only.
+- **GM side.** The GM read flags the latest release with `public_summary` null ("audiences see no summary"). A new release is the only way to give them one.
+
+**Search, counts and sorting use the caller's projection.** The change is in `_VISIBLE_ENTITIES_SQL` and the card select ([queries/world_explorer.py:255-296](../src/dnd_ai/queries/world_explorer.py#L255-L296), [:425-434](../src/dnd_ai/queries/world_explorer.py#L425-L434)), so the list and the counts share one predicate and cannot disagree.
+
+- **New bundle fields.** `CharacterVisibility` gains `released_summary_ids` (the caller's revelation-only characters) and the bundle gains `campaign_id`.
+- **The projected summary,** as SQL:
+
+  ```sql
+  CASE WHEN e.entity_id = ANY(:disc_released_summary_ids)
+       THEN latest.public_summary
+       ELSE e.summary END
+  ```
+
+  `latest` is `LEFT JOIN LATERAL (SELECT r.public_summary FROM campaign.character_public_profiles p JOIN campaign.character_public_profile_releases r USING (character_public_profile_id) WHERE p.campaign_id = :disc_campaign_id AND p.character_id = e.entity_id ORDER BY r.version_number DESC LIMIT 1)`. It is served by the existing unique `(character_public_profile_id, version_number)`, and the route's own campaign is the only one read.
+- **Matching.** `q` matches `canonical_name ILIKE … OR <projected summary> ILIKE …`, so a revelation-only reader's search never touches the canonical summary. Other entity kinds are unchanged.
+- **Counts.** Category counts use the same `FROM … WHERE`, so they count exactly what the list would return for the same `q`.
+- **Sorting and the cursor.** They are unchanged: `lower(left(canonical_name, 200))`, then `entity_id`. Neither depends on the summary, so keyset paging is stable, and the cursor carries no summary.
+- **The card.** Its `summary` field is the projected value.
+- **No other surface.** No other discovery consumer renders a character's summary (checked by grep at `a9ec4c4`). The A4 public tier uses the same released summary.
+
+### 10.13 The party roster exception (D4-C, approved) and the shared discovery rule
+
+**The rule.** One reader may see more of a party's roster than discovery gives them: someone who currently controls a character that is a current member of that party, in this campaign. They see that one party's current members, as character id and canonical name, minus explicit character denies.
+
+That is the whole grant. It is roster visibility only:
+
+- no summary, profile, inventory, sheet or detail tier;
+- no `can_open`;
+- no discovery anywhere else.
+
+**How it fits ADR 0021 §6 ("one discovery and profile predicate for every consumer").**
+
+- **Discovery** is still decided by one predicate, the shared bundle. The roster's discovery path uses it unchanged.
+- **The exception does not decide discovery.** It is a second, named audience for one response: a party's own controllers seeing the people their character travels with, which is a fact of the fiction.
+- **It never flows back.** No other consumer reads it, and the roster's results never enter `AccessContext` or the bundle.
+- **To record.** A3b adds a dated, owner-approved clarification to ADR 0021 §6 and to `PHASE13E_ACCESS_CONTRACT`: "the party roster names its current members to that party's current controllers; this confers no discovery".
+
+**Who qualifies.** All of these, evaluated per request:
+
+- The party is attached to the route campaign (`campaign.campaign_parties`).
+- The campaign's effective clock is set. With no clock, membership is undetermined: nobody qualifies and the roster lists nobody, as today.
+- The caller holds a live `owner`, `primary_controller` or `co_controller` relationship to some character C. It is resolved exactly as `resolve_access_context` resolves relationships: on this campaign membership and timeline, not revoked or expired, with no closed fictional interval, and C active and canon. No relationship type confers `character.control` today, so the type codes are the test. After P03-B, a live, in-effect assignment qualifies instead, and the relationship test is retired with the legacy rows (ADR 0021 §2.10).
+- C is a current member of this party at the effective clock.
+- C is not under a whole-character `campaign.view` deny for the caller. A controller denied their own character does not qualify through it.
+
+**What a qualifying reader sees.** Every current member M of the party, except:
+
+- M not shown to them by `lifecycle_hidden_entity_ids` (unpublished definitions; the existing filter);
+- M under a whole-character `campaign.view` deny for the caller (`entity_id`; existing);
+- **M under a `character.discover` deny for the caller (`character_id`; new, D12).**
+
+**What everyone else sees.** Current members the caller can discover, through `discoverable_entity_ids` with their bundle, which already applies both denies and the lifecycle filter. A GM is unchanged, because `discover_all` lists every current member as today. In both cases `member_count` counts what is listed.
+
+**Where the exception applies: one place.** `GET /campaigns/{campaign_id}/parties/{party_id}/roster` (`get_party_roster_endpoint`, [api/parties.py:134-178](../src/dnd_ai/api/parties.py#L134-L178)). Every other reader of party membership was checked at `a9ec4c4`:
+
+| Reader | Audience today | After A3b |
+|---|---|---|
+| `GET …/parties/{party_id}/members` ([api/parties.py:363](../src/dnd_ai/api/parties.py#L363)) | `canon.edit` | Unchanged; not the exception |
+| `GET …/parties/{party_id}/inventory` ([api/item_authoring.py:540](../src/dnd_ai/api/item_authoring.py#L540)) | `canon.edit` | Unchanged; not the exception |
+| Party list and detail (`_json`, [api/parties.py:93](../src/dnd_ai/api/parties.py#L93)) | `campaign.view`; no members | Unchanged |
+| Bootstrap `authorized_parties` ([queries/bootstrap.py:427](../src/dnd_ai/queries/bootstrap.py#L427)) and the Knowledge perspective ([api/knowledge.py:482](../src/dnd_ai/api/knowledge.py#L482)) | Parties of the caller's own `view_knowledge` characters; no other members | Unchanged |
+| `resolve_party_perspective` ([api/access.py:348](../src/dnd_ai/api/access.py#L348)) | Authorizes a perspective, names no one | Unchanged |
+| Session roster ([api/sessions.py:184](../src/dnd_ai/api/sessions.py#L184)) | Session participants, through the bundle | Shared discovery only; the exception does not apply |
+
+**Keeping it from becoming general discovery.**
+
+- **Contained in one place.** The rule is one function, `party_roster_controller_qualifies(connection, access, *, party_id, membership_clock)`, in `api/parties.py`. A structural test fails if anything other than `get_party_roster_endpoint` references it.
+- **Nothing fed back.** The roster's member set is never written to, or read into, `AccessContext`, `CharacterVisibility`, `WorldEntityVisibility`, `discoverable_entity_ids` or any cache.
+- **Response shape fixed.** It stays `{character_id, character_name}` per member. A structural test pins the key set, so a summary, link or tier flag cannot be added without changing the test.
+- **No capability.** The exception confers none. `has_capability` and the effective-access explanation never mention it. The explanation shows nothing for it, because it is a fact about the party, not an access source.
+- **Regression.** A qualifying player who sees party-mate M on the roster is shown to get, for M:
+  - absence from world search, counts and pagination, relationships, organization members, event explanations, encounters, Knowledge subjects and the session roster (unless discoverable otherwise);
+  - 404 from M's detail, sheet and public profile;
+  - `none` inventory;
+  - nothing from preview as that player.
+
+### 10.14 Who reads a released profile (D11, approved; applied by A4)
+
+The latest release of X in the route campaign is readable when **all** of these hold:
+
+- the caller is not under a whole-character `campaign.view` deny on X;
+- the caller holds no `character.view_public_profile` deny on X (D12: honoured if present, not creatable);
+- either `has_capability("character.view_public_profile", character_id=X)` holds (a revelation), **or** one of `character.view_summary`, `character.view_full` or `canon.edit` holds for X.
+
+A `view_public_profile` deny blocks the released profile on every path, because it is the operation-specific deny for this operation. It does not remove a summary or full tier the caller holds otherwise.
+
+Bare `character.discover` from a relationship or grant does not qualify, because publication is not revelation. Neither does the D4-C roster exception.
+
+Revelation-only readers get the public tier, with the summary from §10.12. Readers with summary access or better see their existing tier and, in addition, a `public_profile` section holding the latest release.
+
+### 10.15 The approved decisions, as §10 applies them (recorded 2026-11-07, from conversation)
+
+| Decision | Approved | Applied in |
+|---|---|---|
+| **D4-C** | Current-campaign party controllers see their party's roster, subject to explicit character denies. Roster visibility only: no profile, inventory or wider discovery | §10.13 |
+| **D5-c** | The canonical name remains the live identity label. Revelation-only readers receive a deliberately released summary. Search does not match their unreleased canonical summary | §10.12 |
+| **D9** | The proposed lifecycle, D9-a to D9-g, including D9-a's candidate-statement cutoff (approved 2026-11-08, §10.4) | §10.2, §10.4, §10.5 |
+| **D10** | Shared discovery across consumers, keeping each consumer's other audience and field restrictions: reader-visible relationship edges, public organization memberships, member-readable encounters, event status rules, Knowledge visibility policy, session participant rules. A revelation adds a character to the discoverable set and changes no other condition | §10.6, §10.7 |
+| **D11** | Released profiles are readable by revelation holders and by readers with summary access or better, subject to applicable denies | §10.14 |
+| **D12** | Honour existing operation-specific denies (`character.discover`, `character.view_public_profile`); creation controls are deferred | §10.2, §10.13, §10.14 |
+
+---
+
+## 11. Prerequisite P3 (before A3a): end the request transaction before the response (DEF-022)
+
+**Designed 2026-11-08 at `c705ee7`, for Sonnet.** The owner made DEF-022's correction a requirement for A3a. It was revised the same day after an independent CHANGES REQUIRED review; the review text is not in the repository, and this revision follows the owner's summary of it. Nothing in the application was changed to produce this section. Its prototypes ran only in a throwaway copy of `c705ee7` outside the repository (design evidence).
+
+**What the review changed.**
+
+- **§11.2 replaces "routes that do not use the request transaction".** That claim was wrong. All eight engine-backed routes also hold a request transaction, opened by their authorization dependency, and keep it open across their engine work, including provider calls.
+- **New in the design:**
+  - engine-backed routes end that transaction before any engine-side effect (§11.4.3);
+  - explicit treatment of serialization, rollback failure, cancellation and an uncertain commit (§11.4.4–§11.4.7);
+  - transaction guarantees per route class (§11.5).
+- **New tests:** an uncertain-commit test, a deterministic DEF-019 regression kept apart from T8, real-route tests for the engine-backed class, and `uv.lock`.
+- **Corrected:** the failure totals of the prototype run (§11.9) and the P2 review record ("P2 implementation and review record").
+
+### 11.1 The request lifecycle at `c705ee7`
+
+Installed and locked: FastAPI 0.141.1, Starlette 1.3.1, SQLAlchemy 2.0.51, psycopg 3.3.4, Uvicorn 0.52.0.
+
+**Order of a request** (`fastapi/routing.py`, `request_response` and the included-router path):
+
+1. Two exit stacks open: `request_stack`, then `function_stack` inside it.
+2. Dependencies are solved, app- and router-level ones first. A generator dependency goes on `function_stack` if its `Depends` says `scope="function"`, otherwise on `request_stack`.
+3. The handler runs. Its result is validated and serialized into a `Response`, so the body bytes exist.
+4. `function_stack` closes.
+5. The response is sent.
+6. `request_stack` closes.
+
+`get_connection` has no scope, so it closes, and commits, at step 6. That is DEF-022.
+
+**Routers are included lazily.** In this FastAPI version, `include_router` stores 63 `_IncludedRouter` objects rather than copying routes onto the app.
+
+- Each route runs with an effective dependency list: the include chain's dependencies (the app's first), then the route's own.
+- `fastapi.routing.iter_route_contexts(app.routes)` enumerates the 343 effective `APIRoute`s with their effective `dependant`. §11.2 and test T13 use it. A walk over `app.routes` alone finds only the 2 routes declared on the app.
+
+**Dependency caching.**
+
+- The cache key is the function, its security scopes and its computed scope (`fastapi/dependencies/models.py`).
+- So declarations of `get_connection` with different scopes are separate cache entries, and the generator runs twice. Probe M1 shows two instances, `a is b` false.
+
+**Exception paths.**
+
+- **Sync generator dependencies:** FastAPI's `contextmanager_in_threadpool` runs a sync generator's exit only for `except Exception`.
+  - A cancellation (`asyncio.CancelledError`, a `BaseException`) skips `get_connection`'s exit.
+  - Its rollback and close then happen only when the suspended generator is finalized.
+  - In CPython that was immediate in probe CX1 (reference counting, even with the cyclic collector off). It is not a guaranteed path, and it runs a blocking rollback on the event-loop thread.
+- **Async generator dependencies** receive every exception at their `yield`, including a cancellation.
+
+**Middlewares** (all ASGI and outside the routing stacks): `NoStoreMiddleware` and `CorrelationIdMiddleware` (both `BaseHTTPMiddleware`) and CORS. They only set headers.
+
+- `BaseHTTPMiddleware` runs the inner app as a task and cancels it only if its own response path raises.
+- The credible sources of cancellation are a server shutdown with a timeout, and an outer middleware failure.
+- An ordinary client disconnect does not cancel a running handler. Uvicorn records it and ignores later sends.
+
+**Responses.** No module in `src/dnd_ai/api` returns `StreamingResponse`, `FileResponse` or a server-sent-event stream, uses `BackgroundTasks`, or has a WebSocket route.
+
+**Error mapping** (`src/dnd_ai/api/errors.py`):
+
+- `IntegrityError` by SQLSTATE: 23505 and 23P01 give 409; 23502, 23503, 23514 and 23001 give 400; anything else gives the fixed 500 `internal_error`.
+- `OperationalError`, which covers 40P01, 40001 and a lost connection, gives 500.
+- `ApiError`, `ValueError` and request validation keep their own handlers.
+
+### 11.2 Routes by dependency graph and transaction ownership
+
+Each of the 343 effective routes of `create_app()` was classified by walking its full effective dependency graph (`iter_route_contexts`; script `classify_routes.py`).
+
+| Class | Routes | Transactions |
+|---|---:|---|
+| **R:** request transaction only | 333 (322 through the authentication dependency) | One request transaction. Authorization (`get_authenticated_user_id`, `require_campaign_capability`, `world_access`, the public-profile pre-checks), the reservation, the command, the audit row and the receipt all share it |
+| **A+E:** authorization request transaction plus engine-owned transactions | 8, listed below | The request transaction carries authentication and authorization only. The command opens its own transactions on the engine |
+| **E:** engine only | 1 (`readyz`) | One `SELECT 1` on its own connection |
+| **N:** no database | 1 (`healthz`) | none |
+
+**The authorization transaction writes for cookie sessions.** `resolve_local_session_principal`, called by `get_authenticated_user_id` for a `__Host-dnd_ai_session` cookie, updates `security.browser_sessions` (idle expiry and `last_used_at`) in the request transaction. For a portal request, that row stays locked until the request transaction ends. A bearer or Foundry principal reads only.
+
+**The eight A+E routes.** At HEAD the request transaction stays open, idle in transaction and holding a pooled connection, while the command runs. It commits after the response. Probe AE1 at HEAD, during the provider call: one application session idle in transaction, and one connection checked out.
+
+| Route | Engine-side transactions | External call | Retry contract (unchanged) |
+|---|---|---|---|
+| `ai_npc.request_npc_conversation_turn_endpoint` | T1 locks the assignment and records the request and context. T2 records the output and proposal | `provider.generate_npc_turn`, between T1 and T2, outside any engine transaction | Not keyed. Each call is a new context request. A provider or T2 failure after T1 leaves the request row (probe AE3) |
+| `ai_npc.review_proposed_change_endpoint` | one | none | Not keyed. The pending-proposal lock makes a second review refuse |
+| `ai_synthesis.request_campaign_synthesis_endpoint` | T1 and T2, as for the NPC turn. Its party-perspective authorization read uses the request connection first | `provider.generate_synthesis`, between T1 and T2 | Not keyed, as for the NPC turn |
+| `integration.apply_foundry_combat_sync_endpoint` | three transactions on a dedicated connection, under a session advisory lock (`commands/integration.py`) | none | Exactly once per `external_operation_id`; a retry returns the recorded outcome |
+| `reference_corpus.ingest_reference_passages_endpoint`, `grant_source_to_campaign_endpoint`, `revoke_source_campaign_grant_endpoint`, `retrieve_cited_passages_endpoint` | one each | none | Not keyed. Each is a single transaction |
+
+**Intended mid-request commits in class R** (unchanged): `local_auth._record_failed_login` commits the failed-login audit row, and `preview` commits a refused preview's audit row. In both, the route then raises, so the request ends on the rollback path.
+
+### 11.3 The defect and the corrections, probed
+
+All probes ran on the test suite's per-run disposable database.
+
+- **The route is real:** `POST /campaigns/{c}/memberships/{m}/end` through `TestClient`, with its real pre-check, P2 key lock, reservation, command, audit and receipt.
+- **The observer:** an ASGI wrapper outside the application reads the database from another connection at `http.response.start`.
+- **Commit-time failures** come from a test-only `DEFERRABLE INITIALLY DEFERRED` trigger on `audit.change_log`, keyed by correlation id.
+- **The application pool** has one connection.
+- **The trees:** "HEAD" is `c705ee7`. "FIX" is prototype v2 (§11.4). Prototype v1, the earlier draft, gave the same results in every row it ran.
+
+| # | Case | HEAD | FIX | Final state (both) |
+|---|---|---|---|---|
+| V1 | Keyed end of N | 200. At response start nothing is visible and **the key lock is held** | 200. At response start N is ended, the audit row and receipt are visible, and the key lock is free | N ended; audit ×1; receipt ×1 |
+| D1 | Keyed end of N; COMMIT fails with 23000 | **200** | 500 `internal_error`; key lock free at response start | nothing persisted |
+| D1 retry, replay | The same key and body, twice | 200, then a replay | 200, then a replay; key lock free at each response start | N ended; audit ×1; receipt ×1 |
+| D2 | Unkeyed end; COMMIT fails with 40P01 | **200** | 500 | nothing persisted |
+| C1 | Unkeyed end of A; the real retention trigger fails at COMMIT | **200** | 500 | A open; no audit |
+| R1 | Handler error after the reservation (400) | 400; key lock free | identical | nothing persisted; the same key then succeeds |
+| E1 | 404, 200, 409 | identical | identical | one receipt |
+| **U1** | Keyed end of N. COMMIT succeeds on PostgreSQL, then the acknowledgement is lost (the `_commit` seam commits, invalidates the connection and raises `OperationalError`) | not runnable at HEAD (no seam) | **500 `internal_error`.** At response start: committed, and the key lock free. **The same-key retry is 200 with a body equal to the stored receipt,** and adds no audit row and no receipt | N ended; audit ×1; receipt ×1 |
+| **RB1** | Handler error (400) and the rollback itself fails (seam) | not runnable | **400**, the original error. The connection is invalidated; at response start the key lock is free and no application session remains | nothing persisted; pool empty |
+| **S1** | A route writes, then its `response_model` validation fails | 500 | 500 | nothing persisted |
+| **CX1** | The request is cancelled while its handler is blocked; then released | cleaned up immediately (key lock free, nothing persisted), by finalization of the suspended generator, with the cyclic GC disabled | cleaned up immediately through the commit dependency: the rollback seam is called once and the `get_connection` backstop never logs | nothing persisted; pool empty |
+| **L1–L4** (amendment) | **Mocked lifecycle ordering.** `commit_request_transaction` driven directly, with a fake connection, the `_commit` or `_rollback` seam held at a worker-thread barrier, and the cancellation delivered while the barrier is held | not runnable | **L1** (COMMIT): commit-enter, cancel delivered, still not closed, commit-exit, close; the cancellation is caught by the request's scope. **L2** (ROLLBACK after `ValueError`): rollback-enter, cancel delivered, still not closed, rollback-exit, close; the same `ValueError` object escapes. **L3** (rollback fails after `ValueError`): rollback-enter, rollback-exit, invalidate, close; the same `ValueError` escapes; one log line naming only `OperationalError`. **L4** (rollback fails after a cancellation): cancel, rollback, invalidate, close; the cancellation is caught, and no `OperationalError` escapes | — |
+| **B1** (amendment) | **PostgreSQL:** keyed end of N, the cancellation delivered while COMMIT is held in the worker thread | not runnable | While held: the request connection not closed, 1 checked out, no pool check-in, the session idle in transaction, the key lock held. After release: commit-exit, then check-in, then the request task ends; **no message sent**; the key lock free | **committed**: N ended, audit ×1, receipt ×1. A same-key retry gets 200 with the stored body; still ×1 |
+| **B2** (amendment) | **PostgreSQL:** keyed end of B with A finite (handler 400 after the reservation), the cancellation delivered while ROLLBACK is held | not runnable | While held: as B1. After release: rollback-exit, then check-in; **no message sent** (the 400 is not sent); the key lock free | nothing persisted |
+| **B3** (amendment) | **PostgreSQL:** the handler blocked on a held row and cancelled, then released; ROLLBACK held | not runnable | While held: as B1. After release: rollback-exit, then check-in; no message sent; the key lock free | nothing persisted |
+| **B4** (amendment) | **PostgreSQL:** as B3, with the rollback seam raising | not runnable | rollback-exit, pool `invalidate`, then check-in; the cancellation caught; no other exception; no message sent; **no application session left**; the key lock free; one log line naming only `OperationalError` | nothing persisted |
+| **B5** (amendment) | **PostgreSQL:** handler 400, then the rollback seam raises (no cancellation) | not runnable | **400**, the original; pool `invalidate`, then check-in; no application session left; the key lock free; the log line as B4 | nothing persisted |
+| **AE1** | NPC turn: state during the provider call | **1 session idle in transaction; 1 connection checked out** | no request session; 0 checked out | request and output rows ×1 |
+| **AE2** | NPC turn: the authorization transaction's commit fails (seam) | not runnable | 500. **The provider is not called; no engine row** | nothing persisted |
+| **AE3** | NPC turn: the provider raises after T1 committed | 500 | 500 | the T1 request row persists; no output |
+| **P2DK** | P2's different-key test (two keyed ends by one owner; DEF-019 K1). 3 runs at HEAD, 3 on v1, 5 on v2 | `(200, 200)`, but the second **persists nothing** | `(200, 500)`. In every run the second waited at COMMIT before the hold was released, was the victim, and persisted no end, audit or receipt. One deadlock per run | player ended; O2 open; one receipt |
+
+### 11.4 The design
+
+#### 11.4.1 One app-wide dependency, not a scope per declaration
+
+- `create_app` passes `dependencies=[Depends(commit_request_transaction, scope="function")]`. FastAPI puts it first in every route's effective list, including routes on included routers (343 of 343 in the prototype).
+- It exits after serialization and before the response is sent.
+- `get_connection` keeps its default scope at all 174 declarations. There is one cache entry and one connection per request, as today, and no route signature in class R changes.
+- **A per-declaration `scope="function"` is rejected.** One missed or new declaration splits authorization and the write into two transactions (M1).
+
+#### 11.4.2 Components (`src/dnd_ai/api/deps.py`)
+
+- **`_RequestTransaction`:** a slot holding the connection and an `ended` flag, kept on `request.state` under one private name.
+- **`_commit(connection)` and `_rollback(connection)`:** the only COMMIT and ROLLBACK of a request transaction. They are module-level so the uncertain-commit and rollback-failure tests can replace them. Production behaviour is the plain call.
+- **`_discard(connection)`:**
+  1. If a transaction is open, it calls `_rollback`.
+  2. If that raises, it logs the exception class and invalidates the connection. The pool drops it, and PostgreSQL aborts the transaction when the session ends.
+  3. It closes the connection.
+
+  It never raises, so the original error is the one mapped.
+- **`_finish(slot, commit)`:**
+  - It runs once; a second call is a no-op.
+  - **To commit:** it calls `_commit`, then closes. If the commit raises, it discards and re-raises.
+  - **Otherwise:** it discards.
+- **`commit_request_transaction(request)`** is an **async** generator. It puts an empty slot on `request.state` and yields.
+  - **On a normal exit** it runs `_finish(commit=True)`.
+  - **On any exception, cancellation included,** it runs `_finish(commit=False)` and re-raises.
+  - Both run in a worker thread (`anyio.to_thread.run_sync`) inside a shielded cancel scope. So the blocking call never runs on the event loop, and a cancellation cannot abandon a COMMIT or ROLLBACK half done.
+  - **After a successful commit,** it calls `anyio.lowlevel.checkpoint_if_cancelled()`.
+    - A cancellation delivered while the shielded COMMIT ran therefore surfaces from the dependency itself, before the response stage.
+    - Without it, the pending cancellation surfaced only at Starlette's later send, by accident of its internals (probe L1, amendment of 2026-11-08).
+  - **On the exception path it adds no checkpoint.** The original exception is re-raised unchanged, and a pending cancellation then stops the response at the next checkpoint (L2, B2).
+- **`end_request_transaction(request)`:** for class A+E only (§11.4.3). It runs `_finish(commit=True)` now, in the handler's thread, and closes the request connection. A commit failure raises from that call, so it is mapped as usual.
+- **`get_connection(request, engine)`:**
+  - It refuses (`RequestTransactionError`, mapped to 500, before any statement) when the slot is missing, or when the request already opened a connection.
+  - It opens, begins, registers and yields.
+  - Its exit is a backstop only: if the slot is not ended, it logs an error and discards. This is unreachable while the commit dependency is installed (CX1).
+  - The signature gains `request: Request`. Every declaration, alias and `dependency_overrides[get_connection]` is unchanged.
+
+**`app.py`:** the one argument above.
+
+#### 11.4.3 Engine-backed routes: end the authorization transaction before engine-side effects
+
+Each of the eight A+E handlers gains `request: Request` and calls `end_request_transaction(request)`:
+
+- after its last use of the request connection or the `AccessContext`, which is authorization;
+- before its first engine call.
+
+Placement:
+
+- **`ai_npc` turn:** after the `character.interact` check, before `_world_id` and the command.
+- **`ai_npc` review:** before `review_proposed_change`.
+- **`ai_synthesis`:** after the tier checks and `resolve_party_perspective`, which reads through the request connection, before the command.
+- **combat sync:** after `assert_foundry_system_matches`.
+- **The four reference-corpus routes:** before their command.
+
+**Options evaluated:**
+
+- **(a) Commit the authorization transaction with everything else, before the response** (the first P3 draft).
+  - The request transaction stays open across the provider call (AE1 at HEAD).
+  - For a cookie session, it keeps `security.browser_sessions` locked for the whole call, so the same browser session's other requests wait behind the provider.
+  - If that late commit failed after the engine work had committed, a completed operation would answer 500.
+  - Rejected.
+- **(b) End it before the engine-side effects. Chosen.**
+  - Authorization is decided exactly as today: the same dependency on the same snapshot, plus the handler's own checks. The engine transactions never shared that snapshot or held its locks, so nothing is weakened.
+  - No database transaction is open during a provider call: the request transaction is ended, and the commands already close T1 before calling the provider.
+  - A failure of the authorization commit precedes every engine-side effect (AE2).
+- **(c) Give engine-backed routes an authorization dependency on its own short connection.** It changes the shared `require_campaign_capability` for 8 of 343 routes. Rejected as larger than needed.
+
+**Behaviour change, stated:** for a cookie session on an A+E route, the session's idle-window extension commits once authorization succeeds, even if the engine work then fails. At HEAD a failed request rolled it back. The extension records activity, not an operation; no retry contract depends on it.
+
+**After `end_request_transaction`,** the request connection is closed, and any later use of it raises and maps to 500. The commit dependency's exit is then a no-op. The combat-sync route's docstring note about holding "two separate pooled connections briefly" becomes untrue and is corrected.
+
+#### 11.4.4 Serialization
+
+- FastAPI validates and serializes the handler's result at step 3, before the commit dependency exits.
+- A serialization or response-validation failure is therefore an exception on the rollback path. It gets 500 and commits nothing (S1).
+- After the commit, only the header-setting middlewares run.
+- For A+E routes, a serialization failure can follow committed engine work (§11.5).
+
+#### 11.4.5 Rollback failure
+
+`_discard` keeps the original exception, invalidates the connection, and relies on PostgreSQL aborting the transaction when its session ends. Locks, including the key lock, are released then (RB1).
+
+The only residual case is a network partition in which the server has not yet seen the disconnect. The locks then last until it does. That is outside the application's control and is unchanged.
+
+#### 11.4.6 Cancellation
+
+- **Before the commit starts:** the commit dependency receives the cancellation, discards in a shielded worker thread, and re-raises. Nothing commits and the key lock is released (CX1). This does not depend on generator finalization or the garbage collector.
+- **During the handler's threadpool call:** the call is not abandonable, so the handler finishes its statements first. The commit dependency then discards them (CX1, B3).
+- **While COMMIT is running in the worker thread:**
+  1. The shield keeps the COMMIT running to completion.
+  2. `_finish` closes the connection, returning it to the pool, only after the COMMIT has returned.
+  3. Then `checkpoint_if_cancelled()` raises the cancellation, and no response is sent.
+
+  The transaction has committed, and its locks, P2's key lock included, are released by that commit. This is the uncertain case of §11.4.7: a same-key retry replays the stored receipt (B1).
+- **While ROLLBACK is running after a handler exception:**
+  1. The shield keeps the ROLLBACK running to completion.
+  2. The close follows it.
+  3. The handler's original exception is re-raised unchanged.
+  4. The pending cancellation stops the response at the next checkpoint, so no error response is sent either.
+
+  Nothing persists, and the locks are released by the rollback (L2, B2).
+- **While ROLLBACK is running after a cancellation:** the same, with the cancellation as the propagating exception (B3).
+- **Rollback failure, after a handler exception or after a cancellation:**
+  - `_discard` logs the failure by exception class, invalidates the connection, then closes it. PostgreSQL aborts the transaction and releases its locks when the session ends.
+  - The propagating exception is unchanged: the handler's exception (L3, B5, RB1) or the cancellation (L4, B4).
+  - The cleanup failure never replaces it.
+
+#### 11.4.7 Uncertain commit
+
+A COMMIT whose acknowledgement is lost raises `OperationalError`, which maps to 500. The transaction may have committed.
+
+- **For a keyed request,** the receipt and the mutation committed together, and P2's key lock was released by the commit. A same-key retry replays the stored response and adds no mutation or audit row (U1).
+- **An unkeyed request** has no such protection, as today.
+
+### 11.5 Transaction guarantees
+
+**Class R (333 routes).**
+
+- **Rollback is guaranteed. Nothing of the request transaction persists** for:
+  - any exception raised before the COMMIT starts: dependency and authorization errors, handler and command errors, serialization and response-validation errors, and a cancellation before the commit;
+  - a COMMIT that PostgreSQL answers with an error: a deferred trigger, 40P01 or 40001 at commit, or any other error reply.
+
+  The client gets the mapping in §11.1.
+- **A failed rollback** keeps that guarantee through server-side abort at disconnect (§11.4.5).
+- **Exceptions by design:** the two audit commits in §11.2, which persist before their route raises.
+- **Non-success can follow a committed transaction only when:**
+  1. the COMMIT's acknowledgement is lost (500; U1);
+  2. a cancellation arrives during the COMMIT (committed, no response);
+  3. the response is lost in transport after a successful commit.
+
+  In each, a keyed retry replays; an unkeyed retry may repeat the write.
+- **A 2xx is sent only after the commit has succeeded.** At that moment the writes, audit row and receipt are visible to other connections, and the key lock is released.
+
+**Class A+E (8 routes).**
+
+- **Phase 1, the authorization transaction,** ends at `end_request_transaction`. Any failure up to and including its commit is non-success with no engine-side effect (AE2).
+- **Phase 2, the engine transactions,** each commit on their own. A failure after the first of them can follow committed engine effects:
+  - the AI routes' T1 request row (AE3);
+  - combat sync's committed steps, under its `external_operation_id` contract;
+  - for the single-transaction routes, only a serialization failure after the commit.
+
+  These outcomes are the commands' existing contracts and are unchanged.
+- **No transaction is held across a provider call.**
+
+**Class E and N:** no request transaction.
+
+### 11.6 Contract
+
+**Changes:**
+
+1. **A 2xx means committed.** For class R, the writes, audit row and receipt are visible, and the key lock is released, before the response is sent.
+2. **A commit-time failure gets the response the same exception would get in the handler.** It is never a 2xx.
+3. **An uncertain commit gets a 500** and may have committed. A keyed retry resolves it.
+4. **A+E only:** the authorization transaction commits before the engine work. A cookie session's idle extension then persists even when the operation fails (§11.4.3).
+
+**Unchanged:**
+
+- the error envelope, codes and messages;
+- authorization decisions, and the replay, conflict and key scope;
+- P2's lock order;
+- the commands' own retry contracts (§11.2);
+- the two audit commits;
+- harnesses that override `get_connection`: the commit dependency finds no registered connection and does nothing.
+
+### 11.7 Affected code, routes and toolchain
+
+- **`deps.py`** (§11.4.2) and **`app.py`** (one argument).
+- **The 8 A+E handlers:** `request: Request` and one call each (§11.4.3). These are the only route signatures that change. The `integration` module docstring is corrected.
+- **Behaviour only:** the 333 class R routes, through the app-wide dependency. None changes its source.
+- **Toolchain:**
+  - `pyproject.toml`: `fastapi>=0.109.0` becomes `fastapi>=0.141.1`. The old floor predates `Depends(scope=...)` and the lazy-include behaviour this design was verified against.
+  - `uv.lock` changes in exactly one line, the project's `[package.metadata] requires-dist` entry, `{ name = "fastapi", specifier = ">=0.141.1" }`.
+  - **Verified in the throwaway copy:**
+    - `uv lock --check` passes at HEAD;
+    - after the `pyproject.toml` change, it fails ("needs to be updated");
+    - `uv lock` (uv 0.11.32) changes only that line, with no package version changed;
+    - `uv lock --check` then passes.
+  - The implementation commits both files, and the check is part of acceptance.
+- **Docs:**
+  - SYSTEM_ARCHITECTURE §7: its diagram already shows `Commit` before `Response`; add the mechanism, and the A+E split.
+  - SYSTEM_ARCHITECTURE §20: commit-time and uncertain-commit failures.
+  - DATABASE_CONVENTIONS §26.4: the receipt is visible and the key lock released before the response; an uncertain commit is resolved by a keyed retry.
+  - The `deps.py`, `idempotency.py` and `integration.py` docstrings.
+
+### 11.8 Tests (P3 acceptance)
+
+These are HTTP tests on `create_app()` with the real `get_connection` and real request transactions, unless marked as unit tests. Every HTTP test asserts persisted state as well as the response.
+
+- **Commit-time failures** use a test-only deferred trigger in the per-run database, created and dropped by a fixture and keyed by correlation id.
+- **Response-start state** is observed by an outermost ASGI wrapper reading through a separate connection.
+- **Seams:** tests replace only `_commit` and `_rollback`.
+
+| # | Covers | Test |
+|---|---|---|
+| T1 | A commit failure: non-success, nothing persisted | A keyed end of N, its COMMIT failing per SQLSTATE: 23000 → 500, 23505 → 409, 23514 → 400, 40P01 → 500. At response start and after: N open, its roles live, no end audit row, no receipt. Also unkeyed 40P01, and the real retention-trigger race (C1) |
+| T2 | Visible before the response | A keyed end of N, and a keyed role revoke (through `require_campaign_capability`). At `http.response.start`, another connection sees the mutation, one audit row for the correlation id, and the completed receipt with the response's status and body |
+| T3 | Safe retry after a failure | After T1's 23000 case, the same key and body: 200, one mutation, audit row and receipt; a further retry replays with no new audit row. After a handler rollback (R1), the same key on another target succeeds once |
+| T4 | P2 lock release | At response start the key lock is absent from `pg_locks` after a commit (T2), a handler rollback (R1), a commit failure (T1) and an uncertain commit (T10). A same-key request sent just after a 2xx is not seen waiting on the advisory lock |
+| T5 | Error mapping and cleanup | `test_api_deps.py` unchanged, plus a commit-failure case. `test_api_integrity_errors.py` and the envelope tests unchanged. With a one-connection pool: nothing is checked out and the next request succeeds after a success, a handler error, a commit failure, a rollback failure and a failed login. Failed-login and refused-preview audit rows persist (`test_api_local_auth.py`, `test_api_preview.py`, unchanged) |
+| T6 | Serialization (S1) | A test route writes, then fails `response_model` validation: 500, nothing persisted, the connection returned |
+| T7 | Rollback failure after a handler exception (RB1, B5; real PostgreSQL) | `_rollback` raises after a handler error on a keyed end. Asserts: the original 400 and envelope; the pool `invalidate` event precedes the `checkin` event; at response start the key lock is free and no application session remains (the invalidated session ended, so PostgreSQL rolled back); nothing persisted; pool empty; one error log line naming the exception class only, with no message text. The ordering and exception-identity part is covered without a database in T11b |
+| T8 | P2's independent-key test | Keep `test_a_different_key_takes_its_own_key_lock_without_queueing_behind_a_held_request`: the second key's lock is granted at once, never queued. Replace its second request with a keyed request on a route whose commit takes no campaign `FOR UPDATE`, chosen by trace, so the two share no row lock. Assert both responses and both persisted mutations, audit rows and receipts |
+| T9 | **DEF-019 two-ends regression, deterministic** (separate from T8) | Two keyed ends by the same owner, different keys, on the player's and O2's memberships. The first is held at the player's membership row. The test waits until `pg_blocking_pids` shows the second waiting at COMMIT behind the first, and only then releases. Asserts: exactly one 2xx; `pg_stat_database.deadlocks` rose by one; for the non-2xx request, whichever PostgreSQL chose as victim, no end, no audit row and **no receipt** for its key; for the other, all three persisted. The victim was the second in 5/5 prototype runs, but the assertions do not depend on which. When DEF-019 is fixed, this test changes with it |
+| T10 | **Uncertain commit** (U1) | `_commit` is replaced so PostgreSQL commits, then the connection is invalidated and `OperationalError` raised. The keyed end gets 500 `internal_error`. At response start the key lock is free, and the mutation, audit row and receipt are committed. A same-key retry with the real `_commit` gets 200 with a body equal to the stored receipt; there is still one mutation, one audit row and one receipt, and no key lock afterwards |
+| T11a | Cancellation during the handler (CX1; kept as its own test) | The ASGI app is called directly under anyio, with the cyclic GC disabled. A keyed end is blocked on a held row, the request's cancel scope is cancelled, then the row is released. Asserts: no response sent; key lock free, nothing persisted and no application session idle in transaction, checked without running the garbage collector; `_rollback` called once by the commit dependency; the `get_connection` backstop never logs. No seam is held: this covers the handler-phase path, which T11b and T11c do not |
+| T11b | **Mocked lifecycle ordering, no database** (L1–L4) | `commit_request_transaction` is driven directly through `contextlib.asynccontextmanager` under anyio, with a fake request (`state` only) and a fake connection placed in its slot, using the barrier protocol below. Cases, each asserting the recorded event order and what escapes the request's cancel scope: **(1)** COMMIT held, then cancelled: `commit-enter`, cancel delivered, still not closed, `commit-exit`, `close`; the scope reports the cancellation caught; nothing else escapes. **(2)** ROLLBACK held after the handler raises a `ValueError`, then cancelled: `rollback-enter`, cancel delivered, still not closed, `rollback-exit`, `close`; the escaping exception **is** the handler's `ValueError` object (identity, not type). **(3)** The rollback raises after a `ValueError`: `rollback-enter`, `rollback-exit`, `invalidate`, `close`; the same `ValueError` object escapes; exactly one error log record, naming `OperationalError` and no message text. **(4)** The rollback raises after a cancellation delivered while the handler awaits: cancel, `rollback-enter`, `rollback-exit`, `invalidate`, `close`; the cancellation is caught by the scope and no `OperationalError` escapes; the same log record. These tests prove ordering and exception preservation only. They make no claim about PostgreSQL |
+| T11c | **Real PostgreSQL, operation in flight** (B1–B4) | The real membership-end route on `create_app()`, called directly under anyio, with a one-connection application pool instrumented by SQLAlchemy events (`engine_connect` to capture the request `Connection`; pool `checkin` and `invalidate`). The barrier protocol below holds `_commit` or `_rollback` in the worker thread. Cases: **(1)** COMMIT held on a keyed end of N, cancelled while held. **(2)** ROLLBACK held after the handler's 400 (A finite, ending B), cancelled while held. **(3)** The handler blocked on a held row and cancelled; the row released; ROLLBACK held. **(4)** As (3) with the rollback raising. While held, every case asserts from a separate connection: the captured `Connection.closed` is false, `pool.checkedout() == 1`, no `checkin` event yet, the request's backend is `idle in transaction`, and P2's key lock is still granted to it in `pg_locks`. After release: the operation's exit event precedes the `checkin` event; in (4), `invalidate` precedes `checkin`; the request task ends after both; no ASGI message was sent (neither `http.response.start` nor a body); the key lock is absent; no application session idle in transaction. Outcomes: (1) N ended, one audit row and one receipt, and a same-key retry gets 200 with a body equal to the stored receipt, adding no row; (2)–(4) nothing persisted. (4) also has no application session left, and one error log record naming only the exception class |
+| T12 | **Engine-backed routes, on the real routes** | **(a)** An NPC turn with a **cookie session** and an observing fake provider. During the provider call: no request session idle in transaction; no connection checked out for the request; and an `UPDATE` of that `security.browser_sessions` row from another connection completes under `lock_timeout = '1s'`. **(b)** The same with the authorization commit failing (`_commit` seam): 500, provider not called, no `ai.context_requests` row. **(c)** The provider raising: 500, the T1 request row persists with no output (existing contract pinned). **(d)** Synthesis at `player_summary`: the party-perspective read happens before the end; then the same observation as (a). **(e)** A reference-corpus grant whose engine transaction fails (a duplicate grant): mapped error, no grant row, with the authorization transaction already ended. **(f)** Combat sync: the same `external_operation_id` sent twice gives one applied outcome, and the request connection is closed before the command's lock connection is opened |
+| T13 | Wiring (unit) | Over `iter_route_contexts(create_app().routes)`: every `APIRoute`'s first effective dependency is `commit_request_transaction` with `scope="function"`; every dependant resolving `get_connection` uses the default scope and the cache. The set of routes whose graph has both `get_connection` and a direct `get_engine` equals the eight A+E routes, and each of their endpoints calls `end_request_transaction` before any name bound to the engine (by syntax tree). `get_connection` is the only sync generator dependency in `dnd_ai.api`. No `dnd_ai.api` module uses `BackgroundTasks`, `StreamingResponse`, `FileResponse` or server-sent events, which is a tripwire |
+| T14 | Guards | An app without the commit dependency gets 500 on its first `get_connection` request, with no statement run. A second request connection in one request is refused |
+| T15 | FastAPI and anyio behaviour P3 relies on (unit, no database) | Pure FastAPI and anyio checks, so an upgrade that changes them fails here first: **(1)** a function-scoped generator dependency exits before `http.response.start`, and a request-scoped one after it; **(2)** an async generator dependency receives a cancellation at its `yield`; **(3)** a sync generator dependency's exit is **not** run for a cancellation (`contextmanager_in_threadpool` handles `Exception` only), which documents why the commit dependency is async; **(4)** `anyio.to_thread.run_sync` inside `CancelScope(shield=True)` runs to completion when the enclosing scope is cancelled mid-call (held by a barrier), and `anyio.lowlevel.checkpoint_if_cancelled()` afterwards raises the pending cancellation |
+| T16 | Lockfile | `uv lock --check` passes with the new floor |
+
+**The barrier protocol (T11b, T11c, T15 part 4).**
+
+1. **Observe operation entry.**
+   - The test replaces the seam (`_commit` or `_rollback`) with a wrapper.
+   - The wrapper appends `<op>-enter` to a lock-protected event list and sets a `threading.Event` (`entered`).
+   - It then waits on a second `threading.Event` (`release`) with a bounded timeout, and only then calls the real operation.
+   - It appends `<op>-exit` in a `finally`.
+   - On a timeout it records the timeout and raises. It never runs the operation unreleased.
+
+   The test waits for `entered` from the event loop with `anyio.to_thread.run_sync(entered.wait, timeout)` and fails if the wait times out. This proves the COMMIT or ROLLBACK is executing in the worker thread, not merely scheduled.
+2. **Deliver the cancellation.**
+   - The request runs as a task inside its own `anyio.CancelScope`, and the test calls `scope.cancel()` while `entered` is set and `release` is not.
+   - For T11c (3) and (4), the cancellation is delivered earlier, while the handler is blocked on a held row (proved through `pg_blocking_pids`). The row is then released so the handler returns and the ROLLBACK starts.
+3. **Hold the operation in flight.** `release` stays unset while the test observes. A short settle period (0.2–0.3 s) is allowed after the cancellation, so an implementation that wrongly closed or returned the connection on cancellation would have done so before the observation.
+4. **Prove close and pool return have not occurred** (T11c):
+   - the captured `Connection.closed` is false;
+   - `pool.checkedout()` is 1;
+   - no pool `checkin` event has been recorded;
+   - `pg_stat_activity` shows the request's backend `idle in transaction`;
+   - `pg_locks` shows P2's key lock granted.
+
+   In T11b, the fake connection's `close` has not been recorded.
+5. **Release and assert.**
+   - The test sets `release` and lets the request task end.
+   - **Order:** `<op>-exit` precedes `close` (T11b) or the pool `checkin` (T11c); `invalidate` precedes both in the rollback-failure cases.
+   - **No response:** the ASGI `send` recorder holds no message.
+   - **Lock release** (T11c, from a separate connection): the key lock is absent from `pg_locks`, and no application session is idle in transaction.
+   - **Which exception escapes:** the handler's original exception object, or the cancellation, as each case states.
+6. **Bounded and always cleaned up.**
+   - **Every wait is bounded:** entry, blocking, the barrier's own wait, and the whole request under `anyio.fail_after`.
+   - **A `finally` always sets `release`,** and releases any held row through `LockRace`, whose context manager commits or rolls back its holds and joins its worker. The request task is joined by its task group, under the same bound.
+   - **Teardown disposes the instrumented engines** and removes the seam (pytest `monkeypatch`).
+   - A failure therefore leaves no thread waiting on a barrier, no held row, and no open application session for later tests.
+
+**What each layer establishes.**
+
+- **T11b (mocked) establishes lifecycle ordering and exception preservation only.**
+- **T11c (real PostgreSQL) establishes the transaction outcome, lock release, connection state and pool return.** Its event order is the same as T11b's, observed on the real connection.
+- **T11a stays distinct:** it cancels during the handler, with no seam held, and checks that cleanup does not wait for the garbage collector.
+
+**Rule for P3's review.** An existing test that asserts a 2xx whose transaction did not commit has a wrong expectation. It is corrected to assert the persisted outcome, never by restoring the old commit timing. T8 is the only such test found (§11.9).
+
+### 11.9 Existing tests on the prototypes (design evidence)
+
+The implementation must re-run everything. First runs and reruns are reported separately.
+
+**Prototype v1, `tests/unit`, first run:** 1230 passed.
+
+**Prototype v1, targeted database files, first run:** 357 passed, 1 failed (T8's test).
+
+- The files: `test_api_deps`, `test_api_integrity_errors`, `test_api_local_auth`, `test_api_preview`, `test_idempotency_key_lock`, `test_actor_idempotency`, `test_api_memberships`, `test_api_auth`, `test_api_cors`, `test_api_characters_inventory_only`, `test_api_campaigns`, `test_api_access_grants`, `test_api_encounters`.
+
+**Prototype v1, full `tests/database` and `tests/scenario`, first run, one process, 37.6 minutes:** 5812 passed, 113 failed, 9 errors.
+
+- **The 122 non-passing entries, reconciled from the run's log alone** (`reconcile_failures.py`). Every entry matches one log section, and each is attributed only to the evidence in its section:
+
+  | Entries | Evidence in the section | Attribution |
+  |---:|---|---|
+  | 67 (58 failed, 9 errors) | An alembic subprocess exited with status 3221225794 (`0xC0000142`). 54 show it as `CalledProcessError` and 13 as an assertion on the exit status | A Windows process-start failure of the test's migration subprocess. Not related to P3 |
+  | 40 | `TimeoutError: background worker did not complete its startup handshake within 10.0s` (`test_entity_type_change_protection.py`) | The symptom only. The cause is **not established** by the log |
+  | 14 | `test_seed_idempotency.py`: a seed file's hash differs from the one its revision recorded | `git archive` wrote LF seed files where the checkout has CRLF |
+  | 1 | `assert (200, 500) == (200, 200)` | T8's test (§11.3, P2DK) |
+
+  The earlier draft of this section said "54 alembic subprocesses", and that everything else was environmental. Both are corrected by this table.
+- **Targeted reruns,** kept separate from the first run:
+  - the 36 files holding the 67 and the 40 entries, prototype unchanged: **261 passed**;
+  - `test_seed_idempotency.py` after copying the checkout's seed files into the throwaway tree: **48 passed**.
+
+  A passing rerun does not establish the cause of the 40 handshake timeouts.
+
+**Prototype v2, full `tests/unit`, `tests/database` and `tests/scenario`, first run, one process, 39.1 minutes:** 7143 passed, 2 failed, 19 errors.
+
+- **Reconciled from the log**, with the same method: 21 entries, each matched to one section.
+
+  | Entries | Evidence | Attribution |
+  |---:|---|---|
+  | 1 | `assert (200, 500) == (200, 200)` | T8's test, as expected |
+  | 19 errors (`tests/unit/test_verify_sh.py`) | `FileNotFoundError` for the session's own `.tmp/pytest-tmp-…` directory, at fixture setup | The directory was removed by another pytest session in the same tree. `tests/conftest.py`'s `_cleanup_stale_pytest_run_dirs` deletes every other run's directory under `.tmp/` at session start, and my probe sessions (CX1 and the first-round probe rerun) started in the prototype tree during this run. This is a harness interaction caused by how the evidence was gathered, not by P3 |
+  | 1 (`test_character_reveal_delegation.py::test_a_caller_whose_owner_assignment_expires_during_the_wait_is_refused`) | `AssertionError: no session waited on a lock; finished=True`, with the request already answered 403 | **Unattributed.** The log does not establish why the request did not wait. It is in the A1 lock-wait family whose intermittent failures are already recorded as unresolved (this plan's A1 status) |
+
+- **Targeted rerun,** kept separate, run alone in the tree: `test_verify_sh.py` and `test_character_reveal_delegation.py`, **61 passed**. A passing rerun does not explain the delegation failure.
+- **The prototype v2 diff against `c705ee7`** is kept outside the repository with the probes.
+
+**Prototype v2 with the post-commit checkpoint** (amendment, after the full run above). These are targeted runs only; the full suite was not re-run for this one-line change.
+
+- The barrier probes L1–L4 and B1–B5: 9 passed.
+- The earlier probe modules (U1, RB1, S1, CX1, AE1–AE3, and the first-round V1–M1): 14 passed, with unchanged outcomes.
+- `test_api_deps`, `test_idempotency_key_lock`, `test_api_ai_and_corpus`, `test_api_local_auth`, `test_api_preview` and `test_api_integrity_errors`: 118 passed and 1 failed, the failure being T8's test as expected.
+
+### 11.10 Rejected alternatives
+
+- **`scope="function"` at all 174 declarations.** A missed declaration splits the transaction (M1).
+- **An explicit `connection.commit()` at the end of each handler.** That is 343 routes. It commits before serialization, and is easy to omit.
+- **An ASGI middleware holding `http.response.start` until teardown.** It bypasses the exception handlers and buffers bodies.
+- **A custom `APIRoute` class on 65 routers.** Same mechanism, more surface.
+- **A sync commit dependency.** FastAPI skips its exit on a cancellation, so cleanup would depend on finalization.
+- **Option (a) and option (c) for the A+E routes** (§11.4.3).
+- **Mapping commit-time 40P01 or 40001 to a retryable status.** That is a contract change, left to DEF-019's own design.
+
+### 11.11 P3 scope and acceptance (for Sonnet)
+
+**Parent:** `c705ee7`, or the later head carrying this plan. It is one commit.
+
+**Scope:**
+
+- §11.4: `deps.py`, `app.py` and the eight A+E handlers;
+- `pyproject.toml` and `uv.lock`;
+- tests T1–T16;
+- the docs in §11.7.
+
+**Not in scope:**
+
+- any class R route signature;
+- the idempotency stores and P2's lock;
+- DEF-019 to DEF-021;
+- the error mapping;
+- the AI and combat-sync commands themselves.
+
+**Acceptance:**
+
+1. T1–T16 pass, with persisted state asserted.
+2. The full suite passes. Any test found to rely on DEF-022 is corrected under §11.8's rule and named in the commit message. First runs and reruns are reported separately; any failure not explained by its own evidence is left unattributed.
+3. `ruff format --check`, `ruff check`, `mypy src`, `uv lock --check` and `git diff --check` pass.
+4. An independent review names the parent and target SHAs.
+
+A3a depends on P3 (§10.10).
+
+---
+
 ## Decisions still needed
 
 - **D1: Public profile scope. Approved by the owner (recorded 2026-11-07).** Public-profile drafts and releases belong to a campaign. Applied in §5.1.
@@ -1612,16 +3404,57 @@ The owner approved these in conversation. The approval text is not otherwise in 
   - Today this can't happen in practice: only `campaign_owner` holds `access.manage`, and no app path creates custom role capabilities.
   - Closing it means restricting `campaign_owner` assignment to current owners, which changes ADR 0020 transfer behavior.
   - Path trace, recommended gate, exact owner decision and regressions: [PHASE14_15_P03A_A1_OWNERSHIP_AUTHORITY_DESIGN_2026-11-06.md](PHASE14_15_P03A_A1_OWNERSHIP_AUTHORITY_DESIGN_2026-11-06.md).
-- **D4: Party roster exception.** P03-A requires one policy for every roster, and linking into a party is not a revelation. But the roster deliberately shows names without discovery, and applying discovery would hide party-mates' names from players.
-- **D5: Names in discovery cards.** Every discovery consumer renders `core.entities.canonical_name` and `summary`. These are classified `PUBLIC_WORLD` ([data_classification.py:143](../src/dnd_ai/domain/data_classification.py#L143)), but OD-17 says audiences see only deliberately released versions.
+- **D4: Party roster exception. Approved by the owner (recorded 2026-11-07): D4-C.** Current-campaign party controllers see their party's roster, subject to explicit character denies. This grants roster visibility only, without profile, inventory or wider discovery access. Applied in §10.13. The question as put, for the record:
 
-  **Recommend:** accept the canonical name and summary as the discovery label, and show them on the release form. The alternative is substituting a released display name across every consumer.
+  **Today.** `GET …/parties/{party_id}/roster` ([api/parties.py:134-178](../src/dnd_ai/api/parties.py#L134-L178)) gives **every** `campaign.view` member every current member's canonical name, for every party in the campaign, not only their own. It leaves out only unpublished definitions and whole-character denies.
 
-  **What D5 decides for A2:**
-  - **(a), recommended:** a release carries no name or summary. The GM read returns the canonical name and summary read-only as "the label audiences will see", so the releaser sees it before releasing.
-  - **(b):** add `public_display_name` and possibly `public_summary` to both profile tables as nullable columns. Decide whether a release requires the name. A3 and A4 then substitute it in every consumer listed in §3, which is the large part.
+  The built-in `player` and `observer` roles hold `campaign.view` alone (migration 086). A player therefore discovers no other character unless a relationship or grant says so. The roster is the only place they see party-mates' names. It also names any NPC the GM puts into a party to the whole campaign, which contradicts "linking into a party is not a revelation".
 
-  Either answer is additive to A2a's tables, so D5 does not block A2a. It blocks A3's discovery bundle and A4's response shape.
+  - **D4-A, keep the exception (today's behaviour, documented).**
+    - **Ordinary party members:** unchanged. They see party-mates' names.
+    - **Everyone else:** every other member and observer also sees every party's roster.
+    - **Cost:** linking an NPC into a party still names it campaign-wide. A3b changes nothing here.
+  - **D4-B, apply the shared discovery policy.** A roster lists a current member only when the caller can discover it (`discoverable_entity_ids` with the bundle), and `member_count` counts only those.
+    - **Ordinary party members:** a player sees their own character, which their controller relationship lets them discover, and **no party-mate** until the GM reveals each one. Under D9-d, revealing needs a release, so that is one release and one revelation per character.
+    - **Observers:** see only revealed members.
+    - **GMs:** unchanged.
+    - **Fit:** strictest; one policy, no exception.
+  - **D4-C, party-mate exception (recommended).** A caller who currently controls a character that is a current member of this party sees every current member of **this** party.
+    - **Controls** means a live `owner`, `primary_controller` or `co_controller` relationship to that character, resolved as `resolve_access_context` resolves relationships. No relationship type confers `character.control` today, so the type codes are the test. After P03-B it means a live, in-effect assignment.
+    - **Everyone else** gets D4-B. Whole-character denies and unpublished definitions are still left out.
+    - **Ordinary party members:** unchanged for their own party. They no longer see other parties' rosters beyond what they can discover.
+    - **Observers:** see only revealed members.
+    - **An NPC linked into a party** is named only to that party's controllers.
+    - **Scope of the exception:** it covers the roster only. It confers no discovery in search, relationships or any other surface, and no detail tier (the roster's existing "listing grants none").
+
+  **Recommend D4-C.** It keeps what players rely on, closes the campaign-wide naming, and limits the remaining exception to people who are in the party in the fiction. The cost is one more predicate, "controls a current member", shared with nothing else. Each option is a change to A3b only.
+
+- **D5: Names and summaries in discovery cards. Approved by the owner (recorded 2026-11-07): D5-c.** The canonical name remains the live identity label. Revelation-only readers receive a deliberately released summary, and search does not match their unreleased canonical summary. Applied in §10.12. The question as put, for the record:
+
+  **Today.** Every discovery consumer renders `core.entities.canonical_name`. World search cards and the summary tier also render `core.entities.summary`. Both are classified `PUBLIC_WORLD` ([data_classification.py](../src/dnd_ai/domain/data_classification.py)). OD-17 says audiences receive only deliberately released versions.
+
+  The A3 trace (§10.7) shows where each is used:
+  - the **name** appears in every surface, and in the search sort key and cursor;
+  - the **summary** appears only in world search cards (`WorldEntityCard`) and in the detail tiers.
+
+  - **D5-a, the canonical label (the earlier recommendation).** A release carries no name or summary. The GM read shows the canonical pair read-only as "what audiences will see".
+    - **No consumer change**, and search and sort are unchanged.
+    - **The cost:** an edit to the canonical summary reaches revealed audiences with no release, and the GM cannot give a revealed character a public alias.
+  - **D5-b, a released label everywhere.** Draft and release gain `public_display_name` (required for any release a revelation may use) and `public_summary`.
+    - **Who sees it:** a caller whose only discovery path to X is a revelation sees the released label in every consumer. Callers with another path see the canonical one.
+    - **What has to change:**
+      - every §10.7 consumer computes a per-caller label;
+      - search matches the label the caller sees, otherwise a search for the canonical name finds an aliased card;
+      - the keyset sort and the cursor change;
+      - Foundry and Discord clients follow.
+    - **What it cannot fix:** the canonical name still appears in free text (event descriptions, Knowledge statements, session notes). This is the largest option and roughly doubles A3b.
+  - **D5-c, canonical name with a released summary (recommended).** The name stays canonical everywhere. Draft and release gain a nullable, authored-only `public_summary`, with no legacy copy and no origin column.
+    - **Who sees it:** a caller whose only path to X is a revelation sees the latest release's `public_summary`, or none, in search cards and in A4's public tier, and never the canonical summary. Other callers are unchanged.
+    - **What changes:** the column pair in migration 145; the draft save and release snapshot gain the field (an additive change to A2's commands, under A2's existing token and audit rules); one CASE in the search card's select.
+    - **Search and sort are unchanged.**
+
+  **Recommend D5-c.** Releases already exist so that prose reaches audiences only deliberately, and the summary is the one piece of prose discovery shows. The name is identity: substituting it cannot be made consistent (D5-b), and it already appears in canon text. The release form shows the canonical name read-only as the name audiences will see. Each option is additive.
+
 - **D6: Species and size in the public tier (new, 2026-11-07).** §3 and the A4 row say the public tier shows no species or size "unless released", but nothing defines how they are released. They are definition inputs, not derived mechanics, so OD-17 does not exclude them.
 
   **Recommend:** a per-release opt-in, off by default. The draft holds `shows_species` and `shows_size`. When a flag is set, the release snapshots `released_species_id` and `released_size_category` from the definition at release time. Later identity edits then reach audiences only through a new release.
@@ -1650,6 +3483,49 @@ The owner approved these in conversation. The approval text is not otherwise in 
   **The alternative** keeps reading limited to `canon.edit` holders. A reveal holder with a `canon.edit` deny on a character could then not read, and so could not release, that character's profile; the deny would block two operations.
 
   D8 decided A2a's route filters and its read, edit and release checks; those are now fixed as written above, including criteria 3, 4 and 14.
+- **D9: Revelation lifecycle points that OD-17 does not settle. Approved by the owner as proposed (recorded 2026-11-07).** Applied in §10.2, §10.4 and §10.5. The alternatives are kept for the record.
+  - **D9-a, the snapshot moment.** OD-17 says "members at release time". A revelation follows later releases, so this design reads it as **the moment the revelation is created**.
+    - "Current" is the open memberships locked by the creation's membership statement, just before its campaign lock, that are `active` when read (§10.4, step 4a). The mechanism was revised on 2026-11-08 after a probed deadlock (§10.8.4).
+    - **The cutoff is approved (owner, recorded 2026-11-08).** The snapshot moment is the start of that statement, so a join or reopen that commits after it is excluded even if it commits before the revelation does. The full statement is in §10.4, "D9-a candidate-statement cutoff".
+    - Alternative: at the latest release. A new release would then re-snapshot every campaign-current revelation. That is not recommended, because releasing would then silently widen audiences.
+  - **D9-b, who counts as current.** Open memberships with status `active`, including the GMs and the revealer. Pending invitations do not count, and neither do suspended or departed members.
+  - **D9-c, a returning member.**
+    - **`campaign_current_and_future`:** a returning member is a future member and is included.
+    - **`campaign_current`:** they are not restored.
+    - **`member` and `access_group`:** they are not restored, because a reopened membership starts with no revelations and no groups.
+
+    This follows the existing reopen rule for roles, relationships, grants and groups.
+  - **D9-d, a release is required.** A revelation cannot be created until the character has at least one release in this campaign, enforced by the database (§10.2). Releases are immutable and cannot be deleted, so this cannot later become false. Without it a revelation would show a name with an empty profile. Alternative: allow it, and show an empty public profile until a release exists.
+  - **D9-e, one live revelation per audience.** One live row per (character, kind, target). That means one live `campaign_current` and one live `campaign_current_and_future` per character.
+    - A repeat is a natural retry (200 `created: false`). It never refreshes a snapshot.
+    - To include later joiners, the GM adds `member` or `access_group` revelations, creates a `campaign_current_and_future` one, or revokes and recreates.
+    - Alternative: allow several `campaign_current` rows, so a retry with no key could silently widen the audience.
+  - **D9-f, authority after the fact.**
+    - A revelation survives the revealer losing reveal authority (a revoked delegation, a lost role, or a transfer), as releases do (§5, criterion 7). The provenance is the creator and `authority_source`.
+    - **Any** current reveal-authority holder in the campaign may revoke it, not only its creator.
+    - Alternative: close a delegated GM's revelations when the delegation ends.
+  - **D9-g, an archived character.** Its revelations are inert while it is not active or not canon, and apply again on restore. That matches relationships and resource grants. Alternative: close them when the character is archived. No archive command exists yet.
+- **D10: How far a revelation's discovery reaches. Approved by the owner (recorded 2026-11-07): D10-a,** using shared discovery across consumers while keeping each consumer's other audience and field restrictions (§10.15). ADR 0021 §6 requires one discovery predicate for every consumer. Revelation therefore enters the shared bundle, and a revealed character is discoverable everywhere discovery is consulted (§10.7). For a revealed-only caller that means it appears:
+  - as a participant in reader-visible world relationships and public organization memberships;
+  - in event explanations and session travel;
+  - in member-readable encounters;
+  - as a Knowledge subject label;
+  - under its canonical name (D5) in each of those.
+
+  This is exactly what `character.discover` from a relationship does today.
+
+  - **D10-a, recommended:** accept it. Revealing a character discovers it.
+  - **D10-b:** a revelation confers only the public profile and a single "revealed characters" list. It would be a second predicate, which ADR 0021 §6 rules out, so choosing it needs an ADR amendment.
+- **D11: Who sees a released profile. Approved by the owner (recorded 2026-11-07): D11-a,** subject to applicable denies (§10.14). A revelation confers `character.view_public_profile`. The question was who else reads the public tier.
+  - **D11-a, recommended:** a revelation, plus any caller holding `character.view_summary`, `character.view_full` or `canon.edit` for the character. The tiers are ordered public_profile < summary < full < gm, and each includes the latest release.
+  - **D11-b:** revelation only.
+
+  Either way, `character.discover` from a relationship or grant without a revelation does **not** show the profile, because publication is not revelation.
+- **D12: Operation-specific denies on revelation. Approved by the owner (recorded 2026-11-07): D12-a.** Existing denies are honoured, and creation controls are deferred (§10.15). ADR 0021 §2.9 says a deny of `character.discover` alone hides only discovery. Today no such deny, and no deny of `character.view_public_profile`, can be created through the application: the resource-grant catalog excludes both codes (access.py, `CHARACTER_TARGET_CAPABILITY_CODES`). Raw rows are honoured.
+  - **D12-a, recommended for A3:** honour them, test them with raw rows, and leave creating them to a separate catalog extension, like A2a-R.
+  - **D12-b:** add both as deny-only codes in A3a.
+
+  The whole-character `campaign.view` deny is creatable (A2a-R), and it covers the cases the denies must cover.
 
 ---
 
@@ -1747,6 +3623,47 @@ A2a is the §5 design without the copy aid, D5/D6 columns, portal or revelations
       - campaign B's GM;
       - a whole-character-denied owner.
 
+## P2 implementation and review record (2026-11-08)
+
+**Commit:** `d36d565` (parent `a9ec4c4`), "fix: serialize same-key campaign requests at an idempotency key lock (P03-A P2)". It is followed by `c705ee7`, a documentation-only rubric update.
+
+**Built.**
+
+- `lock_idempotency_key` takes `pg_advisory_xact_lock(hashtextextended(scope, 0))` on a versioned, length-prefixed `(actor, campaign, key)` scope (`idempotency_key_lock_scope`).
+  - This is a 64-bit single-key form, not the two-key `(namespace, hashtext(...))` form this plan sketched.
+  - No key means no lock. A transaction may take one distinct key lock; a second raises `IdempotencyKeyLockError`.
+- `begin_idempotent_request` takes the lock immediately before its insert. The campaign-creation and actor-scoped stores do not take it.
+- `reset_idempotency_key_lock` is used by the authoring harness between requests that share one connection.
+- DATABASE_CONVENTIONS §26.4 gains a "key lock" paragraph.
+- **Tests:**
+  - `tests/database/test_idempotency_key_lock.py`, 10 tests: same-route and cross-route HTTP races on membership end and role revoke, the rollback case, no lock without a key, one key per transaction, scope encoding, and a different key not queueing.
+  - `tests/unit/test_idempotency_key_lock_structure.py`, 5 tests.
+
+**Independent review: PASS WITH NONBLOCKING FINDINGS.** The review text is not in the repository; this record follows the findings the owner supplied in conversation. *Corrected 2026-11-08: the first version of this record listed two limitations inferred from P2's commit message (different-key cycles and stale authorization after a key-lock wait). Those were not the review's findings. They remain true statements of P2's scope, as its commit message says.*
+
+- **Results reported by the review:** the 15 P2 tests passed (10 database and 5 unit), and a 55-test focused run passed.
+- **Findings (nonblocking):**
+  1. **Structural caller-order coverage.**
+     - The structural tests pin the helper: one reservation insert, after the one key-lock call, and nothing else taking the lock.
+     - They do not cover the callers. The rule that every reserving route reserves before taking any row lock rests on the syntax-tree evaluation at `a9ec4c4` recorded in §10.11, not on a test that re-runs on each change.
+     - A later route that takes a row lock before reserving would not be caught.
+  2. **The external A3 call-site guard.**
+     - `test_only_the_idempotency_module_takes_the_key_lock` admits no caller outside `api/idempotency.py`.
+     - A3's step 0 (§10.4) calls `lock_idempotency_key` from its commands, so as written the guard would fail A3a.
+     - A3a must widen it to name exactly A3's call sites, and pin that each is the command's first database statement, rather than drop it.
+  3. **The outer-transaction harness limitation.**
+     - The authoring harness (`tests/authoring_support.py`) runs many requests on one connection in one outer transaction, each in a savepoint, and calls `reset_idempotency_key_lock` between them.
+     - Transaction-scoped advisory locks are not released by a savepoint's release or rollback, so key locks accumulate until the outer rollback.
+     - Harness tests therefore cannot observe a key lock being released or queued on, and a second key in one harness test is not "another transaction".
+     - Key-lock behaviour is established only by tests on real per-request transactions (`test_idempotency_key_lock.py`).
+     - The same harness overrides `get_connection`, so it also cannot observe P3's commit timing (§11.6).
+
+**Found after the review (2026-11-08, §11.3).** This is not a review finding.
+
+- **The different-key test passes only because of DEF-022.** Its second request (DEF-019 K1) is the deadlock victim at COMMIT and persists nothing, yet it answers 200 at HEAD.
+- P3 keeps the test's independent-key assertion, replaces its second request (§11.8, T8), and adds a separate deterministic DEF-019 regression (T9).
+- The key lock's own behaviour, that a different key is granted at once, holds on both trees.
+
 ## A2b-1 implementation record (2026-11-07)
 
 **Parent:** `5fb2608` (the reviewed design commit; its parent is the A2a handoff `523ae5c`). One local commit; nothing is pushed and CI is pending.
@@ -1816,7 +3733,7 @@ Both verdicts and run counts below were relayed by the owner in conversation. Th
 - **A2b-2: PASS WITH NONBLOCKING FINDINGS** at `46a0154`, with an independent run of **122 tests**. The findings were not relayed in detail; the one that required a change here is the receipt's `origin_entity_row_version`.
 - **Receipt exception documented.** The copy receipt's integer `origin_entity_row_version` is a deliberate departure from the minimal-receipt contract (ids, `row_version`, `created`, `changed`). `DATABASE_CONVENTIONS.md` (the idempotency-replay paragraph) now names it as a specific exception for this approved provenance metadata, and says no other command may add a field and no receipt may carry copied text.
 - **Still open, unchanged:** the intermittent A1 wait-observation timeout (cause unestablished), DEF-016, DEF-017 and F-1. CI on the final head is pending; nothing is pushed.
-- **Next, not started:** A3 (audience revelations), A4 (the audience read), A6 (the portal), push.
+- **Next, not started:** A3 (audience revelations; designed and finalized in §10), A4 (the audience read; awaiting D6), A6 (the portal), push.
 
 ---
 
