@@ -1220,7 +1220,7 @@ So the guard blocks the only representation the readers use. The other own-colum
 
 ## 9. A2b design: the legacy copy aid under approved D7 (2026-11-07, revised after review)
 
-**Status:** design reviewed; A2b-1 is implemented locally and was returned CHANGES REQUIRED by the independent review (provenance relabel hole) and is corrected by revision 144 (see the A2b-1 provenance correction); A2b-2 (the copy command and route) is implemented locally and awaits independent review (see the A2b-2 implementation record).
+**Status:** design reviewed; A2b-1 is implemented locally and was returned CHANGES REQUIRED by the independent review (provenance relabel hole) and is corrected by revision 144 (see the A2b-1 provenance correction); A2b-2 (the copy command and route) is implemented at `46a0154` and independently reviewed: PASS WITH NONBLOCKING FINDINGS (see the A2b review outcome and handoff).
 
 - **Baseline.** `523ae5cbf947af230e1d7a5409912c1039e43a69` (the A2a handoff, directly on A2a-R `f66240a`). Every claim was checked by reading source at that commit; nothing was run.
 - **Supersedes.** This section replaces the D7-dependent parts of §5.6, §5.8 (copy row) and §5.10 ("Design"). Where they differ, this section wins.
@@ -1785,7 +1785,7 @@ A2a is the §5 design without the copy aid, D5/D6 columns, portal or revelations
 
 **Parent:** `c5689a32c6251dab5642ad4eaf66fb381aec7337` (revision 144's downgrade guard). One local commit; nothing is pushed and CI is pending.
 
-**Review evidence (conversation-supplied, not in the repository).** The task that started A2b-2 stated that the independent review of A2b-1 was a PASS with a 70-test result. Which commits that review covered was not stated. No review text or verdict wording was available to this session; the figures are recorded as relayed.
+**Review evidence (conversation-supplied, not in the repository).** The task that started A2b-2 stated that the independent review of A2b-1 was a PASS with a 70-test result; the A2b review handoff below records that it was at `c5689a3`. No review text or verdict wording was available to this session; the figures are recorded as relayed.
 
 **Built.**
 
@@ -1805,6 +1805,18 @@ A2a is the §5 design without the copy aid, D5/D6 columns, portal or revelations
 **Tests.** `test_character_public_profile_copy.py` (20, over HTTP) covers the NPC and player-character source rules, unsupported kinds, fields and provenance in the request, empty sources, denies and an inactive character, `legacy_copy`, stale and missing tokens, keyed replay, a replay refused after losing the world role, a different field or character under one key, atomic rollback of the write and its key when the audit write fails, mixed origins, clearing and recopying, the excerpt regressions through the real copy (append; restore by edit; restore by recopy), and a disclosure sweep over every response, the stored receipts and the audit rows. `test_character_public_profile_copy_races.py` (10, real commands, every wait observed as blocked by the intended session) covers a copy against `update_npc`, a save and a release, each with both winners, and the copier's world role against a copy with both winners for an end and for a downgrade; each asserts the resulting text, source version, watermark, the authorization outcome and that no command wrote an audit row. Structural pins: the route-manifest counts (244 guarded, 197 phase-15 GM), the copy's conditional world-capability argument, `LEGACY_COPY_SOURCES`, and the modules admitted as readers of the description table.
 
 **Not done here:** audience revelations (A3/A4), the portal (A6), push. Pending: independent review and CI.
+
+---
+
+## A2b review outcome and handoff (2026-11-07)
+
+Both verdicts and run counts below were relayed by the owner in conversation. The review texts and raw run output are not in the repository, so neither is reproduced.
+
+- **A2b-1: PASS** at `c5689a3` (the head after the provenance correction `d1f463f` and the revision 144 downgrade guard), with an independent run of **70 tests**. Recorded separately from A2b-2's.
+- **A2b-2: PASS WITH NONBLOCKING FINDINGS** at `46a0154`, with an independent run of **122 tests**. The findings were not relayed in detail; the one that required a change here is the receipt's `origin_entity_row_version`.
+- **Receipt exception documented.** The copy receipt's integer `origin_entity_row_version` is a deliberate departure from the minimal-receipt contract (ids, `row_version`, `created`, `changed`). `DATABASE_CONVENTIONS.md` (the idempotency-replay paragraph) now names it as a specific exception for this approved provenance metadata, and says no other command may add a field and no receipt may carry copied text.
+- **Still open, unchanged:** the intermittent A1 wait-observation timeout (cause unestablished), DEF-016, DEF-017 and F-1. CI on the final head is pending; nothing is pushed.
+- **Next, not started:** A3 (audience revelations), A4 (the audience read), A6 (the portal), push.
 
 ---
 

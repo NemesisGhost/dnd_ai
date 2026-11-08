@@ -1192,6 +1192,8 @@ Audit:
 
 **Idempotency replay bodies are minimal receipts**: typed authoring writes store and return only ids, `row_version`, and `created`/`changed` flags (plus `record_id` for a quest stage or objective); the portal refetches the authoritative view. Existing rows written before this change are handled by the owner-gated scrub checkpoint (15.2A-4).
 
+**One approved exception to the receipt's contents:** the public-profile legacy copy (`POST …/public-profile/draft/copy-legacy`, P03-A A2b-2) also stores and returns `origin_entity_row_version`, an integer: the source character's `core.entities.row_version` at the copy. It is provenance metadata that the draft read already discloses (decision D7-f), it is a number and never text, and it lets a client tell which source version it copied without a refetch. The exception covers that one field of that one receipt; it does not allow any other command to add a field, and no receipt, response, error or audit row may carry the copied text.
+
 ### 24.2 Audit immutability
 
 Audit tables are append-only to normal application roles.
