@@ -3664,6 +3664,27 @@ A2a is the §5 design without the copy aid, D5/D6 columns, portal or revelations
 - P3 keeps the test's independent-key assertion, replaces its second request (§11.8, T8), and adds a separate deterministic DEF-019 regression (T9).
 - The key lock's own behaviour, that a different key is granted at once, holds on both trees.
 
+## P3 implementation record (2026-11-08)
+
+**Commits:** baseline `c705ee7`; design `7f7aeb6` (section 11, committed on its own); implementation: the commit that carries this record. Not pushed. CI pending.
+
+**Built (section 11.4).**
+
+- `api/deps.py`: `commit_request_transaction` (async generator, installed once on `create_app`, function-scoped, first in every route's effective list); the `_commit` / `_rollback` seams; `_discard` (rollback, invalidate on failure, close; never raises); `_finish`; `end_request_transaction`; `get_connection` now takes the request, registers its connection and refuses (500, before any statement) when the commit dependency is missing or a second connection is requested. COMMIT and ROLLBACK run in a worker thread inside a shielded cancel scope; the connection closes only after the operation returns; a successful commit is followed by `checkpoint_if_cancelled()`.
+- The eight engine-backed handlers call `end_request_transaction(request)` after authorization and before their first engine-side effect. The combat-sync docstring is corrected.
+- `pyproject.toml` floor `fastapi>=0.141.1`; `uv.lock` changed in that one line; `uv lock --check` passes.
+- Docs: SYSTEM_ARCHITECTURE 7.0 and 20, DATABASE_CONVENTIONS 26.4, the `deps`, `idempotency` and `integration` docstrings.
+
+**P2's independent-key test corrected (T8).** It asserted `(200, 200)` for two keyed ends that deadlock at commit; the second used to answer 200 and persist nothing. It now pairs the held end with a keyed campaign-invitation create (campaign row `FOR SHARE`, a new row) and asserts the second finishes while the first is held, plus both receipts, the audit row and the end. The deterministic DEF-019 regression is a separate test (T9): exactly one 2xx, one deadlock counted, and for the losing request no end, audit row or receipt.
+
+**Tests.** `tests/database/test_request_transaction.py` (T1-T7, T9, T10, T14), `test_request_transaction_cancellation.py` (T11a, T11c), `test_request_transaction_engine_routes.py` (T12 a-f), `tests/unit/test_request_transaction_lifecycle.py` (T11b, T13, T15, T16). The only existing test changed is T8's.
+
+**Verification.** First full run (`tests/`, one process, isolated configuration, 40 min 40 s): 7205 passed, 0 failed, 0 errors. Earlier targeted runs, kept separate: the nine affected existing files, 227 passed and 1 failed on the first run (T8's test, as expected), then 10 passed after the correction. Mutation check: removing the post-commit checkpoint fails T11b(1); removing the explicit shield changes nothing, because `anyio.to_thread.run_sync` already shields its own wait. The shield is kept as the design states it. The plan's section 11.9 flake and handshake failures did not occur in this run; that establishes nothing about their cause.
+
+**Still open.** DEF-019 (observed by T9, not fixed), DEF-020, DEF-021, stale authorization, the A1 wait-observation flake. A3 and push are not started.
+
+---
+
 ## A2b-1 implementation record (2026-11-07)
 
 **Parent:** `5fb2608` (the reviewed design commit; its parent is the A2a handoff `523ae5c`). One local commit; nothing is pushed and CI is pending.

@@ -37,7 +37,7 @@ monkeypatched module global.
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from sqlalchemy import Engine
 
@@ -49,7 +49,7 @@ from dnd_ai.domain.ai_provider import AiProvider, OpenAiCompatibleProvider
 
 from ._shared import timeline_world_id
 from .access import require_campaign_capability
-from .deps import get_engine
+from .deps import end_request_transaction, get_engine
 from .errors import ApiError, ForbiddenError
 
 router = APIRouter(tags=["ai-npc"])
@@ -125,6 +125,7 @@ class ReviewProposedChangeResponse(BaseModel):
     status_code=200,
 )
 def request_npc_conversation_turn_endpoint(
+    request: Request,
     campaign_id: uuid.UUID,  # noqa: ARG001
     body: NpcConversationTurnRequest,
     access: Annotated[AccessContext, Depends(require_campaign_capability(_INTERACT_CAPABILITY))],
@@ -133,6 +134,8 @@ def request_npc_conversation_turn_endpoint(
 ) -> NpcConversationTurnResponse:
     if not access.has_capability(_INTERACT_CAPABILITY, character_id=body.requesting_character_id):
         raise ForbiddenError()
+    # Authorization is decided; end the request transaction before any engine-side effect.
+    end_request_transaction(request)
 
     result = request_npc_conversation_turn(
         engine,
@@ -167,12 +170,14 @@ def _world_id(engine: Engine, timeline_id: uuid.UUID) -> uuid.UUID:
     status_code=200,
 )
 def review_proposed_change_endpoint(
+    request: Request,
     campaign_id: uuid.UUID,
     ai_proposed_change_id: uuid.UUID,
     body: ReviewProposedChangeRequest,
     access: Annotated[AccessContext, Depends(require_campaign_capability(_REVIEW_CAPABILITY))],
     engine: Annotated[Engine, Depends(get_engine)],
 ) -> ReviewProposedChangeResponse:
+    end_request_transaction(request)
     result = review_proposed_change(
         engine,
         ai_proposed_change_id=ai_proposed_change_id,

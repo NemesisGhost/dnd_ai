@@ -65,7 +65,12 @@ from .character_reveal import router as character_reveal_router
 from .character_state import router as character_state_router
 from .characters import router as characters_router
 from .correlation import CorrelationIdMiddleware
-from .deps import dispose_engine, get_engine, verify_database_identity
+from .deps import (
+    commit_request_transaction,
+    dispose_engine,
+    get_engine,
+    verify_database_identity,
+)
 from .dungeon import router as dungeon_router
 from .dungeon_authoring import router as dungeon_authoring_router
 from .encounter_preparation import router as encounter_preparation_router
@@ -152,7 +157,13 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="D&D AI World Platform API", lifespan=_lifespan)
+    # The request transaction ends here, before the response is sent (P03-A P3): one app-wide
+    # dependency, first in every route's effective list, rather than a scope per declaration.
+    app = FastAPI(
+        title="D&D AI World Platform API",
+        lifespan=_lifespan,
+        dependencies=[Depends(commit_request_transaction, scope="function")],
+    )
     # Outermost middleware (added first — Starlette applies user middleware
     # in the order added, from outside in), so a browser's CORS preflight
     # is answered, and CORS headers are attached to every response

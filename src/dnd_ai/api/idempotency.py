@@ -46,6 +46,12 @@ key lock. A transaction takes at most one distinct key lock (a second raises
 only: cycles between *different* keys (DEF-019) and a request's stale authorization are separate
 defects.
 
+The request transaction is committed before the response is sent (`dnd_ai.api.deps.
+commit_request_transaction`, P03-A P3): a 2xx means the reservation, mutation, audit row and receipt
+are committed and the key lock is released. If a COMMIT's acknowledgement is lost the response is a
+500 and the transaction may have committed; retrying with the same key and body replays the stored
+receipt, so a keyed request resolves an uncertain commit by retrying.
+
 Because the reservation INSERT runs inside the *same* transaction as the
 command it guards (the request's own `get_connection` transaction — see
 `dnd_ai.api.deps`), a command that fails or is rolled back for any reason

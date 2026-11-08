@@ -69,14 +69,20 @@ def _urls(g: Gate) -> dict[str, str]:
     }
 
 
-def _post_keyed(client_factory: Factory, user: uuid.UUID, url: str, key: str | None) -> _Request:
+def _post_keyed(
+    client_factory: Factory,
+    user: uuid.UUID,
+    url: str,
+    key: str | None,
+    body: dict[str, object] | None = None,
+) -> _Request:
     request = _Request(thread=threading.Thread())
     headers = {"Idempotency-Key": key} if key else {}
 
     def run() -> None:
         try:
             with client_factory(user) as client:
-                request.response = client.post(url, json={}, headers=headers)
+                request.response = client.post(url, json=body or {}, headers=headers)
         except BaseException as exc:  # noqa: BLE001 - surfaced to the test
             request.error = exc
 
@@ -447,8 +453,9 @@ def test_the_lock_scope_is_unambiguous_across_actor_campaign_and_key() -> None:
 def test_a_different_key_takes_its_own_key_lock_without_queueing_behind_a_held_request(
     client_factory: Factory, postgres_engine: Engine, g: Gate
 ) -> None:
-    """The key lock is per scope: while one keyed request is held, a request with another key is
-    granted its own key lock at once (it may then wait on business rows; that is not the key lock)."""
+    """The key lock is per scope: while one keyed request is held at a row lock, a request with
+    another key, on a route that shares no row lock with it, runs to completion (it is neither
+    queued at the first key's lock nor blocked by its rows)."""
     urls = _urls(g)
     first_key, second_key = _fresh_key("one"), _fresh_key("two")
     hold = _hold_membership(postgres_engine, g.player)
@@ -457,15 +464,24 @@ def test_a_different_key_takes_its_own_key_lock_without_queueing_behind_a_held_r
     while time.monotonic() < deadline and _blocked_by(postgres_engine, hold.pid) < 1:
         assert not first.done, getattr(first.response, "text", first.error)
         time.sleep(0.02)
-    second = _post_keyed(client_factory, g.o1_user_id, urls["end_o2"], second_key)
-    ids = _key_lock_ids(postgres_engine, g, second_key)
-    deadline = time.monotonic() + _WAIT_SECONDS
-    state: list[tuple[int, bool, list[int]]] = []
-    while time.monotonic() < deadline:
-        state = _key_lock_state(postgres_engine, ids)
-        if state or second.done:
-            break
-        time.sleep(0.02)
-    assert state and all(granted for _, granted, _ in state)  # granted, never queued
+    # A campaign-invitation create: it locks the campaign row FOR SHARE and inserts a new row, so
+    # it shares no row lock with the held end (an access-group create takes the campaign FOR UPDATE
+    # and would queue behind it).
+    second = _post_keyed(
+        client_factory,
+        g.o1_user_id,
+        f"/campaigns/{g.campaign_id}/invitations",
+        second_key,
+        {"invited_email": f"independent-{uuid.uuid4().hex[:8]}@example.test"},
+    )
+    second.thread.join(timeout=_WAIT_SECONDS)
+    # The second request finishes while the first is still held: nothing it needs is held.
+    assert second.done and not first.done
+    assert _status(second.response) == 201
+    assert _receipts(postgres_engine, g, second_key) == [(201, True)]
+    assert _receipts(postgres_engine, g, first_key) == []  # the first is still uncommitted
     hold.release()
-    assert (_status(first.join()), _status(second.join())) == (200, 200)
+    assert _status(first.join()) == 200
+    assert not _open(postgres_engine, g.player)
+    assert _receipts(postgres_engine, g, first_key) == [(200, True)]
+    assert _audit(postgres_engine, g).get("end_campaign_membership") == 1
