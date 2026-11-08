@@ -38,6 +38,14 @@ ORIGIN_LEGACY_APPEARANCE = "legacy_appearance"
 ORIGIN_LEGACY_BACKGROUND = "legacy_background"
 LEGACY_ORIGINS = frozenset({ORIGIN_LEGACY_APPEARANCE, ORIGIN_LEGACY_BACKGROUND})
 
+# The two supported copy sources (plan section 9.1): the request names the legacy description field,
+# and the target is the draft field of the same name. `notes` is never a source. Each entry is
+# (draft field, origin code, `character.character_descriptions` column).
+LEGACY_COPY_SOURCES = {
+    "appearance": (FIELD_APPEARANCE, ORIGIN_LEGACY_APPEARANCE, "appearance"),
+    "background": (FIELD_BACKGROUND, ORIGIN_LEGACY_BACKGROUND, "background"),
+}
+
 KIND_NPC = "npc"
 KIND_PLAYER_CHARACTER = "player_character"
 
@@ -90,6 +98,15 @@ class PublicProfileDraftMissingError(SafeMessageError):
     safe_status_code = 409
     safe_error_code = "public_profile_draft_missing"
     safe_message = "This character has no public-profile draft yet."
+
+
+class PublicProfileLegacyTextMissingError(SafeMessageError):
+    """The legacy description field the copy named is empty, so there is nothing to copy. 409
+    `public_profile_legacy_text_missing`. Raised only to a caller who may read the source."""
+
+    safe_status_code = 409
+    safe_error_code = "public_profile_legacy_text_missing"
+    safe_message = "The character has no text in that description field to copy."
 
 
 class PublicProfileCharacterNotActiveError(SafeMessageError):

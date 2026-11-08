@@ -73,8 +73,8 @@ _GM_FAMILIES: dict[str, tuple[str, str, bool]] = {
 
 _PUBLIC_PROFILE = f"{CAMPAIGN}/characters/{{character_id}}/public-profile"
 _PUBLIC_PROFILE_FAMILY = (
-    "character public profile (draft save, release)",
-    "canon.edit (draft save); character.reveal (release)",
+    "character public profile (draft save, legacy copy, release)",
+    "canon.edit (draft save, legacy copy); character.reveal (release)",
     True,
 )
 

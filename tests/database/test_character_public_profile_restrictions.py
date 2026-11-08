@@ -1,10 +1,11 @@
 # ruff: noqa: F811 - the imported fixtures are used by parameter name
 """Copied text stays restricted until a release covers it (P03-A A2b-1, plan section 9, D7).
 
-No copy route exists yet (A2b-2 adds it), so a copied field is seeded with `seed_copy`, the one
-place these tests write a legacy-origin row directly. It writes exactly what the copy command will
-(the legacy origin, the source version, and the watermark the database trigger demands); every
-read, save and release in the scenarios then goes through the HTTP routes.
+These scenarios predate the copy route (A2b-2), so a copied field is seeded with `seed_copy`, the
+one place they write a legacy-origin row directly: exactly what the copy command writes (the legacy
+origin, the source version, and the watermark the database trigger demands). Every read, save and
+release then goes through the HTTP routes. `test_character_public_profile_copy.py` reruns the
+excerpt regressions through the real copy route.
 
 Cast, on one NPC (its source read needs role `canon.edit` and the world capability
 `world.canon.read_private`):

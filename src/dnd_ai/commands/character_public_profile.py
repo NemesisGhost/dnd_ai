@@ -37,8 +37,24 @@ write a new snapshot refuses when any field would be withheld from the releaser.
 already released version does not (D7-d). `queries/public_profile_restrictions.py` derives which
 fields are withheld; nothing per reader is stored.
 
+**Copy** (`copy_legacy_text_to_public_profile_draft`, A2b-2). Copies one legacy description field
+(`appearance` or `background`) of an NPC or player character into the draft field of the same name.
+The kind comes from the character, never the request, and decides the source-read rule (`npc`: role
+`canon.edit` plus world `world.canon.read_private`; `player_character`: role `canon.edit`; any other
+kind has no source, 404). Lock order (plan section 9.6), the save's with the kind's world capability:
+`lock_authoring_scope` (world `FOR SHARE` -> the caller's role rows and membership -> account ->
+campaign `KEY SHARE`, then the world capability re-judged under the world lock), the `AccessContext`
+re-resolved for the D8 edit rule, the character's `core.entities` row `FOR SHARE`, the entity's
+`row_version` and then the description text read in separate statements under that lock (the only
+writer of the description, `update_npc`, holds the entity `FOR UPDATE` and bumps `row_version` in the
+same transaction, so the pair is consistent), and the draft `FOR UPDATE` (or the unique-index race of
+a first save). The copy replaces the whole target field, keeps the other field, records the origin,
+the source `row_version` and a restriction watermark equal to the draft's new `row_version`, and
+always changes the draft, even when the text is identical: every copy starts new restricted content.
+
 Both commands raise only classified errors, write nothing on a refusal, and leave the audit row to
-the route (one row per real change, never carrying profile text).
+the route (one row per real change, never carrying profile text). The copy's result, receipt and
+audit row carry ids, field names, origin code and versions, never the copied text.
 """
 
 import uuid
@@ -52,6 +68,7 @@ from dnd_ai.domain.authoring import (
     CampaignArchivedError,
     CampaignNotAuthorizedError,
     StaleWriteError,
+    WorldAuthorityRequiredError,
 )
 from dnd_ai.domain.organization_authoring import normalize_optional_text
 from dnd_ai.domain.public_profiles import (
@@ -59,6 +76,9 @@ from dnd_ai.domain.public_profiles import (
     AUTHORITY_OWNER,
     FIELD_APPEARANCE,
     FIELD_BACKGROUND,
+    KIND_NPC,
+    KIND_PLAYER_CHARACTER,
+    LEGACY_COPY_SOURCES,
     ORIGIN_AUTHORED,
     PUBLIC_PROFILE_FIELDS,
     PUBLIC_PROFILE_NOTE_MAX_LENGTH,
@@ -68,13 +88,19 @@ from dnd_ai.domain.public_profiles import (
     PublicProfileDraftMissingError,
     PublicProfileEditDeniedError,
     PublicProfileFieldWithheldError,
+    PublicProfileLegacyTextMissingError,
     PublicProfileNotFoundError,
     has_effective_character_canon_edit,
     may_read_profile,
     whole_character_denied,
 )
 from dnd_ai.domain.reveal_authority import resolve_reveal_authority
-from dnd_ai.queries.public_profile_restrictions import withheld_fields
+from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
+from dnd_ai.queries.public_profile_restrictions import (
+    character_kind,
+    may_read_source_now,
+    withheld_fields,
+)
 
 from ._content import lock_authoring_scope
 from ._shared import lifecycle_code, lookup_id
@@ -208,6 +234,198 @@ def require_may_release(
         )
     if whole_character_denied(access, character_id):
         raise PublicProfileNotFoundError(f"character {character_id} is not visible")
+
+
+@dataclass(frozen=True)
+class CopyLegacyTextResult:
+    character_public_profile_id: uuid.UUID
+    character_id: uuid.UUID
+    row_version: int
+    created: bool
+    source_field: str
+    origin_code: str
+    origin_entity_row_version: int
+
+
+def _campaign_world_id(connection: Connection, campaign_id: uuid.UUID) -> uuid.UUID:
+    world_id = connection.execute(
+        text("""
+            SELECT t.world_id FROM campaign.campaigns c
+            JOIN campaign.timelines t ON t.timeline_id = c.timeline_id
+            WHERE c.campaign_id = :campaign
+        """),
+        {"campaign": campaign_id},
+    ).scalar()
+    if world_id is None:
+        raise CampaignNotAuthorizedError(f"campaign {campaign_id} does not exist")
+    assert isinstance(world_id, uuid.UUID)
+    return world_id
+
+
+def require_may_copy(
+    connection: Connection, *, access: AccessContext, character_id: uuid.UUID
+) -> None:
+    """The copy route's pre-check, before the idempotency lookup: the D8 edit rule, then a kind that
+    has a legacy source in this campaign's world (else 404), then the source-read rule (403
+    `world_authority_required` for an NPC without `world.canon.read_private`). A caller who has lost
+    either right cannot replay a stored copy: the source read is the copy's own authority (D7)."""
+    require_may_edit(connection, access=access, character_id=character_id)
+    world_id = _campaign_world_id(connection, access.campaign_id)
+    kind = character_kind(connection, character_id, world_id=world_id)
+    if kind not in (KIND_NPC, KIND_PLAYER_CHARACTER):
+        raise PublicProfileNotFoundError(f"character {character_id} has no legacy source")
+    if not may_read_source_now(
+        connection, access=access, character_id=character_id, world_id=world_id
+    ):
+        raise WorldAuthorityRequiredError(f"{access.user_id} cannot read a source here")
+
+
+def copy_legacy_text_to_public_profile_draft(
+    connection: Connection,
+    *,
+    campaign_id: uuid.UUID,
+    character_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    expected_row_version: int | None,
+    source_field: str,
+) -> CopyLegacyTextResult:
+    """Copies the character's legacy `source_field` text into the draft field of the same name.
+
+    `expected_row_version` is the draft version the caller read, or `None` for "there is no draft
+    yet" (the copy then creates it with only this field set). Raises `StaleWriteError` on a moved
+    token, `PublicProfileLegacyTextMissingError` when the source is empty, and the save's and the
+    source-read rule's refusals. Always writes (and bumps `row_version`) when it succeeds."""
+    if source_field not in LEGACY_COPY_SOURCES:
+        raise ValueError(f"unsupported legacy copy source: {source_field!r}")
+    target, origin_code, description_column = LEGACY_COPY_SOURCES[source_field]
+    origin_column, version_column, watermark_column = _ORIGIN_COLUMNS[target]
+    other = FIELD_BACKGROUND if target == FIELD_APPEARANCE else FIELD_APPEARANCE
+    other_origin_column = _ORIGIN_COLUMNS[other][0]
+
+    # The kind is read unlocked (plan section 9.1 assumption) to choose the world capability the
+    # scope must hold; a kind with no legacy source is a character that does not exist here.
+    world_id = _campaign_world_id(connection, campaign_id)
+    kind = character_kind(connection, character_id, world_id=world_id)
+    if kind not in (KIND_NPC, KIND_PLAYER_CHARACTER):
+        raise PublicProfileNotFoundError(f"character {character_id} has no legacy source")
+    scope = lock_authoring_scope(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        world_capability=WORLD_CANON_READ_PRIVATE if kind == KIND_NPC else None,
+    )
+    access = resolve_access_context(connection, user_id=actor_user_id, campaign_id=campaign_id)
+    if access is None:
+        raise CampaignNotAuthorizedError(f"user {actor_user_id} has no access to {campaign_id}")
+    character = _character_row(
+        connection, world_id=scope.world_id, character_id=character_id, lock_clause="FOR SHARE"
+    )
+    require_may_edit(connection, access=access, character_id=character_id)
+    if not may_read_source_now(
+        connection, access=access, character_id=character_id, world_id=scope.world_id
+    ):
+        raise WorldAuthorityRequiredError(f"{actor_user_id} cannot read a source here")
+    _require_canon_and_active(character, character_id)
+
+    # The entity is held FOR SHARE, so no description write (which holds it FOR UPDATE and bumps its
+    # row_version in the same transaction) can commit between these two reads: the pair is one state.
+    source_version = connection.execute(
+        text("SELECT row_version FROM core.entities WHERE entity_id = :id"), {"id": character_id}
+    ).scalar_one()
+    source_text = connection.execute(
+        text(
+            f"SELECT {description_column} FROM character.character_descriptions "  # noqa: S608
+            "WHERE character_id = :id"
+        ),
+        {"id": character_id},
+    ).scalar()
+    clean = normalize_optional_text(
+        source_text, field=source_field, max_length=PUBLIC_PROFILE_TEXT_MAX_LENGTH
+    )
+    if clean is None:
+        raise PublicProfileLegacyTextMissingError(f"{character_id} has no {source_field} text")
+
+    authored = lookup_id(
+        connection,
+        "campaign",
+        "public_profile_field_origins",
+        "public_profile_field_origin_id",
+        ORIGIN_AUTHORED,
+    )
+    legacy = lookup_id(
+        connection,
+        "campaign",
+        "public_profile_field_origins",
+        "public_profile_field_origin_id",
+        origin_code,
+    )
+    params: dict[str, object] = {
+        "campaign": campaign_id,
+        "character": character_id,
+        "membership": access.campaign_membership_id,
+        "authored": authored,
+        "legacy": legacy,
+        "text": clean,
+        "source_version": int(source_version),
+    }
+    if expected_row_version is None:
+        inserted = connection.execute(
+            text(f"""
+                INSERT INTO campaign.character_public_profiles (
+                    campaign_id, character_id, {target}, {origin_column}, {version_column},
+                    {watermark_column}, {other_origin_column},
+                    created_by_membership_id, updated_by_membership_id
+                )
+                VALUES (:campaign, :character, :text, :legacy, :source_version, 1, :authored,
+                        :membership, :membership)
+                ON CONFLICT (campaign_id, character_id) DO NOTHING
+                RETURNING character_public_profile_id, row_version
+            """),  # noqa: S608 - the column names come from LEGACY_COPY_SOURCES
+            params,
+        ).one_or_none()
+        if inserted is None:
+            raise StaleWriteError(f"the draft of {character_id} already exists")
+        profile_id, new_version, created = (
+            inserted.character_public_profile_id,
+            int(inserted.row_version),
+            True,
+        )
+    else:
+        draft = connection.execute(
+            text("""
+                SELECT character_public_profile_id, row_version
+                FROM campaign.character_public_profiles
+                WHERE campaign_id = :campaign AND character_id = :character
+                FOR UPDATE
+            """),
+            {"campaign": campaign_id, "character": character_id},
+        ).one_or_none()
+        if draft is None:
+            raise PublicProfileDraftMissingError(f"{character_id} has no draft")
+        if int(draft.row_version) != expected_row_version:
+            raise StaleWriteError(f"the draft of {character_id} is at {draft.row_version}")
+        profile_id = draft.character_public_profile_id
+        new_version = int(draft.row_version) + 1  # what `core.bump_row_version()` gives the row
+        connection.execute(
+            text(f"""
+                UPDATE campaign.character_public_profiles
+                SET {target} = :text, {origin_column} = :legacy,
+                    {version_column} = :source_version, {watermark_column} = :new_version,
+                    updated_by_membership_id = :membership
+                WHERE character_public_profile_id = :profile
+            """),  # noqa: S608 - the column names come from LEGACY_COPY_SOURCES
+            {**params, "profile": profile_id, "new_version": new_version},
+        )
+        created = False
+    return CopyLegacyTextResult(
+        character_public_profile_id=profile_id,
+        character_id=character_id,
+        row_version=new_version,
+        created=created,
+        source_field=source_field,
+        origin_code=origin_code,
+        origin_entity_row_version=int(source_version),
+    )
 
 
 def save_character_public_profile_draft(

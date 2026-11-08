@@ -30,14 +30,18 @@ PROFILE_TABLE_MODULES = {
     "queries/character_public_profile.py",
     "queries/public_profile_restrictions.py",
 }
-# The only modules that may name the legacy description table. A2a adds none; A2b adds the copy
-# command.
+# The only modules that may name the legacy description table. A2a added none; A2b-2 admits the copy
+# command, the profile read (which reports only whether a copyable field has text) and the domain
+# module (which names the table in the source-field mapping's documentation).
 LEGACY_DESCRIPTION_MODULES = {
+    "commands/character_public_profile.py",
     "commands/entity_lifecycle.py",
     "commands/npcs.py",
     "domain/data_classification.py",
     "persistence/tables/__init__.py",
     "persistence/tables/characters.py",
+    "domain/public_profiles.py",
+    "queries/character_public_profile.py",
     "queries/npc_authoring.py",
 }
 PROFILE_MODULES = (
@@ -133,3 +137,20 @@ def test_the_source_read_rule_matches_the_legacy_authoring_reads() -> None:
         assert len(capabilities) == 1, route.path
         required[route.path.rsplit("/", 2)[-2]] = capabilities[0]
     assert required == {"player-characters": None, "npcs": WORLD_CANON_READ_PRIVATE}
+
+
+def test_only_appearance_and_background_are_copy_sources_and_map_to_matching_fields() -> None:
+    from dnd_ai.domain.public_profiles import (
+        FIELD_APPEARANCE,
+        FIELD_BACKGROUND,
+        LEGACY_COPY_SOURCES,
+        LEGACY_ORIGINS,
+    )
+
+    assert LEGACY_COPY_SOURCES == {
+        "appearance": (FIELD_APPEARANCE, "legacy_appearance", "appearance"),
+        "background": (FIELD_BACKGROUND, "legacy_background", "background"),
+    }
+    assert {origin for _field, origin, _column in LEGACY_COPY_SOURCES.values()} == LEGACY_ORIGINS
+    # `notes` is the GM's private scratch field and is never a source.
+    assert "notes" not in LEGACY_COPY_SOURCES

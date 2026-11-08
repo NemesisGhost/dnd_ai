@@ -1220,7 +1220,7 @@ So the guard blocks the only representation the readers use. The other own-colum
 
 ## 9. A2b design: the legacy copy aid under approved D7 (2026-11-07, revised after review)
 
-**Status:** design reviewed; A2b-1 is implemented locally and was returned CHANGES REQUIRED by the independent review (provenance relabel hole) and is corrected by revision 144 (see the A2b-1 provenance correction); A2b-2 is not implemented.
+**Status:** design reviewed; A2b-1 is implemented locally and was returned CHANGES REQUIRED by the independent review (provenance relabel hole) and is corrected by revision 144 (see the A2b-1 provenance correction); A2b-2 (the copy command and route) is implemented locally and awaits independent review (see the A2b-2 implementation record).
 
 - **Baseline.** `523ae5cbf947af230e1d7a5409912c1039e43a69` (the A2a handoff, directly on A2a-R `f66240a`). Every claim was checked by reading source at that commit; nothing was run.
 - **Supersedes.** This section replaces the D7-dependent parts of §5.6, §5.8 (copy row) and §5.10 ("Design"). Where they differ, this section wins.
@@ -1778,6 +1778,33 @@ A2a is the §5 design without the copy aid, D5/D6 columns, portal or revelations
 **Regressions** (`test_character_public_profile_watermarks.py`, through the real trigger and CHECKs, both fields): unchanged copied text relabelled authored, and replacement text relabelled authored, are each refused with text, origins, watermark and `row_version` unchanged (full-row comparison); partial removal of provenance is refused and leaves the row unchanged; clearing text and provenance together succeeds (`row_version` 2); an authored edit of the other field, a valid copied-text edit (watermark = new version) and further authored edits keep their behaviour; and one migration test on a disposable database at 143 shows the relabel accepted before 144 and refused after the upgrade, with `alembic check` clean at head. Downgrade tests (disposable databases): a legacy-origin draft, or a draft whose origin code is legacy without a source version, refuses the downgrade and leaves the revision, the trigger function and comment, the schema and every draft and release row (all columns) and the audit count identical, with the relabel still refused; an authored draft with an immutable legacy release downgrades, restores 143's function with rows unchanged, and re-upgrades to a state identical to before.
 
 **Stated limit.** A relabelled row written by hand at 143 before this revision is neither detected nor repaired by 144.
+
+---
+
+## A2b-2 implementation record (2026-11-07)
+
+**Parent:** `c5689a32c6251dab5642ad4eaf66fb381aec7337` (revision 144's downgrade guard). One local commit; nothing is pushed and CI is pending.
+
+**Review evidence (conversation-supplied, not in the repository).** The task that started A2b-2 stated that the independent review of A2b-1 was a PASS with a 70-test result. Which commits that review covered was not stated. No review text or verdict wording was available to this session; the figures are recorded as relayed.
+
+**Built.**
+
+- **Command** `copy_legacy_text_to_public_profile_draft` and its pre-check `require_may_copy` (`commands/character_public_profile.py`); the lock order is §9.6's. The kind is read unlocked to choose the scope's world capability (`WORLD_CANON_READ_PRIVATE` for an NPC, `None` for a player character; any other kind, or a character outside the campaign's world, is 404). After `lock_authoring_scope`, the `AccessContext` is re-resolved for the D8 edit rule and the source-read rule, the entity is locked `FOR SHARE`, and the entity's `row_version` and the description text are read in separate statements under that lock: `update_npc`, the only writer of the description, holds the entity `FOR UPDATE` and bumps its `row_version` in the same transaction, so the pair is one committed state. The target field is replaced whole, the other field is untouched, and origin, source version and watermark (`row_version` after the write) are set; an insert starts at 1, an update at `OLD.row_version + 1`. Source text is stripped and a blank source is `public_profile_legacy_text_missing`.
+- **Route** `POST …/public-profile/draft/copy-legacy` (`api/character_public_profile.py`), body `{expected_row_version, field}` with `field` in `{appearance, background}` and extra fields refused. The edit-and-source pre-check is a dependency, so it runs before body validation and before the idempotency lookup. The fingerprint holds `character_id`, the field and the token.
+- **Read:** `legacy_copy` in the profile GET (§9.4).
+- **Domain:** `LEGACY_COPY_SOURCES` (the only two sources; `notes` is never one) and `PublicProfileLegacyTextMissingError` (409 `public_profile_legacy_text_missing`).
+- **No schema change.** Migrations 143 and 144 already enforce the watermark rules the copy writes under.
+
+**Deviations from §9.**
+
+- The `legacy_copy` value is `{appearance: bool, background: bool}` and is `null` for an inactive character as well as for a caller who may not copy.
+- The copy response adds `origin_entity_row_version` (an integer) to the §9.4 receipt of ids, `row_version`, `created` and `changed`.
+- The pre-check order is: D8 edit rule, kind in this world (404), source read (403). A caller who fails the edit rule gets the save's 403/404 first.
+- The first-copy insert sets only the copied field; the other field is NULL and authored.
+
+**Tests.** `test_character_public_profile_copy.py` (20, over HTTP) covers the NPC and player-character source rules, unsupported kinds, fields and provenance in the request, empty sources, denies and an inactive character, `legacy_copy`, stale and missing tokens, keyed replay, a replay refused after losing the world role, a different field or character under one key, atomic rollback of the write and its key when the audit write fails, mixed origins, clearing and recopying, the excerpt regressions through the real copy (append; restore by edit; restore by recopy), and a disclosure sweep over every response, the stored receipts and the audit rows. `test_character_public_profile_copy_races.py` (10, real commands, every wait observed as blocked by the intended session) covers a copy against `update_npc`, a save and a release, each with both winners, and the copier's world role against a copy with both winners for an end and for a downgrade; each asserts the resulting text, source version, watermark, the authorization outcome and that no command wrote an audit row. Structural pins: the route-manifest counts (244 guarded, 197 phase-15 GM), the copy's conditional world-capability argument, `LEGACY_COPY_SOURCES`, and the modules admitted as readers of the description table.
+
+**Not done here:** audience revelations (A3/A4), the portal (A6), push. Pending: independent review and CI.
 
 ---
 

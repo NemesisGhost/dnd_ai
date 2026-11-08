@@ -177,3 +177,18 @@ def test_every_lifecycle_action_has_a_world_capability() -> None:
     assert len(actions) == 9
     assert set(LIFECYCLE_ACTION_CAPABILITIES) == actions
     assert ALL_ACTIONS not in LIFECYCLE_ACTION_CAPABILITIES
+
+
+def test_the_legacy_copy_passes_the_npc_world_capability_only_for_an_npc() -> None:
+    """The copy's source-read rule is keyed by the character's kind (P03-A A2b-2): an NPC needs
+    `world.canon.read_private`, a player character needs the campaign role alone. Its single scope
+    call is pinned to exactly that conditional so a change to it is a conscious one."""
+    calls = [
+        call
+        for module, function, call in _scope_calls()
+        if (module, function)
+        == ("character_public_profile.py", "copy_legacy_text_to_public_profile_draft")
+    ]
+    assert len(calls) == 1
+    value = {kw.arg: kw.value for kw in calls[0].keywords}["world_capability"]
+    assert ast.unparse(value) == "WORLD_CANON_READ_PRIVATE if kind == KIND_NPC else None"

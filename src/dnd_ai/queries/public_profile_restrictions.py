@@ -28,15 +28,18 @@ from dnd_ai.domain.public_profiles import (
 from dnd_ai.queries.world_authority import resolve_world_authority
 
 
-def character_kind(connection: Connection, character_id: uuid.UUID) -> str | None:
-    """The character's `core.entity_types.code` (`player_character`, `npc` or `character`)."""
+def character_kind(
+    connection: Connection, character_id: uuid.UUID, *, world_id: uuid.UUID | None = None
+) -> str | None:
+    """The character's `core.entity_types.code` (`player_character`, `npc` or `character`); with
+    `world_id`, `None` unless the entity belongs to that world."""
     value = connection.execute(
         text("""
             SELECT et.code FROM core.entities e
             JOIN core.entity_types et ON et.entity_type_id = e.entity_type_id
-            WHERE e.entity_id = :id
+            WHERE e.entity_id = :id AND (CAST(:world AS uuid) IS NULL OR e.world_id = :world)
         """),
-        {"id": character_id},
+        {"id": character_id, "world": world_id},
     ).scalar()
     return None if value is None else str(value)
 

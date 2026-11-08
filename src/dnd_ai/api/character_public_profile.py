@@ -3,6 +3,7 @@
     GET  /campaigns/{campaign_id}/characters/{character_id}/public-profile
     GET  /campaigns/{campaign_id}/characters/{character_id}/public-profile/releases/{version_number}
     POST /campaigns/{campaign_id}/characters/{character_id}/public-profile/draft
+    POST /campaigns/{campaign_id}/characters/{character_id}/public-profile/draft/copy-legacy
     POST /campaigns/{campaign_id}/characters/{character_id}/public-profile/releases
 
 Authorization (plan section 5.7, decision D8):
@@ -17,6 +18,12 @@ Authorization (plan section 5.7, decision D8):
   idempotency lookup so a caller who has lost the right cannot replay a stored response, and again
   under lock inside the command.
 
+- The copy needs the role `canon.edit` at the route, then the D8 edit rule and the source-read rule
+  for the character's kind (403 `world_authority_required` for an NPC without
+  `world.canon.read_private`; 404 for a kind with no legacy source), checked by a dependency
+  *before* the idempotency lookup, and again under lock inside the command. The request names only
+  the legacy field; provenance and the restriction watermark are never request fields.
+
 All three POSTs put the path's `character_id` into the idempotency fingerprint: the key's scope is
 (actor, campaign, key), so without it the same key and body posted to another character would replay
 the first character's stored response.
@@ -27,14 +34,16 @@ replay) carry field names, versions and the authority source, never profile text
 """
 
 import uuid
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Response
 from pydantic import Field
 from sqlalchemy import Connection
 
 from dnd_ai.commands.character_public_profile import (
+    copy_legacy_text_to_public_profile_draft,
     release_character_public_profile,
+    require_may_copy,
     require_may_edit,
     require_may_release,
     save_character_public_profile_draft,
@@ -74,6 +83,7 @@ _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
 
 _SAVE_COMMAND = "save_character_public_profile_draft"
 _RELEASE_COMMAND = "release_character_public_profile"
+_COPY_COMMAND = "copy_legacy_text_to_public_profile_draft"
 
 
 class SaveCharacterPublicProfileDraftRequest(BaseAuthoringRequest):
@@ -83,6 +93,15 @@ class SaveCharacterPublicProfileDraftRequest(BaseAuthoringRequest):
     expected_row_version: int | None = Field(ge=1)
     public_appearance: str | None = Field(default=None, max_length=PUBLIC_PROFILE_TEXT_MAX_LENGTH)
     public_background: str | None = Field(default=None, max_length=PUBLIC_PROFILE_TEXT_MAX_LENGTH)
+
+
+class CopyLegacyTextRequest(BaseAuthoringRequest):
+    """Copies one legacy description field into the draft field of the same name. `null` means
+    "there is no draft yet". No origin, version or watermark can be named (extra fields are
+    refused)."""
+
+    expected_row_version: int | None = Field(ge=1)
+    field: Literal["appearance", "background"]
 
 
 class ReleaseCharacterPublicProfileRequest(BaseAuthoringRequest):
@@ -99,6 +118,15 @@ def _edit_precheck(
 ) -> None:
     """Before the idempotency lookup: a caller who can no longer edit cannot replay a save."""
     require_may_edit(connection, access=access, character_id=character_id)
+
+
+def _copy_precheck(
+    character_id: uuid.UUID,
+    access: Annotated[AccessContext, Depends(_edit_access)],
+    connection: _Conn,
+) -> None:
+    """Before the idempotency lookup and the body: the edit rule and the source-read rule."""
+    require_may_copy(connection, access=access, character_id=character_id)
 
 
 def _release_precheck(
@@ -203,6 +231,71 @@ def save_character_public_profile_draft_endpoint(
         "row_version": result.row_version,
         "created": result.created,
         "changed": result.changed,
+    }
+    response.status_code = 201 if result.created else 200
+    finish_campaign_idempotency(connection, idem, status_code=response.status_code, body=payload)
+    return payload
+
+
+@router.post(_BASE + "/draft/copy-legacy")
+def copy_legacy_text_endpoint(
+    character_id: uuid.UUID,
+    body: CopyLegacyTextRequest,
+    response: Response,
+    access: Annotated[AccessContext, Depends(_edit_access)],
+    _precheck: Annotated[None, Depends(_copy_precheck)],
+    connection: _Conn,
+    idempotency_key: _Key,
+    correlation_id: _Corr,
+) -> Any:
+    idem = start_campaign_idempotency(
+        connection,
+        actor_user_id=access.user_id,
+        campaign_id=access.campaign_id,
+        idempotency_key=idempotency_key,
+        command_name=_COPY_COMMAND,
+        # The path's character and the source/target selection are in the fingerprint, so a key
+        # reused for another character or field is the non-disclosing conflict, never a replay.
+        payload={"character_id": str(character_id), **body.model_dump(mode="json")},
+        correlation_id=correlation_id,
+    )
+    if idem.replay is not None:
+        return idem.replay
+    result = copy_legacy_text_to_public_profile_draft(
+        connection,
+        campaign_id=access.campaign_id,
+        character_id=character_id,
+        actor_user_id=access.user_id,
+        expected_row_version=body.expected_row_version,
+        source_field=body.field,
+    )
+    record_change_log(
+        connection,
+        change_action_code="created" if result.created else "updated",
+        schema_name="campaign",
+        table_name="character_public_profiles",
+        record_id=result.character_public_profile_id,
+        entity_id=character_id,
+        world_id=timeline_world_id(connection, access.timeline_id),
+        actor_user_id=access.user_id,
+        correlation_id=correlation_id,
+        command_name=_COPY_COMMAND,
+        event_id=None,
+        # Which field, from which source version: never the copied text.
+        changed_fields={
+            "source_field": result.source_field,
+            "origin": result.origin_code,
+            "origin_entity_row_version": result.origin_entity_row_version,
+            "row_version": result.row_version,
+        },
+    )
+    payload: dict[str, Any] = {
+        "character_public_profile_id": str(result.character_public_profile_id),
+        "character_id": str(result.character_id),
+        "row_version": result.row_version,
+        "created": result.created,
+        "changed": True,
+        "origin_entity_row_version": result.origin_entity_row_version,
     }
     response.status_code = 201 if result.created else 200
     finish_campaign_idempotency(connection, idem, status_code=response.status_code, body=payload)

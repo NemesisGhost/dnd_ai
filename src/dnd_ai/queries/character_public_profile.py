@@ -17,11 +17,17 @@ from sqlalchemy import Connection, text
 
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.domain.public_profiles import (
+    KIND_NPC,
+    KIND_PLAYER_CHARACTER,
     has_effective_character_canon_edit,
     may_read_profile,
 )
 from dnd_ai.domain.reveal_authority import resolve_reveal_authority
-from dnd_ai.queries.public_profile_restrictions import withheld_fields
+from dnd_ai.queries.public_profile_restrictions import (
+    character_kind,
+    may_read_source_now,
+    withheld_fields,
+)
 
 
 @dataclass(frozen=True)
@@ -149,6 +155,38 @@ def _readable(
     return character, authority != "none"
 
 
+def _legacy_copy(
+    connection: Connection,
+    access: AccessContext,
+    character_id: uuid.UUID,
+    character: dict[str, Any],
+) -> dict[str, bool] | None:
+    """Which legacy description fields hold text to copy, or `None` unless the caller may copy now:
+    an active character, the D8 edit rule, a kind with a legacy source, and the source-read rule
+    (the same tests as the copy route). Only whether text exists is disclosed, never the text."""
+    if not character["active"] or not has_effective_character_canon_edit(access, character_id):
+        return None
+    kind = character_kind(connection, character_id, world_id=character["world_id"])
+    if kind not in (KIND_NPC, KIND_PLAYER_CHARACTER):
+        return None
+    if not may_read_source_now(
+        connection, access=access, character_id=character_id, world_id=character["world_id"]
+    ):
+        return None
+    row = connection.execute(
+        text(
+            "SELECT (btrim(coalesce(appearance, '')) <> '') AS appearance, "
+            "(btrim(coalesce(background, '')) <> '') AS background "
+            "FROM character.character_descriptions WHERE character_id = :id"
+        ),
+        {"id": character_id},
+    ).one_or_none()
+    return {
+        "appearance": bool(row and row.appearance),
+        "background": bool(row and row.background),
+    }
+
+
 def read_character_public_profile(
     connection: Connection, *, access: AccessContext, character_id: uuid.UUID
 ) -> dict[str, Any] | None:
@@ -235,6 +273,7 @@ def read_character_public_profile(
         and has_effective_character_canon_edit(access, character_id),
         # A release would publish every field, so it needs the releaser to read each one (D7 item 3).
         "can_release": character["active"] and can_reveal and not withheld,
+        "legacy_copy": _legacy_copy(connection, access, character_id, character),
     }
 
 
