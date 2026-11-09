@@ -28,12 +28,14 @@ tests/unit must not depend on any fixture here — it runs with no database.
 Markers (unit, database, scenario) are registered in pyproject.toml, not here.
 """
 
+import contextlib
 import os
 import shutil
 import subprocess
 import sys
+import time
 import uuid
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import IO
 
@@ -102,15 +104,49 @@ def _try_exclusive_lock(handle: IO[bytes]) -> bool:
         return False
 
 
-def _hold_run_lock(run_dir: Path) -> None:
-    """Create and keep locked this run's lock file (until the process exits)."""
-    handle = _run_lock_path(run_dir).open("a+b")
+# Registering a run (creating its lock file and locking it) and sweeping stale runs both happen
+# under one short-lived mutex file, `.tmp/sweep.mutex`. Without it there is an interval between a
+# new run creating its lock file and locking it in which a sweeping process finds an unlocked lock
+# file, concludes its run is dead and deletes it (on POSIX; on Windows the sweep's own probe can
+# instead make the registrant's lock attempt fail). With it the two are strictly ordered: either the
+# registration finishes first, so the sweep sees a held lock, or it starts after the sweep ended.
+_SWEEP_MUTEX_NAME = "sweep.mutex"
+_MUTEX_WAIT_SECONDS = 60.0
+
+# A test seam: called between creating a run's lock file and locking it, the exact interval above.
+_registration_pause: Callable[[], None] | None = None
+
+
+@contextlib.contextmanager
+def _sweep_mutex() -> Iterator[None]:
+    """Hold the sweep/registration mutex for the duration of the block."""
+    _PYTEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+    handle = (_PYTEST_TMP_ROOT / _SWEEP_MUTEX_NAME).open("a+b")
     handle.write(b"x")
     handle.flush()
-    if not _try_exclusive_lock(handle):  # a fresh uuid name: nobody else can hold it
-        handle.close()
-        return
-    _held_run_locks[run_dir] = handle
+    deadline = time.monotonic() + _MUTEX_WAIT_SECONDS
+    try:
+        while not _try_exclusive_lock(handle):
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"could not take {_SWEEP_MUTEX_NAME} within the wait")
+            time.sleep(0.02)
+        yield
+    finally:
+        handle.close()  # closing releases the lock
+
+
+def _hold_run_lock(run_dir: Path) -> None:
+    """Create and keep locked this run's lock file (until the process exits)."""
+    with _sweep_mutex():
+        handle = _run_lock_path(run_dir).open("a+b")
+        handle.write(b"x")
+        handle.flush()
+        if _registration_pause is not None:
+            _registration_pause()
+        if not _try_exclusive_lock(handle):  # a fresh uuid name, under the mutex: cannot happen
+            handle.close()
+            raise RuntimeError(f"could not lock {_run_lock_path(run_dir)}")
+        _held_run_locks[run_dir] = handle
 
 
 def _release_run_lock(run_dir: Path) -> None:
@@ -144,6 +180,16 @@ def _cleanup_stale_pytest_run_dirs(keep: Path) -> None:
     as finished. Never raises."""
     if not _PYTEST_TMP_ROOT.is_dir():
         return
+    try:
+        with _sweep_mutex():
+            _sweep_stale_run_dirs(keep)
+    except OSError:
+        return
+    except TimeoutError:
+        return
+
+
+def _sweep_stale_run_dirs(keep: Path) -> None:
     names = {
         candidate.name.removesuffix(_RUN_LOCK_SUFFIX)
         for candidate in _PYTEST_TMP_ROOT.glob(f"{_PYTEST_RUN_DIR_PREFIX}*")

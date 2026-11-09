@@ -47,10 +47,11 @@ import sys
 import textwrap
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 REPO = Path(__file__).resolve().parent.parent
 DEFAULT_SHARDS = 4  # must match the matrix and the "/4" in .github/workflows/ci.yml
@@ -58,12 +59,50 @@ REQUIRED_MAJOR = 18
 _DB_NAME = "dnd_ai_ci"
 _DB_PASSWORD = "postgres"  # a throwaway loopback cluster, as CI's container
 _ISOLATION_PLUGIN = textwrap.dedent(
-    """\
+    """
     import os
+    import re
+
+    import pytest
+
+
+    def _refuse(message):
+        raise pytest.UsageError("sharded runner isolation: " + message)
 
 
     def pytest_sessionstart(session):
+        # Section 6.2 of docs/DEVELOPMENT.md: the one default-configuration override.
         os.environ.pop("DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS", None)
+        expected = os.environ.get("DND_AI_SHARD_DATABASE_URL")
+        if not expected:
+            return  # the plugin used on its own, as section 6.2 describes
+        # tests/conftest.py has run load_dotenv() by now. A .env file may have put back anything
+        # the runner removed from the environment, so close the doors again and then check.
+        os.environ.pop("DND_AI_TEST_DATABASE_URL", None)
+        for name in list(os.environ):
+            if re.fullmatch(r"PG(?!APPNAME).+", name):
+                os.environ.pop(name)
+        if os.environ.get("DATABASE_URL") != expected:
+            _refuse("DATABASE_URL is not this shard's cluster after loading .env")
+        pgdata = os.environ.get("DND_AI_SHARD_PGDATA")
+        if pgdata:
+            import psycopg
+            from sqlalchemy import make_url
+
+            url = make_url(expected)
+            with psycopg.connect(
+                host=url.host,
+                port=url.port,
+                user=url.username,
+                password=url.password,
+                dbname="postgres",
+                connect_timeout=10,
+            ) as connection:
+                data_directory = connection.execute("SHOW data_directory").fetchone()[0]
+            if os.path.normcase(os.path.realpath(data_directory)) != os.path.normcase(
+                os.path.realpath(pgdata)
+            ):
+                _refuse("the server behind DATABASE_URL is not this run's cluster")
     """
 )
 _SUMMARY = re.compile(r"(\d+) (passed|failed|skipped|xfailed|xpassed|errors?|warnings?|deselected)")
@@ -122,78 +161,112 @@ def free_ports(count: int) -> list[int]:
 # --- children die with this script ------------------------------------------------------------
 
 
+class JobObjectError(RuntimeError):
+    """The Windows Job Object that contains this run's children could not be set up."""
+
+
+class _BasicLimit(ctypes.Structure):
+    _fields_ = [  # noqa: RUF012
+        ("PerProcessUserTimeLimit", ctypes.c_int64),
+        ("PerJobUserTimeLimit", ctypes.c_int64),
+        ("LimitFlags", ctypes.c_uint32),
+        ("MinimumWorkingSetSize", ctypes.c_size_t),
+        ("MaximumWorkingSetSize", ctypes.c_size_t),
+        ("ActiveProcessLimit", ctypes.c_uint32),
+        ("Affinity", ctypes.c_size_t),
+        ("PriorityClass", ctypes.c_uint32),
+        ("SchedulingClass", ctypes.c_uint32),
+    ]
+
+
+class _IoCounters(ctypes.Structure):
+    _fields_ = [  # noqa: RUF012
+        (name, ctypes.c_uint64)
+        for name in ("ReadOps", "WriteOps", "OtherOps", "ReadBytes", "WriteBytes", "OtherBytes")
+    ]
+
+
+class _ExtendedLimit(ctypes.Structure):
+    _fields_ = [  # noqa: RUF012
+        ("BasicLimitInformation", _BasicLimit),
+        ("IoInfo", _IoCounters),
+        ("ProcessMemoryLimit", ctypes.c_size_t),
+        ("JobMemoryLimit", ctypes.c_size_t),
+        ("PeakProcessMemoryUsed", ctypes.c_size_t),
+        ("PeakJobMemoryUsed", ctypes.c_size_t),
+    ]
+
+
 class KillOnCloseJob:
     """A Windows Job Object that kills every process in it when this script's handle closes, so a
-    crash or a closed terminal cannot leave servers or test processes behind. A no-op elsewhere
-    (POSIX children are stopped by the `finally` block and the process group)."""
+    crash or a closed terminal cannot leave servers or test processes behind.
 
-    def __init__(self) -> None:
+    Every step is checked, and a failure raises `JobObjectError`: the run refuses to start rather
+    than run children it could not contain. `add` also confirms membership with `IsProcessInJob`.
+    One interval cannot be closed from Python: between `CreateProcess` returning and the assignment
+    the child is running outside the job, for a few milliseconds, before it has started anything of
+    its own; a child that fails assignment is killed by the caller and the run stops.
+
+    Elsewhere there is no job: POSIX children are in their own session and are stopped by the
+    `finally` block. `kernel32` and `last_error` are injectable for tests."""
+
+    def __init__(
+        self,
+        kernel32: Any = None,
+        *,
+        platform: str | None = None,
+        last_error: Callable[[], int] | None = None,
+    ) -> None:
         self.handle: int | None = None
-        if sys.platform != "win32":
+        self._last_error = last_error or (lambda: ctypes.get_last_error())
+        if (platform or sys.platform) != "win32":
             return
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-
-        class BasicLimit(ctypes.Structure):
-            _fields_ = [  # noqa: RUF012
-                ("PerProcessUserTimeLimit", ctypes.c_int64),
-                ("PerJobUserTimeLimit", ctypes.c_int64),
-                ("LimitFlags", ctypes.c_uint32),
-                ("MinimumWorkingSetSize", ctypes.c_size_t),
-                ("MaximumWorkingSetSize", ctypes.c_size_t),
-                ("ActiveProcessLimit", ctypes.c_uint32),
-                ("Affinity", ctypes.c_size_t),
-                ("PriorityClass", ctypes.c_uint32),
-                ("SchedulingClass", ctypes.c_uint32),
-            ]
-
-        class IoCounters(ctypes.Structure):
-            _fields_ = [
-                (name, ctypes.c_uint64)
-                for name in (  # noqa: RUF012
-                    "ReadOps",
-                    "WriteOps",
-                    "OtherOps",
-                    "ReadBytes",
-                    "WriteBytes",
-                    "OtherBytes",
-                )
-            ]
-
-        class ExtendedLimit(ctypes.Structure):
-            _fields_ = [  # noqa: RUF012
-                ("BasicLimitInformation", BasicLimit),
-                ("IoInfo", IoCounters),
-                ("ProcessMemoryLimit", ctypes.c_size_t),
-                ("JobMemoryLimit", ctypes.c_size_t),
-                ("PeakProcessMemoryUsed", ctypes.c_size_t),
-                ("PeakJobMemoryUsed", ctypes.c_size_t),
-            ]
-
-        kernel32.CreateJobObjectW.restype = ctypes.c_void_p
-        handle = kernel32.CreateJobObjectW(None, None)
+        k = kernel32 or ctypes.WinDLL("kernel32", use_last_error=True)
+        k.CreateJobObjectW.restype = ctypes.c_void_p
+        handle = k.CreateJobObjectW(None, None)
         if not handle:
-            return
-        info = ExtendedLimit()
+            raise JobObjectError(f"CreateJobObjectW failed (error {self._last_error()})")
+        info = _ExtendedLimit()
         info.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-        kernel32.SetInformationJobObject.argtypes = [
+        k.SetInformationJobObject.argtypes = [
             ctypes.c_void_p,
             ctypes.c_int,
             ctypes.c_void_p,
             ctypes.c_uint32,
         ]
-        if not kernel32.SetInformationJobObject(handle, 9, ctypes.byref(info), ctypes.sizeof(info)):
-            return
-        self._kernel32 = kernel32
+        if not k.SetInformationJobObject(handle, 9, ctypes.byref(info), ctypes.sizeof(info)):
+            error = self._last_error()
+            k.CloseHandle(handle)
+            raise JobObjectError(f"SetInformationJobObject failed (error {error})")
+        self._kernel32 = k
         self.handle = handle
 
     def add(self, process: "subprocess.Popen[bytes]") -> None:
+        """Put `process` in the job, or raise `JobObjectError` (the caller then kills it)."""
         if self.handle is None:
             return
-        self._kernel32.AssignProcessToJobObject.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-        self._kernel32.AssignProcessToJobObject(
-            self.handle,
-            ctypes.c_void_p(int(process._handle)),
-        )
+        k = self._kernel32
+        k.AssignProcessToJobObject.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        process_handle = ctypes.c_void_p(int(process._handle))  # type: ignore[attr-defined]
+        if not k.AssignProcessToJobObject(self.handle, process_handle):
+            raise JobObjectError(
+                f"AssignProcessToJobObject failed for pid {process.pid} (error {self._last_error()})"
+            )
+        member = ctypes.c_int(0)
+        k.IsProcessInJob.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+        if (
+            not k.IsProcessInJob(process_handle, self.handle, ctypes.byref(member))
+            or not member.value
+        ):
+            raise JobObjectError(f"pid {process.pid} is not in the job after assignment")
+
+    def contain(self, process: "subprocess.Popen[bytes]") -> None:
+        """`add`, and on failure kill the process tree before raising."""
+        try:
+            self.add(process)
+        except JobObjectError:
+            kill_tree(process)
+            raise
 
 
 def kill_tree(process: "subprocess.Popen[bytes] | None") -> None:
@@ -250,9 +323,66 @@ class Shard:
         return f"postgresql+psycopg://postgres:{_DB_PASSWORD}@127.0.0.1:{self.port}/{_DB_NAME}"
 
 
-def start_cluster(shard: Shard, pg_bin: Path, job: KillOnCloseJob, port: int) -> None:
-    """A throwaway PostgreSQL 18 cluster for this shard, owned by this run."""
-    shard.port = port
+class ForeignServerError(RuntimeError):
+    """Something other than this run's cluster answered on the shard's port."""
+
+
+def port_in_use(port: int) -> bool:
+    with socket.socket() as probe:
+        probe.settimeout(1)
+        return probe.connect_ex(("127.0.0.1", port)) == 0
+
+
+def verify_server_identity(port: int, pgdata: Path, server_pid: int | None) -> None:
+    """Prove the server answering on `port` is the cluster in `pgdata` that this run started.
+
+    `pg_isready` only says that *something* accepts connections there. Here the connection must
+    authenticate with the run's own password (a foreign server will not know it), report
+    `data_directory` equal to this run's `pgdata`, and its `postmaster.pid` must name the process
+    this run started. Anything else raises `ForeignServerError` before a single write."""
+    import psycopg
+
+    try:
+        with psycopg.connect(
+            host="127.0.0.1",
+            port=port,
+            user="postgres",
+            password=_DB_PASSWORD,
+            dbname="postgres",
+            connect_timeout=5,
+        ) as connection:
+            row = connection.execute("SHOW data_directory").fetchone()
+    except psycopg.Error as exc:
+        raise ForeignServerError(
+            f"the server on port {port} does not accept this run's credentials ({type(exc).__name__})"
+        ) from exc
+    reported = os.path.normcase(os.path.realpath(row[0])) if row else ""
+    if reported != os.path.normcase(os.path.realpath(pgdata)):
+        raise ForeignServerError(
+            f"the server on port {port} serves {row[0]!r}, not {str(pgdata)!r}"
+        )
+    pid_file = pgdata / "postmaster.pid"
+    first = pid_file.read_text(encoding="utf-8").splitlines()[0] if pid_file.exists() else ""
+    if server_pid is not None and first.strip() != str(server_pid):
+        raise ForeignServerError(
+            f"postmaster.pid names {first!r}, but this run started process {server_pid}"
+        )
+
+
+def start_cluster(
+    shard: Shard,
+    pg_bin: Path,
+    job: KillOnCloseJob,
+    port: int,
+    *,
+    db_name: str = _DB_NAME,
+    attempts: int = 3,
+) -> None:
+    """A throwaway PostgreSQL 18 cluster for this shard, owned by this run.
+
+    A port that is already taken, or answered by a server that is not this run's, is never used: the
+    candidate is rejected before `createdb` or any other write and a different port is tried, up to
+    `attempts` times, then `ForeignServerError`."""
     shard.root.mkdir(parents=True, exist_ok=True)
     # Password authentication, as in CI's container (POSTGRES_PASSWORD): a test asserts that a
     # wrong password is refused, which `trust` would not do.
@@ -280,19 +410,54 @@ def start_cluster(shard: Shard, pg_bin: Path, job: KillOnCloseJob, port: int) ->
         # Disposable data: durability settings off for speed. Nothing else differs from CI's
         # container (default max_connections and memory settings).
         conf.write(
-            f"\nport = {port}\nlisten_addresses = '127.0.0.1'\nfsync = off\n"
+            "\nlisten_addresses = '127.0.0.1'\nfsync = off\n"
             "synchronous_commit = off\nfull_page_writes = off\n"
         )
-    log = shard.postgres_log.open("wb")
-    flags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
-    shard.server = subprocess.Popen(  # noqa: S603
-        [_exe(pg_bin, "postgres"), "-D", str(shard.pgdata)],
-        stdout=log,
-        stderr=subprocess.STDOUT,
-        creationflags=flags,
-        start_new_session=sys.platform != "win32",
-    )
-    job.add(shard.server)
+    last: Exception | None = None
+    for attempt in range(attempts):
+        candidate = port if attempt == 0 else free_ports(1)[0]
+        shard.port = candidate
+        if port_in_use(candidate):
+            last = ForeignServerError(f"port {candidate} is already in use")
+            continue
+        flags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
+        with shard.postgres_log.open("ab") as log:
+            shard.server = subprocess.Popen(  # noqa: S603
+                [_exe(pg_bin, "postgres"), "-D", str(shard.pgdata), "-p", str(candidate)],
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                creationflags=flags,
+                start_new_session=sys.platform != "win32",
+            )
+        job.contain(shard.server)
+        try:
+            _wait_until_ready(shard, pg_bin, candidate)
+            verify_server_identity(candidate, shard.pgdata, shard.server.pid)
+        except (ForeignServerError, RuntimeError) as exc:
+            last = exc
+            stop_cluster(shard, pg_bin)
+            continue
+        subprocess.run(  # noqa: S603
+            [
+                _exe(pg_bin, "createdb"),
+                "-h",
+                "127.0.0.1",
+                "-p",
+                str(candidate),
+                "-U",
+                "postgres",
+                db_name,
+            ],
+            env={**os.environ, "PGPASSWORD": _DB_PASSWORD},
+            capture_output=True,
+            check=True,
+        )
+        return
+    raise ForeignServerError(f"{shard.name}: no usable port after {attempts} attempts ({last})")
+
+
+def _wait_until_ready(shard: Shard, pg_bin: Path, port: int) -> None:
+    assert shard.server is not None
     deadline = time.monotonic() + 90
     while time.monotonic() < deadline:
         if shard.server.poll() is not None:
@@ -303,16 +468,9 @@ def start_cluster(shard: Shard, pg_bin: Path, job: KillOnCloseJob, port: int) ->
             check=False,
         )
         if ready.returncode == 0:
-            break
+            return
         time.sleep(0.3)
-    else:
-        raise RuntimeError(f"{shard.name}: PostgreSQL did not become ready on port {port}")
-    subprocess.run(  # noqa: S603
-        [_exe(pg_bin, "createdb"), "-h", "127.0.0.1", "-p", str(port), "-U", "postgres", _DB_NAME],
-        env={**os.environ, "PGPASSWORD": _DB_PASSWORD},
-        capture_output=True,
-        check=True,
-    )
+    raise RuntimeError(f"{shard.name}: PostgreSQL did not become ready on port {port}")
 
 
 def stop_cluster(shard: Shard, pg_bin: Path) -> None:
@@ -336,23 +494,96 @@ def stop_cluster(shard: Shard, pg_bin: Path) -> None:
     kill_tree(shard.server)
 
 
+# Environment inputs that could point a shard at someone else's database, change which options or
+# plugins pytest uses, or change which configuration is read. They are removed from every child's
+# environment (names are reported, values never are); `.env` files can bring some back after the
+# process starts, which the generated plugin closes again and then checks (see _ISOLATION_PLUGIN).
+_SCRUBBED_PATTERNS = (
+    re.compile(r"PYTEST_.*"),  # PYTEST_ADDOPTS can carry --basetemp, -p, -c, --rootdir ...
+    re.compile(r"PG(?!APPNAME$).+"),  # libpq: host, port, user, service, passfile, options ...
+    re.compile(
+        r".*DATABASE_URL.*"
+    ),  # DATABASE_URL, DND_AI_TEST_DATABASE_URL, DND_AI_DATABASE_URL ...
+    re.compile(r"CI_TEST_SHARD"),
+    re.compile(r"DND_AI_SHARD_.*"),
+    re.compile(r"PYTHONPATH|PYTHONSTARTUP|PYTHONHOME|PYTHONSAFEPATH|PYTHONINSPECT"),
+)
+
+
+def scrubbed_environment() -> tuple[dict[str, str], list[str]]:
+    """This process's environment without the inputs above, and the names that were removed."""
+    kept: dict[str, str] = {}
+    removed: list[str] = []
+    for name, value in os.environ.items():
+        if any(pattern.fullmatch(name.upper()) for pattern in _SCRUBBED_PATTERNS):
+            removed.append(name)
+        else:
+            kept[name] = value
+    return kept, sorted(removed)
+
+
 def shard_environment(shard: Shard, isolation: Path) -> dict[str, str]:
-    environment = {**os.environ}
-    for variable in ("DND_AI_TEST_DATABASE_URL", "CI_TEST_SHARD"):
-        environment.pop(variable, None)
+    environment, _ = scrubbed_environment()
     scratch = shard.root / "tmp"
     scratch.mkdir(parents=True, exist_ok=True)
     environment.update(
         DATABASE_URL=shard.database_url,
+        # Empty, not absent: python-dotenv will not override a variable that is already set, so a
+        # `.env` file cannot restore DND_AI_TEST_DATABASE_URL. The plugin also removes it.
+        DND_AI_TEST_DATABASE_URL="",
+        DND_AI_SHARD_DATABASE_URL=shard.database_url,
+        DND_AI_SHARD_PGDATA=str(shard.pgdata),
         CI_TEST_SHARD=f"{shard.index}/{shard.total}",
         PGAPPNAME=f"dnd_ai_shard_{shard.index}",
         TEMP=str(scratch),
         TMP=str(scratch),
         TMPDIR=str(scratch),
-        PYTHONPATH=os.pathsep.join(filter(None, [str(isolation), os.environ.get("PYTHONPATH")])),
+        PYTHONPATH=str(isolation),
         PYTHONUNBUFFERED="1",
     )
     return environment
+
+
+# Forwarded pytest options the runner accepts: they change how output looks or when a shard stops,
+# never which database, configuration, plugins, directories or tests it uses. Everything else is
+# refused, because the list of options that can bypass the isolation (--basetemp, -c, --rootdir,
+# -p, -o, --confcutdir, --import-mode, --pyargs, ...) is open-ended and an allowlist cannot miss one.
+_FLAGS = {"-x", "--exitfirst", "-v", "-vv", "-vvv", "--verbose", "-q", "-qq", "--quiet", "-l",
+          "--showlocals", "--full-trace", "--no-header", "--no-summary"}  # fmt: skip
+_VALUED = {"--tb": {"auto", "long", "short", "line", "native", "no"}, "--maxfail": None,
+           "--durations": None}  # fmt: skip
+_REPORT = re.compile(r"-r[a-zA-Z]+")
+
+
+def validate_forwarded_arguments(arguments: Sequence[str]) -> list[str]:
+    """The forwarded pytest arguments, or `SystemExit` naming the first one that is not allowed."""
+    allowed = ", ".join(sorted(_FLAGS | set(_VALUED) | {"-r<chars>"}))
+    items = list(arguments)
+    index = 0
+    while index < len(items):
+        argument = items[index]
+        name, equals, value = argument.partition("=")
+        if argument in _FLAGS or _REPORT.fullmatch(argument):
+            index += 1
+            continue
+        if name in _VALUED:
+            if not equals:
+                index += 1
+                if index >= len(items):
+                    raise SystemExit(f"{name} needs a value")
+                value = items[index]
+            choices = _VALUED[name]
+            ok = value in choices if choices is not None else value.isdigit()
+            if not ok:
+                raise SystemExit(f"{name} was given {value!r}, which is not accepted")
+            index += 1
+            continue
+        raise SystemExit(
+            f"refusing to forward {argument!r} to the shards: it could change the isolation "
+            f"(database, directories, configuration, plugins) or the set of tests. Allowed: "
+            f"{allowed}. For anything else run pytest directly (docs/DEVELOPMENT.md section 6)."
+        )
+    return items
 
 
 def pytest_command(shard: Shard | None, extra: Sequence[str], *, collect: bool) -> list[str]:
@@ -403,9 +634,8 @@ def verify_partition(
     """Collect everything, then every shard's selection, and prove the shards are disjoint and
     together equal the whole: every test file is in exactly one shard with all of its tests, so a
     newly added test (or file) is covered by exactly one shard."""
-    base = {**os.environ}
-    base.pop("CI_TEST_SHARD", None)
-    base["PYTHONPATH"] = os.pathsep.join(filter(None, [str(isolation), base.get("PYTHONPATH")]))
+    base, _ = scrubbed_environment()
+    base["PYTHONPATH"] = str(isolation)
     results: dict[str, dict[str, int]] = {}
     errors: list[str] = []
 
@@ -506,6 +736,9 @@ def run(arguments: argparse.Namespace) -> int:
     extra = arguments.pytest_args
     total = arguments.shards
     print(f"run directory: {run_root}")
+    _, removed = scrubbed_environment()
+    if removed:
+        print("not passed to the shards (isolation): " + ", ".join(removed))
 
     print(f"checking that {total} shards partition the suite exactly ...")
     everything, partition, problems = verify_partition(total, isolation, cwd, extra)
@@ -521,7 +754,11 @@ def run(arguments: argparse.Namespace) -> int:
         return 0
 
     pg_bin = find_pg_bin(arguments.pg_bin)
-    job = KillOnCloseJob()
+    try:
+        job = KillOnCloseJob()
+    except JobObjectError as exc:
+        print(f"cannot contain the shards' processes, so none are started: {exc}")
+        return 3
     if sys.platform == "win32":  # Ctrl+Break in a console behaves like Ctrl+C
         signal.signal(signal.SIGBREAK, signal.default_int_handler)
     shards = [Shard(i, total, run_root / f"shard-{i}") for i in range(1, total + 1)]
@@ -563,7 +800,11 @@ def run(arguments: argparse.Namespace) -> int:
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
                 start_new_session=sys.platform != "win32",
             )
-            job.add(shard.pytest)
+            try:
+                job.contain(shard.pytest)  # a child that cannot be contained is killed
+            except JobObjectError as exc:
+                print(f"{shard.name} could not be contained; stopping the run: {exc}")
+                return 3
 
         next_report = time.monotonic() + 60
         deadline = time.monotonic() + arguments.timeout_minutes * 60
@@ -681,6 +922,7 @@ def main() -> int:
         "pytest_args", nargs="*", help="after `--`: extra arguments for each pytest"
     )
     arguments = parser.parse_args()
+    arguments.pytest_args = validate_forwarded_arguments(arguments.pytest_args)
     return run(arguments)
 
 

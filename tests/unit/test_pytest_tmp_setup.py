@@ -348,3 +348,83 @@ def test_a_second_process_cannot_sweep_a_running_processes_directory(
     # Once the child has exited, its lock is gone and the directory is stale.
     _cleanup_stale_pytest_run_dirs(keep=_tmp_root / f"{_PYTEST_RUN_DIR_PREFIX}mine")
     assert not run_dir.exists()
+
+
+# --- 5. Registering a run cannot race a sweep ---------------------------------------------------
+#
+# Between a new run creating its lock file and locking it there used to be an interval in which a
+# sweeping process found an unlocked lock file, took it for a dead run's and removed it. Both now
+# happen under one mutex file. This test holds a registrant exactly in that interval (through the
+# `_registration_pause` seam) and starts a sweep in a second process.
+
+
+def test_a_sweep_cannot_run_in_the_interval_between_creating_and_locking_a_run_lock(
+    _tmp_root: Path, tmp_path: Path
+) -> None:
+    import time
+
+    repo_root = str(Path(conftest_module.__file__).parents[1])
+    run_dir = _tmp_root / f"{_PYTEST_RUN_DIR_PREFIX}registrant"
+    other = _tmp_root / f"{_PYTEST_RUN_DIR_PREFIX}sweeper"
+    marks = {name: tmp_path / name for name in ("paused", "go", "registered", "swept", "done")}
+
+    registrant = textwrap.dedent(
+        f"""
+        import sys, time
+        from pathlib import Path
+        sys.path.insert(0, {repo_root!r})
+        import tests.conftest as c
+        c._PYTEST_TMP_ROOT = Path({str(_tmp_root)!r})
+        marks = {{k: Path(v) for k, v in { ({k: str(v) for k, v in marks.items()})!r}.items()}}
+
+        def pause():
+            marks["paused"].write_text("1")  # the lock file exists, and is not yet locked
+            while not marks["go"].exists():
+                time.sleep(0.02)
+
+        c._registration_pause = pause
+        run_dir = Path({str(run_dir)!r})
+        c._hold_run_lock(run_dir)
+        run_dir.mkdir()
+        (run_dir / "active.txt").write_text("in use")
+        marks["registered"].write_text("1")
+        while not marks["done"].exists():
+            time.sleep(0.02)
+        """
+    )
+    sweeper = textwrap.dedent(
+        f"""
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, {repo_root!r})
+        import tests.conftest as c
+        c._PYTEST_TMP_ROOT = Path({str(_tmp_root)!r})
+        c._cleanup_stale_pytest_run_dirs(keep=Path({str(other)!r}))
+        Path({str(marks["swept"])!r}).write_text("1")
+        """
+    )
+
+    def wait_for(path: Path, seconds: float = 30.0) -> bool:
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            if path.exists():
+                return True
+            time.sleep(0.02)
+        return False
+
+    first = subprocess.Popen([sys.executable, "-c", registrant])  # noqa: S603
+    second: subprocess.Popen[bytes] | None = None
+    try:
+        assert wait_for(marks["paused"]), "the registrant never reached the interval"
+        second = subprocess.Popen([sys.executable, "-c", sweeper])  # noqa: S603
+        time.sleep(2.0)  # the sweep must be waiting on the mutex, not running
+        assert not marks["swept"].exists(), "a sweep ran inside the registration interval"
+        marks["go"].write_text("1")
+        assert wait_for(marks["registered"]) and wait_for(marks["swept"])
+        assert _run_lock_path(run_dir).exists(), "the sweep removed a live run's lock file"
+        assert (run_dir / "active.txt").read_text() == "in use"
+    finally:
+        marks["done"].write_text("1")
+        for process in (first, second):
+            if process is not None:
+                process.wait(timeout=60)

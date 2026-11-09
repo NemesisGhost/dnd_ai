@@ -520,31 +520,59 @@ directory, a free loopback port, `fsync` off because the data is disposable). It
 
 What it does, in order:
 
-1. **Proves the partition.** It collects the whole suite and each shard's selection and fails (exit
+1. **Checks its inputs.** Forwarded pytest arguments are an allowlist (`-x`, `-v`/`-q`, `--tb`,
+   `--maxfail`, `--durations`, `-r...`). Anything that could change the database, directories,
+   configuration, plugins or the set of tests is refused: `--basetemp` in either form, `-c`,
+   `--rootdir`, `-p`, `-o`, `--confcutdir`, `--import-mode`, `-k`/`-m`, `--deselect`, `--ignore`,
+   paths. Environment inputs that could do the same are removed from every child (`PYTEST_*`, libpq
+   `PG*` other than `PGAPPNAME`, anything named `*DATABASE_URL*`, `PYTHONPATH` and similar); the run
+   prints the names it dropped, never the values.
+2. **Proves the partition.** It collects the whole suite and each shard's selection and fails (exit
    2) unless every test file is in exactly one shard with all of its tests, so a newly added test or
    file is covered by exactly one shard. `--verify-partition-only` stops here (about 20 seconds).
-2. **Starts four servers and four pytest processes**, each with its own `DATABASE_URL`,
+3. **Starts four servers and four pytest processes**, each with its own `DATABASE_URL`,
    `CI_TEST_SHARD`, `PGAPPNAME=dnd_ai_shard_<n>`, `TEMP`/`TMP`/`TMPDIR` and `--basetemp`. The
    configuration isolation of section 6.2 is built in, without pinning defaults: pytest runs from an
-   empty directory (no `.env` is read) with the one-line plugin that drops
-   `DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS`.
-3. **Reports** progress each minute, then per shard (exit status, counts, elapsed) and in total,
+   empty directory, with the plugin that drops `DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS`.
+   `tests/conftest.py` still calls `load_dotenv()`, which would read the repository `.env` for anything
+   the environment does not already hold. So `DND_AI_TEST_DATABASE_URL` is set to the empty string
+   (python-dotenv never overrides a variable that is set); and after `.env` has loaded, the plugin
+   removes it and every `PG*` variable again, requires `DATABASE_URL` to be this shard's own URL, and
+   connects to check that the server's `data_directory` is this run's `pgdata`. A shard that fails
+   that check does not start its tests.
+   Before `createdb` or any other write, each cluster is also proved to be this run's: the port must
+   be free, the server must accept this run's password and report this run's `pgdata`, and its
+   `postmaster.pid` must name the process the run started. `pg_isready` alone only says that
+   something answers. A port that is taken, or answered by anything else, is abandoned for another
+   port without a write; after three attempts the run stops.
+4. **Reports** progress each minute, then per shard (exit status, counts, elapsed) and in total,
    including tests collected against tests executed (an all-green run must execute exactly what it
    collected). The exit status is nonzero if the partition check, any shard, or that comparison fails.
 
 Everything a run creates is in `.tmp/shards/run-<stamp>-<pid>/` (gitignored): each shard's
 `pytest.log` and `postgres.log` are always kept (the failure lines are repeated in the summary), and
 the clusters, temp and basetemp directories are removed at the end (`--keep-data` keeps them). On
-Ctrl+C the shards and servers are stopped and only that run's own directories are cleaned; on
-Windows the children are also in a Job Object, so closing the terminal or killing the script stops
-them too. Extra pytest arguments go after `--` (for example `-- -x`); `--shards N` changes the count,
-but CI's is four, set in `ci.yml`.
+Ctrl+C the shards and servers are stopped and only that run's own directories are cleaned.
+
+On Windows every child is also put in a Job Object that kills it when the runner's handle closes.
+Each step (create, configure, assign, confirm membership) is checked; the run refuses to start if
+the job cannot be set up, and a child that cannot be assigned is killed and the run stops. The one
+gap Python cannot close is the few milliseconds between a child being created and being assigned,
+before it has started anything. After a **hard kill** of the runner (Task Manager, `taskkill /F`)
+the children are gone, but nothing ran the cleanup: that run's `shard-*/pgdata`, `tmp` and
+`basetemp` directories remain under `.tmp/shards/run-<stamp>-<pid>/`. Nothing is left anywhere else
+and your own server is untouched. Delete that run directory by hand.
+
+Extra pytest arguments go after `--` (for example `-- -x`), subject to the allowlist above;
+`--shards N` changes the count, but CI's is four, set in `ci.yml`.
 
 A second cause of one run harming another was fixed alongside: every pytest session used to delete
 every other session's `.tmp/pytest-tmp-*` directory at startup, so a focused test run started while a
 full run was in progress removed the full run's temporary files. A run now holds an exclusive lock on
 `<its directory>.lock` for as long as it lives, and the sweep skips any directory whose lock is held
-(`tests/unit/test_pytest_tmp_setup.py`). The runner's own directories are outside that pattern.
+(`tests/unit/test_pytest_tmp_setup.py`). Creating that lock file and sweeping both happen under one
+short mutex file (`.tmp/sweep.mutex`), so a sweep can never see a lock file that its owner has created
+but not yet locked; a two-process test holds a registrant in exactly that interval. The runner's own directories are outside that pattern.
 
 **Resource constraints.** Four servers and four test processes: about 16 CPU threads and 31 GB of RAM
 were comfortable; a smaller machine runs the same shards slower, and a few timing-sensitive tests

@@ -29,6 +29,20 @@ src/dnd_ai/api/character_state.py whitespace=cr-at-eol
 
 # The frozen seed files are hashed byte for byte (database/seeds/frozen_manifest.json, checked by
 # tests/database/test_seed_idempotency.py), and the hashes are of LF content. With core.autocrlf=true
-# (the Windows default in this history) a fresh checkout or worktree wrote them with CRLF and 14
-# frozen-seed tests failed on the new checkout alone. Pin them to LF everywhere.
-database/seeds/*.yaml text eol=lf
+# (the Windows default in this history) a fresh checkout or worktree wrote them with CRLF and the 14
+# frozen-seed tests failed on the new checkout alone. Pin exactly those 14 files to LF, and no other
+# seed file (tests/unit/test_seed_line_endings.py keeps this list equal to the manifest).
+database/seeds/rules.abilities.yaml text eol=lf
+database/seeds/rules.classes.yaml text eol=lf
+database/seeds/rules.conditions.yaml text eol=lf
+database/seeds/rules.creature_types.yaml text eol=lf
+database/seeds/rules.damage_types.yaml text eol=lf
+database/seeds/rules.feats.yaml text eol=lf
+database/seeds/rules.features.yaml text eol=lf
+database/seeds/rules.languages.yaml text eol=lf
+database/seeds/rules.proficiency_types.yaml text eol=lf
+database/seeds/rules.resource_definitions.yaml text eol=lf
+database/seeds/rules.skills.yaml text eol=lf
+database/seeds/rules.species.yaml text eol=lf
+database/seeds/rules.spells.yaml text eol=lf
+database/seeds/rules.subclasses.yaml text eol=lf
