@@ -45,11 +45,15 @@ _STATE_NAME = "dnd_ai_request_transaction"
 # The COMMIT or ROLLBACK of a request transaction runs on its own AnyIO limiter, never FastAPI's
 # default one (which runs every synchronous handler and dependency). Handlers that wait on a lock
 # held by a request transaction can hold every default token; if that transaction's finalizer needed
-# one too, nothing could progress. The number of request transactions open at once is bounded by
-# the connection pool (SQLAlchemy's default is 5 + 10 overflow = 15), and a finalizer exists only for
-# an open one, so 32 tokens means a finalizer never queues. A finalizer also depends on nothing
-# else: `_discard`'s invalidate and close, and the connection's return to the pool, happen on the
-# same worker thread inside the same call.
+# one too, nothing could progress. Capacity: a finalizer exists only for an open request
+# transaction, and one engine's open connections are bounded by its pool (SQLAlchemy's default is
+# 5 + 10 overflow = 15), so 32 tokens covers a finalizer for every connection of one default engine
+# on the loop. It is a supported sizing, not a guarantee: the limiter is shared by every app on the
+# loop, so several engines or larger pools can need more than 32 finalizers at once, and the extra
+# ones queue. That is safe, because a finalizer's own COMMIT or ROLLBACK waits only on the database,
+# never on a handler thread. A finalizer also depends on nothing else: `_discard`'s invalidate and
+# close, and the connection's return to the pool, happen on the same worker thread inside the same
+# call.
 FINALIZER_LIMITER_TOKENS = 32
 
 _finalizer_limiters: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, CapacityLimiter]" = (
@@ -60,7 +64,8 @@ _finalizer_limiters: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, Capac
 def finalizer_limiter() -> CapacityLimiter:
     """The running event loop's finalizer limiter, created on first use. An AnyIO limiter belongs to
     the loop it is created in, so it is created lazily inside the running loop and kept per loop,
-    never at import time and never shared across the loops of different apps or test clients."""
+    never at import time. There is one per event loop: every app (and test client) running on that
+    loop shares it, and different loops never do."""
     loop = asyncio.get_running_loop()
     limiter = _finalizer_limiters.get(loop)
     if limiter is None:
