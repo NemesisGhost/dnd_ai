@@ -26,3 +26,9 @@ tests/database/test_role_grants.py whitespace=cr-at-eol
 # Same rationale: src/dnd_ai/api/character_state.py is stored with CRLF line endings
 # (as on main), so its added lines read as trailing whitespace to `git diff --check`.
 src/dnd_ai/api/character_state.py whitespace=cr-at-eol
+
+# The frozen seed files are hashed byte for byte (database/seeds/frozen_manifest.json, checked by
+# tests/database/test_seed_idempotency.py), and the hashes are of LF content. With core.autocrlf=true
+# (the Windows default in this history) a fresh checkout or worktree wrote them with CRLF and 14
+# frozen-seed tests failed on the new checkout alone. Pin them to LF everywhere.
+database/seeds/*.yaml text eol=lf
