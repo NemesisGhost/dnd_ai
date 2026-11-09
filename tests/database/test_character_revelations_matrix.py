@@ -27,6 +27,7 @@ from dnd_ai.commands.memberships import (
     transfer_campaign_ownership,
 )
 from dnd_ai.commands.recovery import recover_campaign_access_manager
+from dnd_ai.domain.access import LOCAL_AUTH_ISSUER
 from dnd_ai.domain.public_profiles import (
     CharacterRevealRequiredError,
     RevelationTargetNotActiveError,
@@ -68,7 +69,7 @@ from tests.database.test_character_revelations_keyed import (
     wait_blocked,
     wait_key_queue,
 )
-from tests.factories import make_system_role_assignment, make_user
+from tests.factories import make_external_identity, make_system_role_assignment, make_user
 from tests.lock_race_support import LockRace
 
 pytestmark = pytest.mark.database
@@ -455,6 +456,15 @@ def test_ac1_adding_an_existing_member_waits_for_the_creation_then_fails_on_the_
     postgres_engine: Engine, g: Gate, rev: Rev
 ) -> None:
     c = rev.character_id
+    with (
+        postgres_engine.begin() as connection
+    ):  # eligible to be added: only the open membership refuses
+        make_external_identity(
+            connection,
+            g.o1_user_id,
+            issuer=LOCAL_AUTH_ISSUER,
+            subject=f"ac1-{uuid.uuid4().hex[:8]}",
+        )
     add = lambda cn: add_campaign_member(  # noqa: E731
         cn,
         campaign_id=g.campaign_id,
@@ -471,7 +481,8 @@ def test_ac1_adding_an_existing_member_waits_for_the_creation_then_fails_on_the_
         pause.release()
         race.join_all()
     assert create.error is None, create.error
-    assert adding.error is not None  # refused after waiting: the member is already open
+    # Refused after waiting, by the unique index on open memberships (not by eligibility).
+    assert adding.error is not None and "ux_campaign_memberships_open" in str(adding.error)
     assert len(revelations(postgres_engine, g, c)) == 1
     with postgres_engine.connect() as connection:
         assert (

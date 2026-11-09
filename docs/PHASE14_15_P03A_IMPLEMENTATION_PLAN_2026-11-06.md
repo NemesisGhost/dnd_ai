@@ -3731,7 +3731,28 @@ The verdict and run count below were relayed by the owner in conversation. The r
 - **The last-manager test is deterministic.** `test_two_managers_concurrently_removing_their_own_memberships_cannot_both_leave_zero_managers` uses `LockRace`: the first end is paused after it holds the campaign row, the second is shown through `pg_blocking_pids` to wait on it, then the first is released. It asserts the exact ended membership, the retention refusal (a `ValueError` naming `access.manage`), the remaining manager, and one `end_campaign_membership` audit row for the membership that ended.
 - **`test_character_revelations_matrix.py` (18 tests).** M1, M2, M3 and M3' (as a command race and as a keyed HTTP request held by a real uncommitted end); S3 to S8 (recovery, relinquishing transfer, resource grant and add-member, in the orders the plan names); AC1 to AC3 (an add of an existing member, and account deactivation against creation in both orders); and the keyed expiry cases: for create and revoke, with an owner or a delegated GM, an assignment that expires while the second request waits at the key lock is refused afresh (403, no replay, no new receipt, audit row or revelation).
 - **Evidence they bite.** Removing step 4a's `FOR KEY SHARE` makes S3, S5 and S6 fail; moving the create's reservation ahead of the authority check makes the two create expiry cases fail.
+- **Done after the next review:** the HTTP equivalents of the M, S, V and AC rows (see the mapping below).
 - **Not done, and assigned to A3b:** the resolver, search and audience-projection coverage (the T82 matrix, the wider disclosure sweep, the search projection of the released summary). S9 (an in-flight reopen or insert) remains "by trace", as the plan states.
+
+**Row-to-test mapping (command-level and HTTP).** Command-level tests (`test_character_revelations_matrix.py`, `_keyed.py`) pause the first command at a named statement, which pins *where* each side waits. HTTP tests (`test_character_revelations_http_matrix.py`) run the route through `TestClient` in its own request transaction, with a real competitor, and prove the whole outcome through commit: response, receipt, command-specific audit, revelation, snapshot, membership and role state. A held side is either another HTTP request stopped at its audit insert (the test owns the `audit.change_actions` row, so the request keeps every lock it took) or a real command left uncommitted with `LockRace.hold`; the blocker is observed through `pg_blocking_pids` before release.
+
+| Row | Command-level | HTTP (both winners where the row names two) |
+|---|---|---|
+| M1, M2 | `test_m1_...`, `test_m2_...` | `test_m1_m2_a_member_revelation_and_the_end_of_its_target[create,end]` |
+| M3, M3' | `test_m3_...`, `test_m3_prime_...` | `test_m3_the_end_of_the_creator_against_the_creation[create,end]`; also `test_m3_prime_keyed_...` |
+| S1, S2 | `_keyed.py` F1/F2 tests | `test_s1_s2_the_snapshot_and_the_end_of_a_member[create,end]` |
+| S3, S4 | `test_s3_...`, `test_s4_...` | `test_s3_s4_the_snapshot_and_administrative_recovery_of_a_member[create,recovery]` (recovery has no route: a real command) |
+| S5, S6 | `test_s5_...`, `test_s6_...` | `test_s5_s6_the_snapshot_and_a_relinquishing_transfer_to_a_member[create,transfer]` (transfer route when it waits; a held real command when it wins) |
+| S7 | `test_s7_...` | `test_s7_a_resource_grant_to_a_member_waits_for_the_creation_and_both_commit` |
+| S8 | `test_s8_...` | `test_s8_a_member_being_added_is_after_the_cutoff_whoever_commits_first[create,add]` (the add route in both roles) |
+| V1, V2 | `_keyed.py` revoke/end test | `test_v1_v2_a_revoke_and_the_end_of_the_target[revoke,end]` |
+| AC1 | `test_ac1_...` (now with an eligible account, so the refusal is the open-membership index, not eligibility) | `test_ac1_adding_an_existing_member_waits_for_the_creation_then_is_refused` (409, nothing written) |
+| AC2, AC3 | `test_ac2_...`, `test_ac3_...` | `test_ac2_ac3_account_deactivation_against_the_creation[deactivation,create]` (AC3 through the admin disable route) |
+| Keyed expiry, last-manager, keyed cases 1 to 5 | retained unchanged | retained unchanged |
+
+What the HTTP versions do not pin: the exact step at which a side waits. With a request held at its audit insert, step 4a's `FOR KEY SHARE` and the snapshot insert's foreign-key locks overlap, so removing step 4a fails the command-level S3, S5 and S6 tests but not the HTTP ones; the HTTP tests prove the end-to-end result, the command-level tests pin the lock order. The transfer route is not keyed, so S5 and S6 assert its audit row rather than a receipt. S9 remains by trace.
+
+**Results with the HTTP coverage.** The 18 new HTTP cases and the strengthened command-level AC1 pass (36 in the two matrix files). The affected set (all of `tests/unit`, the five revelation files, the membership concurrency and route files, the idempotency, P3 and owner-race files, and the Phase 15 guards) passed: 1605, 0 failed. The full suite was not rerun: no source changed.
 
 **Results after the corrections.** Reruns of the affected suites on the corrected tree (all of `tests/unit`, the five revelation files, both membership concurrency files, the membership route files, the idempotency, P3, owner, delegation, recovery, group and profile concurrency files, and the Phase 15 guards): 1608 passed, 0 failed. The full suite was not rerun; it had last run on `4b1fc6b` (7291 passed, 2 failed, both addressed above).
 
