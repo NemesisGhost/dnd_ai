@@ -7,12 +7,12 @@
 
 ## Context
 
-The project originally treated AWS as optional for most work. [CONTRIBUTING.md](../CONTRIBUTING.md) told contributors that everything through Phase 7 ran against a local Docker PostgreSQL container and that "you do not need AWS to contribute"; [DEVELOPMENT.md §3](../DEVELOPMENT.md#3-local-setup) said local development needed no AWS resources; the test layers ran on testcontainers; and CI used a `postgres:15` service container. AWS entered the picture only for the final Phase 1 exit criterion.
+The project originally treated AWS as optional for most work. [CONTRIBUTING.md](../DEVELOPMENT.md) told contributors that everything through Phase 7 ran against a local Docker PostgreSQL container and that "you do not need AWS to contribute"; [DEVELOPMENT.md §3](../DEVELOPMENT.md#3-local-setup) said local development needed no AWS resources; the test layers ran on testcontainers; and CI used a `postgres:15` service container. AWS entered the picture only for the final Phase 1 exit criterion.
 
 That split produced two problems:
 
 1. **What was verified was not what was deployed.** A local container is a different PostgreSQL than the RDS instance, with different roles (`rds_iam` does not exist locally), different networking, different parameter groups, and different extension availability. Bugs that only appear on RDS — the ungated `GRANT rds_iam` in the bootstrap revision was exactly this — survive a fully green local test run.
-2. **Deployment was perpetually deferred.** Only PostgreSQL had an AWS plan ([PLAN.md §29](../PLAN.md#29-aws-terraform-deployment-plan-for-postgresql)). The application services had none: [SYSTEM_ARCHITECTURE.md §17](../architecture/SYSTEM_ARCHITECTURE.md#17-deployment-topology) listed vendor-neutral deployables ("object storage", "reverse proxy"), and [PLAN.md §29.6](../PLAN.md#296-migration-execution-mechanism) explicitly recorded that the project "needs no container registry or CI/CD platform decision yet." Each phase could therefore be called done without anything running in the environment it targets.
+2. **Deployment was perpetually deferred.** Only PostgreSQL had an AWS plan ([PLAN.md §29](../README.md)). The application services had none: [SYSTEM_ARCHITECTURE.md §17](../architecture/SYSTEM_ARCHITECTURE.md#17-deployment-topology) listed vendor-neutral deployables ("object storage", "reverse proxy"), and [PLAN.md §29.6](../README.md) explicitly recorded that the project "needs no container registry or CI/CD platform decision yet." Each phase could therefore be called done without anything running in the environment it targets.
 
 ## Decision
 
@@ -22,9 +22,9 @@ Every phase is deployed to and verified in AWS. Local execution is a fallback fo
 
 Concretely:
 
-- Migrations and the `tests/database` / `tests/scenario` suites run against the deployed `dev` RDS instance, not testcontainers ([PLAN.md §23.0](../PLAN.md#230-verification-policy)). `tests/unit` is unaffected — it uses no database. *(Per ADR 0011 this now describes CI, not the developer inner loop.)*
-- `dev` is shared, always-on infrastructure. Reachability for CI and developers is a short-lived, IP-scoped security-group rule opened and revoked per session; isolation between concurrent runs is an ephemeral database per run ([PLAN.md §29.9](../PLAN.md#299-shared-dev-verification-mechanism-ci)). `staging` and `prod` stay non-public and are migrated through the SSM-based runner in [§29.6](../PLAN.md#296-migration-execution-mechanism).
-- Application services (the FastAPI modular monolith, the background worker, and the Discord bot) run on **ECS Fargate**, with images in ECR, in the same VPC and private subnets as the database ([PLAN.md §30](../PLAN.md#30-aws-deployment-plan-for-application-services)). This also unifies the migration runner: the same image runs migrations as a one-off task, replacing the standing EC2 runner anticipated in §29.6.
+- Migrations and the `tests/database` / `tests/scenario` suites run against the deployed `dev` RDS instance, not testcontainers ([PLAN.md §23.0](../README.md)). `tests/unit` is unaffected — it uses no database. *(Per ADR 0011 this now describes CI, not the developer inner loop.)*
+- `dev` is shared, always-on infrastructure. Reachability for CI and developers is a short-lived, IP-scoped security-group rule opened and revoked per session; isolation between concurrent runs is an ephemeral database per run ([PLAN.md §29.9](../README.md)). `staging` and `prod` stay non-public and are migrated through the SSM-based runner in [§29.6](../README.md).
+- Application services (the FastAPI modular monolith, the background worker, and the Discord bot) run on **ECS Fargate**, with images in ECR, in the same VPC and private subnets as the database ([PLAN.md §30](../README.md)). This also unifies the migration runner: the same image runs migrations as a one-off task, replacing the standing EC2 runner anticipated in §29.6.
 
 ECS Fargate was chosen over EC2 + systemd and over App Runner. EC2 is cheaper and matches the SSM pattern already specified for the migration runner, but deploys become file-sync-and-restart rather than image swaps and the instances need patching. App Runner needs the least infrastructure code but gives the least control over networking and task scheduling, and offers no natural home for the background worker or for one-off jobs like migrations. Fargate keeps one artifact (a container image) and one execution model across the API, the worker, and migrations, at the cost of a container build step in CI and a per-service running cost.
 
@@ -39,7 +39,7 @@ ECS Fargate was chosen over EC2 + systemd and over App Runner. EC2 is cheaper an
 
 **Harder**
 
-- ~~Contributing now requires AWS access. [CONTRIBUTING.md](../CONTRIBUTING.md) starts with account setup rather than `docker run`.~~ Reversed by [ADR 0011](0011-local-first-development-aws-verified-delivery.md): contributing requires a local PostgreSQL 18 server; AWS access is needed only to change infrastructure, deploy, or debug a CI-only failure.
+- ~~Contributing now requires AWS access. [CONTRIBUTING.md](../DEVELOPMENT.md) starts with account setup rather than `docker run`.~~ Reversed by [ADR 0011](0011-local-first-development-aws-verified-delivery.md): contributing requires a local PostgreSQL 18 server; AWS access is needed only to change infrastructure, deploy, or debug a CI-only failure.
 - `dev` is an ongoing shared cost (~$25–35/month for the database alone, plus per-service Fargate cost) and must not be destroyed as routine idle-time hygiene — doing so breaks every other contributor's test run.
 - The inner loop is slower than a local container, and depends on network reachability to AWS.
 - CI needs AWS credentials (an OIDC-assumed IAM role), a container build step, and cleanup steps that must run even on failure so a crashed job does not leak an open security-group rule or an orphaned database.
@@ -53,9 +53,9 @@ ECS Fargate was chosen over EC2 + systemd and over App Runner. EC2 is cheaper an
 ## References
 
 - [ADR 0011](0011-local-first-development-aws-verified-delivery.md) — the amendment that moves the inner loop local
-- [PLAN.md §23.0](../PLAN.md#230-verification-policy) — the verification policy
-- [PLAN.md §29.9](../PLAN.md#299-shared-dev-verification-mechanism-ci) — reachability and test isolation mechanism
-- [PLAN.md §30](../PLAN.md#30-aws-deployment-plan-for-application-services) — application service deployment
+- [PLAN.md §23.0](../README.md) — the verification policy
+- [PLAN.md §29.9](../README.md) — reachability and test isolation mechanism
+- [PLAN.md §30](../README.md) — application service deployment
 - [SYSTEM_ARCHITECTURE.md §17](../architecture/SYSTEM_ARCHITECTURE.md#17-deployment-topology) — deployment topology
 - [DEVELOPMENT.md §3](../DEVELOPMENT.md#3-local-setup), [§6](../DEVELOPMENT.md#6-testing), [§8](../DEVELOPMENT.md#8-continuous-integration)
-- [CONTRIBUTING.md §2](../CONTRIBUTING.md#2-aws-access-optional)
+- [CONTRIBUTING.md §2](../DEVELOPMENT.md)

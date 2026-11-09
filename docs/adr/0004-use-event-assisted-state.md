@@ -5,7 +5,7 @@
 
 ## Context
 
-*Stub — to be written.* The reasoning behind this decision currently lives in [PLAN.md §2.5](../PLAN.md#25-event-assisted-state-model) and [DATABASE_CONVENTIONS.md §13-§14](../DATABASE_CONVENTIONS.md#13-timeline-state-conventions) and has not yet been extracted into a standalone record.
+The platform needs fast current-state reads and causal history without requiring every query to replay all events. Typed state and recorded events serve different purposes.
 
 ## Decision
 
@@ -13,8 +13,8 @@ Typed state tables provide fast current-state reads; events provide causality an
 
 ## Consequences
 
-*Stub — to be written.*
+Significant state changes and their causal events commit atomically. Historical event records do not replace current-state tables, and projection code must honor branch limits.
 
 ## References
 
-- [PLAN.md §2.5](../PLAN.md#25-event-assisted-state-model) and [DATABASE_CONVENTIONS.md §13-§14](../DATABASE_CONVENTIONS.md#13-timeline-state-conventions)
+- [PLAN.md §2.5](../README.md) and [DATABASE_CONVENTIONS.md §13-§14](../DATABASE_CONVENTIONS.md#13-timeline-state-conventions)

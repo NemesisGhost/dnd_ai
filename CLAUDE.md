@@ -10,7 +10,7 @@ A persistent-world simulation platform for tabletop RPGs (initially D&D 5e 2024)
 
 This repository is a restart of the platform architecture around a single supported implementation model. Legacy material from the previous iteration has been removed rather than revived, and new work is expected to follow the current design under `docs/` and the self-hosted Docker deployment path.
 
-The rules in this file are intentionally product-focused: use current architecture and schema documentation for implementation behavior, and consult the plan only for delivery status or future scope. The authoritative roadmap is [docs/PLANv2.md](docs/PLANv2.md); [docs/PLAN.md](docs/PLAN.md) is the detailed architectural record and carries the Phase 15 completion checkpoint list.
+The rules in this file are intentionally product-focused: use current architecture and schema documentation for implementation behavior, and consult the plan only for delivery status or future scope. The authoritative roadmap is [docs/PLANv2.md](docs/PLANv2.md); the [documentation index](docs/README.md) routes current contracts and active plans; the original Phase 15 checkpoint list is retained in [docs/PHASE15_VERIFICATION.md](docs/PHASE15_VERIFICATION.md).
 
 ## 3. Technology stack
 
@@ -33,7 +33,7 @@ All project documentation lives under `docs/` (never the repo root, except `READ
 4. Do not preload verification history, unrelated domains, or every architecture document together.
 5. Read a whole authoritative document only for a cross-cutting design/reconciliation review, or when targeted sections do not resolve an ambiguity. State that reason in the work summary.
 
-`docs/AI_ASSISTANT_GUIDE.md` is an **on-demand example catalog**, not part of normal startup context. Open a specific section only when this file and the authoritative topic document do not provide enough guidance. Never load it alongside this file merely because work is beginning.
+Worked examples belong beside their governing topic rule; there is no separate assistant example catalog.
 
 | Document | Use it for |
 |---|---|
@@ -44,7 +44,6 @@ All project documentation lives under `docs/` (never the repo root, except `READ
 | [docs/architecture/SYSTEM_ARCHITECTURE.md](docs/architecture/SYSTEM_ARCHITECTURE.md) | Service layering, command/query separation, transaction boundaries, and AI orchestration flow. |
 | [docs/architecture/DUNGEON_FLOW.md](docs/architecture/DUNGEON_FLOW.md) | The reference end-to-end vertical slice (dungeon/quest scenario) — the acceptance test any cross-domain design should be checked against. |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Toolchain, repository layout, local setup, Alembic workflow, testing layers, CI requirements, and definition of done. Read the section matching the task plus §10. |
-| [docs/AI_ASSISTANT_GUIDE.md](docs/AI_ASSISTANT_GUIDE.md) | On-demand worked examples, anti-patterns, and decision trees. Not a startup read and not a second copy of required context. |
 | [docs/adr/](docs/adr/) | One record per architectural decision. Read the ADRs governing the current design and only the historical ones needed for a specific decision or migration. |
 
 ## 5. Non-negotiable architectural rules
@@ -74,7 +73,7 @@ Full rules are in the linked docs — don't treat this as complete.
 - **Terraform:** one module per bounded infrastructure concern (mirroring the existing `database` / `secrets` split), one directory per environment under `terraform/environments/`, no hardcoded credentials, state and variable naming should mirror what's already in `terraform/modules/`.
 - **React:** standard component-based structure; the UI is a client like any other — it talks to the application API, not the database.
 - **New documentation** always goes under `docs/` — the only markdown files at the repository root are `README.md` and this file, and the only one under `terraform/` is a short pointer to `docs/INFRASTRUCTURE.md`.
-- **Tests and tooling:** `pytest` layers (`tests/unit` with no database; `tests/database` and `tests/scenario` against an ephemeral database — on your local PostgreSQL 18 server during development, on the deployed AWS `dev` instance in CI, per rule 11), `ruff format`/`ruff check`/`mypy src` before committing. Test production behavior and credible failure modes. Do not recursively fault-inject failures of test-only cleanup machinery without a concrete false-pass, persistent-leak, or CI-instability risk. See [docs/DEVELOPMENT.md §6](docs/DEVELOPMENT.md#6-testing).
+- **Tests and tooling:** `pytest` layers (`tests/unit` with no database; `tests/database` and `tests/scenario` against an ephemeral database — on your local PostgreSQL 18 server during development, in disposable containerized PostgreSQL 18 in CI, per rule 11), `ruff format`/`ruff check`/`mypy src` before committing. Test production behavior and credible failure modes. Do not recursively fault-inject failures of test-only cleanup machinery without a concrete false-pass, persistent-leak, or CI-instability risk. See [docs/DEVELOPMENT.md §6](docs/DEVELOPMENT.md#6-testing).
 
 ## 7. Before implementing a feature
 

@@ -12,7 +12,7 @@ Purpose:
     inventory/ownership (docs/architecture/DATABASE_MODEL.md §11). This is
     the first increment (item domain only) — encounters/combat and Foundry
     identifiers/sync records follow in later revisions of this same phase,
-    per docs/PHASE9_VERIFICATION.md.
+    per docs/DELIVERY_HISTORY.md.
 
     Definition versus instance versus state (rule 4/5): rules.item_definitions
     is the reusable mechanical concept (a generic longsword), ruleset-version-

@@ -306,7 +306,7 @@ For the exact current layout and ownership rules, see [Development Guide](docs/D
 The repository is evolving quickly, so this README deliberately avoids claiming that every product-direction feature above is already complete.
 
 - [Project Status](docs/PROJECT_STATUS.md) records dated, verification-backed implementation status.
-- [Roadmap (PLANv2)](docs/PLANv2.md) is the authoritative product roadmap; [Project Plan](docs/PLAN.md) is the detailed architectural record and carries the Phase 15 completion checkpoints.
+- [Roadmap (PLANv2)](docs/PLANv2.md) is the authoritative product roadmap; [Project Plan](docs/README.md) is the detailed architectural record and carries the Phase 15 completion checkpoints.
 - [UI Design](docs/UI_DESIGN.md) defines portal behavior and authorization-sensitive presentation.
 - [Entity Lifecycle](docs/ENTITY_LIFECYCLE.md) defines creation, approval, mutation, supersession, archival, and deletion rules.
 
@@ -318,8 +318,8 @@ Self-hosted Docker Compose is the supported deployment topology. The current sta
 
 Start with:
 
-1. [Contributing](docs/CONTRIBUTING.md) for onboarding and project workflow.
-2. [Development Guide](docs/DEVELOPMENT.md) for PostgreSQL, Python, portal, migration, and test setup.
+1. [Development Guide](docs/DEVELOPMENT.md) for onboarding, PostgreSQL, Python, portal, migrations and verification.
+2. [Documentation index](docs/README.md) for current topic authorities and active work.
 3. [Domain Model](docs/DOMAIN_MODEL.md) for shared vocabulary.
 4. [Database Conventions](docs/DATABASE_CONVENTIONS.md) before changing schema or persistence code.
 
@@ -359,43 +359,20 @@ AWS RDS support remains available as an optional database-hosting path under [`t
 
 ## Documentation map
 
-### Product and status
+The [documentation index](docs/README.md) routes current design, API, UI, development,
+operations, acceptance and active-plan references. Start there rather than loading the
+whole documentation set.
 
-- [Project Status](docs/PROJECT_STATUS.md) — verified implementation snapshot
-- [Roadmap (PLANv2)](docs/PLANv2.md) — authoritative roadmap; [Project Plan](docs/PLAN.md) — architecture and Phase 15 checkpoints
-- [UI Design](docs/UI_DESIGN.md) — portal interaction and authorization rules
-
-### Domain and architecture
-
-- [Domain Model](docs/DOMAIN_MODEL.md) — authoritative vocabulary and ownership rules
-- [Entity Lifecycle](docs/ENTITY_LIFECYCLE.md) — authoring, canon, supersession, archival, and deletion
-- [Database Conventions](docs/DATABASE_CONVENTIONS.md) — PostgreSQL and migration rules
-- [System Architecture](docs/architecture/SYSTEM_ARCHITECTURE.md) — application and deployment architecture
-- [Database Model](docs/architecture/DATABASE_MODEL.md) — logical schemas and relationships
-- [Dungeon Flow](docs/architecture/DUNGEON_FLOW.md) — end-to-end interaction and state-change scenario
-
-### Building and operating
-
-- [Contributing](docs/CONTRIBUTING.md) — contributor onboarding
-- [Development Guide](docs/DEVELOPMENT.md) — toolchain, setup, migrations, and tests
-- [Local Deployment](docs/LOCAL_DEPLOYMENT.md) — self-hosted operational requirements
-- [Quickstart](docs/QUICKSTART.md) — deployment fast path
-- [Checklist](docs/CHECKLIST.md) — deployment checks
-- [Infrastructure](docs/INFRASTRUCTURE.md) — infrastructure reference
-
-### Working with coding assistants
-
-- [CLAUDE.md](CLAUDE.md) — repository operating instructions
-- [AI Assistant Guide](docs/AI_ASSISTANT_GUIDE.md) — worked examples and anti-patterns
-- [Copilot Instructions](.github/copilot-instructions.md) — condensed repository rules
-
-### Decisions
-
-- [Architecture Decision Records](docs/adr/) — one file per accepted architectural decision
+- [Project status](docs/PROJECT_STATUS.md): recorded delivery state and remaining gates.
+- [Roadmap](docs/PLANv2.md): authoritative product order.
+- [Backlog](docs/BACKLOG.md): outstanding findings and original requirement IDs.
+- [Delivery history](docs/DELIVERY_HISTORY.md): immutable historical evidence and retired-source map.
+- [Architectural decisions](docs/adr/): accepted, amended and superseded decision records.
+- [CLAUDE.md](CLAUDE.md) and [Copilot instructions](.github/copilot-instructions.md): coding-assistant entrypoints.
 
 ## Contributing
 
-This is a pre-release project with strict data-integrity, authorization, migration, and test requirements. Before opening a change, read [Contributing](docs/CONTRIBUTING.md) and the documentation for the domain you are modifying.
+This is a pre-release project with strict data-integrity, authorization, migration, and test requirements. Before opening a change, read [Contributing](docs/DEVELOPMENT.md) and the documentation for the domain you are modifying.
 
 ## License
 

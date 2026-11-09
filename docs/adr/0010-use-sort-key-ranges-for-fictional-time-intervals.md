@@ -61,12 +61,12 @@ A real join, departure, disappearance, or return creates or closes a membership 
 
 ## Verification status
 
-Implemented and verified. Phase 3 exit tests prove boundary adjacency, overlap rejection, open-ended behavior, world agreement, and timeline scoping of `campaign.party_memberships` rows against the deployed AWS `dev` database (`tests/database/test_party_memberships.py`; see [PHASE3_VERIFICATION.md](../PHASE3_VERIFICATION.md)). A Phase 4 corrections revision (023) applied the same derived-range half of this contract to `campaign.sessions` — endpoints, half-open bounds, and an unbounded upper range for open-ended cases — deliberately without the exclusion constraint, since overlapping sessions are legitimate; see `tests/database/test_session_chronology.py` (redistributed from the former `test_phase4_corrections.py` monolith during the Phase 6 entry-gate modularization — see [DEVELOPMENT.md §2.1](../DEVELOPMENT.md#21-keep-source-and-tests-bounded-by-domain)) and [DATABASE_MODEL.md §6.4](../architecture/DATABASE_MODEL.md#64-sessions).
+Implemented and verified. Phase 3 exit tests prove boundary adjacency, overlap rejection, open-ended behavior, world agreement, and timeline scoping of `campaign.party_memberships` rows against the deployed AWS `dev` database (`tests/database/test_party_memberships.py`; see [PHASE3_VERIFICATION.md](../DELIVERY_HISTORY.md)). A Phase 4 corrections revision (023) applied the same derived-range half of this contract to `campaign.sessions` — endpoints, half-open bounds, and an unbounded upper range for open-ended cases — deliberately without the exclusion constraint, since overlapping sessions are legitimate; see `tests/database/test_session_chronology.py` (redistributed from the former `test_phase4_corrections.py` monolith during the Phase 6 entry-gate modularization — see [DEVELOPMENT.md §2.1](../DEVELOPMENT.md#21-keep-source-and-tests-bounded-by-domain)) and [DATABASE_MODEL.md §6.4](../architecture/DATABASE_MODEL.md#64-sessions).
 
 ## References
 
 - [DATABASE_CONVENTIONS.md §12](../DATABASE_CONVENTIONS.md#12-temporal-conventions)
 - [DATABASE_MODEL.md §6.3](../architecture/DATABASE_MODEL.md#63-parties-and-membership)
-- [PLAN.md §5.4](../PLAN.md#54-parties)
-- [PLAN.md Phase 3](../PLAN.md#phase-3-timelines-and-campaigns)
+- [PLAN.md §5.4](../README.md)
+- [PLAN.md Phase 3](../README.md)
 - [ADR 0003](0003-separate-world-timeline-and-campaign.md)

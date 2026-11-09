@@ -66,7 +66,7 @@ Deliberate scoping decisions:
       (DOMAIN_MODEL.md §27), districts are just child locations via
       parent_location_id, and control/damage state is timeline state
       (campaign.location_state, revision 040). Same reasoning Phase 4 used to
-      keep character.npcs minimal (docs/PHASE4_VERIFICATION.md, "Deliberate
+      keep character.npcs minimal (docs/DELIVERY_HISTORY.md, "Deliberate
       Scoping Decisions").
     - world.buildings.building_use is free text, not a lookup. Same reasoning
       as character.character_senses.sense_type (Phase 4): no documented

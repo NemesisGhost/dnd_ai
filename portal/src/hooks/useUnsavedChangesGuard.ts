@@ -36,7 +36,7 @@ export interface UnsavedChangesGuard {
 //   would dispose its editor, change the data scope or perspective, or strand an unresolved
 //   operation declares it with `disposingQuery`, and that change is held like any departure.
 //   No option means none, so a caller that passes nothing behaves as before. Each caller's
-//   classification: docs/PHASE14_15_P02_NAVIGATION_ROUTE_AND_GUARD_AUDIT.md.
+//   classification: docs/UI_DESIGN.md.
 //
 // Entered values are deliberately never written to browser storage, so an
 // expired session loses them; that is an accepted limitation, not an oversight.

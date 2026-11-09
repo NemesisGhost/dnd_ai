@@ -536,7 +536,7 @@ The import subsystem is intentionally isolated from canonical tables until promo
 
 The API, worker, and adapter will share a single container image; the entrypoint selects the role, so there is one artifact to build and promote — see [DEVELOPMENT.md §2](../DEVELOPMENT.md#2-repository-layout) and [§3.6](../DEVELOPMENT.md#36-self-hosted-docker-compose).
 
-**AWS remains an optional, no-longer-continuously-verified deployment path.** `terraform/modules/database`/`secrets` and `terraform/environments/dev` are retained for anyone who chooses to host PostgreSQL on AWS RDS instead; an ECS Fargate/Lambda compute path for the application services remains documented, unbuilt planning material in [PLAN.md §30](../PLAN.md#30-aws-terraform-deployment-plan-for-postgresql)–[§31](../PLAN.md#31-aws-deployment-plan-for-application-services), not something any phase currently deploys to. Nothing in this project's supported, CI-verified path requires AWS.
+**AWS remains an optional, no-longer-continuously-verified deployment path.** `terraform/modules/database`/`secrets` and `terraform/environments/dev` are retained for anyone who chooses to host PostgreSQL on AWS RDS instead; an ECS Fargate/Lambda compute path for the application services remains documented, unbuilt planning material in [PLAN.md §30](../README.md)–[§31](../README.md), not something any phase currently deploys to. Nothing in this project's supported, CI-verified path requires AWS.
 
 ## 18. Security model
 
@@ -622,7 +622,7 @@ Do not prematurely split domains into distributed microservices while core invar
 
 ### Integration tests
 
-Run against a local/self-hosted PostgreSQL 18 server during development and against a disposable containerized PostgreSQL 18 instance in CI — never against SQLite or a mock ([PLAN.md §24.0](../PLAN.md#240-verification-policy)):
+Run against a local/self-hosted PostgreSQL 18 server during development and against a disposable containerized PostgreSQL 18 instance in CI — never against SQLite or a mock ([PLAN.md §24.0](../README.md)):
 
 - PostgreSQL constraints and functions
 - transactional state/event updates

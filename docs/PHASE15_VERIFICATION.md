@@ -1,6 +1,6 @@
 # Phase 15.1 Verification
 
-Evidence for Phase 15.1 (GM world-content definitions) on branch `phase15/gm-authoring`, recorded against [PLAN.md Phase 15](PLAN.md) and [ADR 0015](adr/0015-typed-world-content-authoring.md). **Status: implementation complete and merged (PR #65, `60d5bc9`); automated gates green; manual browser and accessibility verification NOT performed** (see below). Phase 15.1 is a **subset** of Phase 15: **Phase 15 as a whole is incomplete**, and the remaining campaign-operations and world-structure work is the checkpoint sequence in [PLAN.md Phase 15](PLAN.md). Phase 16 is blocked by the Phase 15 completion gate.
+Evidence for Phase 15.1 (GM world-content definitions) on branch `phase15/gm-authoring`, recorded against [PLAN.md Phase 15](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md) and [ADR 0015](adr/0015-typed-world-content-authoring.md). **Status: implementation complete and merged (PR #65, `60d5bc9`); automated gates green; manual browser and accessibility verification NOT performed** (see below). Phase 15.1 is a **subset** of Phase 15: **Phase 15 as a whole is incomplete**, and the remaining campaign-operations and world-structure work is the checkpoint sequence in [PLAN.md Phase 15](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md). Phase 16 is blocked by the Phase 15 completion gate.
 
 **Disclosed limitations (2026-10-05):** audit rows written by the 15.1 commands *before checkpoint 15.2A-3* copy up to 1,000 characters of narrative per field into `audit.change_log.changed_fields`, and the 15.1 authoring routes stored the full authoring view, including GM-only notes and background, in idempotency replay rows. **New writes no longer do either (15.2A-3, resolved).** Existing rows were scrubbed by checkpoint 15.2A-4 (migration 135, owner decision recorded in the working session); only backups taken before it still hold the old content. Audience-preview reads are audited as of 15.2A-3.
 
@@ -639,7 +639,7 @@ Local gates for 15.2A-4: `ruff format`/`ruff check` and `mypy src` clean; full P
 
 ## Checkpoint 15.4 — Completion and acceptance (automated part)
 
-Commit(s) on `phase15/completion`. **Status: the automated part is done; the checkpoint is NOT closed.** What remains is the owner's manual acceptance (recorded in [PHASE15_MANUAL_ACCEPTANCE.md](PHASE15_MANUAL_ACCEPTANCE.md)), a CI run on the final head (none has been made on this branch), and the merge. **Phase 15 must not be called complete until those exist.**
+Commit(s) on `phase15/completion`. **Status: the automated part is done; the checkpoint is NOT closed.** What remains is the owner's manual acceptance (recorded in [PHASE15_MANUAL_ACCEPTANCE.md](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PHASE15_MANUAL_ACCEPTANCE.md)), a CI run on the final head (none has been made on this branch), and the merge. **Phase 15 must not be called complete until those exist.**
 
 | Requirement (plan 15.4) | Evidence |
 |---|---|
@@ -663,7 +663,7 @@ Final local gate line (head of `phase15/completion` before this commit): `ruff f
 
 ## Checkpoint 15.4 correction — supported-interface scenario and route-manifest guard
 
-Corrections after an independent acceptance review of `cabe08b`. **Phase 15 is still NOT complete:** the manual matrix ([PHASE15_MANUAL_ACCEPTANCE.md](PHASE15_MANUAL_ACCEPTANCE.md)) is unfilled and no CI run on the final head has been recorded. Phase 16 stays blocked.
+Corrections after an independent acceptance review of `cabe08b`. **Phase 15 is still NOT complete:** the manual matrix ([PHASE15_MANUAL_ACCEPTANCE.md](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PHASE15_MANUAL_ACCEPTANCE.md)) is unfilled and no CI run on the final head has been recorded. Phase 16 stays blocked.
 
 | Area | Result |
 |---|---|
@@ -689,7 +689,7 @@ The unified Knowledge claim page was reorganised into the header and three prese
 
 ## Knowledge Member preview workspace
 
-Knowledge is an expandable sidebar item (Claims, Member preview) for callers with `access.manage`, and a read-only Member preview workspace replaces the per-page "Preview as member" controls on the Knowledge collection and claim pages. Documented in [UI_DESIGN.md](UI_DESIGN.md) §5.6 and [PHASE13E_ACCESS_CONTRACT.md](PHASE13E_ACCESS_CONTRACT.md) §3r.
+Knowledge is an expandable sidebar item (Claims, Member preview) for callers with `access.manage`, and a read-only Member preview workspace replaces the per-page "Preview as member" controls on the Knowledge collection and claim pages. Documented in [UI_DESIGN.md](UI_DESIGN.md) §5.6 and [PHASE13E_ACCESS_CONTRACT.md](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PHASE13E_ACCESS_CONTRACT.md) §3r.
 
 | Area | Result |
 |---|---|
@@ -866,7 +866,7 @@ Source: PLAYER_CHARACTER_RELATIONSHIPS_PLAN.md (untracked working file). A perso
 - **Policy defaults taken (plan §9).** Q1: relationship `description` is GM-only, so it is not shown. Q2: not-yet-started relationships follow existing policy and are shown, labelled **Not started**. **R1b was not done**: the existing `/world/relationships` list and `/relationships/{id}` detail still return `description` (and the detail the shared row's tone and interpretation) to readers. That is a pre-existing over-projection against ADR 0016 and remains an open owner decision; this view does not depend on it.
 - **Portal.** `CharacterRelationshipsSection` mounts only without `canon.edit`, reads only the reader route (never an `/authoring/` route), has no form or mutation control, keys its state by the request path (a late answer for a previous character cannot appear), and needs no party or perspective. Expanding a row sends no request. The editor **Manage** row gains a **Relationships** link to the World workspace section; no second panel is mounted for editors.
 - **Automated.** `tests/database/test_api_character_relationships_reader.py` (24): a qualifying relationship with names, roles and links; the exact visible id set; empty result; undiscoverable and draft counterparts (also for a `canon.edit` caller); archived, private ownership and private membership excluded; a concealed route excluded by the shared predicate; ended, not-started and undated periods; an unset clock; a branch's inherited clock and exact-timeline status; discover-only counterpart without a link; typed fields; symmetric roles; orientation from either participant; seven GM-only sentinel values absent from player and editor bodies; the gate matrix (outsider 404, member without `campaign.view` 403, no character tier the same 404 as a missing character, other world, draft NPC, `campaign.view` deny); party and perspective parameters ignored; id parity with `/world/relationships?related_entity_id=`; a newly granted path makes a counterpart appear. Portal: `CharacterRelationshipsSection.test.tsx` and `relationshipForm.test.ts` (20: states, retry, refused read, badges, accessible expansion with no request, editor renders nothing and sends nothing, only the reader URL, stale-request handling, no unsent field rendered) and `App.characterRelationships.test.tsx` (3: full tier and summary tier without a party, editor link without a duplicate panel). The Phase 15 route manifest pins one more member read (29).
-- **Not run.** No browser or assistive-technology pass (desktop and 390px layouts, both themes, keyboard-only use of the **Details** toggle, screen-reader announcements); see the Character Relationships section of [PHASE15_MANUAL_ACCEPTANCE.md](PHASE15_MANUAL_ACCEPTANCE.md). The checks that need a real browser were not performed, so the layout reuse of the roster styles at narrow widths is untested visually.
+- **Not run.** No browser or assistive-technology pass (desktop and 390px layouts, both themes, keyboard-only use of the **Details** toggle, screen-reader announcements); see the Character Relationships section of [PHASE15_MANUAL_ACCEPTANCE.md](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PHASE15_MANUAL_ACCEPTANCE.md). The checks that need a real browser were not performed, so the layout reuse of the roster styles at narrow widths is untested visually.
 - **Limits.** With the built-in `player` role holding only `campaign.view`, edges to NPCs appear only after the GM gives the player a discover-tier path to that NPC (existing reader policy); the section says "visible", never "all". The section is not on `/world/character/:id` for readers.
 
 ### Player-facing organization view
@@ -878,7 +878,7 @@ Source: ORGANIZATION_PLAYER_VIEW_PLAN.md (untracked working file). A person with
 - **Decisions left open (plan §11).** D-A: the `STRUCTURAL` business type, operating status and unit type, and `reputation`, are not projected to readers. D-B: the editor roster still marks an open stint "(current)" even before it starts; readers get the clock-based badges instead.
 - **Automated.** `tests/database/test_api_organization_reader.py` (12): the council's public details and no GM notes or time ids; ideology for a faction and no business structural fields; the exact reader row set (own PC, summary and discover-only NPCs, an organization without an office, an archived member organization); an undiscoverable member's id, name and office, a private stint, an unpublished member and an archived membership absent from the body text, with no vacancy wording; a "Public Council" government grants nothing; a reader with no character relationships; a discover grant lists without linking; `can_open` by tier and category; `period_status`/`as_of` on the primary clock (ended, in effect, not started) and on a branch's inherited clock; an unset clock; outsider 404, capless 403, unpublished 404 for the reader and 200 for the editor, party/perspective inputs ignored, entity-targeted `campaign.view` deny on both routes; the editor's full row set and field shape. The existing roster, character-reader, World explorer and organization query suites pass unchanged. Portal: `OrganizationMembersReader.test.tsx` (12: rows, links only on `can_open`, badges, "No office recorded" only for a visible row, empty, loading/error/retry, refused, the single GET with no party context, extra fields not rendered, previous organization not shown while the next loads, a late answer ignored, a campaign change re-read), `WorldOrganizationDetailPage.test.tsx` (11: the new facts present and absent, the Ideology panel, Members and offices as an `h2` inside the page section with one `h1`, the same request whatever the type or name), and two App-level tests (a player's page has the reader section with no controls and no write, authoring or relationship request; an editor's workspace shows the editor roster and no reader section). `OrganizationMembers.test.tsx` passes unchanged after its period and office cells moved to shared helpers.
 - **Scripted real-browser pass** (Chrome via playwright-core; throwaway database and API/Vite on 8001/5174; the dev dataset plus memberships on Brindlehaven Council): 41 checks passed. As Player A: Overview shows Type, Form of government, Current status and Founded; Members and offices is an `h2` inside the page section with *As of Year 1700*; four rows (the player's character linked as Page with **Ended** and as Speaker (First seat), The Cartographers' Guild linked with "No office recorded", The Hollowmere Magistracy with **Not started**); an undiscoverable NPC, two private stints and a draft member organization absent from the page and from the members response; no controls in the section; no write, authoring or relationship request (a first run recorded one stray call whose path was not captured; the re-run recorded none); no horizontal scroll at 390px with rows stacked; Tab reaches the four member links in order; with the members request aborted the section shows the alert with **Try again**, the rest of the page stays, and retrying recovers. As the GM, `?section=members` shows the private stints, **Add a member** and **Set status**, one roster and no reader section.
-- **Not run.** Screen-reader announcements, the second-player and viewer-grant steps, the dark theme, and saving in the GM roster in a browser; see the Organization view section of [PHASE15_MANUAL_ACCEPTANCE.md](PHASE15_MANUAL_ACCEPTANCE.md).
+- **Not run.** Screen-reader announcements, the second-player and viewer-grant steps, the dark theme, and saving in the GM roster in a browser; see the Organization view section of [PHASE15_MANUAL_ACCEPTANCE.md](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PHASE15_MANUAL_ACCEPTANCE.md).
 - **Limits.** L1: an office is text on its membership (D-19), so an office whose holder is withheld cannot be shown without revealing that membership; nothing establishes a vacancy. L2: a public membership is not disclosure; with the `player` role's `campaign.view` baseline, NPC members appear only after the GM gives the player a discover-tier path. L3: memberships and founding are world definitions shared by every timeline; only status and the period-status clock are per timeline. L4: the roster read is unbounded.
 
 ### Session travel fix (session link, history and review)
@@ -887,7 +887,7 @@ Source: SESSION_TRAVEL_UI_AUDIT.md and SESSION_TRAVEL_FIX_PLAN.md (untracked wor
 
 Automated evidence: `tests/database/test_api_session_travel.py` (18 tests: linkage and standalone, no-op and mixed, invalid/foreign/ended/archived sessions with identical 404, eligibility equals the `log` available action, stale session on a no-op, authority, atomic rollback, idempotent replay and cross-session mismatch, explicit and default time with the clock unchanged, in-world ordering, differing origins, party and individual union, player projections and GM-note redaction, no knowledge or access rows added, voided events and denied sessions, event-detail names); a travel-versus-end race in `test_session_play_concurrency.py`; the route-manifest pin in `test_phase15_acceptance_guards.py` (+1 guarded route); portal `TravelSection`, `SessionActivity`, `SessionRunPage` (`App.sessionRun`), `SessionDetailPage` and event-page tests. The full database and scenario suites, ruff, mypy and the portal's tsc, eslint and vitest passed. `tests/unit/test_config.py`'s origin-default test fails on this machine because the gitignored `.env` adds a tunnel origin; it does not touch this change. `alembic check` could not be run from this shell (no `script_location`); there is no migration.
 
-Not run: no browser or assistive-technology pass (no browser tooling was available in the implementing session), so desktop and 390px layouts, the supported themes and the keyboard-only pass are unverified; see the Session travel section of [PHASE15_MANUAL_ACCEPTANCE.md](PHASE15_MANUAL_ACCEPTANCE.md).
+Not run: no browser or assistive-technology pass (no browser tooling was available in the implementing session), so desktop and 390px layouts, the supported themes and the keyboard-only pass are unverified; see the Session travel section of [PHASE15_MANUAL_ACCEPTANCE.md](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PHASE15_MANUAL_ACCEPTANCE.md).
 
 Historical data: travel recorded before this change has a null `session_id` and is not listed in any session. It is not inferred from timestamps, participants or history. Events are immutable and no command edits `session_id`, so recovering it needs a separate audited, single-event "attach event to session" correction with its own ADR (not built). Event detail names the places of old travel for editors. Limitations: no pagination of session events or travel; who may travel is unchanged (party members and NPCs outside the session can move; the preview marks them); a hidden-traveler travel event still shows as a bare entry to session viewers; location effects are not reversible by correction; timeline location inheritance for branches is untouched.
 
@@ -906,3 +906,55 @@ Automated: 2 backend tests (`test_api_world_explorer.py` danger level for GM and
 Real-browser pass (throwaway database, API on 8001, Vite on 5174, headless Chrome, the Hearthstone and Iron Ember themes): the Areas, Connections, Contents and Area now pages at 1280, 768, 390 and 320 px and the Areas list at 1920 px showed no horizontal scroll in either theme, for a dungeon with 0, 4 and 30 areas (long names and kinds wrap; the long summary clamps to one line). Observed: Add area by keyboard (focus in the name, the form cleared and focused again after the add, announcement "Area Boiler Room added as a draft", the page stayed on the list); the row Edit then Cancel returning to the dungeon's Areas; the connection editor focus and return of focus to its Edit; the removal confirmation focusing Cancel; a half-typed area surviving a section switch and named by the leave guard; `?section=structure` becoming `areas`; the archive block copy; the Review tally; a hazard status and the area state recorded after the campaign time was set (before that, "Set the campaign time first."); no write on navigation. As a player: a published dungeon and area read 200, the draft dungeon and the draft area 404, `danger_level` was `null` and absent from the body, and no authoring request was sent; as the GM the Details still show the rating.
 
 Not done: no screen-reader or other assistive-technology pass; keyboard behaviour was exercised only on the paths above; the other supported themes were not each viewed; the lifecycle walk was partial (the area publish block, the dungeon archive block and the area state recording were observed; publishing the dungeon then its area, archiving the areas and then the dungeon were covered by the existing backend tests, not re-walked in the browser). `WorldRecordWorkspace.test.tsx` was run in the full portal suite; two unrelated tests (`CreateCalendarPage`, `CreateLocationPage`) failed once under load and passed on rerun.
+
+## Original authoring checkpoint sequence and exit obligation
+
+The following numbered sequence is retained from PLAN's Phase 15 section for traceability.
+Its historical 2026-10-06 implementation summary is not the current expanded Phase 15 scope.
+PLANv2 and the active P03-A plan govern later additions; PROJECT_STATUS summarizes present
+recorded gates. None of this consolidation records acceptance or changes existing results.
+
+1. 15.2-0 status and roadmap reconciliation (documentation only)
+2. 15.2A-1 production relationship-capability defaults
+3. 15.2A-2 reporting-role (`app_read_only`) boundary
+4. 15.2A-3 stop narrative leakage into audit and idempotency storage; audited, closed audience preview
+5. 15.2A-5 private-data policy foundation (Phase 16 prerequisite)
+6. 15.2R canonical revision capture
+7. 15.2W-1 calendars and world-time points · 8. 15.2W-2 campaign clock
+9. 15.2B-1 player-character identity · 10. 15.2B-2 character builds and initial state
+11. 15.2C-1 party definition · 12. 15.2C-2 temporal party membership
+13. 15.2D-1 session definition and lifecycle · 14. 15.2D-2 participation, running a session, manual log
+15. 15.2E-1 event recording and correction · 16. 15.2E-2a quest definition completion · 17. 15.2E-2b quest runtime · 18. 15.2E-3 knowledge runtime
+19. 15.3A-1 dungeons · 20. 15.3A-2a relationship authoring kernel · 21. 15.3A-2b organization membership, offices, status · 22. 15.3A-2c routes and travel · 23. 15.3A-3 NPC portrayal and runtime
+24. 15.3B-1a item definitions · 25. 15.3B-1b item instances and custody · 26. 15.3B-2a encounter preparation · 27. 15.3B-2b encounter operation
+28. 15.3C-1 source attachment and provenance · 29. 15.3C-2 review queues and revision comparison
+30. 15.2A-4 existing-data scrub (owner-gated; requires a recorded decision before it can merge)
+31. 15.4 completion and acceptance (clean-database exit scenario, manual validation)
+
+Maps and images remain deferred (no storage contract). Phase 16 is blocked until checkpoint 31 closes.
+
+#### 15.8 GM authoring exit scenario
+
+Using only a clean deployment and the portal, a GM must be able to:
+
+1. Create a world, timeline, and campaign.
+2. Create two locations, an organization, an NPC, a player character, an item, a quest, and a session.
+3. Invite a player and establish the intended character relationship.
+4. Record the character acquiring the item and meeting the NPC.
+5. Record a discovery and quest progress during the session.
+6. Complete the session and view the resulting timeline, quest, character, and knowledge state.
+7. Correct one mistaken event while preserving the original audit/provenance trail.
+8. Archive and restore an authored record without exposing it while archived.
+
+No SQL, seed script, importer, Foundry, or AI provider may be used.
+
+#### 15.9 Phase 15 exit criteria
+
+- Every entity used in the GM exit scenario has supported create and maintenance commands.
+- All portal write options come from server-authoritative catalogs and capabilities.
+- State changes are temporal where the model requires history.
+- Definition edits do not silently rewrite historical state.
+- Cross-world, cross-timeline, and cross-campaign requests are rejected without disclosure.
+- Audit and provenance identify real changes without storing reusable secrets.
+- The same commands are suitable for later import and integration clients.
+- Focused tests, full suites, migrations, lint, types, build, and final-head CI pass.

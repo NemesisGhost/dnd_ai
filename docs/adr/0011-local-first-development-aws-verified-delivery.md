@@ -24,16 +24,16 @@ The RDS-specific defects ADR 0008 was written to catch (the ungated `GRANT rds_i
 Split the two concerns ADR 0008 fused together:
 
 - **Development and iteration happen against a local PostgreSQL 18 server.** This is the default inner loop, not a fallback. `alembic upgrade head`, `tests/database`, and `tests/scenario` run locally, with no AWS credentials, no security-group rule, and no network dependency.
-- **Delivery is still verified on AWS.** CI (`.github/workflows/ci.yml`) continues to run migrations and the full `tests/database`/`tests/scenario` suites against the deployed `dev` RDS instance, using the ephemeral-database and scoped-ingress mechanism in [PLAN.md §29.9](../PLAN.md#299-shared-dev-verification-mechanism-ci). A green run on RDS remains a merge requirement and remains the authoritative verification of a commit.
+- **Delivery is still verified on AWS.** CI (`.github/workflows/ci.yml`) continues to run migrations and the full `tests/database`/`tests/scenario` suites against the deployed `dev` RDS instance, using the ephemeral-database and scoped-ingress mechanism in [PLAN.md §29.9](../README.md). A green run on RDS remains a merge requirement and remains the authoritative verification of a commit.
 
 Concretely:
 
 - The local server is **PostgreSQL 18.x**, matching the RDS engine version the project pins ([DATABASE_CONVENTIONS.md §2.1](../DATABASE_CONVENTIONS.md#21-supported-postgresql-version)). A local major version that differs from the deployment target is a defect, not a preference — it reintroduces exactly the class of divergence ADR 0008 identified.
 - A developer needs **no AWS account** to contribute application or schema code. AWS access is needed to change infrastructure, to deploy, or to investigate a CI failure that does not reproduce locally.
-- Application services still run only on **ECS Fargate in AWS** ([PLAN.md §30](../PLAN.md#30-aws-deployment-plan-for-application-services)). There is no local deployment topology and none is being added; this ADR changes where the *database* under test lives, not where services run.
-- `staging` and `prod` are unaffected. They remain non-public and migrated through the mechanism in [§29.6](../PLAN.md#296-migration-execution-mechanism).
+- Application services still run only on **ECS Fargate in AWS** ([PLAN.md §30](../README.md)). There is no local deployment topology and none is being added; this ADR changes where the *database* under test lives, not where services run.
+- `staging` and `prod` are unaffected. They remain non-public and migrated through the mechanism in [§29.6](../README.md).
 
-**"It passes locally" is still not a sufficient verification claim.** It is now the expected *first* claim, and the phase exit review ([PLAN.md §23.1](../PLAN.md#231-phase-exit-review)) records both: what passed locally and the CI run ID that proved it on RDS. A phase closes on the second, not the first.
+**"It passes locally" is still not a sufficient verification claim.** It is now the expected *first* claim, and the phase exit review ([PLAN.md §23.1](../README.md)) records both: what passed locally and the CI run ID that proved it on RDS. A phase closes on the second, not the first.
 
 ## Consequences
 
@@ -61,8 +61,8 @@ Concretely:
 ## References
 
 - [ADR 0008](0008-aws-first-deployment-and-verification.md) — the decision this amends
-- [PLAN.md §23.0](../PLAN.md#230-verification-policy) — the verification policy this ADR sets
-- [PLAN.md §29.9](../PLAN.md#299-shared-dev-verification-mechanism-ci) — the CI mechanism that remains AWS-based
-- [PLAN.md §30](../PLAN.md#30-aws-deployment-plan-for-application-services) — application deployment, unchanged
+- [PLAN.md §23.0](../README.md) — the verification policy this ADR sets
+- [PLAN.md §29.9](../README.md) — the CI mechanism that remains AWS-based
+- [PLAN.md §30](../README.md) — application deployment, unchanged
 - [DEVELOPMENT.md §3](../DEVELOPMENT.md#3-local-setup) — local PostgreSQL setup
 - [DATABASE_CONVENTIONS.md §2.1](../DATABASE_CONVENTIONS.md#21-supported-postgresql-version) — the version pin

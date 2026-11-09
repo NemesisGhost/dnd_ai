@@ -129,7 +129,7 @@ tracked *only* through one party's independent `campaign.quest_state` row
 (no campaign-wide row) was silently excluded from the GM's own list. See
 `list_campaign_quests`'s own docstring for the corrected
 `include_all_parties`/`denied_quest_ids` contract and
-docs/PHASE13D_BACKEND_READINESS.md §5 for the full account.
+docs/api/READ_API.md §5 for the full account.
 """
 
 import uuid
@@ -402,7 +402,7 @@ def _resolve_quest_response_inner(
     # through that caller's own party, list_quests_endpoint (which resolves
     # the perspective) would include the quest while this route 404'd it,
     # breaking the shared list/detail eligibility guarantee. See
-    # docs/PHASE13D_BACKEND_READINESS.md §4.2.
+    # docs/api/READ_API.md §4.2.
     include_hidden = access.has_capability(_QUEST_MANAGE_CAPABILITY, quest_id=quest_id)
     is_gm = access.has_capability(_QUEST_MANAGE_CAPABILITY)
 

@@ -428,7 +428,7 @@ The same `InputBundle`, `Contribution`, `DerivedValue` and `Finding` types are u
 
 ## References
 
-- [PLANv2.md](../PLANv2.md) §6.1, 19.0–19.8; [PLAN.md](../PLAN.md) §6.1–6.3, §18.3
+- [PLANv2.md](../PLANv2.md) §6.1, 19.0–19.8; [PLAN.md](../README.md) §6.1–6.3, §18.3
 - Code: `src/dnd_ai/domain/character_calculations.py`, `src/dnd_ai/queries/{character_sheet,character_build_resolution}.py`, `src/dnd_ai/commands/{character_builds,character_state,encounters,item_operations,event_corrections}.py`, `src/dnd_ai/persistence/tables/{rules,characters,campaign,items,core,ai}.py`, `src/dnd_ai/api/reference_corpus.py`, `database/migrations/versions/{022,033,036}_*.py`
 - [DATABASE_CONVENTIONS.md](../DATABASE_CONVENTIONS.md) §5.7, §18, §34
 - [R19_FOUNDATION_IMPLEMENTATION_PLAN.md](../R19_FOUNDATION_IMPLEMENTATION_PLAN.md)

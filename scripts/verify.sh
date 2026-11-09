@@ -27,7 +27,7 @@
 # is never swallowed: it fails an otherwise-successful run, and — if a stage
 # already failed — is reported alongside that failure without overriding it
 # as the primary cause. This is the same guaranteed-teardown discipline
-# docs/PHASE5_VERIFICATION.md's exit reviews established for the test-only
+# docs/DELIVERY_HISTORY.md's exit reviews established for the test-only
 # concurrency helper.
 #
 # `migration-round-trip` runs `alembic downgrade base` then `upgrade head`

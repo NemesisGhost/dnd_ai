@@ -1,5 +1,5 @@
 """Audience-filtered browse/search/detail reads for the Phase 13D World
-Explorer screen (docs/UI_DESIGN.md §5.4, docs/PHASE13D_BACKEND_READINESS.md
+Explorer screen (docs/UI_DESIGN.md §5.4, docs/api/READ_API.md
 §3/§9).
 
 Every existing world read in this codebase is a single-resource "get by
@@ -1117,7 +1117,7 @@ def get_item_view(
 ) -> ItemDetailView:
     """One `world.item_instances` row plus its current `campaign.item_state`.
     Ownership/inventory (who currently holds it) is deliberately deferred —
-    it needs its own audience design (docs/PHASE13D_BACKEND_READINESS.md
+    it needs its own audience design (docs/api/READ_API.md
     §9.3) and no World Explorer bullet requires it for the MVP."""
     if item_instance_id in denied_entity_ids:
         raise WorldResourceNotFoundError(f"item {item_instance_id} denied to caller")

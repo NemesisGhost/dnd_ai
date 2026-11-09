@@ -5,7 +5,7 @@
 
 ## Context
 
-*Stub — to be written.* The reasoning behind this decision currently lives in [PLAN.md §2.2](../PLAN.md#22-use-class-table-inheritance) and [DATABASE_CONVENTIONS.md §7](../DATABASE_CONVENTIONS.md#7-table-inheritance-conventions) and has not yet been extracted into a standalone record.
+Characters, locations and other entity subtypes share identity and provenance but require different structured fields. A shared UUID and foreign-key chain preserve one identity without EAV or PostgreSQL native inheritance.
 
 ## Decision
 
@@ -13,8 +13,8 @@ Entity subtypes use class-table inheritance rooted at `core.entities`, with each
 
 ## Consequences
 
-*Stub — to be written.*
+Subtype creation must create each required ancestor in one transaction. Constraints and joins are explicit; a subtype does not generate another UUID.
 
 ## References
 
-- [PLAN.md §2.2](../PLAN.md#22-use-class-table-inheritance) and [DATABASE_CONVENTIONS.md §7](../DATABASE_CONVENTIONS.md#7-table-inheritance-conventions)
+- [PLAN.md §2.2](../README.md) and [DATABASE_CONVENTIONS.md §7](../DATABASE_CONVENTIONS.md#7-table-inheritance-conventions)

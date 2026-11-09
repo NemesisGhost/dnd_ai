@@ -211,7 +211,7 @@ Evidence methods: **H** human/manual in the portal · **S** scripted real-browse
 | CP-9a | Event explanations (party join, build activation, clock, correction) | G3, G4, I2, I3 | 19.explain, 21.explain, 25.wrong-title, 15.cause |
 | CP-9b | Optional clock cause + member-safe explanation | I3 | 15.cause |
 | CP-10 | Confirmed-write/failed-refresh for quest, item, claim; shared plumbing | RC-04…RC-07; RC-10 for the deferred callers | RC-04…RC-10, NV-* |
-| DEF-001 fix (candidate `7990225…`, not frozen) | The same contract for every other write that reads its result back (26 operations: [PHASE15_DEF001_INVENTORY.md](PHASE15_DEF001_INVENTORY.md) §4.1) | RC-10 (rewritten); retest set in the environment document §9.2 | RC-03…RC-10, TC-14/15/19/20/21/24/25/33/34/35/36/37/38/42/43/44/50/51/53 and the lifecycle-step rows; **no human row executed**. Scripted browser retest on the reviewed candidate `38d2865…` (2026-10-26): RC-03…RC-09 and the exercised variants of all 26 operations pass except DEF-005 (reproduced) and DEF-006 (RC-06 authoring-read variant); remaining coverage per operation in [PHASE15_DEF001_BROWSER_RETEST.md](PHASE15_DEF001_BROWSER_RETEST.md) §3; candidate not frozen |
+| DEF-001 fix (candidate `7990225…`, not frozen) | The same contract for every other write that reads its result back (26 operations: [RC-10 operation inventory](#rc-10-operation-inventory)) | RC-10 (rewritten); retest set in the environment document §9.2 | RC-03…RC-10, TC-14/15/19/20/21/24/25/33/34/35/36/37/38/42/43/44/50/51/53 and the lifecycle-step rows; **no human row executed**. Scripted browser retest on the reviewed candidate `38d2865…` (2026-10-26): RC-03…RC-09 and the exercised variants of all 26 operations pass except DEF-005 (reproduced) and DEF-006 (RC-06 authoring-read variant); remaining coverage per operation in [PHASE15_DEF001_BROWSER_RETEST.md](PHASE14_15_ACCEPTANCE_LEDGER.md) §3; candidate not frozen |
 
 ## 5. Reverse index — guide task to cases
 
@@ -311,4 +311,90 @@ Proposed by plan §8 (P02-8). **All four are marked *not executed*: no browser, 
 | 23.history | History retention and restoration | Back/Forward, reload, new tab, bfcache, `history.state` retention of `task` and `ctx` | H, S, A | **Not executed** | portal `selectedContext.history.integration`, `entryStamp` tests |
 | 55.context-guard | Selection departure, guards and loss handling | Dirty Stay/Leave, native modal close, destination-heading focus, immediate and deferred arrival, announcements, withdrawal after authority loss, two-tab revocation | H, S, A | **Not executed** | portal `selectionDeparture.integration`, `selectionArrival*` tests |
 
-The actionable checklist (prerequisites, action, expected result, evidence and failure criteria per item, B1-B22) is in [PHASE14_15_P02_RECONCILIATION_2026-11-04.md](PHASE14_15_P02_RECONCILIATION_2026-11-04.md) §6.1; every item is **not executed**. DOM or live-region inspection is not screen-reader evidence.
+The actionable [B1–B22 checklist](PHASE14_15_COMPANION_SCENARIOS.md#p02-browser-checklist) is a specification. Current per-check results and the explicit P02 owner decision are in the [ledger](PHASE14_15_ACCEPTANCE_LEDGER.md#current-decision-summary-after-documentation-reconciliation); the original “all not executed” wording is historical. DOM/live-region inspection is not screen-reader evidence.
+
+## Consolidated specification and evidence sources
+
+All TC-01–TC-58 IDs and variants above retain their original meaning and source history.
+The retired manual guide is available as an immutable specification/evidence baseline in
+[delivery history](DELIVERY_HISTORY.md); its historical result markings are not new passes.
+Use the accepted expectation corrections in this matrix and the current journey/scenarios
+when executing a new run. If an old step is not represented by a current task, retain it
+as an explicit unexecuted variant rather than silently dropping it.
+
+TC-55's complete former page/panel matrix, staged Run Session and Knowledge requirements,
+Member preview, travel, Relationships and Organization checks are retained in
+[companion scenarios](PHASE14_15_COMPANION_SCENARIOS.md#tc-55-page-and-panel-obligations).
+The former manual matrix's date/tester, browser/AT version, failures/fixes, accepted risks,
+final-head CI and owner completion decision must be recorded in the acceptance ledger.
+
+### RC-10 operation inventory
+
+The inventory below retains the DEF-001 operation numbering, intentional differences and
+regression-test mapping. Its before/after descriptions are the historical fix baseline;
+they do not certify today's callers. A tested variant never implies every command passed.
+
+## 4. Inventory
+
+Legend — **Reads**: what must be read back for the screen to agree with the write. **Result**: *Corrected*, *Compliant (reference)*, *Compliant (by design)* or *Retained difference*.
+
+### 4.1 Corrected
+
+| # | Operation (caller) | Reads | Behaviour before | Correction | Tests |
+|---|---|---|---|---|---|
+| 1 | World archive / restore (`TransitionControls` in `WorldOverviewPage`) | the world | `await refetch()`, outcome dropped; "World archived" announced; failed read replaced the page by "could not be loaded" | Returns the outcome; record kept (`useKept`); saved notice with read-only **Load latest**; transition held while stale; "done" announced when a read completes | `pages/WorldOverviewPage.test.tsx` (confirmed archive + failed read) |
+| 2 | Timeline archive / restore (`TransitionControls` in `TimelinePage`) | the timeline | same | same | `pages/timelinePages.test.tsx` |
+| 3 | Party archive / restore (`PartyRow` in `PartyPages`) | the party list | outcome dropped; archived row's state shown stale; failed read → error screen | outcome returned; list kept; row held; page announces when the list is read (the row may be gone) | `App.parties.test.tsx` |
+| 4 | Party member end (`MemberTable` in `PartyMembersPage`) | the roster (party version) | same | outcome returned; roster kept; end and add held (party version); notice; recovery | `App.partyMembers.test.tsx` |
+| 5 | Party member add (`AddMemberForm`) | the roster | same | same; **uncertain retry** keeps body and key | `App.partyMembers.test.tsx` (confirmed + failed read; lost answer then retry) |
+| 6 | NPC portrayal save new version (`NpcPortrayalPage`) | the portrayal (versions) | outcome dropped; "not found" screen on a failed read; form re-keyed | outcome; portrayal kept; draft kept; both portrayal writes held; page announces on recovery (form is re-keyed) | `App.npcPortrayal.test.tsx` |
+| 7 | NPC detail level | same | same | same | `App.npcPortrayal.test.tsx` |
+| 8 | Character starting state (`StateSection`) | the builds listing | outcome dropped; error screen | outcome; listing kept; form held until read | `App.characterBuilds.test.tsx` |
+| 9 | Activate a build (`BuildList`) | the builds listing | same | outcome; held (names the active build it showed) | `App.characterBuilds.test.tsx` |
+| 10 | Event void / correct (`Corrections` in `EventPages`) | the event **and** the correction preview | two awaits, both outcomes dropped; "does not exist" screen on a failed read | both reads combined; both kept; actions held; page announces on recovery (the form is replaced by the correction) | `App.eventCorrections.test.tsx` (event read fails; preview-only fails) |
+| 11 | World Sharing: assign / end role, grant / revoke use, transfer ownership (`WorldSharingPage`) | the access list | outcome dropped; any failed read → "Sharing is not available" | outcome; list kept; controls held; transfer's **denied** read is an authoritative answer (removes the content, focus to heading, "Ownership transferred" still announced) | `pages/WorldSharingPage.test.tsx` |
+| 12 | Session Start (`StartControl`, `SessionRunPage`) | the session (version) | `await refetch()`; "Session started" and the log link shown after a failed read | not done until read; Start held; page announces and shows the link when the session is read | `App.sessionRun.test.tsx` |
+| 13 | Session End (`EndControl`) | the session | same | same | `App.sessionRun.test.tsx` |
+| 14 | Session log entry (`LogSection`) | the session | returned the outcome but showed no notice and never announced on recovery | notice beside the form; recovery announces | `App.sessionRun.test.tsx` |
+| 15 | Travel (`TravelSection`) | the session's travel history | outcome dropped; "do not record again" only when the page was already stale | outcome; saved notice (receipt text) with read-only retry; a journey that moved no one reads nothing (intentional) | `components/TravelSection.test.tsx` (failed; superseded) |
+| 16 | Campaign clock advance / correct (`CampaignClockCard`) | the clock (version, last event) | outcome dropped; card vanished on a failed read | outcome; clock kept; Advance/Correct held; notice | `components/CampaignClockCard.test.tsx` |
+| 17 | Session details save (`SessionDetailPage`) | the session | "Session saved" announced after a failed read; Save not held; **Load latest** reset the stale notice even when its read failed | announced only when read; Save held until **Reload session**; stale reset only on success | `App.sessionAuthoring.test.tsx` |
+| 18 | Session archive / restore (`SessionLifecycleControls`) | the session | outcome dropped | outcome; notice with read-only **Load latest** (no page retry exists); actions held | `App.sessionAuthoring.test.tsx` |
+| 19 | Encounter commands: update, add / change / remove participant, start, abort, record turn, end (`PreparedEncounterPage`) | the encounter | outcome dropped; "does not exist" screen on a failed read | outcome; encounter kept; every command held (a turn could be recorded twice from the old view); page announces on recovery | `pages/EncounterPages.test.tsx` (start; turn) |
+| 20 | NPC runtime: hit points, conditions, resources, move (`NpcRuntimePanel`) | the character | outcome dropped | outcome; panel keeps the numbers it read; all four held (they are deltas); notice | `components/NpcRuntimePanel.test.tsx`; `WorldRecordWorkspace.runtime.test.tsx` |
+| 21 | Dungeon / area commands via `useDungeonCommand` (Areas, Connections, Contents, Area now) | the dungeon or area, its lifecycle and revisions (+ the record for Area now) | `reload()` returned nothing; `await refetch()` dropped; commands could repeat from a stale version | `reload()` returns an outcome (`usePairedRead`, `useAreaRuntimeRead`); the workspace's refresh functions combine only the reads that record makes; handle exposes `savedNotice` (rendered outside the form that closes) and holds commands; `clear()` no longer lifts the hold | `WorldRecordWorkspace.areaNow.test.tsx` |
+| 22 | Lifecycle steps (`EntityLifecyclePanel` provider: World record, Item, Quest; Claim keeps its own page notice via `pageReportsRefresh`) | the lifecycle **and** the page's reads | the lifecycle read's outcome was dropped; Quest and Item `onChanged` returned nothing | combined; "done" only on `ok`; saved notice beside the actions; steps held; recovered when the lifecycle read works again | `WorldRecordWorkspace.test.tsx`; `QuestWorkspace.test.tsx` |
+| 23 | Relationship add (`RelationshipsPanel`) and edit / perspectives / end / archive (`RelationshipEditor`) | the roster list and the relationship | decided "refreshed" from a shared ref (`refreshOk`), which a superseded read leaves untouched; reported `success` to the mutation | decided from the returned outcomes; mutation reports `confirmed`; a form whose relationship read failed holds its version-checked save | `components/RelationshipsPanel.test.tsx` |
+| 24 | Organization: add member, set status, member editor (`OrganizationMembers`, `OrganizationMemberEditor`) | the roster | `void refetch()`; "Member added" / "Organization status saved" announced immediately | roster read awaited; announced only when read; roster-level saved notice (forms close); status and add held | `components/OrganizationMembers.test.tsx`; `WorldRecordWorkspace.runtime.test.tsx` |
+| 25 | World time recorded inline (`WorldTimePicker`, used by party, session, clock, event and organization forms) | the world-time list | `refetch().then(...)` selected the id regardless; a failed read replaced the picker by an error | picker kept; new time chosen only once the list shows it; record-again held; read-only **Load latest** | `components/authoring/WorldTimePicker.test.tsx` |
+| 26 | World time recorded (`WorldTimesPage`) | the list | announced "World time recorded" regardless; error screen | outcome; list kept; notice | `pages/WorldTimesPage.test.tsx` |
+
+### 4.2 Compliant (reference implementations; not changed)
+
+| Operation | Why it is compliant |
+|---|---|
+| Quest commands, details, structure editor, dependencies / outcomes / participants, progress (`useQuestCommand`, `QuestDetailsSection`, `QuestEditor`, `QuestProgressPanel`) | CP-10: return the (combined) outcome; announce on `ok` only; page-level kept data and retry |
+| Item operations and item definition edit (`useItemOperation`, `ItemDefinitionPages`) | CP-10 |
+| Knowledge claim save, audience, lifecycle read-back (`KnowledgeClaimPage`, `KnowledgeRoster`) | CP-10 (+ review follow-ups). Only the lifecycle provider's `refetch` now returns its outcome and the page passes `pageReportsRefresh`, so the panel does not add a second notice |
+| Entity sources attach / detach (`EntitySourcesSection`) | CP-10 |
+| Campaign settings save and archive; archived campaigns reactivation; shared content edit page | CP-2 |
+| Session participants add / remove (`ParticipantForm`, `Participants`) | CP-2 (receipt-version gating) |
+| Award item (`AwardItemSection`) | CP-2 |
+| Campaign startup preference (`useSaveCampaignStartupPreference`) | returns outcomes already |
+| Campaign setup (`CampaignSetupPage`) | waits for the authoritative bootstrap to list the campaign before navigating |
+
+### 4.3 Compliant by design (navigate away, close, or intentionally need no reread)
+
+Create-and-open and edit-and-return forms navigate to a destination that loads its own data, so there is no read-back to drop: `CreateWorldPage`, `EditWorldPage`, `CreateTimelinePage`, `EditTimelinePage`, `CreateTimelineBranchPage`, `ContentCreatePage`, `SessionFormPages` (schedule), `CalendarCreation`, `PartyForm` (create / edit), `RecordEventPage`, `CreateCharacterBuildPage` (`BuildForm`), `PrepareEncounterPage` (announces on the destination). `TravelSection` with `changed:false` records nothing and reads nothing.
+
+### 4.4 Retained difference — "reload through the loading state" family (not changed)
+
+The Phase 13 access, invitation, account, session-revocation and onboarding hooks (`useAccessOverview`, `useCampaignInvitations`, `usePlatformAccounts`, `useOwnSessions`, `useCampaignSession` boundaries, and the `Add/Change/Revoke…` mutation hooks such as `useAddCampaignMember`, `useAssignMembershipRole`, `useAddResourceGrant`, `useCreateAccessGroup`) do not keep a stale view after a write: their `retry()` increments a request version, the next render falls back to the **loading** state, and a failed read shows an explicit error page with **Try again**. No stale record is ever shown as current, so the DEF-001 harm ("done" while the screen is behind) cannot occur; the persistent status line ("Role added.") is true of the write. Changing this family would be a redesign of the 13E/13F pages, not a DEF-001 fix. **Reported as an assessed, unchanged family for Codex review**; a different decision (announce only after the reload) would be a separate change.
+
+## 5. Intentional domain differences kept
+
+- Row-version scopes (`StartControl`, `EndControl`, party row, session lifecycle) let the mutation's own status end with the record's version; callers that must outlive the version change (`TransitionControls`, `EntityLifecyclePanel`, `OrganizationMembers`, `WorldTimePicker`, `WorldTimesPage`) keep the unread write in component state and feed `useConfirmedRefresh` a synthetic `confirmed` status.
+- Where the form that sent a write is replaced or removed by the recovered read (archived party row, started session, re-keyed portrayal, voided event) the **page** announces the write (`useAnnounceWhenRead`); the component announces only for its own **Load latest**.
+- A denied/unavailable read-back is an authoritative answer (World Sharing after transfer; permission loss in the World workspace): the retained content is removed, nothing is held, and the write is still announced.
+- Boundary-reload pages (§4.4), create/edit navigation (§4.3), and `Claim` lifecycle (page-level notice) keep their own shape.
+- Wording is per domain ("party list", "campaign time", "world times"); no universal workspace framework was added.

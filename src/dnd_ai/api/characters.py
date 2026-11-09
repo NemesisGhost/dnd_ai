@@ -33,7 +33,7 @@ agreement with the Phase 13D World Explorer search
 (`dnd_ai.api.world_explorer`), which excludes a `campaign.view`-denied
 `entity_id` in SQL before pagination, so a resource hidden from browse can
 never still be opened by its retained URL (the disclosure class the
-quest-detail route was hardened against — docs/PHASE13D_BACKEND_READINESS.md
+quest-detail route was hardened against — docs/api/READ_API.md
 §4.2, §10.8). The character-view tier remains a separate, finer decision:
 it downgrades or withholds detail for callers who *are* otherwise
 entitled, and is unchanged.
@@ -75,7 +75,7 @@ arbitrary caller-supplied knower.
 Phase 13D added a third sub-resource:
 `GET /campaigns/{campaign_id}/characters/{character_id}/sheet`
 (`dnd_ai.queries.character_sheet.get_character_sheet_view`). This closes the
-documented backend gap (docs/PHASE13D_BACKEND_READINESS.md) blocking the
+documented backend gap (docs/api/READ_API.md) blocking the
 portal's Character workspace Sheet panel (docs/UI_DESIGN.md §5.5): the
 existing `GET .../characters/{character_id}` response deliberately stays
 Overview/Current-State-shaped (unchanged by this addition, for backward
@@ -95,7 +95,7 @@ documented requirement demands otherwise. See `dnd_ai.queries.
 character_sheet`'s own docstring for the active-build resolution rule
 (`campaign.character_state.character_build_id` only, never a caller
 input, the newest build, or a guess) and `docs/
-PHASE13D_CHARACTER_SHEET_BACKEND.md` for the full response contract, raw-
+docs/api/CHARACTER_SHEET.md` for the full response contract, raw-
 vs-derived field policy, and known data-model limitations.
 
 A fourth sub-resource, `GET /campaigns/{campaign_id}/characters/{character_id}/relationships`
@@ -507,7 +507,7 @@ def get_character_endpoint(
         # character-view tier below: it removes the resource entirely
         # rather than downgrading detail. The quest/organization/dungeon
         # detail routes were hardened the same way
-        # (docs/PHASE13D_BACKEND_READINESS.md §4.2, §10.8).
+        # (docs/api/READ_API.md §4.2, §10.8).
         raise NotFoundError()
     _require_published_character(connection, access, character_id)
 

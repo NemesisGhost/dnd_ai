@@ -5,7 +5,7 @@ Revises: 139_inventory_capability
 Create Date: 2026-10-26 12:00:00.000000
 
 Purpose:
-    CP-9b / DR-4 (PHASE14_15_INTEGRATION_AND_CONSOLIDATION_PLAN.md). A GM advancing the campaign
+    CP-9b / DR-4 (docs/BACKLOG.md). A GM advancing the campaign
     clock may name a gameplay cause and give an explanation meant for the members who can view the
     resulting event. The plan proposed storing that explanation in `narrative.events.details`, but
     `details` is GM-only (data classification `gm_only`; CP-9a withholds it from every non-editor),

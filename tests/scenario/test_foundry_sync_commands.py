@@ -11,12 +11,12 @@ event/state change plus the sync bookkeeping — not by inspecting the
 transaction boundary.
 
 Also covers the idempotency/concurrency/failure-bookkeeping correction
-pass recorded in docs/PHASE9_VERIFICATION.md: replaying the same
+pass recorded in docs/DELIVERY_HISTORY.md: replaying the same
 external_operation_id, two genuinely concurrent submissions of the same
 operation, a conflicting-payload replay, and a failed combat sync leaving
 domain state untouched while still recording the failure.
 
-A second correction pass (docs/PHASE9_VERIFICATION.md's "atomic completion"
+A second correction pass (docs/DELIVERY_HISTORY.md's "atomic completion"
 note) closed a gap the first pass left: apply_foundry_combat_sync() used
 to commit the domain mutation and _complete_sync_job() as two separate
 transactions, so a failure completing the sync job left the mutation
@@ -31,7 +31,7 @@ proves the atomic sync_state upsert this same pass introduced: two
 genuinely concurrent operations racing for the same encounter's sync_state
 row do not fail spuriously or produce two current rows.
 
-A third correction pass (docs/PHASE9_VERIFICATION.md's "single-connection"
+A third correction pass (docs/DELIVERY_HISTORY.md's "single-connection"
 note) closed a connection-pool deadlock the second pass introduced: the
 claim/work/fail transactions each opened their own pooled connection via
 engine.begin() while the advisory-lock connection sat idle, so a caller

@@ -1640,3 +1640,29 @@ The following are recognized but will receive dedicated design later:
 - cross-world travel
 
 These areas must extend the existing entity, relationship, event, state, and knowledge foundations rather than creating incompatible parallel models.
+
+## 28. Modeling decision checklist
+
+Before adding a field, decide whether it describes stable identity/definition, time-scoped
+state, a knower's belief/discovery, or historical causality. Put each in its own domain.
+A global `is_discovered` flag cannot express per-character knowledge. Use typed state
+and atomic event/state commands instead of a generic JSONB state bag. JSONB is appropriate
+for bounded flexible payloads, not a substitute for relational identities and constraints.
+Use class-table inheritance for a subtype's additional structured data; a classification
+with no additional fields need not create an empty subtype table. Consult the database
+conventions and current schema before inventing a name or column.
+
+### 28.1 Effective-time membership
+
+Resolve the campaign timeline's effective clock once per request (once per campaign in
+bootstrap) and reuse it for membership decisions. Intervals are half-open: join included,
+leave excluded. A finite interval containing Now is current; an open-ended future join is
+not. With no effective clock, membership status is undetermined (`clock_unset`), not ended
+or upcoming, and current-membership-derived authority is not granted. Independent GM,
+public, character and direct-grant authority remains, with denies still enforced.
+
+A root with no clock can be undetermined. A branch uses its own clock or bounded inherited
+clock/branch point. Clock inheritance does not inherit membership rows: evaluate only the
+branch's own timeline-scoped memberships. As-of queries retain their requested time.
+Travel candidate semantics are a separately tracked policy question in BACKLOG; this
+description does not silently change travel commands or previews.

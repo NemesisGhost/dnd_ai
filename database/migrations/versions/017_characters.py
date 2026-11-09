@@ -15,7 +15,7 @@ Purpose:
     This is Phase 4's most consequential first-time obligation: the first
     REAL class-table inheritance subtype chain. Phase 2 could only build and
     test core.enforce_entity_subtype() abstractly, against a synthetic table
-    created inside a test transaction (see docs/PHASE2_VERIFICATION.md,
+    created inside a test transaction (see docs/DELIVERY_HISTORY.md,
     "Partially met: subtype consistency"). This revision is where that
     mechanism either holds up against production shape or doesn't.
 

@@ -1,5 +1,5 @@
 """World Explorer read endpoints (docs/UI_DESIGN.md §5.4,
-docs/PHASE13D_BACKEND_READINESS.md §3).
+docs/api/READ_API.md §3).
 
 One unified, cursor-paginated entity search/browse
 (`GET /campaigns/{campaign_id}/world/search`), one relationship list
@@ -12,7 +12,7 @@ their own routers and are reused; those routers gain a targeted
 `campaign.view` deny check in this same workstream so list and detail can
 never disagree on which resources an audience may see (the disclosure
 class the quest-detail route was hardened against in Phase 13D —
-docs/PHASE13D_BACKEND_READINESS.md §4.2).
+docs/api/READ_API.md §4.2).
 
 Every route requires the `campaign.view` role capability
 (`dnd_ai.api.access.require_campaign_capability`), the read-only

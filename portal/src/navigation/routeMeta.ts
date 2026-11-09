@@ -3,7 +3,7 @@ import type { ExecutionScope, ViewedRecord } from "./contexts"
 import { isIdShaped } from "./contexts"
 
 // One entry per production route pattern in App.tsx (docs/UI_DESIGN.md §4.8, and the route inventory in
-// docs/PHASE14_15_P02_NAVIGATION_ROUTE_AND_GUARD_AUDIT.md). `routeMeta.test.ts` builds the pattern list
+// docs/UI_DESIGN.md). `routeMeta.test.ts` builds the pattern list
 // from the real route tree and fails when a pattern has no entry, or an entry matches no pattern, so
 // this table cannot drift from App.tsx silently. Matching itself is react-router's, over these same
 // patterns, so route ranking and permissions are untouched: this table only describes routes.
