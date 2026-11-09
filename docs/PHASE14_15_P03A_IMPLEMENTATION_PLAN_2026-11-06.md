@@ -3685,6 +3685,18 @@ A2a is the §5 design without the copy aid, D5/D6 columns, portal or revelations
 
 ---
 
+## P3 limiter-starvation correction (2026-11-08)
+
+**Base:** `0790423`. Review finding: the finalizer's COMMIT/ROLLBACK ran on AnyIO's default thread limiter, which also runs every synchronous handler. Handlers blocked on a lock held by a request transaction could take every default token, so that transaction's finalizer could never run and the lock was never released.
+
+**Fix (`api/deps.py`).** The finalizer runs on a dedicated limiter, `finalizer_limiter()`, owned by `deps` and created lazily per running event loop (a `WeakKeyDictionary` keyed by loop; AnyIO limiters belong to their loop, so nothing is created at import time or shared between apps). **Capacity 32** (`FINALIZER_LIMITER_TOKENS`): the request transactions open at once are bounded by the connection pool (SQLAlchemy default 5 + 10 = 15) and a finalizer exists only for an open one, so it never queues. The shielded scope, the worker thread, and operation-before-close ordering are unchanged. `end_request_transaction` runs on the calling handler's own thread and needs no limiter. Failure cleanup (`_discard`: rollback, invalidate, close) and the connection's return to the pool happen on the same worker thread inside the same call, so they add no second hop; the only other default-limiter use is `get_connection`'s generator setup and its no-op backstop exit, both outside any lock wait.
+
+**Tests (`tests/database/test_request_transaction_limiter.py`).** The default limiter is reduced to three tokens; a request transaction holds a row lock; three synchronous handlers block on that row until `borrowed_tokens == total_tokens`; only then is the holder released. (1) Commit: all four requests return 200, waiters see the committed value, the row is committed. (2) Rollback (holder raises): holder 400, waiters 200 with the original value, nothing committed. (3) Engine-backed route ending early: one default token is its own handler's, two waiters hold the rest; it commits on its own thread and the waiters finish. Waits are bounded and a watchdog terminates the application's backends, so a regression fails instead of hanging. Mutation check: with the finalizer back on the default limiter, tests (1) and (2) fail after the bounded wait; (3) passes, as it should.
+
+**Results.** Affected set (all of `tests/unit`, the four `test_request_transaction*` files, `test_api_deps`, `test_idempotency_key_lock`, `test_actor_idempotency`, `test_api_ai_and_corpus`, `test_api_integration`, `test_api_memberships`, `test_api_local_auth`, `test_api_integrity_errors`, `test_authoring_concurrency`): 1450 passed, 1 failed on the first run. The failure, `tests/unit/test_config.py::test_local_session_allowed_origins_defaults_to_dev_topology_outside_production`, came from this run's helper starting in the repository directory, where `.env` sets the origins; run from the isolation directory it passes (109 passed). The full suite was not re-run for this change.
+
+---
+
 ## A2b-1 implementation record (2026-11-07)
 
 **Parent:** `5fb2608` (the reviewed design commit; its parent is the A2a handoff `523ae5c`). One local commit; nothing is pushed and CI is pending.

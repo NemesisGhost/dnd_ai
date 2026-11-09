@@ -11,15 +11,18 @@ boundary (the one-transaction-per-world-change rule every command follows on
 its own when called directly).
 """
 
+import asyncio
 import logging
 import re
 import threading
+import weakref
 from collections.abc import AsyncIterator, Iterator
 from typing import Annotated
 
 import anyio
 import anyio.lowlevel
 import anyio.to_thread
+from anyio import CapacityLimiter
 from fastapi import Depends, Header, Request
 from sqlalchemy import Connection, Engine, create_engine, text
 
@@ -38,6 +41,32 @@ _engine: Engine | None = None
 logger = logging.getLogger(__name__)
 
 _STATE_NAME = "dnd_ai_request_transaction"
+
+# The COMMIT or ROLLBACK of a request transaction runs on its own AnyIO limiter, never FastAPI's
+# default one (which runs every synchronous handler and dependency). Handlers that wait on a lock
+# held by a request transaction can hold every default token; if that transaction's finalizer needed
+# one too, nothing could progress. The number of request transactions open at once is bounded by
+# the connection pool (SQLAlchemy's default is 5 + 10 overflow = 15), and a finalizer exists only for
+# an open one, so 32 tokens means a finalizer never queues. A finalizer also depends on nothing
+# else: `_discard`'s invalidate and close, and the connection's return to the pool, happen on the
+# same worker thread inside the same call.
+FINALIZER_LIMITER_TOKENS = 32
+
+_finalizer_limiters: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, CapacityLimiter]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def finalizer_limiter() -> CapacityLimiter:
+    """The running event loop's finalizer limiter, created on first use. An AnyIO limiter belongs to
+    the loop it is created in, so it is created lazily inside the running loop and kept per loop,
+    never at import time and never shared across the loops of different apps or test clients."""
+    loop = asyncio.get_running_loop()
+    limiter = _finalizer_limiters.get(loop)
+    if limiter is None:
+        limiter = CapacityLimiter(FINALIZER_LIMITER_TOKENS)
+        _finalizer_limiters[loop] = limiter
+    return limiter
 
 
 def get_engine() -> Engine:
@@ -186,7 +215,9 @@ async def commit_request_transaction(request: Request) -> AsyncIterator[None]:
     before the response is sent, so the request transaction is committed (or rolled back) first.
 
     An async generator, so it receives a cancellation too (a sync generator dependency's exit is
-    skipped for one). The COMMIT or ROLLBACK runs in a worker thread inside a shielded cancel
+    skipped for one). The COMMIT or ROLLBACK runs in a worker thread, on the dedicated
+    `finalizer_limiter` (never FastAPI's handler limiter, which waiting handlers can exhaust), inside
+    a shielded cancel
     scope: a cancellation cannot abandon it half done, and the connection is closed (returned to
     the pool) only after it returns. After a successful commit a pending cancellation surfaces at
     the checkpoint, so no response is sent for it. On the exception path the original exception is
@@ -198,16 +229,21 @@ async def commit_request_transaction(request: Request) -> AsyncIterator[None]:
     except BaseException:
         if slot.connection is not None:
             with anyio.CancelScope(shield=True):
-                await anyio.to_thread.run_sync(lambda: _finish(slot, commit=False))
+                await anyio.to_thread.run_sync(
+                    lambda: _finish(slot, commit=False), limiter=finalizer_limiter()
+                )
         raise
     if slot.connection is None:
         return
     with anyio.CancelScope(shield=True):
-        await anyio.to_thread.run_sync(lambda: _finish(slot, commit=True))
+        await anyio.to_thread.run_sync(
+            lambda: _finish(slot, commit=True), limiter=finalizer_limiter()
+        )
     await anyio.lowlevel.checkpoint_if_cancelled()
 
 
 def end_request_transaction(request: Request) -> None:
+    # Runs on the calling handler's own thread (it already holds its token): no limiter is needed.
     """For a route that does engine-side work (its command opens its own transactions): commit the
     request transaction, which carried authentication and authorization only, and close the
     request connection, before the first engine-side effect. A failed commit raises here (mapped
