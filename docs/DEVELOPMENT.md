@@ -502,6 +502,62 @@ PYTHONPATH=. python -m pytest -p default_config_plugin /path/to/dnd_ai/tests \
 
 `DATABASE_URL` still comes from the repository `.env` through conftest, so the database tests run unchanged. Report a run made this way as "defaults, `.env` override removed", and a run made from the repository root with your `.env` as it is separately.
 
+### 6.3 Running all four CI shards locally
+
+```bash
+uv run python scripts/run_sharded_tests.py
+```
+
+One command, Windows or POSIX. It reproduces CI's `postgres-tests` job: the same partition
+(`CI_TEST_SHARD=<index>/4`, whole files dealt round-robin by `tests/conftest.py`), the whole of
+`tests/` (unit, database and scenario), four shards at once. The cause of the "don't run shards
+concurrently" warning above is that the migrations and downgrade tests create and drop
+**cluster-global roles**, so two shards on one server collide. CI gives each shard its own server;
+so does this script, with a throwaway PostgreSQL 18 cluster per shard (`initdb` into the run
+directory, a free loopback port, `fsync` off because the data is disposable). It uses the PostgreSQL
+18 binaries already installed (`PATH`, `C:\Program Files\PostgreSQL\18\bin`, `--pg-bin`, or
+`DND_AI_PG_BIN`); your own server and databases are never touched, and nothing needs Docker.
+
+What it does, in order:
+
+1. **Proves the partition.** It collects the whole suite and each shard's selection and fails (exit
+   2) unless every test file is in exactly one shard with all of its tests, so a newly added test or
+   file is covered by exactly one shard. `--verify-partition-only` stops here (about 20 seconds).
+2. **Starts four servers and four pytest processes**, each with its own `DATABASE_URL`,
+   `CI_TEST_SHARD`, `PGAPPNAME=dnd_ai_shard_<n>`, `TEMP`/`TMP`/`TMPDIR` and `--basetemp`. The
+   configuration isolation of section 6.2 is built in, without pinning defaults: pytest runs from an
+   empty directory (no `.env` is read) with the one-line plugin that drops
+   `DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS`.
+3. **Reports** progress each minute, then per shard (exit status, counts, elapsed) and in total,
+   including tests collected against tests executed (an all-green run must execute exactly what it
+   collected). The exit status is nonzero if the partition check, any shard, or that comparison fails.
+
+Everything a run creates is in `.tmp/shards/run-<stamp>-<pid>/` (gitignored): each shard's
+`pytest.log` and `postgres.log` are always kept (the failure lines are repeated in the summary), and
+the clusters, temp and basetemp directories are removed at the end (`--keep-data` keeps them). On
+Ctrl+C the shards and servers are stopped and only that run's own directories are cleaned; on
+Windows the children are also in a Job Object, so closing the terminal or killing the script stops
+them too. Extra pytest arguments go after `--` (for example `-- -x`); `--shards N` changes the count,
+but CI's is four, set in `ci.yml`.
+
+A second cause of one run harming another was fixed alongside: every pytest session used to delete
+every other session's `.tmp/pytest-tmp-*` directory at startup, so a focused test run started while a
+full run was in progress removed the full run's temporary files. A run now holds an exclusive lock on
+`<its directory>.lock` for as long as it lives, and the sweep skips any directory whose lock is held
+(`tests/unit/test_pytest_tmp_setup.py`). The runner's own directories are outside that pattern.
+
+**Resource constraints.** Four servers and four test processes: about 16 CPU threads and 31 GB of RAM
+were comfortable; a smaller machine runs the same shards slower, and a few timing-sensitive tests
+(the lock-wait observations and the worker start-up handshake timeouts) are the first to fail under
+CPU starvation. Judge such a failure by rerunning its file alone, and report both results.
+
+**Full backend verification** is this runner (all of `tests/`) plus the checks that are not pytest:
+`uv run ruff format --check .`, `uv run ruff check .`, `uv run mypy src`, `uv lock --check`,
+`uv run alembic -c database/alembic.ini check` (the migrations job) and `git diff --check`. The
+portal and the Foundry module have their own npm commands (section 7). Focused runs are unchanged:
+`uv run pytest tests/unit` needs no database, and `uv run pytest path/to/test_file.py` runs against
+the server `DATABASE_URL` names, as before.
+
 ---
 
 ## 7. Code quality
@@ -572,7 +628,7 @@ Run the same three commands locally before pushing portal changes.
 - seed idempotency — apply the complete seed set twice and require byte-identical lookup rows
 - schema comparison — autogenerate against head must produce an empty diff, proving migrations and metadata agree
 
-**`postgres-tests`** runs the full pytest suite (`tests/unit`, `tests/database`, `tests/scenario`) as four parallel matrix shards, each against its own fresh `postgres:18.4` service container — `tests/conftest.py` provisions its own ephemeral database off it exactly as it does against a local server. The suite outgrew a single 30-minute job (PR #66: ~26 minutes of pytest alone). `CI_TEST_SHARD=<index>/<total>` makes `tests/conftest.py` keep only that shard's test files (whole files, dealt round-robin in sorted order — disjoint and together covering every file, proven by `tests/unit/test_conftest_sharding.py`); unset, as locally, every test runs. To reproduce one CI shard locally, run `CI_TEST_SHARD=2/4 uv run pytest`. Don't run several shards concurrently against one local server: migrations and downgrade tests create and drop cluster-global roles (`migration_owner` and the application roles), and concurrent sessions collide on them (`tuple concurrently deleted`) — CI avoids this by giving every shard its own server.
+**`postgres-tests`** runs the full pytest suite (`tests/unit`, `tests/database`, `tests/scenario`) as four parallel matrix shards, each against its own fresh `postgres:18.4` service container — `tests/conftest.py` provisions its own ephemeral database off it exactly as it does against a local server. The suite outgrew a single 30-minute job (PR #66: ~26 minutes of pytest alone). `CI_TEST_SHARD=<index>/<total>` makes `tests/conftest.py` keep only that shard's test files (whole files, dealt round-robin in sorted order — disjoint and together covering every file, proven by `tests/unit/test_conftest_sharding.py`); unset, as locally, every test runs. To reproduce one CI shard locally, run `CI_TEST_SHARD=2/4 uv run pytest`. Don't run several shards concurrently against one local server: migrations and downgrade tests create and drop cluster-global roles (`migration_owner` and the application roles), and concurrent sessions collide on them (`tuple concurrently deleted`) — CI avoids this by giving every shard its own server. Locally, [`scripts/run_sharded_tests.py`](../scripts/run_sharded_tests.py) does the same ([section 6.3](#63-running-all-four-ci-shards-locally)).
 
 **`docker-build`**: validates `compose.yaml`/`compose.ci.yaml`, builds the application image, brings up disposable PostgreSQL via compose, and runs the `migrate` service against it as an end-to-end smoke test of the self-hosted deployment topology itself.
 

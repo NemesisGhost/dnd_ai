@@ -35,6 +35,7 @@ import sys
 import uuid
 from collections.abc import Iterator, Sequence
 from pathlib import Path
+from typing import IO
 
 import psycopg
 import pytest
@@ -69,9 +70,59 @@ _PYTEST_TMP_ROOT = REPO_ROOT / ".tmp"
 _PYTEST_RUN_DIR_PREFIX = "pytest-tmp-"
 
 
+# A run proves it is alive by holding an exclusive OS lock on `<run dir>.lock` for the life of its
+# process. The operating system releases the lock when the process ends, however it ends, so a
+# crashed run is recognised as stale and a live one (another shard, another terminal, a tool
+# running a focused test) is never mistaken for one. Without this, every session's startup sweep
+# deleted every other session's basetemp, and a second pytest process started while a first was
+# running removed the first's temporary files under it.
+_RUN_LOCK_SUFFIX = ".lock"
+_held_run_locks: dict[Path, IO[bytes]] = {}
+
+
+def _run_lock_path(run_dir: Path) -> Path:
+    return run_dir.with_name(run_dir.name + _RUN_LOCK_SUFFIX)
+
+
+def _try_exclusive_lock(handle: IO[bytes]) -> bool:
+    """Take a non-blocking exclusive lock on the first byte of `handle`; False if another handle
+    (in this or any other process) holds it. Works the same on Windows and POSIX."""
+    try:
+        handle.seek(0)
+        if sys.platform == "win32":
+            import msvcrt
+
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)  # type: ignore[attr-defined]
+        else:
+            import fcntl
+
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError:
+        return False
+
+
+def _hold_run_lock(run_dir: Path) -> None:
+    """Create and keep locked this run's lock file (until the process exits)."""
+    handle = _run_lock_path(run_dir).open("a+b")
+    handle.write(b"x")
+    handle.flush()
+    if not _try_exclusive_lock(handle):  # a fresh uuid name: nobody else can hold it
+        handle.close()
+        return
+    _held_run_locks[run_dir] = handle
+
+
+def _release_run_lock(run_dir: Path) -> None:
+    """Drop this process's hold on `run_dir`'s lock (tests use it to simulate a run ending)."""
+    handle = _held_run_locks.pop(run_dir, None)
+    if handle is not None:
+        handle.close()
+
+
 def _new_pytest_run_basetemp() -> Path:
-    """A fresh, unique path under _PYTEST_TMP_ROOT. The directory itself
-    is not created here — pytest's own TempPathFactory.getbasetemp()
+    """A fresh, unique path under _PYTEST_TMP_ROOT, with its liveness lock held. The directory
+    itself is not created here — pytest's own TempPathFactory.getbasetemp()
     creates it (0o700) the first time a test actually asks for
     tmp_path/tmp_path_factory, which also means a session that never
     touches either never creates a directory here at all. _PYTEST_TMP_ROOT
@@ -79,25 +130,47 @@ def _new_pytest_run_basetemp() -> Path:
     call is not parents=True, so it requires .tmp/ to already exist — true
     on an established checkout, but not guaranteed on a fresh one."""
     _PYTEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
-    return _PYTEST_TMP_ROOT / f"{_PYTEST_RUN_DIR_PREFIX}{uuid.uuid4().hex}"
+    run_dir = _PYTEST_TMP_ROOT / f"{_PYTEST_RUN_DIR_PREFIX}{uuid.uuid4().hex}"
+    _hold_run_lock(run_dir)
+    return run_dir
 
 
 def _cleanup_stale_pytest_run_dirs(keep: Path) -> None:
-    """Best-effort removal of previous runs' basetemp directories,
-    skipping `keep` (this run's own, not created yet at this point) and
-    silently leaving behind anything this identity can't remove — an
-    inaccessible leftover from a different identity is exactly the case
-    this whole mechanism exists to make irrelevant, not something worth
-    failing a test session over. Never raises."""
+    """Best-effort removal of *finished* runs' basetemp directories, skipping `keep` (this run's
+    own, not created yet at this point), any run whose liveness lock is still held, and anything
+    this identity can't remove — an inaccessible leftover from a different identity is exactly
+    the case this whole mechanism exists to make irrelevant, not something worth failing a test
+    session over. A directory with no lock file (left by an older version of this hook) counts
+    as finished. Never raises."""
     if not _PYTEST_TMP_ROOT.is_dir():
         return
-    for candidate in _PYTEST_TMP_ROOT.glob(f"{_PYTEST_RUN_DIR_PREFIX}*"):
+    names = {
+        candidate.name.removesuffix(_RUN_LOCK_SUFFIX)
+        for candidate in _PYTEST_TMP_ROOT.glob(f"{_PYTEST_RUN_DIR_PREFIX}*")
+    }
+    for name in sorted(names):
+        candidate = _PYTEST_TMP_ROOT / name
         if candidate == keep:
             continue
+        lock_path = _run_lock_path(candidate)
+        probe: IO[bytes] | None = None
         try:
-            shutil.rmtree(candidate)
+            if lock_path.exists():
+                probe = lock_path.open("r+b")
+                if not _try_exclusive_lock(probe):
+                    probe.close()
+                    continue  # its process is still running: not ours to remove
+            if candidate.exists():
+                shutil.rmtree(candidate)
+            if probe is not None:
+                probe.close()
+                probe = None
+                lock_path.unlink(missing_ok=True)
         except OSError:
             continue
+        finally:
+            if probe is not None:
+                probe.close()
 
 
 @pytest.hookimpl(tryfirst=True)
