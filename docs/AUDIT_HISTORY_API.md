@@ -11,7 +11,7 @@ tabs on both routes). Read-only — no new command, no new mutation, no new
 capability. This document records
 the discovered `audit.change_log` contract and the exact endpoint this
 workstream adds. It does not change, and is not a substitute for,
-[docs/PHASE13E_ACCESS_CONTRACT.md](PHASE13E_ACCESS_CONTRACT.md) (which
+[docs/PHASE13E_ACCESS_CONTRACT.md](api/ACCESS_CONTROL.md) (which
 remains the authoritative record of the Access-page mutation/read contract
 this endpoint sits alongside).
 

@@ -5,7 +5,7 @@
 
 ## Context
 
-*Stub — to be written.* The reasoning behind this decision currently lives in [PLAN.md §6.1](../PLAN.md#61-ruleset-separation) and [PLAN.md §12.1](../PLAN.md#121-definitions-and-instances) and has not yet been extracted into a standalone record.
+Reusable rules must be versioned independently of a particular world object or character. A rules definition describes a kind; a world instance has identity, ownership, provenance and state.
 
 ## Decision
 
@@ -13,8 +13,8 @@ Reusable mechanical definitions live in the `rules` schema and identify their ru
 
 ## Consequences
 
-*Stub — to be written.*
+Rules content stays ruleset/version aware. World instances refer to definitions without turning reusable definitions into campaign state.
 
 ## References
 
-- [PLAN.md §6.1](../PLAN.md#61-ruleset-separation) and [PLAN.md §12.1](../PLAN.md#121-definitions-and-instances)
+- [PLAN.md §6.1](../README.md) and [PLAN.md §12.1](../README.md)

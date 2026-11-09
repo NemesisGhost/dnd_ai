@@ -9,7 +9,7 @@ Use this instead of hand-rolling a `curl`/GitHub-API polling loop when a
 commit has been pushed and its CI run needs to be confirmed green before
 reporting a task done, opening/merging a PR, or closing a phase-exit review
 (this repo's convention is to never declare something done before a green
-pushed-head CI run — see docs/PLAN.md §23.0–23.1).
+pushed-head CI run — see docs/DEVELOPMENT.md §11).
 
 Invoke via Bash:
 

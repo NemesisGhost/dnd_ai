@@ -1,6 +1,6 @@
 """Pure unit tests for `dnd_ai.api.pagination` — the keyset-cursor helper
 introduced for the Phase 13D World Explorer and Knowledge browse endpoints
-(docs/PHASE13D_BACKEND_READINESS.md §9's "focused pure unit tests for
+(docs/api/READ_API.md §9's "focused pure unit tests for
 cursor encode/decode/validation"). No database.
 """
 

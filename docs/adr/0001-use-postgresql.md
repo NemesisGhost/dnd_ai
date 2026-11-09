@@ -5,7 +5,7 @@
 
 ## Context
 
-*Stub — to be written.* The reasoning behind this decision currently lives in [PLAN.md §2.1](../PLAN.md#21-postgresql-is-the-source-of-truth) and [README.md § Design Philosophy](../../README.md#design-philosophy) and has not yet been extracted into a standalone record.
+Durable world facts must outlive any cache, embedding index or generated summary. PostgreSQL provides relational constraints and atomic transactions across the connected domains.
 
 ## Decision
 
@@ -13,8 +13,8 @@ PostgreSQL stores all canonical world data. Embeddings, caches, search indexes, 
 
 ## Consequences
 
-*Stub — to be written.*
+Derived stores may be rebuilt; writes to canon go through application commands and the database. External indexes are not an alternative authority.
 
 ## References
 
-- [PLAN.md §2.1](../PLAN.md#21-postgresql-is-the-source-of-truth) and [README.md § Design Philosophy](../../README.md#design-philosophy)
+- [PLAN.md §2.1](../README.md) and [README.md § Design Philosophy](../../README.md#design-principles)

@@ -67,7 +67,7 @@ from dnd_ai.domain.errors import DomainAuthorizationError
 # `{alias}` is the `campaign.quest_state` alias in the surrounding query;
 # every call site binds the identical `:party`/`:include_all_parties`
 # parameters, so list and detail can never disagree on which quests an
-# audience may see (docs/PHASE13D_BACKEND_READINESS.md §4.2/§5).
+# audience may see (docs/api/READ_API.md §4.2/§5).
 _QUEST_STATE_MATCHES_AUDIENCE = (
     "(:include_all_parties OR {alias}.party_id IS NULL OR {alias}.party_id = :party)"
 )
@@ -390,7 +390,7 @@ def list_campaign_quests(
     the caller learns the quest is tracked even without a resolvable status
     for their own perspective.
 
-    `include_all_parties` (docs/PHASE13D_BACKEND_READINESS.md §5) decides
+    `include_all_parties` (docs/api/READ_API.md §5) decides
     which quests count as "tracked" in the first place:
 
     - `True` — a caller who sees canonical truth across every party (a GM,

@@ -11,7 +11,7 @@
 
 ## Context
 
-Phase 14 (authoring-first roadmap, [PLAN.md](../PLAN.md)) lets a game master create a world, its timelines, and a campaign through the portal. Before this ADR:
+Phase 14 (authoring-first roadmap, [PLAN.md](../README.md)) lets a game master create a world, its timelines, and a campaign through the portal. Before this ADR:
 
 - `core.worlds` had no owner, creator, or authority of any kind; worlds were created only by migrations, scripts, and test factories.
 - The only authorization concepts were *campaign* memberships/roles/capabilities and an account-administration flag (`security.users.is_platform_administrator`), which by design "never masquerades as campaign roles".
@@ -45,7 +45,7 @@ Phase 14 (authoring-first roadmap, [PLAN.md](../PLAN.md)) lets a game master cre
 
 ## References
 
-- [PLAN.md](../PLAN.md) Phase 14
+- [PLAN.md](../README.md) Phase 14
 - [DOMAIN_MODEL.md](../DOMAIN_MODEL.md) §4.1
 - [DATABASE_MODEL.md](../architecture/DATABASE_MODEL.md)
 - [ENTITY_LIFECYCLE.md](../ENTITY_LIFECYCLE.md)

@@ -2,7 +2,7 @@
 
 How to set up a working environment and make changes to this repository.
 
-This document covers the **mechanics** — toolchain, layout, commands, and workflow. Design rules live in [DATABASE_CONVENTIONS.md](DATABASE_CONVENTIONS.md), [architecture/SYSTEM_ARCHITECTURE.md](architecture/SYSTEM_ARCHITECTURE.md), and [ENTITY_LIFECYCLE.md](ENTITY_LIFECYCLE.md). Consult [PLAN.md](PLAN.md) only for delivery status or future scope.
+This document covers the **mechanics** — toolchain, layout, commands, and workflow. Design rules live in [DATABASE_CONVENTIONS.md](DATABASE_CONVENTIONS.md), [architecture/SYSTEM_ARCHITECTURE.md](architecture/SYSTEM_ARCHITECTURE.md), and [ENTITY_LIFECYCLE.md](ENTITY_LIFECYCLE.md). Use [PROJECT_STATUS.md](PROJECT_STATUS.md) for delivery status and [PLANv2.md](PLANv2.md) for future scope.
 
 ---
 
@@ -28,17 +28,17 @@ These are the project defaults. They are decisions, not suggestions — an imple
 | Concern | Choice | Notes |
 |---|---|---|
 | Language | **Python 3.12+** | Pin the exact version in `pyproject.toml` via `requires-python` |
-| Packaging / env | **uv** | `uv.lock` is committed; `uv sync` is reproducible. `pip install -r requirements.txt` is generated from it only where a runtime needs it (e.g. the migration runner, per [PLAN.md §29.6](PLAN.md#296-migration-execution-mechanism)) |
+| Packaging / env | **uv** | `uv.lock` is committed; `uv sync` is reproducible. `pip install -r requirements.txt` is generated from it only where a runtime needs it (e.g. the migration runner, per [PLAN.md §29.6](README.md)) |
 | Database driver | **psycopg 3** | Not psycopg2 |
 | SQL toolkit | **SQLAlchemy 2.x Core** | Core, not the ORM. The domain model is class-table inheritance across bounded schemas with typed state tables; an ORM identity map fights that design more than it helps. Use `sqlalchemy.Table` metadata and explicit queries |
 | Migrations | **Alembic** | Required by [DATABASE_CONVENTIONS.md §25.1](DATABASE_CONVENTIONS.md#251-migration-tool). Hand-written SQL inside revisions where a PostgreSQL feature is clearer than the DSL |
 | Validation / DTOs | **Pydantic v2** | Command and query payloads at the API boundary |
-| HTTP API | **FastAPI** | The API layer only ([SYSTEM_ARCHITECTURE.md §5.2](architecture/SYSTEM_ARCHITECTURE.md#52-api-layer)). The concrete REST shape is still deferred by [PLAN.md §27](PLAN.md#27-deferred-decisions) — this pins the framework, not the endpoint design |
-| Tests | **pytest** against a local/self-hosted PostgreSQL 18 server; CI repeats them against a disposable containerized PostgreSQL 18 instance | Per [PLAN.md §24.0](PLAN.md#240-verification-policy). Constraint and trigger behavior cannot be tested against SQLite or any other engine, so every layer below `tests/unit` needs a real PostgreSQL |
-| Property tests | **Hypothesis** | For the cases in [PLAN.md §25.4](PLAN.md#254-property-based-tests) |
+| HTTP API | **FastAPI** | The API layer only ([SYSTEM_ARCHITECTURE.md §5.2](architecture/SYSTEM_ARCHITECTURE.md#52-api-layer)). The concrete REST shape is still deferred by [PLAN.md §27](README.md) — this pins the framework, not the endpoint design |
+| Tests | **pytest** against a local/self-hosted PostgreSQL 18 server; CI repeats them against a disposable containerized PostgreSQL 18 instance | Per [delivery verification policy](#11-delivery-verification-and-phase-exit-review). Constraint and trigger behavior cannot be tested against SQLite or any other engine, so every layer below `tests/unit` needs a real PostgreSQL |
+| Property tests | **Hypothesis** | For the cases in [PLAN.md §25.4](README.md) |
 | Lint + format | **ruff** | Both linting and formatting; no separate black/isort |
 | Types | **mypy** | `strict` on `src/`; relaxed in tests |
-| Development database | **PostgreSQL 18.x**, local install or `compose.yaml` | The default development and test target ([PLAN.md §24.0](PLAN.md#240-verification-policy), [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)). The major version must match everywhere it runs — see [DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version). Setup: [§3](#3-local-setup) |
+| Development database | **PostgreSQL 18.x**, local install or `compose.yaml` | The default development and test target ([delivery verification policy](#11-delivery-verification-and-phase-exit-review), [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)). The major version must match everywhere it runs — see [DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version). Setup: [§3](#3-local-setup) |
 | Self-hosted deployment | **Docker Compose** (`compose.yaml`, `Dockerfile`) | The supported deployment topology ([ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)). One shared image for migrations today, API/worker/adapter once they exist |
 | UI (`portal/`) | **React 19, TypeScript, Vite, React Router**; npm; Vitest/Testing Library; ESLint | Phase 13 browser portal. `package-lock.json` is committed; use `npm ci` for clean or automated installs. The older `ui/` directory is not the portal application and must not be adopted as the Phase 13 frontend. |
 | Foundry module (`foundry-module/`) | **Plain ES modules, zero npm dependencies**; tests on Node's built-in test runner (`node --test`) | Phase 11 workstream 7. This is deliberately separate from the React portal toolchain: Foundry loads the module's native ES modules directly via `module.json`, so there is nothing to bundle or transpile. CI's `foundry-module-check` job runs its Node checks independently of the portal. |
@@ -143,7 +143,7 @@ New closeout tests go directly into the stable topic file. A temporary phase-nam
 
 ## 3. Local setup
 
-Per [PLAN.md §24.0](PLAN.md#240-verification-policy) and [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md), development runs against a **local or self-hosted PostgreSQL 18 server**. No AWS account, no credentials, and no network are needed for schema or application work — CI verifies the same work against a disposable containerized PostgreSQL 18 instance when you push ([§8](#8-continuous-integration)).
+Per [delivery verification policy](#11-delivery-verification-and-phase-exit-review) and [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md), development runs against a **local or self-hosted PostgreSQL 18 server**. No AWS account, no credentials, and no network are needed for schema or application work — CI verifies the same work against a disposable containerized PostgreSQL 18 instance when you push ([§8](#8-continuous-integration)).
 
 ### 3.1 PostgreSQL
 
@@ -165,7 +165,7 @@ pg_isready                      # must report "accepting connections"
 
 ### 3.2 Database and superuser
 
-The project's own roles (`migration_owner`, `app_read_write`, and the rest) are created **by the `001_bootstrap` migration**, not by hand — that is what keeps local and `dev` in agreement ([PLAN.md §29.9](PLAN.md#299-shared-dev-verification-mechanism-ci)). All you create manually is the database and a connecting superuser for the migrations to run as, standing in for the RDS master user.
+The project's own roles (`migration_owner`, `app_read_write`, and the rest) are created **by the `001_bootstrap` migration**, not by hand — that is what keeps local and `dev` in agreement ([PLAN.md §29.9](README.md)). All you create manually is the database and a connecting superuser for the migrations to run as, standing in for the RDS master user.
 
 ```bash
 # `postgres` superuser already exists from the install; use it directly, or
@@ -192,7 +192,7 @@ cp .env.example .env    # defaults already point at a local server
 DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/dnd_ai
 ```
 
-No `sslmode=require` locally: a stock local server has no TLS configured, whereas `dev` enforces SSL and rejects a plain connection outright (`FATAL: no pg_hba.conf entry for host "...", ... no encryption`) — that asymmetry is the single most common surprise when you do connect to `dev`. On earlier RDS PostgreSQL versions this showed up as an `rds.force_ssl` parameter; as of the PostgreSQL 18 replacement ([POSTGRES18_UPGRADE_PLAN.md](POSTGRES18_UPGRADE_PLAN.md)) that GUC no longer exists at all (confirmed absent from `pg_settings`) — enforcement moved to `pg_hba.conf`, verified directly rather than by parameter inspection.
+No `sslmode=require` locally: a stock local server has no TLS configured, whereas `dev` enforces SSL and rejects a plain connection outright (`FATAL: no pg_hba.conf entry for host "...", ... no encryption`) — that asymmetry is the single most common surprise when you do connect to `dev`. On earlier RDS PostgreSQL versions this showed up as an `rds.force_ssl` parameter; as of the PostgreSQL 18 replacement ([POSTGRES18_UPGRADE_PLAN.md](DELIVERY_HISTORY.md)) that GUC no longer exists at all (confirmed absent from `pg_settings`) — enforcement moved to `pg_hba.conf`, verified directly rather than by parameter inspection.
 
 The bare `DATABASE_URL` above is what Alembic, pytest, and CI read directly. The application itself (`src/dnd_ai/api/`, via `src/dnd_ai/config.py`) has its own, separate configuration source rule, summarized here and stated in full in that module's docstring and in `.env.example`: locally/in tests it accepts `DND_AI_DATABASE_URL`, falls back to the same unprefixed `DATABASE_URL` as a compatibility alias, and finally a hardcoded local-dev default — but in production (`DND_AI_ENVIRONMENT=production`, selected *only* by the real process/deployment environment, checked before `.env` is even considered) it never loads `.env` at all and requires `DND_AI_DATABASE_URL` explicitly, as a real environment variable or a mounted secret file named `dnd_ai_database_url` (docs/LOCAL_DEPLOYMENT.md). `.env` cannot select production either: if the real environment doesn't already say `production`, `.env` does get loaded, but if it turns out to set `DND_AI_ENVIRONMENT=production` itself, that fails startup outright rather than silently promoting the process. Other `DND_AI_*`-prefixed variables — `DND_AI_TEST_DATABASE_URL`, `DND_AI_CI_DB_NAME` (§8, tests/conftest.py), `DND_AI_SEEDS_DIR` (seed loading) — share the namespace but belong to those other subsystems, not to `Settings`; `config.py` keeps an explicit allowlist for them rather than accepting every `DND_AI_*` name.
 
@@ -243,7 +243,7 @@ Your local server is **disposable** — it holds nothing that isn't reproducible
 
 ### 3.5 Connecting to AWS `dev` (optional, no longer required)
 
-AWS RDS is an optional, no-longer-CI-verified path ([ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)) — you need this only if you have deployed the Terraform under `terraform/` yourself and want to reproduce a failure against it or inspect it directly. Setup is [CONTRIBUTING.md §2](CONTRIBUTING.md#2-aws-access-optional). `dev`, if deployed, is publicly reachable but gated by a security-group rule scoped to your current IP, opened and closed around your work rather than left standing ([PLAN.md §30.9](PLAN.md#309-shared-dev-verification-mechanism-ci)):
+AWS RDS is an optional, no-longer-CI-verified path ([ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)) — you need this only if you have deployed the Terraform under `terraform/` yourself and want to reproduce a failure against it or inspect it directly. Setup is [CONTRIBUTING.md §2](DEVELOPMENT.md). `dev`, if deployed, is publicly reachable but gated by a security-group rule scoped to your current IP, opened and closed around your work rather than left standing ([PLAN.md §30.9](README.md)):
 
 ```bash
 scripts/aws-db-allow-my-ip.sh open    # authorizes your current IP on the dev security group
@@ -342,7 +342,7 @@ This needs only the already-running `db` container (no image build, no applicati
 docker compose up -d api      # dev: also publishes 127.0.0.1:8000 via the override
 ```
 
-Unlike `migrate`, `api` is a standing service with no `profiles:` restriction, so plain `docker compose up` (no service name) starts it alongside `db` — but see the required ordering above: `migrate` and `set-role-password` must both have already succeeded, since Compose's own `depends_on` has no equivalent mechanism for a `profiles: ["tools"]` one-off job or a step external to Compose entirely. It reaches `db` over the compose-internal network — no published host port in the base `compose.yaml`, same as `migrate` — authenticating as `app_read_write` (never `postgres`/`migration_runner`/`migration_owner` — see the `APP_READ_WRITE_PASSWORD`/`API_DATABASE_URL` note above; this is a production security boundary, not a documented "future hardening" item). This is enforced by the process itself, not only by this documentation or by `compose.yaml`'s own required-variable interpolation: `dnd_ai.config.Settings` refuses to start if `API_DATABASE_URL` doesn't parse to the `app_read_write` username, and `dnd_ai.api.app`'s lifespan startup separately opens a real connection and confirms `session_user`/`current_user` both actually are `app_read_write` before the container can ever report healthy — so a stale `postgres`/`migration_runner` URL now fails the container outright at startup instead of silently starting with the wrong privileges. Its container `HEALTHCHECK` polls `/healthz` (process liveness only, deliberately database-independent; see `dnd_ai.api.app`'s own docstring) so `docker compose up --wait`/`docker compose ps` report readiness accurately — it does not, and cannot, detect a missing `app_read_write` password, which is exactly why `verify-roles` is a separate, required step rather than something the healthcheck alone catches. `compose.override.yaml` additionally publishes `api` on `127.0.0.1:${API_PORT:-8000}` for local development, mirroring `db`'s own override; a real self-hosted deployment reaches it only through a reverse proxy instead (not yet built — [§32](PLAN.md#32-local-production-deployment-plan), Phase 14).
+Unlike `migrate`, `api` is a standing service with no `profiles:` restriction, so plain `docker compose up` (no service name) starts it alongside `db` — but see the required ordering above: `migrate` and `set-role-password` must both have already succeeded, since Compose's own `depends_on` has no equivalent mechanism for a `profiles: ["tools"]` one-off job or a step external to Compose entirely. It reaches `db` over the compose-internal network — no published host port in the base `compose.yaml`, same as `migrate` — authenticating as `app_read_write` (never `postgres`/`migration_runner`/`migration_owner` — see the `APP_READ_WRITE_PASSWORD`/`API_DATABASE_URL` note above; this is a production security boundary, not a documented "future hardening" item). This is enforced by the process itself, not only by this documentation or by `compose.yaml`'s own required-variable interpolation: `dnd_ai.config.Settings` refuses to start if `API_DATABASE_URL` doesn't parse to the `app_read_write` username, and `dnd_ai.api.app`'s lifespan startup separately opens a real connection and confirms `session_user`/`current_user` both actually are `app_read_write` before the container can ever report healthy — so a stale `postgres`/`migration_runner` URL now fails the container outright at startup instead of silently starting with the wrong privileges. Its container `HEALTHCHECK` polls `/healthz` (process liveness only, deliberately database-independent; see `dnd_ai.api.app`'s own docstring) so `docker compose up --wait`/`docker compose ps` report readiness accurately — it does not, and cannot, detect a missing `app_read_write` password, which is exactly why `verify-roles` is a separate, required step rather than something the healthcheck alone catches. `compose.override.yaml` additionally publishes `api` on `127.0.0.1:${API_PORT:-8000}` for local development, mirroring `db`'s own override; a real self-hosted deployment reaches it only through a reverse proxy instead (not yet built — [§32](README.md), Phase 14).
 
 `api` always runs with `DND_AI_ENVIRONMENT=production` (a fixed value in `compose.yaml` itself, not read from `.env`) — this file is the self-hosted/production deployment topology, not a "local" convenience default, so it must never be possible to start this service without a real OIDC provider configured and have every authenticated route silently fail closed with a generic 500 instead of the intended 401. `API_OIDC_ISSUER`/`API_OIDC_AUDIENCE`/`API_OIDC_JWKS_URL` are therefore required with no fallback, exactly like `API_DATABASE_URL` — `dnd_ai.config.Settings` also additionally requires the issuer/JWKS URL to be HTTPS in this mode. To exercise an authenticated route locally without standing up a real OIDC provider, run the API directly on the host instead (`uv run uvicorn dnd_ai.api.app:app --reload`, `DND_AI_ENVIRONMENT` left at its "local" default) — see `.env.example`'s OIDC section for the two paths and how their requirements differ.
 
@@ -402,7 +402,7 @@ uv run alembic -c database/alembic.ini history --verbose
 
 The downgrade round trip is cheap now that it runs locally, so run it every time rather than saving it for a phase close — Phase 1's downgrade was broken for weeks while looking fine. `scripts/verify.sh migration-round-trip --confirm-destructive` wraps the full `downgrade base` / `upgrade head` cycle ([§7](#7-code-quality)).
 
-Against a self-hosted `compose.yaml` database, run `docker compose --profile tools run --rm migrate` ([§3.6](#36-self-hosted-docker-compose)). Against the optional AWS `dev` path, migrations run against a disposable containerized database in CI on every push and are no longer routinely run against `dev` itself; to run them there by hand anyway, use the session-scoped ingress workflow in [§3.5](#35-connecting-to-aws-dev-optional-no-longer-required). `staging` and `prod`, if ever stood up, remain private and would use the one-off migration task described in [PLAN.md §30.6](PLAN.md#306-migration-execution-mechanism) — unbuilt, optional planning material.
+Against a self-hosted `compose.yaml` database, run `docker compose --profile tools run --rm migrate` ([§3.6](#36-self-hosted-docker-compose)). Against the optional AWS `dev` path, migrations run against a disposable containerized database in CI on every push and are no longer routinely run against `dev` itself; to run them there by hand anyway, use the session-scoped ingress workflow in [§3.5](#35-connecting-to-aws-dev-optional-no-longer-required). `staging` and `prod`, if ever stood up, remain private and would use the one-off migration task described in [PLAN.md §30.6](README.md) — unbuilt, optional planning material.
 
 ---
 
@@ -418,36 +418,36 @@ Concretely, in order:
 
 1. **Project skeleton** — `pyproject.toml` with the tools from §1, `uv.lock`, ruff/mypy/pytest configuration, `src/dnd_ai/` package root.
 2. **Alembic scaffold** — `database/alembic.ini` and `database/migrations/`, configured per §4 above. Connection URL read from the environment, never hardcoded.
-3. **The bootstrap revision** — the first revision, containing everything in [PLAN.md §29.5](PLAN.md#295-database-role-schema-and-extension-bootstrap):
+3. **The bootstrap revision** — the first revision, containing everything in [PLAN.md §29.5](README.md):
    - `CREATE EXTENSION IF NOT EXISTS pgcrypto;` and `pg_trgm` (`btree_gist` is added by the Phase 3 revision that first needs it; `vector` is deferred)
-   - all thirteen schemas from [PLAN.md §3](PLAN.md#3-postgresql-schema-organization)
+   - all thirteen schemas from [PLAN.md §3](README.md)
    - `REVOKE CREATE ON SCHEMA public FROM PUBLIC;`
    - the six database roles from [DATABASE_CONVENTIONS.md §27.1](DATABASE_CONVENTIONS.md#271-database-roles): `migration_owner` created `NOLOGIN` and never granted `rds_iam`, the five login roles created `WITH LOGIN` and granted `rds_iam`
 
    It must be idempotent and re-runnable. Treat it as a revision, not an untracked script, so it is versioned like everything else.
-4. **Shared domains** — `core.rating_1_10`, `core.percentage_0_100`, `core.nonnegative_integer` per [PLAN.md §4.2](PLAN.md#42-shared-domains).
+4. **Shared domains** — `core.rating_1_10`, `core.percentage_0_100`, `core.nonnegative_integer` per [PLAN.md §4.2](README.md).
 5. **Seed infrastructure** — the mechanism for idempotent lookup seeding (§25.4), not yet the seed content.
 6. **CI workflow** — at the time, `.github/workflows/ci.yml`'s `aws-verification` job plus `terraform/modules/github_actions_ci` for the OIDC role it assumed. Both are historical: CI now verifies against containerized PostgreSQL (see §8 below), and that Terraform module was removed ([ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)).
-7. **`dev` deployed and reachable** — `terraform/environments/dev` applied, with migrations run against the live instance per [PLAN.md §30.9](PLAN.md#309-shared-dev-verification-mechanism-ci).
+7. **`dev` deployed and reachable** — `terraform/environments/dev` applied, with migrations run against the live instance per [PLAN.md §30.9](README.md).
 
-Steps 1–6 needed no AWS access at all, and under [ADR 0011](adr/0011-local-first-development-aws-verified-delivery.md) (in effect at the time) neither did verifying them: migrations and the test suite ran against a local PostgreSQL 18 server ([§3](#3-local-setup)), with CI proving the same against `dev`. Step 7 was the exception and was inherently an AWS task at the time. *(When this walkthrough was written, every step's verification went directly against `dev`; see [PLAN.md §24.0](PLAN.md#240-verification-policy) for current policy — CI no longer touches AWS at all, per [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md).)*
+Steps 1–6 needed no AWS access at all, and under [ADR 0011](adr/0011-local-first-development-aws-verified-delivery.md) (in effect at the time) neither did verifying them: migrations and the test suite ran against a local PostgreSQL 18 server ([§3](#3-local-setup)), with CI proving the same against `dev`. Step 7 was the exception and was inherently an AWS task at the time. *(When this walkthrough was written, every step's verification went directly against `dev`; see [delivery verification policy](#11-delivery-verification-and-phase-exit-review) for current policy — CI no longer touches AWS at all, per [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md).)*
 
-> **What actually closed the AWS exit criterion (historical).** This step originally read "Migration runner — `terraform/modules/db_migration_runner/`". That module was never built and turned out not to be needed: `dev` was directly reachable via the session-scoped ingress mechanism in [§30.9](PLAN.md#309-shared-dev-verification-mechanism-ci), so migrations ran against it the same way they ran anywhere else, and CI did the same with an OIDC-assumed role. The SSM-based runner in [PLAN.md §30.6](PLAN.md#306-migration-execution-mechanism) remains documented, optional planning material for `staging`/`prod` on AWS, unbuilt and not on the critical path since self-hosted Docker Compose became the default deployment topology.
+> **What actually closed the AWS exit criterion (historical).** This step originally read "Migration runner — `terraform/modules/db_migration_runner/`". That module was never built and turned out not to be needed: `dev` was directly reachable via the session-scoped ingress mechanism in [§30.9](README.md), so migrations ran against it the same way they ran anywhere else, and CI did the same with an OIDC-assumed role. The SSM-based runner in [PLAN.md §30.6](README.md) remains documented, optional planning material for `staging`/`prod` on AWS, unbuilt and not on the critical path since self-hosted Docker Compose became the default deployment topology.
 
 ---
 
 ## 6. Testing
 
-Three layers, matching [PLAN.md §25](PLAN.md#25-testing-strategy) and [DATABASE_CONVENTIONS.md §32](DATABASE_CONVENTIONS.md#32-testing-conventions):
+Three layers, matching [testing strategy](#6-testing) and [DATABASE_CONVENTIONS.md §32](DATABASE_CONVENTIONS.md#32-testing-conventions):
 
 | Layer | Location | Database | Purpose |
 |---|---|---|---|
 | Unit | `tests/unit/` | none | Pure logic — rules calculations, policy decisions, validation |
 | Database | `tests/database/` | Local/self-hosted PostgreSQL 18 (ephemeral database per run); disposable containerized PostgreSQL 18 in CI | Constraints, triggers, subtype consistency, same-world invariants, state uniqueness, branch behavior |
-| Scenario | `tests/scenario/` | Local/self-hosted PostgreSQL 18 (ephemeral database per run); disposable containerized PostgreSQL 18 in CI | Cross-domain flows, ultimately the full acceptance scenario in [PLAN.md §25](PLAN.md#25-vertical-slice-acceptance-scenario) |
+| Scenario | `tests/scenario/` | Local/self-hosted PostgreSQL 18 (ephemeral database per run); disposable containerized PostgreSQL 18 in CI | Cross-domain flows, ultimately the full acceptance scenario in [testing strategy](#6-testing) |
 | Portal | `portal/src/**/*.test.tsx` | none | Focused Vitest/jsdom and Testing Library coverage for meaningful routing, state, and authorization-presentation behavior; run from `portal/` with `npm test` |
 
-Database and scenario tests create a throwaway database per test session — `dnd_ai_test_<run-id>` — migrate it to head, run, and drop it. That is the same mechanism against either target, which is what lets the identical suite run locally and in CI with nothing skipped or conditionally disabled on either ([PLAN.md §24.0](PLAN.md#240-verification-policy), [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)).
+Database and scenario tests create a throwaway database per test session — `dnd_ai_test_<run-id>` — migrate it to head, run, and drop it. That is the same mechanism against either target, which is what lets the identical suite run locally and in CI with nothing skipped or conditionally disabled on either ([delivery verification policy](#11-delivery-verification-and-phase-exit-review), [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)).
 
 ```bash
 uv run pytest                    # everything, against your local server
@@ -455,7 +455,7 @@ uv run pytest tests/unit         # fast loop, no database at all
 uv run pytest tests/database -x  # local server, see §3
 ```
 
-**Your local/self-hosted server and CI's container must stay in agreement.** Same PostgreSQL major version, same extensions, same six bootstrap roles. When they drift, the symptom is a green local run and a red CI run — and per [PLAN.md §24.0](PLAN.md#240-verification-policy), CI is right. Investigate rather than re-run.
+**Your local/self-hosted server and CI's container must stay in agreement.** Same PostgreSQL major version, same extensions, same six bootstrap roles. When they drift, the symptom is a green local run and a red CI run — and per [delivery verification policy](#11-delivery-verification-and-phase-exit-review), CI is right. Investigate rather than re-run.
 
 If you have deployed the optional AWS `dev` path and want to run the suite against it — normally only to reproduce a failure specific to that environment — open the ingress rule per [§3.5](#35-connecting-to-aws-dev-optional-no-longer-required) and point `DATABASE_URL` at the `dev` endpoint (with `sslmode=require`). The fixture provisions its ephemeral database there exactly as it does locally.
 
@@ -471,7 +471,7 @@ A helper deserves focused regression coverage when it could realistically:
 
 Cover ordinary startup, success, assertion failure, timeout/cancellation, and teardown as applicable. Beyond those paths, require an observed incident or a concrete, realistic failure chain before adding fault injection. Assume standard-library cleanup primitives honor their documented contracts unless there is contrary evidence. Do not build and exhaustively test a second teardown framework solely to test the first.
 
-When production assertions are reliable and CI isolation contains any residual test-process state, document theoretical limitations and proceed. See [PLAN.md §25.6](PLAN.md#256-proportional-test-infrastructure-policy) for the blocking threshold and stop-loss rule.
+When production assertions are reliable and CI isolation contains any residual test-process state, document theoretical limitations and proceed. See [delivery verification policy](#11-delivery-verification-and-phase-exit-review) for the blocking threshold and stop-loss rule.
 
 Two rules that matter more here than in a typical project:
 
@@ -564,7 +564,7 @@ independent of every other job — no PostgreSQL, Docker, Python, or Foundry —
 Python and Foundry jobs are not verification of the React application; this one is.
 Run the same three commands locally before pushing portal changes.
 
-**`postgres-verification`** — a `postgres:18.4` GitHub Actions service container, health-checked before the job's steps run — covers, per [PLAN.md Phase 1](PLAN.md#phase-1-database-bootstrap), [§24.0](PLAN.md#240-verification-policy), and [DATABASE_CONVENTIONS.md §25.6](DATABASE_CONVENTIONS.md#256-migration-testing):
+**`postgres-verification`** — a `postgres:18.4` GitHub Actions service container, health-checked before the job's steps run — covers, per [PLAN.md Phase 1](README.md), [§24.0](README.md), and [DATABASE_CONVENTIONS.md §25.6](DATABASE_CONVENTIONS.md#256-migration-testing):
 
 - migration from an **empty** database through all revisions to head
 - migration state confirmation (`alembic current --verbose`)
@@ -580,7 +580,7 @@ Run the same three commands locally before pushing portal changes.
 
 Seed idempotency became a required CI step in Phase 2 when the first lookup content was added. Every later seed change participates in the same check; do not create a second seeding path outside `apply_seed()`.
 
-A pull request that changes schema without green `postgres-verification` and `postgres-tests` jobs (every shard) should not merge. Local results do not substitute for it — CI runs on a clean, disposable environment every time, which a long-lived local server does not guarantee ([PLAN.md §24.0](PLAN.md#240-verification-policy)).
+A pull request that changes schema without green `postgres-verification` and `postgres-tests` jobs (every shard) should not merge. Local results do not substitute for it — CI runs on a clean, disposable environment every time, which a long-lived local server does not guarantee ([delivery verification policy](#11-delivery-verification-and-phase-exit-review)).
 
 AWS RDS is no longer part of CI. Anyone who deploys the optional Terraform under `terraform/` is responsible for verifying that path themselves — see [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md) for what that trades away.
 
@@ -617,18 +617,85 @@ Recurring requirements when writing a command:
 
 Before opening a pull request:
 
-- [ ] The work matches the current phase in [PLAN.md](PLAN.md), or the deviation is stated explicitly
+- [ ] The work matches the current phase in [PLANv2.md](PLANv2.md), or the deviation is stated explicitly
 - [ ] Schema changes follow [DATABASE_CONVENTIONS.md](DATABASE_CONVENTIONS.md), checked against the anti-patterns in §34
 - [ ] New tables and important columns carry comments (§31)
 - [ ] Migration runs up **and** down cleanly against a fresh database on your local/self-hosted PostgreSQL 18 server (§3, §4)
 - [ ] Your local/self-hosted server is PostgreSQL 18.x, matching what CI runs — a mismatch invalidates the local result ([DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version))
 - [ ] Constraints have positive and negative tests
-- [ ] Tests target production behavior or a credible regression; any new test-harness fault injection satisfies [PLAN.md §26.6](PLAN.md#266-proportional-test-infrastructure-policy)
+- [ ] Tests target production behavior or a credible regression; any new test-harness fault injection satisfies [delivery verification policy](#11-delivery-verification-and-phase-exit-review)
 - [ ] Code sits in the layer [SYSTEM_ARCHITECTURE.md §5](architecture/SYSTEM_ARCHITECTURE.md#5-layering) prescribes
-- [ ] `ruff format --check`, `ruff check`, `mypy src`, and `pytest` all pass locally
-- [ ] CI is green on the pushed commit — containerized PostgreSQL 18 verification ([§8](#8-continuous-integration), [PLAN.md §24.0](PLAN.md#240-verification-policy)). A green local run is not a substitute; a red CI run after a green local one is a real defect or local/CI drift, not flakiness to re-run away
-- [ ] If the change adds or alters a deployable, it runs via `compose.yaml` and was exercised there; an AWS deployable additionally needs the (optional, no longer required) AWS verification described in [PLAN.md §31.8](PLAN.md#318-per-phase-deployment-expectations)
+- [ ] Appropriate local checks pass: code changes use `ruff format --check`, `ruff check`, `mypy src`, and affected/full suites as required; documentation-only changes use §11.2
+- [ ] CI is green on the pushed commit — containerized PostgreSQL 18 verification ([§8](#8-continuous-integration), [delivery verification policy](#11-delivery-verification-and-phase-exit-review)). A green local run is not a substitute; a red CI run after a green local one is a real defect or local/CI drift, not flakiness to re-run away
+- [ ] If the change adds or alters a deployable, it runs via `compose.yaml` and was exercised there; an AWS deployable additionally needs the (optional, no longer required) AWS verification described in [PLAN.md §31.8](README.md)
 - [ ] No secret, credential, or connection string is committed
 - [ ] Any new cross-cutting concept is reflected in the relevant `docs/` file **in the same change** — these documents are meant to stay current, not be reconciled later
-- [ ] If this change completes a phase, the phase exit review in [PLAN.md §24.1](PLAN.md#241-phase-exit-review) is done: `docs/PHASEn_VERIFICATION.md` written, recurring obligations re-checked, next phase reviewed and amended
+- [ ] If this change completes a phase, the phase exit review in [delivery verification policy](#11-delivery-verification-and-phase-exit-review) is done: verification/acceptance record written with SHA, method, results and CI run, recurring obligations re-checked, next phase reviewed and amended
 - [ ] Phase closure is not blocked solely by theoretical failures of test-only cleanup primitives; lower-risk limitations are documented and delivery continues
+
+## 11. Delivery verification and phase exit review
+
+Development uses local/self-hosted PostgreSQL 18; CI repeats verification against disposable
+containerized PostgreSQL 18. AWS is optional and is not the current CI merge gate. Local
+and CI versions, extensions and bootstrap roles must agree. Investigate a red CI result;
+a passing retry without an explanation does not establish a cause.
+
+A phase closes only after its specified acceptance criteria, local migration/test evidence,
+final-head CI, and any required deployed/Compose/manual exercise are recorded. Store the
+SHA, environment, exact check, observed result, CI run ID and limitations in its active
+verification/acceptance record. Completed records can later be retired to immutable Git
+history with a concise DELIVERY_HISTORY entry. This changes document storage, not the
+evidence required for closure. Distinguish local, CI, browser, scripted, AT and owner evidence.
+
+Re-check object ownership by `migration_owner`, default privileges as the runtime roles,
+seed idempotency, positive/negative constraints, comments, FK indexes, and supported
+downgrade/upgrade behavior on disposable databases. Never run a downgrade-to-base on the
+working database. Review the next phase's first-time mechanisms, due deferrals and
+falsifiable exit criteria; update the roadmap/topic contract in the same change.
+
+Before requiring additional harness work, record the credible production/CI failure,
+realistic trigger, why containment is insufficient, smallest correction/test, and cost
+relative to deliverables. Once production invariants, realistic scenarios, ordinary cleanup
+and final-head CI pass, record theoretical helper limitations as nonblocking and continue.
+Reopen only for concrete production risk, false results, persistent external-state leaks
+or repeatable CI instability. The current ISSUE_GRADING_RUBRIC governs disposition.
+
+### 11.1 Coverage targets
+
+Database coverage includes subtype consistency, same-world constraints, time ordering,
+branch inheritance, state uniqueness, event/state atomicity, quest transitions and visibility.
+Application tests cover authentication, role/grant/revocation, non-disclosure, idempotency,
+rollback and filtering before AI context assembly. Cross-domain scenarios use DUNGEON_FLOW.
+
+Property-based targets: timeline resolution, relationship participant combinations,
+event-effect application, quest dependency graphs, world-time ordering. Performance targets:
+effective-state queries, NPC context, dungeon maps, session ingestion, knowledge filters,
+branch resolution. These are strategy requirements, not claims of completed coverage.
+
+Browser boundary coverage should exercise activation/login/session/logout/reset, uniform
+failed-auth/recovery behavior, no durable browser-readable credentials, CSRF rejection,
+context changes, GM/player/observer boundaries, grant/session/device revocation, two-device
+Foundry isolation, feature-disabled surfaces making no requests, and hidden-resource
+non-disclosure. Keep it proportional; jsdom tests do not prove real-browser or AT behavior.
+
+### 11.2 Documentation-only changes
+
+For prose, links and comment-only reference updates, inspect the diff, validate changed
+local links/anchors and run `git diff --check`. Do not create a database or run the full
+application suite solely for a documentation reorganization. If a tool/test reads a changed
+document or a comment edit changes behavior, run the affected check and report it separately.
+
+## 12. Contribution and assistance
+
+Use a feature branch and explain what changed and why. Review the diff and staged paths
+before committing, especially in a shared checkout. Commit examples, source, migrations,
+lockfiles and documentation; never credentials, local `.env`, Terraform state, tfvars or
+generated build output. Document new cross-cutting behavior in its topic authority.
+
+The implemented OpenAI-compatible provider uses Chat Completions; provider configuration
+and secrets are described in `.env.example`. Discord integration remains roadmap work.
+Keep secrets in private local environment/host-mounted configuration and out of Git.
+For portal setup use [portal/README](../portal/README.md); optional AWS setup is in
+[INFRASTRUCTURE](INFRASTRUCTURE.md). The [documentation index](README.md) routes design
+questions. Report reproducible issues with sanitized expected/actual behavior at the
+repository issue tracker; never include tokens, passwords or authenticated headers.

@@ -3,7 +3,7 @@
 - **Status**: Accepted; decision 3 amended by [ADR 0020](0020-scoped-system-world-and-campaign-roles.md) (world-definition writes also need a world capability)
 - **Date**: 2026-10-04
 - **Builds on**: [ADR 0014](0014-world-authoring-authority.md) (authority), [ADR 0003](0003-separate-world-timeline-and-campaign.md) (world, timeline, campaign), [ADR 0004](0004-use-event-assisted-state.md) (state needs a causal event).
-- **Related**: [ENTITY_LIFECYCLE.md](../ENTITY_LIFECYCLE.md) §3, §21.1; [PLAN.md](../PLAN.md) Phase 15.
+- **Related**: [ENTITY_LIFECYCLE.md](../ENTITY_LIFECYCLE.md) §3, §21.1; [PLAN.md](../README.md) Phase 15.
 
 ## Context
 
@@ -42,4 +42,4 @@ Phase 14 delivered the authoring kernel: the canon-lifecycle commands, optimisti
 
 ## References
 
-- [PLAN.md](../PLAN.md) Phase 15 · [ENTITY_LIFECYCLE.md](../ENTITY_LIFECYCLE.md) · [SYSTEM_ARCHITECTURE.md](../architecture/SYSTEM_ARCHITECTURE.md) §7.1 · [UI_DESIGN.md](../UI_DESIGN.md) §4.6
+- [PLAN.md](../README.md) Phase 15 · [ENTITY_LIFECYCLE.md](../ENTITY_LIFECYCLE.md) · [SYSTEM_ARCHITECTURE.md](../architecture/SYSTEM_ARCHITECTURE.md) §7.1 · [UI_DESIGN.md](../UI_DESIGN.md) §4.6

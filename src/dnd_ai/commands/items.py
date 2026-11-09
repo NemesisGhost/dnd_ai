@@ -16,7 +16,7 @@ caller rather than built speculatively (conventions §33.1).
 
 transfer_item_possession()'s narrative.event_effects.previous_value records
 the item's actual prior holder/container/location (added during Phase 9
-review, before this PR merged — docs/PHASE9_VERIFICATION.md's correction-
+review, before this PR merged — docs/DELIVERY_HISTORY.md's correction-
 pass note) — NULL only for a genuine first placement, and the real
 {holder_entity_id, container_id, location_id} snapshot (matching new_value's
 own shape) for every subsequent transfer.

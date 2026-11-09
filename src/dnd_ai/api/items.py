@@ -1,7 +1,7 @@
 """Item-possession and identification command endpoints.
 
 Exposes `transfer_item_
-possession` and `identify_item` (docs/PHASE9_VERIFICATION.md) over HTTP, on
+possession` and `identify_item` (docs/DELIVERY_HISTORY.md) over HTTP, on
 the same already-delivered OIDC authentication (`dnd_ai.api.auth`),
 transaction management (`dnd_ai.api.deps`), and access resolution
 (`dnd_ai.api.access`, `dnd_ai.domain.access`) `dnd_ai.api.encounters` uses.

@@ -1,11 +1,10 @@
-# Phase 13D character Sheet-panel backend
+# Character sheet read contract
 
-Backend-only workstream closing the documented gap preventing the Character
-workspace's Sheet panel (`docs/UI_DESIGN.md` §5.5) from displaying a
-character's active mechanical build. Scope is backend-only, per the owner's
-instructions for this workstream: `portal/` was not opened or modified.
-React implementation of the Sheet panel remains owner work on another
-machine, tracked separately.
+Current reference for the implemented sheet endpoint and active-build resolver, extracted
+from the Phase 13D delivery record. ADRs 0021–0023 define accepted future changes; they
+do not silently change this implementation. Reconcile a limitation against the current
+command/query before treating it as outstanding work. Historical verification and fixture
+details remain in [delivery history](../DELIVERY_HISTORY.md).
 
 ## 1. Endpoint and response contract
 
@@ -135,17 +134,7 @@ order:
    *as of its own effective history* — including recovering a value from
    an ancestor whose row has since changed again, which reading the row
    directly can never do.
-3. **Administrative baseline fallback.** No command in this codebase
-   changes `character_build_id` through a causal event today — the only
-   writer (`scripts/setup_phase13c_dev_data.py`) is administrative
-   (`last_event_id IS NULL`), which CLAUDE.md rule 6 explicitly permits
-   ("or explicit administrative source"). An administrative write has no
-   recorded time to bound against a branch point. Since such a write
-   currently only ever happens once, at character setup, before any
-   branching involving that character could occur, an ancestor's
-   administrative row is walked one `parent_timeline_id` level at a time
-   and trusted unconditionally — see §8 for why this is a documented, not
-   fully general, limitation rather than a completed design.
+3. **Baseline fallback.** Walk ancestors when no local state or branch-effective build event exists. A row with `last_event_id IS NULL` supplies the administrative baseline. If an ancestor later activated a build by event, recover the baseline from the `previous_value` of its earliest build effect. Checkpoint 15.2B-2 implemented `activate_character_build`: the first activation on untouched state is administrative; subsequent activations atomically record `character_build_activated`, previous/new values, and state. The fallback does not make arbitrary later event-less rewrites branch-safe.
 
 Proven at `tests/database/test_query_character_sheet.py`:
 `test_branch_child_with_no_local_state_inherits_the_parents_administrative_build`,
@@ -313,184 +302,4 @@ Not duplicated onto this endpoint, per the task's explicit boundary:
 - **Homebrew/non-`dnd5e` rulesets get raw values only.** Extending
   `dnd_ai.domain.character_calculations` to a second ruleset is future
   work, gated behind that ruleset actually existing and needing it.
-- **Administrative (event-less) `character_build_id` changes are not fully
-  branch-safe.** §2.1's step 3 fallback treats an ancestor's administrative
-  row as always safe to inherit, which only holds because, in current
-  practice, such a write happens exactly once, at character setup, before
-  any branch involving that character exists. If a *second* administrative
-  write ever changed an already-branched-from ancestor's build, this
-  resolver cannot detect that (an administrative write carries no
-  recorded time to bound against a branch point) and would incorrectly
-  treat the new value as always having been true — the same class of leak
-  §2.1 otherwise prevents for event-linked writes. Closing this for good
-  requires routing every `character_build_id` change through a causal
-  event, mirroring the existing HP/condition/resource commands in
-  `dnd_ai.commands.character_state` (`_adjust_hit_points_impl`,
-  `_apply_character_condition_impl`, `_adjust_character_resource_impl`); no
-  such "select active build" command exists yet because nothing in the
-  product calls it today — building one with no caller was out of scope
-  for this fix. `resolve_effective_character_build_id()` already prefers
-  the sound, bounded event-linked path (step 2) whenever one exists, so
-  adding that command later closes this gap without any further change to
-  the read side.
-
-## 9. Fixture data added
-
-`scripts/setup_phase13c_dev_data.py` (already the source of the Phase 13C/
-13D live-verification dataset) was extended, not replaced — same
-idempotent create-or-reconcile discipline as its existing Current-State
-extension:
-
-- **Character A** ("Fighter 2 / Wizard 1", champion subclass) — a fully
-  populated build: all six ability scores; a multiclass build with a
-  subclass; a proficient skill (Athletics) and an expertise skill
-  (Perception — a fixture liberty, since nothing in this schema restricts
-  expertise by class); a proficient saving throw (Strength); two free-text
-  proficiencies (Martial Weapons, Heavy Armor); two granted features
-  (Second Wind, Spellcasting — one per class); one spellcasting profile
-  with independent known-only (Mage Hand), known-and-prepared (Magic
-  Missile), and prepared-only (Cure Wounds) spells; one language
-  (Common); one sense (Darkvision, 60 ft); one movement mode (Walk, 30
-  ft).
-- **Character B** ("Fighter 1") — a legitimate *minimal* build: one class
-  level, only three of six ability scores (so a skill/saving throw
-  governed by an absent ability renders its documented null-modifier
-  state), one movement mode, and no proficiencies/features/spellcasting/
-  languages/senses at all.
-
-Both builds are selected as each character's *active* build on Phase13C
-Timeline A via `campaign.character_state.character_build_id`
-(`_ensure_active_build_selection`) — never a "current" flag on the build
-itself. Every `rules.*` id the fixture references is looked up by code
-against the already-seeded dnd5e/2024 content (migration 022); the fixture
-creates no `rules.*` rows of its own.
-
-## 10. Files changed
-
-- `src/dnd_ai/domain/character_calculations.py` (new) — the derived-
-  calculation service (§5).
-- `src/dnd_ai/queries/character_sheet.py` (new) — `get_character_sheet_view`
-  and its view dataclasses.
-- `src/dnd_ai/queries/character_build_resolution.py` (new) —
-  `resolve_effective_character_build_id()`, the branch-effective resolver
-  (§2.1).
-- `src/dnd_ai/api/characters.py` — the new `/sheet` route, its Pydantic
-  response models, and an updated module docstring.
-- `scripts/setup_phase13c_dev_data.py` — Character A/B sheet fixture data
-  (§9) and updated module docstring.
-- `tests/factories.py` — new factories for `character.character_builds`/
-  `.character_ability_scores`/`.character_class_levels`/
-  `.character_proficiencies`/`.character_features`/
-  `.character_spellcasting_profiles`/`.character_known_spells`/
-  `.character_prepared_spells`/`.character_languages`/`.character_senses`/
-  `.character_movements` and for `rules.classes`/`.subclasses`/`.features`/
-  `.spells`/`.damage_types`/`.proficiency_types`/`.languages`; extended
-  `make_character_state` with an optional `character_build_id`; extended
-  `make_event_effect` with `previous_value`/`new_value` (JSON-encoded, same
-  convention every real command uses); added `ruleset_content_id` and
-  `use_dnd5e_ruleset` test helpers for reusing already-seeded rules content
-  without colliding with it.
-- `tests/database/test_query_character_sheet.py` (new; extended again for
-  §2.1's branch-effective regression tests).
-- `tests/database/test_api_character_sheet.py` (new).
-- `tests/database/test_setup_phase13c_dev_data.py` — one new regression
-  reading Character A/B's sheets back through the real query.
-- `docs/PHASE13D_CHARACTER_SHEET_BACKEND.md` (this file).
-- `docs/PLAN.md` — one added clause to the Phase 13 status paragraph.
-
-No migration was required — every table, column, and function this
-endpoint reads (`character.character_builds` and its children,
-`campaign.character_state.character_build_id`, `campaign.
-effective_events()`, `narrative.event_effects`, `rules.*`) already
-existed. Confirmed by `alembic check` reporting no schema diff.
-
-`portal/` was not opened or modified.
-
-## 11. Focused tests added
-
-**`tests/database/test_query_character_sheet.py`** (query-layer, no HTTP —
-mirrors `tests/database/test_query_bootstrap.py`'s direct-query
-discipline): no-character-state and no-build-selected empty-sheet states;
-character-level languages/senses/movements returned even with no active
-build; active build resolved from `campaign.character_state`, not the
-newest or an arbitrary build (proven against three builds, only one
-selected); unrelated timelines selecting independent builds for the same
-character; nonexistent/cross-world character rejection; multiclass total
-level and deterministic class ordering (inserted out of alphabetical
-order); ability-modifier floor-division across six scores including two
-below 10; the complete skill list (proficient, expertise, and non-
-proficient with a missing governing ability, in one build); saving-throw
-proficiency and bonus across every ruleset ability; free-text
-proficiencies kept separate from skills/saving throws; feature source-
-category derivation (class vs. species) and deterministic ordering;
-independent known/prepared spell associations (known-only, both, and
-prepared-only in one profile, each spell appearing exactly once);
-legitimate empty collections for a build with only one class level; the
-unsupported-ruleset raw-values-only contract; and (§2.1) branch-effective
-resolution — a branch child with no local state inheriting the parent's
-administratively selected build, a branch child *not* seeing a parent
-build change made after the branch (the exact leak CLAUDE.md rule 7
-forbids), a branch child that selects its own build staying independent of
-the parent, a three-level ancestry applying each timeline's own branch
-cutoff rather than the original requester's, and a fully stateless branch
-ancestry still returning the documented empty sheet.
-
-**`tests/database/test_api_character_sheet.py`** (HTTP/authorization —
-mirrors `tests/database/test_api_characters.py`'s access-control shape):
-non-member 404, capless-member 403, campaign-view-but-no-character-
-capability 404, summary-tier-alone 404, full-tier success with build/
-class/ability/skill data, a GM without any character-specific
-relationship, a valid character with no active build returning the
-documented empty response, a character-targeted `canon.edit` denial
-overriding a role-derived GM, cross-world/nonexistent character
-rejection, and that the two are indistinguishable (identical error code
-and message; `correlation_id` is intentionally excluded from that
-comparison, since it legitimately differs per request).
-
-**`tests/database/test_setup_phase13c_dev_data.py`** (+1 test) —
-`test_character_a_and_b_sheets_match_the_documented_fixture`: runs the
-real fixture script twice (idempotency), then reads both characters' full
-sheets back through the real `get_character_sheet_view` query and asserts
-every documented populated/minimal value from §9.
-
-Deliberately not duplicated: the full authorization deny/allow-precedence
-matrix (already exhaustive in `test_api_characters.py`), database
-constraint tests already covered by migration tests, and broad coverage of
-every possible D&D 5e rule.
-
-## 12. Verification
-
-Run against a local PostgreSQL 18 server (`DATABASE_URL` set per
-`docs/DEVELOPMENT.md` §3):
-
-```
-uv run ruff format --check   # PASS
-uv run ruff check            # PASS
-uv run mypy src              # PASS
-uv run pytest tests/unit           # PASS (500 passed)
-uv run pytest tests/database        # PASS (3320 passed)
-uv run pytest tests/scenario        # PASS (95 passed)
-uv run alembic -c database/alembic.ini upgrade head && \
-  uv run alembic check        # PASS — no schema diff (no migration needed)
-```
-
-Full battery via `scripts/verify.sh full`:
-
-```
-PASS: ruff format --check (0s)
-PASS: ruff check (0s)
-PASS: mypy src (1s)
-PASS: node --test foundry-module (0s)
-PASS: pytest tests/unit (37s)
-PASS: pytest tests/database (398s)
-PASS: pytest tests/scenario (14s)
-PASS: alembic check (schema diff) (2s)
-All requested stages passed.
-```
-
-(`tests/database` ran 3320 tests — the 3315 recorded at the initial
-Sheet-panel delivery, plus the 5 new branch-effective-resolution
-regression tests added by this correction; `tests/scenario` ran 95.)
-
-`git status --porcelain -- portal/` confirmed empty before and after this
-workstream.
+- **Arbitrary later administrative build rewrites are not branch-safe.** The supported `activate_character_build` command already records later activations through causal events; its first activation initializes the administrative baseline. Do not bypass it with a second event-less write to an ancestor after branching. Such a write has no historical time to bound and cannot be reconstructed safely by the fallback. The old claim that no activation command exists was superseded by checkpoint 15.2B-2.

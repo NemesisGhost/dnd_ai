@@ -11,7 +11,7 @@ combat-resolution logic dnd_ai.commands.encounters.resolve_combat_turn()
 uses — never a raw table write.
 
 Transaction design (revised twice during Phase 9 review, before this PR
-merged — docs/PHASE9_VERIFICATION.md records both correction passes): the
+merged — docs/DELIVERY_HISTORY.md records both correction passes): the
 domain mutation and its successful completion bookkeeping commit or roll
 back together, via dnd_ai.commands.encounters._resolve_combat_turn_impl()
 — the composable form of resolve_combat_turn() that runs on a

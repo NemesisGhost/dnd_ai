@@ -2,7 +2,7 @@
 (`GET /campaigns/{id}/knowledge`) — the audience-filtered discovery/list
 side of the Knowledge screen (docs/UI_DESIGN.md §5.6).
 
-Covers, per docs/PHASE13D_BACKEND_READINESS.md §9: known fact; false party
+Covers, per docs/api/READ_API.md §9: known fact; false party
 belief (interpretation, not canonical truth); recently-discovered ordering
 and pagination; character-private knowledge and its exclusion from another
 character's perspective; party-shared and its exclusion of another party's

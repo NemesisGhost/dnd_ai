@@ -40,7 +40,6 @@ A move to a VPS or AWS is justified if measured availability, bandwidth, capacit
 ## References
 
 - [ADR 0012](0012-self-hosted-docker-deployment-and-ci-verification.md) — the self-hosted Docker Compose decision this ADR builds on
-- [PLAN.md](../PLAN.md)
+- [PLAN.md](../README.md)
 - [SYSTEM_ARCHITECTURE.md](../architecture/SYSTEM_ARCHITECTURE.md)
 - [LOCAL_DEPLOYMENT.md](../LOCAL_DEPLOYMENT.md)
-

@@ -5,7 +5,7 @@ Revises: 138_world_roles_and_use_grants
 Create Date: 2026-10-25 12:00:00.000000
 
 Purpose:
-    CP-6 / DR-2 (PHASE14_15_INTEGRATION_AND_CONSOLIDATION_PLAN.md). A character's inventory was
+    CP-6 / DR-2 (docs/BACKLOG.md). A character's inventory was
     readable only with the full character view (`character.view_full`), so a `viewer` or
     `observer_approved_viewer` (discover + summary) could never see what a character carries.
     `character.view_inventory` is a narrower, read-only capability: its holder reads the inventory

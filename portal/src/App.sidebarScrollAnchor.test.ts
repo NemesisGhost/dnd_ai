@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest"
 // scrolls the page by that height between pointerdown and click, so a control far down a long page
 // (the Sharing page's "Transfer ownership…") is not under the pointer when the button is released.
 // jsdom has no layout, so this pins the one declaration that stops it; the behaviour itself was
-// observed and fixed in real Chrome (see docs/SCOPED_ROLE_INTEGRATION_VERIFICATION.md).
+// observed and fixed in real Chrome (see docs/PHASE14_15_ACCEPTANCE_LEDGER.md).
 describe("sidebar scroll anchoring", () => {
     it("excludes the sidebar from scroll anchoring, and only the sidebar", () => {
         const css = readFileSync(resolve(process.cwd(), "src/App.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "")

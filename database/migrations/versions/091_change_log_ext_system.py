@@ -6,7 +6,7 @@ Create Date: 2026-08-19 15:00:00.000000
 
 Purpose:
     Phase 11 workstream 2 correction: closes a critical Foundry-adapter
-    authentication scope defect (docs/PHASE11_VERIFICATION.md /
+    authentication scope defect (docs/DELIVERY_HISTORY.md /
     `src/dnd_ai/domain/access.py`'s `AuthenticatedPrincipal` docstring have
     the full account). Part of that correction restricts a `FoundrySystem`
     credential to a narrow, explicitly opted-in set of adapter-facing

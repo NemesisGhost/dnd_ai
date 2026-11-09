@@ -6,21 +6,21 @@
 
 Reference for the AWS infrastructure that hosts the platform — what exists, how it is configured, and how to operate it.
 
-Today that is only the PostgreSQL database and its supporting resources, which is what this document describes. Compute for the application services on AWS is planned but unbuilt and optional: [PLAN.md §31](PLAN.md#31-aws-deployment-plan-for-application-services) sketches ECS Fargate/Lambda paths, and this document gains those sections when and if the modules exist.
+Today that is only the PostgreSQL database and its supporting resources, which is what this document describes. Compute for the application services on AWS is planned but unbuilt and optional: [PLAN.md §31](README.md) sketches ECS Fargate/Lambda paths, and this document gains those sections when and if the modules exist.
 
 **Which document do you want?**
 
 | You want to… | Read |
 |---|---|
-| Set up your environment for the first time | [CONTRIBUTING.md](CONTRIBUTING.md) |
-| Deploy quickly, having done it before | [QUICKSTART.md](QUICKSTART.md) |
-| Confirm you're ready to apply | [CHECKLIST.md](CHECKLIST.md) |
+| Set up your environment for the first time | [Development setup](DEVELOPMENT.md) |
+| Deploy quickly, having done it before | [Deploying](#3-deploying) |
+| Confirm you're ready to apply | [AWS preflight](#12-optional-aws-preflight) |
 | Look up a variable, output, or error | **This document** |
 | Set up your everyday dev/test database (local, not AWS) | [DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup) |
-| Reach the `dev` database directly | [DEVELOPMENT.md §3.5](DEVELOPMENT.md#35-connecting-to-aws-dev-occasional) |
-| Know what the infrastructure *should* become | [PLAN.md §29](PLAN.md#29-aws-terraform-deployment-plan-for-postgresql) |
+| Reach the `dev` database directly | [DEVELOPMENT.md §3.5](DEVELOPMENT.md#35-connecting-to-aws-dev-optional-no-longer-required) |
+| Know what the infrastructure *should* become | [PLAN.md §29](README.md) |
 
-[PLAN.md §29](PLAN.md#29-aws-terraform-deployment-plan-for-postgresql) is the authoritative **plan**; this document describes **what exists today**. Where the two disagree about intent, §29 wins.
+[PLAN.md §29](README.md) is the authoritative **plan**; this document describes **what exists today**. Where the two disagree about intent, §29 wins.
 
 ---
 
@@ -36,7 +36,7 @@ Today that is only the PostgreSQL database and its supporting resources, which i
 - [8. Teardown](#8-teardown)
 - [9. Cost](#9-cost)
 - [10. Troubleshooting](#10-troubleshooting)
-- [11. Known gaps and discrepancies](#11-known-gaps-and-discrepancies)
+- [11. Known gaps and discrepancies](#11-known-gaps-and-historical-configuration)
 
 ---
 
@@ -66,7 +66,7 @@ A `terraform apply` in `terraform/environments/dev/` provisions, in dependency o
 
 ### What does not exist yet
 
-Per [PLAN.md §29.1](PLAN.md#291-scope-and-current-state), still to be built:
+Per [PLAN.md §29.1](README.md), still to be built:
 
 - Remote Terraform state (currently **local state only** — see §29.2 of the plan).
 - `staging/` and `prod/` environment directories.
@@ -74,11 +74,11 @@ Per [PLAN.md §29.1](PLAN.md#291-scope-and-current-state), still to be built:
 - A migration runner (`terraform/modules/db_migration_runner/`) able to reach a private RDS instance to run `alembic upgrade head` — used for `staging`/`prod`, which stay non-public.
 - A `multi_az` variable on the `database` module.
 - CloudWatch alarms.
-- **All application compute.** Per [PLAN.md §30](PLAN.md#30-aws-deployment-plan-for-application-services), the API, background worker, and Discord adapter run on ECS Fargate from a shared image in ECR, behind an ALB. None of `ecr`, `ecs_cluster`, `ecs_service`, or `alb` modules exist. Note that pulling images into the private subnets requires either ECR/S3 VPC endpoints or a NAT Gateway — the current design has neither ([PLAN.md §30.9](PLAN.md#309-open-items)).
+- **All application compute.** Per [PLAN.md §30](README.md), the API, background worker, and Discord adapter run on ECS Fargate from a shared image in ECR, behind an ALB. None of `ecr`, `ecs_cluster`, `ecs_service`, or `alb` modules exist. Note that pulling images into the private subnets requires either ECR/S3 VPC endpoints or a NAT Gateway — the current design has neither ([PLAN.md §30.9](README.md)).
 
 ### What was removed
 
-The pre-restart deployment tooling — the `db_runner`, `lambda-api`, and `lambda-with-build` modules, the `db-schema-introspect`/`query-runner` environments, and the Lambda that applied a directory of raw SQL files — has been **deleted**. Do not rebuild it from git history. Schema changes go through Alembic per [DATABASE_CONVENTIONS.md §25](DATABASE_CONVENTIONS.md#25-migration-conventions), executed by the migration runner described in [PLAN.md §29.6](PLAN.md#296-migration-execution-mechanism).
+The pre-restart deployment tooling — the `db_runner`, `lambda-api`, and `lambda-with-build` modules, the `db-schema-introspect`/`query-runner` environments, and the Lambda that applied a directory of raw SQL files — has been **deleted**. Do not rebuild it from git history. Schema changes go through Alembic per [DATABASE_CONVENTIONS.md §25](DATABASE_CONVENTIONS.md#25-migration-conventions), executed by the migration runner described in [PLAN.md §29.6](README.md).
 
 ---
 
@@ -98,7 +98,7 @@ The pre-restart deployment tooling — the `db_runner`, `lambda-api`, and `lambd
 
 The AWS provider is pinned to `~> 5.0` in `terraform/environments/dev/main.tf`.
 
-Credential configuration, named profiles, and creating a scoped deployment identity are covered in [CONTRIBUTING.md §2](CONTRIBUTING.md#2-aws-access-optional). Verify with `aws sts get-caller-identity` before anything else — a missing or expired credential is the most common cause of a failed first apply.
+Select the intended AWS CLI profile and region before using Terraform. Verify the active identity with `aws sts get-caller-identity`; credentials belong in the local CLI/identity provider configuration, not source control. The permissions table below describes the deployment operations.
 
 ### 2.2 Required IAM permissions
 
@@ -113,15 +113,15 @@ The apply creates resources across six services. The identity running Terraform 
 | IAM | The RDS enhanced-monitoring service role | `iam:CreateRole`, `iam:AttachRolePolicy`, `iam:PassRole`, `iam:GetRole`, `iam:DeleteRole` |
 | CloudWatch Logs | PostgreSQL log export | `logs:CreateLogGroup`, `logs:PutRetentionPolicy`, `logs:DescribeLogGroups` |
 
-`PowerUserAccess` covers everything except the IAM role creation; pair it with the narrow role policy in [CONTRIBUTING.md §2.2](CONTRIBUTING.md#22-creating-a-deployment-identity). Least-privilege policies for the *runtime* roles — as opposed to the deploying identity — are in [§6](#6-secrets).
+The deployment identity needs the relevant scoped actions above, including permission to create/pass the enhanced-monitoring role. Do not assume a broad managed policy supplies IAM permissions. Runtime-role policies are described in [§6](#6-secrets).
 
-The pre-flight checklist is [CHECKLIST.md](CHECKLIST.md).
+The pre-flight checklist is [AWS preflight](#12-optional-aws-preflight).
 
 ---
 
 ## 3. Deploying
 
-The step-by-step path is [QUICKSTART.md](QUICKSTART.md); the pre-flight is [CHECKLIST.md](CHECKLIST.md). In brief:
+The step-by-step path is [Deploying](#3-deploying); the pre-flight is [AWS preflight](#12-optional-aws-preflight). In brief:
 
 ```powershell
 Copy-Item terraform/environments/dev/terraform.tfvars.example terraform/environments/dev/terraform.tfvars
@@ -129,7 +129,7 @@ Copy-Item terraform/environments/dev/terraform.tfvars.example terraform/environm
 ./build.ps1 -Environment dev -Action apply -AutoApprove
 ```
 
-> **Set `my_ip_cidr` explicitly, and set it narrow.** Its declared default is `0.0.0.0/0` — never leave that in place. Per [PLAN.md §29.9](PLAN.md#299-shared-dev-verification-mechanism-ci), `dev` needs `enable_public_access = true` so contributors and CI can reach it day to day, but the actual per-caller allowlisting happens out-of-band via short-lived security-group rules added and removed with the AWS CLI (`scripts/aws-db-allow-my-ip.sh`, the CI workflow), not through this variable. Treat `my_ip_cidr` as a narrow, static baseline (e.g. your own IP, for the initial verification in [§7](#7-verification)) — it is not the mechanism day-to-day access relies on, and a `terraform apply` will not affect rules added out-of-band by that mechanism (see the note on drift in §29.9).
+> **Set `my_ip_cidr` explicitly, and set it narrow.** Its declared default is `0.0.0.0/0` — never leave that in place. Per [PLAN.md §29.9](README.md), `dev` needs `enable_public_access = true` so contributors and CI can reach it day to day, but the actual per-caller allowlisting happens out-of-band via short-lived security-group rules added and removed with the AWS CLI (`scripts/aws-db-allow-my-ip.sh`, the CI workflow), not through this variable. Treat `my_ip_cidr` as a narrow, static baseline (e.g. your own IP, for the initial verification in [§7](#7-verification)) — it is not the mechanism day-to-day access relies on, and a `terraform apply` will not affect rules added out-of-band by that mechanism (see the note on drift in §29.9).
 
 Terraform directly, if you prefer:
 
@@ -141,7 +141,7 @@ terraform -chdir=terraform/environments/dev apply tfplan
 
 Initial apply takes roughly 10–15 minutes, dominated by RDS instance creation. `build.ps1` also runs the secrets upsert afterward if `terraform/environments/dev/secrets.local.json` exists (see [§6](#6-secrets)); pass `-SkipSecrets` to suppress it.
 
-**The result is an empty database.** No schemas, roles, or extensions — that bootstrap is the first Alembic revision, run by the migration runner, and neither exists yet ([PLAN.md §29.5–§29.6](PLAN.md#295-database-role-schema-and-extension-bootstrap)).
+**The result is an empty database.** No schemas, roles, or extensions — that bootstrap is the first Alembic revision, run by the migration runner, and neither exists yet ([PLAN.md §29.5–§29.6](README.md)).
 
 ---
 
@@ -153,7 +153,7 @@ Initial apply takes roughly 10–15 minutes, dominated by RDS instance creation.
 |---|---|---|
 | `aws_region` | `us-east-1` | Deployment region |
 | `owner_name` | `developer` | Applied as an `Owner` tag to all resources |
-| `my_ip_cidr` | `0.0.0.0/0` | Static baseline ingress CIDR; **always override, narrowly**. Per-session access is layered on top out-of-band ([§3](#3-deploying), [PLAN.md §29.9](PLAN.md#299-shared-dev-verification-mechanism-ci)), not driven through this variable |
+| `my_ip_cidr` | `0.0.0.0/0` | Static baseline ingress CIDR; **always override, narrowly**. Per-session access is layered on top out-of-band ([§3](#3-deploying), [PLAN.md §29.9](README.md)), not driven through this variable |
 | `enable_public_access` | `false` | Makes the RDS instance publicly accessible; dev only. Set `true` — required for the day-to-day AWS-verification workflow, not just occasional manual access |
 | `vpc_id` | `""` | Override to deploy into a specific VPC instead of the default one |
 | `private_subnet_ids` | `[]` | Override subnet selection |
@@ -165,13 +165,13 @@ Initial apply takes roughly 10–15 minutes, dominated by RDS instance creation.
 |---|---|---|
 | `database_name` | `dnd_ai` | Not `dnd_ai_dev` |
 | `master_username` | `dnd_admin` | Not `postgres` |
-| `postgres_version` | `18.4` | Matches [DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version)'s pin and the local development server. `dev` was replaced onto this version 2026-08-08 — see [POSTGRES18_UPGRADE_PLAN.md](POSTGRES18_UPGRADE_PLAN.md). The RDS parameter group family (e.g. `postgres18`) is derived from this automatically (`local.parameter_group_family` in `rds.tf`) — there is no separate variable for it, so the two can't be set inconsistently |
+| `postgres_version` | `18.4` | Matches [DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version)'s pin and the local development server. `dev` was replaced onto this version 2026-08-08 — see [POSTGRES18_UPGRADE_PLAN.md](DELIVERY_HISTORY.md). The RDS parameter group family (e.g. `postgres18`) is derived from this automatically (`local.parameter_group_family` in `rds.tf`) — there is no separate variable for it, so the two can't be set inconsistently |
 | `instance_class` | `db.t3.micro` | |
 | `allocated_storage` / `max_allocated_storage` | `20` / `100` | GB, gp3, autoscaling |
 | `backup_retention_period` | `7` | Days |
-| `deletion_protection` | `true` | Module default — meant for `staging`/`prod`. **`dev` overrides this to `false`** in `terraform/environments/dev/main.tf`, per [PLAN.md §29.3](PLAN.md#293-environments-dev-staging-prod) |
+| `deletion_protection` | `true` | Module default — meant for `staging`/`prod`. **`dev` overrides this to `false`** in `terraform/environments/dev/main.tf`, per [PLAN.md §29.3](README.md) |
 | `skip_final_snapshot` | `false` | Module default. **`dev` overrides this to `true`** — no final snapshot on delete, matching its disposable-by-design status |
-| `iam_database_authentication_enabled` | `true` | Ready for the IAM-auth roles in [PLAN.md §29.5](PLAN.md#295-database-role-schema-and-extension-bootstrap) |
+| `iam_database_authentication_enabled` | `true` | Ready for the IAM-auth roles in [PLAN.md §29.5](README.md) |
 | `enhanced_monitoring` / `performance_insights_enabled` | `true` | |
 | `create_vpc_endpoints` | `true` | Secrets Manager + KMS interface endpoints |
 | `use_nat_gateway` | `false` | Endpoints are used instead |
@@ -180,7 +180,7 @@ The `dev` environment overrides only networking, `publicly_accessible`, `create_
 
 ### Per-environment targets
 
-When `staging/` and `prod/` are created, follow the table in [PLAN.md §29.3](PLAN.md#293-environments-dev-staging-prod). Copy `environments/dev/` rather than adding conditionals to a single environment — per-environment tfvars keep blast radius explicit.
+When `staging/` and `prod/` are created, follow the table in [PLAN.md §29.3](README.md). Copy `environments/dev/` rather than adding conditionals to a single environment — per-environment tfvars keep blast radius explicit.
 
 ### Making infrastructure changes
 
@@ -234,7 +234,7 @@ psql -h (terraform -chdir=terraform/environments/dev output -raw database_endpoi
 $env:PGPASSWORD = $null
 ```
 
-This only works from a network that can reach the instance — `enable_public_access = true` plus a current, open ingress rule for your IP (`scripts/aws-db-allow-my-ip.sh open`, per [PLAN.md §29.9](PLAN.md#299-shared-dev-verification-mechanism-ci)), or from inside the VPC.
+This only works from a network that can reach the instance — `enable_public_access = true` plus a current, open ingress rule for your IP (`scripts/aws-db-allow-my-ip.sh open`, per [PLAN.md §29.9](README.md)), or from inside the VPC.
 
 ---
 
@@ -253,7 +253,7 @@ Copy-Item terraform/environments/dev/secrets.local.json.example terraform/enviro
 ./terraform/scripts/upsert-secrets.ps1 -Environment dev -Region us-east-1 -File terraform/environments/dev/secrets.local.json
 ```
 
-`secrets.local.json`, `terraform.tfvars`, `*.tfstate`, and `.env` are all gitignored. Application roles should prefer IAM database authentication over stored passwords once the roles in [PLAN.md §29.5](PLAN.md#295-database-role-schema-and-extension-bootstrap) exist.
+`secrets.local.json`, `terraform.tfvars`, `*.tfstate`, and `.env` are all gitignored. Application roles should prefer IAM database authentication over stored passwords once the roles in [PLAN.md §29.5](README.md) exist.
 
 ### IAM policy snippets
 
@@ -277,7 +277,7 @@ For a compute role that needs to read project secrets:
 }
 ```
 
-For a role connecting with IAM database authentication, scope `rds-db:connect` to the specific entry it needs from the `rds_iam_connect_arns` output — the migration task to `migration_runner`, the API and worker to `app_read_write`, and so on ([PLAN.md §30.5](PLAN.md#305-identity-and-secrets)). `migration_owner` deliberately has no entry: it is `NOLOGIN` and cannot authenticate ([ADR 0009](adr/0009-separate-owning-role-from-login-roles.md)).
+For a role connecting with IAM database authentication, scope `rds-db:connect` to the specific entry it needs from the `rds_iam_connect_arns` output — the migration task to `migration_runner`, the API and worker to `app_read_write`, and so on ([PLAN.md §30.5](README.md)). `migration_owner` deliberately has no entry: it is `NOLOGIN` and cannot authenticate ([ADR 0009](adr/0009-separate-owning-role-from-login-roles.md)).
 
 ---
 
@@ -303,7 +303,7 @@ Expected after a successful apply:
 - Secrets Manager entries for the RDS master user plus the named OpenAI/Discord entries
 - VPC interface endpoints for Secrets Manager and KMS
 
-Once the bootstrap revision from [PLAN.md §29.5](PLAN.md#295-database-role-schema-and-extension-bootstrap) exists, verification also includes connecting as `app_read_only` via an IAM token and confirming all thirteen schemas plus the expected Alembic head revision — see [PLAN.md §29.7](PLAN.md#297-deployment-runbook) step 5.
+Once the bootstrap revision from [PLAN.md §29.5](README.md) exists, verification also includes connecting as `app_read_only` via an IAM token and confirming all thirteen schemas plus the expected Alembic head revision — see [PLAN.md §29.7](README.md) step 5.
 
 ---
 
@@ -313,7 +313,7 @@ Once the bootstrap revision from [PLAN.md §29.5](PLAN.md#295-database-role-sche
 ./build.ps1 -Environment dev -Action destroy -AutoApprove
 ```
 
-This now works without extra steps: `dev` overrides `deletion_protection = false` and `skip_final_snapshot = true` explicitly in `terraform/environments/dev/main.tf`, resolved 2026-08-08 as part of [POSTGRES18_UPGRADE_PLAN.md](POSTGRES18_UPGRADE_PLAN.md) (that plan needed exactly this to replace the RDS instance). If you ever hit `deletion_protection` blocking a destroy anyway — for example against an instance created before this override existed — disable it directly first:
+This now works without extra steps: `dev` overrides `deletion_protection = false` and `skip_final_snapshot = true` explicitly in `terraform/environments/dev/main.tf`, resolved 2026-08-08 as part of [POSTGRES18_UPGRADE_PLAN.md](DELIVERY_HISTORY.md) (that plan needed exactly this to replace the RDS instance). If you ever hit `deletion_protection` blocking a destroy anyway — for example against an instance created before this override existed — disable it directly first:
 
 ```powershell
 aws rds modify-db-instance --db-instance-identifier dnd-ai-dev-db `
@@ -339,7 +339,7 @@ Approximate monthly `dev` cost with current defaults:
 
 VPC endpoints are the largest variable. They exist to avoid a NAT Gateway, which would cost more. Setting `create_vpc_endpoints = false` only makes sense if the instance sits in a subnet with another route to AWS APIs.
 
-`staging`/`prod` costs are not estimated here — measure once those environments exist rather than guessing, per [PLAN.md §29.8](PLAN.md#298-open-items). Run `terraform destroy` on `dev` when not actively developing.
+`staging`/`prod` costs are not estimated here — measure once those environments exist rather than guessing, per [PLAN.md §29.8](README.md). Run `terraform destroy` on `dev` when not actively developing.
 
 ---
 
@@ -359,18 +359,189 @@ Verbose Terraform logging: `$env:TF_LOG = "DEBUG"` before the command; unset aft
 
 ---
 
-## 11. Known gaps and discrepancies
+## 11. Known gaps and historical configuration
 
-Documented so they get fixed rather than rediscovered. These are **code** issues, not doc issues:
+The 2026-08-08 replacement onto PostgreSQL 18.4 and the dev deletion-protection/final-snapshot
+overrides are completed historical changes; details are indexed in [delivery history](DELIVERY_HISTORY.md).
+The current Terraform configuration is the configuration reference, not a live AWS inventory.
 
-0. ~~PostgreSQL major version is behind the pin~~ — resolved 2026-08-08. `dev` was replaced with a fresh PostgreSQL 18.4 instance (targeted `terraform apply -replace=module.database.aws_db_instance.main`, not an in-place `pg_upgrade`), matching [DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version)'s pin and the local development server. Full account, including two real bugs this surfaced and fixed (`deletion_protection` blocking the first replace attempt, and a missing `apply_method = "pending-reboot"` on the `shared_preload_libraries` parameter), is [POSTGRES18_UPGRADE_PLAN.md](POSTGRES18_UPGRADE_PLAN.md). One residual finding worth knowing: `rds.force_ssl` is not a recognized GUC on this engine build at all (absent from `pg_settings`) — SSL is still enforced, verified empirically (a `sslmode=disable` connection is rejected), just not through that parameter anymore. Gap 1 below (`deletion_protection`/`skip_final_snapshot` for `dev`) was closed as a prerequisite for this replacement.
+Remote Terraform state and staging/prod environments are not supplied by this repository.
+Reconcile the historical orphaned KMS resource and login-role-list drift before operating
+that account. A narrower CREATEDB login is an optional-AWS test-provisioning concern;
+`migration_owner` remains NOLOGIN. Current CI runs containerized PostgreSQL and does not
+open AWS ingress. Old `ci_ephemeral_database.py`/`ci_cleanup.py` references and AWS CI run
+records describe the retired verification path, not scripts to invoke today.
 
-1. ~~`dev` cannot be destroyed.~~ — resolved 2026-08-08, as a prerequisite for the PostgreSQL 18 instance replacement in [POSTGRES18_UPGRADE_PLAN.md](POSTGRES18_UPGRADE_PLAN.md). `terraform/environments/dev/main.tf` now passes `deletion_protection = false` and `skip_final_snapshot = true` explicitly, matching [PLAN.md §29.3](PLAN.md#293-environments-dev-staging-prod). Verified live: the first replacement attempt failed against the *old* instance's still-`true` protection (a `-replace` destroy-then-create never modifies the resource being replaced first), fixed by disabling it out-of-band before retrying — see B3 in the plan doc for the full account.
-2. **`my_ip_cidr` defaults to `0.0.0.0/0`.** A default of `null` with explicit validation would fail closed instead of open. Now that per-session access is meant to go through `scripts/aws-db-allow-my-ip.sh` and CI's own authorize/revoke step rather than this variable (§3, [PLAN.md §29.9](PLAN.md#299-shared-dev-verification-mechanism-ci)), consider dropping it to a single harmless placeholder CIDR rather than keeping it as a real access path at all.
-3. **`database_secret_name` returns an ARN**, not a name. Either rename the output or change the value.
-4. **`app_config_secret_name` is hardcoded to `""`**, and `deployment_summary.secrets.app_config` to `null`. Dead outputs — remove or implement.
-5. **The `secrets` module exposes `api_gateway_api_key_secret_*` and `basic_auth_secret_*`** outputs that belong to the removed pre-restart Lambda API. Confirm whether the current architecture needs them; if not, remove.
-6. **No remote state.** Local state blocks any second operator and risks loss. Bootstrap per [PLAN.md §29.2](PLAN.md#292-remote-terraform-state) before `staging` exists.
-7. **No `multi_az` variable**, required before `prod` per [PLAN.md §29.8](PLAN.md#298-open-items).
-8. **No `CREATEDB`-capable test role.** The ephemeral-per-run database mechanism in [PLAN.md §29.9](PLAN.md#299-shared-dev-verification-mechanism-ci) works today — `tests/conftest.py`, `scripts/ci_ephemeral_database.py`, and this session's Phase 4 corrections work have all exercised it successfully — but only because it connects as the RDS master user, which has `CREATEDB` incidentally rather than by design. The bootstrap revision's six roles are still scoped to schema-level DDL/DML only, none with `CREATEDB`. Add a dedicated, narrower **login** role for this before running the mechanism unattended in prod-adjacent environments — not by granting `CREATEDB` to `migration_owner`, which is `NOLOGIN` and nothing connects as ([ADR 0009](adr/0009-separate-owning-role-from-login-roles.md)).
-9. ~~`scripts/aws-db-allow-my-ip.sh` and the CI IP-allowlist step don't exist yet~~ — resolved. Both exist (`scripts/aws-db-allow-my-ip.sh`; the "Open dev access for this runner"/cleanup steps in `.github/workflows/ci.yml`) and have been exercised against the deployed `dev` security group. The required GitHub configuration is present and the complete workflow passed in run [`30765722355`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30765722355). Cleanup no longer masks drop/revoke failures with `|| true`: `scripts/ci_cleanup.py` always attempts both, fails the step if either failed, and its combining logic is exercised against every failure combination by `tests/unit/test_ci_cleanup.py` without touching real AWS resources (see [PHASE4_VERIFICATION.md § Second closeout](PHASE4_VERIFICATION.md#second-closeout-2026-08-02)).
+## 12. Optional AWS preflight
+
+Use this path only when operating the retained Terraform/RDS target; normal development
+and CI use local/containerized PostgreSQL. Before an apply, confirm the AWS account and
+region, inspect existing state, configure narrow network access, keep credentials/tfvars
+untracked, and review the plan for replacements/deletions. The current dev configuration
+sets `deletion_protection = false` and `skip_final_snapshot = true`; these settings are
+not proof of any live instance's state. Bootstrap is implemented by Alembic, not future work.
+Follow §§3–7 for configuration, deployment and verification, and §8 for intentional teardown.
+
+Historical operator questions still needing reconciliation if AWS is used: the orphaned
+KMS resource reported by Phase 1, manual `iam_auth_db_users` alignment with login roles,
+remote state, and a narrower CREATEDB login for test provisioning. Do not delete a cloud
+resource on the assumption that a historical report still describes today's account.
+
+## 13. Legacy GitHub Actions OIDC state
+
+The following operator decision guidance was moved from terraform/README. It describes
+the consequences of removing configuration, not evidence that any live resources were
+changed. No AWS operation is part of this documentation consolidation.
+
+### Removed from configuration: the `github_actions_ci` module
+
+The `github_actions_ci` module (the OIDC role CI used to assume) was removed
+from configuration — its only consumer was the AWS `aws-verification` CI
+job, which no longer exists. See
+[docs/adr/0012-self-hosted-docker-deployment-and-ci-verification.md](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)
+for the reasoning. **This was a configuration-only change; no live AWS
+resource was created, modified, or destroyed by that commit** — nothing in
+this repository ran `terraform apply`, `terraform destroy`, or any command
+that touches a backend or provider.
+
+Removing a module from *configuration* does not remove, retire, or delete
+anything from AWS by itself — it only makes configuration and state
+disagree. What happens next is a deliberate operator choice between three
+different outcomes, below. Don't run any of them without reading the plan
+they produce first.
+
+**What a future `terraform plan`/`apply` against a previously applied `dev`
+will show, if you do nothing else.** Terraform reconciles state against
+configuration, and resources present in state but absent from config are
+proposed for *destruction* by default — not left alone. If `dev` was ever
+applied with this module present, the next plan run against that state
+will propose destroying:
+
+- `module.github_actions_ci.aws_iam_role.github_actions_ci` and its inline
+  policy — scoped to this repository's CI.
+- `module.github_actions_ci.aws_iam_openid_connect_provider.github[0]` —
+  **only if** `create_github_oidc_provider`/`create_oidc_provider` was
+  `true` when applied (the `dev` environment's default). This resource is
+  **not scoped to this repository**: a GitHub Actions OIDC provider
+  (`token.actions.githubusercontent.com`) is one-per-AWS-account, so if this
+  module created it, any *other* GitHub Actions workflow in the same AWS
+  account that assumes a role via OIDC may depend on that same provider
+  existing. **Never let a plan destroy it reflexively.** Check for other
+  consumers first, every time, regardless of which of the three choices
+  below you're pursuing:
+
+  ```powershell
+  aws iam list-open-id-connect-providers
+  aws iam list-roles --query "Roles[?AssumeRolePolicyDocument.Statement[?Principal.Federated!=null]]"
+  ```
+
+  If another role trusts the same provider ARN, none of the options below
+  may destroy or delete it.
+
+**Review any plan line by line before applying it, every time.** `terraform
+plan` alone touches no live resource — read exactly what it proposes,
+re-check the OIDC-provider question above, and only then decide whether to
+`apply`. None of this runs automatically from any commit to this
+repository.
+
+#### A. Preserve the resources *and* keep them Terraform-managed
+
+Configuration and state must agree for Terraform to manage something — since
+the module block is gone from this repository's configuration, keeping the
+role Terraform-managed means putting equivalent configuration back before
+applying anything: restore the `module "github_actions_ci"` block (see git
+history for its last committed form), or write a new configuration and
+`terraform import` the existing role/policy/provider into it. Either way,
+apply nothing until a `terraform plan` against that restored configuration
+shows no unexpected changes — it should show none, since the real resource
+hasn't moved.
+
+#### B. Preserve the live resources but stop managing them
+
+This leaves everything the module created exactly as it is in AWS — **live,
+unretired, unmanaged** — with Terraform simply no longer tracking any of it.
+`state rm` does not delete or retire anything; it only removes an entry from
+Terraform's state file. But state and reality have to be dropped *together*:
+if some of the module's resources stay in state while others don't, a future
+plan reconciles state against configuration for whatever's left, and with the
+module gone from configuration, anything still tracked is proposed for
+*destruction* — silently turning a "stop managing" choice into a "delete"
+outcome for whichever resource you forgot. Removing the entire module
+address from state, in one operation, is generally the coherent way to
+abandon management of it, rather than removing resources one at a time.
+
+Start by finding out what's actually still tracked — don't assume; the OIDC
+provider resource's `count` depended on configuration (`create_github_oidc_provider`/
+`create_oidc_provider`), so whether it's in state at all depends on how `dev`
+was applied:
+
+```powershell
+terraform -chdir=terraform/environments/dev state list
+```
+
+Look for `module.github_actions_ci` and everything nested under it in the
+output. If the module doesn't appear at all, there's nothing to remove —
+skip straight to whichever of A/B/C you actually need for other resources.
+If it does appear, remove the whole module in one command:
+
+```powershell
+terraform -chdir=terraform/environments/dev state rm module.github_actions_ci
+```
+
+This is deliberately the module-wide form, not per-resource `state rm`
+calls, because it can't leave a partial result: whatever the `state list`
+output actually showed under `module.github_actions_ci` — role, inline
+policy, and OIDC provider alike, if `state list` showed the provider as
+present — comes out of state together. **The shared OIDC provider is
+exactly the resource this matters most for**: it's one-per-AWS-account, not
+scoped to this repository (see the dependency check above), so if it's in
+state and gets left behind while the rest of the module is removed, the next
+`plan` proposes destroying a resource other GitHub Actions workflows in the
+same account may depend on. Leaving it tracked under absent configuration is
+not a safe way to "preserve" it — removing it from state, so Terraform stops
+proposing to touch it at all, is what actually preserves it here.
+
+On Terraform 1.7+, a declarative alternative that leaves a reviewable record
+of this same choice is a `removed` block scoped to the whole module (add
+temporarily, apply once, then delete):
+
+```hcl
+removed {
+  from = module.github_actions_ci
+  lifecycle {
+    destroy = false
+  }
+}
+```
+
+Either form stops here: the IAM role, its inline policy, and the OIDC
+provider (if it was ever in state) keep existing in AWS, accruing no
+Terraform drift warnings but also receiving no further review from anyone,
+until a human deletes them directly or brings them back under management via
+option A.
+
+#### C. Actually retire the resources (delete them)
+
+Only after confirming via the dependency check above that nothing else
+trusts the OIDC provider (if it's in scope at all), pick one:
+
+1. **Temporarily restore the module configuration** (as in option A) and run
+   a normal, reviewed `terraform destroy -target=module.github_actions_ci`
+   against it, reading the plan first — this uses Terraform's own
+   understanding of the resource graph rather than a hand-assembled list of
+   ARNs, so it's the safer of the two paths here.
+2. **Delete the specific resources directly with AWS tooling**, after
+   confirming their exact names/ARNs yourself (`aws iam get-role
+   --role-name <name>`, `aws iam list-role-policies --role-name <name>`) —
+   there is deliberately no ready-made deletion script in this repository
+   for this, since a generic one is exactly the kind of broad,
+   easy-to-misapply tool that risks taking out a shared resource. Delete the
+   inline policy before the role, and only delete the OIDC provider
+   (`aws iam delete-open-id-connect-provider`) as an explicit, separate,
+   last step you've independently decided to take — never as a
+   side effect of cleaning up this repository's role.
+
+Whichever path, if anything was still tracked in Terraform state when you
+delete it out-of-band, run the module-wide `state rm` from option B
+afterward (after re-checking with `state list`) so state doesn't keep
+referencing a resource that no longer exists.

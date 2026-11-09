@@ -1,0 +1,1378 @@
+# Access control and account API contracts
+
+Maintained endpoint/security reference. This consolidates the Phase 13E contract and
+links the scoped-role policy instead of maintaining a second implementation plan.
+Checkpoint identifiers below identify contract provenance, not current delivery gates.
+
+## Authority and current amendments
+
+System, world and campaign roles are independent scopes. [ADR 0020](../adr/0020-scoped-system-world-and-campaign-roles.md)
+defines their policy; the [database model](../architecture/DATABASE_MODEL.md#19-security-audit-and-integration)
+defines persistence; [system architecture](../architecture/SYSTEM_ARCHITECTURE.md#7-transaction-boundary)
+defines transaction and lock boundaries. Campaign roles do not by themselves grant world
+creation or shared-world authoring. World Viewer and Reader remain distinct.
+
+The implemented defaults were owner-approved as DR-7 on 2026-10-24: Q2 backfill, Q5
+Observer classification, Q8 deferred world-only authoring, Q11 script recovery/IDs-only
+stranding report, Q12 invitation registration as Player, Q13 Reviewer lifecycle authority,
+E2/E3 lifecycle exceptions, Viewer/Reader coexistence, and the Q4 interpretation.
+The original scoped-role SR-6 campaign-role eligibility bullet was superseded by D11;
+the later P03-A D3 campaign-owner gate is the current owner-specific amendment below.
+
+ADRs 0021–0023 were accepted on 2026-11-06. Their implementation gates still apply.
+The active [P03-A plan](../PHASE14_15_P03A_IMPLEMENTATION_PLAN_2026-11-06.md) and
+[A1 authority design](../PHASE14_15_P03A_A1_OWNERSHIP_AUTHORITY_DESIGN_2026-11-06.md)
+own pending implementation and review, not this reference's historical checkpoint labels.
+
+## 1. Existing read endpoints
+
+| Endpoint | Module | Capability | Notes |
+|---|---|---|---|
+| `GET /campaigns/{campaign_id}/access-overview` | `dnd_ai.api.access_overview` | `access.manage` | New in 13E-A. **Extended, checkpoint 5**: `grantable_resource_capabilities` metadata and per-grant `target_id`/`target_display_name`. See §3/§3k. |
+| `GET /campaigns/{campaign_id}/eligible-accounts` | `dnd_ai.api.access_overview` | `access.manage` | New in 13E-B checkpoint 3 — exact-match account lookup for "Add campaign member". See §3d. |
+| `GET /campaigns/{campaign_id}/invitations` | `dnd_ai.api.campaign_invitations` | `access.manage` | Delivered in checkpoint 7. Returns outstanding invitations only; never returns the raw token or token hash. See §3m. |
+
+No other read endpoint exposes campaign membership, role,
+character-relationship, resource-grant, or invitation state.
+
+## 2. Mutation endpoints
+
+| Endpoint | Method | Module | Capability | Boundary |
+|---|---|---|---|---|
+| `/campaigns/{campaign_id}/memberships` | POST | `dnd_ai.api.memberships` | `access.manage` | Campaign-scoped — **portal-wired, 13E-B checkpoint 3** (hardened to require an initial `role_id`; previously reserved/unused). See §3e. |
+| `/campaigns/{campaign_id}/memberships/{membership_id}/end` | POST | `dnd_ai.api.memberships` | `access.manage` | Campaign-scoped — **new, portal-wired, 13E-B checkpoint 3.** See §3f. |
+| `/campaigns/{campaign_id}/memberships/{membership_id}/roles` | POST | `dnd_ai.api.memberships` | `access.manage` | Campaign-scoped — **portal-wired, 13E-B checkpoint 2.** See §3b. |
+| `/campaigns/{campaign_id}/memberships/roles/{membership_role_id}/revoke` | POST | `dnd_ai.api.memberships` | `access.manage` | Campaign-scoped — **portal-wired, 13E-B checkpoint 2.** See §3c. |
+| `/campaigns/{campaign_id}/memberships/roles/{membership_role_id}/change` | POST | `dnd_ai.api.memberships` | `access.manage` | Campaign-scoped — **portal-wired, 13E-B checkpoint 1.** See §3a. |
+| `/campaigns/{campaign_id}/memberships/{membership_id}/character-relationships` | POST | `dnd_ai.api.access_grants` | `access.manage` | Campaign-scoped — **portal-wired, hardened, character-relationship-management checkpoint.** See §3h. |
+| `/campaigns/{campaign_id}/character-relationships/{id}/change` | POST | `dnd_ai.api.access_grants` | `access.manage` | Campaign-scoped — **new, portal-wired, character-relationship-management checkpoint.** See §3i. |
+| `/campaigns/{campaign_id}/character-relationships/{id}/revoke` | POST | `dnd_ai.api.access_grants` | `access.manage` | Campaign-scoped — **portal-wired, hardened, character-relationship-management checkpoint.** See §3j. |
+| `/campaigns/{campaign_id}/resource-grants` | POST | `dnd_ai.api.access_grants` | `access.manage` | Campaign-scoped — **portal-wired, hardened, checkpoint 5** (character targets only). See §3k. |
+| `/campaigns/{campaign_id}/resource-grants/{id}/revoke` | POST | `dnd_ai.api.access_grants` | `access.manage` | Campaign-scoped — **portal-wired, hardened, checkpoint 5.** See §3k. |
+| `/campaigns/{campaign_id}/invitations` | POST | `dnd_ai.api.campaign_invitations` | `access.manage` | Campaign-scoped — **portal-wired, checkpoint 7**. Returns a raw invitation token once; see §3m. |
+| `/campaigns/{campaign_id}/invitations/{campaign_invitation_id}/revoke` | POST | `dnd_ai.api.campaign_invitations` | `access.manage` | Campaign-scoped — **portal-wired, checkpoint 7**. See §3m. |
+| `/campaign-invitations/accept` | POST | `dnd_ai.api.campaign_invitations` | none (`require_human_user_id` only) | Self-service — **portal-wired, checkpoint 7**, currently through manual token entry. See §3m. |
+| `/campaigns` | POST | `dnd_ai.api.campaigns` | none at the route; real authorization inside `dnd_ai.commands.campaigns.create_campaign` | Human, but not generically self-service — see §4 |
+| `/admin/accounts` | POST | `dnd_ai.api.local_auth` | system `admin` role (`accounts.manage`; checked in-command) | Platform-administrator |
+| `/admin/accounts/{user_id}/password-reset` | POST | `dnd_ai.api.local_auth` | system `admin` role | Platform-administrator |
+| `/admin/accounts/{user_id}/disable` | POST | `dnd_ai.api.local_auth` | system `admin` role | Platform-administrator |
+| `/admin/accounts/{user_id}/reactivate` | POST | `dnd_ai.api.local_auth` | system `admin` role | Platform-administrator |
+| `/admin/accounts/{user_id}/revoke-sessions` | POST | `dnd_ai.api.local_auth` | system `admin` role | Platform-administrator |
+| `/auth/password-reset-status` | POST | `dnd_ai.api.local_auth` | none — public, Origin-checked, read-only, non-consuming advisory check (`{"valid": bool}`), own rate-limit bucket; uses the same token loader and target eligibility (active account with a local credential) as the final reset; no row lock, audit row, or idempotency key; every unusable reason is indistinguishable | Self-service |
+| `/auth/activation-status` | POST | `dnd_ai.api.local_auth` | none — public, Origin-checked, read-only advisory check (`{"valid": bool}`); no principal, machine credentials ignored | Self-service |
+| `/auth/activate`, `/auth/password-reset`, `/auth/change-password`, `/auth/sessions` (list/delete own) | various | `dnd_ai.api.local_auth` | none — acts on the caller's own account | Self-service |
+
+None of the campaign-scoped rows above pass `allow_foundry_access=True` to `require_campaign_capability` — see §4.
+
+## 3. `GET /campaigns/{campaign_id}/access-overview` (new, 13E-A)
+
+- **Capability:** `access.manage`, resolved via the existing `dnd_ai.api.access.require_campaign_capability` dependency — the identical gate every mutation endpoint in §2 already uses for the same category of action.
+- **Boundary:** campaign-scoped, human principal only (local-session or OIDC — see §4; Foundry-adapter credentials are rejected).
+- **Request:** `campaign_id` path parameter (UUID) only. No query parameters, no request body.
+- **Response (`CampaignAccessOverviewResponse`):** `{ members: [CampaignMemberSummaryResponse], assignable_roles: [AssignableRoleResponse], assignable_characters: [AssignableCharacterResponse], assignable_relationship_types: [AssignableCharacterRelationshipTypeResponse], grantable_resource_capabilities: [GrantableResourceCapabilityResponse] }` (`assignable_characters`/`assignable_relationship_types` are character-relationship-management checkpoint — see §3g; `grantable_resource_capabilities` is checkpoint 5 — see §3k), one member entry per currently open (`ended_at IS NULL`) campaign membership:
+  - `campaign_membership_id` (UUID — identity only, never rendered as page text)
+  - `display_name`, `status_code`, `status_display_name`, `joined_at`
+  - `account_is_active` (checkpoint-6 correction) — a single derived boolean (`security.users.lifecycle_status_id -> core.lifecycle_statuses.code = 'active'`), never the raw status code, login name, email, or identity subject. Added so the portal's access-group "Add member" selector (§3l) can exclude a membership `add_access_group_member` would reject anyway (its owning account platform-disabled) instead of offering it and having the request always fail.
+  - `roles: [{ membership_role_id, role_id, code, display_name }]` — active (non-revoked, non-expired, `is_active`) roles only. `membership_role_id` (13E-B) is the identifier the portal's role-change control targets — identity only, never rendered as page text, matching `campaign_membership_id`'s own contract.
+  - `character_relationships: [{ membership_character_relationship_id, character_id, character_display_name, relationship_type_code, relationship_type_display_name, granted_at, expires_at }]` — current (non-revoked, non-expired, timeline-scoped, fictional-time-unbounded — checkpoint-4 correction) relationships **whose character is itself currently active** (checkpoint-4 review correction: a relationship to a character deactivated/archived after the relationship was granted is now excluded here too, matching `dnd_ai.domain.access.resolve_access_context`'s own identical exclusion) only
+  - `grants: [{ resource_grant_id, capability_code, capability_display_name, effect, target_type, target_id, target_display_name, reason, granted_at, expires_at }]` — current, membership-targeted (not access-group-targeted), active-capability resource grants **whose target is itself currently active** (checkpoint 5, the identical generalization of the character-relationship exclusion above — see §3k) only (see the capability-parity correction below). `target_id` (checkpoint 5) is identity only, never rendered as page text, matching every other raw id in this response — populated for all six target kinds so the portal can detect an exact active duplicate combination when adding a new grant. `target_display_name` (checkpoint 5) is populated only for a `character` target (`core.entities.canonical_name`, the same safe name `character_relationships` already uses) and `null` for every other target kind — see the audience-safe-fields note below.
+  - `assignable_roles: [{ role_id, code, display_name }]` (13E-B) — every role currently usable by this campaign (`dnd_ai.queries.access_overview.list_assignable_campaign_roles`: a system template or a role scoped to this campaign, `is_active`; the built-in `campaign_owner` template only for a live owner, §3t), campaign-level rather than per-member since this codebase's role model carries no hierarchy — the read-contract counterpart to §3a's mutation, so the portal never hardcodes or guesses the assignable set.
+- **Pagination/filtering:** none. Per-campaign membership/role/relationship/grant counts are expected to stay small (matching the existing precedent in `dnd_ai.api.memberships`/`.access_grants`, neither of which paginates); no cursor, no limit, no total count.
+- **401:** unauthenticated requests never reach this route's own logic — `dnd_ai.api.auth.get_authenticated_user_id` (the same dependency every other route uses) rejects them first; this route adds no separate 401 handling.
+- **403:** an authenticated member of the campaign who does not hold `access.manage`.
+- **404:** no active, authorizing membership in the campaign at all, **or** the campaign does not exist — both indistinguishable, matching `require_campaign_capability`'s existing non-disclosing contract (the same 404 shape `dnd_ai.api.memberships`/`.access_grants` already give).
+- **Validation:** a malformed `campaign_id` (not a UUID) is rejected by FastAPI's own path-parameter validation before any handler code runs (422).
+- **Recoverable errors:** any other failure (5xx) is not specially handled by this route and surfaces as a generic error to the portal's existing recoverable-error boundary with retry.
+- **Audience-safe fields:** `security.users.display_name` only (never `email`, never a login identifier, never `external_identities.subject`); `membership_statuses.display_name` (campaign-scoped status, not the account-wide `lifecycle_status_id`); `roles.display_name`/`code`; `character_relationship_types.display_name`/`code` plus the related character's `core.entities.canonical_name`; `capabilities.display_name`/`code`, `effect`, `target_type` (the grant's target *kind* only — `character`/`entity`/`knowledge_item`/`quest`/`session`/`event` — never the specific target resource's own display identity for the five non-character kinds), `reason`, `granted_at`, `expires_at`; `account_is_active` (checkpoint-6 correction) — one derived boolean, never the account-wide `lifecycle_status_id` code itself.
+- **Correction (review pass):** the resource-grants query now also requires `security.capabilities.is_active`, matching `dnd_ai.domain.access.resolve_access_context`'s own resource-grant resolution — an otherwise-current grant of a *deactivated* capability confers no effective access there and must not appear here as a current grant either. Covered by `tests/database/test_api_access_overview.py::test_a_grant_of_a_deactivated_capability_is_excluded_while_an_active_one_remains`.
+
+## 3a. `POST /campaigns/{campaign_id}/memberships/roles/{membership_role_id}/change` (new, 13E-B checkpoint 1)
+
+The first Phase 13E-B mutation checkpoint: lets an authorized campaign
+access manager change an existing, currently active campaign member's role
+assignment. Scope is deliberately narrow — see `docs/PLAN.md` §13 for what
+this checkpoint excludes (invitations, account lifecycle, session
+revocation, character-relationship/explicit-grant changes, every other
+access-management mutation).
+
+- **Role model discovered:** `security.membership_roles` lets one
+  `security.campaign_memberships` row hold **multiple simultaneous active
+  roles** (`ux_membership_roles_active` only forbids two *active* rows for
+  the *same* role on the same membership) — never a single-valued
+  "current role" column. Roles are **temporal**: a row is never updated in
+  place; it is revoked (`revoked_at` set) and a new row inserted.
+  Accordingly this checkpoint changes **one targeted role assignment**
+  (`membership_role_id`), not "the member's role" — any other role the
+  same membership independently holds is left untouched, so a multi-role
+  membership never has its whole role set silently replaced.
+- **Capability:** `access.manage`, via the identical `require_campaign_capability`
+  dependency every other row in §2 uses.
+- **Request (`ChangeMembershipRoleRequest`):** `{ new_role_id: UUID }`. Route
+  path carries `campaign_id` and the target `membership_role_id`.
+- **Response (`MembershipRoleResponse`, reused from the existing assign-role
+  contract):** `{ membership_role_id: UUID }` — the id of the *new* row
+  created by this change (the old one is revoked, not reused, per the
+  temporal-history point above). `201`, matching `assign_membership_role`'s
+  own status code for "a new row now exists," even though an existing row
+  also changed.
+- **Assignable-role read contract:** §3's new `assignable_roles` field —
+  every role usable by this campaign (system template or campaign-scoped),
+  currently `is_active`. No hierarchy or delegation narrows this further:
+  this codebase's role model is flat, so every role `access.manage` may
+  assign is equally assignable to any member, including the actor's own —
+  with one exception (P03-A D3, 2026-11-06): the built-in `campaign_owner`
+  template is omitted unless the caller holds a live built-in owner
+  assignment in the campaign, because the four commands that grant it refuse
+  anyone else (see §3t).
+- **Self-change:** permitted, with no special-case check anywhere in the
+  stack. The only thing that can block a self-change is the retention
+  invariant below — including when the caller is changing their own last
+  qualifying assignment.
+- **Last-manager protection:** enforced server-side, evaluated *after* both
+  the revoke and the new assignment apply within the same transaction —
+  `security.campaign_has_access_manager(campaign_id)`, the identical
+  read-only helper `revoke_membership_role`'s own pre-check already uses,
+  scoped identically to *active* campaigns only (a `pending`/`draft`
+  campaign's sole `access.manage` holder may freely change away from it).
+  A change that would leave an active campaign with no membership holding
+  `access.manage` raises a plain `ValueError`, mapped to **400** —
+  deliberately the same status code (not 409) `revoke_membership_role`
+  already uses for the identical invariant, so the two routes stay
+  consistent rather than the newer one inventing a different contract for
+  the same failure.
+- **Active-state boundary (correction pass):** the target `membership_role_id`
+  must currently be an *eligible, active* assignment — the identical
+  "currently true" definition §3's `roles` field already uses to decide
+  what to show as a member's current role, so this mutation can never act
+  on a row the read side would no longer show as active:
+  - not already revoked (`revoked_at IS NULL`);
+  - not expired (`expires_at IS NULL OR expires_at > now()`);
+  - its *current* role still `is_active`;
+  - its owning membership not ended (`ended_at IS NULL`) and in the
+    `active` membership status (`security.membership_statuses.code =
+    'active'` and `.is_active`).
+
+  Any of these failing raises `MembershipRoleNotActiveError`, mapped to
+  **409** — identically for all of them (already revoked, expired, current
+  role deactivated, or membership ended/non-active), so a caller can never
+  learn *which* condition applied, only that the assignment is no longer a
+  valid target. The candidate `new_role_id` is held to the same activeness
+  bar: an inactive role is rejected by the *existing* `RoleNotUsableByCampaignError`
+  (**404**) — grouped with "not usable by this campaign" rather than a new
+  shape, since an inactive role was never a legitimate target in the first
+  place (unlike the 409 cases above, which *were* valid a moment ago).
+- **Same-role no-op (correction pass):** if `new_role_id` names the role
+  `membership_role_id` already, currently holds, the request is rejected
+  as `ChangeMembershipRoleNoOpError`, mapped to **422** ("malformed or
+  invalid role request"), checked before any write. No revoke, no new row,
+  no audit entry — and critically, no idempotency-key completion, so a
+  caller who corrects their selection and retries with the *same*
+  `Idempotency-Key` still gets the real command run rather than a cached
+  "successful" no-op. The portal disables Save for this exact case so it
+  is rarely reached at all; the server-side check is defense in depth.
+- **Concurrency (correction pass):** two independent guarantees, both
+  proven by real-connection PostgreSQL regression tests
+  (`tests/database/test_membership_role_concurrency.py`):
+  - *Eligibility-check/write race:* the target row, its owning membership,
+    and its current role are locked together (`FOR UPDATE OF mr, cm, r`)
+    before any eligibility check runs, and the candidate `new_role_id` row
+    is separately locked (`FOR UPDATE`) before its own check — so a
+    concurrent deactivation of either role, or a concurrent ending of the
+    membership, cannot slip in between this function's own read and
+    write. A concurrent change/revoke of the identical `membership_role_id`
+    is serialized the same way (same-row coverage) — the loser observes
+    the winner's committed effect (already-revoked) once unblocked, never
+    an interleaved write.
+  - *Campaign `access.manage` retention:* this checkpoint adds no locking
+    of its own for this — it relies entirely on the pre-existing
+    `security.assert_campaign_retains_access_manager()` (migration 080),
+    which locks `campaign.campaigns` `FOR UPDATE` and is invoked by a
+    `DEFERRABLE INITIALLY DEFERRED` constraint trigger on `security.
+    membership_roles`, evaluated against the fully-committed final state
+    at commit time. Two concurrent changes (or a change racing a revoke)
+    against *different* management-granting rows can never both commit
+    when their combined effect would leave an active campaign with zero
+    qualifying managers — the loser is rejected either by this route's own
+    app-level pre-check (a **400** `ValueError`, if its check happens to
+    run after the winner already committed) or by the database's deferred
+    trigger (a **5xx**-mapped `IntegrityError`, if both sides write before
+    either commits) — which mechanism catches it is a genuine timing
+    outcome of the real race, not something either the application or a
+    caller controls.
+- **Idempotency:** the same durable, PostgreSQL-backed
+  `security.idempotent_requests` mechanism `assign_membership_role`/
+  `create_campaign_membership` already use — an `Idempotency-Key` replay
+  returns the original response verbatim rather than re-running the
+  command. The portal (correction pass) now generates and sends this
+  header itself: one opaque key (`crypto.randomUUID()`) per logical
+  `(membership_role_id, new_role_id)` edit, reused verbatim across a retry
+  of that exact selection (an unknown network outcome), regenerated the
+  moment the selection changes (a different role row, or a different
+  target role on the same row), and cleared entirely on confirmed success
+  — so a later edit, even one that happens to choose the identical role
+  again, always gets a fresh key rather than risking a replay of a stale
+  cached response. See `portal/src/hooks/useChangeMembershipRole.ts`.
+- **Cross-campaign/unknown-role rejection:** identical to `assign_membership_role`'s
+  existing checks — a `membership_role_id` outside `campaign_id`, or a
+  `new_role_id` neither a system template nor scoped to `campaign_id`
+  (including a nonexistent one), both raise `MembershipNotInCampaignError`/
+  `RoleNotUsableByCampaignError` (**404**, non-disclosing — a caller can
+  never tell "doesn't exist" from "belongs to a different campaign").
+- **Audit:** one `audit.change_log` row (`change_action_code = 'updated'`,
+  `table_name = 'membership_roles'`, `record_id` = the new
+  `membership_role_id`), atomic with the state change, recording
+  `actor_user_id`, `world_id` (the campaign's own pinned timeline's world —
+  never a caller-supplied value), `previous_status`/`new_status` (the old
+  and new role **codes** — reusing `audit.change_log`'s pre-existing
+  lifecycle-transition columns, the same ones `dnd_ai.commands.local_auth`'s
+  account disable/reactivate commands already populate), and
+  `changed_fields = { "previous_membership_role_id": "<uuid>" }` for
+  traceability back to the revoked row. No credential, session token, or
+  CSRF token ever reaches this record.
+- **CSRF/Origin:** this route carries no CSRF logic of its own — like every
+  other cookie-authenticated mutation in this application, `dnd_ai.api.auth`'s
+  global `_enforce_csrf_and_origin` (checked for every `POST`/`PUT`/`PATCH`/
+  `DELETE` against a browser-session principal) requires a matching
+  `X-CSRF-Token` header and an allowed `Origin`; a missing/mismatched token
+  or a disallowed/missing `Origin` is rejected before this route's own logic
+  ever runs.
+- **Effective immediately:** the change is visible on the next
+  `GET .../access-overview` request and the next `/auth/session` bootstrap
+  — no caching layer sits in front of either.
+
+## 3b. `POST /campaigns/{campaign_id}/memberships/{campaign_membership_id}/roles` (hardened, 13E-B checkpoint 2)
+
+The route and command (`assign_membership_role`) already existed — this
+checkpoint hardens the command to the same "currently true" eligibility bar
+§3a's checkpoint-1 correction pass already established for `change_
+membership_role`, then wires it into the portal as the Access page's
+"Add role" action for an existing member. Never creates a membership; only
+adds one role to a membership that already exists.
+
+- **Capability:** `access.manage`, via the identical `require_campaign_capability` dependency every other row in §2 uses.
+- **Request (`AssignMembershipRoleRequest`):** `{ role_id: UUID, expires_at?: datetime }`. Route path carries `campaign_id` and the target `campaign_membership_id`. `expires_at` is a pre-existing field this checkpoint does not remove; the portal's own Add-role control never sets it (no UI for a time-limited grant yet).
+- **Response (`MembershipRoleResponse`):** `{ membership_role_id: UUID }` — the new row's id. `201`, unchanged.
+- **Eligibility (hardened this checkpoint):** all checked before any write, all raising identically within each group so a caller cannot distinguish which condition applied:
+  - the target `campaign_membership_id` must belong to `campaign_id` (pre-existing; `MembershipNotInCampaignError`, 404, non-disclosing — identical for "doesn't exist" and "belongs to a different campaign");
+  - the membership must be currently open (`ended_at IS NULL`) and in the `active` membership status (`security.membership_statuses.code = 'active'` and `.is_active`) — **new**;
+  - the membership's own user account must currently be platform-active (`security.users.lifecycle_status_id` -> `core.lifecycle_statuses.code = 'active'`, the identical account-usability check every login path in this codebase already applies) — **new**; both of the two conditions above raise `MembershipNotActiveError` (409);
+  - the `role_id` must be a system template or scoped to `campaign_id`, **and** currently `is_active` (`RoleNotUsableByCampaignError`, 404 — the `is_active` half is **new**; the scope half is pre-existing) — matching `dnd_ai.queries.access_overview.list_assignable_campaign_roles`'s own assignable-role definition exactly, so a role the read-contract would never offer can never be assigned either;
+  - a duplicate still-active assignment of the same role to the same membership is rejected as a 409 by the pre-existing `ux_membership_roles_active` unique index (existing `IntegrityError` handler) — not pre-checked, matching this module's documented "database-enforced invariants this module deliberately does not duplicate" policy.
+- **Concurrency (new):** the target membership row, then its owning user row, then the candidate role row are locked (`FOR UPDATE OF cm` / `FOR UPDATE OF u` / `FOR UPDATE`, in that order — always membership-then-role, the same order `change_membership_role` already uses for its own target/candidate pair, so the two commands can never deadlock against each other) before any eligibility check runs — so a concurrent ending of the membership, a concurrent disablement of its user account, or a concurrent deactivation of the candidate role cannot slip in between this function's own read and its later `INSERT`. Proven by real-connection PostgreSQL regression tests (`tests/database/test_membership_role_concurrency.py`): assign vs. membership-ending, assign vs. role-deactivation, assign vs. account-disablement.
+- **Idempotency/audit:** unchanged from the pre-existing contract — the same durable `Idempotency-Key` mechanism, one `audit.change_log` row per successful call, atomic with the insert.
+- **Sibling roles:** untouched — this inserts exactly one new row; any other role the same membership independently holds is unaffected.
+- **Actor scope:** `granted_by_membership_id` is always the caller's own resolved `AccessContext.campaign_membership_id` — never caller-supplied, so it is same-campaign by construction.
+
+## 3c. `POST /campaigns/{campaign_id}/memberships/roles/{membership_role_id}/revoke` (hardened, 13E-B checkpoint 2)
+
+The route and command (`revoke_membership_role`) already existed — this
+checkpoint closes a duplicate-audit gap in the *route*, then wires it into
+the portal as the Access page's "Revoke role" action. Never ends a
+membership; revokes exactly one role assignment.
+
+- **Capability:** `access.manage`, via the identical `require_campaign_capability` dependency every other row in §2 uses.
+- **Request:** no body. Route path carries `campaign_id` and the target `membership_role_id`. Accepts an optional `Idempotency-Key` header — **new this checkpoint**.
+- **Response contract change:** previously a bodyless `204 No Content`; now `200`/`MembershipRoleResponse` (`{ membership_role_id: UUID }`, reusing the existing assign-role response shape) — needed so `begin_idempotent_request`/`complete_idempotent_request` have a response to cache. See `revoke_membership_role_endpoint`'s own docstring for the full "why" (the duplicate-audit gap this closes).
+- **Active-state/eligibility:** unchanged from the pre-existing contract. `revoke_membership_role` does **not** require the target to currently be an eligible/active assignment the way `change_membership_role` requires of its own target — an already-revoked row is a documented, harmless no-op (`RevokeMembershipRoleResult.revoked = False`), proven by the pre-existing, unmodified `tests/database/test_membership_role_concurrency.py::test_a_change_and_a_revoke_targeting_the_identical_row_serialize`. A nonexistent `membership_role_id`, or one belonging to a different campaign, is still rejected identically as `MembershipNotInCampaignError` (404, non-disclosing).
+- **Idempotency/audit (hardened this checkpoint):** the pre-checkpoint-2 route wrote one `audit.change_log` row on *every* call, including a plain retry against an already-revoked row — a genuine, if narrow, duplicate-audit gap for an ordinary network retry with no `Idempotency-Key` reuse. Fixed two ways: (1) an `Idempotency-Key` replay (the same durable `security.idempotent_requests` mechanism §3a/§3b already use) returns the cached response verbatim without re-running the command at all; (2) independent of any key, the route's audit write is now conditioned on `RevokeMembershipRoleResult.revoked` — `False` (the no-op case) writes no audit row at all, so even a retry that reaches the command a second time under a *different* (or no) key converges on one real revocation and exactly one audit record.
+- **Last-manager protection:** unchanged — `security.campaign_has_access_manager(campaign_id)`, scoped to *active* campaigns only, evaluated after the write; skipped entirely for the no-op case (nothing changed, so nothing can newly violate the invariant).
+- **Self-revocation:** permitted, with no special-case check anywhere in the stack — identical to `change_membership_role`'s own self-change policy. The only thing that can block it is the retention invariant above.
+- **Concurrency (new regression coverage; behavior itself unchanged):** the pre-existing `FOR UPDATE` lock on the target row already served same-row serialization (see the pre-existing change-vs-revoke same-row test); this checkpoint adds a revoke-vs-revoke same-row test and a revoke-vs-revoke different-management-row retention-race test (`tests/database/test_membership_role_concurrency.py`), completing the same "every pairing of change/revoke against the same or different management-granting rows" coverage §3a already established for change-vs-change and change-vs-revoke.
+- **Sibling roles:** untouched — only the named row is revoked.
+
+## 3d. `GET /campaigns/{campaign_id}/eligible-accounts` (new, 13E-B checkpoint 3)
+
+The account-selection read contract behind the portal Access page's "Add
+campaign member" action. Never a directory/search endpoint — see the
+design note below.
+
+- **Capability:** `access.manage`, via the identical `require_campaign_capability` dependency every other row in §2/§3 uses.
+- **Request:** `campaign_id` path parameter plus one required query parameter, `login_name` (string, 1-64 characters — the same bound `dnd_ai.commands.local_auth`'s own login-name format constraint allows, so a longer value can never match a stored one and is rejected by FastAPI's own query-parameter validation, 422, before reaching the database).
+- **Response (`EligibleAccountLookupResponse`):** `{ account: { user_id, display_name } | null }`. `account` is `null` for "no such account", "exists but is not currently platform-active", and "exists and is active but already has an open membership in this campaign" — all three folded into the identical result, so a caller can never distinguish which applied (the same non-disclosure discipline every `DomainAuthorizationError` in this codebase already applies). `user_id` is identity only, submitted back verbatim as §3e's `user_id` — never rendered as page text.
+- **Design choice — exact match, not directory search:** `dnd_ai.queries.access_overview.find_eligible_campaign_account` resolves `login_name` to at most one account via an exact match (after the same `normalize_login_name()` every local-auth login path already applies) against `security.external_identities` (`issuer = dnd_ai.domain.access.LOCAL_AUTH_ISSUER`) — never a prefix/substring search. A search-shaped endpoint would let any `access.manage` holder enumerate accounts platform-wide by trying successive queries; `campaign.view`/`access.manage` scope one campaign's authorization, not a platform-wide user directory, and this checkpoint's own scope explicitly forbids exposing one merely to support account selection. The caller must already know the exact login name (communicated out-of-band, by whoever administers accounts) — there is no in-app directory browse.
+- **Scope limitation (deliberate, not an oversight):** only resolves a **local** login. An OIDC-only account has no login name of this shape to look up by; broadening this to OIDC subjects is deferred to whichever future increment needs it.
+- **401/403/404:** identical to §3's contract — `get_authenticated_user_id` rejects unauthenticated requests first; an authenticated member without `access.manage` gets 403; no active membership in the campaign at all (or the campaign not existing) gets 404, indistinguishably.
+- **Pagination/filtering:** none — this is a single exact-match lookup, not a list.
+- **Idempotency/audit:** none — a pure read, matching §3's own contract.
+
+## 3e. `POST /campaigns/{campaign_id}/memberships` (hardened, 13E-B checkpoint 3)
+
+The route and command (`create_campaign_membership`) already existed but
+was reserved/unused (§2's original "reserved for a later 13E increment"
+row, with no real caller besides its own tests) — this checkpoint hardens
+it into the portal Access page's "Add campaign member" action: selecting
+an existing, eligible account and adding it to the campaign with one
+initial role, atomically. Never account creation, never an invitation,
+never a reactivation of an earlier-departed membership.
+
+- **Capability:** `access.manage`, via the identical `require_campaign_capability` dependency every other row in §2/§3 uses.
+- **Request contract change (`CreateCampaignMembershipRequest`):** `{ user_id: UUID, role_id: UUID }` — `role_id` is **new and required** this checkpoint. Safe to harden without a compatibility shim: this route had no real caller before now (confirmed by repo-wide inspection), so there was no roleless-membership contract to preserve.
+- **Response contract change (`CampaignMembershipResponse`):** `{ campaign_membership_id: UUID, membership_role_id: UUID }` — `membership_role_id` is new, naming the atomically-created initial role assignment. `201`, unchanged.
+- **Command:** `dnd_ai.commands.memberships.add_campaign_member` (new). Every check below runs, and every row lock is taken, before any write — a rejection never leaves a partial write behind, matching `change_membership_role`'s own discipline:
+  - `campaign_id` must currently be `active` (`core.lifecycle_statuses.code`) — `CampaignNotActiveError` (409). Locks `campaign.campaigns` `FOR UPDATE` first.
+  - `user_id` must exist and currently be a platform-active account (`security.users.lifecycle_status_id` -> `core.lifecycle_statuses.code = 'active'`) — `AccountNotEligibleError` (404 — an ineligible account was never a legitimate target, unlike the 409 cases above). Locks the target `security.users` row `FOR UPDATE`.
+  - `user_id` must also hold at least one currently unrevoked local-login identity (`security.external_identities`, `issuer = dnd_ai.domain.access.LOCAL_AUTH_ISSUER`, `revoked_at IS NULL`) — `AccountNotEligibleError` again (review correction: the command previously trusted §3d's own read-side eligibility check instead of re-deriving it, so a caller who already knew — or guessed — an active OIDC-only user's `user_id`, or one whose sole local identity had since been revoked, could add it directly, bypassing §3d's non-disclosure contract entirely). Matches §3d's own eligibility definition exactly. Locks every matching `security.external_identities` row `FOR UPDATE`, locked immediately after the `security.users` row above (this function's own consistent top-to-bottom lock order).
+  - `role_id` must be a system template or scoped to `campaign_id`, and currently `is_active` — `RoleNotUsableByCampaignError` (404), identical to `assign_membership_role`'s own check. Locks the candidate role row `FOR UPDATE`.
+  - A target `user_id` who already holds an *open* membership in `campaign_id` is deliberately **not** pre-checked — `ux_campaign_memberships_open` rejects that race as an ordinary 409 `IntegrityError` at insert time, matching this module's documented "database-enforced invariants this module deliberately does not duplicate" policy. This is what actually makes the add-vs-add concurrency case below correct: no pre-check to race past.
+- **Re-entry creates a new row, never a reactivation:** a target whose only prior membership in this campaign is *closed* (`ended_at IS NOT NULL`) gets a **new** `security.campaign_memberships` row from this insert — `ended_at`/`ended_by_membership_id` on the earlier row are never touched. This deliberately diverges from `dnd_ai.commands.campaign_invitations._activate_or_create_membership`'s own reactivate-if-closed behavior for its different (invitation-acceptance) flow — membership reactivation is explicitly out of this checkpoint's scope.
+- **Concurrency:** proven by real-connection PostgreSQL regression tests (`tests/database/test_membership_lifecycle_concurrency.py`): two concurrent adds of the same account (resolved by the unique index at insert time, not a pre-check); a concurrent campaign deactivation, candidate-role deactivation, target-account disablement, or target-identity revocation, each blocked by this command's own row locks. No application command currently revokes a local identity (no route writes `security.external_identities.revoked_at`); the identity-revocation race test exercises the raw SQL write directly, the same way the campaign-deactivation race test already does for its own lifecycle transition with no dedicated command.
+- **Idempotency/audit:** the same durable `Idempotency-Key` mechanism every other row in §2/§3 uses. Two `audit.change_log` rows are written per successful call — one per table this call inserts into (`campaign_memberships`, `membership_roles`) — matching each table's own pre-existing single-row-per-insert convention rather than inventing a new "one row describes two tables" shape.
+- **Cross-campaign/unknown-role rejection:** a `role_id` neither a system template nor scoped to `campaign_id` (including a nonexistent one, or one deactivated) is `RoleNotUsableByCampaignError` (404, non-disclosing), identical to §3b/§3a.
+- **Actor scope:** `granted_by_membership_id` (recorded on the new role row) is always the caller's own resolved `AccessContext.campaign_membership_id` — never caller-supplied.
+
+## 3f. `POST /campaigns/{campaign_id}/memberships/{campaign_membership_id}/end` (new, 13E-B checkpoint 3)
+
+The portal Access page's "Remove member" action: ends an existing, open
+campaign membership. Never a role change, never an account-lifecycle
+action (disable/reactivate) — those remain out of scope.
+
+- **Capability:** `access.manage`, via the identical `require_campaign_capability` dependency every other row in §2/§3 uses.
+- **Request:** no body. Route path carries `campaign_id` and the target `campaign_membership_id`. Accepts an optional `Idempotency-Key` header.
+- **Response (`EndCampaignMembershipResponse`):** `{ campaign_membership_id: UUID }` — the closed membership's own id, echoed back so `begin_idempotent_request`/`complete_idempotent_request` have a response to cache, the identical pattern §3c's revoke response already established. `200`, not `201`: this closes an existing row, it creates nothing.
+- **Command:** `dnd_ai.commands.memberships.end_campaign_membership` (new). Locks the target membership row (`FOR UPDATE`) before evaluating anything, matching `revoke_membership_role`'s identical discipline. Raises `MembershipNotInCampaignError` (404, non-disclosing) for a nonexistent `campaign_membership_id` or one belonging to a different campaign.
+- **Effect:** sets `ended_at`/`ended_by_membership_id` (the caller's own resolved membership) and moves `membership_status_id` to the `revoked` status ("Closed by a GM or owner action" — `database/seeds/security.membership_statuses.yaml`'s own words, which this always is: the route requires `access.manage` even for a self-removal). In the same transaction, every one of the membership's currently active `security.membership_roles` rows **and** (checkpoint-4 correction) every one of its currently active `security.membership_character_relationships` rows is revoked (`revoked_at` set) — never deleted, never reassigned — so a departed member is never left holding rows the read side would still describe as an active current role or character relationship. The relationship half closes a real gap: `dnd_ai.commands.campaign_invitations._activate_or_create_membership` (the invitation-acceptance flow's own reactivation path) reopens the *same* `campaign_membership_id` row in place, so a relationship left unrevoked here would have silently regained effect the moment that membership reopened, with no new grant and no new audit entry to explain why — proven by `tests/database/test_api_campaign_invitations.py::test_ending_a_membership_then_reaccepting_an_invitation_does_not_restore_its_old_character_relationship`.
+- **Already-ended target (harmless no-op, mirroring §3c's revoke contract exactly):** a `campaign_membership_id` that is already ended does nothing — `EndCampaignMembershipResult.ended = False` — no second `ended_at`/`ended_by_membership_id` write, no role/relationship-row changes, no audit row. The route's audit write is conditioned on `.ended`, so even a plain retry with no key reused (or a different key) converges on one real removal and exactly one audit record — identical to §3c's own duplicate-audit-gap fix.
+- **Last-manager protection:** `security.campaign_has_access_manager(campaign_id)`, scoped to *active* campaigns only, evaluated after the write via the same shared `_assert_active_campaign_retains_access_manager` helper `revoke_membership_role`/`change_membership_role` use — a plain `ValueError`, mapped to **400**, matching those two routes' identical contract for this invariant. Skipped entirely for the no-op case.
+- **Self-removal:** permitted, with no special-case check anywhere in the stack — identical to every other self-mutation in this module. The only thing that can block it is the retention invariant above; a lone `access.manage` holder on an active campaign cannot remove their own membership, but a second manager can remove theirs (or the first's) freely.
+- **Sibling campaigns/memberships:** untouched — only the named membership (and its own role rows) is affected.
+- **Effective immediately:** the removed member disappears from the next `GET .../access-overview` (already filtered to `ended_at IS NULL`) and the next `/auth/session` bootstrap (`dnd_ai.queries.bootstrap`, same filter) — no browser-session revocation is performed or required; a still-valid session simply stops being authorized on its next request.
+- **Concurrency:** proven by real-connection PostgreSQL regression tests (`tests/database/test_membership_lifecycle_concurrency.py`): two concurrent removals of the identical membership (same-row serialization, second observes the no-op); a concurrent `change_membership_role` against one of the membership's own role rows (blocked by this command's membership-row lock); two managers concurrently ending their own distinct manager-bearing memberships on the same active campaign (the combined-effect retention race, resolved by the database's own deferred trigger under barrier-coordinated real concurrency); self-removal racing a different manager's concurrent attempt to end that same membership (same-row serialization again, not a retention race, since a second manager remains either way).
+- **Idempotency/audit:** the same durable `Idempotency-Key` mechanism every other row in §2/§3 uses. One `audit.change_log` row per actual removal (`table_name = 'membership_roles'`/`'membership_character_relationships'` are **not** separately recorded — `changed_fields.revoked_membership_role_ids`/`.revoked_membership_character_relationship_ids` (checkpoint-4 correction added the latter) list every role/relationship row this call revoked on the single `campaign_memberships` audit row instead, since they are all one logical removal event, not independent creates the way §3e's two inserts are).
+
+## 3g. `assignable_characters`/`assignable_relationship_types` on `GET /campaigns/{campaign_id}/access-overview` (new fields, character-relationship-management checkpoint)
+
+The read-contract counterpart §3h/§3i's mutations need so the portal's
+"Add/change character relationship" controls never have to hardcode or
+guess either assignable set — the identical role §3's own `assignable_roles`
+already plays for §3a/§3b.
+
+- `assignable_characters: [{ character_id, display_name }]` —
+  `dnd_ai.queries.access_overview.list_assignable_campaign_characters`:
+  every `character.characters` row (never a bare `core.entities` row of
+  some other type) belonging to the campaign's own world (resolved
+  server-side from the caller's pinned timeline, exactly like `grant_
+  character_relationship`'s own `expected_world_id`) and currently active
+  (`core.lifecycle_statuses.code = 'active'`) — the identical "never a
+  legitimate target" bar §3h's own hardening now enforces. **Not** narrowed
+  to player characters only: an NPC is a legitimate target too (a
+  portrayer/assistant-GM relationship is meaningful for an NPC, per
+  docs/architecture/DATABASE_MODEL.md §19.4's own relationship-type list).
+  Campaign-level by world, not per-member — which *combinations* are
+  already active for a given member is derived by the portal from that
+  member's own `character_relationships` list already in this response.
+- `assignable_relationship_types: [{ character_relationship_type_id, code, display_name }]`
+  — `dnd_ai.queries.access_overview.list_assignable_character_relationship_types`:
+  every currently `is_active` `security.character_relationship_types` row.
+  Relationship types carry no campaign scope of their own (unlike roles),
+  so this is not further narrowed by `campaign_id`/`world_id`.
+- No pagination — matching §3's own "expected to stay small" precedent.
+
+## 3h. `POST /campaigns/{campaign_id}/memberships/{campaign_membership_id}/character-relationships` (hardened, character-relationship-management checkpoint)
+
+The route and command (`grant_character_relationship`) already existed
+(Phase 10 workstream 21/25) — this checkpoint hardens the command to the
+same "currently true" eligibility bar §3b/§3e already established for
+role/membership mutations, then wires it into the portal as the Access
+page's "Add character relationship" action.
+
+- **Relationship model discovered:** `security.membership_character_relationships`
+  lets one `(campaign_membership_id, character_id)` pair hold **multiple
+  simultaneous active relationships of different types**
+  (`ux_membership_character_relationships_active_type` only forbids two
+  *active* rows for the *same* `(membership, character, type)` triple) —
+  e.g. a member may simultaneously be both `viewer` and `portrayer` of the
+  same character. Relationships are **temporal**, identically to roles: a
+  row is never updated in place; it is revoked (`revoked_at` set) and a
+  new row inserted (§3i). Relationship types are reference rows
+  (`security.character_relationship_types`, a `code`/`is_active`/`sort_order`
+  lookup table, not an enum) — see §3g.
+- **Capability:** `access.manage`, via the identical `require_campaign_capability` dependency every other row in §2/§3 uses.
+- **Request (`GrantCharacterRelationshipRequest`):** `{ character_id: UUID, relationship_type_code: string, timeline_id?: UUID, effective_from_world_time_id?: UUID, effective_to_world_time_id?: UUID }` — unchanged this checkpoint. The portal's own Add-relationship control sets only `character_id`/`relationship_type_code`; the temporal-scope fields have no UI yet (pre-existing capability, not newly exposed).
+- **Response (`CharacterRelationshipResponse`):** `{ membership_character_relationship_id: UUID }`. `201`, unchanged.
+- **Eligibility (hardened this checkpoint):** all checked before any write, all raising identically within each group so a caller cannot distinguish which condition applied:
+  - the target `campaign_membership_id` must belong to `campaign_id` (pre-existing; `MembershipNotInCampaignError`, 404, non-disclosing);
+  - the membership must be currently open (`ended_at IS NULL`) and in the `active` membership status — **new**; the membership's own user account must currently be platform-active — **new**; both raise `MembershipNotActiveError` (409) — identical to §3b's own two checks for `assign_membership_role`;
+  - the target `character_id` must exist, belong to the campaign's own world, **and** currently be active (`core.lifecycle_statuses.code = 'active'`) — the world-scope half is pre-existing, the activeness half is **new**; both fold into the existing `TargetNotInCampaignWorldError` (404);
+  - `relationship_type_code` must resolve to a currently `is_active` type — **new**; previously any existing code (even a deactivated one) was accepted. Raises the new `RelationshipTypeNotActiveError` (404), folding "doesn't exist" and "deactivated" identically, mirroring `RoleNotUsableByCampaignError`'s reasoning for roles;
+  - a duplicate still-active `(membership, character, type)` triple is rejected as a 409 by the pre-existing `ux_membership_character_relationships_active_type` unique index (existing `IntegrityError` handler) — not pre-checked, matching this module's own "database-enforced invariants deliberately not duplicated" policy.
+- **Campaign lifecycle (new, checkpoint-4 correction):** `campaign_id` itself must currently be `active` (`core.lifecycle_statuses.code`), reusing `dnd_ai.commands.memberships.CampaignNotActiveError` (409) — closes a real gap: `require_campaign_capability("access.manage")` never itself consults campaign lifecycle status, so a campaign could be deactivated after the request was authorized but before this write committed, previously letting it commit anyway. Locked `campaign.campaigns FOR UPDATE` *after* the target membership row rather than before it — locking campaign-first would create a genuine deadlock opportunity against any concurrent role mutation's own deferred `campaign.campaigns` lock (`security.assert_campaign_retains_access_manager()`); see `dnd_ai.commands.access_grants`' own module docstring for the full argument. `revoke_character_relationship` (§3j) deliberately keeps no such check — closing access must stay available even against an inactive campaign.
+- **Concurrency (new):** the target membership row, then `campaign.campaigns`, then its owning user row, then the target character row, then the candidate relationship-type row are locked in that order (`FOR UPDATE OF cm` / `FOR UPDATE OF c` / `FOR UPDATE OF u` / `FOR UPDATE OF e` / `FOR UPDATE`) before any eligibility check runs — always membership-then-campaign-then-role/type, the same relative order `assign_membership_role`/`change_membership_role` already use for their own disjoint row sets, so this command can never deadlock against either. Proven by real-connection PostgreSQL regression tests (`tests/database/test_character_relationship_concurrency.py`): grant-vs-grant of the identical relationship (unique-index insertion lock, no pre-check needed), grant vs. membership-ending, grant vs. character-deactivation, grant vs. relationship-type-deactivation, grant vs. campaign-deactivation.
+- **Idempotency/audit:** unchanged — the same durable `Idempotency-Key` mechanism every other create-shaped row in §2/§3 uses; one `audit.change_log` row per successful call. A request rejected for campaign inactivity rolls back its whole transaction, including any `Idempotency-Key` reservation — a retry with the same key once the campaign is active again runs the real command rather than replaying a cached rejection.
+- **Fictional-time bounds (checkpoint-4 correction):** supplying **both** `effective_from_world_time_id` and `effective_to_world_time_id` records a closed historical interval that never currently grants access — see §3g's own note and `dnd_ai.domain.access.resolve_access_context`'s docstring for the full "current record" rule this reuses (this schema tracks no "current fictional now" a bounded window could be compared against, so a bounded relationship is fail-closed rather than treated as unbounded, previously the case). Supplying only `effective_from_world_time_id` (or neither) still grants normally and remains current indefinitely.
+- **Sibling relationships:** untouched — this inserts exactly one new row; any other relationship (to this character or any other) the same membership independently holds is unaffected.
+
+## 3i. `POST /campaigns/{campaign_id}/character-relationships/{membership_character_relationship_id}/change` (new, character-relationship-management checkpoint)
+
+The character-relationship analogue of §3a's `change_membership_role`:
+atomically revokes one existing, currently-active relationship assignment
+and inserts a new one with a different relationship type — never a bulk
+replace of every relationship a member holds.
+
+- **Capability:** `access.manage`, via the identical `require_campaign_capability` dependency every other row in §2/§3 uses.
+- **Request (`ChangeCharacterRelationshipRequest`):** `{ new_relationship_type_id: UUID }`. Route path carries `campaign_id` and the target `membership_character_relationship_id`. Unlike §3h's grant contract (which takes a `relationship_type_code` string), this takes the type by **id** — mirroring §3a's `new_role_id: UUID` shape, and matching §3g's `assignable_relationship_types` metadata, which carries both `code` and `character_relationship_type_id` so the portal can satisfy either contract without a lookup of its own.
+- **Response (`CharacterRelationshipResponse`, reused from §3h):** `{ membership_character_relationship_id: UUID }` — the id of the *new* row. `201`, matching §3h's own status code for "a new row now exists," even though an existing row also changed.
+- **Command:** `dnd_ai.commands.access_grants.change_character_relationship` (new). The new row carries forward the old row's own `timeline_id`/`effective_from_world_time_id`/`effective_to_world_time_id` temporal scope unchanged — only the relationship type changes. Takes a new required `expected_world_id` argument (checkpoint-4 review correction), resolved server-side by the route from the caller's own authorized campaign timeline (`timeline_world_id(connection, access.timeline_id)`) — never accepted from the request body.
+- **Campaign lifecycle (new, checkpoint-4 correction):** identical to §3h's own new check — `campaign_id` must currently be `active`, checked immediately after the target row is located (before its own eligibility below), raising the same `CampaignNotActiveError` (409).
+- **Active-state boundary:** the target `membership_character_relationship_id` must currently be an eligible, active assignment — not already revoked, not expired, not fictional-time-bounded and therefore closed (both `effective_from_world_time_id`/`effective_to_world_time_id` set — checkpoint-4 correction, see §3h's own fictional-time-bounds note), its owning membership not ended and in the `active` membership status, its owning user account no longer currently platform-active, or its character no longer currently active or no longer in `expected_world_id` (the last two, **checkpoint-4 review correction**: `change_character_relationship` had not been hardened to the same target-eligibility boundary §3h's `grant_character_relationship` already enforces — it locked/rechecked the relationship, membership, campaign, and replacement type, but never the membership owner's platform account or the existing character's lifecycle/world, so an access manager could durably change a relationship while its account or character was inactive, and account/character reactivation could expose the changed grant). Any of these failing raises `CharacterRelationshipNotActiveError`, mapped to **409** — identically for all of them, mirroring §3a's own `MembershipRoleNotActiveError` contract exactly (a caller cannot learn *which* condition applied), and deliberately folded into this same error rather than reusing §3h's own `MembershipNotActiveError`/`TargetNotInCampaignWorldError`: those two are shaped around a caller-*supplied* fresh target, while this command's user/character are the *existing* relationship's own already-fixed attributes. The candidate `new_relationship_type_id` is held to the same bar as §3h's own type check: nonexistent or deactivated raises `RelationshipTypeNotActiveError` (**404**) — never a legitimate target in the first place, unlike the 409 cases above.
+- **Same-type no-op:** if `new_relationship_type_id` names the type `membership_character_relationship_id` already, currently holds, the request is rejected as `ChangeCharacterRelationshipNoOpError`, mapped to **422**, checked before any write — identical to §3a's own `ChangeMembershipRoleNoOpError` contract, including the "never durably cached as a successful idempotent-replay result" reasoning.
+- **Duplicate-result rejection:** a retry naming a `new_relationship_type_id` the same `(membership, character)` pair already holds actively (from some *other* assignment) is rejected as a 409 by the pre-existing `ux_membership_character_relationships_active_type` unique index — not pre-checked, matching §3h's own policy.
+- **Concurrency:** the target row and its owning membership are locked together (`FOR UPDATE OF mcr, cm`), then `campaign.campaigns` (`FOR UPDATE OF c`, checkpoint-4 correction), then, separately, the membership's owning user row and the relationship's own character row (`FOR UPDATE OF u`/`FOR UPDATE OF e`, checkpoint-4 review correction), before evaluating the target's own eligibility, and the candidate new relationship-type row is separately locked (`FOR UPDATE`) before its own check — relationship/membership, campaign, owning user, character, candidate type: the identical order §3h's `grant_character_relationship` uses for its own disjoint checks, so this command can never deadlock against it (see §3h's own note on why campaign is locked after the target row, not before — the user/character locks follow the same reasoning). A concurrent change/revoke of the identical row is serialized the same way (same-row coverage) — the loser observes the winner's committed effect (already-revoked/superseded) once unblocked, raising `CharacterRelationshipNotActiveError` rather than an interleaved write. Proven by real-connection PostgreSQL regression tests (`tests/database/test_character_relationship_concurrency.py`): change vs. relationship-type-deactivation, change vs. campaign-deactivation, change vs. account-disablement, change vs. character-deactivation, change-vs-revoke same-row, change-vs-change same-row.
+- **Revoke stays unchecked (deliberate, unchanged):** `revoke_character_relationship` (§3j) checks none of the four conditions above — account, character, membership, or campaign lifecycle — closing access must remain possible for cleanup regardless of any of them.
+- **No retention invariant:** unlike §3a's `change_membership_role`, this checkpoint adds no campaign `access.manage`-retention check — a character relationship never carries `access.manage` (character-scoped capabilities and the campaign-wide `access.manage` capability are disjoint concerns, per `dnd_ai.commands.access_grants`' own module docstring).
+- **Idempotency:** the same durable `Idempotency-Key` mechanism §3a uses — one opaque key per logical `(membership_character_relationship_id, new_relationship_type_id)` edit, reused verbatim across a retry of that exact selection, regenerated the moment the selection changes, cleared on confirmed success. See `portal/src/hooks/useChangeCharacterRelationship.ts`.
+- **Audit:** one `audit.change_log` row (`change_action_code = 'updated'`, `table_name = 'membership_character_relationships'`, `record_id` = the new row's id), atomic with the state change, recording `previous_status`/`new_status` (the old/new relationship-type **codes**) and `changed_fields = { "previous_membership_character_relationship_id": "<uuid>" }` — the identical shape §3a's own audit row uses.
+- **Self-change:** permitted, with no special-case check — there is no retention invariant to protect.
+- **Effective immediately:** the change is visible on the next `GET .../access-overview` request and the next `/auth/session` bootstrap.
+
+## 3j. `POST /campaigns/{campaign_id}/character-relationships/{membership_character_relationship_id}/revoke` (hardened, character-relationship-management checkpoint)
+
+The route and command (`revoke_character_relationship`) already existed —
+this checkpoint closes the identical duplicate-audit gap §3c already
+closed for `revoke_membership_role_endpoint`, then wires it into the
+portal as the Access page's "Revoke relationship" action.
+
+- **Capability:** `access.manage`, via the identical `require_campaign_capability` dependency every other row in §2/§3 uses.
+- **Request:** no body. Route path carries `campaign_id` and the target `membership_character_relationship_id`. Accepts an optional `Idempotency-Key` header — **new this checkpoint**.
+- **Response contract change:** previously a bodyless `204 No Content`; now `200`/`CharacterRelationshipResponse` (`{ membership_character_relationship_id: UUID }`, reusing §3h's own grant response shape) — needed so `begin_idempotent_request`/`complete_idempotent_request` have a response to cache. Identical reasoning to §3c's own response-contract change for `revoke_membership_role_endpoint`.
+- **Active-state/eligibility:** `revoke_character_relationship` does **not** require the target to currently be an eligible/active assignment the way `change_character_relationship` requires of its own target — an already-revoked row is a documented, harmless no-op (`RevokeCharacterRelationshipResult.revoked = False`), proven by `tests/database/test_character_relationship_concurrency.py::test_two_concurrent_revokes_of_the_same_relationship_serialize`. A nonexistent `membership_character_relationship_id`, or one belonging to a different campaign, is still rejected identically as `MembershipNotInCampaignError` (404, non-disclosing).
+- **Campaign lifecycle: deliberately not checked (checkpoint-4 correction confirmed this, did not change it):** unlike §3h/§3i's grant/change, `revoke_character_relationship` never requires `campaign_id` to be `active` — revoking access must remain available for cleanup even against an inactive campaign, proven by `tests/database/test_api_access_grants.py::test_revoking_a_relationship_on_an_inactive_campaign_still_succeeds`.
+- **Idempotency/audit (hardened this checkpoint):** the pre-hardening route wrote one `audit.change_log` row on *every* call, including a plain retry against an already-revoked row — the identical duplicate-audit gap §3c closed for role revocation. Fixed the same two ways: (1) an `Idempotency-Key` replay returns the cached response verbatim without re-running the command; (2) independent of any key, the route's audit write is now conditioned on `RevokeCharacterRelationshipResult.revoked` — `False` writes no audit row at all.
+- **No retention invariant:** unchanged — a character relationship never carries `access.manage`, so there is nothing for this route to protect (see §3i).
+- **Self-revocation:** permitted, with no special-case check — the server decides authorization; the portal never locally grants or withholds the control based on whether the target is the caller's own relationship.
+- **Concurrency:** the pre-existing `FOR UPDATE OF mcr` lock on the target row serializes same-row races; this checkpoint adds regression coverage for revoke-vs-revoke and change-vs-revoke same-row cases (`tests/database/test_character_relationship_concurrency.py`). Revoke racing the owning membership's own ending is **not** a race this function needs to resolve — `revoke_character_relationship` never re-checks membership eligibility at all (documented in that function's own docstring), so a concurrent write to a different `security.campaign_memberships` row cannot affect its `FOR UPDATE OF mcr` lock.
+- **Sibling relationships:** untouched — only the named row is revoked.
+- **Immediate authorization effect:** revocation removes the character from the target user's next `GET /auth/session` bootstrap (`dnd_ai.queries.bootstrap.get_session_bootstrap` re-resolves `AccessContext.character_capabilities` fresh on every call — no caching layer) and, if the revoked relationship was the sole source of a `selected_character_id` default, that field becomes `null` on the next bootstrap rather than continuing to name a no-longer-authorized character. Already covered by the pre-existing, unmodified `tests/database/test_query_bootstrap.py::test_relationship_revocation_is_reflected_on_the_next_call`/`test_character_relationship_with_capability_is_a_selectable_perspective`/`test_multiple_perspectives_leave_selected_character_null` — this checkpoint changes no bootstrap-query code, so no new bootstrap-level test was needed; the existing suite already proves the same-request re-resolution behavior this route's own hardening depends on. A route request made using the revoked perspective (e.g. a character-scoped read) fails with that route's own established non-disclosing response on its *next* request — no browser-session revocation is performed or required.
+
+## 3k. `POST /campaigns/{campaign_id}/resource-grants` / `.../resource-grants/{id}/revoke` (hardened, checkpoint 5, corrected)
+
+The direct-resource-grant management checkpoint: the `security.
+resource_grants` schema, resolver (`dnd_ai.domain.access.
+resolve_access_context`), read-overview join, commands
+(`create_resource_grant`/`revoke_resource_grant`), and API routes all
+already existed (Phase 10) — this checkpoint hardens the commands to the
+same "currently true" eligibility bar §3h/§3b already established, adds a
+server-authoritative delegation policy (nothing this codebase had before),
+closes the identical membership-ending silent-reactivation gap checkpoint
+4 closed for character relationships (extended by a post-delivery
+correction — see the membership-ending-integration bullet below — to also
+close a member's access-group links, not just their own direct grants), and
+wires the portal's own
+"Direct resource access" section to it — scoped to **character targets
+only** this checkpoint.
+
+- **Grant model discovered:** `security.resource_grants` attaches to
+  either a campaign membership or an access group (`grantee_campaign_
+  membership_id`/`grantee_access_group_id`, exactly one), and targets
+  exactly one of six kinds (`character_id`, `entity_id`, `knowledge_
+  item_id`, `quest_id`, `session_id`, `event_id`) with one capability and
+  an `effect` (`allow`/`deny`). `ux_resource_grants_active` forbids two
+  *active* rows for the identical `(grantee, target, timeline_id,
+  capability_id, effect)` tuple — otherwise multiple simultaneous grants
+  to the same target are permitted (e.g. an `allow` and a narrower `deny`
+  at the same time). No `resource_type` reference table exists (docs/
+  architecture/DATABASE_MODEL.md §19.6 deliberately rejects a universal
+  ACL framework); target validity is enforced by real per-kind foreign
+  keys instead.
+- **Capability:** `access.manage`, via the identical `require_campaign_capability` dependency every other row in §2/§3 uses.
+- **Delegation policy (new this checkpoint — no prior rule existed):**
+  `dnd_ai.domain.access.RESOURCE_GRANT_CAPABILITY_CATALOG` is a fixed,
+  server-authoritative table of which `security.capabilities.code` values
+  are ever a legitimate pairing with which of the six target kinds,
+  derived from this codebase's own actual `has_capability(...)`/
+  `resource_grant_targets()` call sites (not guessed): every `character.*`
+  code is valid only for a `character_id` target (mirroring `security.
+  character_relationship_type_capabilities`' own identical scoping of
+  those same codes to character relationships); `campaign.view`/
+  `canon.edit` are valid for the other five target kinds (the only two
+  capabilities any reader in this codebase ever checks against them).
+  `access.manage`, `import.approve`, and `rules_source.manage` are
+  excluded from every target kind entirely — each is checked only via
+  `require_campaign_capability`, which never passes a resource-target
+  keyword, so a resource-scoped grant of one would be silently inert
+  against every real call site, and this codebase's authorization model
+  has no documented notion of *resource-scoped* platform/campaign
+  administration regardless. `character.discover` (checkpoint-5
+  correction) is also excluded from the `character_id` list even though it
+  is otherwise a `character.*` code: its own baseline reader passes no
+  resource target at all, and the one call site that *does* pass a
+  `character_id` can only confirm a grant that already exists — no reader
+  anywhere in this codebase resolves "should a resource grant of
+  `character.discover` make character X newly discoverable" from a bare
+  `(membership, capability)` pair the way the other eight `character.*`
+  codes do for their own gated actions; see `RESOURCE_GRANT_CAPABILITY_
+  CATALOG`'s own docstring for the full account. `access.manage`
+  authorizes assignment from this entire fixed catalog regardless of which
+  capabilities the granting membership itself currently holds — the
+  identical precedent `assign_membership_role`/`grant_character_
+  relationship` already established for roles and relationship types (an
+  access manager need not personally hold a capability to delegate it).
+- **Request (`CreateResourceGrantRequest`):** `{ capability_code, effect, grantee_campaign_membership_id?, grantee_access_group_id?, character_id?, entity_id?, knowledge_item_id?, quest_id?, session_id?, event_id?, reason? }` — unchanged shape (all six target kinds and both grantee kinds remain backend-supported); the portal's own Add-grant control only ever sends `grantee_campaign_membership_id`, `character_id`, and `capability_code` (`effect` always `"allow"` — see the portal-scope note below).
+- **Response (`ResourceGrantResponse`):** `{ resource_grant_id: UUID }`. `201`, unchanged.
+- **Eligibility (hardened this checkpoint):** all checked before any write, all raising identically within each group so a caller cannot distinguish which condition applied:
+  - a `grantee_campaign_membership_id` grantee must belong to `campaign_id` (pre-existing; `MembershipNotInCampaignError`, 404, non-disclosing); must be currently open and in the `active` membership status, and its owning user account must currently be platform-active — both **new**, folded into `MembershipNotActiveError` (409), the identical bar §3h's own `grant_character_relationship` hardening established. Not applicable to a `grantee_access_group_id` grantee, which carries no lifecycle of its own (`security.access_groups` has no `is_active`/status column) — access-group-targeted grants are otherwise unchanged and remain out of this checkpoint's own portal scope (see below).
+  - `campaign_id` itself must currently be `active` — **new**, `CampaignNotActiveError` (409), the identical gap-closing check checkpoint 4 added for character relationships.
+  - whichever of the six target kinds is supplied must exist, belong to the campaign's own world/campaign scope (pre-existing), **and** currently be active — the activeness half is **new**, folded into the existing `TargetNotInCampaignWorldError`/`SessionNotInCampaignError` (404): a character/entity/knowledge-item/quest/event target's `core.lifecycle_statuses.code` must be `'active'` (all five are `core.entities` rows via class-table inheritance), and a session target's own `campaign.sessions.lifecycle_status_id` must be `'active'` (the one target kind without a `core.entities` row of its own).
+  - `capability_code` must be currently active **and** a valid pairing for the supplied target kind under `RESOURCE_GRANT_CAPABILITY_CATALOG` — both **new**, folded into the new `ResourceGrantCapabilityNotGrantableError` (404): a nonexistent code, a deactivated one, and an incompatible pairing (e.g. `character.control` against a `quest_id`) are all indistinguishable to the caller.
+  - a duplicate still-active `(grantee, target, timeline_id, capability, effect)` combination is rejected as a 409 by the pre-existing `ux_resource_grants_active` unique index (existing `IntegrityError` handler) — not pre-checked, matching this module's own "database-enforced invariants deliberately not duplicated" policy.
+- **Concurrency (new):** the grantee (membership row, or nothing further for an access-group grantee), then `campaign.campaigns`, then, separately, the membership grantee's owning user row, then the target resource row, then the candidate capability row are locked in that order (`FOR UPDATE OF cm` / `FOR UPDATE OF c` / `FOR UPDATE OF u` / `FOR UPDATE OF e`-or-`s` / `FOR UPDATE`) before any eligibility check runs — grantee, then campaign, then owning user, then target, then capability: the identical relative order §3h's `grant_character_relationship` uses for its own disjoint checks, so this command can never deadlock against it. Proven by real-connection PostgreSQL regression tests (`tests/database/test_resource_grant_concurrency.py`): create-vs-create of the identical grant (unique-index insertion lock), create vs. membership-ending, create vs. account-disablement, create vs. campaign-deactivation, create vs. target-deactivation (both the entity-rooted and the session code path), create vs. capability-deactivation, and two-concurrent-revokes-serialize.
+- **Idempotency:** unchanged for create — the same durable `Idempotency-Key` mechanism every other create-shaped row in §2/§3 uses. A request rejected for any of the eligibility conditions above rolls back its whole transaction, including any `Idempotency-Key` reservation — a retry with the same key once the condition clears runs the real command rather than replaying a cached rejection.
+- **Audit content (hardened this checkpoint, correction):** one `audit.change_log` row per successful create, and per actual revocation, exactly as before — but both now carry a bounded, non-free-form `changed_fields` payload (`grantee_campaign_membership_id`/`grantee_access_group_id` — exactly one non-null, `target_kind`/`target_id`, `capability_code`, `effect`) instead of none at all. `create_resource_grant_endpoint` reads these from the already-validated request body; `revoke_resource_grant_endpoint` reads them from `RevokeResourceGrantResult`'s own new fields, populated server-side by `revoke_resource_grant()` from the locked grant row itself — never re-derived from caller input, since a revoke request only ever supplies `resource_grant_id`. `reason` (free-form caller text) is never recorded, matching `dnd_ai.api.local_auth`'s "Never store" list.
+- **Revoke stays unchecked (deliberate, unchanged):** `revoke_resource_grant` checks none of the eligibility conditions above (account, character/target, membership, campaign) — closing access must remain possible for cleanup regardless, matching §3j's identical policy for `revoke_character_relationship`.
+- **Revoke response contract change (hardened this checkpoint):** previously a bodyless `204 No Content` with no `Idempotency-Key` support and an unconditional audit write on every call (including a plain retry against an already-revoked row); now `200`/`ResourceGrantResponse` (`{ resource_grant_id: UUID }`), an optional `Idempotency-Key`, and the audit write conditioned on `RevokeResourceGrantResult.revoked` — the identical duplicate-audit-gap fix §3c/§3j already made for role/relationship revocation.
+- **No change endpoint:** unlike a character relationship's single-dimension type change, a resource grant's meaningful fields (target, capability, effect, temporal/timeline scope) could each independently change, with no single unambiguous "this is what changed" audit story — revoking the old grant and creating a new one (both already hardened, audited, and idempotent) is the deliberate replacement for a generic edit form; see `dnd_ai.commands.access_grants`' own module docstring.
+- **Membership-ending integration (checkpoint 5, extended by correction):** `end_campaign_membership` revokes every currently active `security.resource_grants` row whose `grantee_campaign_membership_id` is the ending membership, in the same transaction that closes it — the identical silent-reactivation gap checkpoint 4 closed for character relationships. It also now closes (`removed_at = now()`, never deletes) the ending membership's own currently open `security.access_group_memberships` rows — the *membership's link* to each access group it belonged to — so a group's own resource grants stop applying to a departed member too, without touching the group's grant row or any other member's link to it. This closes a real gap the first cut of this checkpoint missed: `resolve_access_context`'s group-membership subquery only ever considers a currently open `access_group_memberships` row, and `_activate_or_create_membership` reactivates the *same* `campaign_membership_id` row in place on a later invitation acceptance — without this correction, a departed member's stale group membership (and every grant made to that group) would silently regain effect the moment they rejoined. Covered by `tests/database/test_api_membership_lifecycle.py::test_ending_a_membership_also_revokes_its_resource_grants`/`::test_ending_a_membership_also_closes_its_access_group_memberships` and `tests/database/test_api_campaign_invitations.py::test_ending_a_membership_then_reaccepting_an_invitation_does_not_restore_its_old_character_relationship` (extended checkpoint 5 to also cover the resource-grant half through a real reactivation) and the new `::test_ending_a_membership_then_reaccepting_an_invitation_does_not_restore_its_old_access_group_membership` (checkpoint-5 correction — the full access-group scenario: initial effect, closure on end, non-reactivation on a reopened membership, and restoration only via an explicit new `access_group_memberships` insert).
+- **Read-side parity (checkpoint 5):** `dnd_ai.domain.access.resolve_access_context` and `get_campaign_access_overview` both now exclude a resource grant whose own target is not currently active — the same "currently true" generalization applied to the mutation side above, so a target deactivated *after* a grant was created stops being authorization-effective (and stops appearing on the overview) on the very next request, not just at creation time.
+- **Portal scope, checkpoint 5 (superseded by checkpoint 12 — see §3o):** at checkpoint 5, the portal's "Add direct resource access" control offered only **character** as a selectable resource type, reasoning that the other five target kinds had no safe, campaign-scoped display/search contract of their own yet. **That reasoning is stale as of Phase 13D**, which delivered exactly those five contracts (world search, knowledge browse, quest list, session list) before this checkpoint's own portal work began — §3o documents what checkpoint 12 built on top of them. `grantable_resource_capabilities` (§3) was shaped generally (one row per valid `(capability, target_type)` pairing) specifically so this later checkpoint needed no change to that endpoint, only a portal change.
+- **Server delegation policy answers this checkpoint's own open question:** an access manager may delegate any capability in the fixed catalog for the target's kind, **not** only capabilities they personally currently hold — see the delegation-policy bullet above for the precedent this follows and the reasoning.
+
+## 3l. `POST /campaigns/{campaign_id}/access-groups` and friends (new, checkpoint 6)
+
+**Discovered model** (`security.access_groups`/`.access_group_memberships`, revision 080; `lifecycle_status_id` added by revision 105): a group is campaign-scoped (`campaign_id`, `ON DELETE CASCADE`), named uniquely within its campaign (`ux_access_groups_campaign_name`, case-sensitive plain-text comparison — a deliberate choice, not an oversight, matching this table's own established convention with no `citext`/`lower()` normalization anywhere in schema), 1-200 characters (`ck_access_groups_name_length`); with an optional `description`, 1-2000 characters when present (`ck_access_groups_description_length`, migration 106 — a checkpoint-6 correction; a blank value normalizes to `NULL` before storage, never an empty string). Migration 106's own legacy-data policy (a further checkpoint-6 production-safety correction, since revisions 080-105 enforced no bound at all) runs, in order: (1) `ADD CONSTRAINT ck_access_groups_description_length ... NOT VALID` first — its brief `ACCESS EXCLUSIVE` lock waits for any in-flight writer to finish and then blocks any new writer until the migration's own transaction ends; (2) only then the over-length preflight, which never silently truncates — a pre-existing description already longer than 2000 characters blocks the migration outright with a deliberate `RuntimeError` naming the affected `access_group_id`(s), and raising here rolls the whole transaction back, undoing the `NOT VALID` constraint too; (3) any pre-existing empty-string description is backfilled to `NULL` (retroactively applying the same normalization the application already guarantees, destroying no text); (4) `VALIDATE CONSTRAINT` runs last, taking only a `SHARE UPDATE EXCLUSIVE` lock (concurrent reads/writes permitted) rather than blocking the table for a full scan. Installing the constraint before the preflight, rather than after, is deliberate: it closes a rolling-deployment race where an old writer could otherwise commit an invalid description after the preflight ran clean but before the lock was taken, surfacing only a generic constraint-violation error instead of this migration's actionable one — see the migration's own "Concurrency guarantee" docstring section, proven directly against real locks by `tests/database/test_access_group_description_length_migration.py`'s two-connection concurrency tests. Since revision 105, a group also carries `lifecycle_status_id` (`core.lifecycle_statuses` — the same shared lookup `campaign.campaigns`/`.sessions`/`.timelines`/`core.entities`/`security.users` all already use; only `active`/`archived` are ever written by this checkpoint's own commands, though the FK does not itself forbid the lookup's other codes). Membership (`access_group_memberships`) links a group to a `campaign_membership_id` — never a bare `user_id` — with `removed_at` closing the row rather than deleting it (`ux_access_group_memberships_open`, a partial unique index, prevents a duplicate open link). One campaign membership may belong to multiple groups simultaneously; groups do not nest (no `parent_access_group_id` or similar exists, and none is added). Hard deletion of either table is never performed by any command.
+
+**Routes** (`dnd_ai.api.access_groups` over `dnd_ai.commands.access_groups`, all gated `access.manage`):
+
+| Method & path | Command | Status | Notes |
+|---|---|---|---|
+| `POST /campaigns/{campaign_id}/access-groups` | `create_access_group` | 201 | `{name, description?}`. Requires the campaign currently active. Blank/whitespace-only name rejected (422, `BlankAccessGroupNameError`) before any write; an over-length name (>200, `ck_access_groups_name_length`) or description (>2000, `ck_access_groups_description_length`, migration 106) rejected (422 — `Field(max_length=...)` at the API layer, `AccessGroupNameTooLongError`/`AccessGroupDescriptionTooLongError` at the command layer, matching bounds all the way down); a duplicate name is left to `ux_access_groups_campaign_name`'s own 409. |
+| `POST /campaigns/{campaign_id}/access-groups/{access_group_id}/update` | `update_access_group` | 200 | `{name, description?}`. Requires an active group in this campaign (`AccessGroupNotInCampaignError`/`AccessGroupNotActiveError`). Rejects an unchanged request (422, `AccessGroupUpdateNoOpError`), a blank name, and an over-length name/description (checkpoint-6 correction, identical bounds to create), before any write. No generic patch — only `name`/`description` are ever accepted. |
+| `POST /campaigns/{campaign_id}/access-groups/{access_group_id}/deactivate` | `deactivate_access_group` | 200 | No body. Archives the group; closes every open membership and revokes every active resource grant it owns, in the same transaction — unbounded, regardless of how many. Already-archived is a harmless no-op (no second audit row). `changed_fields` (checkpoint-6 correction) bounds each dependent list to an exact `count`, a `sample_ids` prefix capped at 20, and a `sample_truncated` flag — never the full, unbounded id list the first cut of this checkpoint wrote. |
+| `POST /campaigns/{campaign_id}/access-groups/{access_group_id}/members` | `add_access_group_members` | 201 | Preferred request: `{campaign_membership_ids: UUID[]}` with 1–100 entries. The legacy `{campaign_membership_id: UUID}` request remains accepted for compatibility, but supplying both fields is rejected with 422. IDs are deduplicated and canonically sorted before authorization, idempotency fingerprinting, locking, or insertion, so order and duplicate entries do not change the logical operation. Response: `{access_group_membership_id: UUID \| null, access_group_membership_ids: UUID[], added_count: int}`; the singular compatibility field is populated only when exactly one row is added. The batch is atomic: the server validates the active group, active campaign, and every selected open/active/platform-active campaign membership before inserting anything. One invalid or conflicting selection rolls back the complete operation. A duplicate open link remains a 409 through `ux_access_group_memberships_open`. |
+| `POST /campaigns/{campaign_id}/access-groups/{access_group_id}/members` | `add_access_group_member` | 201 | `{campaign_membership_id}` — the authoritative campaign-membership id, never a bare `user_id`. Requires an active group, an open/active/platform-active target membership, and an active campaign — all before any write. A duplicate open link is left to `ux_access_group_memberships_open`'s own 409. |
+| `POST /campaigns/{campaign_id}/access-group-memberships/{access_group_membership_id}/remove` | `remove_access_group_member` | 200 | No body. Closes the link (`removed_at`), never deletes it. Checks nothing beyond campaign scope — closing access must remain possible for cleanup, matching every other revoke/end/remove command in this document. Self-removal permitted (no per-campaign retention invariant applies to a group link). Already-removed is a harmless no-op. |
+
+Group-owned resource grants use the **existing** §3k routes unchanged — `POST /campaigns/{campaign_id}/resource-grants` / `.../resource-grants/{id}/revoke` already accept `grantee_access_group_id`. The one change: `create_resource_grant`'s group-grantee branch now also locks the group row (`FOR UPDATE OF ag`) and requires it currently be active (`AccessGroupNotActiveError`, 409) — before revision 105 a group carried no lifecycle to check. The portal exposes only the same character-target `allow`-grant workflow already built for §3k's member-target grants; it does not add create controls for a `deny` effect or any of the other five target kinds for a group grantee either, matching §3k's own portal-scope limitation. An existing backend-created `deny` grant on a group remains visible/revocable with the same effect-aware "Remove denial" wording §3k's correction already established.
+
+**Read contract:** `GET /campaigns/{campaign_id}/access-overview` gains `access_groups: AccessGroupSummaryResponse[]` (`dnd_ai.queries.access_overview.list_campaign_access_groups`) — every group in the campaign, **both** `active` and `archived` (so the portal can offer "Reactivate"), each with its currently open members (`access_group_membership_id`, `campaign_membership_id`, `display_name`, `added_at`) and currently active, group-owned resource grants (the identical shape §3k's own per-member `grants[]` already uses — `target_type`/`target_id`/`target_display_name`, the last populated only for a `character_id` target). No separate "eligible members" endpoint exists: the portal's group-add control reuses the overview's own top-level `members` list, filtering to `status_code == "active"` **and** `account_is_active` (checkpoint-6 correction — see §3's own note on that field) client-side — the server still authoritatively re-validates eligibility at mutation time regardless, the same "read side only narrows offered choices, never the authorization boundary" pattern §3d's `find_eligible_campaign_account` already established for a different control.
+
+**Portal batch-add behavior:** the access-group member picker presents eligible members as ordinary checkboxes rather than a native multi-select, so selecting multiple members does not depend on Ctrl/Command or Shift gestures. The picker opens with no implicit selection, displays the selected-member count, and sends all checked membership IDs in one atomic request. Cancel discards the draft selection; a recoverable failure retains it for retry. Successful messaging uses the server-returned `added_count`, and the authoritative access overview is refetched before the updated group membership is displayed.
+
+**Concurrency:** group create/rename/deactivate/reactivate lock their own group row first (`dependent-row-then-campaign-row`, this document's established order). `add_access_group_members` canonicalizes the selected membership IDs and locks, in this order: the group `FOR UPDATE`; every selected membership `FOR NO KEY UPDATE` (ascending id, in a statement without a join to `membership_statuses`); the acting membership `FOR KEY SHARE`; the campaign `FOR KEY SHARE`; then each member's account `FOR UPDATE`. Eligibility is checked only after those locks, in the unchanged error order. The group lock serializes overlapping additions to the same group, while the selected membership locks prevent membership-ending, role changes, recovery or account-lifecycle changes from passing the eligibility check concurrently. Memberships are locked before the campaign, as every authoring command and `end_campaign_membership` do, so an add cannot deadlock with a member's own authoring write, the end of the member's (or the actor's) membership, administrative recovery or an A2a release (DEF-015); the campaign is `FOR KEY SHARE`, so an archive still waits for an in-flight add and the reverse. Proven by `tests/database/test_access_group_member_add_locks.py`. `create_resource_grant`'s group-grantee branch locks the group row before `campaign.campaigns`, matching `reactivate_access_group`'s relative order rather than inverting it. Proven by `tests/database/test_access_group_concurrency.py`: duplicate-name create/rename races; batch addition versus group deactivation, membership ending, and account disablement; two overlapping batch additions; two concurrent removals; group-grant creation versus group deactivation; group deactivation versus grant revocation; and two concurrent deactivations/reactivations.
+
+**Idempotency:** every mutating route accepts an `Idempotency-Key` through the same durable `security.idempotent_requests` mechanism every other route in this document uses. For batch group-member addition, the fingerprint contains the canonical deduplicated membership-ID set. Reordering the same IDs or repeating an ID therefore represents the same logical request and replays the original response; changing the selected set with the same key remains a conflict.
+
+**Audit:** one `audit.change_log` row per actual state change (`create_access_group`/`update_access_group`/`deactivate_access_group`/`reactivate_access_group`/`add_access_group_member`/`remove_access_group_member`, `table_name` `access_groups`/`access_group_memberships`), the latter four conditioned on the underlying command's own no-op result exactly like every other revoke/end/remove route in this document. `create_access_group`/`update_access_group` record the command's own normalized `description` (trimmed, blank-to-`NULL`) in `changed_fields`, never the raw request body value (checkpoint-6 correction). `update_access_group`'s row records the group's previous/new name in `previous_status`/`new_status` (reusing those generic columns, matching `change_membership_role`'s own precedent for a different kind of "old → new" change) so `GET /campaigns/{campaign_id}/audit-history` can show a rename summary. `deactivate_access_group`'s row bounds each dependent id list in `changed_fields` (checkpoint-6 correction — see the routes table above) rather than writing every removed-membership/revoked-grant id verbatim. Audit-history gains two new categories, `access_group` (the four lifecycle commands, target = the group) and `access_group_membership` (the two membership commands, target = the added/removed account, `change_summary` = the group's name) — see `docs/AUDIT_HISTORY_API.md` §2 for the full label-resolution contract, including how both reuse the identical `grantee_access_group_id`/`grantee_group_name` and `target_user_id`/`target_user_display_name` resolution the `resource_grant`/`membership` categories already established, rather than adding new columns.  Batch member addition writes exactly one `access_group_memberships` audit row for each row actually inserted. Each audit record is paired from the command result's own `(campaign_membership_id, access_group_membership_id)` values rather than by zipping the original request list, so duplicate or reordered input cannot associate an audit event with the wrong campaign member. The audit writes and every membership insertion remain in the same transaction.
+
+## 3m. `GET /campaigns/{campaign_id}/invitations`, `POST /campaigns/{campaign_id}/invitations`, `POST /campaigns/{campaign_id}/invitations/{campaign_invitation_id}/revoke`, and `POST /campaign-invitations/accept` (pending-invitation management, checkpoint 7)
+
+The invitation-issuance and acceptance routes already existed; this checkpoint adds the pending-list read contract and the revoke mutation, then wires the full invitation-management surface into the portal.
+
+- **List pending invitations (`GET /campaigns/{campaign_id}/invitations`):** capability `access.manage`, the same campaign-scoped human-principal boundary as every other Access-page management read. Returns only currently outstanding invitations: `accepted_by_user_id IS NULL`, `accepted_at IS NULL`, `revoked_at IS NULL`, `expires_at > now()`. Response shape: `{ invitations: [{ campaign_invitation_id, invited_email, invited_by_display_name, created_at, expires_at }] }`, ordered deterministically by `created_at`, then `campaign_invitation_id`. The raw token, token hash, accepted user, login identity, credential/session data, or any account-binding claim are never returned. `invited_email` is optional operator metadata only, never an authorization binding.
+- **Issue invitation (`POST /campaigns/{campaign_id}/invitations`):** unchanged core semantics, now consumed by the portal. The raw token is returned exactly once, in the successful response body only. Only the SHA-256 token hash is persisted. The token is never placed into a URL, logs, audit metadata, browser storage, or any later read response.
+- **Revoke invitation (`POST /campaigns/{campaign_id}/invitations/{campaign_invitation_id}/revoke`):** capability `access.manage`; cookie-authenticated browser callers must satisfy the same CSRF and allowed-Origin enforcement every other portal mutation already uses. Response shape: `{ campaign_invitation_id }`. `dnd_ai.commands.campaign_invitations.revoke_campaign_invitation` locks the invitation row `FOR UPDATE`, requires it to belong to the route campaign, and never deletes it. A currently outstanding invitation is narrowed in place by setting `revoked_at = now()`. An already-revoked row is a successful no-op. Accepted and expired invitations are rejected by one fixed 409 conflict contract with no cause disclosure. Missing or cross-campaign rows remain the usual non-disclosing 404.
+- **Revocation idempotency/audit:** the revoke route accepts `Idempotency-Key` through the existing durable `security.idempotent_requests` mechanism. The fingerprint includes `campaign_id`, `campaign_invitation_id`, the actor's campaign membership scope, and the command name. Idempotent replays return the original response without re-running the command; rejected requests leave no completed reservation behind. Exactly one `audit.change_log` row is written for one real revocation (`command_name = 'revoke_campaign_invitation'`, category `invitation`, action label `Invitation revoked`). No audit metadata includes the raw token, token hash, or email label.
+- **Acceptance semantics (preserved):** `POST /campaign-invitations/accept` still treats the token as a bearer credential carried only in the request body, never a path/query/fragment parameter. Any authenticated human principal possessing a valid token may accept it; `invited_email` does not bind the token to an account. Wrong, expired, revoked, or already-differently-accepted tokens remain non-disclosing. A same-user replay remains idempotent. Acceptance creates, reuses, or reactivates campaign membership, but does **not** assign a campaign role, restore prior role/resource/access-group assignments, or create any new grant beyond reopening the membership row itself.
+- **Portal behavior:** the Access page now includes a campaign-level `Invitations` section, separate from member and access-group cards. It lists only outstanding invitations; shows the optional email label (or `No email label`), inviter display name, created time, and expiration time; and offers `Issue invitation` plus per-row `Revoke` controls. The one-time token returned by issuance lives in React memory only, is shown in a dedicated success panel, can be copied only by explicit user action, and is erased when the panel is dismissed. The panel is intentionally owned above the Access overview's refetch boundary so the authoritative pending-list reload does not erase the token before the GM can copy it. The authenticated portal acceptance page at `/campaign-invitations/accept` uses a password-style token field, never stores the token, reloads session bootstrap after success, states that a GM may still need to assign role/access, and links the user to `/campaigns` rather than auto-navigating into a possibly still-denied campaign route.
+- **Still out of scope:** email delivery, invitation resend, editable expiration, invitation binding to an email/account, account lifecycle changes, membership-role assignment during acceptance, non-character resource-grant invitation UX, Foundry administration, and AI features.
+
+## 3n. Single-link invitation onboarding (delivered, checkpoints 8a-8d)
+
+Checkpoint 7 deliberately shipped the smallest secure invitation workflow:
+the GM copies a raw token and an already-authenticated player pastes it into
+`/campaign-invitations/accept`. Checkpoints 8a-8d deliver the intended
+player-facing workflow: a single link that continues through authentication
+or invitation-authorized account registration and then accepts the
+invitation automatically. Every endpoint, cookie, and registration behavior
+below is implemented and covered by `tests/database/test_invitation_
+onboarding.py`, `.test_invitation_onboarding_concurrency.py`, and `.
+test_api_invitation_onboarding.py` (backend) and the portal's own
+`useBeginInvitationOnboarding`/`useInvitationOnboardingStatus`/
+`useRegisterInvitedAccount`/`useCompleteInvitationOnboarding`/
+`useCancelInvitationOnboarding` hook suite plus `AcceptCampaignInvitationPage`
+integration tests.
+
+### User flow
+
+1. A GM issues an invitation from the campaign Invitations page
+   (`/app/:campaignId/access/invitations`, reached from the Access
+   navigation — see `docs/UI_DESIGN.md` §4.6/§6.4).
+2. The portal constructs and displays one shareable URL from the current
+   trusted portal origin and the one-time raw token:
+   `/campaign-invitations/accept#token=<one-time-token>`.
+3. The GM sends that URL to the intended player through a trusted channel.
+4. The player opens the URL. The portal reads the fragment exactly once,
+   immediately replaces the current history entry with the fragment-free
+   acceptance URL, and exchanges the token in a JSON request body for a
+   short-lived server-side onboarding session.
+5. An existing player signs in. A player without an account may create one
+   only while the valid onboarding session exists; there is no unrestricted
+   public-registration route.
+6. After successful authentication or invitation-authorized registration,
+   the server accepts the pending invitation for that authenticated account.
+7. The completion screen identifies the campaign by an audience-safe display
+   name, links to `/campaigns`, and explains that a GM may still need to
+   assign a role, character relationship, resource grant, or access-group
+   membership before campaign content becomes available.
+
+The existing password-style manual token form remains available as a fallback
+for users who cannot open the generated link.
+
+### Delivered backend contract
+
+Five routes, all in `src/dnd_ai/api/invitation_onboarding.py`:
+
+- **`POST /campaign-invitations/onboarding/start`** (unauthenticated-human,
+  `require_allowed_origin`, IP rate-limited): accepts `{ token }` in the JSON
+  body. Validates the invitation without accepting it (read-only —
+  `dnd_ai.commands.invitation_onboarding.begin_invitation_onboarding` takes
+  no lock), creates a `security.invitation_onboarding_sessions` row, and sets
+  a random opaque onboarding cookie (`HttpOnly`, `Secure` in production,
+  `SameSite=Lax`, host-only, `Path=/`, `Max-Age` equal to the remaining onboarding lifetime — the `__Host-` prefix used in production requires `Path=/`, so the cookie is *not* path-scoped to the onboarding routes; see `dnd_ai.api.cookies`).
+  The raw invitation token is never stored — only its hash, matching every
+  other opaque-secret table in this codebase. Returns the campaign display
+  name, invitation/onboarding expiry, the onboarding CSRF token, and the
+  caller's `next_action`/`signed_in_display_name` (whether they are already
+  signed in, so the portal can skip straight to completion).
+- **`GET /campaign-invitations/onboarding/status`**: identical safe fields to
+  `start`'s response, re-derived from the still-live onboarding cookie —
+  including the onboarding CSRF token (an additive correction found while
+  building the portal page: without it, refreshing the page permanently lost
+  the only copy, blocking `register`/`cancel` for the rest of that session).
+  Never exposes `campaign_id`, membership state, inviter identity, or the raw
+  token/hash.
+- **`POST /campaign-invitations/onboarding/register`** (unauthenticated-
+  human, `require_allowed_origin`, onboarding CSRF double-submit, IP rate-
+  limited, `Authorization` header rejected): usable only with a valid
+  onboarding session. Accepts `login_name`, `display_name` (`1-100` chars,
+  matching `ck_users_display_name_length`), and `password`. Creates the
+  local account (Argon2id, the existing minimum-length/common-password/
+  audit/generic-error policies), a browser session, and — via
+  `accept_locked_onboarding_invitation` (shared with `accept_campaign_
+  invitation`) — the campaign membership, atomically in one transaction. The
+  same transaction writes two `audit.change_log` rows: the existing
+  `invitation_onboarding.register` row (names the new `security.users` row;
+  not campaign-resolvable) and an `invitation_onboarding.register_accept`
+  row naming the accepted `security.campaign_memberships` row, which the
+  campaign audit history shows as "Invitation accepted (new account)" under
+  the `invitation` category. Neither row carries a token, token hash,
+  password, email, or onboarding CSRF value, and a failed or replayed
+  registration writes neither.
+- **`POST /campaign-invitations/onboarding/complete`** (an ordinary
+  authenticated human session, session CSRF via `require_human_user_id`):
+  binds the already-authenticated caller to the still-open invitation and
+  activates the membership, reusing the identical `_accept_locked_invitation`
+  tail `accept_campaign_invitation` uses.
+- **`POST /campaign-invitations/onboarding/cancel`** (unauthenticated-human,
+  `require_allowed_origin`): clears the onboarding cookie and marks the
+  session cancelled; safe to call at any point, including after a token that
+  never resolved to a valid session.
+- **Cancellation/expiry, and when the cookie is actually cleared.** The server
+  sends an explicit cookie deletion only on a *successful* `register`,
+  `complete`, or `cancel`. Every other end state — invitation revocation,
+  invitation expiry, onboarding-session expiry, a consumed or cancelled
+  session, and any rejected request (generic `404`, or `403` for a wrong
+  CSRF value) — leaves the browser cookie in place to expire on its own
+  `Max-Age`; it is already unusable server-side, and every later read of it
+  returns the same generic unavailable response. A `start` for an unavailable
+  invitation sets no cookie at all. The onboarding session's own expiry is
+  `min(now() + 20 minutes, the invitation's own expires_at)` — never extends
+  the invitation's expiry.
+- **No role assignment:** completion creates or reactivates membership only.
+  It does not assign roles or restore historical roles, relationships, direct
+  grants, or access-group membership — a GM still configures those
+  separately after onboarding, exactly as after a manual-token acceptance.
+
+### Token and secret handling
+
+The shareable URL intentionally makes a narrow exception to checkpoint 7's
+"never in a URL" rule. The raw token may exist only:
+
+- in the one-time issuance response held in GM-side React memory;
+- in the generated URL **fragment** and the GM/player delivery channel;
+- briefly in recipient-side JavaScript while it is removed from the URL and
+  submitted in the onboarding-start JSON body; and
+- in the existing manual-entry fallback while that form is being submitted.
+
+It must never appear in a URL path or query string, HTTP request target,
+`Referer` header, reverse-proxy/access log, application log, exception text,
+audit metadata, database plaintext, cookie value, `localStorage`,
+`sessionStorage`, IndexedDB, analytics event, or later read response. The
+portal must not derive the public origin from an untrusted forwarded host;
+it should construct the URL from the already-loaded same-origin portal or a
+validated configured public portal base URL.
+
+Because the fragment is a bearer credential before exchange, the invitation
+remains short-lived and single-use. Documentation and UI copy must tell the GM
+that anyone who obtains the link can claim it until it is accepted, revoked,
+or expired. The optional `invited_email` remains an operator label and does
+not become an identity proof unless a separate verified-email design is
+approved later.
+
+### Authentication and routing behavior
+
+- `/campaign-invitations/accept` becomes a public landing route, but it does
+  not expose protected campaign content and cannot accept an invitation
+  without a valid onboarding session plus an authenticated human account.
+- If a valid local/OIDC human session already exists, the portal may proceed
+  directly to completion after showing the audience-safe campaign name and
+  which signed-in account will join. It must not silently switch accounts.
+- If no authenticated session exists, the player is offered **Sign in** and
+  **Create account**, rendered inline on `/campaign-invitations/accept`
+  itself rather than a redirect to `/login` — so the captured onboarding
+  state is never lost to a route change. Both flows preserve the onboarding
+  cookie, not the raw token. Refresh after fragment cleanup resumes from the
+  server-side onboarding record while it remains valid. Successful sign-in,
+  registration, or confirmation reloads the session bootstrap before
+  offering the "Go to campaigns" link, so the newly joined campaign is
+  present the first time that link is followed rather than only after a
+  later, unrelated reload.
+- **Login destination selection.** Sign-in for an invitation happens inline
+  on `/campaign-invitations/accept`. `/login` has exactly two fixed internal
+  destinations after a successful sign-in, and asks the server (the
+  onboarding cookie is `HttpOnly`, so only the server can say) whether this
+  browser still holds a live onboarding continuation. None: `/campaigns`,
+  exactly as before. A live one **never auto-redirects**: a cookie left by
+  an abandoned flow cannot be told apart from current intent (no return URL
+  or stored flag is trusted, and the raw token is never persisted), so Login
+  shows the campaign name and an explicit **Resume invitation** (to the
+  confirm step at `/campaign-invitations/accept`) / **Continue to campaigns**
+  choice. Signing in never accepts by itself; acceptance always needs the
+  explicit confirm click (or, for a new account, the register submit).
+  Neither destination is read from the URL, a query parameter, or history
+  state, so Login cannot be used as an open redirect. If the check itself
+  fails, Login says so and offers **Try again** or **Continue to campaigns**
+  rather than silently dropping a possibly live invitation. A failed login
+  leaves the continuation untouched; a later successful retry reaches the
+  same choice.
+- **Wrong account and cancellation.** The confirm step always names the
+  signed-in account (safe display name only) and keeps the Join button
+  disabled until the session bootstrap has finished reloading. **Use a
+  different account** signs the current account out and returns, in place, to
+  Sign in / Create account on the same continuation. **Not now** (shown on
+  both the sign-in and confirm states) calls the existing `cancel` endpoint:
+  it clears the onboarding cookie and closes the onboarding session but never
+  accepts the invitation, which remains pending for the GM to revoke or
+  re-share. A continuation that expires or is revoked while the user is on
+  Login or at the confirm step ends in the generic "no longer available"
+  state (or the ordinary `/campaigns` destination from Login) with no
+  membership change.
+- **Malformed fragment.** The fragment is removed from the current history
+  entry before anything that can throw. A value that is empty or not valid
+  percent-encoding renders the same generic "no longer available" state as
+  an invalid invitation, with no `start` request and no retry.
+- A transient `start` failure (rate-limited or a generic request error)
+  offers **Try again**, resubmitting the same token this component already
+  captured from the fragment — never re-reading the URL, which was already
+  cleared. `denied` (this session is not allowed to accept invitations at
+  all) and `unavailable` (token already consumed/expired/revoked) are
+  deliberately not retryable: retrying cannot change either outcome.
+- Foundry and machine principals cannot begin, register through, or complete
+  this workflow.
+- Invalid, expired, revoked, already-consumed-by-another-user, or missing
+  tokens/onboarding sessions use one generic unavailable response and never
+  disclose which condition applied.
+
+### Verification
+
+Covered by focused PostgreSQL-backed and portal tests for: fragment removal;
+no query/path token; onboarding-cookie flags and expiry; refresh across
+login; existing-account completion; invitation-authorized registration;
+duplicate login and weak/compromised passphrase handling; revoke/expire
+races; accept-vs-accept serialization (real-lock concurrency tests, `tests/
+database/test_invitation_onboarding_concurrency.py`); same-user replay;
+account/session/membership/audit atomicity; no restoration of old access;
+generic rejection; Foundry/machine rejection; CSRF/Origin protection; rate
+limiting; cancellation; stale-token suppression; and absence of the raw
+token from persistence, logs, audit, URLs after cleanup, browser storage,
+and later responses. The invitation onboarding category also appears in the
+campaign audit history (checkpoint 14) — see `docs/AUDIT_HISTORY_API.md` §2
+for the full label-resolution contract.
+
+**Manual-acceptance fix (post-checkpoint-8d):** a logged-out visitor opening
+a valid link could get stuck indefinitely on "Checking the invitation
+link." — never wrong, never insecure, just never resolving. Root cause:
+`useBeginInvitationOnboarding` fired its one real network request from
+inside an imperative `submit()` call, while a *separate* effect owned that
+request's `AbortController` unmount cleanup. React 18 StrictMode's
+mount → cleanup → mount replay of a component's first commit (`npm run
+dev`; stripped from production builds, but exactly what local manual
+testing runs against) let the phantom cleanup abort the one live request
+with nothing left to resubmit it, since the page's own ref latch correctly
+prevents a second `submit()` call. Fixed by moving the `fetch` itself into
+a `useEffect` keyed on a `pending` state value that `submit()` only sets —
+so the effect that creates the `AbortController` and the effect that
+cleans it up are always the same invocation, and a StrictMode replay
+creates-then-aborts-then-recreates a fresh, live request rather than
+leaking an aborted one. Covered by `useBeginInvitationOnboarding.test.tsx`
+mounting the real hook under `<StrictMode>` with a mount-effect-driven
+`submit()` (mirroring the page's own pattern) and a controllable, never-
+auto-resolving mock request.
+
+**Post-login continuation fix:** a logged-out visitor opening a valid link
+could be bounced to `/login` and, after signing in, land on `/campaigns` with
+the invitation never accepted or explained. Root cause: on mount the page
+fired the onboarding **status** read concurrently with the **start** request
+that creates the onboarding cookie. The status read raced ahead of the
+cookie, returned `404`, and left a stale "unavailable" snapshot; `start`
+then succeeded, and the one render before the page's status refetch took
+effect saw "unavailable" + "unauthenticated" and ran the page's
+`<Navigate to="/login">` for a visitor with no continuation — unmounting the
+page (and with it the invitation flow) while the valid cookie sat unused
+server-side. Fixed by gating the status read on the begin request
+(`useInvitationOnboardingStatus({ enabled })`: held off until `start` has
+succeeded when the page opened with a fragment, immediate otherwise), by
+having Login offer an explicit Resume / Continue choice for a live
+continuation (above, never an automatic redirect), and by giving the user a
+**Not now** exit. (A later review round added the malformed-fragment handling and
+the invited-registration audit row described above.) Backend behavior was unchanged by the original fix: the continuation is still the
+same short-lived, single-use opaque `HttpOnly` onboarding cookie backed by
+`security.invitation_onboarding_sessions`; the raw invitation token still
+appears only in the one-time fragment (removed before any await) and the
+`start` request body. Covered by `App.invitationContinuation.integration.test.tsx`,
+which mounts the real `<App />` under the real `RouteSessionProvider` and
+router with only `fetch` faked by a small stateful server — including a gated
+`start` that reproduces the original race, Strict Mode, failed-then-successful
+login, Back/Forward, wrong-account switching, cancellation, registration,
+expiry/revocation, double submission, unmount abort, and the absence of the
+raw token from the URL, history state, and browser storage.
+
+## 3o. Resource-grant target kinds, group grants, and the `deny` effect (checkpoint 12)
+
+Closes §3k's checkpoint-5 portal-scope limitation, which had gone stale:
+Phase 13D delivered an audience-safe, campaign-scoped display/search
+contract for every one of the six resource-grant target kinds before this
+checkpoint's own work began, so the "no safe contract yet" reasoning no
+longer applied. No new backend read endpoint was added — this checkpoint
+is entirely: one backend correctness fix, and portal reuse of contracts
+that already existed.
+
+- **The CTI column trap (backend fix, P-8).** `character.characters`,
+  `narrative.quests`, `narrative.events`, and `knowledge.knowledge_items`
+  all key their primary key off `core.entities(entity_id)` via class-table
+  inheritance (migrations 073/057/041) — so one UUID can satisfy several of
+  `security.resource_grants`' six mutually exclusive target columns at
+  once, and `ck_resource_grants_exactly_one_target` cannot tell which
+  column the caller meant. The read side always keys off one specific
+  column (`dnd_ai.api.world_explorer`'s own `resource_grant_targets(cap,
+  "event_id")` call reads `event_id`, never `entity_id`), so a grant
+  written to `entity_id` for one of these four kinds was a **silent
+  authorization no-op** — it never authorized anything, while still
+  displaying as an active grant on the access overview. `dnd_ai.commands.
+  access_grants.create_resource_grant` now rejects an `entity_id` target
+  whose resolved `core.entities.entity_type_id` belongs to
+  `character`/`npc`/`player_character`/`event`/`quest`/`knowledge_item`,
+  folded into the existing non-disclosing `TargetNotInCampaignWorldError`
+  — a caller cannot distinguish this from "wrong world" or "not active." A
+  genuine `location`/`organization`/`religion`/`item` `entity_id` target is
+  unaffected. Covered by `tests/database/test_resource_grant_target_column.py`.
+  **One exception (P03-A A2a-R, DEF-018):** a `character`, `npc` or `player_character` entity is
+  accepted as an `entity_id` target for a **deny** of `campaign.view` (the whole-character deny)
+  or `canon.edit` (the per-character `canon.edit` deny), because every reader looks those two up
+  under `entity_id` and `character_id`'s catalog cannot carry them. An `allow` on a character
+  entity stays refused, as does any `character.*` code under `entity_id`; `event`, `quest` and
+  `knowledge_item` entities stay refused for both effects. The deny is scoped to the route
+  campaign, applies on the campaign's own timeline (`timeline_id` null), needs an active
+  character of the campaign's world, and is revoked like any grant; an identical active deny is a
+  `409`. The access overview and the effective-access explanation name the character for such a
+  grant (`target_type` stays `entity`). The portal offers no control for it until A6. The
+  `canon.edit` deny's contract in this slice is the public-profile draft's edit and read path
+  only: character view tiers, inventory and other character authoring do not consult it
+  (DEF-016, unfixed).
+- **Portal: every target kind, both grantee kinds.** `ResourceTargetSelector`
+  (new shared component) switches over target kind and reuses four existing
+  read hooks, each fired only for the currently selected kind (never all
+  four at once, to avoid populating one dropdown with four requests):
+
+  | Kind | Read contract reused | Filter applied |
+  |---|---|---|
+  | `character` | the overview's own `assignable_characters` | unchanged |
+  | `entity` | `GET /campaigns/{id}/world/search` | `category ∈ {location, organization, religion, item}` |
+  | `event` | `GET /campaigns/{id}/world/search` | `category = event` |
+  | `knowledge_item` | `GET /campaigns/{id}/knowledge?view=known` (no character/party — the canonical/ground-truth projection, reachable for a baseline GM) | — |
+  | `quest` | `GET /campaigns/{id}/quests` | — |
+  | `session` | `GET /campaigns/{id}/sessions` | — |
+
+  The selector is shared verbatim by `AddResourceGrant` (membership
+  grantee) and `AddGroupResourceGrant` (access-group grantee) — no new
+  backend endpoint for the group case either, matching §3l's own note that
+  group-owned grants reuse the member-grant routes unchanged. No new
+  resource-directory endpoint was created for any kind: every selector
+  reuses an existing `campaign.view`-gated, audience-filtered contract, so
+  nothing inaccessible to the actor is ever offered, and the selector is
+  hidden (presentation only) when `campaign.view` is absent from the
+  campaign's own bootstrap capabilities — the backend remains the sole
+  authority regardless.
+- **Portal: the `deny` effect.** Both Add-grant forms now offer an
+  Allow/Deny radio; choosing Deny requires an explicit confirmation
+  checkbox ("I understand this explicitly denies this capability…") before
+  the submit button is enabled — a caller cannot create a deny grant by
+  selection alone. Presentation of an existing deny grant (the "Remove
+  denial" wording) already existed from §3k's own correction; only
+  creation was missing before this checkpoint.
+- **What is still not in the portal.** A resource-directory/search endpoint
+  spanning multiple kinds at once — deliberately never built, per
+  `UI_DESIGN.md` §9's non-disclosure rules ("a purpose-built 'grantable
+  resources' directory would risk disclosing resources the actor cannot
+  see"). Bulk grant management (grant the same capability to many
+  resources at once) — out of scope, not requested.
+
+## 3p. Platform account lifecycle UI (delivered, checkpoints 9-11b)
+
+Closes the account-lifecycle gap §5 (pre-checkpoint-16 revision) listed as
+missing: a full portal surface for platform-account administration and
+self-service, layered on the local-authentication backend that already
+existed before 13E-B.
+
+- **`GET /admin/accounts`** (checkpoint 9): keyset-paginated platform-account
+  list, gated on the bootstrap's `global_capabilities` containing `accounts.manage` (the system `admin` role; ADR 0020) — never a
+  campaign-scoped `access.manage` grant, which confers nothing here (`dnd_ai.
+  queries.access_overview`'s own module docstring: "do not merge account-wide
+  administration with campaign administration unless the existing
+  authorization model explicitly does so"). `dnd_ai.commands.local_auth.
+  grant_platform_administrator` (checkpoint 9b) is the only way to create the
+  first platform administrator — deliberately out-of-band only, no API route
+  ever, per D-10 — documented operationally in `docs/operations/
+  PLATFORM_ADMINISTRATOR_RECOVERY.md`.
+- **`AdminAccountsPage`** (checkpoint 10): lists every platform account
+  (`AccountLifecycleActions`: create, issue a password-reset link, disable,
+  reactivate, revoke all sessions), each rendered through `OneTimeSecretPanel`
+  — a one-time activation/reset link shown exactly once, in a `repr=False`
+  Pydantic field server-side, never persisted client-side beyond the single
+  render. The issued password-reset link is held in transient React state owned
+  by `AdminAccountsPage` (above the account-list loading boundary), so the
+  authoritative refetch after issuance does not lose it; it is replaced by a
+  newer issuance, cleared when a new issuance starts, dismissed explicitly, or
+  dropped on unmount/reload. The administrator must copy it and send it out of
+  band — no email is sent. Platform-administrator status is indicated (a badge on admin rows)
+  never tabulated (no separate "role" column) — D-10.
+- **`ActivateAccountPage`/`ResetPasswordPage`** (checkpoint 11): public routes
+  that extract a one-time token from the URL **fragment** (never a query
+  string or path segment, matching the invitation-onboarding link's own
+  token-handling discipline in §3n), immediately clear it from browser
+  history (`extractTokenFromLocationHash`'s lazy-initializer pattern — safe
+  under React 18 `StrictMode`'s double-invoke, since the side effect
+  self-idempotently sees the already-cleared hash on a second call), and
+  submit it in a JSON body.
+- **`AccountPage`** (checkpoint 11b, self-service): change own password
+  (current-password-verified), list own active browser sessions
+  (`OwnSessionsList`), and revoke any one of them individually — the
+  self-service counterpart to an administrator's "revoke all sessions"
+  action, scoped to the caller's own account only.
+- **Non-disclosure carried through the whole surface.** Every account-
+  lifecycle mutation response and every list item exposes only `user_id`,
+  `display_name`, and account status — never login name, email, or a raw
+  secret outside its own one-time issuance response. `display_name` is
+  bounded `1-100` characters with a reserved-login-name denylist (D-11),
+  since invited registration (§3n) makes it untrusted input reaching this
+  same account model.
+
+## 3q. Effective-access explanation (delivered, checkpoint 13)
+
+```
+GET /campaigns/{campaign_id}/members/{campaign_membership_id}/effective-access
+  auth: access.manage (require_campaign_capability), human principals only
+  200: { display_name,
+         capabilities: [ { code, display_name,
+                           sources: [ { kind: "role" | "character_relationship"
+                                             | "resource_grant" | "access_group",
+                                        label, target_display_name? } ] } ],
+         denials: [ { capability_code, target_type, target_display_name? } ] }
+  404: non-disclosing — membership missing, foreign-campaign, or closed
+```
+
+`dnd_ai.queries.effective_access.resolve_member_effective_access` — every
+capability the named member currently holds, each with the role
+assignments, character relationships, direct resource grants, and access-
+group resource grants that contribute to it, plus every capability an
+active `deny` grant currently overrides for a specific target (independent
+of whether the member also holds that capability more broadly — a `deny`
+only ever narrows one target, never the capability as a whole). The
+administrator remains the only authenticated actor: no second session, no
+request authorized as the explained member, nothing mutable, no protected
+campaign content — only the member's own access shape, every label drawn
+from the same audience-safe field set `GET .../access-overview` already
+uses. A pure read: no `audit.change_log` row.
+
+Portal: `EffectiveAccessPanel`, one disclosure per member row on the Access
+page (never a single shared side panel) — `EffectiveAccessContent` mounts,
+and therefore only fetches, while its own row's disclosure is open; closing
+it or opening a different member's instead unmounts it, clearing that
+member's access shape from memory rather than merely hiding it. This
+satisfies `UI_DESIGN.md` §6.4's "Effective-access explanation" screen and
+§8.3, but not §16's full preview line on its own — §3r below covers the
+spoiler-checking half of that (D-1, Option B here, Option C there).
+
+## 3r. Per-resource audience preview (delivered, checkpoint 15)
+
+```
+GET /campaigns/{campaign_id}/members/{campaign_membership_id}/preview/quests/{quest_id}
+GET /campaigns/{campaign_id}/members/{campaign_membership_id}/preview/knowledge/{knowledge_item_id}
+GET /campaigns/{campaign_id}/members/{campaign_membership_id}/preview/knowledge            (the collection)
+GET /campaigns/{campaign_id}/members/{campaign_membership_id}/preview/knowledge/perspectives
+  auth: access.manage on {campaign_id} (require_campaign_capability, UNCHANGED), human only
+  query: character_id?, party_id? — interpreted against the SUBJECT, not the actor
+  200: the identical QuestResponse/KnowledgeResponse body the member's own request returns
+  404: non-disclosing — membership absent/closed/cross-campaign, subject denied, or the
+       subject may not see this resource at all
+```
+
+The capability half of D-1's "preview as a selected member" answer (§3q)
+tells a GM *what capabilities* a member holds; it does not show what a
+specific quest or knowledge item actually renders as for that member —
+quest detail (hidden stages) and knowledge-item detail (per-knower belief
+versus ground truth) are `visibility_policy`-driven, not capability-
+listing-driven, so no capability listing can answer "did I accidentally
+expose the hidden stage to the party?" This is explicitly **not** Option A
+(no full-portal impersonation, no projection over all ~15 13D read routes):
+two bounded routes only, confined to the two genuine spoiler surfaces in
+the 13D read set.
+
+**Knowledge collection and perspectives (Knowledge member preview).** The portal's dedicated Member preview workspace needs the member's *collection* and the perspectives they may choose, so the Knowledge adapter has two further fixed-segment reads. The collection calls `dnd_ai.api.knowledge.resolve_knowledge_list` (the one derivation behind the member's own `GET /campaigns/{id}/knowledge`, now shared) with the **subject's** `AccessContext` and the same query parameters; a subject without `campaign.view` is the same non-disclosing 404, and a perspective the subject may not use is refused exactly as their own request would refuse it. The perspectives read returns `get_session_bootstrap(subject)`'s character perspectives and authorized parties for this campaign (and their roles), so the portal never offers a perspective the server would refuse for them. Neither adds an adapter or a resource kind; both write the same metadata-only `sensitive_read` row with `scope` = `collection` or `perspectives` and no record id. The anti-lying test also covers the collection (byte-identical to the subject's own list for the same query, including a refused perspective).
+
+**Actor and subject are never interchangeable.** `require_campaign_
+capability` is not modified at all — it authorizes the actor for `access.
+manage` and resolves their own `AccessContext` before either route ever
+looks at who the preview is about. `dnd_ai.api.preview.
+resolve_preview_subject` then separately resolves the **subject** into a
+`PreviewSubjectContext` — a distinct frozen type nothing else in this
+codebase returns or accepts. A caller cannot pass one where an
+`AccessContext` is expected, and `require_campaign_capability` can never
+construct or return one — an actor/subject swap is a mypy error, not a
+runtime authorization bypass (confirmed against a throwaway negative-type
+script during development: mypy rejected both misuse directions).
+
+**The preview does not lie.** Both routes call `dnd_ai.api.quests.
+resolve_quest_response`/`dnd_ai.api.knowledge.resolve_knowledge_response` —
+the exact functions the real `GET .../quests/{quest_id}`/`.../knowledge/
+{knowledge_item_id}` routes call — passing the subject's own resolved
+`AccessContext` in place of the actor's. `tests/database/test_api_preview.py`
+proves the preview response is byte-identical to what the subject's own
+authenticated request returns for the same resource and query parameters
+(the anti-lying test), for both a GM subject and a player subject.
+
+Portal: `AudiencePreviewPanel` — pick a member (from the overview's own
+member list), pick a quest or knowledge item (reusing checkpoint 12's
+`ResourceTargetSelector`), see the rendered result in a container labelled
+with both. Changing either selection, or closing the panel, remounts (never
+merely re-renders) the fetching component, so a previous selection's
+content is gone the instant a different one is made. Presentation-only
+gate (the server's `access.manage` check on the campaign, `require_
+campaign_capability`, is what actually authorizes every request regardless)
+— the frontend hides the control from a session whose own campaign
+membership lacks `access.manage` (`utils/canPreviewAudience.ts`, shared by
+every placement below; corrected post-checkpoint-15 from an earlier,
+overly-permissive `campaign.view` check that every ordinary member also
+carries).
+
+**Placement (post-checkpoint-15 manual-acceptance fix):** the panel is no
+longer confined to the Access page. `AudiencePreviewSection` wraps it for
+four additional pages, each gating and fetching the member list
+independently (a player visiting any of them never triggers the
+campaign-access-overview request the panel's member list needs):
+- **Quest collection** (`QuestsPage`) and **Knowledge collection**
+  (`KnowledgePage`): the resource-type selector is locked to that page's
+  own type (`fixedResourceType`), but the resource itself is still picked
+  from `ResourceTargetSelector` — there is no collection-level preview
+  endpoint, only the same per-resource one §3r already describes.
+- **Quest detail** (`QuestDetailPage`) and **Knowledge detail**
+  (`KnowledgeDetailPage`): both the resource type and the specific resource
+  are locked to the one already on screen (`fixedResource`), so only a
+  member picker is shown — these routes ARE the single-resource detail
+  projection §3r's endpoints already return, so no separate resource
+  picker is needed or offered.
+
+No other page gets the control: no route in this codebase has a backend
+contract that can project a *collection* through a member's perspective
+(only single-quest/single-knowledge-item detail), so no page simulates that
+locally. Campaign navigation always remounts the section (keyed by
+`campaignId`), clearing any selected member/resource from a previous
+campaign rather than carrying it forward.
+
+## 3s. `character.view_inventory` and the inventory-only projection (CP-6)
+
+`character.view_inventory` joins the character-target grant/deny catalog (`CHARACTER_TARGET_CAPABILITY_CODES`, label **View inventory**, so `grantable_resource_capabilities` lists it for target type `character` and no other). It adds no endpoint and no mutation.
+
+**Relationship matrix.** Held by `owner`, `primary_controller`, `co_controller`, `portrayer` (who already hold `view_full`), `viewer` and `observer_approved_viewer`; not by `former_controller`. A relationship-derived grant is effective only with a database row, code-matrix permission and an active type, as for every capability.
+
+**Resolution** (`dnd_ai.api.access.resolve_character_inventory_access`, shared by `GET …/characters/{id}/inventory` and `sections.inventory`): entity-level `campaign.view` deny → `none`; `canon.edit` → `full`; explicit deny of `character.view_inventory` → `none` (it wins over `view_full`, relationships and allow grants); `character.view_full` → `full`; `character.view_inventory` → `inventory_only`; otherwise `none` (the same fixed 404 as before). The campaign's primary-timeline, world, draft/archived and foreign-character boundaries are unchanged.
+
+**Restricted projection** (`RestrictedInventoryItemResponse`, built by an explicit allowlist, never by trimming the full row): `item_instance_id`, `name`, `display_name`, `item_category_code`, `rarity`, `quantity`, `is_equipped`, `is_destroyed`, `ownership` (`holder` when the character owns it, `other` when it is carried but owned by someone else, `none`), `is_attuned`, `identification_level` and `properties` (identification-filtered exactly as for the full row, never revealed in full). `is_attuned` is true only for an open `campaign.item_attunements` row (`broken_world_time_id IS NULL`, the definition the attune and end-attunement commands and the item editor use) for this timeline, this item and this holder; an ended attunement, another character's and another timeline's read false, nothing is inferred from the definition's attunement requirement, and the attunement's times and ids are never sent. The full row carries the same flag. Withheld: `condition_percentage`, `charges_current`/`charges_maximum`, `last_event_id`, `owner_entity_id` (so another owner's id is not disclosed), publication state, and every GM-only instance field (`origin_notes`). Draft and archived instances never appear.
+**Item links.** A row's item name links to the existing read-only World item detail (`GET …/world/items/{id}`, portal `/world/item/:id`), which any non-editor with `campaign.view` can open under its own rules (the entity-level view deny and lifecycle hiding apply; `origin_notes` is withheld without the GM capability). That route has its own response contract, which includes quantity, condition and charges; it is separate from, and not narrowed by, the restricted inventory response, which only decides what the inventory list itself carries. It does not say who holds the item.
+
+**Not granted:** the sheet (`/sheet` stays 404), the parties section, party inventory, item transfer/identify or any item command (all `canon.edit`), perspective selection and control.
+
+**Direct entry.** `/app/:campaignId/characters/:characterId/inventory` shows the inventory from the inventory endpoint alone. It does not read the character, sheet, relationships or parties, shows no name or section row, selects no perspective and sends no write, so a player whose only access is a direct `character.view_inventory` grant (the character read stays refused to them) can use it; a revoked grant or an explicit deny answers the endpoint's 404 and the page says the inventory is not available. Nothing links to it from the character record: it is an address, not an inferred capability, and the row on that record is still offered only from `sections.inventory`.
+
+## 4. Principal/boundary summary
+
+> **Amended by [ADR 0020](../adr/0020-scoped-system-world-and-campaign-roles.md).** `security.users.is_platform_administrator` and `SessionBootstrap.is_platform_administrator` no longer exist: platform authority is the system `admin` role, and the bootstrap reports `system_roles` and `global_capabilities`. `POST /admin/accounts` accepts `system_role_codes` (default `["player"]`; `admin` only while `DND_AI_ALLOW_IN_APP_ADMIN_GRANT` is true, otherwise 403 `admin_grant_disabled`). New routes: `POST /admin/accounts/{user_id}/system-roles` (201 new, 200 already held) and `POST /admin/accounts/{user_id}/system-roles/{code}/revoke` (409 `last_active_platform_administrator`); `GET /admin/accounts` adds `system_roles`, `stranded_world_count` and a `system_role` filter; the disable and GM-revoke responses report stranded world/campaign IDs. D-10 stands: the operator script remains the default way to grant Admin.
+
+- **Local-session/OIDC-human:** `dnd_ai.api.auth.require_human_user_id` accepts only `LOCAL_SESSION_AUTH_METHOD` and `OIDC_AUTH_METHOD`. Every campaign-scoped access-management route (§2's campaign-scoped rows, plus the new overview read) is reachable by either.
+- **Platform-administrator:** `/admin/accounts*` (`dnd_ai.api.local_auth`) — gated on the system `admin` role (`security.user_system_roles`, ADR 0020), checked *inside* the command (a non-platform-administrator caller gets a fixed, non-disclosing 404, not 403). Entirely separate from any campaign's `access.manage` — a campaign owner is not automatically a platform administrator, and vice versa.
+- **Campaign-scoped:** every `access.manage`-gated route in §2, plus the new overview read — authorization is per-campaign, resolved fresh per request via `dnd_ai.domain.access.resolve_access_context`.
+- **Self-service:** routes that act only on the caller's own account/own invitation with no special capability (`/auth/login`, `/auth/logout`, `/auth/change-password`, `/auth/sessions` list/delete-own, `/auth/activate`, `/auth/password-reset`, `POST /campaign-invitations/accept`).
+- **Invitation onboarding (delivered, §3n):** a narrowly unauthenticated
+  landing/start boundary plus invitation-authorized registration.
+  Possession of a valid onboarding invitation authorizes only creation of
+  that player's own local account and membership in the named campaign; it
+  never grants platform-administrator or campaign capabilities.
+- **Foundry/machine boundary:** a `FOUNDRY_ACCESS_AUTH_METHOD`-authenticated principal may reach a campaign-scoped route only when that route explicitly opts in via `require_campaign_capability(..., allow_foundry_access=True, foundry_scope=...)`. **None** of the access-management routes in §2, §3l's access-group routes, nor the access-overview read, opt in — a paired Foundry device or its adapter credential cannot list, create, or revoke any membership, role, relationship, grant, or access group, and cannot read the overview either. The retired `FOUNDRY_SYSTEM_AUTH_METHOD` cannot reach any authenticated route at all (rejected earlier, in `get_authenticated_user_id` itself).
+- **`POST /campaigns` (its own category):** callable by any human principal, but real authorization is inside `dnd_ai.commands.campaigns.create_campaign` (pre-existing `access.manage` in another campaign attached to the same timeline, plus a positively issued `security.timeline_bootstrap_grants` row) — not a generic "any authenticated human may create any campaign" self-service contract.
+
+## 5. Contracts delivered across Phase 13E, and what remains genuinely deferred
+
+Historical note: this section originally tracked contracts *not yet*
+implemented as of 13E-A/13E-B's early checkpoints. As of checkpoint 16, every
+item it once listed is delivered — recorded below with the checkpoint that
+closed it — except the handful that are deliberately out of scope for Phase
+13E entirely, listed at the end of this section with the reason.
+
+**Delivered:**
+- Access-group management (checkpoint 6, §3l): create/rename/deactivate/
+  reactivate a group, add/remove a member. Group-owned resource grants
+  continue through the existing §3k routes unchanged in shape.
+- The campaign audit-history read (delivered independently of this
+  checkpoint sequence; `GET /campaigns/{campaign_id}/audit-history` — see
+  `docs/AUDIT_HISTORY_API.md`). Checkpoint 6 extends its category allowlist
+  with `access_group`/`access_group_membership`; checkpoint 14 folds in
+  `invitation_onboarding.complete` and adds the actor filter to the portal.
+- The single-link onboarding/start/status/registration/completion contracts
+  (checkpoints 8a-8d, §3n) — the manual authenticated-acceptance flow from
+  checkpoint 7 remains available as a fallback, not the only path.
+- A UI for account creation/activation/reset/disable/reactivate/revoke-
+  sessions (checkpoints 9-11b, §3p) — `/admin/accounts`, `/activate`,
+  `/reset-password`, `/account` (browser pages; they submit to the POST-only
+  `/auth/activate` and `/auth/password-reset` endpoints and stay off the
+  proxied `/auth/*` prefix).
+- A UI for the other five resource-grant target kinds and the `deny` effect
+  (checkpoint 12, §3o) — every target kind and both effects, for both
+  grantee kinds, via the shared `ResourceTargetSelector`.
+- The effective-access explanation (checkpoint 13, §3q) and a per-resource
+  audience preview for quests and knowledge items (checkpoint 15, §3r) — D-1's
+  bounded substitute for full preview-as-user (Option B + Option C; see
+  below).
+
+**Deliberately out of scope for Phase 13E (not deferred by oversight):**
+- **Full preview-as-user / full-portal impersonation (Option A)** —
+  docs/UI_DESIGN.md §16's own preview line is only *partially* met by §3q/
+  §3r's bounded pair, by owner decision D-1. Projecting all ~15 13D read
+  routes through an arbitrary member's perspective is a materially larger
+  surface (every route would need its own actor/subject separation audit)
+  with a correspondingly larger blast radius if that separation were ever
+  gotten wrong anywhere in it — deferred to whichever future phase actually
+  needs it, not attempted piecemeal here.
+- **Explicit membership reactivation outside invitation acceptance** — §3e's
+  own design: a departed member is re-added as a new membership row, never
+  reactivated in place; only invitation acceptance (§3n) reactivates a
+  closed membership. This is a considered design position, not a gap.
+- Foundry-adapter and AI-proposal mutation surfaces for any of the above —
+  every route in this document remains human-portal-only by its own
+  `allow_foundry_access`/`require_human_user_id` gates; extending any of
+  them to a Foundry or AI-agent actor is out of scope here.
+
+
+## 3t. Campaign-owner gate (P03-A decision D3, 2026-11-06)
+
+`access.manage` alone no longer reaches the built-in `campaign_owner` role. These four commands require, in addition, that the caller holds a **live built-in owner assignment** in the same campaign (`dnd_ai.domain.access.find_live_builtin_owner_assignment`: the built-in template matched by identity rather than by code, assignment unrevoked and unexpired, membership open and `active`, account active):
+
+| Route | Gated when |
+|---|---|
+| `POST /campaigns/{id}/memberships/{membership_id}/roles` | `role_id` is the built-in owner |
+| `POST /campaigns/{id}/memberships/roles/{membership_role_id}/change` | `new_role_id` is the built-in owner |
+| `POST /campaigns/{id}/memberships` | `role_id` is the built-in owner |
+| `POST /campaigns/{id}/ownership-transfer` | always |
+
+- **Refusal:** `403`, error code `campaign_owner_required`, fixed message; nothing is written, no audit row, no idempotency reservation. The check runs against the database inside the command, not the request's `AccessContext`, so a revocation that committed first refuses the request, and direct command calls are gated too.
+- **Unchanged:** every other role, campaign creation, administrative recovery, invitation acceptance, revoke and end-membership.
+- **Read contract:** `assignable_roles` omits the built-in owner role for a caller who is not a live owner (campaign-scoped roles that merely reuse the code `campaign_owner` stay listed and are not the built-in).
+- **Locking:** one order everywhere: the member's role rows (a gated command's own owner assignment first), then membership rows, then account and role-template rows, then the campaign row (taken at commit by the retention trigger, and explicitly by a relinquishing transfer). `end_campaign_membership` now locks the member's role rows before the membership row and stamps its writes with one `clock_timestamp()` read taken after its locks. See the design record §3 for the verified table.
+- **Tests:** `tests/database/test_campaign_owner_gate.py`. Preflight: `scripts/preflight_campaign_owner_gate.py`.
+
+## 3u. Reveal delegation (P03-A A1)
+
+`character.reveal` is the authority to publish a character's public profile. Its only sources are a live built-in `campaign_owner` assignment and a delegation from such an owner to a member holding the built-in `gm` role. A custom role, `canon.edit`, `access.manage` and assistant-GM status confer none of it, and it is never carried by `role_capabilities`, a relationship type or a resource grant (the database refuses such a row).
+
+| Route | Body | Result |
+|---|---|---|
+| `POST /campaigns/{id}/reveal-delegations` | `grantee_campaign_membership_id`, `reason` | 200 `{grantee_campaign_membership_id, character_reveal_delegation_id, granted}`; `granted` is false for a repeat |
+| `POST /campaigns/{id}/reveal-delegations/{grantee_campaign_membership_id}/revoke` | `reason` | 200 `{grantee_campaign_membership_id, revoked}`; `revoked` is false when none was live |
+
+- **Authorization:** the route requires `access.manage` (a coarse filter); the command requires a live built-in owner, `403 campaign_owner_required`, re-read under lock and again at a fresh instant before the write. A refused call writes nothing and no audit row.
+- **Recipient:** a member of the campaign holding a live built-in `gm` assignment; otherwise `409 reveal_delegation_recipient_not_gm`. A membership of another campaign is `404`.
+- **Binding:** a delegation is bound to the grantee's specific `gm` assignment and authorizes only while it is live. Revoking or changing that assignment, ending the membership or changing its status closes the delegation; regaining GM status needs a fresh grant. A lapsed (expired) assignment leaves no authority and does not block a fresh grant.
+- **Transfer:** delegations survive an ownership transfer. A former owner keeps only a separate delegation bound to their own live `gm` assignment.
+- **Audit:** one `audit.change_log` row per actual change (`grant_character_reveal_delegation`, `revoke_character_reveal_delegation`).
+- **Tests:** `tests/database/test_character_reveal_delegation.py`. Design: `docs/PHASE14_15_P03A_A1_OWNERSHIP_AUTHORITY_DESIGN_2026-11-06.md` §3 and §8.
+
+## 3v. Character public profile (P03-A A2a)
+
+A campaign's draft of a character's public profile, and immutable releases of it. Routes are under `/campaigns/{id}/characters/{character_id}/public-profile`; a character outside the campaign's world, a non-character entity and a non-canon character are `404`.
+
+| Route | Route filter | Authority | Result |
+|---|---|---|---|
+| `GET …/public-profile` | `campaign.view` | read rule (below); failing it is `404` | draft or `null`, `row_version`, `has_unreleased_changes`, latest release, release summaries, `can_edit`, `can_release`, the canonical name and summary as the read-only label |
+| `GET …/public-profile/releases/{version_number}` | `campaign.view` | read rule; `404` otherwise | one release snapshot |
+| `POST …/public-profile/draft` | role `canon.edit` | edit rule, re-resolved under lock | `201` created or `200` (`changed` false for a no-op); `Idempotency-Key` supported |
+| `POST …/public-profile/releases` | `campaign.view` | `character.reveal` authority, then no whole-character deny, before the idempotency lookup, then re-judged under lock | `201 created: true`, or `200 created: false` for a retry of a released draft version; `Idempotency-Key` supported |
+
+- **Read rule (D8, approved 2026-11-07):** effective character-scoped `canon.edit` **or** current `character.reveal` authority. Reveal authority confers reading only.
+- **Edit rule:** the role `canon.edit`, re-checked under lock, with no whole-character `campaign.view` deny and no `canon.edit` deny on the character (an `entity_id` resource grant; a `character_id`-keyed row counts too). A `canon.edit` *allow* grant never confers editing. A caller who can still read gets `403 public_profile_edit_denied`; anyone else `404`.
+- **Release rule:** `character.reveal` authority (`resolve_reveal_authority`: a live built-in owner, or a live delegation bound to the caller's live `gm` assignment); `403 character_reveal_required` otherwise (the code says nothing about the character). A `canon.edit` deny does not stop a release.
+- **Whole-character deny:** an `entity_id` `campaign.view` deny blocks reading, editing and releasing for every source, an owner included, and a retry (keyed or not) never hands a denied caller a stored release. Both D8 denies are creatable through `POST /campaigns/{id}/resource-grants` with `entity_id` and effect `deny` (A2a-R); the `canon.edit` deny covers public-profile drafting only.
+- **Concurrency token:** the draft's `row_version`. A save needs `expected_row_version` (`null` = no draft yet); a mismatch or a lost first-save race is `409 stale_write`. A release names `expected_draft_row_version` and snapshots exactly that locked version; a moved draft is `409 stale_write` unless that version was already released (then `200`, never a false stale write); no draft is `409 public_profile_draft_missing`; an archived character is `409 public_profile_character_not_active`.
+- **Idempotency:** the path's `character_id` is part of every fingerprint, so a key reused on another character is the existing non-disclosing `409`. A replay returns the minimal stored receipt (`replay_body`): the status code, ids, version numbers and flags survive; omitted metadata (for a release, `authority_source`) is refetched from the GET.
+- **Releases outlive authority:** ending a delegation, a GM role or ownership leaves earlier releases unchanged and listed; it ends future release authority.
+- **Audit:** one `audit.change_log` row per real change (`save_character_public_profile_draft`: field names and the new `row_version`; `release_character_public_profile`: `version_number`, `from_draft_row_version`, `authority_source`), none for a no-op, refusal or replay, and never profile text. No `core.entity_revisions` row is written.
+- **Copied (restricted) fields (A2b-1, D7).** Text copied from a character's legacy description (by the copy route, below) keeps the source-read restriction until a release covers it. The **source-read rule** is keyed by the character's kind: a `player_character` needs role `canon.edit`; an `npc` needs role `canon.edit` and the world capability `world.canon.read_private`; any other kind has no source and nothing can be copied. Per-character denies do not enter it (they do not enter the authoring reads either); a whole-character deny still removes the profile (D8). **Assumption:** a character's kind is stable on every application path; the database does not forbid changing it (migration 048), so a slice that makes kind mutable must first snapshot the rule into the field.
+  - **Read:** a field withheld from the caller is returned as `null` with `"<field>_withheld": true` and its origin code and `origin_entity_row_version` (D7-f). Releases are never withheld. `can_release` is false while any field is withheld from the caller.
+  - **Save:** after the token check (stale → 409) and before the no-op comparison, text for a withheld field refuses the **whole** request with `403 public_profile_field_withheld` (nothing written, other fields included, whatever the text). Explicit `null` clears a withheld field (D7-a) and ends its lineage. Editing copied text keeps its origin and advances its watermark, so it is withheld again until a release covers the new text; editing another field leaves it alone.
+  - **Release:** a release that would write a new snapshot refuses with `403 public_profile_field_withheld` when any field of that draft version is withheld from the releaser. A retry of an already released version, keyed or not, does not consult the source read (D7-d), though reveal authority and the whole-character deny still apply. A covering release lifts the restriction on exactly the text it released (D7-c).
+  - **Replays** of a save keep the receipt (ids, version, flags; no text); a refused save stores nothing, so its key runs afresh.
+  - **Copy** (`POST /campaigns/{campaign_id}/characters/{character_id}/public-profile/draft/copy-legacy`, body `{expected_row_version, field}` with `field` one of `appearance`, `background`; no other field, and no origin, version or watermark, can be named: 422). The route needs role `canon.edit`; a dependency then applies the D8 edit rule, a kind with a legacy source in this campaign's world (else 404) and the source-read rule (403 `world_authority_required` for an NPC without `world.canon.read_private`) **before the idempotency lookup**, so a caller who lost the source read cannot replay a stored copy (D7 item 1). The command applies the same rules again under its locks. It replaces the whole target field with the source text, keeps the other field, sets the origin, the source `core.entities.row_version` and a restriction watermark equal to the new draft `row_version`, and always writes: a copy of identical text, or after a covering release, starts new restricted content. 201 when it created the draft (`expected_row_version: null`), else 200; stale token 409 `stale_write`; a token with no draft 409 `public_profile_draft_missing`; empty source text 409 `public_profile_legacy_text_missing`; an archived character 409 `public_profile_character_not_active`. The response and stored receipt hold ids, `row_version`, `created`, `changed: true` and `origin_entity_row_version`, never text. The fingerprint holds the path's character, the field and the token. One audit row (`copy_legacy_text_to_public_profile_draft`): the field, origin code, source version and new `row_version`.
+  - **Read:** `legacy_copy` is `{appearance, background}` (whether the source field has text) for a caller who passes the edit rule and the source read on an active character, else `null`; never text.
+- **Not in A2a:** audience revelations (A3), the audience read (A4), the portal (A6).
+- **Tests:** `tests/database/test_character_public_profile_{api,schema,concurrency,markers,restrictions,restriction_races,watermarks,copy,copy_races}.py`, `test_character_public_profiles_migration.py`, `tests/unit/test_character_public_profile_structure.py`. Design: `docs/PHASE14_15_P03A_IMPLEMENTATION_PLAN_2026-11-06.md` §5 and §7.
+
+## Recovery and audit
+
+Use [administrator recovery](../operations/PLATFORM_ADMINISTRATOR_RECOVERY.md) and
+[database recovery](../operations/DATABASE_RECOVERY.md) for operations. Campaign/world
+recovery overrides require their documented authority and reason; a documentation cleanup
+does not authorize maintenance writes. Audit read fields, categories and safe presentation
+remain in [AUDIT_HISTORY_API](../AUDIT_HISTORY_API.md).
+
+## Browser authentication and integration boundary requirements
+
+These requirements were extracted from the former implementation plan's identity/access
+section. They define supported boundaries, not an instruction to rebuild delivered
+endpoints. The endpoint-specific amendments above and accepted ADR implementation gates
+take precedence over an older checkpoint's vocabulary.
+
+### 23.1 Identity and campaign membership
+
+Authentication establishes a user identity; application authorization determines what that user may do or discover. D&D AI is the initial credential authority for human users. The application database retains local login credentials, account lifecycle, campaign membership, roles, capabilities, resource relationships, invitations, revocation, and audit history. Authentication and campaign admission remain separate: possessing an active login account does not grant access to any campaign.
+
+An administrator creates an account and its campaign membership, then generates a cryptographically random, short-lived, single-use activation link or code. The user uses it to choose a password; the administrator never assigns or learns a temporary or permanent password. An administrator-initiated reset revokes the user's existing browser sessions and Foundry device credentials when the reset policy requests a full sign-out, generates a new short-lived single-use reset token, and requires the user to choose a new password. Ordinary password change and recovery behavior must clearly state which browser sessions and Foundry devices will be revoked.
+
+Passwords are stored only as Argon2id hashes with unique salts and parameters recorded for future rehashing. Accept passphrases of at least 15 characters, permit at least 64 characters plus spaces and Unicode, reject common/compromised values through a locally enforceable denylist or approved privacy-preserving check, and do not impose composition formulas or periodic forced changes. Login, activation, and reset endpoints use rate limits, uniform non-disclosing responses, audit events, and bounded token lifetimes. There are no default production credentials; initial-administrator bootstrap is an explicit one-time deployment operation that fails closed after use.
+
+Implement or evolve concepts equivalent to:
+
+- `security.users`
+- local password credentials and credential-history/security metadata separated from the user profile
+- hashed, expiring, single-use activation and password-reset tokens
+- opaque server-side browser sessions with creation, last-use, expiry, revocation, and CSRF state
+- optional external identity subjects retained only for compatibility and Foundry identity binding, not required for local login
+- campaign memberships joining users to campaigns
+- membership roles joining memberships to one or more campaign-scoped roles
+- configurable capabilities assigned to roles
+- invitations, membership status, and revocation history
+
+A user may belong to multiple campaigns and hold multiple roles in each. The same user may be a GM in one campaign, a player in another, and an observer in a third. Roles provide default capabilities; application services authorize capabilities rather than scattering hard-coded role-name checks.
+
+Initial role templates are campaign owner, GM, assistant GM, player, observer, import reviewer, and rules curator. Observer is a curated, read-only role, not an alias for access to all player-visible or GM-visible data.
+
+### 23.2 Many-to-many user and resource relationships
+
+Do not add a single `owner_user_id` or one-user visibility flag to characters, facts, or other domain records. Details are many-to-many with users.
+
+Keep semantic user-character relationships, including owner, primary controller, co-controller, viewer, portrayer, former controller, and observer-approved viewer. Store campaign/timeline scope, effective period, granting user, and audit metadata. A user may relate to many characters, and one character may relate to many users.
+
+Provide a securable-resource and grant model, or equivalently typed access associations, for at least:
+
+- characters
+- canonical facts and knowledge records
+- entities and locations
+- quests
+- sessions, summaries, and events
+- items and documents
+- AI and campaign-import proposals
+
+Grants may target a user or access group and express capabilities such as `discover`, `view_summary`, `view_full`, `view_private`, `interact`, `control`, `edit`, `approve`, and `manage_access`. They record campaign/timeline scope, source, effect, optional effective period, granting user, and audit timestamps. Access may also derive from roles, character control, parties, knowledge holdings, or groups; resolution retains the derivation so the UI can explain why information is visible.
+
+Canonical truth, a character's belief, a knowledge grant, and administrative permission remain distinct. For example, one fact may be true, known by several NPCs, suspected by one player character, directly shared with two users, and administratively visible to multiple GMs without duplicating the canonical fact.
+
+### 23.3 Authorization and non-disclosure
+
+For each request, the application layer:
+
+1. Authenticates the user.
+2. Confirms active campaign membership.
+3. Resolves the campaign, timeline, role, and optional character perspective.
+4. Resolves role capabilities, direct grants, group grants, and character/party/knowledge-derived access.
+5. Applies explicit restrictions and temporal scope.
+6. Filters rows, fields, relationships, counts, search results, summaries, and AI context.
+7. Audits sensitive reads and every write or access-control change.
+
+Inaccessible resources must be non-discoverable: clients must not infer them from identifiers, search suggestions, counts, relationship edges, error differences, or AI responses. Client-side hiding is presentation only; enforcement occurs in application services and query construction before data reaches a client or AI provider. AI answers are generated from already authorized context, never from a broader answer followed by redaction.
+
+### 23.4 Browser-session boundary
+
+FastAPI owns the local login and browser-session lifecycle. The flow is:
+
+1. The browser submits a username and password to a same-origin FastAPI endpoint over HTTPS; loopback HTTP is permitted only for development.
+2. FastAPI applies account/IP-aware rate limits and performs a constant-work credential check that does not disclose whether the username exists, the account is disabled, or the password is wrong.
+3. After successful verification, FastAPI rotates any pre-authentication session identifier, creates an opaque server-side session, and records the authenticated user, CSRF secret, creation/last-use time, absolute expiry, idle expiry, and revocation state.
+4. The browser receives `__Host-dnd_ai_session` with `Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/`, and no `Domain` attribute. A development-only cookie name/configuration may omit `Secure` strictly on loopback.
+5. The session-bootstrap endpoint returns the current user, campaigns, capabilities, selected perspective, CSRF token, and server feature manifest; it never returns a password hash, reset/activation token, or durable API credential.
+
+The portal must not put bearer or refresh tokens in `localStorage`, `sessionStorage`, IndexedDB, JavaScript-readable cookies, URLs, or application state. Cookie-authenticated state-changing requests also require `X-CSRF-Token`, validation against the current server-side session, an allowed `Origin`, and the existing command idempotency contract. Identity is not authorization: every request re-resolves active campaign membership, roles, capabilities, relationships, grants, restrictions, and the selected character perspective so revocation takes effect without waiting for the browser session to expire.
+
+Successful login rotates the session; logout revokes it server-side and clears the cookie. Password reset, account disablement, membership revocation, and administrator sign-out controls take effect on the next relevant request. Session identifiers and activation/reset tokens are stored only as hashes. Token-generating endpoints reveal each raw token only once and never log it.
+
+The existing OIDC bearer-token verifier remains an optional compatibility path for explicitly configured non-browser clients; local authentication must work with OIDC entirely unconfigured. Browser sessions, optional OIDC principals, and Foundry device/access principals converge on the same `AuthenticatedPrincipal`, authorization, query, command, audit, visibility, and non-disclosure boundaries. Credential type determines identity only and never bypasses campaign authorization.
+
+Development uses FastAPI at `http://localhost:8000` and React/Vite at `http://localhost:5173`, with Vite proxying `/api` and `/auth` to preserve the same-origin browser contract. Production uses HTTPS at the `world` origin for both portal and API. No identity-provider callback or separate identity hostname is required.
+
+### 23.5 Foundry hybrid pairing and device authentication
+
+Foundry authentication is separate from portal login and does not make D&D AI an OAuth or OIDC provider. Every Foundry user who uses D&D AI pairs each browser/device independently. The credential authenticates one D&D AI user on one Foundry origin, world/external system, Foundry user, campaign connection, and device; it never represents a shared world-wide secret and never derives identity from a caller-supplied actor header.
+
+Pairing flow:
+
+1. The user signs into the D&D AI portal with local authentication and selects a campaign/Foundry connection they are permitted to use.
+2. D&D AI creates a random, hashed-at-rest, single-use pairing code valid for 5–10 minutes. The code records the user, campaign, requested connection, bounded scopes, creator/session, expiry, and unused state.
+3. In Foundry, the same user enters the pairing code. The module sends the code plus the exact Foundry origin, world id, Foundry user id, module/Foundry versions, and a generated device id.
+4. D&D AI atomically consumes the code, validates campaign membership and connection/world binding, creates or confirms the non-secret Foundry-user binding, and returns a one-time long-lived device secret plus an initial short-lived access token.
+5. The module stores only non-secret binding metadata in a Foundry `user`-scoped setting. It stores the device id and long-lived device secret in a `client`-scoped setting bound to the API origin, Foundry origin, world id, Foundry user id, connection id, and device id. It holds the access token in memory only.
+6. On later starts, the module exchanges the stored device credential for a new access token. A restart does not require pairing again; a new browser/device, cleared client storage, revoked/expired device credential, changed Foundry identity/world, or materially expanded scope does.
+
+Use distinct credential types and endpoints rather than overloading local browser sessions or the Phase 10 OIDC verifier:
+
+| Credential | Lifetime and storage | Use |
+|---|---|---|
+| Pairing code | 5–10 minutes, single-use; hash stored by D&D AI; raw value never persisted by Foundry | Bootstrap one user/device connection |
+| Foundry device credential | 30–90 days or until revoked/rotated; hash stored by D&D AI; raw value in one client-scoped Foundry setting | Obtain access tokens only |
+| Foundry access token | 10–30 minutes; opaque server-side token; memory only in the module | Ordinary permitted Foundry API requests |
+
+Conceptual schemes are `Authorization: FoundryDevice <connection-or-device-id>.<secret>` only at the token endpoint and `Authorization: FoundryAccess <opaque-token>` on opted-in adapter endpoints. Names may change during implementation, but the two credential classes, storage boundary, and route separation may not. Access-token issuance revalidates the device, user, campaign membership, Foundry binding, connection, scopes, and revocation state. Every API request again resolves current capabilities and resource access so an access token cannot preserve revoked campaign authorization.
+
+The portable user-scoped setting contains no bearer secret. It may contain a connection id, D&D AI user id/display label, paired status, Foundry world/user binding, and last-known API origin. Because Foundry user-scoped settings require Foundry v13, the hybrid implementation raises the supported module minimum from v12 to v13 rather than silently falling back to a world-scoped secret. A user-scoped value is portability metadata, not an authorization assertion; the server accepts only the device/access credential.
+
+Initial Foundry scopes remain closed and narrow: encounter/current-state reads, synchronization status reads, combat synchronization, character-state synchronization, and only the location/state reads required by the module. Foundry credentials cannot manage users, roles, grants, campaign invitations, Foundry connections, device credentials other than their own rotation/revocation flow, imports, or unrestricted GM/AI operations. Every route explicitly opts into Foundry access and validates campaign, world, external-system, Foundry-user, and device bindings.
+
+The authenticated principal is the D&D AI user bound during pairing. A supplied Foundry actor id remains descriptive audit metadata only and cannot select or impersonate another principal. Audit records identify the user, connection/external system, Foundry user, device, access-token/session id, claimed actor metadata when supplied, provisioning portal session, and operation/correlation id without storing secrets.
+
+Portal connection management shows each user's paired devices and, for authorized GMs, campaign connection health: Foundry origin/world, Foundry user, device label, scopes, creator, created/last-used time, last-used IP, module/Foundry version, expiry, and active/revoked state. Users can revoke their own devices; authorized GMs can revoke campaign devices or the connection. Rotation issues a new secret once, invalidates the prior secret after a bounded overlap only when explicitly requested, and does not change the portable binding.
+
+### 23.6 Web-portal experience
+
+**Delivered — single navigation and settings redesign** (branch `phase13e/phase13e-b`; commits `0a50f3b` schema, `05fac90` preference API and bootstrap contract, `c4f25a8` last-visited recording, `e5f358d` persistent sidebar, `97b765f` header and account menu, `5c363f0` `/settings`, `239862b` `/home` landing resolver, `09a657d` drawer CSS fix found by live validation). It replaced the earlier header Home/Campaigns navigation plus `CampaignLayout`-owned campaign sidebar with one persistent sidebar owned by the authenticated shell (present on every authenticated route, absent on public pages), a header containing only identity, the narrow-screen drawer control, and the User Account menu (Settings, Account & Security, Platform Accounts for platform administrators, Log out), campaign selection beneath Campaign Home with **View all campaigns** to `/campaigns`, Access Management/Invitations/Audit History beneath an `access.manage`-gated Access disclosure, a new `/settings` page (client-side appearance/theme; server-persisted campaign startup preference), the `/home` dashboard replaced by an authenticated landing resolver, and a server-persisted last-visited campaign. It added one user-scoped table (`security.user_portal_preferences`, revision `109_user_portal_preferences`, [DATABASE_MODEL.md §19.1](../architecture/DATABASE_MODEL.md#191-identity-and-login)), two CSRF-protected preference writes, and replaced the bootstrap's `selected_campaign_id` (formerly simply the first authorized campaign, with no persisted preference) with `startup_campaign_id` and `campaign_preferences`. [UI_DESIGN.md §4–§4.7 and §5.2a](../UI_DESIGN.md#4-information-architecture) are the authoritative design, including the exact landing precedence, authorization boundaries, and accepted limitations.
+
+Verification for this redesign is recorded in `portal/README.md` ("Navigation and settings redesign verification"): automated backend/portal suites, and a 48-check live run against a real API, PostgreSQL 18, Vite, and headless Chrome. Still outstanding: screen-reader (NVDA) checks, keyboard focus-visibility review in every theme, and the CI run on this branch.
+
+The portal uses React, TypeScript, and Vite under `portal/`. During development Vite runs at `http://localhost:5173` and proxies `/api` and `/auth` to FastAPI at `http://localhost:8000`, preserving the same-origin browser contract. Production serves the built portal and `/api/*` from the same `world` origin. The portal uses ordinary same-origin login/session endpoints and does not install a browser OIDC library such as `oidc-client-ts`.
+
+`/` is a replacement redirect to `/login`, and `/home` is the ordinary authenticated login destination — a landing resolver that renders nothing and replaces itself with the resolved Campaign Home or `/campaigns`. Global routes include `/home`, `/campaigns`, `/settings`, `/account`, and platform-authorized `/platform/accounts`; campaign routes retain `/app/:campaignId/{home,world,characters,quests,sessions,knowledge,access}` and existing detail routes. Invitation onboarding and public activation/reset routes remain under their existing contracts; Ask remains feature-gated. [UI_DESIGN.md §4.2-§4.7](../UI_DESIGN.md#42-root-authentication-landing-and-deep-links) records the complete delivered design. Platform eligibility currently comes from the server-provided `is_platform_administrator` signal, separately from campaign capabilities; this design does not change that authorization contract. Route visibility improves usability but never replaces direct-route and server authorization.
+
+The MVP includes:
+
+- a personalized dashboard with last-session recap, current situation, active quests, recent discoveries, relevant NPCs/factions, character reminders, and an Ask entry point
+- a world explorer for permitted locations, NPCs, organizations, religions, items, events, relationships, and lore
+- character workspaces honoring separate view, edit, control, private-history, character-knowledge, and access-management capabilities
+- audience-aware knowledge, quest, session, and summary views
+- an on-demand assistant for campaign summaries, details, rules questions, and GM preparation using authorized structured queries and cited rules/reference passages
+- observer views built from explicitly published or granted resources
+- GM tools for canon browsing, preparation, visibility preview, user/account activation, password-reset initiation, campaign invitations, role assignment, user-character relationships, resource grants, Foundry connection/device management, and audit history
+- Phase 18 campaign-import review, editing, match resolution, approval, rejection, and promotion surfaces
+
+The detailed interaction design, screen specifications, and authorization matrix are maintained in [UI_DESIGN.md](../UI_DESIGN.md). The plan defines delivery boundaries; that document defines the product experience. UI implementation proceeds in small, individually runnable increments; authorship changes at 13E (§2.9 — owner-authored through 13D, Claude Code-authored from 13E, with owner manual validation before each closeout). A large generated scaffold or an unrestricted content-management platform remains outside the Phase 13 workflow either way.
+
+### 23.7 Audience-aware summaries, questions, and feature boundaries
+
+Deterministic query services provide current campaign/session state, active quests/objectives, recent events, locations, characters, NPCs/factions, inventory, knowledge, and recaps. Phase 12 adds AI synthesis over those already-filtered results and the authorized rules/reference corpus. Phase 13 may expose deterministic data immediately, but Phase 12 is not complete. Ask, AI-generated summaries, GM briefs, and cited rules questions therefore begin as disabled or clearly labeled placeholder surfaces behind a server-provided feature manifest.
+
+Use one central session/bootstrap response to report capabilities equivalent to `ask`, `aiSummaries`, `gmBriefs`, and `citedRules`; do not scatter build-time flags or hard-coded Phase 12 assumptions through components. A disabled capability must not issue Phase 12 network requests, preload protected results, or leave cached AI output reachable. The server remains authoritative even when a surface is enabled. Phase 12 completion and deliberate enablement activate each capability without requiring the rest of the portal to be rebuilt.
+
+Every summary or answer records or returns its campaign, timeline, effective point in time, requesting user, viewing role/perspective, visibility scope, source records or citations, and whether it is deterministic, cached, or AI-synthesized. The same question may correctly produce different player, character, observer, GM, or session-preparation answers.
+
+---
