@@ -219,8 +219,10 @@ class _ExtendedLimit(ctypes.Structure):
 
 
 class KillOnCloseJob:
-    """A Windows Job Object that kills every process in it when this script's handle closes, so a
-    crash or a closed terminal cannot leave servers or test processes behind.
+    """A Windows Job Object. Closing it (when this script's handle closes, including when the script
+    is killed) terminates the processes already assigned to it. That does not by itself guarantee
+    nothing is left behind: the coverage limits below (the assignment window and the processes
+    outside the job) apply.
 
     Every step is checked, and a failure raises `JobObjectError`: the run refuses to start rather
     than run children it could not contain. `add` also confirms membership with `IsProcessInJob`.
