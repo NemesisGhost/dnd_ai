@@ -51,6 +51,7 @@ Deferred to later Phase 10 workstreams, per §19.7's own step list:
 
 import hashlib
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal
@@ -241,6 +242,77 @@ RESOURCE_GRANT_CAPABILITY_CATALOG: dict[str, frozenset[str]] = {
 
 _GrantKey = tuple[str, uuid.UUID]
 
+# What a live revelation confers on its one character, and nothing else (P03-A A3b, plan
+# section 10.1): discovery and the released public profile. Never `view_summary`, `view_full`,
+# `view_inventory`, `view_knowledge`, `view_private`, control or play. A revelation is a source of
+# its own and never becomes a relationship capability.
+REVELATION_CONFERRED_CAPABILITIES: frozenset[str] = frozenset(
+    {"character.discover", "character.view_public_profile"}
+)
+
+
+@dataclass(frozen=True)
+class RevelationSource:
+    """One live revelation that reaches the caller for one character: its id and audience kind
+    code (`member`, `access_group`, `campaign_current`, `campaign_current_and_future`). Kept in
+    `AccessContext.revelations`, separate from `character_capabilities`, so each revelation stays
+    a distinct, individually revocable source."""
+
+    character_revelation_id: uuid.UUID
+    audience_kind: str
+
+
+# The live revelations that reach one campaign membership (plan section 10.5, "Resolution"). The
+# one definition, shared by `resolve_access_context` and the effective-access explanation so the
+# two cannot disagree. A revelation applies while it is unclosed and its character is active and
+# canon (an archived or non-canon character is inert, and applies again if restored); the audience
+# test is by kind: the member itself, an open link to an active target group, an unremoved
+# snapshot row, or every active member (`campaign_current_and_future`). Binds `:campaign_id` and
+# `:membership_id`; the membership must already be open and active (the caller checks).
+LIVE_REVELATIONS_FOR_MEMBERSHIP_SQL = """
+    SELECT r.character_revelation_id, r.character_id, k.code AS audience_kind,
+           k.display_name AS audience_kind_display_name,
+           e.canonical_name AS character_display_name
+    FROM security.character_revelations r
+    JOIN security.revelation_audience_kinds k
+      ON k.revelation_audience_kind_id = r.revelation_audience_kind_id
+    JOIN core.entities e ON e.entity_id = r.character_id
+    JOIN core.lifecycle_statuses cls ON cls.lifecycle_status_id = e.lifecycle_status_id
+    JOIN core.canon_statuses ccs ON ccs.canon_status_id = e.canon_status_id
+    WHERE r.campaign_id = :campaign_id
+      AND r.ended_at IS NULL
+      AND cls.code = 'active'
+      AND ccs.code = 'canon'
+      AND (
+            (k.code = 'member' AND r.target_campaign_membership_id = :membership_id)
+            OR (
+                k.code = 'access_group'
+                AND r.target_access_group_id IN (
+                    SELECT agm.access_group_id
+                    FROM security.access_group_memberships agm
+                    JOIN security.access_groups ag
+                      ON ag.access_group_id = agm.access_group_id
+                    JOIN core.lifecycle_statuses ag_status
+                      ON ag_status.lifecycle_status_id = ag.lifecycle_status_id
+                    WHERE agm.campaign_membership_id = :membership_id
+                      AND agm.removed_at IS NULL
+                      AND ag_status.code = 'active'
+                )
+            )
+            OR (
+                k.code = 'campaign_current'
+                AND EXISTS (
+                    SELECT 1
+                    FROM security.character_revelation_members rm
+                    WHERE rm.character_revelation_id = r.character_revelation_id
+                      AND rm.campaign_membership_id = :membership_id
+                      AND rm.removed_at IS NULL
+                )
+            )
+            OR k.code = 'campaign_current_and_future'
+          )
+"""
+
 
 def _as_uuid(value: object) -> uuid.UUID:
     assert isinstance(value, uuid.UUID)
@@ -288,6 +360,12 @@ class AccessContext:
     # (`dnd_ai.api.access`); `pending`/`inactive` still authorize because only
     # fixtures produce them.
     campaign_lifecycle_status: str = "active"
+    # Live revelations that reach this caller, by character (P03-A A3b, plan section 10.6). Each
+    # source is its own revelation; revoking one leaves the others, and every relationship, role
+    # and grant, exactly as they were.
+    revelations: Mapping[uuid.UUID, frozenset[RevelationSource]] = field(
+        default_factory=dict, repr=False
+    )
 
     def has_capability(
         self,
@@ -299,6 +377,7 @@ class AccessContext:
         quest_id: uuid.UUID | None = None,
         session_id: uuid.UUID | None = None,
         event_id: uuid.UUID | None = None,
+        include_revelations: bool = True,
     ) -> bool:
         """Deny-by-default: True only if a role, character relationship, or
         active `allow` resource grant supplies the capability, and no
@@ -329,6 +408,15 @@ class AccessContext:
         if character_id is not None:
             baseline = baseline or capability_code in self.character_capabilities.get(
                 character_id, frozenset()
+            )
+            # A live revelation confers discovery and the released public profile for that one
+            # character, as a source of its own. A role-only check (no `character_id`) gains
+            # nothing, and a resource-grant `deny` below still wins. `include_revelations=False`
+            # asks what the caller holds through every *other* source (the D5-c projection).
+            baseline = baseline or (
+                include_revelations
+                and capability_code in REVELATION_CONFERRED_CAPABILITIES
+                and bool(self.revelations.get(character_id))
             )
 
         if not supplied:
@@ -1139,6 +1227,18 @@ def resolve_access_context(
             continue
         bucket[capability_code] = _as_str(row["effect"])
 
+    revelations: dict[uuid.UUID, set[RevelationSource]] = {}
+    for revelation_row in connection.execute(
+        text(LIVE_REVELATIONS_FOR_MEMBERSHIP_SQL),
+        {"campaign_id": campaign_id, "membership_id": membership_id},
+    ).mappings():
+        revelations.setdefault(_as_uuid(revelation_row["character_id"]), set()).add(
+            RevelationSource(
+                character_revelation_id=_as_uuid(revelation_row["character_revelation_id"]),
+                audience_kind=_as_str(revelation_row["audience_kind"]),
+            )
+        )
+
     return AccessContext(
         user_id=user_id,
         campaign_id=campaign_id,
@@ -1150,6 +1250,9 @@ def resolve_access_context(
         },
         grant_effects=grant_effects,
         campaign_lifecycle_status=campaign_lifecycle_status,
+        revelations={
+            character_id: frozenset(sources) for character_id, sources in revelations.items()
+        },
     )
 
 

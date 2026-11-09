@@ -122,6 +122,7 @@ from sqlalchemy import Connection, text
 from dnd_ai.commands.local_auth import normalize_login_name
 from dnd_ai.domain.access import (
     BUILTIN_CAMPAIGN_OWNER_ROLE_CODE,
+    LIVE_REVELATIONS_FOR_MEMBERSHIP_SQL,
     LOCAL_AUTH_ISSUER,
     RESOURCE_GRANT_CAPABILITY_CATALOG,
     find_live_builtin_owner_assignment,
@@ -154,6 +155,18 @@ class MemberCharacterRelationshipView:
     relationship_type_display_name: str
     granted_at: datetime
     expires_at: datetime | None
+
+
+@dataclass(frozen=True)
+class MemberRevelationView:
+    """One live character revelation that reaches a member (P03-A A3b): the character it names
+    and the audience kind it reaches them through. A source of its own beside roles, relationships
+    and grants; never its id, reason, creator or the rest of its audience."""
+
+    character_id: uuid.UUID
+    character_display_name: str
+    audience_kind_code: str
+    audience_kind_display_name: str
 
 
 @dataclass(frozen=True)
@@ -200,6 +213,7 @@ class CampaignMemberView:
     roles: tuple[MemberRoleView, ...]
     character_relationships: tuple[MemberCharacterRelationshipView, ...]
     grants: tuple[MemberResourceGrantView, ...]
+    revelations: tuple[MemberRevelationView, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -428,6 +442,31 @@ def get_campaign_access_overview(
             )
         )
 
+    # Live revelations, from the resolver's own query (one definition), for each member that
+    # resolves access at all (an open, `active` membership).
+    revelations_by_membership: dict[uuid.UUID, list[MemberRevelationView]] = {}
+    for member_row in member_rows:
+        if member_row["status_code"] != "active":
+            continue
+        for row in connection.execute(
+            text(
+                LIVE_REVELATIONS_FOR_MEMBERSHIP_SQL
+                + " ORDER BY e.canonical_name, r.created_at, r.character_revelation_id"
+            ),
+            {
+                "campaign_id": campaign_id,
+                "membership_id": member_row["campaign_membership_id"],
+            },
+        ).mappings():
+            revelations_by_membership.setdefault(member_row["campaign_membership_id"], []).append(
+                MemberRevelationView(
+                    character_id=row["character_id"],
+                    character_display_name=row["character_display_name"],
+                    audience_kind_code=row["audience_kind"],
+                    audience_kind_display_name=row["audience_kind_display_name"],
+                )
+            )
+
     return tuple(
         CampaignMemberView(
             campaign_membership_id=row["campaign_membership_id"],
@@ -442,6 +481,7 @@ def get_campaign_access_overview(
                 relationships_by_membership.get(row["campaign_membership_id"], [])
             ),
             grants=tuple(grants_by_membership.get(row["campaign_membership_id"], [])),
+            revelations=tuple(revelations_by_membership.get(row["campaign_membership_id"], [])),
         )
         for row in member_rows
     )

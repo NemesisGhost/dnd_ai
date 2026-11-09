@@ -963,7 +963,8 @@ GET /campaigns/{campaign_id}/members/{campaign_membership_id}/effective-access
   200: { display_name,
          capabilities: [ { code, display_name,
                            sources: [ { kind: "role" | "character_relationship"
-                                             | "resource_grant" | "access_group",
+                                             | "resource_grant" | "access_group"
+                                             | "revelation",
                                         label, target_display_name? } ] } ],
          denials: [ { capability_code, target_type, target_display_name? } ] }
   404: non-disclosing — membership missing, foreign-campaign, or closed
@@ -981,6 +982,16 @@ request authorized as the explained member, nothing mutable, no protected
 campaign content — only the member's own access shape, every label drawn
 from the same audience-safe field set `GET .../access-overview` already
 uses. A pure read: no `audit.change_log` row.
+
+**Revelations (P03-A A3b).** Each live character revelation that reaches the member is its own
+source of kind `revelation`, listed under both `character.discover` and
+`character.view_public_profile` (the only two capabilities a revelation confers), labelled with its
+audience kind's display name and naming the one character it reaches (`target_display_name`). It
+comes from the same query the resolver uses (`LIVE_REVELATIONS_FOR_MEMBERSHIP_SQL`), so the
+explanation never shows a revelation the resolver would not honour, and the revelation disappears
+from it the moment it is revoked, ended or closed. Sources are never merged: two revelations are
+two entries. The label is the audience kind only, never a revelation id, reason, creator or the
+rest of the audience.
 
 Portal: `EffectiveAccessPanel`, one disclosure per member row on the Access
 page (never a single shared side panel) — `EffectiveAccessContent` mounts,
@@ -1202,7 +1213,10 @@ closed it — except the handful that are deliberately out of scope for Phase
 - **Errors:** 409 `public_profile_not_released`, 409 `public_profile_character_not_active`, 409 `revelation_target_not_active`; a target outside the campaign, a revelation id of another character, or a nonexistent one is 404.
 - **Receipt:** `{character_revelation_id, created}` (201, or 200 `created: false` for a natural retry) and `{character_revelation_id, revoked}`; the reason is never in a receipt or an audit row.
 - **Idempotency order:** a keyed request takes the idempotency key lock as its first database statement; the reservation or replay lookup happens inside the command after its locks and its fresh authority and deny checks. A caller who has since lost authority or come under a deny is refused (403 or 404) and is never handed a stored receipt. A key reused for another payload, character or route is the non-disclosing 409 once the caller is authorized.
-- **Effect:** none yet on any audience response (A3b).
+- **Effect (A3b):** a live revelation is a distinct access source (`AccessContext.revelations`, kept apart from relationship capabilities). It makes the character discoverable, with its released summary, to exactly its audience, and confers `character.discover` and `character.view_public_profile` for that character only: never `view_summary`, `view_full`, `view_inventory`, `view_knowledge`, `view_private`, control or play, so the character page, sheet, builds, inventory and bootstrap perspectives are unchanged. Revoking one revelation leaves access supplied by another revelation, a relationship, a role or a grant exactly as it was. A whole-character `campaign.view` deny or a `character.discover` deny on the reader suppresses it; a `character.view_public_profile` deny blocks only the profile (A4).
+  - **Where it reaches** (the shared discovery policy, ADR 0021 §6): world search, its category counts and pagination (filtered before the page), world relationships, organization memberships, session roster and travel, event explanations, encounters and Knowledge subject labels, each keeping its own other audience rules. A revealed character is listed but cannot be opened until A4.
+  - **Released summary (D5-c):** a reader whose only path to a character is a revelation sees its canonical name and the latest release's `public_summary` (`null` when that release has none, including every release made before migration 145), never the canonical summary. Search matching, counts and the card use the same projection; the sort key and cursor do not depend on the summary. Gaining another discovery source (a relationship, a grant, a GM role) moves the reader to the canonical summary on the next request.
+  - **Access overview:** each member gains `revelations: [{ character_id, character_display_name, audience_kind_code, audience_kind_display_name }]`, the live revelations that reach them (no id, reason or creator).
 
 ## 3v. Character public profile (P03-A A2a)
 

@@ -3762,6 +3762,48 @@ What the HTTP versions do not pin: the exact step at which a side waits. With a 
 
 ---
 
+## A3b implementation record (2026-11-09)
+
+**Base:** `ac589eae6cb9657e2e37c457c5613bc5dd551f72` (A3a's last test commit). Not pushed. CI pending.
+
+**Conversation-supplied evidence (not re-derived here).** A3a received an independent PASS, and its three race files (`test_character_revelations_matrix.py`, `_http_matrix.py`, `_keyed.py`) ran 61 tests, all passing, at `ac589ea`. Both facts come from the owner's A3b instruction and are recorded as stated; this record did not repeat that review.
+
+**Built.**
+
+- **Revelation as a distinct source.** `AccessContext.revelations` (character id to a set of `RevelationSource(character_revelation_id, audience_kind)`), kept apart from `character_capabilities`. `resolve_access_context` fills it from one query, `LIVE_REVELATIONS_FOR_MEMBERSHIP_SQL` in `domain/access.py`: unclosed, character active and canon, and the audience matches (the member; an open link to an active target group; an unremoved snapshot row; every active member). `has_capability(..., character_id=X)` gains a baseline for `character.discover` and `character.view_public_profile` only (`REVELATION_CONFERRED_CAPABILITIES`), with `include_revelations=False` to ask what every other source supplies. A role-only check gains nothing and a resource-grant `deny` still wins.
+- **Shared discovery.** `resolve_world_character_visibility` adds revelation keys to the characters it tests, so the `force_visible`/`force_hidden` bundle every consumer reads includes them. The whole-character `campaign.view` deny and the lifecycle filter still override in SQL. No consumer was edited: the bundle reaches world search and counts, relationships, organization members, session roster and travel, event explanations, encounters and Knowledge labels at once, each keeping its other rules.
+- **D5-c projection.** `CharacterVisibility` gains `released_summary_ids` (characters whose only discovery path is a revelation, with denies applied) and `campaign_id`. `_VISIBLE_ENTITIES_SQL` left-joins the latest release's `public_summary` for those characters only; the card, the `q` match and so the counts use `CASE WHEN id = ANY(released) THEN latest.public_summary ELSE e.summary END`. Sort key and cursor are unchanged and carry no summary. An older release or one without a summary gives `null`; nothing falls back.
+- **D4-C party roster.** `party_roster_controller_qualifies` (in `api/parties.py`, one caller) decides, per request, whether the caller holds a live `owner`/`primary_controller`/`co_controller` relationship to a character that is a current member of this party at the effective clock, with no whole-character `campaign.view` deny on that character. A qualifying caller sees every current member minus lifecycle-hidden members and members under a `campaign.view` or `character.discover` deny. **Everyone else now sees only the current members shared discovery lets them see; before A3b every `campaign.view` reader saw all current members.** The response shape is unchanged (`character_id`, `character_name`).
+- **Explanation and overview.** Each live revelation is a source of kind `revelation` in the effective-access explanation (under both conferred capabilities, labelled by audience kind, naming the character), and the access overview gains `revelations` per member. Both reuse the resolver's query. The portal does not render either yet (A6).
+
+**Named changes to tests that passed at A3a's head** (plan section 10.10, A3b item 8):
+
+1. `test_api_party_roster.py`: five existing tests listed members to a reader who controlled nothing; they now give the reader a controller relationship (a `control` helper) because D4-C narrows the roster. `test_a_member_is_named_without_character_access_and_nothing_else_opens` now lists two members, the player controlling the second.
+2. `test_party_membership_effective_time.py::test_every_surface_agrees_at_every_clock_position`: the player owns Tobin, so the roster lists the current members only while Tobin is one (years 4 and 5, when only Mira is current, now list nobody). The GM-facing rows are unchanged.
+3. `test_character_public_profile_structure.py`: `queries/world_explorer.py` joins the admitted readers of the releases table (read-only, plan section 10.12).
+
+**Tests added.** `test_character_revelations_discovery.py` (27): the T82 matrix for the four kinds (P1 in the group, P2, an observer, a late joiner, X who leaves and rejoins, R in another campaign on the same timeline), group removal and deactivation then reactivation, archive and restore, revocation of each kind; independent sources (relationship, grant and revelation, two revelations of different kinds, the explanation and overview before and after); whole-character denies to a member and to a group for every kind; a raw `character.discover` deny and a `view_public_profile` deny; never-grants (detail, sheet, builds, inventory, profile, relationships, Knowledge perspective, bootstrap perspectives, `can_open_participant`, every non-conferred capability); preview inheriting the subject's revelations; the projection (revelation-only, relationship and GM readers; the name always matches; later release without a summary; gaining a relationship); paging, cursors and counts across a page boundary; campaign B's release never reaching campaign A; the world relationships list; and a disclosure sweep for revelation ids, reasons, canonical summary and unrevealed names. `test_api_party_roster.py` (+14): each controller type, discovery-only types, former and future members, no clock, a denied controller, `campaign.view` and `character.discover` denies, non-controllers with and without a revelation, and the containment checks. `tests/unit/test_revelation_discovery_structure.py` (6): which modules name the tables, that consumers use the resolver's query, the single roster caller, nothing fed back, and the conferred set.
+
+**Evidence the tests bite.** Making `party_roster_controller_qualifies` return `True` fails 10 roster tests. Setting `released_summary_ids` empty fails the four projection and paging tests. Dropping the `include_revelations` guard fails the revelation-only projection test.
+
+**Not covered, stated plainly.** Revelation reach is asserted through HTTP for world search, counts, pagination, the relationships list, the roster and the explanation and overview. Organization members, session roster and travel, event explanations, encounters and Knowledge subject labels read the same bundle and their existing suites pass, but no new revelation-specific test names them, so the plan's full per-surface sweep (section 10.9) is not complete. The portal does not display the new fields. S9 stays "by trace".
+
+**Fourth named change.** `test_clock_advance_details_migration.py::test_populated_upgrade_and_documented_downgrade` builds its data at schema revision 139 through `create_world_time`, which resolves access; the resolver now reads the revelation tables, which do not exist at 139. The test creates the world time with `make_world_time` instead (the calendar it also made was unused). Production code is unchanged for this.
+
+**Added after the full run.** `test_character_revelations_surfaces.py` (2): the organization roster and the event explanation name a revealed character only while it is revealed, never open it, and drop it under a whole-character deny or after revocation. This narrows, but does not close, the surfaces listed above as not covered (session roster and travel, encounters, Knowledge labels remain unexercised by a revelation).
+
+**Results (reported separately).**
+
+- Static: `ruff format --check`, `ruff check`, `mypy src` (279 files) and `uv lock --check` clean; `git diff --check` clean. `alembic check` was not rerun: A3b changes no migration or table metadata.
+- Focused: `tests/unit` 1301 passed with 1 failure, `test_config.py::test_local_session_allowed_origins_defaults_to_dev_topology_outside_production`, which fails identically with A3b's changes stashed (environment dependent, unrelated). The discovery file 27, roster 24, party effective-time 30, surfaces 2, all passed.
+- **Full runner, first run** (`scripts/run_sharded_tests.py`, 16 min 39 s, 7430 collected): 7428 passed, 2 failed.
+  1. `test_clock_advance_details_migration.py::test_populated_upgrade_and_documented_downgrade` (shard 4): the schema-revision dependency above. A3b caused it; fixed in the test.
+  2. `test_character_revelations_matrix.py::test_a_keyed_waiter_whose_assignment_expires_during_the_key_wait_is_refused_afresh[owner-create]` (shard 1): an A3a race test, asserting a blocked request had not finished, failed once under four-shard load. Rerun alone: the matrix file and then that test three more times, 4 of 4 passed each time. No code relevant to it changed in A3b. Unattributed timing sensitivity; not fixed.
+- **Reruns** (after the test fix): the two files holding those failures, 20 passed. **The full runner was not rerun after the fix and after the 2 surface tests were added**, so no single full-suite pass exists on the final tree.
+
+
+---
+
 ## A2b-1 implementation record (2026-11-07)
 
 **Parent:** `5fb2608` (the reviewed design commit; its parent is the A2a handoff `523ae5c`). One local commit; nothing is pushed and CI is pending.

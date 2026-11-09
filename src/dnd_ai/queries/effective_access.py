@@ -52,7 +52,9 @@ _GRANT_TARGET_COLUMNS = (
 @dataclass(frozen=True)
 class EffectiveAccessSourceView:
     # One of "role" | "character_relationship" | "resource_grant" |
-    # "access_group" — see this module's own docstring.
+    # "access_group" | "revelation" — see this module's own docstring. A "revelation" source
+    # is labelled with its audience kind only (never its id, reason or target) and names the
+    # one character it reaches.
     kind: str
     label: str
     target_display_name: str | None = None
@@ -188,6 +190,48 @@ def resolve_member_effective_access(
                 target_display_name=str(row["character_display_name"]),
             ),
         )
+
+    # Live revelations that reach this member: one source per revelation and conferred capability,
+    # from the same query the resolver uses, so the panel can never show a revelation the resolver
+    # would not honour (and stops showing it the moment it is revoked). Only an open, active
+    # membership resolves access at all.
+    member_is_active = connection.execute(
+        text("""
+            SELECT ms.code = 'active' AND ms.is_active
+            FROM security.campaign_memberships cm
+            JOIN security.membership_statuses ms ON ms.membership_status_id = cm.membership_status_id
+            WHERE cm.campaign_membership_id = :membership_id
+        """),
+        {"membership_id": campaign_membership_id},
+    ).scalar()
+    if member_is_active:
+        conferred = {
+            str(row["code"]): str(row["display_name"])
+            for row in connection.execute(
+                text("""
+                    SELECT code, display_name FROM security.capabilities
+                    WHERE code = ANY(CAST(:codes AS text[])) AND is_active
+                """),
+                {"codes": sorted(_access.REVELATION_CONFERRED_CAPABILITIES)},
+            ).mappings()
+        }
+        for row in connection.execute(
+            text(
+                _access.LIVE_REVELATIONS_FOR_MEMBERSHIP_SQL + " ORDER BY e.canonical_name, "
+                "r.created_at, r.character_revelation_id"
+            ),
+            {"campaign_id": campaign_id, "membership_id": campaign_membership_id},
+        ).mappings():
+            for code in sorted(conferred):
+                _add_source(
+                    code,
+                    conferred[code],
+                    EffectiveAccessSourceView(
+                        kind="revelation",
+                        label=str(row["audience_kind_display_name"]),
+                        target_display_name=str(row["character_display_name"]),
+                    ),
+                )
 
     target_column_list = ", ".join(f"rg.{column}" for column in _GRANT_TARGET_COLUMNS)
 

@@ -108,7 +108,10 @@ def resolve_world_character_visibility(access: AccessContext) -> CharacterVisibi
     """
     discover_all = any(access.has_capability(cap) for cap in _DISCOVER_CAPABILITIES)
 
-    mentioned: set[uuid.UUID] = set(access.character_capabilities)
+    # A revealed character must be tested even when the caller has no relationship or grant for it
+    # (P03-A A3b, plan section 10.6). The whole-character `campaign.view` deny and the lifecycle
+    # filter still override `force_visible` in SQL (`cv_denied`).
+    mentioned: set[uuid.UUID] = set(access.character_capabilities) | set(access.revelations)
     for cap in _DISCOVER_CAPABILITIES:
         denied, allowed = access.resource_grant_targets(cap, "character_id")
         mentioned |= denied | allowed
@@ -123,10 +126,25 @@ def resolve_world_character_visibility(access: AccessContext) -> CharacterVisibi
         else:
             force_hidden.add(character_id)
 
+    # D5-c: a reader whose only path to a revealed character is a revelation is shown the
+    # deliberately released summary, never the canonical one. "Only path" asks every discovery-tier
+    # capability again with revelations excluded, denies applied as usual.
+    released_summary_ids = frozenset(
+        character_id
+        for character_id in access.revelations
+        if character_id in force_visible
+        and not any(
+            access.has_capability(cap, character_id=character_id, include_revelations=False)
+            for cap in _DISCOVER_CAPABILITIES
+        )
+    )
+
     return CharacterVisibility(
         discover_all=discover_all,
         force_visible=frozenset(force_visible),
         force_hidden=frozenset(force_hidden),
+        released_summary_ids=released_summary_ids,
+        campaign_id=access.campaign_id,
     )
 
 

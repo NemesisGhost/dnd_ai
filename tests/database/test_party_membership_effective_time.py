@@ -255,10 +255,13 @@ def test_every_surface_agrees_at_every_clock_position(scene: Scene, year: int) -
     assert body["clock_unset"] is False and body["as_of"]
 
     # Read-only roster: members and count agree.
+    # D4-C (P03-A A3b): the player controls Tobin, so the roster lists the current members only
+    # while Tobin is one; a controller of a former or future member sees no more than discovery.
+    names = sorted(n for n, on in (("Tobin", tobin_in), ("Mira", mira_in)) if on)
     roster = scene.roster(s.player).json()
-    names = sorted(m["character_name"] for m in roster["members"])
-    assert names == sorted(n for n, on in (("Tobin", tobin_in), ("Mira", mira_in)) if on)
-    assert roster["member_count"] == len(names)
+    roster_names = sorted(m["character_name"] for m in roster["members"])
+    assert roster_names == (names if tobin_in else [])
+    assert roster["member_count"] == len(roster_names)
     assert roster["clock_unset"] is False
 
     # GM management rows: period status per row, is_current kept as `in_effect`.

@@ -880,6 +880,8 @@ This ADR adopts the investigation's recommended contract (§D6.3–D6.5, supplem
 - **Release semantics.** An audience receives only **deliberately published** versions of the public profile. A reveal follows later deliberate releases. It never exposes unpublished edits, GM-private fields, the GM view, restricted legacy background, the player profile's unpublished fields or derived mechanics.
 - **Revocation.** Revoking a revelation is independent of every other capability source (§2.9).
 
+**Clarification: the party roster (decision D4-C, Owner-approved 2026-11-07; implemented in A3b 2026-11-09).** The party roster names its current members to that party's current controllers; this confers no discovery. A reader who currently controls a character that is a current member of the party (a live `owner`, `primary_controller` or `co_controller` relationship, judged at the campaign's effective clock, with no whole-character `campaign.view` deny on that character) sees every current member by id and canonical name on `GET …/parties/{party_id}/roster`, minus members hidden from them as unpublished definitions or under a whole-character `campaign.view` or a `character.discover` deny. Every other reader sees the current members shared discovery lets them see. The exception is a second, named audience for one response, not part of the discovery predicate: its result is never read into `AccessContext` or the discovery bundle, it confers no capability, and no other consumer reads it.
+
 Four projections are distinct server DTOs:
 1. public profile;
 2. controller view;
