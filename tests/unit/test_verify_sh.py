@@ -152,14 +152,33 @@ def sandbox(tmp_path: Path) -> Path:
     bin_dir.mkdir()
 
     ingress_stub = scripts_dir / "ingress-stub.sh"
-    ingress_stub.write_text(_INGRESS_STUB)
+    ingress_stub.write_text(_INGRESS_STUB, newline="\n")
     _make_executable(ingress_stub)
 
     uv_stub = bin_dir / "uv"
-    uv_stub.write_text(_UV_STUB)
+    uv_stub.write_text(_UV_STUB, newline="\n")
     _make_executable(uv_stub)
 
     return tmp_path
+
+
+# Putting the sandbox's `bin` first in the PATH given to `bash` is not enough on Windows. Git for
+# Windows' `bash.exe` rebuilds PATH when it starts and puts `/mingw64/bin`, `/usr/bin` and the user's
+# own `~/bin` ahead of everything it was handed, so a machine with a real `uv` in `~/bin` (this
+# project's maintainer has one) ran the real `uv` -- alembic, ruff -- instead of the stub, and 11
+# tests failed when pytest was started from PowerShell (it happened to work from Git Bash, whose
+# `bash` is a different executable). The script under test is therefore started through a tiny
+# launcher that puts the stub directory first *after* bash has built its PATH and then execs bash
+# again on the script, so the order no longer depends on how bash was installed or configured.
+_PUT_STUB_FIRST = (
+    'stub=$(cygpath -u "$VERIFY_TEST_STUB_BIN" 2>/dev/null || printf "%s" "$VERIFY_TEST_STUB_BIN"); '
+    'PATH="$stub:$PATH"; export PATH; exec "$BASH" "$@"'
+)
+
+
+def _bash_command(sandbox: Path, *arguments: str) -> list[str]:
+    """`bash <arguments>` with the sandbox's stub directory guaranteed first on PATH."""
+    return [BASH_EXECUTABLE, "-c", _PUT_STUB_FIRST, "bash", *arguments]
 
 
 def _run_verify(
@@ -170,11 +189,12 @@ def _run_verify(
 ) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
     env["PATH"] = f"{sandbox / 'bin'}{os.pathsep}{env['PATH']}"
+    env["VERIFY_TEST_STUB_BIN"] = str(sandbox / "bin")
     env["VERIFY_SH_INGRESS_SCRIPT"] = "scripts/ingress-stub.sh"
     if env_overrides:
         env.update(env_overrides)
     return subprocess.run(
-        [BASH_EXECUTABLE, str(VERIFY_SH), *args],
+        _bash_command(sandbox, str(VERIFY_SH), *args),
         cwd=sandbox,
         env=env,
         capture_output=True,
@@ -182,6 +202,28 @@ def _run_verify(
         timeout=30,
         check=False,
     )
+
+
+def test_the_stub_uv_is_the_uv_the_script_resolves_whatever_the_users_path_holds(
+    sandbox: Path,
+) -> None:
+    """A guard for the launcher above: with the stub's exit status set to 7, running `uv` through
+    the same launcher must give 7. If a real `uv` ever wins the lookup again this fails loudly
+    here instead of the other tests quietly running the real quality tools."""
+    env = dict(os.environ)
+    env["PATH"] = f"{sandbox / 'bin'}{os.pathsep}{env['PATH']}"
+    env["VERIFY_TEST_STUB_BIN"] = str(sandbox / "bin")
+    env["STUB_UV_EXIT"] = "7"
+    result = subprocess.run(
+        _bash_command(sandbox, "-c", "uv; exit $?"),
+        cwd=sandbox,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 7, result.stdout + result.stderr
 
 
 def test_help_as_first_argument_prints_usage_and_exits_zero(sandbox: Path) -> None:
