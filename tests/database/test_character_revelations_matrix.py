@@ -62,10 +62,11 @@ from tests.database.test_character_revelations_keyed import (
     assert_roles,
     hold_audit_action,
     key_ids,
-    live_roles,
+    live_role_ids,
     make_revelation,
     membership_open,
     receipts,
+    role_rows,
     start,
     wait_blocked,
     wait_key_queue,
@@ -305,6 +306,7 @@ def test_s3_a_creation_that_reaches_the_member_first_includes_them_and_recovery_
     row = row_for(postgres_engine, g, c)
     assert g.player in snapshot(postgres_engine, row["character_revelation_id"])
     assert _owner_role_live(postgres_engine, g.player)
+    assert_roles(postgres_engine, g, roles={g.player: {g.player_role_id, g.owner_role_id}})
 
 
 def test_s4_recovery_that_holds_the_member_first_leaves_them_in_the_snapshot(
@@ -323,6 +325,7 @@ def test_s4_recovery_that_holds_the_member_first_leaves_them_in_the_snapshot(
     row = row_for(postgres_engine, g, c)
     assert g.player in snapshot(postgres_engine, row["character_revelation_id"])
     assert _owner_role_live(postgres_engine, g.player)
+    assert_roles(postgres_engine, g, roles={g.player: {g.player_role_id, g.owner_role_id}})
 
 
 def _transfer(g: Gate, to: uuid.UUID) -> Callable[[Any], Any]:
@@ -355,6 +358,12 @@ def test_s5_a_creation_that_reaches_the_recipient_first_includes_them_and_the_tr
     assert _owner_role_live(postgres_engine, g.player) and not _owner_role_live(
         postgres_engine, g.o1
     )
+    # The recipient holds the built-in owner role as well as their own; the relinquisher none.
+    assert_roles(
+        postgres_engine,
+        g,
+        roles={g.player: {g.player_role_id, g.owner_role_id}, g.o1: set()},
+    )
 
 
 def test_s6_a_transfer_that_holds_the_recipient_first_leaves_them_in_the_snapshot(
@@ -374,6 +383,12 @@ def test_s6_a_transfer_that_holds_the_recipient_first_leaves_them_in_the_snapsho
     assert g.player in snapshot(postgres_engine, row["character_revelation_id"])
     assert _owner_role_live(postgres_engine, g.player) and not _owner_role_live(
         postgres_engine, g.o1
+    )
+    # The recipient holds the built-in owner role as well as their own; the relinquisher none.
+    assert_roles(
+        postgres_engine,
+        g,
+        roles={g.player: {g.player_role_id, g.owner_role_id}, g.o1: set()},
     )
 
 
@@ -450,6 +465,8 @@ def test_s8_a_member_being_added_is_after_the_cutoff_and_not_in_the_snapshot(
         ).scalar_one()
     assert new_membership not in members  # committed after the cutoff (D9-a)
     assert g.player in members and g.o1 in members
+    assert live_role_ids(postgres_engine, new_membership) == [g.player_role_id]  # the role added
+    assert_roles(postgres_engine, g)  # nobody else gained or lost a role
 
 
 # --- AC1 to AC3: the caller's account ---------------------------------------------------------
@@ -498,7 +515,7 @@ def test_ac1_adding_an_existing_member_waits_for_the_creation_then_fails_on_the_
             ).scalar_one()
             == 1
         )
-        assert live_roles(postgres_engine, g.o1) == 1  # A's membership is unchanged
+        assert live_role_ids(postgres_engine, g.o1) == [g.owner_role_id]  # A's roles are unchanged
 
 
 @pytest.fixture
@@ -527,6 +544,7 @@ def test_ac2_a_deactivation_that_holds_the_account_first_makes_the_creation_a_40
     postgres_engine: Engine, g: Gate, rev: Rev, admin: uuid.UUID
 ) -> None:
     c = rev.character_id
+    assignments = role_rows(postgres_engine, g.o1)
     with LockRace(postgres_engine) as race:
         held = race.hold(lambda cn: _disable_local_account_impl(
             cn, admin_user_id=admin, target_user_id=g.o1_user_id
@@ -538,6 +556,11 @@ def test_ac2_a_deactivation_that_holds_the_account_first_makes_the_creation_a_40
     assert isinstance(create.error, CharacterRevealRequiredError), create.error
     assert revelations(postgres_engine, g, c) == []
     assert not _account_active(postgres_engine, g.o1_user_id)
+    # Deactivating the account and the refused creation changed none of the caller's assignments:
+    # the same rows, still unrevoked and unexpired, holding the built-in owner role.
+    assert role_rows(postgres_engine, g.o1) == assignments
+    assert live_role_ids(postgres_engine, g.o1) == [g.owner_role_id]
+    assert_roles(postgres_engine, g)
 
 
 def test_ac3_a_creation_past_the_account_lock_commits_before_the_deactivation(

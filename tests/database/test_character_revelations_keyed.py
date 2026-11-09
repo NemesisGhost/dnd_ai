@@ -189,25 +189,89 @@ def make_revelation(
     return uuid.UUID(response.json()["character_revelation_id"])
 
 
+def live_role_ids(engine: Engine, membership: uuid.UUID) -> list[uuid.UUID]:
+    """The `role_id` of every assignment of `membership` that is in force now: not revoked and not
+    expired (judged at the database clock). One entry per live assignment, so a duplicated
+    assignment shows twice."""
+    with engine.connect() as connection:
+        return sorted(
+            connection.execute(
+                text("""
+                    SELECT role_id FROM security.membership_roles
+                    WHERE campaign_membership_id = :m AND revoked_at IS NULL
+                      AND (expires_at IS NULL OR expires_at > clock_timestamp())
+                """),
+                {"m": membership},
+            ).scalars()
+        )
+
+
+def role_rows(engine: Engine, membership: uuid.UUID) -> list[tuple[Any, ...]]:
+    """Every assignment row of `membership`, live or not, with its state: used to show that a race
+    changed none of a caller's assignments."""
+    with engine.connect() as connection:
+        return [
+            tuple(row)
+            for row in connection.execute(
+                text("""
+                    SELECT membership_role_id, role_id, revoked_at, expires_at
+                    FROM security.membership_roles
+                    WHERE campaign_membership_id = :m
+                    ORDER BY membership_role_id
+                """),
+                {"m": membership},
+            )
+        ]
+
+
+def default_roles(g: Gate) -> dict[uuid.UUID, set[uuid.UUID]]:
+    """The live role set each Gate member starts with: the owners the **built-in** owner role, the
+    manager its campaign-scoped custom role, the player the built-in player role. (`Gate` also holds
+    `lookalike_role_id`, a campaign-scoped role that reuses the code `campaign_owner`; nobody holds
+    it, and comparing role ids, not codes, is what tells it from the built-in one.)"""
+    return {
+        g.o1: {g.owner_role_id},
+        g.o2: {g.owner_role_id},
+        g.manager: {g.custom_manager_role_id},
+        g.player: {g.player_role_id},
+    }
+
+
 def assert_roles(
     engine: Engine,
     g: Gate,
     *,
     ended: tuple[uuid.UUID, ...] = (),
-    roles: dict[uuid.UUID, int] | None = None,
+    roles: dict[uuid.UUID, set[uuid.UUID]] | None = None,
 ) -> None:
-    """The final role state of a membership-end race: every ended membership has no live role, and
-    every other Gate member is still open and holds the roles it should: one each (owners `o1` and
-    `o2` the owner role, the manager its custom role, the player the player role) unless `roles`
-    says otherwise, as when recovery or a transfer gave someone the owner role as well."""
+    """The exact final role state of a membership-end race. Every ended membership is closed and
+    has **no** live assignment. Every other Gate member is open and its live assignments are
+    exactly the expected role ids: the defaults of `default_roles` unless `roles` names the set
+    (recovery or a transfer adding the built-in owner role, a relinquisher left with none). Live
+    means unrevoked and unexpired, and each live assignment counts once, so a duplicate fails."""
     for membership in ended:
         assert not membership_open(engine, membership), membership
-        assert live_roles(engine, membership) == 0, membership
-    expected = roles or {}
-    for membership in (g.o1, g.o2, g.manager, g.player):
-        if membership not in ended:
-            assert membership_open(engine, membership), membership
-            assert live_roles(engine, membership) == expected.get(membership, 1), membership
+        assert live_role_ids(engine, membership) == [], membership
+    expected = default_roles(g) | (roles or {})
+    for membership, wanted in expected.items():
+        if membership in ended:
+            continue
+        assert membership_open(engine, membership), membership
+        assert live_role_ids(engine, membership) == sorted(wanted), (
+            membership,
+            live_role_ids(engine, membership),
+            sorted(wanted),
+        )
+    # The built-in owner role is the template (no campaign); the look-alike is campaign-scoped.
+    with engine.connect() as connection:
+        scopes = dict(
+            connection.execute(
+                text("SELECT role_id, campaign_id FROM security.roles WHERE role_id = ANY(:ids)"),
+                {"ids": [g.owner_role_id, g.player_role_id, g.lookalike_role_id]},
+            ).all()
+        )
+    assert scopes[g.owner_role_id] is None and scopes[g.player_role_id] is None
+    assert scopes[g.lookalike_role_id] == g.campaign_id
 
 
 def live_roles(engine: Engine, membership: uuid.UUID) -> int:

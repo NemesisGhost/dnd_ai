@@ -62,9 +62,10 @@ from tests.database.test_character_revelations_keyed import (
     assert_roles,
     end_url,
     hold_audit_action,
-    live_roles,
+    live_role_ids,
     make_revelation,
     receipts,
+    role_rows,
     start,
     wait_blocked,
     wait_until,
@@ -367,7 +368,8 @@ def test_s3_s4_the_snapshot_and_administrative_recovery_of_a_member(
     assert _owner_role_live(postgres_engine, g.player)
     assert len(audit(postgres_engine, g, CREATE_COMMAND)) == 1
     one_receipt(postgres_engine, g, g.o1_user_id, create_key, creation)
-    assert_roles(postgres_engine, g, roles={g.player: 2})  # recovery added the owner role
+    # Recovery added the built-in owner role to the player's own role.
+    assert_roles(postgres_engine, g, roles={g.player: {g.player_role_id, g.owner_role_id}})
 
 
 # --- S5 and S6: the snapshot against a relinquishing transfer, both winners -----------------------
@@ -421,7 +423,11 @@ def test_s5_s6_the_snapshot_and_a_relinquishing_transfer_to_a_member(
     assert len(audit(postgres_engine, g, CREATE_COMMAND)) == 1
     one_receipt(postgres_engine, g, g.o2_user_id, create_key, creation)
     # The recipient holds the owner role as well as their own; the relinquisher lost theirs.
-    assert_roles(postgres_engine, g, roles={g.player: 2, g.o1: 0})
+    assert_roles(
+        postgres_engine,
+        g,
+        roles={g.player: {g.player_role_id, g.owner_role_id}, g.o1: set()},
+    )
     if winner == "create":
         assert len(audit(postgres_engine, g, TRANSFER)) == 1  # the transfer route is not keyed
 
@@ -523,7 +529,7 @@ def test_s8_a_member_being_added_is_after_the_cutoff_whoever_commits_first(
     one_receipt(postgres_engine, g, g.o1_user_id, create_key, creation_request)
     one_receipt(postgres_engine, g, g.o2_user_id, add_key, addition_request)
     assert_roles(postgres_engine, g)
-    assert live_roles(postgres_engine, new_membership) == 1  # the added member holds the role added
+    assert live_role_ids(postgres_engine, new_membership) == [g.player_role_id]  # the role added
 
 
 # --- AC1 to AC3: the caller's account ---------------------------------------------------------------
@@ -571,7 +577,7 @@ def test_ac1_adding_an_existing_member_waits_for_the_creation_then_is_refused(
             ).scalar_one()
             == 1
         )  # fmt: skip
-    assert live_roles(postgres_engine, g.o1) == 1  # A's membership and roles are unchanged
+    assert live_role_ids(postgres_engine, g.o1) == [g.owner_role_id]  # A's roles are unchanged
     one_receipt(postgres_engine, g, g.o1_user_id, create_key, first)
     assert_roles(postgres_engine, g)  # nobody gained or lost a role
 
@@ -588,6 +594,7 @@ def test_ac2_ac3_account_deactivation_against_the_creation(
     c = rev.character_id
     create_key = key("ac-create")
     body = campaign_body("campaign_current")
+    assignments = role_rows(postgres_engine, g.o1)
     if winner == "deactivation":
         # AC2: the deactivation holds the caller's account first; the creation waits at step 5a and
         # is then refused at step 7 (the owner predicate needs an active account).
@@ -606,6 +613,7 @@ def test_ac2_ac3_account_deactivation_against_the_creation(
         assert revelations(postgres_engine, g, c) == []
         no_receipt(postgres_engine, g, g.o1_user_id, create_key)
         assert audit(postgres_engine, g, CREATE_COMMAND) == []
+        assert role_rows(postgres_engine, g.o1) == assignments  # the refusal changed none
     else:
         # AC3: the creation is past the account lock (held at its audit insert); the deactivation
         # waits for it, then commits.
