@@ -588,13 +588,16 @@ def test_a_request_cannot_open_a_second_request_connection(
 # --- T9: DEF-019, a different-key commit-time deadlock, observed (not fixed by P3) ----------------
 
 
-def test_def019_two_keyed_ends_by_one_owner_deadlock_at_commit_and_the_loser_persists_nothing(
+def test_def019_two_keyed_ends_by_one_owner_deadlock_and_the_loser_persists_nothing(
     postgres_engine: Engine, g: Gate
 ) -> None:
     """Two keyed ends by the same owner with different keys, on the player's and O2's memberships.
-    The first is held at the player's membership row; the second reaches COMMIT behind it; releasing
-    the hold makes them deadlock at PostgreSQL's commit-time check. Exactly one request succeeds.
-    The other is a non-2xx with no end, no audit row and no receipt. This test changes with DEF-019."""
+    The first is held at the player's membership row; the second waits behind it; releasing the hold
+    makes them deadlock (each holds the campaign `KEY SHARE` from its reservation and wants the
+    campaign `FOR UPDATE`). Exactly one request succeeds. The other is a non-2xx with no end, no
+    audit row and no receipt. Before A3a the second waited at COMMIT for the retention trigger's
+    campaign lock; `end_campaign_membership` now takes that lock itself, earlier, so the wait and
+    the deadlock moved into the command and the outcome is the same. This test changes with DEF-019."""
     urls = _urls(g)
     keys = (_fresh_key("def19-one"), _fresh_key("def19-two"))
     correlations = (str(uuid.uuid4()), str(uuid.uuid4()))
@@ -622,10 +625,12 @@ def test_def019_two_keyed_ends_by_one_owner_deadlock_at_commit_and_the_loser_per
     threads.append(threading.Thread(target=run, args=(1, urls["end_o2"]), daemon=True))
     threads[1].start()
     deadline = time.monotonic() + _WAIT_SECONDS
-    while time.monotonic() < deadline and not _commit_waiters(postgres_engine):
+    while time.monotonic() < deadline and _lock_waiters(postgres_engine) < 2:
         assert 1 not in results, getattr(results.get(1), "text", errors)
         time.sleep(0.02)
-    assert _commit_waiters(postgres_engine), "the second request never waited at COMMIT"
+    # The first waits on the hold; the second waits on the first (since A3a at the end command's
+    # explicit campaign lock, where it used to wait at COMMIT).
+    assert _lock_waiters(postgres_engine) >= 2, "the second request never waited on the first"
     hold.release()
     for thread in threads:
         thread.join(timeout=_WAIT_SECONDS)
@@ -650,18 +655,16 @@ def test_def019_two_keyed_ends_by_one_owner_deadlock_at_commit_and_the_loser_per
             assert not ended and audited == 0 and receipt == []
 
 
-def _commit_waiters(engine: Engine) -> list[int]:
+def _lock_waiters(engine: Engine) -> int:
     with engine.connect() as connection:
-        return [
-            int(r[0])
-            for r in connection.execute(
+        return int(
+            connection.execute(
                 text("""
-                    SELECT pid FROM pg_stat_activity
-                    WHERE query = 'COMMIT' AND wait_event_type = 'Lock'
-                      AND datname = current_database()
+                    SELECT count(*) FROM pg_stat_activity
+                    WHERE wait_event_type = 'Lock' AND datname = current_database()
                 """)
-            )
-        ]
+            ).scalar_one()
+        )
 
 
 def _deadlocks(engine: Engine) -> int:

@@ -1694,6 +1694,7 @@ character_public_profiles = Table(
             "legacy material; NULL unless the origin is a legacy origin."
         ),
     ),
+    Column("public_summary", Text()),
     Column(
         "public_background",
         Text(),
@@ -1841,6 +1842,7 @@ character_public_profile_releases = Table(
         nullable=False,
     ),
     Column("public_appearance_origin_entity_row_version", BigInteger()),
+    Column("public_summary", Text()),
     Column(
         "public_background",
         Text(),

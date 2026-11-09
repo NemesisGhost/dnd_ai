@@ -93,6 +93,7 @@ class SaveCharacterPublicProfileDraftRequest(BaseAuthoringRequest):
     expected_row_version: int | None = Field(ge=1)
     public_appearance: str | None = Field(default=None, max_length=PUBLIC_PROFILE_TEXT_MAX_LENGTH)
     public_background: str | None = Field(default=None, max_length=PUBLIC_PROFILE_TEXT_MAX_LENGTH)
+    public_summary: str | None = Field(default=None, max_length=PUBLIC_PROFILE_TEXT_MAX_LENGTH)
 
 
 class CopyLegacyTextRequest(BaseAuthoringRequest):
@@ -203,7 +204,7 @@ def save_character_public_profile_draft_endpoint(
         expected_row_version=body.expected_row_version,
         fields={
             name: getattr(body, name)
-            for name in ("public_appearance", "public_background")
+            for name in ("public_appearance", "public_background", "public_summary")
             if name in body.model_fields_set
         },
     )

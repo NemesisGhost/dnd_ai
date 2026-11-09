@@ -36,6 +36,7 @@ class LatestPublicProfileRelease:
     version_number: int
     public_appearance: str | None
     public_background: str | None
+    public_summary: str | None = None
 
 
 def latest_character_public_profile_release(
@@ -47,7 +48,7 @@ def latest_character_public_profile_release(
     row = connection.execute(
         text("""
             SELECT character_public_profile_release_id, version_number,
-                   public_appearance, public_background
+                   public_appearance, public_background, public_summary
             FROM campaign.character_public_profile_releases
             WHERE campaign_id = :campaign AND character_id = :character
             ORDER BY version_number DESC
@@ -62,6 +63,7 @@ def latest_character_public_profile_release(
         version_number=int(row.version_number),
         public_appearance=row.public_appearance,
         public_background=row.public_background,
+        public_summary=row.public_summary,
     )
 
 
@@ -117,6 +119,7 @@ def _release_json(row: Any, origins: dict[uuid.UUID, str], *, with_text: bool) -
                 "public_appearance_origin": origins[row.public_appearance_origin_id],
                 "public_background": row.public_background,
                 "public_background_origin": origins[row.public_background_origin_id],
+                "public_summary": row.public_summary,
                 "release_note": row.release_note,
             }
         )
@@ -127,7 +130,7 @@ _RELEASE_COLUMNS = """
     r.character_public_profile_release_id, r.version_number, r.from_draft_row_version,
     r.authority_source_code, r.released_at,
     r.public_appearance, r.public_appearance_origin_id,
-    r.public_background, r.public_background_origin_id, r.release_note,
+    r.public_background, r.public_background_origin_id, r.public_summary, r.release_note,
     COALESCE(u.display_name, '') AS released_by_name
 """
 _RELEASE_JOINS = """
@@ -203,7 +206,7 @@ def read_character_public_profile(
                    public_appearance, public_appearance_origin_id,
                    public_appearance_origin_entity_row_version,
                    public_background, public_background_origin_id,
-                   public_background_origin_entity_row_version
+                   public_background_origin_entity_row_version, public_summary
             FROM campaign.character_public_profiles
             WHERE campaign_id = :campaign AND character_id = :character
         """),
@@ -236,6 +239,7 @@ def read_character_public_profile(
             "row_version": int(draft_row.row_version),
             "updated_at": draft_row.updated_at.isoformat(),
         }
+        draft["public_summary"] = draft_row.public_summary
         for field_name, text_value, origin_id, source_version in (
             (
                 "public_appearance",

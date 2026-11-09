@@ -118,7 +118,8 @@ COLUMN_CLASSES: dict[str, DataClass] = {
     **_table("campaign.character_conditions", {"source_description": _G}),
     # A2: the draft is GM-only; a release is campaign-visible once revealed (A3/A4), its note is not.
     **_table(
-        "campaign.character_public_profiles", {"public_appearance": _G, "public_background": _G}
+        "campaign.character_public_profiles",
+        {"public_appearance": _G, "public_background": _G, "public_summary": _G},
     ),
     **_table(
         "campaign.character_public_profile_releases",
@@ -126,6 +127,7 @@ COLUMN_CLASSES: dict[str, DataClass] = {
             "authority_source_code": _S,
             "public_appearance": _C,
             "public_background": _C,
+            "public_summary": _C,
             "release_note": _G,
         },
     ),

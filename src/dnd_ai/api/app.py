@@ -62,6 +62,7 @@ from .campaigns import router as campaigns_router
 from .character_builds import router as character_builds_router
 from .character_public_profile import router as character_public_profile_router
 from .character_reveal import router as character_reveal_router
+from .character_revelations import router as character_revelations_router
 from .character_state import router as character_state_router
 from .characters import router as characters_router
 from .correlation import CorrelationIdMiddleware
@@ -214,6 +215,7 @@ def create_app() -> FastAPI:
     app.include_router(local_auth_router)
     app.include_router(location_authoring_router)
     app.include_router(character_reveal_router)
+    app.include_router(character_revelations_router)
     app.include_router(character_public_profile_router)
     app.include_router(memberships_router)
     app.include_router(movement_router)

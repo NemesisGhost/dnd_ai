@@ -121,6 +121,8 @@ def drop_gate(engine: Engine, fixture: Gate) -> None:
         cleanup.execute(text("DELETE FROM audit.change_log WHERE world_id = :w"), params)
         # P03-A A2a public profiles and the grants/groups tests attach to a campaign.
         for table in (
+            "security.character_revelation_members",
+            "security.character_revelations",
             "campaign.character_public_profile_releases",
             "campaign.character_public_profiles",
             "security.resource_grants",

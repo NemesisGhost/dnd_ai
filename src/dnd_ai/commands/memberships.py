@@ -107,6 +107,7 @@ from dnd_ai.domain.access import (
 from dnd_ai.domain.errors import DomainAuthorizationError, SafeMessageError
 
 from ._shared import lookup_id
+from .character_revelations import close_member_revelations_for_ended_membership
 from .reveal_delegation_lifecycle import (
     END_REASON_GM_ROLE_CHANGED,
     END_REASON_GM_ROLE_REVOKED,
@@ -1164,6 +1165,8 @@ class EndCampaignMembershipResult:
     revoked_membership_character_relationship_ids: tuple[uuid.UUID, ...]
     revoked_resource_grant_ids: tuple[uuid.UUID, ...]
     removed_access_group_membership_ids: tuple[uuid.UUID, ...]
+    closed_character_revelation_ids: tuple[uuid.UUID, ...] = ()
+    removed_character_revelation_member_ids: tuple[uuid.UUID, ...] = ()
 
 
 def end_campaign_membership(
@@ -1396,6 +1399,29 @@ def end_campaign_membership(
         closed_at=closed_at,
     )
 
+    # P03-A A3: two explicit locks, then the revelation closures. The actor's membership
+    # `FOR KEY SHARE` keeps today's relative order (actor, then campaign: the status UPDATE's
+    # foreign key took it before the commit-time retention trigger took the campaign). The campaign
+    # row `FOR UPDATE` comes before any revelation or snapshot row, because every other writer of a
+    # member-target revelation (create, revoke) takes the campaign row first. The retention
+    # trigger's own campaign lock at commit then finds it already held.
+    connection.execute(
+        text(
+            "SELECT 1 FROM security.campaign_memberships "
+            "WHERE campaign_membership_id = :actor FOR KEY SHARE"
+        ),
+        {"actor": ended_by_membership_id},
+    ).all()
+    connection.execute(
+        text("SELECT 1 FROM campaign.campaigns WHERE campaign_id = :campaign FOR UPDATE"),
+        {"campaign": campaign_id},
+    ).all()
+    revelation_closed_at = connection.execute(text("SELECT clock_timestamp()")).scalar_one()
+    assert isinstance(revelation_closed_at, datetime)
+    closed_revelation_ids, removed_snapshot_ids = close_member_revelations_for_ended_membership(
+        connection, campaign_membership_id=campaign_membership_id, closed_at=revelation_closed_at
+    )
+
     revoked_status_id = lookup_id(
         connection, "security", "membership_statuses", "membership_status_id", "revoked"
     )
@@ -1429,6 +1455,8 @@ def end_campaign_membership(
         revoked_membership_character_relationship_ids=tuple(revoked_relationship_ids),
         revoked_resource_grant_ids=tuple(revoked_resource_grant_ids),
         removed_access_group_membership_ids=tuple(removed_access_group_membership_ids),
+        closed_character_revelation_ids=closed_revelation_ids,
+        removed_character_revelation_member_ids=removed_snapshot_ids,
     )
 
 

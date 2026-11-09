@@ -29,6 +29,9 @@ PROFILE_TABLE_MODULES = {
     "persistence/tables/campaign.py",
     "queries/character_public_profile.py",
     "queries/public_profile_restrictions.py",
+    # A3a: a revelation requires a release in its campaign (decision D9-d), which the
+    # create command reads.
+    "commands/character_revelations.py",
 }
 # The only modules that may name the legacy description table. A2a added none; A2b-2 admits the copy
 # command, the profile read (which reports only whether a copyable field has text) and the domain

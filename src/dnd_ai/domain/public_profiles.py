@@ -32,6 +32,9 @@ PUBLIC_PROFILE_NOTE_MAX_LENGTH = 1000
 FIELD_APPEARANCE = "public_appearance"
 FIELD_BACKGROUND = "public_background"
 PUBLIC_PROFILE_FIELDS = (FIELD_APPEARANCE, FIELD_BACKGROUND)
+# D5-c: a third, authored-only field with no origin, watermark or copy source.
+FIELD_SUMMARY = "public_summary"
+PUBLIC_PROFILE_SAVEABLE_FIELDS = (*PUBLIC_PROFILE_FIELDS, FIELD_SUMMARY)
 
 ORIGIN_AUTHORED = "authored"
 ORIGIN_LEGACY_APPEARANCE = "legacy_appearance"
@@ -116,6 +119,44 @@ class PublicProfileCharacterNotActiveError(SafeMessageError):
     safe_error_code = "public_profile_character_not_active"
     safe_message = "The character is not active."
 
+
+class PublicProfileNotReleasedError(SafeMessageError):
+    """A revelation was requested for a character with no release in this campaign (D9-d). 409
+    `public_profile_not_released`. Raised only to a caller who holds reveal authority."""
+
+    safe_status_code = 409
+    safe_error_code = "public_profile_not_released"
+    safe_message = "This character has no released public profile in this campaign."
+
+
+class RevelationTargetNotActiveError(SafeMessageError):
+    """The revelation's target membership has ended or is not active, or its target group is
+    archived. 409 `revelation_target_not_active`."""
+
+    safe_status_code = 409
+    safe_error_code = "revelation_target_not_active"
+    safe_message = "The revelation's target is not active."
+
+
+# --- revelations (P03-A A3) ---------------------------------------------------------------------
+
+AUDIENCE_MEMBER = "member"
+AUDIENCE_ACCESS_GROUP = "access_group"
+AUDIENCE_CAMPAIGN_CURRENT = "campaign_current"
+AUDIENCE_CAMPAIGN_CURRENT_AND_FUTURE = "campaign_current_and_future"
+AUDIENCE_KINDS = (
+    AUDIENCE_MEMBER,
+    AUDIENCE_ACCESS_GROUP,
+    AUDIENCE_CAMPAIGN_CURRENT,
+    AUDIENCE_CAMPAIGN_CURRENT_AND_FUTURE,
+)
+
+REVELATION_REASON_MAX_LENGTH = 1000
+
+END_REASON_REVOKED = "revoked"
+END_REASON_TARGET_MEMBERSHIP_ENDED = "target_membership_ended"
+END_REASON_ACCESS_GROUP_DEACTIVATED = "access_group_deactivated"
+REMOVAL_REASON_MEMBERSHIP_ENDED = "membership_ended"
 
 # --- policy ------------------------------------------------------------------------------------
 

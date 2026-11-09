@@ -76,12 +76,13 @@ from dnd_ai.domain.public_profiles import (
     AUTHORITY_OWNER,
     FIELD_APPEARANCE,
     FIELD_BACKGROUND,
+    FIELD_SUMMARY,
     KIND_NPC,
     KIND_PLAYER_CHARACTER,
     LEGACY_COPY_SOURCES,
     ORIGIN_AUTHORED,
-    PUBLIC_PROFILE_FIELDS,
     PUBLIC_PROFILE_NOTE_MAX_LENGTH,
+    PUBLIC_PROFILE_SAVEABLE_FIELDS,
     PUBLIC_PROFILE_TEXT_MAX_LENGTH,
     CharacterRevealRequiredError,
     PublicProfileCharacterNotActiveError,
@@ -443,7 +444,7 @@ def save_character_public_profile_draft(
     `None` (or blank text) clears it and resets its origin to `authored`. Values identical to the
     stored ones write nothing and do not bump `row_version`. `expected_row_version` is the draft
     version the caller read, or `None` for "there is no draft yet"."""
-    unknown = set(fields) - set(PUBLIC_PROFILE_FIELDS)
+    unknown = set(fields) - set(PUBLIC_PROFILE_SAVEABLE_FIELDS)
     if unknown:
         raise ValueError(f"unknown public-profile fields: {sorted(unknown)}")
     clean = {
@@ -477,11 +478,11 @@ def save_character_public_profile_draft(
             text("""
                 INSERT INTO campaign.character_public_profiles (
                     campaign_id, character_id, public_appearance, public_appearance_origin_id,
-                    public_background, public_background_origin_id,
+                    public_background, public_background_origin_id, public_summary,
                     created_by_membership_id, updated_by_membership_id
                 )
                 VALUES (:campaign, :character, :appearance, :origin, :background, :origin,
-                        :membership, :membership)
+                        :summary, :membership, :membership)
                 ON CONFLICT (campaign_id, character_id) DO NOTHING
                 RETURNING character_public_profile_id, row_version
             """),
@@ -490,6 +491,7 @@ def save_character_public_profile_draft(
                 "character": character_id,
                 "appearance": clean.get(FIELD_APPEARANCE),
                 "background": clean.get(FIELD_BACKGROUND),
+                "summary": clean.get(FIELD_SUMMARY),
                 "origin": authored,
                 "membership": membership_id,
             },
@@ -503,12 +505,15 @@ def save_character_public_profile_draft(
             row_version=int(inserted.row_version),
             created=True,
             changed=True,
-            changed_field_names=tuple(name for name in PUBLIC_PROFILE_FIELDS if name in clean),
+            changed_field_names=tuple(
+                name for name in PUBLIC_PROFILE_SAVEABLE_FIELDS if name in clean
+            ),
         )
 
     draft = connection.execute(
         text("""
             SELECT character_public_profile_id, row_version, public_appearance, public_background,
+                   public_summary,
                    public_appearance_origin_entity_row_version,
                    public_background_origin_entity_row_version
             FROM campaign.character_public_profiles
@@ -539,7 +544,7 @@ def save_character_public_profile_draft(
         raise PublicProfileFieldWithheldError(f"{character_id} holds copied text withheld from you")
     changed = tuple(
         name
-        for name in PUBLIC_PROFILE_FIELDS
+        for name in PUBLIC_PROFILE_SAVEABLE_FIELDS
         if name in clean and clean[name] != draft._mapping[name]
     )
     if not changed:
@@ -559,6 +564,11 @@ def save_character_public_profile_draft(
     }
     new_version = int(draft.row_version) + 1  # what `core.bump_row_version()` gives the row
     for name in changed:
+        if name == FIELD_SUMMARY:
+            # Authored-only: no origin, source version or watermark.
+            assignments.append(f"{name} = :{name}")
+            params[name] = clean[name]
+            continue
         origin_column, version_column, watermark_column = _ORIGIN_COLUMNS[name]
         assignments.append(f"{name} = :{name}")
         params[name] = clean[name]
@@ -674,7 +684,7 @@ def release_character_public_profile(
                    public_appearance, public_appearance_origin_id,
                    public_appearance_origin_entity_row_version,
                    public_background, public_background_origin_id,
-                   public_background_origin_entity_row_version
+                   public_background_origin_entity_row_version, public_summary
             FROM campaign.character_public_profiles
             WHERE campaign_id = :campaign AND character_id = :character
             FOR UPDATE
@@ -758,13 +768,13 @@ def release_character_public_profile(
                 public_appearance, public_appearance_origin_id,
                 public_appearance_origin_entity_row_version,
                 public_background, public_background_origin_id,
-                public_background_origin_entity_row_version,
+                public_background_origin_entity_row_version, public_summary,
                 authority_source_code, character_reveal_delegation_id,
                 released_by_membership_id, release_note
             )
             VALUES (:profile, :campaign, :character, :version, :from_version,
                     :appearance, :appearance_origin, :appearance_origin_version,
-                    :background, :background_origin, :background_origin_version,
+                    :background, :background_origin, :background_origin_version, :summary,
                     :source, :delegation, :membership, :note)
             RETURNING character_public_profile_release_id
         """),
@@ -780,6 +790,7 @@ def release_character_public_profile(
             "background": draft.public_background,
             "background_origin": draft.public_background_origin_id,
             "background_origin_version": draft.public_background_origin_entity_row_version,
+            "summary": draft.public_summary,
             "source": AUTHORITY_OWNER if source == "owner" else AUTHORITY_DELEGATION,
             "delegation": delegation_id,
             "membership": actor_membership_id,

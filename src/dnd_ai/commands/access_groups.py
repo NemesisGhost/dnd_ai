@@ -82,6 +82,7 @@ from dnd_ai.commands.memberships import CampaignNotActiveError
 from dnd_ai.domain.errors import DomainAuthorizationError, SafeMessageError
 
 from ._shared import lookup_id
+from .character_revelations import close_group_revelations_for_deactivated_group
 
 __all__ = [
     "CampaignNotActiveError",
@@ -404,6 +405,7 @@ class DeactivateAccessGroupResult:
     deactivated: bool
     removed_access_group_membership_ids: tuple[uuid.UUID, ...] = ()
     revoked_resource_grant_ids: tuple[uuid.UUID, ...] = ()
+    closed_character_revelation_ids: tuple[uuid.UUID, ...] = ()
 
 
 def deactivate_access_group(
@@ -490,11 +492,17 @@ def deactivate_access_group(
         .all()
     )
 
+    # P03-A A3: a deactivated group's live revelations close; reactivation does not restore them.
+    closed_revelation_ids = close_group_revelations_for_deactivated_group(
+        connection, access_group_id=access_group_id
+    )
+
     return DeactivateAccessGroupResult(
         access_group_id=access_group_id,
         deactivated=True,
         removed_access_group_membership_ids=removed_membership_ids,
         revoked_resource_grant_ids=revoked_grant_ids,
+        closed_character_revelation_ids=closed_revelation_ids,
     )
 
 

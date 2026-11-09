@@ -594,6 +594,12 @@ def end_campaign_membership_endpoint(
                     str(access_group_membership_id)
                     for access_group_membership_id in result.removed_access_group_membership_ids
                 ],
+                "closed_character_revelation_ids": [
+                    str(revelation_id) for revelation_id in result.closed_character_revelation_ids
+                ],
+                "removed_character_revelation_member_ids": [
+                    str(member_id) for member_id in result.removed_character_revelation_member_ids
+                ],
             },
         )
 

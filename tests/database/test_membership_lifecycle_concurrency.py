@@ -28,7 +28,9 @@ ERRORS` helpers directly:
    database's own deferred `security.assert_campaign_retains_access_
    manager()` trigger."""
 
+import threading
 import uuid
+from collections.abc import Callable
 
 import pytest
 from sqlalchemy import Connection, Engine, text
@@ -46,7 +48,7 @@ from tests.database.test_membership_role_concurrency import (
     _audit_row_count,
     _cleanup_retention_fixture,
     _manager_count,
-    _run_with_precommit_barrier,
+    _ThreadOutcome,
 )
 from tests.factories import (
     lookup_id,
@@ -524,15 +526,51 @@ def test_a_role_change_cannot_race_a_removal_of_the_same_membership(
 # ---------------------------------------------------------------------------
 
 
+def _run_concurrently(
+    engine: Engine, operations: dict[str, Callable[[Connection], None]]
+) -> dict[str, _ThreadOutcome]:
+    """Each callable in its own thread and transaction, committing when it returns, with no barrier:
+    a worker that must wait for another's lock simply waits."""
+    results: dict[str, _ThreadOutcome] = {}
+    lock = threading.Lock()
+
+    def worker(label: str, operation: Callable[[Connection], None]) -> None:
+        try:
+            with engine.connect() as connection:
+                connection.begin()
+                operation(connection)
+                connection.commit()
+        except Exception as exc:  # noqa: BLE001 - recorded as that worker's outcome
+            with lock:
+                results[label] = _ThreadOutcome(label=label, committed=False, error=exc)
+        else:
+            with lock:
+                results[label] = _ThreadOutcome(label=label, committed=True, error=None)
+
+    threads = [
+        threading.Thread(target=worker, args=(label, operation))
+        for label, operation in operations.items()
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=25.0)
+        assert not thread.is_alive(), "a concurrency test thread did not finish within 25s"
+    return results
+
+
 def test_two_managers_concurrently_removing_their_own_memberships_cannot_both_leave_zero_managers(
     postgres_engine: Engine,
 ) -> None:
     """Both workers end a *distinct* manager-bearing membership on the same
-    active campaign — `_run_with_precommit_barrier` guarantees both `end_
-    campaign_membership` calls (and their own in-process retention
-    pre-checks, provably a no-op for both sides) complete before either
-    commits, so the rejection can only come from the database's own
-    deferred retention trigger."""
+    active campaign. Since P03-A A3a, `end_campaign_membership` takes the
+    campaign row `FOR UPDATE` before its in-command retention check, so the
+    two ends serialize there: the second waits for the first's commit and
+    its own check then refuses it (a `ValueError`, the 400 the route maps),
+    where before it passed the check beside the first and the database's
+    deferred retention trigger rejected it at commit. The invariant is the
+    same: exactly one commit, one manager left, one audit row. (The trigger
+    itself is still the backstop for every other path; see the role tests.)"""
     engine = postgres_engine
     slug = f"conc-end-end-retention-{uuid.uuid4().hex[:8]}"
     with engine.begin() as setup:
@@ -592,15 +630,15 @@ def test_two_managers_concurrently_removing_their_own_memberships_cannot_both_le
                 event_id=None,
             )
 
-        outcomes = _run_with_precommit_barrier(engine, {"first": end_first, "second": end_second})
+        outcomes = _run_concurrently(engine, {"first": end_first, "second": end_second})
 
         committed = [o for o in outcomes.values() if o.committed]
         rejected = [o for o in outcomes.values() if not o.committed]
         assert len(committed) == 1, f"expected exactly one commit, got: {outcomes}"
         assert len(rejected) == 1, f"expected exactly one rejection, got: {outcomes}"
-        assert isinstance(rejected[0].error, CONSTRAINT_ERRORS), (
-            f"expected the rejected removal to fail via the database's own deferred "
-            f"retention trigger specifically, got: {rejected[0].error!r}"
+        assert isinstance(rejected[0].error, (ValueError, *CONSTRAINT_ERRORS)), (
+            f"expected the rejected removal to fail the retention invariant, got: "
+            f"{rejected[0].error!r}"
         )
         assert "access.manage" in str(rejected[0].error) or "access_manager" in str(
             rejected[0].error

@@ -1545,6 +1545,17 @@ otherwise exist to confirm.
 - **Audit:** one `audit.change_log` row per actual change (`grant_character_reveal_delegation`, `revoke_character_reveal_delegation`).
 - **Tests:** `tests/database/test_character_reveal_delegation.py`. Design: `docs/PHASE14_15_P03A_A1_OWNERSHIP_AUTHORITY_DESIGN_2026-11-06.md` §3 and §8.
 
+## 3w. Character revelations (P03-A A3a)
+
+`GET`, `POST` and `POST …/{character_revelation_id}/revoke` under `/campaigns/{campaign_id}/characters/{character_id}/revelations`.
+
+- **Authority:** create and revoke need `campaign.view` at the route, then `character.reveal` authority (`resolve_reveal_authority`) and no whole-character deny, checked by a dependency before the body and again under lock at a fresh database instant. `403 character_reveal_required` says nothing about the character; a whole-character deny is a non-disclosing 404. A `canon.edit` deny does not stop it. The list uses the D8 read rule (effective `canon.edit` on the character, or reveal authority) and is a non-disclosing 404 otherwise.
+- **Body:** `{audience_kind, target_campaign_membership_id?, target_access_group_id?, reason}`; extra fields and a target that does not match the kind are 422. Revoke takes `{reason}`.
+- **Errors:** 409 `public_profile_not_released`, 409 `public_profile_character_not_active`, 409 `revelation_target_not_active`; a target outside the campaign, a revelation id of another character, or a nonexistent one is 404.
+- **Receipt:** `{character_revelation_id, created}` (201, or 200 `created: false` for a natural retry) and `{character_revelation_id, revoked}`; the reason is never in a receipt or an audit row.
+- **Idempotency order:** a keyed request takes the idempotency key lock as its first database statement; the reservation or replay lookup happens inside the command after its locks and its fresh authority and deny checks. A caller who has since lost authority or come under a deny is refused (403 or 404) and is never handed a stored receipt. A key reused for another payload, character or route is the non-disclosing 409 once the caller is authorized.
+- **Effect:** none yet on any audience response (A3b).
+
 ## 3v. Character public profile (P03-A A2a)
 
 A campaign's draft of a character's public profile, and immutable releases of it. Routes are under `/campaigns/{id}/characters/{character_id}/public-profile`; a character outside the campaign's world, a non-character entity and a non-canon character are `404`.
