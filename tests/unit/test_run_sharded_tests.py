@@ -44,8 +44,8 @@ def test_a_shard_is_given_ci_s_partition_its_own_database_and_private_directorie
     scratch = str(tmp_path / "shard-2" / "tmp")
     assert environment["TEMP"] == environment["TMP"] == environment["TMPDIR"] == scratch
     assert environment["PYTHONPATH"] == str(tmp_path / "isolation")  # nothing else is importable
-    assert environment["DND_AI_SHARD_PGDATA"] == str(tmp_path / "shard-2" / "pgdata")
-    assert environment["DND_AI_SHARD_DATABASE_URL"] == environment["DATABASE_URL"]
+    assert environment["RUNNER_SHARD_PGDATA"] == str(tmp_path / "shard-2" / "pgdata")
+    assert environment["RUNNER_SHARD_DATABASE_URL"] == environment["DATABASE_URL"]
 
 
 def test_two_shards_share_no_directory_port_or_application_name(tmp_path: Path) -> None:
@@ -165,7 +165,7 @@ def _sandbox(tmp_path: Path) -> tuple[Path, dict[str, str]]:
     (tmp_path / ".env").write_text(_HOSTILE_ENV, encoding="utf-8")
     (tmp_path / "conftest.py").write_text("from dotenv import load_dotenv\n\nload_dotenv()\n")
     environment = runner.shard_environment(_shard(tmp_path), isolation)
-    environment.pop("DND_AI_SHARD_PGDATA")  # no server here: the identity check has its own test
+    environment.pop("RUNNER_SHARD_PGDATA")  # no server here: the identity check has its own test
     return tmp_path, environment
 
 
@@ -180,7 +180,7 @@ def test_a_hostile_dotenv_cannot_bring_back_a_database_or_a_libpq_setting(tmp_pa
         "import os\n\n\n"
         "def test_only_the_shard_database_is_visible():\n"
         "    assert not os.environ.get('DND_AI_TEST_DATABASE_URL')\n"
-        "    assert os.environ['DATABASE_URL'] == os.environ['DND_AI_SHARD_DATABASE_URL']\n"
+        "    assert os.environ['DATABASE_URL'] == os.environ['RUNNER_SHARD_DATABASE_URL']\n"
         "    assert 'hostile' not in os.environ['DATABASE_URL']\n"
         "    assert [n for n in os.environ if n.startswith('PG') and n != 'PGAPPNAME'] == []\n"
     )
@@ -325,3 +325,17 @@ def test_a_process_that_is_not_a_member_after_assignment_is_not_accepted() -> No
 def test_a_contained_process_is_accepted_and_posix_has_no_job() -> None:
     _job(_FakeKernel32()).add(_FakeProcess())
     assert runner.KillOnCloseJob(platform="linux").handle is None
+
+
+def test_the_application_accepts_every_variable_a_shard_is_given(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`dnd_ai.config` refuses any unrecognised `DND_AI_*` variable, so a runner variable named
+    that way made every shard fail at collection (found on the first run of the final tree). The
+    application's own check is run against exactly the environment a shard gets."""
+    from dnd_ai import config
+
+    environment = runner.shard_environment(_shard(tmp_path), tmp_path / "isolation")
+    assert not [n for n in environment if n.startswith("DND_AI_SHARD")]
+    monkeypatch.setattr(runner.os, "environ", environment)
+    config._reject_unrecognized_env_vars()  # raises RuntimeError on an unknown DND_AI_* name

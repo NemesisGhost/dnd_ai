@@ -112,7 +112,7 @@ def _run_plugin(
     (isolation / "default_config_plugin.py").write_text(runner._ISOLATION_PLUGIN)
     (tmp_path / "test_noop.py").write_text("def test_noop():\n    pass\n")
     environment = runner.shard_environment(url_shard, isolation)
-    environment["DND_AI_SHARD_PGDATA"] = str(pgdata)
+    environment["RUNNER_SHARD_PGDATA"] = str(pgdata)
     return subprocess.run(  # noqa: S603
         [
             sys.executable, "-m", "pytest", "-p", "default_config_plugin", "-p", "no:cacheprovider",

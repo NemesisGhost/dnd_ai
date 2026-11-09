@@ -73,7 +73,7 @@ _ISOLATION_PLUGIN = textwrap.dedent(
     def pytest_sessionstart(session):
         # Section 6.2 of docs/DEVELOPMENT.md: the one default-configuration override.
         os.environ.pop("DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS", None)
-        expected = os.environ.get("DND_AI_SHARD_DATABASE_URL")
+        expected = os.environ.get("RUNNER_SHARD_DATABASE_URL")
         if not expected:
             return  # the plugin used on its own, as section 6.2 describes
         # tests/conftest.py has run load_dotenv() by now. A .env file may have put back anything
@@ -84,7 +84,7 @@ _ISOLATION_PLUGIN = textwrap.dedent(
                 os.environ.pop(name)
         if os.environ.get("DATABASE_URL") != expected:
             _refuse("DATABASE_URL is not this shard's cluster after loading .env")
-        pgdata = os.environ.get("DND_AI_SHARD_PGDATA")
+        pgdata = os.environ.get("RUNNER_SHARD_PGDATA")
         if pgdata:
             import psycopg
             from sqlalchemy import make_url
@@ -505,7 +505,7 @@ _SCRUBBED_PATTERNS = (
         r".*DATABASE_URL.*"
     ),  # DATABASE_URL, DND_AI_TEST_DATABASE_URL, DND_AI_DATABASE_URL ...
     re.compile(r"CI_TEST_SHARD"),
-    re.compile(r"DND_AI_SHARD_.*"),
+    re.compile(r"RUNNER_SHARD_.*"),
     re.compile(r"PYTHONPATH|PYTHONSTARTUP|PYTHONHOME|PYTHONSAFEPATH|PYTHONINSPECT"),
 )
 
@@ -531,8 +531,8 @@ def shard_environment(shard: Shard, isolation: Path) -> dict[str, str]:
         # Empty, not absent: python-dotenv will not override a variable that is already set, so a
         # `.env` file cannot restore DND_AI_TEST_DATABASE_URL. The plugin also removes it.
         DND_AI_TEST_DATABASE_URL="",
-        DND_AI_SHARD_DATABASE_URL=shard.database_url,
-        DND_AI_SHARD_PGDATA=str(shard.pgdata),
+        RUNNER_SHARD_DATABASE_URL=shard.database_url,
+        RUNNER_SHARD_PGDATA=str(shard.pgdata),
         CI_TEST_SHARD=f"{shard.index}/{shard.total}",
         PGAPPNAME=f"dnd_ai_shard_{shard.index}",
         TEMP=str(scratch),
