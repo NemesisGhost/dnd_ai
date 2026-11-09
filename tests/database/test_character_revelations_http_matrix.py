@@ -14,6 +14,7 @@ revelation, snapshot, membership and role state as applicable. The command-level
 rows are in test_character_revelations_matrix.py; the mapping is in plan section 10.9.
 """
 
+import json
 import uuid
 from collections.abc import Callable
 from typing import Any
@@ -28,6 +29,7 @@ from dnd_ai.commands.memberships import (
     transfer_campaign_ownership,
 )
 from dnd_ai.domain.access import LOCAL_AUTH_ISSUER
+from dnd_ai.domain.data_classification import replay_body
 from tests.database.test_campaign_owner_gate import (  # noqa: F401 - fixtures used by name
     Gate,
     client_factory,
@@ -57,11 +59,11 @@ from tests.database.test_character_revelations import (  # noqa: F401 - fixtures
     url,
 )
 from tests.database.test_character_revelations_keyed import (
+    assert_roles,
     end_url,
     hold_audit_action,
     live_roles,
     make_revelation,
-    membership_open,
     receipts,
     start,
     wait_blocked,
@@ -147,9 +149,22 @@ def post(
     return start(factory, user, path, body, request_key)
 
 
-def one_receipt(engine: Engine, g: Gate, user: uuid.UUID, request_key: str, status: int) -> None:
+def one_receipt(
+    engine: Engine, g: Gate, user: uuid.UUID, request_key: str, request: _Request
+) -> None:
+    """Exactly one receipt for the key, completed, with the response's status and the minimal body
+    the documented sanitizer (`replay_body`: ids, flags, numbers and short codes only) makes of the
+    response. A replay is allowed to omit the metadata the sanitizer drops, so the stored body must
+    equal the sanitized response, and may hold nothing the response did not."""
+    response = request.response
     stored = receipts(engine, g, user, request_key)
-    assert len(stored) == 1 and stored[0][0] == status, stored
+    assert len(stored) == 1, stored
+    status, body_text, completed_at = stored[0]
+    assert status == response.status_code, (status, response.status_code)  # type: ignore[attr-defined]
+    assert completed_at is not None  # the reservation was completed, not left pending
+    body = json.loads(body_text)
+    assert body == replay_body(response.json()), (body, response.json())  # type: ignore[attr-defined]
+    assert set(body) <= set(response.json())  # type: ignore[attr-defined]
 
 
 def no_receipt(engine: Engine, g: Gate, user: uuid.UUID, request_key: str) -> None:
@@ -195,7 +210,7 @@ def test_m1_m2_a_member_revelation_and_the_end_of_its_target(
             assert row["end_reason"] == "target_membership_ended" and row["ended_at"] is not None
             [entry] = audit(postgres_engine, g, END)
             assert str(row["character_revelation_id"]) in entry["changed_fields"]
-            one_receipt(postgres_engine, g, g.o2_user_id, end_key, 200)
+            one_receipt(postgres_engine, g, g.o2_user_id, end_key, ended)
             assert audit(postgres_engine, g, CREATE_COMMAND) == []  # the held create had no route
         else:
             # M2: the end holds the target first; the creation waits, then finds it ended.
@@ -212,7 +227,7 @@ def test_m1_m2_a_member_revelation_and_the_end_of_its_target(
             no_receipt(postgres_engine, g, g.o1_user_id, create_key)  # rolled back: the key is free
             assert audit(postgres_engine, g, CREATE_COMMAND) == []
         race.join_all()
-    assert not membership_open(postgres_engine, g.player)
+    assert_roles(postgres_engine, g, ended=(g.player,))
 
 
 # --- M3 and M3': the creator's own end, both winners ----------------------------------------------
@@ -236,7 +251,7 @@ def test_m3_the_end_of_the_creator_against_the_creation(
             row = revelations(postgres_engine, g, c)[0]
             assert row["ended_at"] is None and row["created_by_membership_id"] == g.o2
             assert len(audit(postgres_engine, g, END)) == 1
-            one_receipt(postgres_engine, g, g.o1_user_id, end_key, 200)
+            one_receipt(postgres_engine, g, g.o1_user_id, end_key, ended)
         else:
             # M3': the end of the creator holds their role rows; the creation waits, then its
             # fresh authority check refuses it and nothing is written.
@@ -252,7 +267,7 @@ def test_m3_the_end_of_the_creator_against_the_creation(
             no_receipt(postgres_engine, g, g.o2_user_id, create_key)
             assert audit(postgres_engine, g, CREATE_COMMAND) == []
         race.join_all()
-    assert not membership_open(postgres_engine, g.o2) and live_roles(postgres_engine, g.o2) == 0
+    assert_roles(postgres_engine, g, ended=(g.o2,))
 
 
 # --- S1 and S2: the snapshot against the end of a member, both winners ----------------------------
@@ -282,8 +297,8 @@ def test_s1_s2_the_snapshot_and_the_end_of_a_member(
         assert removed is not None and reason == "membership_ended"
         [entry] = audit(postgres_engine, g, END)
         assert "removed_character_revelation_member_ids" in entry["changed_fields"]
-        one_receipt(postgres_engine, g, g.o1_user_id, create_key, 201)
-        one_receipt(postgres_engine, g, g.o2_user_id, end_key, 200)
+        one_receipt(postgres_engine, g, g.o1_user_id, create_key, first)
+        one_receipt(postgres_engine, g, g.o2_user_id, end_key, ended)
     else:
         # S2: the end holds the member first: the snapshot is taken without them.
         with LockRace(postgres_engine) as race:
@@ -300,9 +315,9 @@ def test_s1_s2_the_snapshot_and_the_end_of_a_member(
             postgres_engine, current(postgres_engine, g, c)["character_revelation_id"]
         )
         assert g.player not in members and g.o2 in members
-        one_receipt(postgres_engine, g, g.o1_user_id, create_key, 201)
+        one_receipt(postgres_engine, g, g.o1_user_id, create_key, created)
     assert len(audit(postgres_engine, g, CREATE_COMMAND)) == 1
-    assert not membership_open(postgres_engine, g.player)
+    assert_roles(postgres_engine, g, ended=(g.player,))
 
 
 # --- S3 and S4: the snapshot against recovery, both winners ---------------------------------------
@@ -325,6 +340,7 @@ def test_s3_s4_the_snapshot_and_administrative_recovery_of_a_member(
         hold, first, pid = in_flight(
             postgres_engine, client_factory, g.o1_user_id, url(g, c), body, create_key, "created"
         )
+        creation = first
         with LockRace(postgres_engine) as race:
             recovery = race.start("recovery", _recover(g, stranded, g.player_user_id))
             wait_until(
@@ -341,6 +357,7 @@ def test_s3_s4_the_snapshot_and_administrative_recovery_of_a_member(
         with LockRace(postgres_engine) as race:
             held = race.hold(_recover(g, stranded, g.player_user_id))
             created = post(client_factory, g.o1_user_id, url(g, c), body, create_key)
+            creation = created
             wait_waiting_on(postgres_engine, held.pid, created)
             held.commit()
             assert _status(created.join()) == 201  # type: ignore[arg-type]
@@ -349,7 +366,8 @@ def test_s3_s4_the_snapshot_and_administrative_recovery_of_a_member(
     assert g.player in snapshot(postgres_engine, row["character_revelation_id"])
     assert _owner_role_live(postgres_engine, g.player)
     assert len(audit(postgres_engine, g, CREATE_COMMAND)) == 1
-    one_receipt(postgres_engine, g, g.o1_user_id, create_key, 201)
+    one_receipt(postgres_engine, g, g.o1_user_id, create_key, creation)
+    assert_roles(postgres_engine, g, roles={g.player: 2})  # recovery added the owner role
 
 
 # --- S5 and S6: the snapshot against a relinquishing transfer, both winners -----------------------
@@ -376,6 +394,7 @@ def test_s5_s6_the_snapshot_and_a_relinquishing_transfer_to_a_member(
         wait_waiting_on(postgres_engine, pid, transfer)
         hold.release()
         assert _status(first.join()) == 201 and _status(transfer.join()) == 200  # type: ignore[arg-type]
+        creation = first
     else:
         # S6: the transfer holds the recipient and the campaign first; the creation waits at step 4a.
         with LockRace(postgres_engine) as race:
@@ -389,6 +408,7 @@ def test_s5_s6_the_snapshot_and_a_relinquishing_transfer_to_a_member(
                 )
             )
             created = post(client_factory, g.o2_user_id, url(g, c), body, create_key)
+            creation = created
             wait_waiting_on(postgres_engine, held.pid, created)
             held.commit()
             assert _status(created.join()) == 201  # type: ignore[arg-type]
@@ -399,7 +419,9 @@ def test_s5_s6_the_snapshot_and_a_relinquishing_transfer_to_a_member(
         postgres_engine, g.o1
     )
     assert len(audit(postgres_engine, g, CREATE_COMMAND)) == 1
-    one_receipt(postgres_engine, g, g.o2_user_id, create_key, 201)
+    one_receipt(postgres_engine, g, g.o2_user_id, create_key, creation)
+    # The recipient holds the owner role as well as their own; the relinquisher lost theirs.
+    assert_roles(postgres_engine, g, roles={g.player: 2, g.o1: 0})
     if winner == "create":
         assert len(audit(postgres_engine, g, TRANSFER)) == 1  # the transfer route is not keyed
 
@@ -444,8 +466,9 @@ def test_s7_a_resource_grant_to_a_member_waits_for_the_creation_and_both_commit(
         )  # fmt: skip
     assert len(audit(postgres_engine, g, CREATE_COMMAND)) == 1
     assert len(audit(postgres_engine, g, GRANT)) == 1
-    one_receipt(postgres_engine, g, g.o1_user_id, create_key, 201)
-    one_receipt(postgres_engine, g, g.o2_user_id, grant_key, 201)
+    one_receipt(postgres_engine, g, g.o1_user_id, create_key, first)
+    one_receipt(postgres_engine, g, g.o2_user_id, grant_key, granted)
+    assert_roles(postgres_engine, g)  # a grant adds no role
 
 
 # --- S8: adding a member against the snapshot, both winners ---------------------------------------
@@ -472,6 +495,7 @@ def test_s8_a_member_being_added_is_after_the_cutoff_whoever_commits_first(
         wait_waiting_on(postgres_engine, pid, added)  # the add needs the campaign FOR UPDATE
         hold.release()
         creation, addition = first.join(), added.join()
+        creation_request, addition_request = first, added
     else:
         # The add holds the campaign FOR UPDATE (stopped at its audit insert, its membership and
         # role inserted but uncommitted); the creation waits at step 5, past its snapshot.
@@ -482,6 +506,7 @@ def test_s8_a_member_being_added_is_after_the_cutoff_whoever_commits_first(
         wait_waiting_on(postgres_engine, pid, created)
         hold.release()
         creation, addition = created.join(), first.join()
+        creation_request, addition_request = created, first
     assert _status(creation) == 201 and _status(addition) == 201  # type: ignore[arg-type]
     row = current(postgres_engine, g, c)
     members = snapshot(postgres_engine, row["character_revelation_id"])
@@ -495,8 +520,10 @@ def test_s8_a_member_being_added_is_after_the_cutoff_whoever_commits_first(
     assert g.player in members and g.o1 in members
     assert len(audit(postgres_engine, g, CREATE_COMMAND)) == 1
     assert len(audit(postgres_engine, g, ADD)) >= 1
-    one_receipt(postgres_engine, g, g.o1_user_id, create_key, 201)
-    one_receipt(postgres_engine, g, g.o2_user_id, add_key, 201)
+    one_receipt(postgres_engine, g, g.o1_user_id, create_key, creation_request)
+    one_receipt(postgres_engine, g, g.o2_user_id, add_key, addition_request)
+    assert_roles(postgres_engine, g)
+    assert live_roles(postgres_engine, new_membership) == 1  # the added member holds the role added
 
 
 # --- AC1 to AC3: the caller's account ---------------------------------------------------------------
@@ -545,7 +572,8 @@ def test_ac1_adding_an_existing_member_waits_for_the_creation_then_is_refused(
             == 1
         )  # fmt: skip
     assert live_roles(postgres_engine, g.o1) == 1  # A's membership and roles are unchanged
-    one_receipt(postgres_engine, g, g.o1_user_id, create_key, 201)
+    one_receipt(postgres_engine, g, g.o1_user_id, create_key, first)
+    assert_roles(postgres_engine, g)  # nobody gained or lost a role
 
 
 @pytest.mark.parametrize("winner", ["create", "deactivation"])
@@ -592,7 +620,8 @@ def test_ac2_ac3_account_deactivation_against_the_creation(
         assert _status(first.join()) == 201 and _status(disabled.join()) == 200  # type: ignore[arg-type]
         assert len(revelations(postgres_engine, g, c)) == 1
         assert len(audit(postgres_engine, g, CREATE_COMMAND)) == 1
-        one_receipt(postgres_engine, g, g.o1_user_id, create_key, 201)
+        one_receipt(postgres_engine, g, g.o1_user_id, create_key, first)
+    assert_roles(postgres_engine, g)  # deactivating an account changes no membership or role
     assert not _account_active(postgres_engine, g.o1_user_id)
 
 
@@ -619,7 +648,7 @@ def test_v1_v2_a_revoke_and_the_end_of_the_target(
             assert row["end_reason"] == "revoked" and row["ended_by_membership_id"] == g.o1
             [entry] = audit(postgres_engine, g, END)
             assert str(revelation) not in entry["changed_fields"]  # no closed revelation id
-            one_receipt(postgres_engine, g, g.o2_user_id, end_key, 200)
+            one_receipt(postgres_engine, g, g.o2_user_id, end_key, ended)
         else:
             # V2: the end holds the campaign row first and closes the revelation; the revoke waits,
             # then reports `revoked: false` and writes nothing.
@@ -635,6 +664,6 @@ def test_v1_v2_a_revoke_and_the_end_of_the_target(
             row = revelations(postgres_engine, g, c)[0]
             assert row["end_reason"] == "target_membership_ended"
             assert audit(postgres_engine, g, REVOKE_COMMAND) == []
-            one_receipt(postgres_engine, g, g.o1_user_id, revoke_key, 200)
+            one_receipt(postgres_engine, g, g.o1_user_id, revoke_key, revoked)
         race.join_all()
-    assert not membership_open(postgres_engine, g.player)
+    assert_roles(postgres_engine, g, ended=(g.player,))

@@ -189,6 +189,27 @@ def make_revelation(
     return uuid.UUID(response.json()["character_revelation_id"])
 
 
+def assert_roles(
+    engine: Engine,
+    g: Gate,
+    *,
+    ended: tuple[uuid.UUID, ...] = (),
+    roles: dict[uuid.UUID, int] | None = None,
+) -> None:
+    """The final role state of a membership-end race: every ended membership has no live role, and
+    every other Gate member is still open and holds the roles it should: one each (owners `o1` and
+    `o2` the owner role, the manager its custom role, the player the player role) unless `roles`
+    says otherwise, as when recovery or a transfer gave someone the owner role as well."""
+    for membership in ended:
+        assert not membership_open(engine, membership), membership
+        assert live_roles(engine, membership) == 0, membership
+    expected = roles or {}
+    for membership in (g.o1, g.o2, g.manager, g.player):
+        if membership not in ended:
+            assert membership_open(engine, membership), membership
+            assert live_roles(engine, membership) == expected.get(membership, 1), membership
+
+
 def live_roles(engine: Engine, membership: uuid.UUID) -> int:
     with engine.connect() as connection:
         return int(
@@ -640,7 +661,7 @@ def test_creation_that_reaches_a_member_first_keeps_them_in_the_snapshot_and_the
     assert g.player in members and members[g.player][0] is not None
     assert members[g.player][1] == "membership_ended"
     assert members[g.o2][0] is None
-    assert not membership_open(postgres_engine, g.player)
+    assert_roles(postgres_engine, g, ended=(g.player,))
 
 
 def test_an_end_that_reaches_the_member_first_keeps_them_out_of_the_snapshot(
@@ -664,7 +685,7 @@ def test_an_end_that_reaches_the_member_first_keeps_them_out_of_the_snapshot(
     [row] = revelations(postgres_engine, g, c)
     members = snapshot(postgres_engine, row["character_revelation_id"])
     assert g.player not in members and g.o2 in members
-    assert not membership_open(postgres_engine, g.player)
+    assert_roles(postgres_engine, g, ended=(g.player,))
 
 
 def test_a_revoke_and_the_end_of_the_target_meet_at_the_campaign_row_in_either_order(

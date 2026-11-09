@@ -59,6 +59,7 @@ from tests.database.test_character_revelations import (  # noqa: F401 - fixtures
     url,
 )
 from tests.database.test_character_revelations_keyed import (
+    assert_roles,
     hold_audit_action,
     key_ids,
     live_roles,
@@ -146,6 +147,7 @@ def test_m1_a_member_creation_that_reaches_the_target_first_is_closed_by_the_end
     assert row["end_reason"] == "target_membership_ended" and row["ended_at"] is not None
     assert not membership_open(postgres_engine, g.player)
     assert end.result.closed_character_revelation_ids == (row["character_revelation_id"],)  # type: ignore[union-attr]
+    assert_roles(postgres_engine, g, ended=(g.player,))
 
 
 def test_m2_an_end_that_reaches_the_target_first_makes_the_creation_a_409_that_writes_nothing(
@@ -163,7 +165,7 @@ def test_m2_an_end_that_reaches_the_target_first_makes_the_creation_a_409_that_w
     assert end.error is None, end.error
     assert isinstance(create.error, RevelationTargetNotActiveError), create.error
     assert revelations(postgres_engine, g, c) == []
-    assert not membership_open(postgres_engine, g.player)
+    assert_roles(postgres_engine, g, ended=(g.player,))
 
 
 def test_m3_ending_the_creator_after_the_creation_keeps_the_committed_revelation(
@@ -184,7 +186,7 @@ def test_m3_ending_the_creator_after_the_creation_keeps_the_committed_revelation
     row = row_for(postgres_engine, g, c)
     assert row["ended_at"] is None  # D9-f: the revelation survives its creator
     assert row["created_by_membership_id"] == g.o2
-    assert not membership_open(postgres_engine, g.o2) and live_roles(postgres_engine, g.o2) == 0
+    assert_roles(postgres_engine, g, ended=(g.o2,))
 
 
 def test_m3_prime_an_end_that_reaches_the_creator_first_makes_the_creation_a_403(
@@ -202,6 +204,7 @@ def test_m3_prime_an_end_that_reaches_the_creator_first_makes_the_creation_a_403
     assert end.error is None, end.error
     assert isinstance(create.error, CharacterRevealRequiredError), create.error
     assert revelations(postgres_engine, g, c) == []
+    assert_roles(postgres_engine, g, ended=(g.o2,))
 
 
 def test_m3_prime_keyed_the_refused_creator_gets_403_no_receipt_and_no_audit_row(
