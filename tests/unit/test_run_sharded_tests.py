@@ -45,7 +45,7 @@ def test_a_shard_is_given_ci_s_partition_its_own_database_and_private_directorie
     assert environment["TEMP"] == environment["TMP"] == environment["TMPDIR"] == scratch
     assert environment["PYTHONPATH"] == str(tmp_path / "isolation")  # nothing else is importable
     assert environment["RUNNER_SHARD_PGDATA"] == str(tmp_path / "shard-2" / "pgdata")
-    assert environment["RUNNER_SHARD_DATABASE_URL"] == environment["DATABASE_URL"]
+    assert environment["RUNNER_SHARD_URL"] == environment["DATABASE_URL"]
 
 
 def test_two_shards_share_no_directory_port_or_application_name(tmp_path: Path) -> None:
@@ -136,6 +136,9 @@ def test_inputs_that_could_bypass_the_isolation_are_removed_from_every_child(
 
 _HOSTILE_ENV = """
 DND_AI_TEST_DATABASE_URL=postgresql://hostile.example/elsewhere
+DND_AI_DATABASE_URL=postgresql+psycopg://migration_owner:secret@hostile.example:5432/elsewhere
+MIGRATION_DATABASE_URL=postgresql+psycopg://migration_owner:secret@hostile.example:5432/elsewhere
+API_DATABASE_URL=postgresql+psycopg://app_read_write:secret@hostile.example:5432/elsewhere
 DATABASE_URL=postgresql://hostile.example/elsewhere
 PGHOST=hostile.example
 PGPORT=1
@@ -149,7 +152,7 @@ def _sandbox_pytest(tmp_path: Path, environment: dict[str, str], test: Path) -> 
             sys.executable, "-m", "pytest", "-p", "default_config_plugin", "-p", "no:cacheprovider",
             "-q", str(test), f"--rootdir={tmp_path}",
         ],
-        cwd=tmp_path,
+        cwd=tmp_path / "cwd",
         env=environment,
         capture_output=True,
         text=True,
@@ -161,6 +164,9 @@ def _sandbox_pytest(tmp_path: Path, environment: dict[str, str], test: Path) -> 
 def _sandbox(tmp_path: Path) -> tuple[Path, dict[str, str]]:
     isolation = tmp_path / "isolation"
     isolation.mkdir()
+    (
+        tmp_path / "cwd"
+    ).mkdir()  # empty, as the runner's: the application's .env lookup finds nothing
     (isolation / "default_config_plugin.py").write_text(runner._ISOLATION_PLUGIN)
     (tmp_path / ".env").write_text(_HOSTILE_ENV, encoding="utf-8")
     (tmp_path / "conftest.py").write_text("from dotenv import load_dotenv\n\nload_dotenv()\n")
@@ -169,21 +175,49 @@ def _sandbox(tmp_path: Path) -> tuple[Path, dict[str, str]]:
     return tmp_path, environment
 
 
+_SANDBOX_TEST = """
+import os
+
+
+def test_only_the_shard_database_is_visible(monkeypatch):
+    # what conftest's load_dotenv() brought back is gone
+    assert not os.environ.get("DND_AI_TEST_DATABASE_URL")
+    assert os.environ["DATABASE_URL"] == os.environ["RUNNER_SHARD_URL"]
+    assert "hostile" not in os.environ["DATABASE_URL"]
+    names = [n for n in os.environ if "DATABASE_URL" in n.upper()]
+    assert names == ["DATABASE_URL"], names  # no application, migration or API URL either
+    assert "MIGRATION_DATABASE_URL" not in os.environ
+    assert [n for n in os.environ if n.startswith("PG") and n != "PGAPPNAME"] == []
+
+    # the application's resolved URL points at the owned cluster, with its credentials
+    from dnd_ai.config import settings
+    from sqlalchemy import make_url
+
+    resolved = make_url(settings.database_url)
+    owned = make_url(os.environ["RUNNER_SHARD_URL"])
+    assert (resolved.host, resolved.port, resolved.username, resolved.password) == (
+        owned.host, owned.port, owned.username, owned.password,
+    )
+    assert "hostile" not in str(settings.database_url)
+    assert "secret" not in str(settings.database_url)  # the external migration credentials
+
+    # an explicit per-test environment is still honoured
+    monkeypatch.setenv("MIGRATION_DATABASE_URL", "postgresql://explicit/for-this-test")
+    assert os.environ["MIGRATION_DATABASE_URL"].endswith("for-this-test")
+"""
+
+
 def test_a_hostile_dotenv_cannot_bring_back_a_database_or_a_libpq_setting(tmp_path: Path) -> None:
     """The real mechanism in a sandbox project: a conftest that calls `load_dotenv()` (as
-    tests/conftest.py does) next to a `.env` that tries to override the shard's database, plus the
-    runner's generated plugin. After the plugin's session start the test sees only the shard's own
-    database URL, no DND_AI_TEST_DATABASE_URL and no libpq variable."""
+    tests/conftest.py does) next to a `.env` that tries to override the shard's database through
+    every input the repository knows (`DND_AI_TEST_DATABASE_URL`, `DND_AI_DATABASE_URL`,
+    `MIGRATION_DATABASE_URL`, `API_DATABASE_URL`, `DATABASE_URL`, libpq variables), plus the
+    runner's generated plugin, run from an empty directory as the runner does. After the plugin's
+    session start the test sees only the shard's own `DATABASE_URL`; the application's resolved
+    URL names the owned cluster and none of the external migration credentials."""
     root, environment = _sandbox(tmp_path)
     test = root / "test_environment.py"
-    test.write_text(
-        "import os\n\n\n"
-        "def test_only_the_shard_database_is_visible():\n"
-        "    assert not os.environ.get('DND_AI_TEST_DATABASE_URL')\n"
-        "    assert os.environ['DATABASE_URL'] == os.environ['RUNNER_SHARD_DATABASE_URL']\n"
-        "    assert 'hostile' not in os.environ['DATABASE_URL']\n"
-        "    assert [n for n in os.environ if n.startswith('PG') and n != 'PGAPPNAME'] == []\n"
-    )
+    test.write_text(_SANDBOX_TEST)
     result = _sandbox_pytest(root, environment, test)
     assert result.returncode == 0, result.stdout + result.stderr  # type: ignore[attr-defined]
 

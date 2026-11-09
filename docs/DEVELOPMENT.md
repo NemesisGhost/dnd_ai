@@ -535,11 +535,15 @@ What it does, in order:
    configuration isolation of section 6.2 is built in, without pinning defaults: pytest runs from an
    empty directory, with the plugin that drops `DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS`.
    `tests/conftest.py` still calls `load_dotenv()`, which would read the repository `.env` for anything
-   the environment does not already hold. So `DND_AI_TEST_DATABASE_URL` is set to the empty string
+   the environment does not already hold (the application's own loader looks only in the current
+   directory, which is empty). So `DND_AI_TEST_DATABASE_URL` is set to the empty string
    (python-dotenv never overrides a variable that is set); and after `.env` has loaded, the plugin
-   removes it and every `PG*` variable again, requires `DATABASE_URL` to be this shard's own URL, and
-   connects to check that the server's `data_directory` is this run's `pgdata`. A shard that fails
-   that check does not start its tests.
+   removes every database URL input but `DATABASE_URL` (`DND_AI_DATABASE_URL`,
+   `DND_AI_TEST_DATABASE_URL`, `MIGRATION_DATABASE_URL`, `API_DATABASE_URL` and any other name
+   containing `DATABASE_URL`) and every `PG*` variable again, requires `DATABASE_URL` to be this
+   shard's own URL, checks that the application's own resolved `settings.database_url` names the
+   same cluster, and connects to check that the server's `data_directory` is this run's `pgdata`. A
+   shard that fails any of these does not start its tests.
    Before `createdb` or any other write, each cluster is also proved to be this run's: the port must
    be free, the server must accept this run's password and report this run's `pgdata`, and its
    `postmaster.pid` must name the process the run started. `pg_isready` alone only says that
@@ -554,14 +558,29 @@ Everything a run creates is in `.tmp/shards/run-<stamp>-<pid>/` (gitignored): ea
 the clusters, temp and basetemp directories are removed at the end (`--keep-data` keeps them). On
 Ctrl+C the shards and servers are stopped and only that run's own directories are cleaned.
 
-On Windows every child is also put in a Job Object that kills it when the runner's handle closes.
-Each step (create, configure, assign, confirm membership) is checked; the run refuses to start if
-the job cannot be set up, and a child that cannot be assigned is killed and the run stops. The one
-gap Python cannot close is the few milliseconds between a child being created and being assigned,
-before it has started anything. After a **hard kill** of the runner (Task Manager, `taskkill /F`)
-the children are gone, but nothing ran the cleanup: that run's `shard-*/pgdata`, `tmp` and
-`basetemp` directories remain under `.tmp/shards/run-<stamp>-<pid>/`. Nothing is left anywhere else
-and your own server is untouched. Delete that run directory by hand.
+On Windows the four servers and the four pytest processes are put in a Job Object that kills
+them when the runner's handle closes. The coverage is partial, and this is what it is:
+
+- **In the job:** those eight processes and everything they create *after* they were assigned to it.
+- **Outside the job:** the short-lived utilities the runner starts with `subprocess.run`:
+  `postgres --version`, `initdb`, `pg_isready`, `createdb`, `pg_ctl stop`, `taskkill`, and the
+  `pytest --collect-only` processes of the partition check. A hard kill of the runner while one is
+  running leaves it to finish on its own.
+- **The window:** between `Popen` returning and the assignment a child is already executing and may
+  have started children of its own (a server its auxiliary processes, pytest a subprocess). Those
+  are not in the job, because a job only captures processes created after the assignment. Python
+  cannot close this window (it cannot create a process suspended).
+- **What is handled:** each step (create, configure, assign, confirm membership) is checked; the run
+  refuses to start if the job cannot be set up, and a process that cannot be assigned is killed and
+  the run stops. On a normal exit and on Ctrl+C the runner kills the pytest process trees and stops
+  the servers itself, with or without a job.
+
+After a **hard kill** of the runner (Task Manager, `taskkill /F`) the job ends the eight processes
+and whatever was created after their assignment, but nothing ran the runner's cleanup: that run's
+`shard-*/pgdata`, `tmp` and `basetemp` directories remain under `.tmp/shards/run-<stamp>-<pid>/`, and
+anything created inside the window or by an in-flight utility may still be running. Check for stray
+`postgres.exe` and `python.exe` processes, then delete that run directory by hand. Nothing is written
+anywhere else, and your own server is untouched.
 
 Extra pytest arguments go after `--` (for example `-- -x`), subject to the allowlist above;
 `--shards N` changes the count, but CI's is four, set in `ci.yml`.

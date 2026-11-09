@@ -22,10 +22,13 @@ Per shard, inside `.tmp/shards/run-<stamp>-<pid>/shard-<n>/`:
     basetemp/     pytest's --basetemp (removed)
 
 plus `isolation/` (the configuration-isolation plugin, docs/DEVELOPMENT.md section 6.2) and `cwd/`
-(an empty directory, so no `.env` is read). `PGAPPNAME=dnd_ai_shard_<n>` names each shard's
-sessions. The pytest processes and servers are assigned to a Windows Job Object that kills them if
-this script dies, and on Ctrl+C they are stopped and only the resources this run created are
-removed. The run directory itself (logs) is always kept.
+(an empty directory, so the application's own `.env` lookup, which is relative to the current
+directory, finds nothing; the repository `.env` that `tests/conftest.py` loads is neutralised by
+the generated plugin). `PGAPPNAME=dnd_ai_shard_<n>` names each shard's
+sessions. On Windows the four servers and four pytest processes (and what they start after
+assignment) are in a Job Object that kills them if this script dies; the short-lived `subprocess.run`
+utilities are not (see KillOnCloseJob). On Ctrl+C and on normal exit they are stopped and only the
+resources this run created are removed. The run directory itself (logs) is always kept.
 
 This covers unit, database and scenario tests, which are all of `tests/`. Linting, mypy, the
 migrations job, the portal and the Foundry module are separate commands (docs/DEVELOPMENT.md).
@@ -73,17 +76,35 @@ _ISOLATION_PLUGIN = textwrap.dedent(
     def pytest_sessionstart(session):
         # Section 6.2 of docs/DEVELOPMENT.md: the one default-configuration override.
         os.environ.pop("DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS", None)
-        expected = os.environ.get("RUNNER_SHARD_DATABASE_URL")
+        expected = os.environ.get("RUNNER_SHARD_URL")
         if not expected:
             return  # the plugin used on its own, as section 6.2 describes
         # tests/conftest.py has run load_dotenv() by now. A .env file may have put back anything
         # the runner removed from the environment, so close the doors again and then check.
-        os.environ.pop("DND_AI_TEST_DATABASE_URL", None)
+        # Every database URL input is removed except DATABASE_URL, which is validated: that is
+        # DND_AI_DATABASE_URL (application settings), DND_AI_TEST_DATABASE_URL (fixtures),
+        # MIGRATION_DATABASE_URL and API_DATABASE_URL (migration and deployment tooling), and any
+        # other name containing DATABASE_URL, along with the libpq variables.
         for name in list(os.environ):
-            if re.fullmatch(r"PG(?!APPNAME).+", name):
+            if (name != "DATABASE_URL" and "DATABASE_URL" in name.upper()) or re.fullmatch(
+                r"PG(?!APPNAME).+", name
+            ):
                 os.environ.pop(name)
         if os.environ.get("DATABASE_URL") != expected:
             _refuse("DATABASE_URL is not this shard's cluster after loading .env")
+        # What the application will resolve, which is what migration helpers, subprocesses and the
+        # API tests ultimately use, must be the owned cluster too.
+        from dnd_ai.config import settings
+        from sqlalchemy import make_url as _make_url
+
+        resolved, owned = _make_url(str(settings.database_url)), _make_url(expected)
+        if (resolved.host, resolved.port, resolved.database, resolved.username) != (
+            owned.host,
+            owned.port,
+            owned.database,
+            owned.username,
+        ):
+            _refuse("the application's resolved database URL is not this shard's cluster")
         pgdata = os.environ.get("RUNNER_SHARD_PGDATA")
         if pgdata:
             import psycopg
@@ -203,9 +224,16 @@ class KillOnCloseJob:
 
     Every step is checked, and a failure raises `JobObjectError`: the run refuses to start rather
     than run children it could not contain. `add` also confirms membership with `IsProcessInJob`.
-    One interval cannot be closed from Python: between `CreateProcess` returning and the assignment
-    the child is running outside the job, for a few milliseconds, before it has started anything of
-    its own; a child that fails assignment is killed by the caller and the run stops.
+    Coverage is partial, and this is exactly what it covers. **In the job:** the four PostgreSQL
+    servers and the four pytest processes, and every process they create *after* they were assigned.
+    **Outside the job:** the utilities run with `subprocess.run` (`postgres --version`, `initdb`,
+    `pg_isready`, `createdb`, `pg_ctl stop`, `taskkill`, and the partition check's `pytest
+    --collect-only` processes), which are short-lived and not killed if this script is hard-killed
+    while one is running. **The window:** between `Popen` returning and the assignment a child is
+    already executing and may have created children of its own; those are not in the job, because a
+    job only captures processes created after the assignment. A child whose assignment fails is
+    killed by the caller and the run stops; on a normal exit or Ctrl+C the `finally` block kills the
+    pytest trees and stops the servers whether or not a job exists.
 
     Elsewhere there is no job: POSIX children are in their own session and are stopped by the
     `finally` block. `kernel32` and `last_error` are injectable for tests."""
@@ -531,7 +559,7 @@ def shard_environment(shard: Shard, isolation: Path) -> dict[str, str]:
         # Empty, not absent: python-dotenv will not override a variable that is already set, so a
         # `.env` file cannot restore DND_AI_TEST_DATABASE_URL. The plugin also removes it.
         DND_AI_TEST_DATABASE_URL="",
-        RUNNER_SHARD_DATABASE_URL=shard.database_url,
+        RUNNER_SHARD_URL=shard.database_url,
         RUNNER_SHARD_PGDATA=str(shard.pgdata),
         CI_TEST_SHARD=f"{shard.index}/{shard.total}",
         PGAPPNAME=f"dnd_ai_shard_{shard.index}",
