@@ -3726,7 +3726,14 @@ The verdict and run count below were relayed by the owner in conversation. The r
 
 **Results.** First full run (`tests/`, one process, isolated configuration, 46 min 27 s): 7291 passed, 2 failed, both caused by the end lock (above). Reruns, kept separate: the two files holding them, 34 passed (`test_request_transaction.py` 25, `test_membership_lifecycle_concurrency.py` 9). The full suite was not run again after the two test edits.
 
-**Not done in A3a.** XR4 as a separate run (create/revoke are parametrized inside XR1/XR2), the expiry variant of keyed case 3, the §10.8.4 rows M1 to M3, S3 to S8 and AC1 to AC3 (only F1/F2, V1/V2 and the actor lock are pinned), the T82 resolver matrix, the disclosure sweep beyond the byte-identical audience reads, and the search projection of the released summary: all A3b.
+**Review corrections (after `4b1fc6b`).** The cases first listed as not done are now built:
+
+- **The last-manager test is deterministic.** `test_two_managers_concurrently_removing_their_own_memberships_cannot_both_leave_zero_managers` uses `LockRace`: the first end is paused after it holds the campaign row, the second is shown through `pg_blocking_pids` to wait on it, then the first is released. It asserts the exact ended membership, the retention refusal (a `ValueError` naming `access.manage`), the remaining manager, and one `end_campaign_membership` audit row for the membership that ended.
+- **`test_character_revelations_matrix.py` (18 tests).** M1, M2, M3 and M3' (as a command race and as a keyed HTTP request held by a real uncommitted end); S3 to S8 (recovery, relinquishing transfer, resource grant and add-member, in the orders the plan names); AC1 to AC3 (an add of an existing member, and account deactivation against creation in both orders); and the keyed expiry cases: for create and revoke, with an owner or a delegated GM, an assignment that expires while the second request waits at the key lock is refused afresh (403, no replay, no new receipt, audit row or revelation).
+- **Evidence they bite.** Removing step 4a's `FOR KEY SHARE` makes S3, S5 and S6 fail; moving the create's reservation ahead of the authority check makes the two create expiry cases fail.
+- **Not done, and assigned to A3b:** the resolver, search and audience-projection coverage (the T82 matrix, the wider disclosure sweep, the search projection of the released summary). S9 (an in-flight reopen or insert) remains "by trace", as the plan states.
+
+**Results after the corrections.** Reruns of the affected suites on the corrected tree (all of `tests/unit`, the five revelation files, both membership concurrency files, the membership route files, the idempotency, P3, owner, delegation, recovery, group and profile concurrency files, and the Phase 15 guards): 1608 passed, 0 failed. The full suite was not rerun; it had last run on `4b1fc6b` (7291 passed, 2 failed, both addressed above).
 
 ---
 
