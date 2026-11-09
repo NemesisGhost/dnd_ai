@@ -552,8 +552,7 @@ def upgrade() -> None:
             f"updated_at) ON security.character_revelations TO {role};"
         )
         op.execute(
-            f"REVOKE UPDATE, DELETE, TRUNCATE ON security.character_revelation_members "
-            f"FROM {role};"
+            f"REVOKE UPDATE, DELETE, TRUNCATE ON security.character_revelation_members FROM {role};"
         )
         op.execute(
             f"GRANT UPDATE (removed_at, removal_reason) "
@@ -601,7 +600,5 @@ def downgrade() -> None:
     op.execute("DROP FUNCTION IF EXISTS security.refuse_character_revelation_member_delete();")
     op.execute("DROP FUNCTION IF EXISTS security.enforce_character_revelation_member_rules();")
     op.execute("DROP FUNCTION IF EXISTS security.enforce_character_revelation_closed_once();")
-    op.execute(
-        "DROP FUNCTION IF EXISTS security.enforce_character_revelation_shape_and_scope();"
-    )
+    op.execute("DROP FUNCTION IF EXISTS security.enforce_character_revelation_shape_and_scope();")
     op.execute(f"DELETE FROM security.capabilities WHERE code = '{_CAPABILITY}'")
