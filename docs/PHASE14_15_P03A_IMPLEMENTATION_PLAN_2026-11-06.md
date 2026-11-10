@@ -3839,6 +3839,22 @@ Results (isolated configuration, section 6.2): the new file, 13 passed, on four 
 
 ---
 
+## A3b verification closeout investigation (2026-11-09)
+
+**Accepted review target:** `e366e58eeebbca5dfa8c2fd29448b11d85c55c01` (direct parent `c59c40dfc16222557939df497645325afe3cb07c`). No A3b production code changed during closeout. The accepted Knowledge disclosure assertions and duplicate-sensitive encounter participant/turn assertions remain intact.
+
+**Original full-run evidence retained:** `.tmp/shards/run-20261109-073353-34308` recorded 7,428 passed and these two failures: `tests/database/test_clock_advance_details_migration.py::test_populated_upgrade_and_documented_downgrade` and `tests/database/test_character_revelations_matrix.py::test_a_keyed_waiter_whose_assignment_expires_during_the_key_wait_is_refused_afresh[owner-create]`. The migration failure was `UndefinedTable` for `security.character_revelations`: this migration fixture deliberately stops at revision 139, while the application command now reads revision-145 revelation state. Its fixture had called `make_world_time`, crossing into the incompatible application path. The A3b fixture correction uses the direct world-time fixture for this migration-only test; the exact migration node subsequently passed in focused reproduction. This was a fixture compatibility defect, not a revision-139 application regression.
+
+The expiry-wait trace did not show a polling timeout. `wait_blocked` found that the request had already completed with HTTP 403 before reaching the expected audit lock. The test originally set the assignment expiry to eight seconds before acquiring the audit blocker and starting the request. Under the four-shard load, the assignment could therefore expire before that request completed authorization and reached the blocker. The expiry is checked using the database clock in the command's fresh authority check; an expired assignment is correctly refused. A focused exact-node reproduction passed, which alone did not explain the original failure. A diagnostic run confirmed the blocked request can reach the audit lock promptly when the fixture establishes the blocker before starting the expiry window. An attempted mid-wait expiry update could not proceed because the in-flight command holds the assignment row for share; the test therefore retains natural expiry rather than mutating the row while blocked.
+
+**Correction:** commit `9e3e855` moves the expiry setup after acquisition of the audit blocker and gives the initial authorization/lock path a 30-second scheduling margin. It still waits for natural database-clock expiry while the keyed waiter is blocked and asserts refusal after that expiry; no production logic, assertion, or polling timeout was weakened or extended. All four owner/create, owner/revoke and delegated parameterizations passed (`4 passed`, 128.26 s). The exact two original failure nodes also passed together (`2 passed`, 25.16 s), reported separately from the original failure.
+
+**Closeout verification on the corrected tree:** the 16-file A3a/A3b affected set passed `350 passed` in 318.80 s with §6.2 configuration isolation and disposable PostgreSQL. `uv run python scripts/run_sharded_tests.py` passed all `7,445` collected tests across four disposable PostgreSQL 18 shards in 16m15s; logs are retained in `.tmp/shards/run-20261109-202310-1692`. `git diff --check` passed. The earlier independent 350-test result and 13-test A3b HTTP results remain historical results; the new affected-set and full-suite runs are separately recorded here.
+
+**CI/push status:** CI remains pending. `origin/phase15/completion` was at `ea85b2c`; updating it would send 117 commits including unrelated P02 navigation, A2b profile, P2/P3 transaction and other phase work. No PR exists for this branch, and the workflow requires a PR targeting `main`. Those outgoing changes were not pushed or submitted in a draft PR because doing so would violate the no-unrelated-commits constraint. No merge or A4 work was started.
+
+---
+
 ## A2b-1 implementation record (2026-11-07)
 
 **Parent:** `5fb2608` (the reviewed design commit; its parent is the A2a handoff `523ae5c`). One local commit; nothing is pushed and CI is pending.
