@@ -638,9 +638,11 @@ def test_a_keyed_waiter_whose_assignment_expires_during_the_key_wait_is_refused_
     else:
         path, body, action = url(g, c, f"/{existing}/revoke"), {"reason": "Because"}, "updated"
     before_revelations = len(revelations(postgres_engine, g, c))
-    _expire_soon(postgres_engine, assignment, 8)
     hold = hold_audit_action(postgres_engine, action)
     try:
+        # Start the expiry window only after the audit blocker is established, leaving a generous
+        # scheduling margin for the first HTTP request to reach its expected lock wait.
+        _expire_soon(postgres_engine, assignment, 30)
         first = start(client_factory, user, path, body, key)
         wait_blocked(postgres_engine, hold, first)  # past its authority check, at its audit insert
         second = start(client_factory, user, path, body, key)
