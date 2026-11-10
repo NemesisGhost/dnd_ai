@@ -425,20 +425,26 @@ def read_character_public_profile(
             "species": {"code": live.species_code, "label": live.species_display_name},
             "size": _size_value(live.size_category),
         }
-    differs = (
-        latest is not None
-        and live is not None
-        and (
-            (
-                latest.released_species_id is not None
-                and latest.released_species_id != live.species_id
-            )
-            or (
-                latest.released_size_category is not None
-                and latest.released_size_category != live.size_category
+    # The comparison needs the live definition, so it is only as readable as the preview: where
+    # `identity_preview` is withheld (or the definition is unavailable) the indicator is withheld
+    # too (`None`, never a false "unchanged"), so it cannot reveal whether unreadable identity data
+    # changed.
+    differs: bool | None = None
+    if identity_preview is not None:
+        differs = (
+            latest is not None
+            and live is not None
+            and (
+                (
+                    latest.released_species_id is not None
+                    and latest.released_species_id != live.species_id
+                )
+                or (
+                    latest.released_size_category is not None
+                    and latest.released_size_category != live.size_category
+                )
             )
         )
-    )
     publishes_identity = draft is not None and (draft["publish_species"] or draft["publish_size"])
     return {
         "character_id": str(character_id),
@@ -459,7 +465,7 @@ def read_character_public_profile(
         and not (publishes_identity and preview_withheld),
         "identity_preview": identity_preview,
         "identity_preview_withheld": preview_withheld,
-        "identity_differs_from_latest_release": bool(differs),
+        "identity_differs_from_latest_release": differs,
         "legacy_copy": _legacy_copy(connection, access, character_id, character),
     }
 

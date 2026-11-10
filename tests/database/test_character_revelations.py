@@ -4,8 +4,8 @@ lifecycle hooks, audit and receipts.
 
 Everything runs against committed data across real connections, on the `Gate` fixture (owners
 `o1` and `o2`, a custom `access.manage` manager, a player) plus the A1 members (`gm`, assistant GM,
-a `gm` look-alike). A3a stores revelations and changes no audience response; the sweep at the end
-pins that. Keyed regressions are in test_character_revelations_keyed.py and the schema's own
+a `gm` look-alike). A3a stored revelations and changed no audience response; from A4 the detail opens at the public tier, and the sweep at the end
+pins that and nothing else changes. Keyed regressions are in test_character_revelations_keyed.py and the schema's own
 constraints in test_character_revelations_schema.py.
 """
 
@@ -769,14 +769,34 @@ def test_public_summary_saves_clears_snapshots_into_a_release_and_is_never_copie
 # --- A3a changes no audience response ---------------------------------------------------------
 
 
-def test_creating_every_kind_of_revelation_changes_no_audience_response(
-    client_factory: Factory, postgres_engine: Engine, g: Gate, m: Members, rev: Rev
+@pytest.mark.parametrize(
+    ("kind", "audience"),
+    [
+        ("member", {"player"}),
+        ("access_group", {"player"}),
+        ("campaign_current", {"player"}),
+        ("campaign_current_and_future", {"player"}),
+    ],
+)
+def test_a_revelation_changes_only_the_audience_detail_to_the_public_tier(
+    client_factory: Factory,
+    postgres_engine: Engine,
+    g: Gate,
+    m: Members,
+    rev: Rev,
+    kind: str,
+    audience: set[str],
 ) -> None:
-    """A3b reads the tables; A3a must not. Audience-facing reads for a player, an observer-like
-    member and a stranger are byte-identical before and after each kind exists."""
+    """A3a stored revelations and changed no audience response; A4 opens exactly one thing. For
+    each audience kind, the detail of the revealed character becomes the public tier for the
+    callers the revelation reaches, and nothing else changes: every other path (sheet, inventory,
+    relationships, public profile, party list) is byte-identical for everyone, and a caller outside
+    the audience gets the identical response to before: the look-alike's custom role carries no
+    `campaign.view`, so even a campaign-wide revelation opens nothing for it (403 throughout), and
+    a non-member gets the same 404/403 as before."""
     c = rev.character_id
-    paths = [
-        f"/campaigns/{g.campaign_id}/characters/{c}",
+    detail = f"/campaigns/{g.campaign_id}/characters/{c}"
+    others = [
         f"/campaigns/{g.campaign_id}/characters/{c}/sheet",
         f"/campaigns/{g.campaign_id}/characters/{c}/inventory",
         f"/campaigns/{g.campaign_id}/characters/{c}/relationships",
@@ -785,24 +805,68 @@ def test_creating_every_kind_of_revelation_changes_no_audience_response(
     ]
     with postgres_engine.begin() as connection:
         stranger = make_user(connection, "Sweep Stranger")
+    callers = {"player": g.player_user_id, "lookalike": m.lookalike_user_id, "stranger": stranger}
 
-    def sweep() -> list[tuple[str, int, str]]:
-        out = []
-        for user in (g.player_user_id, m.lookalike_user_id, stranger):
+    def sweep(paths: list[str]) -> dict[tuple[str, str], tuple[int, str]]:
+        out = {}
+        for name, user in callers.items():
             with client_factory(user) as client:
                 for path in paths:
                     response = client.get(path)
                     # The error envelope carries a per-request correlation id.
-                    out.append((path, response.status_code, _CORRELATION.sub("", response.text)))
+                    out[(name, path)] = (
+                        response.status_code,
+                        _CORRELATION.sub("", response.text),
+                    )
         return out
 
-    before = sweep()
-    for payload in (
-        member_body(g.player),
-        group_body(rev.group_id),
-        campaign_body("campaign_current"),
-        campaign_body("campaign_current_and_future"),
-    ):
-        assert create(client_factory, g.o1_user_id, g, c, payload).status_code == 201
-    assert sweep() == before
-    assert all(SUMMARY_MARKER not in text_ for _, _, text_ in before)
+    before = sweep([detail, *others])
+    assert all(SUMMARY_MARKER not in text_ for _, text_ in before.values())
+    body = (
+        campaign_body(kind, REASON_MARKER)
+        if kind.startswith("campaign")
+        else group_body(rev.group_id, REASON_MARKER)
+        if kind == "access_group"
+        else member_body(g.player, REASON_MARKER)
+    )
+    assert create(client_factory, g.o1_user_id, g, c, body).status_code == 201
+    after = sweep([detail, *others])
+
+    # Unrelated responses are unchanged for every caller, in or out of the audience.
+    for key, answer in before.items():
+        if key[1] != detail:
+            assert after[key] == answer, key
+
+    for name in callers:
+        status, text_ = after[(name, detail)]
+        if name not in audience:
+            assert (status, text_) == before[(name, detail)], name  # no leak outside the audience
+            assert SUMMARY_MARKER not in text_ and REASON_MARKER not in text_
+            continue
+        assert before[(name, detail)][0] in (403, 404), name
+        assert status == 200, (name, text_)
+        assert REASON_MARKER not in text_  # the GM's reason never reaches the audience
+        with client_factory(callers[name]) as client:
+            payload = client.get(detail).json()
+        assert set(payload) == {
+            "view_tier",
+            "character_id",
+            "name",
+            "character_kind",
+            "sections",
+            "public_profile",
+        }
+        assert payload["view_tier"] == "public_profile"
+        assert payload["character_id"] == str(c) and payload["name"] == "Revealed Subject"
+        assert payload["sections"]["public_profile"] is True
+        assert payload["sections"]["details"] is True
+        assert payload["sections"]["sheet"] is False
+        assert payload["sections"]["relationships"] is False
+        assert payload["sections"]["inventory"] is False
+        assert payload["public_profile"] == {
+            "summary": SUMMARY_MARKER,
+            "appearance": "A weathered face",
+            "background": None,
+            "species": None,
+            "size": None,
+        }

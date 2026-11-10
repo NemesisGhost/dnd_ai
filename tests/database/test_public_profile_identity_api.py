@@ -522,3 +522,42 @@ def test_a_reader_with_no_character_view_tier_sees_the_preview_withheld_and_cann
     deny(postgres_engine, g, g.o1, "canon.edit", other, key="character_id")
     plain = body(read(client_factory, g.o1_user_id, g, other))
     assert plain["identity_preview_withheld"] is True and plain["can_release"] is True
+
+
+def test_a_withheld_preview_withholds_the_differs_indicator_and_hides_identity_changes(
+    client_factory: Callable[[uuid.UUID], TestClient], postgres_engine: Engine, g: Gate, prof: Prof
+) -> None:
+    """Where `identity_preview` is withheld, `identity_differs_from_latest_release` is `None`
+    (unavailable, never a false "unchanged"), and the whole read is identical before and after a
+    change to the unreadable definition, so the change cannot be inferred from it."""
+    c = prof.character_id
+    v = draft_with(client_factory, g, c, publish_species=True, publish_size=True)
+    assert code(identity_release(client_factory, g.o1_user_id, g, c, v, entity_row_version(postgres_engine, c))) == 201  # fmt: skip
+    # An authorized preview reader keeps the indicator and sees it flip.
+    authorized = body(read(client_factory, g.o1_user_id, g, c))
+    assert authorized["identity_preview_withheld"] is False
+    assert authorized["identity_differs_from_latest_release"] is False
+    change_identity(postgres_engine, c, size="tiny")
+    changed = body(read(client_factory, g.o1_user_id, g, c))
+    assert changed["identity_differs_from_latest_release"] is True
+
+    deny(postgres_engine, g, g.o1, "canon.edit", c, key="character_id")  # leaves no view tier
+    hidden_before = body(read(client_factory, g.o1_user_id, g, c))
+    assert hidden_before["identity_preview"] is None
+    assert hidden_before["identity_preview_withheld"] is True
+    assert hidden_before["identity_differs_from_latest_release"] is None
+    change_identity(postgres_engine, c, size="gargantuan")  # a further hidden change
+    hidden_after = body(read(client_factory, g.o1_user_id, g, c))
+    # `change_identity` also rewrites the canonical summary, which the `label` shows by design, so
+    # the label is set aside; everything else is identical, so no identity change can be inferred.
+    hidden_before.pop("label"), hidden_after.pop("label")
+    assert hidden_after == hidden_before
+
+    # No release at all: withheld still reads as unavailable, not as "unchanged".
+    other = prof.other_character_id
+    assert code(save(client_factory, g.o2_user_id, g, other, {"expected_row_version": None, "public_appearance": "x"})) == 201  # fmt: skip
+    deny(postgres_engine, g, g.o1, "canon.edit", other, key="character_id")
+    assert (
+        body(read(client_factory, g.o1_user_id, g, other))["identity_differs_from_latest_release"]
+        is None
+    )

@@ -276,6 +276,25 @@ def test_a_discover_deny_hides_the_listing_and_leaves_the_public_tier_by_direct_
     assert response.status_code == 200 and response.json() == public_body(tier, g)
 
 
+def test_a_discover_deny_is_read_under_character_id_only_and_a_stray_entity_id_row_is_inert(
+    client_factory: Factory, postgres_engine: Engine, g: Gate, tier: Tier
+) -> None:
+    """Characterization, not a policy change: every discovery consumer reads `character.discover`
+    under the `character_id` key (`resource_grant_targets(cap, "character_id")`), the application's
+    writer cannot create the code under either key, and a raw `entity_id` row is therefore ignored
+    (listing unchanged), while the `character_id` row hides the listing. See the A4 follow-up
+    record in the plan for the grading of this inconsistency with the `view_public_profile` deny,
+    which readers do honour under both keys."""
+    c, f = tier.character, client_factory
+    revealed(f, g, c, campaign_body("campaign_current_and_future"))
+    deny(postgres_engine, g, g.player, "character.discover", c, key="entity_id")
+    assert sees(f, g.player_user_id, g, c)  # the entity_id row hides nothing
+    assert get(f, g.player_user_id, g, c).status_code == 200
+    deny(postgres_engine, g, g.player, "character.discover", c, key="character_id")
+    assert not sees(f, g.player_user_id, g, c)  # the supported key hides the listing
+    assert get(f, g.player_user_id, g, c).status_code == 200  # and the direct URL stays open (D12)
+
+
 def test_a_whole_character_deny_removes_the_detail_and_the_listing(
     client_factory: Factory, postgres_engine: Engine, g: Gate, tier: Tier
 ) -> None:

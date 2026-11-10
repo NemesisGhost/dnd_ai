@@ -373,7 +373,9 @@ def test_a_knowledge_claim_carries_a_revealed_subject_and_only_while_revealed(
     assert aldric in texts[0] and aldric in texts[1]  # the revealed subject, list and detail
     detail_row = s.player.get(f"/campaigns/{s.cid}/knowledge/{about_aldric}").json()
     assert detail_row["subject"]["name"] == "Aldric"
-    assert_not_openable(s, aldric, revealed=True)  # a labelled subject is not a character page
+    assert_not_openable(
+        s, aldric, revealed=True
+    )  # the revealed subject opens only its public tier (A4)
 
     unreveal(s, aldric, revelation)
     rows = subjects(s)
