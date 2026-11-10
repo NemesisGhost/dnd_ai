@@ -440,7 +440,7 @@ def start_cluster(
         # Disposable data: durability settings off for speed. Nothing else differs from CI's
         # container (default max_connections and memory settings).
         conf.write(
-            "\nlisten_addresses = '127.0.0.1'\nfsync = off\n"
+            "\nunix_socket_directories = ''\nlisten_addresses = '127.0.0.1'\nfsync = off\n"
             "synchronous_commit = off\nfull_page_writes = off\n"
         )
     last: Exception | None = None
@@ -491,7 +491,17 @@ def _wait_until_ready(shard: Shard, pg_bin: Path, port: int) -> None:
     deadline = time.monotonic() + 90
     while time.monotonic() < deadline:
         if shard.server.poll() is not None:
-            raise RuntimeError(f"{shard.name}: PostgreSQL exited early; see {shard.postgres_log}")
+            try:
+                detail = "\n".join(
+                    shard.postgres_log.read_text(encoding="utf-8", errors="replace").splitlines()[
+                        -20:
+                    ]
+                )
+            except OSError as exc:
+                detail = f"could not read {shard.postgres_log}: {exc}"
+            raise RuntimeError(
+                f"{shard.name}: PostgreSQL exited early; see {shard.postgres_log}\n{detail}"
+            )
         ready = subprocess.run(  # noqa: S603
             [_exe(pg_bin, "pg_isready"), "-h", "127.0.0.1", "-p", str(port), "-U", "postgres"],
             capture_output=True,
