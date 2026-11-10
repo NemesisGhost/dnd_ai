@@ -3830,6 +3830,13 @@ For each: nothing about either character before the revelation; after it, the re
 - A first run of the same set, made before the list-order fix, gave 349 passed and 1 failed (the new encounter test); kept separate from the passing run above.
 - `ruff format --check` (838 files), `ruff check` and `git diff --check` clean. The full suite was not rerun (test-only correction, as instructed).
 
+**Assertion tightening (2026-11-09, base `c59c40dfc16222557939df497645325afe3cb07c`; test-only).** Two review gaps in `test_character_revelations_surfaces_http.py`:
+
+1. *Knowledge.* The tests now capture the revelation id in every case, including both deny cases, and check the complete text of the list response and of each claim's detail response (`knowledge_responses`). While the revelation is live, the unrevealed character's id and the revelation id are absent from each response, and the revealed subject's id is present in the list and detail. After revocation, and after either deny, the formerly revealed subject's id, the unrevealed character's id and the revelation id are all absent from each complete response, and both claims are still listed and readable (status 200). Names are not asserted absent, because the claim statement itself names Aldric.
+2. *Encounters.* The GM comparison is now two sorted-list equalities, one for the participants and one for the turns (each against `sorted([aldric, borin])`), so a duplicated or missing participant or turn fails; the earlier set comparison could not catch a duplicate.
+
+Results (isolated configuration, section 6.2): the new file, 13 passed, on four consecutive runs (one while editing, three after); `ruff format --check` (838 files), `ruff check` and `git diff --check` clean. The unchanged coverage reuses the independent 350-test result recorded above (16 files); it was not rerun, and the full suite was not rerun. No production code changed. The unexplained expiry-timeout evidence recorded in the A3b record is untouched.
+
 ---
 
 ## A2b-1 implementation record (2026-11-07)

@@ -268,8 +268,11 @@ def test_an_encounter_shows_a_revealed_participant_and_its_turns_only(s: Content
     assert shown(body) == ([aldric], [aldric])  # participant and its turn; Borin's turn is gone
     assert_absent(body, borin, "Borin", revelation)
     assert_not_openable(s, aldric)
-    # The GM view is unchanged (participant order is storage order, so compare as a set).
-    assert set(shown(encounter_for(s, encounter, "gm"))[0]) == {aldric, borin}
+    # The GM view is unchanged. Participant order is storage order, so compare sorted lists, which
+    # still catch a duplicated or missing participant or turn.
+    gm_participants, gm_turns = shown(encounter_for(s, encounter, "gm"))
+    assert sorted(gm_participants) == sorted([aldric, borin])
+    assert sorted(gm_turns) == sorted([aldric, borin])
 
     unreveal(s, aldric, revelation)
     after = encounter_for(s, encounter)
@@ -324,6 +327,24 @@ def subjects(s: ContentSetup) -> dict[str, dict]:
     return {i["knowledge_item_id"]: i for i in response.json()["items"]}
 
 
+def knowledge_responses(s: ContentSetup, *claims: str) -> list[str]:
+    """The complete text of the player's Knowledge list and of each claim's detail response."""
+    listing = s.player.get(f"/campaigns/{s.cid}/knowledge", view="public", limit=100)
+    assert listing.status_code == 200, listing.text
+    texts = [listing.text]
+    for claim in claims:
+        found = s.player.get(f"/campaigns/{s.cid}/knowledge/{claim}")
+        assert found.status_code == 200, found.text  # readable claims stay available
+        texts.append(found.text)
+    return texts
+
+
+def assert_ids_absent(texts: list[str], *ids: str) -> None:
+    for body in texts:
+        for item in ids:
+            assert item not in body, item
+
+
 def test_a_knowledge_claim_carries_a_revealed_subject_and_only_while_revealed(
     s: ContentSetup,
 ) -> None:
@@ -333,7 +354,7 @@ def test_a_knowledge_claim_carries_a_revealed_subject_and_only_while_revealed(
     assert about_aldric in rows and about_borin in rows  # the claims are readable; subjects are not
     for row in rows.values():
         assert row["subject"] is None and row["subject_entity_id"] is None
-    assert_absent(rows, aldric, borin)
+    assert_ids_absent(knowledge_responses(s, about_aldric, about_borin), aldric, borin)
 
     revelation = reveal(s, aldric)
     rows = subjects(s)
@@ -341,26 +362,33 @@ def test_a_knowledge_claim_carries_a_revealed_subject_and_only_while_revealed(
     assert rows[about_aldric]["subject"]["entity_id"] == aldric
     assert rows[about_aldric]["subject"]["name"] == "Aldric"
     assert rows[about_borin]["subject"] is None and rows[about_borin]["subject_entity_id"] is None
-    assert_absent([r["subject"] for r in rows.values()], borin, "Borin")
+    texts = knowledge_responses(s, about_aldric, about_borin)
+    assert_ids_absent(texts, borin, revelation)  # complete list and detail responses
+    assert aldric in texts[0] and aldric in texts[1]  # the revealed subject, list and detail
     detail_row = s.player.get(f"/campaigns/{s.cid}/knowledge/{about_aldric}").json()
     assert detail_row["subject"]["name"] == "Aldric"
     assert_not_openable(s, aldric)  # a labelled subject is not a character page
 
     unreveal(s, aldric, revelation)
     rows = subjects(s)
+    assert about_aldric in rows and about_borin in rows
     assert rows[about_aldric]["subject"] is None and rows[about_aldric]["subject_entity_id"] is None
-    assert aldric not in str(s.player.get(f"/campaigns/{s.cid}/knowledge/{about_aldric}").json())
+    assert_ids_absent(knowledge_responses(s, about_aldric, about_borin), aldric, borin, revelation)
 
 
 @pytest.mark.parametrize("deny", DENIES)
 def test_a_deny_removes_a_revealed_knowledge_subject(s: ContentSetup, deny: str) -> None:
     aldric, borin = pc(s, "Aldric"), pc(s, "Borin")
-    about_aldric = published_claim(s, aldric)
-    reveal(s, aldric)
+    about_aldric, about_borin = published_claim(s, aldric), published_claim(s, borin)
+    revelation = reveal(s, aldric)
     assert subjects(s)[about_aldric]["subject"]["name"] == "Aldric"
+    live = knowledge_responses(s, about_aldric, about_borin)
+    assert_ids_absent(live, borin, revelation)
     apply_deny(s, aldric, deny)
-    row = subjects(s)[about_aldric]
+    rows = subjects(s)
+    assert about_aldric in rows and about_borin in rows  # the claims stay readable
+    row = rows[about_aldric]
     assert row["subject"] is None and row["subject_entity_id"] is None
-    detail_row = s.player.get(f"/campaigns/{s.cid}/knowledge/{about_aldric}").json()
-    assert detail_row["subject"] is None and aldric not in str(detail_row)
-    assert borin not in str(subjects(s))
+    after = knowledge_responses(s, about_aldric, about_borin)
+    assert s.player.get(f"/campaigns/{s.cid}/knowledge/{about_aldric}").json()["subject"] is None
+    assert_ids_absent(after, aldric, borin, revelation)
