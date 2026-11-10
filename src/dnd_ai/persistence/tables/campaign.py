@@ -1748,6 +1748,28 @@ character_public_profiles = Table(
         ),
     ),
     Column(
+        "should_publish_species",
+        Boolean(),
+        nullable=False,
+        server_default=text("false"),
+        comment=(
+            "Whether the next release publishes the character's actual species. Off by default. "
+            "It only selects what the next release snapshots; it publishes nothing by itself "
+            "(P03-A A4, decision D6)."
+        ),
+    ),
+    Column(
+        "should_publish_size",
+        Boolean(),
+        nullable=False,
+        server_default=text("false"),
+        comment=(
+            "Whether the next release publishes the character's actual size. Off by default. "
+            "It only selects what the next release snapshots; it publishes nothing by itself "
+            "(P03-A A4, decision D6)."
+        ),
+    ),
+    Column(
         "created_by_membership_id",
         UUID(),
         ForeignKey("security.campaign_memberships.campaign_membership_id", ondelete="SET NULL"),
@@ -1823,8 +1845,10 @@ character_public_profile_releases = Table(
         BigInteger(),
         nullable=False,
         comment=(
-            "The draft row_version this release snapshots. Unique per profile: a draft version "
-            "is released at most once, which makes it the natural retry key."
+            "The draft row_version this release snapshots. With identity_entity_row_version it is "
+            "the natural retry key: a draft version that publishes neither species nor size is "
+            "released at most once; one that does may be released again under a new character "
+            "row_version."
         ),
     ),
     Column(
@@ -1893,6 +1917,50 @@ character_public_profile_releases = Table(
         Text(),
         comment="An optional GM-only note on why the release was made. Never shown to an audience.",
     ),
+    Column(
+        "released_species_id",
+        UUID(),
+        ForeignKey("rules.species.species_id", ondelete="RESTRICT"),
+        comment=(
+            "The character's species_id when a release published its species; NULL when it did "
+            "not. Kept for GM provenance and never sent to an audience. ON DELETE RESTRICT: a "
+            "species a release names cannot be deleted."
+        ),
+    ),
+    Column(
+        "released_species_code",
+        Text(),
+        comment=(
+            "The released species' rules.species.code at release time; NULL unless the species "
+            "was published. A snapshot: later ruleset changes never alter it."
+        ),
+    ),
+    Column(
+        "released_species_display_name",
+        Text(),
+        comment=(
+            "The released species' rules.species.display_name at release time; NULL unless the "
+            "species was published. A snapshot, so a relabelled species never changes what "
+            "audiences were told."
+        ),
+    ),
+    Column(
+        "released_size_category",
+        Text(),
+        comment=(
+            "The character's size_category (one of the six size codes) when a release published "
+            "its size; NULL when it did not."
+        ),
+    ),
+    Column(
+        "identity_entity_row_version",
+        BigInteger(),
+        comment=(
+            "The character's core.entities.row_version the species and size snapshot was read "
+            "at; set exactly when species or size is published. Part of the retry key: the same "
+            "draft version may be released again after a definition change."
+        ),
+    ),
     ForeignKeyConstraint(
         ["character_public_profile_id", "campaign_id", "character_id"],
         [
@@ -1910,7 +1978,9 @@ character_public_profile_releases = Table(
     UniqueConstraint(
         "character_public_profile_id",
         "from_draft_row_version",
-        name="ux_character_public_profile_releases_draft_version",
+        "identity_entity_row_version",
+        name="ux_character_public_profile_releases_draft_identity",
+        postgresql_nulls_not_distinct=True,
     ),
     schema="campaign",
     comment=(
@@ -1936,6 +2006,11 @@ Index(
 Index(
     "ix_character_public_profile_releases_background_origin_id",
     character_public_profile_releases.c.public_background_origin_id,
+)
+Index(
+    "ix_character_public_profile_releases_released_species_id",
+    character_public_profile_releases.c.released_species_id,
+    postgresql_where=character_public_profile_releases.c.released_species_id.isnot(None),
 )
 Index(
     "ix_character_public_profile_releases_delegation",

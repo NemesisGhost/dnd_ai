@@ -201,7 +201,7 @@ def test_version_numbers_and_draft_versions_are_unique_per_profile(
         postgres_engine,
         lambda c: _release(c, g, profile, character, version=2, from_version=1),
     )
-    assert "ux_character_public_profile_releases_draft_version" in duplicate_draft
+    assert "ux_character_public_profile_releases_draft_identity" in duplicate_draft
 
 
 def test_a_draft_is_unique_per_campaign_and_character(
@@ -428,3 +428,245 @@ def _refused_exc(engine: Engine, statement: Callable[[Any], object]) -> BaseExce
     with pytest.raises(DBAPIError) as raised, engine.begin() as connection:
         statement(connection)
     return raised.value
+
+
+# --- migration 146: published species and size (P03-A A4a, decision D6) -------------------------------
+
+
+def _live(connection: Any, character: uuid.UUID) -> dict[str, Any]:
+    """The character's live species, size and entity row version: what a release may snapshot."""
+    row = connection.execute(
+        text("""
+            SELECT ch.species_id, ch.size_category, sp.code, sp.display_name, e.row_version
+            FROM character.characters ch
+            JOIN rules.species sp ON sp.species_id = ch.species_id
+            JOIN core.entities e ON e.entity_id = ch.character_id
+            WHERE ch.character_id = :c
+        """),
+        {"c": character},
+    ).one()
+    return {
+        "released_species_id": row.species_id,
+        "released_species_code": row.code,
+        "released_species_display_name": row.display_name,
+        "released_size_category": row.size_category,
+        "identity_entity_row_version": int(row.row_version),
+    }
+
+
+def _identity_release(
+    connection: Any,
+    g: Gate,
+    profile: uuid.UUID,
+    character: uuid.UUID,
+    identity: dict[str, Any],
+    *,
+    version: int = 1,
+    from_version: int = 1,
+    triggers_off: bool = False,
+) -> None:
+    if triggers_off:
+        connection.execute(text("SET LOCAL session_replication_role = replica"))
+    authored = _origin(connection, "authored")
+    columns: dict[str, Any] = {
+        "character_public_profile_id": profile,
+        "campaign_id": g.campaign_id,
+        "character_id": character,
+        "version_number": version,
+        "from_draft_row_version": from_version,
+        "public_appearance_origin_id": authored,
+        "public_background_origin_id": authored,
+        "authority_source_code": "owner",
+        "released_by_membership_id": g.o1,
+        **identity,
+    }
+    connection.execute(
+        text(
+            f"INSERT INTO {RELEASES} ({', '.join(columns)}) "  # noqa: S608
+            f"VALUES ({', '.join(':' + name for name in columns)})"
+        ),
+        columns,
+    )
+
+
+def test_the_identity_pairing_checks_hold_even_with_triggers_off(
+    postgres_engine: Engine, g: Gate, two: tuple[uuid.UUID, uuid.UUID]
+) -> None:
+    character = two[0]
+    with postgres_engine.begin() as connection:
+        profile = _draft(connection, g, character)
+        live = _live(connection, character)
+    cases: dict[str, list[dict[str, Any]]] = {
+        # The three species columns are all null or all set.
+        "species_snapshot": [
+            {**live, "released_species_code": None},
+            {**live, "released_species_display_name": None},
+            {
+                "released_species_code": "x",
+                "released_size_category": live["released_size_category"],
+                "identity_entity_row_version": live["identity_entity_row_version"],
+            },
+        ],
+        # Null or one of the six size codes.
+        "size_category": [{**live, "released_size_category": "colossal"}],
+        # The entity row version is set exactly when species or size is, and is at least 1.
+        "identity_version": [
+            {"identity_entity_row_version": 3},
+            {**live, "identity_entity_row_version": None},
+            {**live, "identity_entity_row_version": 0},
+            {"released_size_category": "small"},
+        ],
+    }
+    for constraint, identities in cases.items():
+        for identity in identities:
+            message = _refused(
+                postgres_engine,
+                lambda c, i=identity: _identity_release(
+                    c, g, profile, character, i, triggers_off=True
+                ),
+            )
+            assert f"ck_character_public_profile_releases_{constraint}" in message, identity
+
+
+def test_the_insert_trigger_refuses_any_value_that_is_not_the_live_definition(
+    postgres_engine: Engine, g: Gate, two: tuple[uuid.UUID, uuid.UUID]
+) -> None:
+    character = two[0]
+    with postgres_engine.begin() as connection:
+        profile = _draft(connection, g, character)
+        live = _live(connection, character)
+        other_species = connection.execute(
+            text(
+                "SELECT species_id, code, display_name FROM rules.species "
+                "WHERE species_id <> :s LIMIT 1"
+            ),
+            {"s": live["released_species_id"]},
+        ).one()
+    wrong_size = "tiny" if live["released_size_category"] != "tiny" else "huge"
+    for identity, needle in (
+        # A different species id, even with that species' own code and label.
+        (
+            {
+                **live,
+                "released_species_id": other_species.species_id,
+                "released_species_code": other_species.code,
+                "released_species_display_name": other_species.display_name,
+            },
+            "actual species",
+        ),
+        ({**live, "released_species_code": "apparent-dragon"}, "actual species"),
+        ({**live, "released_species_display_name": "Disguised Human"}, "actual species"),
+        ({**live, "released_size_category": wrong_size}, "actual size"),
+        (
+            {**live, "identity_entity_row_version": live["identity_entity_row_version"] + 1},
+            "row_version",
+        ),
+    ):
+        message = _refused(
+            postgres_engine, lambda c, i=identity: _identity_release(c, g, profile, character, i)
+        )
+        assert needle in message, identity
+    # Species alone is checked against the live species and entity version.
+    species_only = {
+        key: live[key]
+        for key in (
+            "released_species_id",
+            "released_species_code",
+            "released_species_display_name",
+            "identity_entity_row_version",
+        )
+    }
+    with postgres_engine.begin() as connection:
+        _identity_release(connection, g, profile, character, species_only)
+    with postgres_engine.connect() as connection:
+        stored = connection.execute(
+            text(f"SELECT released_size_category, released_species_code FROM {RELEASES}")  # noqa: S608
+        ).one()
+    assert stored.released_size_category is None
+    assert stored.released_species_code == live["released_species_code"]
+
+
+def test_the_trigger_accepts_the_live_values_and_the_new_columns_are_immutable(
+    postgres_engine: Engine, g: Gate, two: tuple[uuid.UUID, uuid.UUID]
+) -> None:
+    character = two[0]
+    with postgres_engine.begin() as connection:
+        profile = _draft(connection, g, character)
+        live = _live(connection, character)
+        _identity_release(connection, g, profile, character, live)
+    for column in live:
+        message = _refused(
+            postgres_engine,
+            lambda c, col=column: c.execute(text(f"UPDATE {RELEASES} SET {col} = NULL")),  # noqa: S608
+        )
+        assert "append-only" in message, column
+
+
+def test_the_retry_key_admits_one_release_per_draft_and_character_version(
+    postgres_engine: Engine, g: Gate, two: tuple[uuid.UUID, uuid.UUID]
+) -> None:
+    character = two[0]
+    with postgres_engine.begin() as connection:
+        profile = _draft(connection, g, character)
+        _identity_release(connection, g, profile, character, {})
+    # Two releases of one draft version that publish nothing: refused, under the new name.
+    duplicate = _refused(
+        postgres_engine,
+        lambda c: _identity_release(c, g, profile, character, {}, version=2),
+    )
+    assert "ux_character_public_profile_releases_draft_identity" in duplicate
+    with postgres_engine.begin() as connection:
+        first = _live(connection, character)
+        _identity_release(connection, g, profile, character, first, version=2)
+        # A definition change moves the entity row_version.
+        connection.execute(
+            text("UPDATE core.entities SET summary = 'moved' WHERE entity_id = :c"),
+            {"c": character},
+        )
+        second = _live(connection, character)
+        assert second["identity_entity_row_version"] > first["identity_entity_row_version"]
+        _identity_release(connection, g, profile, character, second, version=3)
+    # The same identity version again: refused.
+    repeat = _refused(
+        postgres_engine,
+        lambda c: _identity_release(c, g, profile, character, second, version=4),
+    )
+    assert "ux_character_public_profile_releases_draft_identity" in repeat
+    with postgres_engine.connect() as connection:
+        count = connection.execute(text(f"SELECT count(*) FROM {RELEASES}")).scalar_one()  # noqa: S608
+    assert count == 3
+
+
+def test_a_species_that_a_release_names_cannot_be_deleted(
+    postgres_engine: Engine, g: Gate, two: tuple[uuid.UUID, uuid.UUID]
+) -> None:
+    character = two[0]
+    with postgres_engine.begin() as connection:
+        profile = _draft(connection, g, character)
+        live = _live(connection, character)
+        _identity_release(connection, g, profile, character, live)
+    exc = _refused_exc(
+        postgres_engine,
+        lambda c: c.execute(
+            text("DELETE FROM rules.species WHERE species_id = :s"),
+            {"s": live["released_species_id"]},
+        ),
+    )
+    assert isinstance(exc, IntegrityError)
+    # The character itself also references the species, so pin the release's own foreign key too:
+    # it exists, is ON DELETE RESTRICT, and has its partial index (conventions section 19.1).
+    with postgres_engine.connect() as connection:
+        rule = connection.execute(
+            text(
+                "SELECT confdeltype FROM pg_constraint WHERE conrelid = CAST(:t AS regclass) "
+                "AND confrelid = 'rules.species'::regclass"
+            ),
+            {"t": RELEASES},
+        ).scalar_one()
+        index = connection.execute(
+            text(
+                "SELECT indpred IS NOT NULL FROM pg_index "
+                "WHERE indexrelid = 'campaign.ix_character_public_profile_releases_released_species_id'::regclass"
+            )
+        ).scalar_one()
+    assert rule == "r" and index is True

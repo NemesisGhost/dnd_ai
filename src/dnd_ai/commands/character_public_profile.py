@@ -81,6 +81,7 @@ from dnd_ai.domain.public_profiles import (
     KIND_PLAYER_CHARACTER,
     LEGACY_COPY_SOURCES,
     ORIGIN_AUTHORED,
+    PUBLIC_PROFILE_IDENTITY_FLAGS,
     PUBLIC_PROFILE_NOTE_MAX_LENGTH,
     PUBLIC_PROFILE_SAVEABLE_FIELDS,
     PUBLIC_PROFILE_TEXT_MAX_LENGTH,
@@ -89,9 +90,12 @@ from dnd_ai.domain.public_profiles import (
     PublicProfileDraftMissingError,
     PublicProfileEditDeniedError,
     PublicProfileFieldWithheldError,
+    PublicProfileIdentityUnavailableError,
+    PublicProfileIdentityVersionRequiredError,
     PublicProfileLegacyTextMissingError,
     PublicProfileNotFoundError,
     has_effective_character_canon_edit,
+    holds_character_view_tier,
     may_read_profile,
     whole_character_denied,
 )
@@ -143,6 +147,12 @@ class ReleaseCharacterPublicProfileResult:
     created: bool
     # Whether this is the profile's highest release. False for a retry after a later release.
     is_latest: bool
+    # D6 (A4): whether this release published the character's species / size, and the
+    # `core.entities.row_version` the snapshot was read at (set exactly when either was published).
+    # Flags and a number only: never a code or a label.
+    species_published: bool = False
+    size_published: bool = False
+    identity_entity_row_version: int | None = None
 
 
 @dataclass(frozen=True)
@@ -150,6 +160,7 @@ class _CharacterRow:
     world_id: uuid.UUID
     canon_status: str
     lifecycle_status: str
+    row_version: int
 
 
 def _character_row(
@@ -160,7 +171,7 @@ def _character_row(
     joined inside the locking statement; see `lifecycle_code`)."""
     row = connection.execute(
         text(f"""
-            SELECT world_id, canon_status_id, lifecycle_status_id
+            SELECT world_id, canon_status_id, lifecycle_status_id, row_version
             FROM core.entities
             WHERE entity_id = :id AND world_id = :world
             {lock_clause}
@@ -186,6 +197,7 @@ def _character_row(
         world_id=row.world_id,
         canon_status=canon,
         lifecycle_status=lifecycle_code(connection, row.lifecycle_status_id),
+        row_version=int(row.row_version),
     )
 
 
@@ -437,16 +449,24 @@ def save_character_public_profile_draft(
     actor_user_id: uuid.UUID,
     expected_row_version: int | None,
     fields: dict[str, str | None],
+    identity_flags: dict[str, bool] | None = None,
 ) -> SaveCharacterPublicProfileDraftResult:
     """Creates or updates the campaign's draft of the character's public profile.
 
     `fields` holds only the fields the request named: a field left out is untouched, an explicit
-    `None` (or blank text) clears it and resets its origin to `authored`. Values identical to the
-    stored ones write nothing and do not bump `row_version`. `expected_row_version` is the draft
-    version the caller read, or `None` for "there is no draft yet"."""
+    `None` (or blank text) clears it and resets its origin to `authored`. `identity_flags` holds only
+    the D6 controls the request named (`publish_species`, `publish_size`; strict booleans, never
+    text): a flag left out is untouched, and a flag never enters origins, watermarks, the copy aid
+    or the withheld check. Values identical to the stored ones write nothing and do not bump
+    `row_version`; a change to text and flags in one request bumps it once. `expected_row_version`
+    is the draft version the caller read, or `None` for "there is no draft yet"."""
     unknown = set(fields) - set(PUBLIC_PROFILE_SAVEABLE_FIELDS)
     if unknown:
         raise ValueError(f"unknown public-profile fields: {sorted(unknown)}")
+    flags = dict(identity_flags or {})
+    unknown_flags = set(flags) - set(PUBLIC_PROFILE_IDENTITY_FLAGS)
+    if unknown_flags:
+        raise ValueError(f"unknown public-profile flags: {sorted(unknown_flags)}")
     clean = {
         name: normalize_optional_text(value, field=name, max_length=PUBLIC_PROFILE_TEXT_MAX_LENGTH)
         for name, value in fields.items()
@@ -479,10 +499,11 @@ def save_character_public_profile_draft(
                 INSERT INTO campaign.character_public_profiles (
                     campaign_id, character_id, public_appearance, public_appearance_origin_id,
                     public_background, public_background_origin_id, public_summary,
+                    should_publish_species, should_publish_size,
                     created_by_membership_id, updated_by_membership_id
                 )
                 VALUES (:campaign, :character, :appearance, :origin, :background, :origin,
-                        :summary, :membership, :membership)
+                        :summary, :species_flag, :size_flag, :membership, :membership)
                 ON CONFLICT (campaign_id, character_id) DO NOTHING
                 RETURNING character_public_profile_id, row_version
             """),
@@ -493,6 +514,8 @@ def save_character_public_profile_draft(
                 "background": clean.get(FIELD_BACKGROUND),
                 "summary": clean.get(FIELD_SUMMARY),
                 "origin": authored,
+                "species_flag": flags.get("publish_species", False),
+                "size_flag": flags.get("publish_size", False),
                 "membership": membership_id,
             },
         ).one_or_none()
@@ -505,15 +528,16 @@ def save_character_public_profile_draft(
             row_version=int(inserted.row_version),
             created=True,
             changed=True,
-            changed_field_names=tuple(
-                name for name in PUBLIC_PROFILE_SAVEABLE_FIELDS if name in clean
+            changed_field_names=(
+                *(name for name in PUBLIC_PROFILE_SAVEABLE_FIELDS if name in clean),
+                *(name for name in PUBLIC_PROFILE_IDENTITY_FLAGS if name in flags),
             ),
         )
 
     draft = connection.execute(
         text("""
             SELECT character_public_profile_id, row_version, public_appearance, public_background,
-                   public_summary,
+                   public_summary, should_publish_species, should_publish_size,
                    public_appearance_origin_entity_row_version,
                    public_background_origin_entity_row_version
             FROM campaign.character_public_profiles
@@ -547,7 +571,12 @@ def save_character_public_profile_draft(
         for name in PUBLIC_PROFILE_SAVEABLE_FIELDS
         if name in clean and clean[name] != draft._mapping[name]
     )
-    if not changed:
+    changed_flags = tuple(
+        name
+        for name, column in PUBLIC_PROFILE_IDENTITY_FLAGS.items()
+        if name in flags and flags[name] != draft._mapping[column]
+    )
+    if not changed and not changed_flags:
         return SaveCharacterPublicProfileDraftResult(
             character_public_profile_id=draft.character_public_profile_id,
             character_id=character_id,
@@ -563,6 +592,10 @@ def save_character_public_profile_draft(
         "authored": authored,
     }
     new_version = int(draft.row_version) + 1  # what `core.bump_row_version()` gives the row
+    for name in changed_flags:
+        column = PUBLIC_PROFILE_IDENTITY_FLAGS[name]
+        assignments.append(f"{column} = :{column}")
+        params[column] = flags[name]
     for name in changed:
         if name == FIELD_SUMMARY:
             # Authored-only: no origin, source version or watermark.
@@ -599,7 +632,7 @@ def save_character_public_profile_draft(
         row_version=int(updated),
         created=False,
         changed=True,
-        changed_field_names=changed,
+        changed_field_names=(*changed, *changed_flags),
     )
 
 
@@ -617,6 +650,7 @@ def release_character_public_profile(
     actor_membership_id: uuid.UUID,
     expected_draft_row_version: int,
     release_note: str | None,
+    expected_character_row_version: int | None = None,
 ) -> ReleaseCharacterPublicProfileResult:
     """Publishes an immutable snapshot of the draft at `expected_draft_row_version`.
 
@@ -625,7 +659,16 @@ def release_character_public_profile(
     locked draft at that version; the command never takes field content. If that draft version was
     already released, the existing release is returned (`created=False`) even when the draft has
     since moved on; a whole-character deny is checked first, so a denied caller is never handed a
-    release."""
+    release.
+
+    **Species and size (A4, decision D6).** When the draft publishes either, the release snapshots
+    the character's actual species (id, code, display name) and size, read in one statement after
+    every lock wait, together with the `core.entities.row_version` they were read at.
+    `expected_character_row_version` is the version the releaser reviewed; it is required then
+    (422) and must equal the version read under the entity lock (409 `stale_write`). A release that
+    publishes neither ignores it. A natural retry matches the draft version and either no identity
+    or the same character version, so the same draft version may be released again after a
+    definition change."""
     note = normalize_optional_text(
         release_note, field="release_note", max_length=PUBLIC_PROFILE_NOTE_MAX_LENGTH
     )
@@ -684,7 +727,8 @@ def release_character_public_profile(
                    public_appearance, public_appearance_origin_id,
                    public_appearance_origin_entity_row_version,
                    public_background, public_background_origin_id,
-                   public_background_origin_entity_row_version, public_summary
+                   public_background_origin_entity_row_version, public_summary,
+                   should_publish_species, should_publish_size
             FROM campaign.character_public_profiles
             WHERE campaign_id = :campaign AND character_id = :character
             FOR UPDATE
@@ -713,11 +757,18 @@ def release_character_public_profile(
 
     existing = connection.execute(
         text("""
-            SELECT character_public_profile_release_id, version_number, authority_source_code
+            SELECT character_public_profile_release_id, version_number, authority_source_code,
+                   released_species_id, released_size_category, identity_entity_row_version
             FROM campaign.character_public_profile_releases
             WHERE character_public_profile_id = :profile AND from_draft_row_version = :version
+              AND (identity_entity_row_version IS NULL
+                   OR identity_entity_row_version = :character_version)
         """),
-        {"profile": profile_id, "version": expected_draft_row_version},
+        {
+            "profile": profile_id,
+            "version": expected_draft_row_version,
+            "character_version": expected_character_row_version,
+        },
     ).one_or_none()
     if existing is not None:
         latest = _latest_version(connection, profile_id)
@@ -730,10 +781,40 @@ def release_character_public_profile(
             authority_source_code=str(existing.authority_source_code),
             created=False,
             is_latest=int(existing.version_number) == latest,
+            species_published=existing.released_species_id is not None,
+            size_published=existing.released_size_category is not None,
+            identity_entity_row_version=(
+                None
+                if existing.identity_entity_row_version is None
+                else int(existing.identity_entity_row_version)
+            ),
         )
     if int(draft.row_version) != expected_draft_row_version:
         raise StaleWriteError(f"the draft of {character_id} is at {draft.row_version}")
     _require_canon_and_active(character, character_id)
+    publishes_species = bool(draft.should_publish_species)
+    publishes_size = bool(draft.should_publish_size)
+    identity: _IdentitySnapshot | None = None
+    if publishes_species or publishes_size:
+        if expected_character_row_version is None:
+            raise PublicProfileIdentityVersionRequiredError(
+                f"{character_id} publishes species or size without a character row_version"
+            )
+        if expected_character_row_version != character.row_version:
+            raise StaleWriteError(f"the character {character_id} is at {character.row_version}")
+        # Species and size are summary-tier fields: the releaser must hold a character-view tier
+        # (D7 item 3, for the new fields). Only a raw-row state can fail this for a built-in GM.
+        if not holds_character_view_tier(access, character_id):
+            raise PublicProfileFieldWithheldError(
+                f"{character_id} species or size is withheld from membership {actor_membership_id}"
+            )
+        identity = _read_identity(
+            connection,
+            character_id=character_id,
+            species=publishes_species,
+            size=publishes_size,
+            row_version=character.row_version,
+        )
     # A new snapshot would publish every field of this draft version, so the releaser must be able
     # to read each one (D7 item 3). Retries and natural retries returned above, without this check
     # (D7-d).
@@ -770,12 +851,15 @@ def release_character_public_profile(
                 public_background, public_background_origin_id,
                 public_background_origin_entity_row_version, public_summary,
                 authority_source_code, character_reveal_delegation_id,
-                released_by_membership_id, release_note
+                released_by_membership_id, release_note,
+                released_species_id, released_species_code, released_species_display_name,
+                released_size_category, identity_entity_row_version
             )
             VALUES (:profile, :campaign, :character, :version, :from_version,
                     :appearance, :appearance_origin, :appearance_origin_version,
                     :background, :background_origin, :background_origin_version, :summary,
-                    :source, :delegation, :membership, :note)
+                    :source, :delegation, :membership, :note,
+                    :species_id, :species_code, :species_name, :size, :identity_version)
             RETURNING character_public_profile_release_id
         """),
         {
@@ -795,6 +879,11 @@ def release_character_public_profile(
             "delegation": delegation_id,
             "membership": actor_membership_id,
             "note": note,
+            "species_id": None if identity is None else identity.species_id,
+            "species_code": None if identity is None else identity.species_code,
+            "species_name": None if identity is None else identity.species_display_name,
+            "size": None if identity is None else identity.size_category,
+            "identity_version": None if identity is None else identity.row_version,
         },
     ).scalar_one()
     return ReleaseCharacterPublicProfileResult(
@@ -806,6 +895,53 @@ def release_character_public_profile(
         authority_source_code=AUTHORITY_OWNER if source == "owner" else AUTHORITY_DELEGATION,
         created=True,
         is_latest=True,
+        species_published=publishes_species,
+        size_published=publishes_size,
+        identity_entity_row_version=None if identity is None else identity.row_version,
+    )
+
+
+@dataclass(frozen=True)
+class _IdentitySnapshot:
+    """The definition values a release snapshots (only the selected ones are set)."""
+
+    row_version: int
+    species_id: uuid.UUID | None
+    species_code: str | None
+    species_display_name: str | None
+    size_category: str | None
+
+
+def _read_identity(
+    connection: Connection,
+    *,
+    character_id: uuid.UUID,
+    species: bool,
+    size: bool,
+    row_version: int,
+) -> _IdentitySnapshot:
+    """The character's species and/or size in ONE statement, after every lock wait: the release
+    holds the entity row `FOR KEY SHARE`, which the only writer (`update_character_identity`, entity
+    `FOR UPDATE`) conflicts with, so this is the state at `row_version`. Unselected fields are kept
+    out of the snapshot. No row (unreachable: the columns are NOT NULL) is a classified refusal."""
+    row = connection.execute(
+        text("""
+            SELECT ch.species_id, ch.size_category, sp.code AS species_code,
+                   sp.display_name AS species_display_name
+            FROM character.characters ch
+            JOIN rules.species sp ON sp.species_id = ch.species_id
+            WHERE ch.character_id = :id
+        """),
+        {"id": character_id},
+    ).one_or_none()
+    if row is None:
+        raise PublicProfileIdentityUnavailableError(f"{character_id} has no species or size")
+    return _IdentitySnapshot(
+        row_version=row_version,
+        species_id=row.species_id if species else None,
+        species_code=row.species_code if species else None,
+        species_display_name=row.species_display_name if species else None,
+        size_category=row.size_category if size else None,
     )
 
 

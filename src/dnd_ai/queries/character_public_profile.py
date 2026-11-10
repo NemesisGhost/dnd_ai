@@ -16,10 +16,12 @@ from typing import Any
 from sqlalchemy import Connection, text
 
 from dnd_ai.domain.access import AccessContext
+from dnd_ai.domain.npc_authoring import SIZE_CATEGORIES
 from dnd_ai.domain.public_profiles import (
     KIND_NPC,
     KIND_PLAYER_CHARACTER,
     has_effective_character_canon_edit,
+    holds_character_view_tier,
     may_read_profile,
 )
 from dnd_ai.domain.reveal_authority import resolve_reveal_authority
@@ -94,6 +96,29 @@ def _character(
     }
 
 
+_SIZE_LABELS = dict(SIZE_CATEGORIES)
+
+
+def _size_value(code: str) -> dict[str, str]:
+    return {"code": code, "label": _SIZE_LABELS[code]}
+
+
+def _live_identity(connection: Connection, character_id: uuid.UUID) -> Any | None:
+    """The character's live species, size and `core.entities.row_version`: what the next release
+    that publishes them would snapshot (GM read only; an audience never reads this)."""
+    return connection.execute(
+        text("""
+            SELECT ch.species_id, ch.size_category, sp.code AS species_code,
+                   sp.display_name AS species_display_name, e.row_version AS entity_row_version
+            FROM character.characters ch
+            JOIN rules.species sp ON sp.species_id = ch.species_id
+            JOIN core.entities e ON e.entity_id = ch.character_id
+            WHERE ch.character_id = :id
+        """),
+        {"id": character_id},
+    ).one_or_none()
+
+
 def _origin_codes(connection: Connection) -> dict[uuid.UUID, str]:
     rows = connection.execute(
         text(
@@ -121,6 +146,25 @@ def _release_json(row: Any, origins: dict[uuid.UUID, str], *, with_text: bool) -
                 "public_background_origin": origins[row.public_background_origin_id],
                 "public_summary": row.public_summary,
                 "release_note": row.release_note,
+                # D6: the published values, from the snapshot alone (never the live definition).
+                "species": (
+                    None
+                    if row.released_species_id is None
+                    else {
+                        "code": row.released_species_code,
+                        "label": row.released_species_display_name,
+                    }
+                ),
+                "size": (
+                    None
+                    if row.released_size_category is None
+                    else _size_value(row.released_size_category)
+                ),
+                "identity_entity_row_version": (
+                    None
+                    if row.identity_entity_row_version is None
+                    else int(row.identity_entity_row_version)
+                ),
             }
         )
     return body
@@ -131,6 +175,8 @@ _RELEASE_COLUMNS = """
     r.authority_source_code, r.released_at,
     r.public_appearance, r.public_appearance_origin_id,
     r.public_background, r.public_background_origin_id, r.public_summary, r.release_note,
+    r.released_species_id, r.released_species_code, r.released_species_display_name,
+    r.released_size_category, r.identity_entity_row_version,
     COALESCE(u.display_name, '') AS released_by_name
 """
 _RELEASE_JOINS = """
@@ -206,7 +252,8 @@ def read_character_public_profile(
                    public_appearance, public_appearance_origin_id,
                    public_appearance_origin_entity_row_version,
                    public_background, public_background_origin_id,
-                   public_background_origin_entity_row_version, public_summary
+                   public_background_origin_entity_row_version, public_summary,
+                   should_publish_species, should_publish_size
             FROM campaign.character_public_profiles
             WHERE campaign_id = :campaign AND character_id = :character
         """),
@@ -240,6 +287,8 @@ def read_character_public_profile(
             "updated_at": draft_row.updated_at.isoformat(),
         }
         draft["public_summary"] = draft_row.public_summary
+        draft["publish_species"] = bool(draft_row.should_publish_species)
+        draft["publish_size"] = bool(draft_row.should_publish_size)
         for field_name, text_value, origin_id, source_version in (
             (
                 "public_appearance",
@@ -264,6 +313,33 @@ def read_character_public_profile(
     unreleased = draft is not None and (
         latest is None or int(latest.from_draft_row_version) != draft["row_version"]
     )
+    # D6: the live species and size the next release would snapshot, shown only to a reader who
+    # holds a character-view tier (they are summary-tier fields), and whether the latest release
+    # has fallen behind the live definition for a field it published.
+    live = _live_identity(connection, character_id)
+    preview_withheld = not holds_character_view_tier(access, character_id)
+    identity_preview: dict[str, Any] | None = None
+    if live is not None and not preview_withheld:
+        identity_preview = {
+            "character_row_version": int(live.entity_row_version),
+            "species": {"code": live.species_code, "label": live.species_display_name},
+            "size": _size_value(live.size_category),
+        }
+    differs = (
+        latest is not None
+        and live is not None
+        and (
+            (
+                latest.released_species_id is not None
+                and latest.released_species_id != live.species_id
+            )
+            or (
+                latest.released_size_category is not None
+                and latest.released_size_category != live.size_category
+            )
+        )
+    )
+    publishes_identity = draft is not None and (draft["publish_species"] or draft["publish_size"])
     return {
         "character_id": str(character_id),
         "label": {"name": character["name"], "summary": character["summary"]},
@@ -276,7 +352,14 @@ def read_character_public_profile(
         "can_edit": character["active"]
         and has_effective_character_canon_edit(access, character_id),
         # A release would publish every field, so it needs the releaser to read each one (D7 item 3).
-        "can_release": character["active"] and can_reveal and not withheld,
+        # (and, when the draft publishes species or size, a preview the releaser can review)
+        "can_release": character["active"]
+        and can_reveal
+        and not withheld
+        and not (publishes_identity and preview_withheld),
+        "identity_preview": identity_preview,
+        "identity_preview_withheld": preview_withheld,
+        "identity_differs_from_latest_release": bool(differs),
         "legacy_copy": _legacy_copy(connection, access, character_id, character),
     }
 

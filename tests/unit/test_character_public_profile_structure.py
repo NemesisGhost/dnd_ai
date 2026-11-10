@@ -107,6 +107,16 @@ def test_every_new_text_column_is_classified() -> None:
         "campaign.character_public_profile_releases.public_background": DataClass.CAMPAIGN_VISIBLE,
         "campaign.character_public_profile_releases.release_note": DataClass.GM_ONLY,
         "campaign.character_public_profile_releases.authority_source_code": DataClass.STRUCTURAL,
+        # D6 (A4): the published species label and code and the size code are campaign-visible.
+        "campaign.character_public_profile_releases.released_species_code": (
+            DataClass.CAMPAIGN_VISIBLE
+        ),
+        "campaign.character_public_profile_releases.released_species_display_name": (
+            DataClass.CAMPAIGN_VISIBLE
+        ),
+        "campaign.character_public_profile_releases.released_size_category": (
+            DataClass.CAMPAIGN_VISIBLE
+        ),
     }
     for column, expected in {**draft, **release}.items():
         assert COLUMN_CLASSES[column] is expected, column

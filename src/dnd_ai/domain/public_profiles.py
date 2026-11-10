@@ -35,6 +35,16 @@ PUBLIC_PROFILE_FIELDS = (FIELD_APPEARANCE, FIELD_BACKGROUND)
 # D5-c: a third, authored-only field with no origin, watermark or copy source.
 FIELD_SUMMARY = "public_summary"
 PUBLIC_PROFILE_SAVEABLE_FIELDS = (*PUBLIC_PROFILE_FIELDS, FIELD_SUMMARY)
+# D6 (A4): two strict-boolean draft controls, never text. They select what the next release
+# snapshots and take no part in origins, watermarks, the copy aid or the withheld check. Request
+# field -> draft column. `PUBLIC_PROFILE_SAVEABLE_FIELDS` stays text-only so no text path iterates
+# over a boolean.
+FLAG_SPECIES = "publish_species"
+FLAG_SIZE = "publish_size"
+PUBLIC_PROFILE_IDENTITY_FLAGS = {
+    FLAG_SPECIES: "should_publish_species",
+    FLAG_SIZE: "should_publish_size",
+}
 
 ORIGIN_AUTHORED = "authored"
 ORIGIN_LEGACY_APPEARANCE = "legacy_appearance"
@@ -120,6 +130,24 @@ class PublicProfileCharacterNotActiveError(SafeMessageError):
     safe_message = "The character is not active."
 
 
+class PublicProfileIdentityVersionRequiredError(SafeMessageError):
+    """A release of a draft that publishes species or size named no `expected_character_row_version`.
+    422 `public_profile_identity_version_required`; nothing is written."""
+
+    safe_status_code = 422
+    safe_error_code = "public_profile_identity_version_required"
+    safe_message = "Releasing a published species or size needs expected_character_row_version."
+
+
+class PublicProfileIdentityUnavailableError(SafeMessageError):
+    """The character's species or size could not be read for a release that publishes them.
+    409 `public_profile_identity_unavailable`. Defensive: the source columns are NOT NULL."""
+
+    safe_status_code = 409
+    safe_error_code = "public_profile_identity_unavailable"
+    safe_message = "The character's species or size is not available to publish."
+
+
 class PublicProfileNotReleasedError(SafeMessageError):
     """A revelation was requested for a character with no release in this campaign (D9-d). 409
     `public_profile_not_released`. Raised only to a caller who holds reveal authority."""
@@ -185,6 +213,18 @@ def has_effective_character_canon_edit(access: AccessContext, character_id: uuid
         CANON_EDIT in access.role_capabilities
         and not whole_character_denied(access, character_id)
         and not canon_edit_denied_for_character(access, character_id)
+    )
+
+
+def holds_character_view_tier(access: AccessContext, character_id: uuid.UUID) -> bool:
+    """Whether the caller holds a character-view tier for the character: `canon.edit`,
+    `character.view_full` or `character.view_summary`, each checked with `character_id=` exactly as
+    `api.access.resolve_character_view_tier` does. The commands and queries layers cannot import
+    the API layer, so this pure predicate mirrors that function's three checks; a unit test pins the
+    two together (D6: species and size are summary-tier fields)."""
+    return any(
+        access.has_capability(capability, character_id=character_id)
+        for capability in ("canon.edit", "character.view_full", "character.view_summary")
     )
 
 

@@ -37,7 +37,7 @@ import uuid
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Response
-from pydantic import Field
+from pydantic import Field, StrictBool
 from sqlalchemy import Connection
 
 from dnd_ai.commands.character_public_profile import (
@@ -50,6 +50,7 @@ from dnd_ai.commands.character_public_profile import (
 )
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.domain.public_profiles import (
+    PUBLIC_PROFILE_IDENTITY_FLAGS,
     PUBLIC_PROFILE_NOTE_MAX_LENGTH,
     PUBLIC_PROFILE_TEXT_MAX_LENGTH,
 )
@@ -94,6 +95,10 @@ class SaveCharacterPublicProfileDraftRequest(BaseAuthoringRequest):
     public_appearance: str | None = Field(default=None, max_length=PUBLIC_PROFILE_TEXT_MAX_LENGTH)
     public_background: str | None = Field(default=None, max_length=PUBLIC_PROFILE_TEXT_MAX_LENGTH)
     public_summary: str | None = Field(default=None, max_length=PUBLIC_PROFILE_TEXT_MAX_LENGTH)
+    # D6 (A4): strict booleans. Absent leaves the control untouched; JSON `null` is a 422 (the type
+    # does not admit it). A control publishes nothing by itself: it selects the next release.
+    publish_species: StrictBool = False
+    publish_size: StrictBool = False
 
 
 class CopyLegacyTextRequest(BaseAuthoringRequest):
@@ -110,6 +115,10 @@ class ReleaseCharacterPublicProfileRequest(BaseAuthoringRequest):
 
     expected_draft_row_version: int = Field(ge=1)
     release_note: str | None = Field(default=None, max_length=PUBLIC_PROFILE_NOTE_MAX_LENGTH)
+    # D6 (A4): the character `row_version` the releaser reviewed in the GM read's
+    # `identity_preview`. Required only when the draft publishes species or size (422 otherwise
+    # absent); ignored by a release that publishes neither.
+    expected_character_row_version: int | None = Field(default=None, ge=1)
 
 
 def _edit_precheck(
@@ -205,6 +214,11 @@ def save_character_public_profile_draft_endpoint(
         fields={
             name: getattr(body, name)
             for name in ("public_appearance", "public_background", "public_summary")
+            if name in body.model_fields_set
+        },
+        identity_flags={
+            name: getattr(body, name)
+            for name in PUBLIC_PROFILE_IDENTITY_FLAGS
             if name in body.model_fields_set
         },
     )
@@ -320,7 +334,15 @@ def release_character_public_profile_endpoint(
         campaign_id=access.campaign_id,
         idempotency_key=idempotency_key,
         command_name=_RELEASE_COMMAND,
-        payload={"character_id": str(character_id), **body.model_dump(mode="json")},
+        # A null token is left out of the fingerprint, so a pre-A4 body fingerprints as before.
+        payload={
+            "character_id": str(character_id),
+            **{
+                key: value
+                for key, value in body.model_dump(mode="json").items()
+                if not (key == "expected_character_row_version" and value is None)
+            },
+        },
         correlation_id=correlation_id,
     )
     if idem.replay is not None:
@@ -332,6 +354,7 @@ def release_character_public_profile_endpoint(
         actor_membership_id=access.campaign_membership_id,
         expected_draft_row_version=body.expected_draft_row_version,
         release_note=body.release_note,
+        expected_character_row_version=body.expected_character_row_version,
     )
     if result.created:
         record_change_log(
@@ -350,6 +373,10 @@ def release_character_public_profile_endpoint(
                 "version_number": result.version_number,
                 "from_draft_row_version": result.from_draft_row_version,
                 "authority_source": result.authority_source_code,
+                # Flags and a version only: never a species code, a label or a size code.
+                "species_published": result.species_published,
+                "size_published": result.size_published,
+                "identity_entity_row_version": result.identity_entity_row_version,
             },
         )
     payload: dict[str, Any] = {
@@ -361,6 +388,9 @@ def release_character_public_profile_endpoint(
         "authority_source": result.authority_source_code,
         "created": result.created,
         "is_latest": result.is_latest,
+        "species_published": result.species_published,
+        "size_published": result.size_published,
+        "identity_entity_row_version": result.identity_entity_row_version,
     }
     response.status_code = 201 if result.created else 200
     finish_campaign_idempotency(connection, idem, status_code=response.status_code, body=payload)
