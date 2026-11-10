@@ -4357,6 +4357,23 @@ The closeout record above, which said CI was pending and no PR existed, is kept 
 
 ---
 
+## A4a and A4b implementation record (2026-11-10)
+
+Two commits on `phase15/completion`, from the planning commit `4128905` (parent `bfa64f2`). A4a is `7a66520`; A4b is the commit that carries this record. Nothing was pushed, no PR was changed, and A5, A6, A7 and every portal or Foundry-module file are untouched.
+
+**A4a (migration 146, authoring; no audience response changed).** Implemented as §12.5, §12.6 and §12.8 state. Observations:
+
+- `holds_character_view_tier` (`domain/public_profiles.py`) mirrors `resolve_character_view_tier` for the commands and queries layers, which cannot import `api/access.py`; a unit test runs both over every capability combination.
+- BEFORE triggers run ahead of CHECK constraints, so a CHECK violation with a mismatched snapshot reaches the trigger first; the migration test exercises each CHECK with triggers off.
+- The races call the release command (as the existing release races do), not the HTTP route: the route adds no lock, and the route-level rules are covered over HTTP.
+- `identity_differs_from_latest_release` is computed from the live definition even for a reader whose `identity_preview` is withheld (it discloses only that a published field changed).
+
+**A4b (the audience read).** Implemented as §12.2 to §12.4. `read_released_profile` and `read_public_character` live in `queries/character_public_profile.py`; the projection SQL names only the releases table. Observations:
+
+- Discovery honours a `character.discover` deny only under the `character_id` key (as at A3b), so the not-listed assertions use that key; a stray `entity_id`-keyed discover deny still lists the character (pre-existing, unchanged).
+- The named test changes 1 to 4 were made as listed; the renamed tests are in the commit.
+- **Finding:** `test_character_revelations.py::test_creating_every_kind_of_revelation_changes_no_audience_response` records the character detail for a revelation reader and expects it unchanged by a revelation. It now fails, because the detail legitimately becomes the public tier. It is not among the named changes, so it was left unchanged; the review must decide its change.
+
 ## A2b-1 implementation record (2026-11-07)
 
 **Parent:** `5fb2608` (the reviewed design commit; its parent is the A2a handoff `523ae5c`). One local commit; nothing is pushed and CI is pending.

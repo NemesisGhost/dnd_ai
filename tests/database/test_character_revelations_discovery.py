@@ -422,7 +422,7 @@ def test_a_relationship_and_a_revelation_are_independent_sources(
     assert not sees(f, p2.user, g, c)
 
 
-def test_a_summary_grant_and_a_revelation_are_independent_and_a_revelation_opens_nothing(
+def test_a_summary_grant_and_a_revelation_are_independent_and_a_revelation_opens_the_public_tier_only(
     client_factory: Factory, postgres_engine: Engine, g: Gate, rev: Rev, people: People
 ) -> None:
     c, f = rev.character_id, client_factory
@@ -444,7 +444,9 @@ def test_a_summary_grant_and_a_revelation_are_independent_and_a_revelation_opens
     with f(people.p2.user) as client:
         assert client.get(detail).status_code == 200  # the grant's summary tier
     with f(g.player_user_id) as client:
-        assert client.get(detail).status_code == 404  # a revelation alone opens no detail
+        opened = client.get(detail)
+        assert opened.status_code == 200  # a revelation alone opens the public tier (A4)
+        assert opened.json()["view_tier"] == "public_profile"
     revoke_ok(f, g, c, revelation)
     with f(people.p2.user) as client:
         assert client.get(detail).status_code == 200  # unchanged by the revocation
@@ -588,10 +590,15 @@ def test_a_revelation_grants_no_detail_sheet_inventory_perspective_or_roster_lin
     assert sees(f, g.player_user_id, g, c)
     base = f"/campaigns/{g.campaign_id}/characters/{c}"
     with f(g.player_user_id) as client:
-        for suffix in ("", "/sheet", "/builds", "/inventory", "/public-profile", "/relationships"):
+        for suffix in ("/sheet", "/builds", "/inventory", "/public-profile", "/relationships"):
             response = client.get(base + suffix)
             assert response.status_code in (403, 404), suffix
             assert "Revealed Subject" not in response.text and CANON_MARKER not in response.text
+        # The detail itself is the public tier (A4): the canonical name may appear, the
+        # canonical summary may not.
+        public = client.get(base)
+        assert public.status_code == 200 and public.json()["view_tier"] == "public_profile"
+        assert CANON_MARKER not in public.text
     with postgres_engine.connect() as connection:
         bootstrap = get_session_bootstrap(connection, user_id=g.player_user_id)
         access = resolve_access_context(
@@ -618,7 +625,7 @@ def test_a_revelation_grants_no_detail_sheet_inventory_perspective_or_roster_lin
         assert not access.has_capability(capability, character_id=c), capability
     from dnd_ai.api.access import can_open_participant
 
-    assert can_open_participant(access, "character", c) is False
+    assert can_open_participant(access, "character", c) is True  # the public tier opens (A4)
     for campaign in bootstrap.campaigns:
         assert str(c) not in str([p.character_id for p in campaign.character_perspectives])
 

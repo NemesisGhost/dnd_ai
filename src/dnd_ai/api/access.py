@@ -110,6 +110,7 @@ from dnd_ai.domain.access import (
 from dnd_ai.domain.authoring import WorldAuthorityRequiredError
 from dnd_ai.domain.errors import DomainAuthorizationError
 from dnd_ai.domain.foundry_pairing import FOUNDRY_SCOPES
+from dnd_ai.domain.public_profiles import may_read_released_profile
 from dnd_ai.domain.record_authoring import (
     NO_AUTHORING,
     RecordAuthoring,
@@ -490,6 +491,52 @@ def resolve_character_view_tier(access: AccessContext, *, character_id: uuid.UUI
     )
 
 
+CharacterDetailTier = Literal["public_profile", "summary", "full"]
+
+
+def resolve_character_detail_tier(
+    access: AccessContext, *, character_id: uuid.UUID, allow_public_tier: bool = True
+) -> CharacterDetailTier:
+    """The tier of the character detail the caller is served (P03-A A4, plan section 12.2): `full`
+    or `summary` exactly as `resolve_character_view_tier` decides; otherwise `public_profile` for a
+    caller a live revelation reaches (`may_read_released_profile`, with no view tier held) when
+    `allow_public_tier`; otherwise the fixed `CharacterViewNotAuthorizedError` (404). Pure, from the
+    loaded `AccessContext`. `resolve_character_view_tier` itself is unchanged, so the sheet, builds,
+    inventory and relationships keep gating on it."""
+    try:
+        return (
+            "full" if resolve_character_view_tier(access, character_id=character_id) else "summary"
+        )
+    except CharacterViewNotAuthorizedError:
+        if allow_public_tier and may_read_released_profile(
+            access, character_id, holds_view_tier=False
+        ):
+            return "public_profile"
+        raise
+
+
+def is_foundry_access(access: AccessContext) -> bool:
+    """Whether the request was authenticated with a paired Foundry credential."""
+    return (
+        access.principal is not None and access.principal.auth_method == FOUNDRY_ACCESS_AUTH_METHOD
+    )
+
+
+def can_open_character(access: AccessContext, character_id: uuid.UUID) -> bool:
+    """Whether the character's detail answers 200 for this (portal) reader: some detail tier,
+    including the public-profile tier a revelation confers, resolves. The one test every link
+    producer uses, so a link and the page behind it agree. A paired Foundry credential is not served
+    the public tier (plan section 12.3). No database: a live revelation implies a release in its
+    campaign (D9-d), and if raw SQL broke that the page would fail closed with a 404."""
+    try:
+        resolve_character_detail_tier(
+            access, character_id=character_id, allow_public_tier=not is_foundry_access(access)
+        )
+    except CharacterViewNotAuthorizedError:
+        return False
+    return True
+
+
 InventoryAccess = Literal["full", "inventory_only", "none"]
 
 
@@ -532,15 +579,11 @@ _OPENABLE_WORLD_CATEGORIES = frozenset({"location", "organization", "religion"})
 
 def can_open_participant(access: AccessContext, category: str | None, entity_id: uuid.UUID) -> bool:
     """Whether a reader may follow a listed record to its own page: a location, organization or
-    religion always opens; a character opens only where `resolve_character_view_tier` passes, so
-    discovering a character (`character.discover`) lists it without making it a link. Shared by
-    every reader roster that names other records."""
+    religion always opens; a character opens only where `can_open_character` passes (a view tier, or
+    the public-profile tier a revelation confers), so discovering a character (`character.discover`)
+    lists it without making it a link. Shared by every reader roster that names other records."""
     if category in _OPENABLE_WORLD_CATEGORIES:
         return True
     if category == "character":
-        try:
-            resolve_character_view_tier(access, character_id=entity_id)
-        except CharacterViewNotAuthorizedError:
-            return False
-        return True
+        return can_open_character(access, entity_id)
     return False

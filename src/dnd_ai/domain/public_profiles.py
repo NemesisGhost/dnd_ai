@@ -67,6 +67,7 @@ AUTHORITY_DELEGATION = "delegation"
 
 CANON_EDIT = "canon.edit"
 CAMPAIGN_VIEW = "campaign.view"
+VIEW_PUBLIC_PROFILE = "character.view_public_profile"
 
 
 class PublicProfileNotFoundError(DomainAuthorizationError):
@@ -226,6 +227,35 @@ def holds_character_view_tier(access: AccessContext, character_id: uuid.UUID) ->
         access.has_capability(capability, character_id=character_id)
         for capability in ("canon.edit", "character.view_full", "character.view_summary")
     )
+
+
+def view_public_profile_denied(access: AccessContext, character_id: uuid.UUID) -> bool:
+    """A `character.view_public_profile` deny on the character (D12: honoured if present, not
+    creatable through the application). Both keys are checked, `entity_id` and `character_id`, so a
+    stray raw row fails closed; the `canon_edit_denied_for_character` pattern."""
+    return any(
+        access.grant_effects.get((key, character_id), {}).get(VIEW_PUBLIC_PROFILE) == "deny"
+        for key in ("entity_id", "character_id")
+    )
+
+
+def may_read_released_profile(
+    access: AccessContext, character_id: uuid.UUID, *, holds_view_tier: bool
+) -> bool:
+    """Whether the caller may read the latest release of the character in this campaign (D11-a,
+    plan section 10.14; D12-a).
+
+    False under a whole-character deny or a `character.view_public_profile` deny, on every path.
+    Otherwise true for a caller who holds a character-view tier (`holds_view_tier`: summary, full or
+    `canon.edit`), or one a live revelation reaches: migration 145's guard makes a revelation the
+    capability's only allow source, so `has_capability("character.view_public_profile")` means
+    exactly that. Bare `character.discover` and the D4-C roster confer nothing here (publication is
+    not revelation). Pure: resolved from the loaded `AccessContext`."""
+    if whole_character_denied(access, character_id) or view_public_profile_denied(
+        access, character_id
+    ):
+        return False
+    return holds_view_tier or access.has_capability(VIEW_PUBLIC_PROFILE, character_id=character_id)
 
 
 def may_read_profile(

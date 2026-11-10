@@ -56,10 +56,16 @@ def apply_deny(s: ContentSetup, character: str, kind: str) -> None:
         grant(s, "character.discover", character, "deny")
 
 
-def assert_not_openable(s: ContentSetup, character: str) -> None:
-    """Discovery is not access: the reader's character routes stay closed and say nothing."""
+def assert_not_openable(s: ContentSetup, character: str, *, revealed: bool = False) -> None:
+    """Discovery is not access: the reader's sheet, builds and inventory stay closed and say
+    nothing. The detail is closed too, except that a live revelation opens the public tier
+    (A4), which is asserted instead."""
     for suffix in ("", "/sheet", "/builds", "/inventory"):
         response = s.player.get(f"/campaigns/{s.cid}/characters/{character}{suffix}")
+        if suffix == "" and revealed:
+            assert response.status_code == 200, response.text
+            assert response.json()["view_tier"] == "public_profile"
+            continue
         assert response.status_code in (403, 404), suffix
         assert "Aldric" not in response.text and character not in response.text, suffix
 
@@ -95,7 +101,7 @@ def roster(s: ContentSetup, sid: str) -> list[tuple[str, str, bool]]:
     ]
 
 
-def test_the_session_roster_names_a_revealed_participant_and_never_opens_it(
+def test_the_session_roster_names_a_revealed_participant_and_opens_its_public_tier(
     s: ContentSetup,
 ) -> None:
     sid, aldric, borin = roster_session(s)
@@ -103,9 +109,9 @@ def test_the_session_roster_names_a_revealed_participant_and_never_opens_it(
     assert_absent(detail(s, sid, who="player"), "Aldric", "Borin", aldric, borin)
 
     revelation = reveal(s, aldric)
-    assert roster(s, sid) == [(aldric, "Aldric", False)]  # named; can_open_character is false
+    assert roster(s, sid) == [(aldric, "Aldric", True)]  # named; the public tier opens (A4)
     assert_absent(detail(s, sid, who="player"), "Borin", borin, revelation)
-    assert_not_openable(s, aldric)
+    assert_not_openable(s, aldric, revealed=True)
     assert_not_openable(s, borin)
     gm = detail(s, sid)["participants"]
     assert {(p["character_name"], p["can_open_character"]) for p in gm} == {
@@ -124,7 +130,7 @@ def test_a_deny_removes_a_revealed_participant_from_the_session_roster(
 ) -> None:
     sid, aldric, borin = roster_session(s)
     reveal(s, aldric)
-    assert roster(s, sid) == [(aldric, "Aldric", False)]
+    assert roster(s, sid) == [(aldric, "Aldric", True)]
     apply_deny(s, aldric, deny)
     assert roster(s, sid) == []
     assert_absent(detail(s, sid, who="player"), "Aldric", "Borin", aldric, borin)
@@ -170,7 +176,7 @@ def test_session_travel_names_a_revealed_traveler_only_and_while_revealed(
         "Southmark",
     ]  # places are ordinary world records; the traveler is the revealed part
     assert after["participants"] == []
-    assert_not_openable(s, aldric)
+    assert_not_openable(s, aldric, revealed=True)
     assert [len(entry["legs"]) for entry in detail(s, sid)["travel"]] == [2, 2]  # GM unchanged
 
     unreveal(s, aldric, revelation)
@@ -267,7 +273,7 @@ def test_an_encounter_shows_a_revealed_participant_and_its_turns_only(s: Content
     body = encounter_for(s, encounter)
     assert shown(body) == ([aldric], [aldric])  # participant and its turn; Borin's turn is gone
     assert_absent(body, borin, "Borin", revelation)
-    assert_not_openable(s, aldric)
+    assert_not_openable(s, aldric, revealed=True)
     # The GM view is unchanged. Participant order is storage order, so compare sorted lists, which
     # still catch a duplicated or missing participant or turn.
     gm_participants, gm_turns = shown(encounter_for(s, encounter, "gm"))
@@ -367,7 +373,7 @@ def test_a_knowledge_claim_carries_a_revealed_subject_and_only_while_revealed(
     assert aldric in texts[0] and aldric in texts[1]  # the revealed subject, list and detail
     detail_row = s.player.get(f"/campaigns/{s.cid}/knowledge/{about_aldric}").json()
     assert detail_row["subject"]["name"] == "Aldric"
-    assert_not_openable(s, aldric)  # a labelled subject is not a character page
+    assert_not_openable(s, aldric, revealed=True)  # a labelled subject is not a character page
 
     unreveal(s, aldric, revelation)
     rows = subjects(s)

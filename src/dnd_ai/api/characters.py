@@ -119,10 +119,17 @@ from pydantic import BaseModel
 from sqlalchemy import Connection, text
 
 from dnd_ai.domain.access import AccessContext
+from dnd_ai.domain.public_profiles import may_read_released_profile
 from dnd_ai.queries.character import (
     UNFILTERED_ENCOUNTER_READER,
     EncounterReader,
     get_character_view,
+)
+from dnd_ai.queries.character_public_profile import (
+    ReleasedProfile,
+    ReleasedValue,
+    read_public_character,
+    read_released_profile,
 )
 from dnd_ai.queries.character_relationships import list_character_relationships_for_reader
 from dnd_ai.queries.character_sheet import get_character_sheet_view
@@ -137,11 +144,14 @@ from dnd_ai.queries.party_membership_period import resolve_membership_clock
 
 from ._shared import timeline_world_id
 from .access import (
+    CharacterDetailTier,
     CharacterViewNotAuthorizedError,
     RecordAuthoringResponse,
     can_open_participant,
+    is_foundry_access,
     record_authoring_response,
     require_campaign_capability,
+    resolve_character_detail_tier,
     resolve_character_inventory_access,
     resolve_character_view_tier,
 )
@@ -194,9 +204,52 @@ class CharacterSectionsResponse(BaseModel):
     relationships: bool
     inventory: bool
     parties: bool
+    # Whether the response carries the released public profile (A4). True at the public tier; at
+    # the summary and full tiers true when a release exists and the caller may read it (D11, D12).
+    public_profile: bool = False
+
+
+class CharacterIdentityValueResponse(BaseModel):
+    """A published species or size: the snapshot's own code and label, never a database id."""
+
+    code: str
+    label: str
+
+
+class CharacterPublicProfileResponse(BaseModel):
+    """The latest release of this campaign, as audiences were told it (P03-A A4, plan section
+    12.3). An explicit allowlist: content only. Withheld at every tier: the release id and version,
+    `released_at`, the releaser, the authority source, the release note, field origins, the draft
+    version, the snapshotted species id and the identity row version."""
+
+    summary: str | None
+    appearance: str | None
+    background: str | None
+    species: CharacterIdentityValueResponse | None
+    size: CharacterIdentityValueResponse | None
+
+
+class PublicCharacterResponse(BaseModel):
+    """The public-profile tier of the character detail: what a revelation confers. An explicit
+    allowlist, deliberately not a subclass of `CharacterResponse`, so a field added there is never
+    inherited here. Withheld: authoring, canon and lifecycle status, the live species and size,
+    every hit-point, death-save and exhaustion field, the current location, the active encounter,
+    conditions and resources."""
+
+    view_tier: Literal["public_profile"]
+    character_id: uuid.UUID
+    name: str  # the canonical name (D5-c)
+    character_kind: Literal["npc", "player_character", "character"]
+    sections: CharacterSectionsResponse
+    public_profile: CharacterPublicProfileResponse
 
 
 class CharacterResponse(BaseModel):
+    # `summary` or `full`: which tier of detail this body is (A4). The public tier is the distinct
+    # `PublicCharacterResponse`.
+    view_tier: Literal["summary", "full"]
+    # The latest release of this campaign, for a reader who may read it (D11), else None.
+    public_profile: CharacterPublicProfileResponse | None = None
     # What the caller may do to this character's definition, resolved by the server (an NPC is
     # shared world canon; player-character identity is campaign-originated).
     authoring: RecordAuthoringResponse
@@ -442,29 +495,53 @@ def _require_published_character(
 
 
 def character_sections(
-    access: AccessContext, *, character_id: uuid.UUID, include_full: bool
+    access: AccessContext,
+    *,
+    character_id: uuid.UUID,
+    tier: CharacterDetailTier,
+    has_section: bool,
 ) -> CharacterSectionsResponse:
     """The section eligibility of a character the caller has already been allowed to read (the
-    entity-level `campaign.view` deny and the published-character check have passed, and
-    `include_full` is `resolve_character_view_tier`'s answer). Each flag repeats the test its own
-    endpoint applies after those shared checks: the sheet and the inventory need the full tier
-    (the summary tier alone is refused), the relationships need either tier (the page itself),
-    and the parties need `character.view_knowledge` for this character. The inventory opens for
-    either inventory tier (`resolve_character_inventory_access`, the endpoint's own decision), so a
-    reader holding only `character.view_inventory` is offered the inventory and nothing else full.
-    The agreement tests hold these to the endpoints."""
+    entity-level `campaign.view` deny and the published-character check have passed, and `tier` is
+    `resolve_character_detail_tier`'s answer; plan section 12.4). Each flag repeats the test its own
+    endpoint applies after those shared checks: the sheet needs the full tier, the relationships
+    need the summary or full tier (the public tier is refused them), and the parties need
+    `character.view_knowledge` for this character, at any tier. The inventory opens for either
+    inventory tier (`resolve_character_inventory_access`, the endpoint's own decision), so a reader
+    holding only `character.view_inventory` is offered the inventory and nothing else full; publication
+    adds nothing to it or to the parties. `public_profile` is true at the public tier, and at the
+    other tiers when the response carries a section (`has_section`). The agreement tests hold these
+    to the endpoints."""
     return CharacterSectionsResponse(
         details=True,
-        sheet=include_full,
-        relationships=True,
+        sheet=tier == "full",
+        relationships=tier != "public_profile",
         inventory=resolve_character_inventory_access(access, character_id=character_id) != "none",
         parties=access.has_capability("character.view_knowledge", character_id=character_id),
+        public_profile=tier == "public_profile" or has_section,
+    )
+
+
+def _public_profile_response(profile: ReleasedProfile) -> CharacterPublicProfileResponse:
+    def value(released: ReleasedValue | None) -> CharacterIdentityValueResponse | None:
+        return (
+            None
+            if released is None
+            else CharacterIdentityValueResponse(code=released.code, label=released.label)
+        )
+
+    return CharacterPublicProfileResponse(
+        summary=profile.summary,
+        appearance=profile.appearance,
+        background=profile.background,
+        species=value(profile.species),
+        size=value(profile.size),
     )
 
 
 @router.get(
     "/campaigns/{campaign_id}/characters/{character_id}",
-    response_model=CharacterResponse,
+    response_model=CharacterResponse | PublicCharacterResponse,
     status_code=200,
 )
 def get_character_endpoint(
@@ -494,7 +571,7 @@ def get_character_endpoint(
         ),
     ],
     connection: Annotated[Connection, Depends(get_connection)],
-) -> CharacterResponse:
+) -> CharacterResponse | PublicCharacterResponse:
     if not access.has_capability(_CHARACTER_VIEW_CAPABILITY, entity_id=character_id):
         # An entity-targeted `campaign.view` resource-grant deny —
         # indistinguishable from a nonexistent character, keeping this
@@ -511,7 +588,34 @@ def get_character_endpoint(
         raise NotFoundError()
     _require_published_character(connection, access, character_id)
 
-    include_full = resolve_character_view_tier(access, character_id=character_id)
+    # A paired Foundry credential is not served the public tier: the adapter's contract is
+    # `CharacterResponse`, and the sheet and inventory routes set the portal-only precedent (A4).
+    tier = resolve_character_detail_tier(
+        access, character_id=character_id, allow_public_tier=not is_foundry_access(access)
+    )
+    if tier == "public_profile":
+        public = read_public_character(connection, access=access, character_id=character_id)
+        if public is None:
+            raise NotFoundError()
+        return PublicCharacterResponse(
+            view_tier="public_profile",
+            character_id=character_id,
+            name=public.name,
+            character_kind=public.character_kind,  # type: ignore[arg-type]
+            sections=character_sections(
+                access, character_id=character_id, tier=tier, has_section=True
+            ),
+            public_profile=_public_profile_response(public.profile),
+        )
+    include_full = tier == "full"
+
+    # The summary and full tiers carry the released profile for a reader who may read it (D11) and
+    # when this campaign has a release; a `view_public_profile` deny nulls the section only.
+    released = (
+        read_released_profile(connection, campaign_id=access.campaign_id, character_id=character_id)
+        if may_read_released_profile(access, character_id, holds_view_tier=True)
+        else None
+    )
 
     world_id = timeline_world_id(connection, access.timeline_id)
     # The encounter detail route's own split (api.encounters.get_encounter_endpoint):
@@ -539,10 +643,14 @@ def get_character_endpoint(
         connection, entity_id=character_id, hidden_entity_ids=frozenset()
     )
     return CharacterResponse(
+        view_tier=tier,
+        public_profile=None if released is None else _public_profile_response(released),
         authoring=record_authoring_response(
             connection, access=access, entity_type_code=view.character_kind
         ),
-        sections=character_sections(access, character_id=character_id, include_full=include_full),
+        sections=character_sections(
+            access, character_id=character_id, tier=tier, has_section=released is not None
+        ),
         character_id=view.character_id,
         name=view.name,
         character_kind=view.character_kind,  # type: ignore[arg-type]

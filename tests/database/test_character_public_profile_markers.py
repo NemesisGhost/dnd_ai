@@ -116,12 +116,23 @@ def test_no_other_response_carries_draft_or_release_text(
     }
     paths = _sweep_paths(g, c)
     assert len(paths) >= 10, "the route table was not read; the sweep would be vacuous"
+    detail_path = f"/campaigns/{g.campaign_id}/characters/{c}"
     leaks: list[tuple[str, str, str]] = []
     for name, user in audiences.items():
         with client_factory(user) as client:
             for path in paths:
                 response = client.get(path)
-                leaks.extend((name, path, marker) for marker in MARKERS if marker in response.text)
+                text_ = response.text
+                if name == "player with view_full" and path == detail_path:
+                    # D11 (A4): a summary-or-better reader sees the latest release in exactly the
+                    # character detail's `public_profile` section, and nowhere else.
+                    section = response.json()["public_profile"]
+                    assert section["appearance"] == RELEASED_APPEARANCE
+                    assert section["background"] == RELEASED_BACKGROUND
+                    text_ = text_.replace(f'"{RELEASED_APPEARANCE}"', "").replace(
+                        f'"{RELEASED_BACKGROUND}"', ""
+                    )
+                leaks.extend((name, path, marker) for marker in MARKERS if marker in text_)
     assert leaks == []
 
     # Campaign B's GM reads nothing of A's profile, and A's routes do not exist for them.

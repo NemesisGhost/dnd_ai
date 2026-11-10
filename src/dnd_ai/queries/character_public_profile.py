@@ -1,6 +1,7 @@
 """Reads of a character's public-profile draft and releases (P03-A A2a).
 
-GM-side only: every reader here applies the D8 read rule (`may_read_profile`: effective
+The audience readers (`read_released_profile`, `read_public_character`, A4) are the only functions
+here that serve a non-GM. Every other reader is GM-side only and applies the D8 read rule (`may_read_profile`: effective
 character-scoped `canon.edit`, or current `character.reveal` authority, and no whole-character deny)
 and returns `None` otherwise, which the route maps to a non-disclosing 404. No audience reader
 selects these tables in A2a; `latest_character_public_profile_release` is the single query A3/A4
@@ -67,6 +68,105 @@ def latest_character_public_profile_release(
         public_background=row.public_background,
         public_summary=row.public_summary,
     )
+
+
+@dataclass(frozen=True)
+class ReleasedValue:
+    """A published `{code, label}` pair (species or size)."""
+
+    code: str
+    label: str
+
+
+@dataclass(frozen=True)
+class ReleasedProfile:
+    """The audience projection of a campaign's latest release (plan section 12.3): content only.
+    The release id, version, time, releaser, authority source, note, field origins, draft version,
+    snapshotted species id and identity row version are never part of it."""
+
+    summary: str | None
+    appearance: str | None
+    background: str | None
+    species: ReleasedValue | None
+    size: ReleasedValue | None
+
+
+@dataclass(frozen=True)
+class PublicCharacterRead:
+    """The public tier's whole read: the canonical name (D5-c), the kind and the projection."""
+
+    name: str
+    character_kind: str
+    profile: ReleasedProfile
+
+
+# Names only the releases table: no `rules.*`, `character.characters`, description, draft or
+# `core.entities.summary` (a unit test pins this). The label of a size comes from the static
+# `SIZE_CATEGORIES` constant; a species label is the snapshot's own.
+_RELEASED_PROFILE_SQL = """
+    SELECT public_summary, public_appearance, public_background,
+           released_species_code, released_species_display_name, released_size_category
+    FROM campaign.character_public_profile_releases
+    WHERE campaign_id = :campaign AND character_id = :character
+    ORDER BY version_number DESC
+    LIMIT 1
+"""
+
+
+def read_released_profile(
+    connection: Connection, *, campaign_id: uuid.UUID, character_id: uuid.UUID
+) -> ReleasedProfile | None:
+    """The projection of this campaign's latest release of the character, or `None` when it has no
+    release. The latest release wins as a whole snapshot: no field falls back to an earlier release,
+    the canonical summary, the draft, legacy text or the live definition. Reads this campaign only.
+    The caller has already decided the reader may see it (`may_read_released_profile`)."""
+    row = connection.execute(
+        text(_RELEASED_PROFILE_SQL), {"campaign": campaign_id, "character": character_id}
+    ).one_or_none()
+    if row is None:
+        return None
+    return ReleasedProfile(
+        summary=row.public_summary,
+        appearance=row.public_appearance,
+        background=row.public_background,
+        species=(
+            None
+            if row.released_species_code is None
+            else ReleasedValue(row.released_species_code, row.released_species_display_name)
+        ),
+        size=(
+            None
+            if row.released_size_category is None
+            else ReleasedValue(row.released_size_category, _SIZE_LABELS[row.released_size_category])
+        ),
+    )
+
+
+def read_public_character(
+    connection: Connection, *, access: AccessContext, character_id: uuid.UUID
+) -> PublicCharacterRead | None:
+    """The public-profile tier of the character detail (A4): the canonical name, the kind and the
+    latest release of this campaign, or `None` (the fixed 404) when there is no release, which D9-d
+    makes unreachable for a revelation holder. Never calls `get_character_view`, the sheet,
+    calculations, inventory or the encounter readers, so no mechanical field and no
+    `active_encounter_id` is ever computed. The route has already decided the tier."""
+    profile = read_released_profile(
+        connection, campaign_id=access.campaign_id, character_id=character_id
+    )
+    if profile is None:
+        return None
+    row = connection.execute(
+        text("""
+            SELECT e.canonical_name FROM core.entities e
+            JOIN campaign.timelines t ON t.timeline_id = :timeline AND t.world_id = e.world_id
+            WHERE e.entity_id = :character
+        """),
+        {"character": character_id, "timeline": access.timeline_id},
+    ).one_or_none()
+    kind = character_kind(connection, character_id)
+    if row is None or kind is None:
+        return None
+    return PublicCharacterRead(name=row.canonical_name, character_kind=kind, profile=profile)
 
 
 def _character(

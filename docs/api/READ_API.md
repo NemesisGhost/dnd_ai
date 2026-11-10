@@ -666,6 +666,15 @@ detail route and `AccessContext.has_capability`'s own precedence:
   `caller_sees_ground_truth` column instead of one global `gm` flag.
 
 
+## Character detail tiers (P03-A A4)
+
+`GET /campaigns/{campaign_id}/characters/{character_id}` answers `CharacterResponse | PublicCharacterResponse`.
+
+- **Tiers:** none (404) < `public_profile` < `summary` < `full`. `CharacterResponse` gains `view_tier` (`summary` or `full`) and `public_profile` (the latest release of this campaign for a reader who may read it, else `null`); `sections` gains `public_profile`.
+- **`PublicCharacterResponse`:** `view_tier: "public_profile"`, `character_id`, `name` (canonical), `character_kind`, `sections`, `public_profile`. It never carries `authoring`, canon or lifecycle status, the live `species_code` or `size_category`, hit points, death saves, exhaustion, location, `active_encounter_id`, conditions or resources.
+- **`public_profile`:** `summary`, `appearance`, `background` (the release's own text, `null` when absent; never the canonical summary, the draft or legacy text), `species` and `size` (`{code, label}` or `null`, from the snapshot). No release id, version, time, releaser, note, origin, draft version, species id or entity row version is returned.
+- **Sections at the public tier:** `details` and `public_profile` true, `sheet` and `relationships` false, `inventory` and `parties` as their own endpoints decide. The portal types are unchanged until A6.
+
 ## Source and deferred work
 
 The original audit, implementation file list, fixture creation, and execution evidence are

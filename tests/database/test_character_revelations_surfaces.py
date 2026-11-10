@@ -87,14 +87,16 @@ def test_an_organization_roster_names_a_revealed_member_and_only_while_revealed(
     listed = next(
         m for m in org_members(s, guild, s.player)["members"] if m["member_name"] == "Mira"
     )
-    assert listed["can_open"] is False  # a revelation opens no page until A4
+    assert listed["can_open"] is True  # the public tier opens (A4)
     deny_entity(s, mira)
     assert names() == ["The Bank"]  # a whole-character deny wins
     unreveal(s, mira, revelation)
     assert names() == ["The Bank"]
 
 
-def test_an_event_explanation_names_a_revealed_subject_and_never_opens_it(s: ContentSetup) -> None:
+def test_an_event_explanation_names_a_revealed_subject_and_opens_its_public_tier(
+    s: ContentSetup,
+) -> None:
     times = Times(s)
     start_clock(s, times)
     party, aldric = new_party(s), published_pc(s, "Aldric")
@@ -105,7 +107,7 @@ def test_an_event_explanation_names_a_revealed_subject_and_never_opens_it(s: Con
     revelation = reveal(s, aldric)
     named = explanation(s, s.player, joined)["subject"]
     assert named["name"] == "Aldric" and named["entity_id"] == aldric
-    assert named["openable"] is False  # naming is not opening (A4 owns the link)
+    assert named["openable"] is True  # the public tier opens (A4)
     unreveal(s, aldric, revelation)
     after = world_event(s, s.player, joined)
     assert after.status_code == 200
