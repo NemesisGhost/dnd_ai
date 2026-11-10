@@ -3804,6 +3804,34 @@ What the HTTP versions do not pin: the exact step at which a side waits. With a 
 
 ---
 
+## A3b disclosure-test correction (2026-11-09)
+
+**Base:** `bd1cb51cc345499635f846fe38f7c374d4623bcf`. Test-only; no production code changed, and no test exposed a defect. Not pushed. CI pending. The A3b record above is unchanged, including its first full-run failures (the migration test caused by A3b and fixed, and the keyed-waiter expiry race `test_a_keyed_waiter_whose_assignment_expires_during_the_key_wait_is_refused_afresh[owner-create]`, which failed once under four-shard load and passed on four reruns). **The cause of that expiry failure is still unexplained**; this correction did not investigate or touch it.
+
+**What it closes.** The A3b record listed four surfaces with no revelation-specific test. `test_character_revelations_surfaces_http.py` (13 tests) now covers them through the production routes on the disposable PostgreSQL fixture (`ContentSetup`): the owner GM creates and revokes the revelation, and the reader is the plain player with no relationship to any character. Each surface asserts its own projection:
+
+| Surface | Route read | Projection asserted |
+|---|---|---|
+| Session roster | `GET …/sessions/{id}` | `participants[]`: `character_id`, `character_name`, `can_open_character` is `false`; the GM view still shows both with `true` |
+| Session travel | `GET …/sessions/{id}` | `travel[].legs[]`: traveler `entity_id` and `name`; entries stay but legs are empty without the revelation; a denied place is `unavailable` (no id, no name) while the traveler stays named |
+| Encounters | `GET …/encounters/{id}` | `participants[].participant_entity_id` and the turns whose `participant_id` points at them; the unrevealed participant's turn leaves with it |
+| Knowledge subjects | `GET …/knowledge` and `…/knowledge/{id}` | `subject` (`entity_id`, `name`) and `subject_entity_id`; the claim itself stays listed, only the subject reference is `null` without discovery |
+
+For each: nothing about either character before the revelation; after it, the revealed character's id and name only, with the second, unrevealed character's name and id, and the revelation id, absent from the whole body; a whole-character `campaign.view` deny and a raw `character.discover` deny each remove every reference while the revelation is live; revocation removes them on the next request; and `GET …/characters/{id}` with `/sheet`, `/builds` and `/inventory` stay 403/404 and name nothing. The place-reference test and the GM views check that a deny or revelation does not change what other readers see.
+
+**Fixture notes.** The Knowledge authoring route offers only non-character subjects, so the claim's `subject_entity_id` is set by one `UPDATE` in the fixture and the claim is made public with `make_public_knowledge`, as the Knowledge browse tests do; every read is the production route. `Actor.get` takes query parameters as keywords (a `params=` dict is sent as a parameter literally named `params`), which first made the Knowledge list look empty. Participant order in the encounter response is storage order, so the GM comparison is a set comparison; a first draft compared lists and failed intermittently (1 of 3 runs), and the final file passed 8 of 8 consecutive runs.
+
+**Evidence the tests bite.** Removing revelation keys from `resolve_world_character_visibility` (`| set(access.revelations)`) fails all 13.
+
+**Results (isolated configuration: section 6.2, `.env` override of `DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS` removed, run from an empty directory with the repository `-c` and `--rootdir`).**
+
+- New file alone: 13 passed, 8 consecutive repeats on the final file.
+- Affected set, 16 files (the new file; `test_character_revelations_surfaces`, `_discovery` and `test_character_revelations`; the party roster, session play, session travel, encounter query, Knowledge browse, event explanation, world explorer, organization members, effective-access and access-overview suites; the two revelation/profile structural unit files): **350 passed, 0 failed** (6 min 7 s).
+- A first run of the same set, made before the list-order fix, gave 349 passed and 1 failed (the new encounter test); kept separate from the passing run above.
+- `ruff format --check` (838 files), `ruff check` and `git diff --check` clean. The full suite was not rerun (test-only correction, as instructed).
+
+---
+
 ## A2b-1 implementation record (2026-11-07)
 
 **Parent:** `5fb2608` (the reviewed design commit; its parent is the A2a handoff `523ae5c`). One local commit; nothing is pushed and CI is pending.
