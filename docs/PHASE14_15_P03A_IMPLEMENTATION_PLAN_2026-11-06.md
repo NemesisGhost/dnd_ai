@@ -1,6 +1,14 @@
 # P03-A implementation plan: public profiles, revelation and audience-safe character reads
 
-**Status:** Approved planning document. A0, A1, P0, P1, A2a and A2a-R are implemented and independently reviewed (A2a and A2a-R: PASS WITH NONBLOCKING FINDINGS; handoff `523ae5c`). D7 and D8 are approved (recorded 2026-11-07). A2b-1 and A2b-2 are implemented and reviewed (handoff `a9ec4c4`). A3a (storage, create/revoke/list, lifecycle hooks) is implemented locally and awaits independent review (see the A3a implementation record); A3b is not started. A3 is designed and finalized (§10; D4, D5 and D9–D12 approved, §10.15, including the D9-a candidate-statement cutoff approved 2026-11-08) and not implemented. P2, the shared idempotency key lock, is implemented at `d36d565` and independently reviewed (PASS WITH NONBLOCKING FINDINGS; record below §10). A3a now needs P3, committing the request transaction before the response (DEF-022, §11), which is designed and not implemented. The plan was committed on its own as the design commit (`3b3d637`) before A2a's code.
+**Status (2026-11-10):** Approved planning document.
+
+- **Implemented and independently reviewed:** A0, A1, P0, P1, A2a, A2a-R, A2b-1, A2b-2, P2, P3, A3a and A3b. The A3b verification closeout is complete (PASS WITH NONBLOCKING FINDINGS).
+- **CI and PR:** CI run 42755362414 passed all ten jobs at `bfa64f2`, the head of draft PR #68, which is open and unmerged.
+- **Decisions:** D6 was approved on 2026-11-10, so every owner decision this plan has raised is now approved.
+- **Next:** A4 is designed (§12) and not started; it is for Sonnet as A4a, then A4b. A5 to A7 are outlined in §4 only.
+- **History:** the plan was committed on its own as the design commit (`3b3d637`) before A2a's code. The dated entries below record each step.
+
+*Superseded status line (2026-11-08), for the record:* A0, A1, P0, P1, A2a and A2a-R are implemented and independently reviewed (A2a and A2a-R: PASS WITH NONBLOCKING FINDINGS; handoff `523ae5c`). D7 and D8 are approved (recorded 2026-11-07). A2b-1 and A2b-2 are implemented and reviewed (handoff `a9ec4c4`). A3a (storage, create/revoke/list, lifecycle hooks) is implemented locally and awaits independent review (see the A3a implementation record); A3b is not started. A3 is designed and finalized (§10; D4, D5 and D9–D12 approved, §10.15, including the D9-a candidate-statement cutoff approved 2026-11-08) and not implemented. P2, the shared idempotency key lock, is implemented at `d36d565` and independently reviewed (PASS WITH NONBLOCKING FINDINGS; record below §10). A3a now needs P3, committing the request transaction before the response (DEF-022, §11), which is designed and not implemented.
 
 - **A0** is implemented at `fca3ac7`.
 - **A1** is implemented at `68dc902` through `6a5773d`. That covers the D3 ownership gate, DEF-011, DEF-013 and the reveal delegation. Its record is in [the A1 design](PHASE14_15_P03A_A1_OWNERSHIP_AUTHORITY_DESIGN_2026-11-06.md) §8. The independent re-review passed at `fc20e8d`. CI is pending until push, and an intermittent race-test timeout is still unresolved. It has now been seen in the A1 lock-wait tests twice in full suites (`test_campaign_owner_caller_expiry.py` once, and `test_character_reveal_delegation.py::test_a_grant_that_waits_on_ending_the_gms_membership_is_refused` once: the request was alive but no session waited on a lock within 15 s), each passing on every rerun. That test now observes its blocker through `pg_blocking_pids` (A2 handoff, below); the cause of the missing wait is not established.
@@ -11,7 +19,7 @@
 - **D7-a to D7-f**, the points D7 left open, were approved by the owner in conversation and recorded on 2026-11-07 (§9.10).
 - **D4-C, D5-c, D9, D10-a, D11-a and D12-a** were approved by the owner in conversation and recorded on 2026-11-07 (§10.15).
 - **D9-a's candidate-statement cutoff** (§10.4) was approved by the owner on 2026-11-08.
-- **Still open:** D6, which blocks A4 only.
+- **D6** was approved by the owner on 2026-11-10 (see "Decisions still needed"); A4's design follows it (§12). Until then it was the only open decision, and it blocked A4 only. No owner decision is open now.
 - **Revision of 2026-11-07, after an independent CHANGES REQUIRED review.** The review text is not in the repository; this revision follows the owner's summary of it.
   - The recovery deadlock is now a prerequisite commit, P0 (§6).
   - The draft-read and deny policy is now proposed decision D8.
@@ -114,6 +122,14 @@
   - **T15 is extended** to the FastAPI and anyio behaviours P3 relies on.
   - **Design change from the probes:** `checkpoint_if_cancelled()` after a successful shielded commit. Without it, a cancellation delivered during COMMIT surfaced only at Starlette's later send (probe L1).
   - **Probed on prototype v2** (L1–L4, B1–B5; §11.3).
+- **Revision of 2026-11-10: D6 approved, and A4 designed (§12).**
+  - **D6** is recorded as owner-approved ("Decisions still needed").
+  - **The public tier.** It is a distinct DTO (`PublicCharacterResponse`) on the existing detail route. Summary and full readers gain a `public_profile` section under D11. A `view_public_profile` deny withholds only that section (D12).
+  - **Links.** `can_open_character` replaces both character-link helpers, so browse and detail agree (§12.4).
+  - **The snapshot.** A flagged release stores the species' id, code and label and the size code, guarded by a token on the character's `row_version` and by an insert trigger. No lock is added (§12.6, §12.7).
+  - **The retry key** gains the identity row version, so a changed species can be released from the same draft version.
+  - **Migration 146**, the tests, and the named changes to existing tests are listed.
+  - **No new owner decision** (§12.13).
 
 **Baseline:**
 
@@ -125,6 +141,7 @@
 - The A3 design (§10) was checked by reading source at `a9ec4c4b7a14d7c5236525b2121da8ba6f01475d` (the A2b review handoff). Nothing was run for it.
 - The membership-end matrix (§10.8, with §10.4 and §10.11) was traced and probed on 2026-11-08 at the same commit (§10.8, "Method").
 - The P3 design (§11) was traced and probed on 2026-11-08 at `c705ee79351ac84d6ac23ff8340aa07278881ac7`, which contains P2 (`d36d565`). The installed and locked versions are FastAPI 0.141.1, Starlette 1.3.1, SQLAlchemy 2.0.51, psycopg 3.3.4 and Uvicorn 0.52.0. Its prototype ran only in a throwaway copy outside the repository.
+- The A4 design (§12) was checked by reading source at `bfa64f23c458b9c831c55d24355652d8726aa3c2` on 2026-11-10. Nothing was run for it.
 
 Every code claim was checked by reading source at the stated commit. No application code, schema or committed test was changed to produce this plan. The DEF-014 and DEF-015 reproductions, and the §10.8 probes, ran throwaway probes on the test suite's per-run disposable PostgreSQL 18 database (§6.1, §7.1, §10.8). The §10.8 probes are kept outside the repository and are not committed.
 
@@ -142,7 +159,15 @@ Every code claim was checked by reading source at the stated commit. No applicat
 
 ## Recommendation
 
-**Next: P3, commit before the response (§11, for Sonnet); then A3a, then A3b (§10, for Sonnet); then A4 once D6 is decided.** P2 is done (`d36d565`, reviewed).
+**Next (2026-11-10): A4a, then A4b (§12, for Sonnet), then one independent review covering both.** D6 is approved and no owner decision is open.
+
+- **A4a** adds migration 146, the D6 draft controls, the release's identity snapshot, token and retry key, and the GM read additions. No audience response changes.
+- **A4b** adds the public-profile tier, the `public_profile` section, `sections` and `can_open_character`.
+- **Not started:** A5 to A7. DEF-019 should still be fixed before A6.
+
+*Previous recommendation (2026-11-08; done: P3, A3a and A3b are implemented and reviewed):*
+
+**P3, commit before the response (§11, for Sonnet); then A3a, then A3b (§10, for Sonnet); then A4 once D6 is decided.** P2 is done (`d36d565`, reviewed).
 
 - **A3a** has no effect on any audience response.
 - **A3b** makes revealed characters discoverable through the one shared bundle. They cannot be opened until A4.
@@ -339,7 +364,7 @@ The second caller, AI NPC context ([domain/context_assembly.py:362-396](../src/d
 | **A2b-1** (designed, revised after review; for Sonnet) | The D7 restriction: migration 143 (restriction watermarks, preflight, enforcement trigger), the source-read rule, withholding in the GM read, the save rule and watermark advance, the release's world lock and withheld check (§9.1–§9.7) | A2a-R, D7 and D7-a to D7-f (approved) | §9.8–§9.9, with legacy-origin rows seeded by a test helper |
 | **A2b-2** (designed, revised after review; for Sonnet) | The copy command and route, `legacy_copy` in the GM read, the copy audit row (§9.4, §9.6) | A2b-1 | §9.8–§9.9: copy rules, recopy, excerpt regressions through the real copy, disclosure sweep, copy races |
 | **A3** (designed in §10; split into A3a and A3b, §10.10) | Revelations: audience kinds, snapshot, create/revoke, membership-end and group-deactivate hooks, `AccessContext` source, discovery bundle | A2 (a revelation requires an existing release, D9-d); D4-C, D5-c, D9, D10 (approved) | T82 audiences, including the late joiner; T6 independent-grant survival; whole vs operation deny; cross-surface matrix from investigation D6.4 (lists, counts, pagination, relationships, organizations, roster, events, encounters, Knowledge, preview), with **response-body ID assertions**; bootstrap, inventory and sheet unchanged |
-| **A4** | Projection tier, public-profile read in the detail route, `sections`, `can_open` | A3 | Browse/detail agreement; public tier carries no species, size or mechanics unless released; revocation takes effect on the next request |
+| **A4** (designed 2026-11-10 in §12; for Sonnet as A4a and A4b) | Migration 146 (D6 draft controls, the release's identity snapshot, the retry key); the public-profile tier and its DTO; the `public_profile` section for summary and full readers; `sections`; `can_open_character` | A3b (done); D6 (approved 2026-11-10), D11, D12 | §12.9, §12.11: browse/detail agreement; the public tier carries no species, size or mechanics unless released; revocation takes effect on the next request |
 | **A5** | OD-18 player-profile storage plus GM read (editing is P03-B, T85); publishing a selected field via A2 provenance | A2 | Readable only by A's GMs; nothing in B; no write path for players yet |
 | **A6** | Portal: reveal/delegation management, draft and release editor, revelation list and revoke, public character view, effective-access sources | A4 (A5 optional) | jsdom; type contract; non-disclosing errors; real-browser checks recorded as pending |
 | **A7** | Character-profile audience preview (investigation D6.3, optional), docs reconciliation, corrected Sella acceptance (investigation D6.8) | A4, A6 | Manual T82/D6.8 on namespaced fixtures, not the owner's campaign |
@@ -2645,7 +2670,7 @@ The matrix also covers:
 |---|---|---|---|
 | **A3a** | Migration 145 (with the `public_summary` pair and its draft-save and release fields, §10.12); the create, revoke and list commands, routes and audit, with step 4a's membership lock and both routes reserving their key, and looking up replays, only after the lock phase and the under-lock authority and deny checks, with the caller's account lock and the post-reservation re-check (§10.4); the membership-end lock and closure; the group-deactivation closure; registries; docs | D5-c, D9 (including the D9-a cutoff), D12 (approved); P2 (done, `d36d565`); P3 (§11) | `AccessContext` is not changed. No audience surface reads the tables, so a revelation is visible only in the GM list and in audit |
 | **A3b** | The `AccessContext` source and `has_capability` (with `include_revelations`); `resolve_world_character_visibility` and `released_summary_ids`; the party roster under D4-C (§10.13); the explanation and overview sources; the released-summary projection in search and counts (§10.12); the §10.7 matrix, disclosure sweep and T6 tests; the ADR 0021 §6 and access-contract clarification for the roster | A3a; D4-C, D5-c, D10 (approved) | Revealed characters are listed, named and counted, but cannot be opened (the existing discover-only behaviour). No release text is served |
-| **A4** | The public tier, the direct-detail public response with the released summary, `can_open`, `sections.public_profile`, the session links, D6, and the D11 reader rule (§10.14). The roster gets no links (§10.13) | A3b, D6 (open), D11 (approved) | — |
+| **A4** | The public tier, the direct-detail public response with the released summary, `can_open`, `sections.public_profile`, the session links, D6, and the D11 reader rule (§10.14). The roster gets no links (§10.13) | A3b, D6 (approved 2026-11-10), D11 (approved). Designed in §12 | — |
 
 **A3a acceptance:**
 
@@ -3391,6 +3416,458 @@ A3a depends on P3 (§10.10).
 
 ---
 
+## 12. A4 design: the public-profile tier, and published species and size (D6) (2026-11-10)
+
+**Status:** designed 2026-11-10, for Sonnet. It was checked by reading source at `bfa64f23c458b9c831c55d24355652d8726aa3c2` (the A3b closeout plus two CI-environment commits; CI run 42755362414 passed all ten jobs on that SHA). Nothing was run to produce this section, and no application code, schema or test changed. D6 is owner-approved (recorded 2026-11-10, "Decisions still needed"). A4 is two commits, A4a and A4b (§12.11). It needs no new owner decision (§12.13).
+
+### 12.1 The rules A4 applies
+
+| Source | Rule | Applied in |
+|---|---|---|
+| **D6** (approved 2026-11-10) | Separate "Publish species" and "Publish size" draft controls, both off by default. A release snapshots the selected **actual** definition values. Later definition changes never alter it. Existing releases disclose neither field. A later release may withhold either. Publication opens no mechanics and no other section. No apparent-species or apparent-size override: released prose may describe a disguise | §12.5–§12.7 |
+| **D11-a** (§10.14) | The latest release is readable through a revelation, or by a reader holding `character.view_summary`, `character.view_full` or `canon.edit` for the character | §12.2 |
+| **D12-a** | A `character.view_public_profile` deny blocks the released profile on every path and removes no other tier. A `character.discover` deny hides discovery only. Neither is creatable (unchanged) | §12.2 |
+| **D5-c** (§10.12) | The canonical name is the label. The public tier's summary is the release's `public_summary` or null, never the canonical summary | §12.3 |
+| **D9-d** | A revelation exists only for a character with a release in its campaign | §12.4 |
+| **D4-C** (§10.13) | Roster visibility confers no profile, tier or link | §12.2 |
+| ADR 0021 §2.9 and §6; OD-17 | Sources revoke independently; a whole-character deny suppresses everything; the public profile is a distinct server DTO; audiences see only deliberate releases and never derived mechanics | Throughout |
+
+**Boundaries A4 keeps (owner, 2026-11-10).**
+
+- **No unreleased draft and no legacy-text fallback.** Nothing in an audience response is read from the draft, `character.character_descriptions` or the live definition, and a public-tier reader is never given `core.entities.summary`.
+- **No derived mechanics** at the public tier.
+- **Roster-only visibility** grants no profile access and no link.
+- **Inventory, sheet and bootstrap permissions do not expand.**
+- **A `view_public_profile` deny** withholds the section and leaves an independently authorized summary or full tier in place.
+- **No A5 or A6 work, and no portal change.** The portal's TypeScript types are not changed in A4 (§12.3, "Clients").
+
+### 12.2 Tiers and the reader rule
+
+**Order.** none (404) < `public_profile` < `summary` < `full`. A GM is `full`; this route has no separate GM projection.
+
+**New pure functions.** They take no database access and resolve from the loaded `AccessContext`.
+
+- In `domain/public_profiles.py`:
+  - **`view_public_profile_denied(access, character_id)`:** a `deny` of `character.view_public_profile` under `("character_id", X)` or `("entity_id", X)`. Both keys are checked, so a stray raw row fails closed. This is the `canon_edit_denied_for_character` pattern.
+  - **`may_read_released_profile(access, character_id, *, holds_view_tier)`:** false under a whole-character deny (`whole_character_denied`) or `view_public_profile_denied`. Otherwise `holds_view_tier or access.has_capability("character.view_public_profile", character_id=X)`. Migration 145's guard makes a revelation the capability's only allow source, so the second operand means "a live revelation reaches the caller".
+- In `api/access.py`:
+  - **`CharacterDetailTier`** `= Literal["public_profile", "summary", "full"]`.
+  - **`resolve_character_detail_tier(access, *, character_id, allow_public_tier=True) -> CharacterDetailTier`:**
+    - `full` or `summary` from `resolve_character_view_tier`;
+    - when that raises, `public_profile` if `allow_public_tier` and `may_read_released_profile(..., holds_view_tier=False)`;
+    - otherwise it re-raises `CharacterViewNotAuthorizedError`, the fixed 404.
+  - **`can_open_character(access, character_id) -> bool`:** `resolve_character_detail_tier` succeeds (for a portal credential).
+- **`resolve_character_view_tier` is unchanged.** So is every caller that gates mechanics or relationships on it: the sheet, builds, inventory's full tier, the character relationships route, and `build_explanation_audience.may_read_build`.
+
+**Who gets what.** Rows are for a non-editor unless stated. "Section" is the `public_profile` section.
+
+| Reader of X in campaign C | Detail | Section | Listed / `can_open` |
+|---|---|---|---|
+| A live revelation only | `public_profile` tier | The latest release | Listed / true |
+| A revelation plus a `view_public_profile` deny (either key) | 404 | — | Listed / false |
+| A revelation plus a `character.discover` deny | `public_profile` tier, by direct URL | The latest release | Not listed anywhere |
+| A revelation plus a whole-character `campaign.view` deny | 404 | — | Not listed |
+| `view_summary` or `view_full` (relationship or grant), no revelation | The existing tier | The latest release if one exists, else `null` | Unchanged / true |
+| The same, plus a `view_public_profile` deny | The existing tier, unchanged | `null`; `sections.public_profile` false | Unchanged / true |
+| A GM (`canon.edit` for X) | `full` | The latest release if one exists | Unchanged |
+| Bare `character.discover` (relationship or grant), no revelation | 404: publication is not revelation | — | Listed / false |
+| D4-C roster only | 404 | — | Named on the roster only; no link |
+| A revelation or release only in campaign B | 404 in C | — | Not listed in C |
+| A paired Foundry credential whose only path is a revelation | 404, as today (§12.3) | — | — |
+
+- **The discover deny.** The third row follows the approved D11 rule, which lists only the whole-character and `view_public_profile` denies (§10.14), and ADR 0021 §2.9: "An operation-specific deny blocks only that operation". It matches the summary tier today, which a discover deny does not close. It is derived, not a new decision (§12.13).
+- **Revocation.** `AccessContext` is resolved per request. Revoking the revelation, adding a deny, or ending the membership takes effect on the next request. A3b's lifecycle hooks are unchanged.
+- **Independent sources.** Revoking a revelation leaves a summary or full tier from a relationship or grant, with its section (D11). Revoking that grant leaves the public tier while a revelation lives.
+
+### 12.3 The detail response
+
+The route is unchanged: `GET /campaigns/{campaign_id}/characters/{character_id}`, now with `response_model=CharacterResponse | PublicCharacterResponse`. This follows the inventory route's precedent (`InventoryItemResponse | RestrictedInventoryItemResponse`) and ADR 0021 §6, which calls for distinct server DTOs.
+
+**The handler, in order.**
+
+1. **Whole-character deny:** 404 (unchanged).
+2. **`_require_published_character`** (unchanged).
+3. **Tier:** `resolve_character_detail_tier(access, character_id=X, allow_public_tier=<not a Foundry credential>)`.
+   - A Foundry paired credential (`access.principal.auth_method == FOUNDRY_ACCESS_AUTH_METHOD`) is not served the public tier. The adapter's contract is `CharacterResponse`, and the sheet and inventory routes set the precedent that a read stays portal-only until a requirement says otherwise.
+   - Its summary and full responses do gain the additive `view_tier` and `public_profile` fields.
+4. **Public tier:** `read_public_character(connection, access=..., character_id=X)`, in `queries/character_public_profile.py`.
+   - It returns the canonical name, the kind (`character_kind` from `queries/public_profile_restrictions.py`) and the projected latest release of **this campaign**, or `None`.
+   - `None` means no release, which is unreachable while D9-d holds. It gives the fixed 404.
+   - It never calls `get_character_view`, the sheet, calculations, inventory or the encounter readers. So `active_encounter_id` and every mechanical field are never computed.
+5. **Summary or full:** the existing path, plus `view_tier` and `public_profile`. The section is the projected latest release when `may_read_released_profile(..., holds_view_tier=True)` holds and a release exists; otherwise `null`.
+
+**DTOs** (`api/characters.py`). Each is an explicit allowlist; none subclasses another.
+
+```python
+class CharacterIdentityValueResponse(BaseModel):
+    code: str
+    label: str
+
+
+class CharacterPublicProfileResponse(BaseModel):
+    summary: str | None  # release.public_summary
+    appearance: str | None  # release.public_appearance
+    background: str | None  # release.public_background
+    species: CharacterIdentityValueResponse | None  # released_species_code, _display_name
+    size: CharacterIdentityValueResponse | None  # released_size_category, SIZE_CATEGORIES label
+
+
+class PublicCharacterResponse(BaseModel):
+    view_tier: Literal["public_profile"]
+    character_id: uuid.UUID
+    name: str  # the canonical name (D5-c)
+    character_kind: Literal["npc", "player_character", "character"]
+    sections: CharacterSectionsResponse
+    public_profile: CharacterPublicProfileResponse
+
+
+# Additive:
+#   CharacterResponse.view_tier: Literal["summary", "full"]
+#   CharacterResponse.public_profile: CharacterPublicProfileResponse | None = None
+#   CharacterSectionsResponse.public_profile: bool = False
+```
+
+- **Withheld at the public tier:**
+  - `authoring`, `canon_status` and `lifecycle_status`;
+  - the live `species_code` and `size_category`;
+  - every hit-point, death-save and exhaustion field;
+  - `current_location_id`, `active_encounter_id`, conditions and resources.
+- **Withheld from the section at every tier:** the release id and version number, `released_at`, the releaser, the authority source, the release note, field origins, the draft version, the snapshotted species id and the identity row version. Adding any of them later is an additive, reviewed change.
+- **Live values for summary and full readers.** `CharacterResponse.species_code` and `size_category` keep their type and their live values, which is those readers' existing entitlement. A summary reader can therefore see a live species beside an older released one. That is correct: the section is what audiences were told.
+- **The latest release wins as a whole snapshot.** No field falls back to an earlier release, the canonical summary, the draft, legacy text or the live definition. §10.12 states this for the summary; it holds the same way for species and size.
+- **Clients.**
+  - The portal's types are not changed; that is A6.
+  - Until A6, the existing character page renders a public-tier answer with its live-definition fields blank.
+  - The Foundry adapter never receives one.
+
+### 12.4 `sections`, `can_open` and browse/detail agreement
+
+`character_sections(access, *, character_id, tier, has_section)` replaces the `include_full` boolean.
+
+| Flag | `public_profile` tier | `summary` | `full` |
+|---|---|---|---|
+| `details` | True (this route answered) | True | True |
+| `sheet` | False | False | True |
+| `relationships` | False | True | True |
+| `inventory` | `resolve_character_inventory_access(...) != "none"`, unchanged at every tier | Same | Same |
+| `parties` | `has_capability("character.view_knowledge", character_id=X)`, unchanged | Same | Same |
+| `public_profile` | True | `has_section` | `has_section` |
+
+The inventory and parties endpoints authorize independently of the view tier (`get_character_inventory_endpoint`, `list_character_parties_endpoint`). Their flags therefore show the same independent decision at the public tier, and publication adds nothing to either.
+
+**Link producers.**
+
+- `can_open_participant(access, "character", X)` and the session roster's `_can_open_character` both become `can_open_character`. The session helper is deleted.
+- **Gain the public tier through it:** character-relationship participants, organization members, event explanations (`may_open_character`) and the session roster.
+- **Unchanged:**
+  - `may_read_build` (mechanics);
+  - the party roster (no link, D4-C);
+  - world search cards, which carry no `can_open` (the portal links them to the detail route).
+
+**Why `can_open_character` needs no database.** A live revelation implies a release in its campaign: D9-d is enforced by the database, and releases are never deleted. If raw SQL broke that invariant, the link would say true and the detail would fail closed with 404. The D9-d schema test pins the invariant.
+
+**The agreement contract** (A4b acceptance). For a portal reader R who is not an editor, and a character X in campaign C:
+
+1. **Links.** Every `can_open` or `can_open_character` that is true for X leads to a detail 200. Every false one leads to the fixed 404.
+2. **Sections.** The detail's `view_tier` and each `sections` flag agree with the section's endpoint. A true flag answers 200 (for inventory, the full or the restricted projection). A false flag gets the endpoint's existing refusal.
+3. **Search.** If world search lists X, the detail answers 200 exactly when §12.2 gives R a tier. A bare-discover reader is listed without opening, as before A4.
+
+### 12.5 D6: the draft controls
+
+- **Columns** (migration 146):
+  - `campaign.character_public_profiles.should_publish_species BOOLEAN NOT NULL DEFAULT false`;
+  - `should_publish_size BOOLEAN NOT NULL DEFAULT false`.
+
+  The prefix follows DATABASE_CONVENTIONS §4.5. Existing drafts read false. Adding a column with a constant default fires no row trigger, so no `row_version` moves.
+- **The save body** gains optional `publish_species` and `publish_size`, each a strict boolean.
+  - Absent means untouched; JSON `null` gives 422.
+  - They are not text. They never enter `normalize_optional_text`, origins, watermarks, the copy aid or D7's withheld check.
+  - They take part in the no-op comparison. A change bumps `row_version` once, together with any text change in the same request, and `changed_field_names` lists `publish_species` or `publish_size`.
+  - The first save may set them.
+  - The D8 edit rule, the token, the idempotency fingerprint and the audit are unchanged. The fingerprint already uses `exclude_unset`, so a body without the flags fingerprints as it did before A4.
+  - They are held in a separate constant, `PUBLIC_PROFILE_IDENTITY_FLAGS`. `PUBLIC_PROFILE_SAVEABLE_FIELDS` stays text-only, so no text path iterates over a boolean.
+- **A flag publishes nothing by itself.** It only selects what the next release snapshots.
+
+### 12.6 D6: the release snapshot
+
+**Release columns** (migration 146). All are nullable, and every existing release has null in each.
+
+| Column | Type | Class | Meaning |
+|---|---|---|---|
+| `released_species_id` | `UUID`, FK to `rules.species`, `ON DELETE RESTRICT` | Structural; GM provenance only | The definition's `species_id` at release |
+| `released_species_code` | `TEXT` | `CAMPAIGN_VISIBLE` | That species' `code` at release |
+| `released_species_display_name` | `TEXT` | `CAMPAIGN_VISIBLE` | That species' `display_name` at release |
+| `released_size_category` | `TEXT` | `CAMPAIGN_VISIBLE` | The definition's `size_category` at release |
+| `identity_entity_row_version` | `BIGINT` | Structural | The character's `core.entities.row_version` the snapshot was read at. Set exactly when species or size is published |
+
+**Species labels cannot drift.** The snapshot keeps the code and the label, not only the id. A `rules.species` row is ruleset data that a reseed or ruleset change can relabel, and a character's species can change. Resolving a stored id through live data would show either change to an audience with no release. So:
+
+- the audience projection reads only release columns, and never joins `rules.species`, `character.characters` or `core.entities` for these fields;
+- `released_species_id` never leaves the server in an audience response. It is kept for GM provenance and for the "differs" flag below;
+- size keeps only its code. `ck_characters_size_category` fixes the six codes, and the label comes from the static `SIZE_CATEGORIES` constant, not from data.
+
+**Request.** `ReleaseCharacterPublicProfileRequest` gains `expected_character_row_version: int | None` (at least 1). It is the character's `row_version` that the releaser reviewed in the GM read's `identity_preview`. The idempotency payload omits the key when it is null, so a pre-A4 body fingerprints as before.
+
+**Steps.** They amend §5.5. The locks are unchanged (§12.7).
+
+1. **Whole-character deny:** 404 (unchanged).
+2. **No draft:** 409 `public_profile_draft_missing` (unchanged).
+3. **Natural retry.** A release is returned (200, `created: false`, with `is_latest`) when it has `from_draft_row_version = v` **and** either `identity_entity_row_version IS NULL` or `identity_entity_row_version = expected_character_row_version`.
+   - A draft version fixes the flags. So the releases of one draft version either all publish nothing (`NULL`, exactly the A2 behaviour) or all carry a row version, and at most one matches.
+4. **Draft `row_version` is not `v`:** 409 `stale_write` (unchanged).
+5. **Canon and active** (unchanged).
+6. **Identity**, only when the draft publishes species or size:
+   1. `expected_character_row_version` is missing: 422 `public_profile_identity_version_required`, nothing written.
+   2. It differs from the `row_version` read under the entity lock: 409 `stale_write`, nothing written.
+   3. **D7 item 3, for the new fields.** The releaser's re-resolved `AccessContext` must hold a character-view tier for X (`resolve_character_view_tier`), because species and size are summary-tier fields. Otherwise 403 `public_profile_field_withheld`, as for a withheld text field. Every built-in `gm` and `assistant_gm` role holds `character.view_full` (migration 086), so this refuses only a raw-row state.
+   4. Read the snapshot in one statement, after every lock wait: `character.characters.species_id` and `size_category`, and the species' `code` and `display_name`. No row gives 409 `public_profile_identity_unavailable` (defensive; see "Missing source values").
+
+   Unflagged fields are never read into the release. When the draft publishes neither field, `expected_character_row_version` is accepted and ignored (not validated, not stored), so a client may always send it.
+7. **D7's withheld check** (unchanged).
+8. **Version, insert and audit** (unchanged), with the new columns.
+
+**Database guarantees** (migration 146).
+
+- **`ck_…_species_snapshot`:** the three species columns are all null or all non-null.
+- **`ck_…_size_category`:** null or one of the six codes.
+- **`ck_…_identity_version`:** `identity_entity_row_version` is non-null exactly when species or size is non-null, and is at least 1.
+- **Insert trigger** `campaign.enforce_public_profile_release_identity()` (BEFORE INSERT; a local integrity rule, DATABASE_CONVENTIONS §20.4):
+  - a published species equals the character's current `species_id`, and its code and display name equal that `rules.species` row;
+  - a published size equals the current `size_category`;
+  - `identity_entity_row_version` equals the current `core.entities.row_version`.
+
+  This makes "the actual definition values" a database promise, not only a command rule. It also refuses an apparent-species value from any future path.
+- **The retry key.** `ux_character_public_profile_releases_draft_version UNIQUE (character_public_profile_id, from_draft_row_version)` is replaced by `ux_character_public_profile_releases_draft_identity UNIQUE NULLS NOT DISTINCT (character_public_profile_id, from_draft_row_version, identity_entity_row_version)`.
+  - For a release that publishes neither field, the key is exactly the A2 key.
+  - For one that publishes species or size, the same draft version may be released again after a definition change, under the new `row_version`. Without this, a GM could publish a changed species only by making an unrelated draft edit.
+  - A2b's covering rule (the highest `from_draft_row_version`) and `has_unreleased_changes` are unaffected. Neither depends on a draft version being released only once.
+- **Immutability and grants.** Release immutability already covers every column. Grants are table-level, so the new columns need no grant change.
+
+**Response, receipt and audit.**
+
+- The POST response gains `species_published`, `size_published` and `identity_entity_row_version`. They are flags and numbers, so `replay_body` keeps them.
+- The audit row's `changed_fields` gains the same three. It never carries a species code, a label or a size code.
+
+**The GM read** (`read_character_public_profile`, D8 readers only).
+
+- `draft.publish_species` and `draft.publish_size`.
+- Each full release (`latest_release`, and `GET …/releases/{n}`) gains `species` and `size` (`{code, label}` from the snapshot, or null) and `identity_entity_row_version`.
+- **`identity_preview`:** `{character_row_version, species: {code, label}, size: {code, label}}`, the live values the next release would snapshot. It is `null`, with `identity_preview_withheld: true`, when the reader holds no character-view tier (step 6.3).
+- **`identity_differs_from_latest_release`:** true when the latest release published species or size and the live value of a published field now differs (by `species_id`, or by size code); otherwise false. It tells the GM that a new release is needed. It changes nothing for audiences.
+- **`can_release`** is also false when a flag is set and the preview is withheld.
+
+**Missing source values.**
+
+- `character.characters.species_id` and `size_category` are `NOT NULL` (migration 017).
+- `species_id` references `rules.species`, whose `code` and `display_name` are `NOT NULL`.
+- `_character_row` already gives 404 for a character-type entity without a `character.characters` row.
+
+A missing value is therefore unreachable through the application. The command still fails closed (step 6.4), and the pairing CHECKs refuse a partial snapshot.
+
+**Existing drafts and releases.**
+
+- Drafts read both flags as false.
+- Every existing release has null identity columns and discloses neither field.
+- Releasing an existing draft without setting a flag needs no new request field, and behaves exactly as at A3b, natural retry included.
+- A later release with a flag off withholds that field from later reads, because the latest release wins as a whole.
+
+### 12.7 Publication under concurrent definition edits
+
+**No new lock and no lock-order change.**
+
+- **The release** already takes the character's `core.entities` row `FOR KEY SHARE`, after the membership and the campaign, and then the draft `FOR UPDATE` (§5.8, §9.6).
+- **The only application writer** of `species_id` and `size_category` is `update_character_identity` (`commands/npcs.py`, shared by `update_npc` and `update_player_character`). After `lock_authoring_scope` it takes that same entity row `FOR UPDATE` through `lock_entities(update_ids=[character_id])`, writes `character.characters`, and bumps `row_version` through `touch_entity`, all in one transaction.
+- `FOR UPDATE` conflicts with `FOR KEY SHARE`.
+
+The cases:
+
+- **Edit first.** The release waits at the entity row. Under READ COMMITTED its locking read returns the updated row, so step 6.2 compares the new `row_version`. The snapshot statement runs later and sees the committed definition. A token from before the edit gives 409 `stale_write`, and nothing is written.
+- **Release first.** The edit waits at the entity row until the release commits. The release snapshots the pre-edit values with the pre-edit `row_version`, which the insert trigger confirms. The edit then commits. Audiences keep the released values until a new release.
+- **No cycle.**
+  - Before the entity row, both commands hold only shared locks that the other does not request exclusively: world `S`, the caller's membership `S`, campaign `KEY SHARE`.
+  - After it, the edit touches only rows the release never locks (`character.characters`, descriptions, audit). The release takes only the draft, which the edit never touches.
+  - The release's insert takes `KEY SHARE` on the `rules.species` row through its foreign key. No application path locks that row.
+- **Other entity writers** (archive, other authoring writes) already serialize with the release at this row since A2a. A4 changes nothing for them.
+- **Rules data.** `rules.species` has no application writer. If an offline reseed relabels a species between the snapshot read and the insert, the trigger refuses the insert (500, rolled back), and a retry snapshots the new label.
+
+**Outcomes** (added to §5.9):
+
+| Situation | Outcome |
+|---|---|
+| An identity edit commits before a release whose token predates it | 409 `stale_write`; no release. The GM reloads the preview |
+| A release holds the entity row when an identity edit arrives | The edit waits. The release commits the old values, then the edit commits. Audiences see the old values until a new release |
+| A save toggling a flag commits before a release of the previous draft version | 409 `stale_write`, at the draft row, as in §5.9 |
+| Two releases with the same draft and character versions, under any keys | One gets 201. The other waits on the draft row, then gets 200 `created: false` with the same release |
+| A retry with no key and the old character version, after an identity edit | 200 `created: false`: the release already made from that pair |
+| The same draft version with the new character version | 201: a new version *n* + 1, snapshotting the new values |
+| A keyed replay after an identity edit | The stored receipt, after the authority pre-check (unchanged). No new snapshot |
+| A flagged draft and no `expected_character_row_version` | 422 `public_profile_identity_version_required`; nothing written |
+
+### 12.8 Migration `146_public_profile_identity`
+
+**Upgrade.** Additive, with no backfill:
+
+1. the two draft flags;
+2. the five release columns, their three CHECKs and their comments, and a partial index `ix_character_public_profile_releases_released_species_id` (`WHERE released_species_id IS NOT NULL`; DATABASE_CONVENTIONS §19.1, because a delete of the species consults the foreign key);
+3. the retry-key replacement: drop the A2 unique and add the `NULLS NOT DISTINCT` one, which PostgreSQL 18 supports;
+4. the insert trigger and its function, with comments.
+
+**Downgrade.**
+
+- It is lossy for the draft flags and the identity snapshots, by design, as 145's downgrade drops `public_summary`. Older code never serves those columns, so dropping them discloses nothing.
+- It first refuses, atomically and with a message naming the reason, while any profile holds two releases of one draft version, because the A2 unique could not then be restored.
+- Otherwise it drops the trigger, function, index, constraints and columns, and restores `ux_character_public_profile_releases_draft_version`.
+
+**Metadata and registries.**
+
+- The SQLAlchemy metadata (`persistence/tables/campaign.py`) mirrors every column, constraint and index, so `alembic check` is clean.
+- `COLUMN_CLASSES`: `released_species_code`, `released_species_display_name` and `released_size_category` are `CAMPAIGN_VISIBLE`. The registry covers TEXT and JSONB columns only, so the UUID, BIGINT and BOOLEAN columns need no entry.
+- `test_schema_documentation.py` requires a comment on every new column, function and trigger.
+- `ENTITY_REFERENCE_CLASSIFICATION` is unchanged: `rules.species` is not an entity table.
+
+**Module access.** No new module names the profile tables. The public projection lives in `queries/character_public_profile.py`, which is already admitted. `api/characters.py` calls it and names no table.
+
+### 12.9 Tests
+
+Every audience test uses the production routes on the disposable PostgreSQL 18 fixtures. Races use `LockRace` (§7.7), with blockers observed through `pg_blocking_pids`.
+
+**A4a: storage and authoring (no audience change).**
+
+1. **Migration** (`test_public_profile_identity_migration.py`):
+   - a populated upgrade from 145: drafts read false, releases have null identity, no `row_version` changes, and an existing release still returns from the GM read;
+   - every CHECK;
+   - the guarded downgrade, refused with two releases of one draft version, and atomic (revision, schema and rows unchanged);
+   - a clean downgrade, then a re-upgrade, then `alembic check`.
+2. **Schema** (`test_character_public_profile_schema.py`, extended):
+   - each pairing CHECK;
+   - the trigger refusing a mismatched species id, code, label, size or entity row version, and accepting the live values;
+   - an UPDATE of a new column refused by immutability;
+   - the new unique: two `NULL`-identity releases of one draft version refused under the new name; two with different identity versions accepted; a repeat refused;
+   - deleting a referenced `rules.species` row refused.
+3. **Draft save** (API):
+   - set, clear and no-op for each flag; `null` gives 422; absent leaves it untouched;
+   - one `row_version` bump together with text; the audit names;
+   - the D8 refusals unchanged;
+   - an existing draft's token unaffected by the upgrade.
+4. **Release** (API):
+   - each flag alone and both; the values equal the definition; the receipt and audit fields;
+   - the natural retry and the keyed replay;
+   - 422 without a token; 409 with a stale token; a release without flags ignores a supplied token;
+   - step 6.3 refused with a raw stray `canon.edit` deny under `character_id` and no `view_full` source;
+   - the snapshot unaffected by a later species change, size change or rules relabel (the GM read of that release unchanged, `identity_differs_from_latest_release` true);
+   - a later release with the flag off has null.
+5. **GM read:** `identity_preview` and `identity_differs_from_latest_release`; a reader with no view tier sees `identity_preview_withheld`.
+6. **Races**, in both orders where a row names two: every §12.7 row, through the HTTP release route, against a real `update_npc` and a real `update_player_character` held with `LockRace`.
+   - Edit first: 409 and no release.
+   - Release first: the edit waited (`pg_blocking_pids`), the release holds the old values, and the definition holds the new ones.
+   - No scenario deadlocks.
+
+**A4b: the audience read.**
+
+7. **Reader matrix** (`test_character_public_tier.py`): every §12.2 row, asserting the status, `view_tier`, the whole `sections` object and the exact `public_profile` object.
+8. **Disclosure.**
+   - **Markers:** the draft text and flags (an unreleased species flag set after the release); legacy description text; the canonical summary; the release note; the live species and size, changed after the release; a relabelled species; the species UUIDs, released and live; the revelation id and reason.
+   - A public-tier body contains exactly the canonical name and the released summary, appearance, background and selected species and size, and none of the markers. Its key set is pinned.
+   - A summary or full body adds only the section to its existing keys.
+   - A public-tier body never contains `active_encounter_id` or any mechanical key.
+9. **Snapshot stability.** After a release with species, change the definition's species and size, and relabel the `rules.species` row.
+   - The audience section is unchanged.
+   - A summary reader's top-level `species_code` shows the live value, and their section the released one.
+   - A new release shows the new values.
+10. **Cross-campaign.**
+    - A release and revelation only in campaign B: 404 in A.
+    - Releases in both campaigns with different text and species: each campaign's reader sees its own.
+    - Campaign B's GM gets nothing of A.
+11. **Revocation and lifecycle**, each effective on the next request:
+    - revoking each audience kind; ending the membership; deactivating the group;
+    - archiving and restoring the character (D9-g);
+    - adding a whole-character deny; adding a raw `view_public_profile` deny under each key.
+12. **Independent sources.**
+    - A revelation plus a `view_summary` grant, revoking each, in both orders.
+    - Two revelations, revoking one.
+    - A `view_public_profile` deny with a summary grant: the summary tier stays, the section is null and the flag false.
+13. **Existing tiers unchanged.**
+    - For summary and full readers without a release, the body equals the pre-A4 body plus `view_tier`, `public_profile: null` and `sections.public_profile: false`.
+    - The sheet, builds, relationships, inventory (both tiers), parties, bootstrap perspectives and Knowledge perspective give the same status and body as at A3b for every §12.2 row.
+    - `inventory_only` plus a revelation gives the restricted projection, as before.
+14. **Agreement** (§12.4): for each matrix reader, every link producer (session roster, character-relationship participants, organization members, event explanations) against the detail status, and each `sections` flag against its endpoint.
+15. **Foundry.** A paired credential whose only path is a revelation gets 404. A paired GM credential gets `CharacterResponse` with the section.
+16. **Structural** (unit):
+    - the public projection's SQL names only the releases table: not `rules.`, `character.characters`, `character_descriptions`, the draft table or `core.entities.summary`;
+    - the key sets of `PublicCharacterResponse` and `CharacterPublicProfileResponse` are pinned;
+    - `api/characters.py` imports no sheet, calculation or rules module for the public path;
+    - `can_open_participant` and the session roster use `can_open_character`;
+    - `resolve_character_view_tier` is unchanged.
+
+**Named changes to tests that pass at `bfa64f2`.** Only these may change; any other change is a finding.
+
+1. `test_character_public_profile_markers.py::test_no_other_response_carries_draft_or_release_text`. The "player with view_full" reader now sees `RELEASED_APPEARANCE` and `RELEASED_BACKGROUND` (D11), in exactly the character detail's `public_profile` section. The sweep allows exactly those markers at that path and JSON location. It still forbids the draft text and the release note everywhere, for every reader.
+2. `test_character_revelations_discovery.py`:
+   - `test_a_summary_grant_and_a_revelation_are_independent_and_a_revelation_opens_nothing`: the revelation-only player gets 200 at the public tier. The test is renamed to match.
+   - `test_a_revelation_grants_no_detail_sheet_inventory_perspective_or_roster_link`: the detail path (`""`) leaves the refused list and is asserted at the public tier. The canonical name may now appear; `CANON_MARKER` may not. `can_open_participant` becomes true. The sheet, builds, inventory, relationships, the GM `/public-profile` read, perspectives and capabilities are unchanged.
+   - Any assertion that a revealed reader under a raw `character.discover` deny gets a detail 404 now expects the public tier (§12.2).
+3. `test_character_revelations_surfaces_http.py`:
+   - `assert_not_openable` no longer asserts the detail for a live revelation (with no deny, or with a discover deny); it asserts the public tier instead.
+   - `test_the_session_roster_names_a_revealed_participant_and_never_opens_it`: `can_open_character` becomes true; the test is renamed.
+   - After revocation or a whole-character deny, nothing changes.
+4. `test_character_revelations_surfaces.py::test_an_event_explanation_names_a_revealed_subject_and_never_opens_it`: `openable` becomes true while the character is revealed; the test is renamed.
+5. `test_character_public_profile_schema.py`: the duplicate-draft-version test names the new constraint.
+6. `tests/unit/test_character_public_profile_structure.py`: the classification test lists the three new columns.
+
+### 12.10 Documentation updated by the implementation commits
+
+- `DATABASE_MODEL`, campaign schema: the flags, the release columns, the retry key and the trigger.
+- `DOMAIN_MODEL` §8.1a and §8.1b: publishing species and size; the public tier; a revealed character now opens.
+- `ENTITY_LIFECYCLE` command list: the save's new fields; the release's token and retry key.
+- `api/ACCESS_CONTROL.md` §3w, "Effect": the public tier and `can_open`.
+- The character detail contract in `api/READ_API.md`: tiers, `view_tier`, `PublicCharacterResponse`, `sections.public_profile`.
+- `PHASE13E_ACCESS_CONTRACT`: the D11 rule, the D12 deny, and the new error codes `public_profile_identity_version_required` and `public_profile_identity_unavailable`.
+- This plan: an A4a and an A4b implementation record.
+
+### 12.11 Slices, boundaries and acceptance
+
+| Slice | Scope | Safe between commits because |
+|---|---|---|
+| **A4a** | Migration 146; metadata and registries; the draft flags in the save; the release token, steps 3 and 6, the snapshot and the retry key; the GM read additions; §12.9 items 1–6 and named changes 5–6 | No audience reader reads the new columns. The search summary projection (A3b) is unchanged |
+| **A4b** | The tier functions; `PublicCharacterResponse`; the section on summary and full; `sections`; `can_open_character` in every link producer; the Foundry exclusion; §12.9 items 7–16 and named changes 1–4; the docs | — |
+
+Each is one commit on `phase15/completion`, green on its own. One independent review covers both, naming the parent (the planning commit) and the A4b SHA.
+
+**A4 acceptance criteria.**
+
+1. **Migration.** Migration 146 upgrades a populated 145 database, downgrades as §12.8 states, and re-upgrades on PostgreSQL 18, and `alembic check` is clean.
+2. **Tests.** Every §12.9 test passes. The concurrency tests are real command or HTTP races, with blockers observed through `pg_blocking_pids`, and none deadlocks.
+3. **Existing data.** Existing drafts read both flags false, and existing releases have null identity, with no `row_version` change. Releasing them without a flag behaves exactly as at `bfa64f2`.
+4. **Snapshots.** A release with a flag snapshots the live definition values at its locked instant, and the trigger agrees. No later definition, rules or draft change alters any response that reads it.
+5. **Disclosure.** No audience response contains a draft value, legacy text, a release's metadata or a species UUID. A public-tier response also contains no canonical summary, no live species or size and no mechanical field.
+6. **Tiers and agreement.** The detail answers exactly per §12.2, and the agreement contract (§12.4) holds for every link producer and section.
+7. **Other routes unchanged.** The sheet, builds, relationships, inventory, parties, bootstrap and Knowledge perspectives answer as at `bfa64f2` for every §12.2 reader.
+8. **Test changes.** Only the §12.9 named test changes occur.
+9. **Checks.** `ruff format --check`, `ruff check`, `mypy src`, `uv lock --check`, `alembic check` and `git diff --check`; the focused tests; then `uv run python scripts/run_sharded_tests.py`. First runs and reruns are reported separately.
+10. **Docs and CI.** The docs follow §12.10. CI runs on the final head after a push by the owner; the implementer does not push.
+
+### 12.12 Out of scope, and residuals
+
+- **Out of scope:**
+  - apparent-species and apparent-size overrides (D6);
+  - a display name (D5-c);
+  - creating `character.discover` or `view_public_profile` denies (D12);
+  - A5's player-profile fields, A6's portal types and UI, and A7's preview;
+  - DEF-016, DEF-019 to DEF-021, and stale authorization.
+- **Residual, by design.** A released species or size can disagree with the live definition until a new release. The GM read flags it (`identity_differs_from_latest_release`).
+- **Residual.** An unrelated character edit (name, notes) also moves `row_version`. A flagged release prepared before it gets 409, and the GM must reload. It fails closed and is rare. Comparing values instead would add a second kind of token.
+
+### 12.13 Owner decisions
+
+**None new.** D6 is approved, and D11 and D12 are applied as approved. These points follow from approved text or repository precedent. They are stated so that the owner can object, not because they need a decision:
+
+- A `character.discover` deny does not close the public tier by direct URL. This follows the §10.14 rule and ADR 0021 §2.9, and matches the summary tier today.
+- A paired Foundry credential is not served the public tier, following the sheet and inventory precedent.
+- The audience section carries content only, with no release metadata.
+- A flagged draft version may be released again after a definition change (§12.6, "The retry key"). This is a technical change to an A2 storage rule, reviewed here, not an owner policy.
+
+---
+
 ## Decisions still needed
 
 - **D1: Public profile scope. Approved by the owner (recorded 2026-11-07).** Public-profile drafts and releases belong to a campaign. Applied in §5.1.
@@ -3455,11 +3932,22 @@ A3a depends on P3 (§10.10).
 
   **Recommend D5-c.** Releases already exist so that prose reaches audiences only deliberately, and the summary is the one piece of prose discovery shows. The name is identity: substituting it cannot be made consistent (D5-b), and it already appears in canon text. The release form shows the canonical name read-only as the name audiences will see. Each option is additive.
 
-- **D6: Species and size in the public tier (new, 2026-11-07).** §3 and the A4 row say the public tier shows no species or size "unless released", but nothing defines how they are released. They are definition inputs, not derived mechanics, so OD-17 does not exclude them.
+- **D6: Species and size in the public tier. Approved by the owner (recorded 2026-11-10).** The approved policy:
+  1. The draft has separate "Publish species" and "Publish size" controls, both off by default.
+  2. Each release snapshots the selected actual definition values.
+  3. Later definition changes do not alter an existing release.
+  4. Existing releases disclose neither field.
+  5. A later release may withhold either field from subsequent public-profile reads.
+  6. Publication grants no access to mechanics or other character sections.
+  7. Apparent-species and apparent-size overrides are out of scope. Released prose can describe disguises.
 
-  **Recommend:** a per-release opt-in, off by default. The draft holds `shows_species` and `shows_size`. When a flag is set, the release snapshots `released_species_id` and `released_size_category` from the definition at release time. Later identity edits then reach audiences only through a new release.
+  Applied in §12 (A4). The snapshot keeps the species' code and label as well as its id, so an audience never sees a later definition or rules change without a release (§12.6). No point of D6 remains open.
 
-  The alternative is never showing them in the public tier. Either answer is additive to A2a and blocks only A4.
+  *The question, as first put (2026-11-07), for the record.* §3 and the A4 row say the public tier shows no species or size "unless released", but nothing defines how they are released. They are definition inputs, not derived mechanics, so OD-17 does not exclude them.
+
+  **Recommended then:** a per-release opt-in, off by default. The draft holds `shows_species` and `shows_size`. When a flag is set, the release snapshots `released_species_id` and `released_size_category` from the definition at release time. Later identity edits then reach audiences only through a new release.
+
+  The alternative was never showing them in the public tier. Either answer was additive to A2a and blocked only A4.
 - **D7: Copied legacy text and draft readers. Approved by the owner (recorded 2026-11-07).** The approved policy:
   1. Copying a legacy field requires current permission to read its source.
   2. Before release, copied fields retain that source-read restriction.
@@ -3852,6 +4340,20 @@ The expiry-wait trace did not show a polling timeout. `wait_blocked` found that 
 **Closeout verification on the corrected tree:** the 16-file A3a/A3b affected set passed `350 passed` in 318.80 s with §6.2 configuration isolation and disposable PostgreSQL. `uv run python scripts/run_sharded_tests.py` passed all `7,445` collected tests across four disposable PostgreSQL 18 shards in 16m15s; logs are retained in `.tmp/shards/run-20261109-202310-1692`. `git diff --check` passed. The earlier independent 350-test result and 13-test A3b HTTP results remain historical results; the new affected-set and full-suite runs are separately recorded here.
 
 **CI/push status:** CI remains pending. `origin/phase15/completion` was at `ea85b2c`; updating it would send 117 commits including unrelated P02 navigation, A2b profile, P2/P3 transaction and other phase work. No PR exists for this branch, and the workflow requires a PR targeting `main`. Those outgoing changes were not pushed or submitted in a draft PR because doing so would violate the no-unrelated-commits constraint. No merge or A4 work was started.
+
+---
+
+## A3b CI and pull-request status, and the A4 handoff (recorded 2026-11-10)
+
+The closeout record above, which said CI was pending and no PR existed, is kept as written. The owner reported the status since then, and it was checked with `gh` on 2026-11-10:
+
+- **Commits after the closeout record (`e16a08b`).** Three CI-environment commits, touching only `.github/workflows/ci.yml` and `scripts/run_sharded_tests.py`:
+  - `5206fcf` installs the PostgreSQL binaries for the runner safety tests;
+  - `76023b0` configures the PostgreSQL repository noninteractively;
+  - `bfa64f2` disables inaccessible Unix sockets in local shards.
+- **CI.** Run 42755362414 passed all ten jobs at `bfa64f23c458b9c831c55d24355652d8726aa3c2`.
+- **PR.** Draft PR #68 (`phase15/completion` into `main`) is open and unmerged, with head `bfa64f2`. Its readiness was not changed.
+- **A4.** D6 is approved, and A4 is designed in §12 on top of `bfa64f2`. The design commit is documentation only. A4's implementation is not started.
 
 ---
 
