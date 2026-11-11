@@ -4422,6 +4422,14 @@ Two commits on `phase15/completion`, from the planning commit `4128905` (parent 
 
 **Remaining findings (rubric).** (1) Helpers outside this change keep their own fixed 15 s budgets (`_wait_until_blocked_by` in `test_character_reveal_delegation_deadlocks.py`, the expiry file's waits, `_Request.join`). They failed under the three-runner condition on earlier trees and passed in the three runs on this tree, which is a sample, not a proof. Exposure 0, impact 1, triggerability 1 (oversubscribed machine), detection 1 (a misleading failure), blast 0: **score 3, Low**; schedule normally, and convert them to `Budget` if they recur. (2) One run under that condition failed `test_login_failure_audit_action_migration.py::test_upgrading_to_103_adds_exactly_the_denied_code` once; it is a migration test outside this change, not diagnosed, and passed in all other runs. Exposure 0, impact 1, triggerability 1, detection 1, blast 0: **score 3, Low**. (3) The freeze's own source is not isolated: **informational**.
 
+**Review outcome and closeout status (2026-11-11).** Attribution matters here, so the three statuses are kept apart.
+
+- *Reviewed correctness (reviewer's statement, not re-derived here).* The A4 production implementation was accepted under prior review. The A4 HTTP race and disclosure-sweep gaps were reported resolved. The harness correction (`10ff2aa`, `1cb3b2b`) was reported as **pass with a nonblocking cleanup finding**.
+- *Local verification (implementer's run).* Final implementation tree `1cb3b2b3d69cb4ed5a366b9dbd23dd40ed9a12e9`: four-shard full run, 7,550 of 7,550 passed on the first run, no reruns (`.tmp/a3-http-evidence/full-closeout.out`). The reviewer inspected that run's log and independently ran correction checks; the reviewer did **not** independently rerun the full suite.
+- *CI.* Recorded in the pull request for the pushed HEAD; not part of this entry.
+
+**Nonblocking findings retained, none resolved:** (a) request-thread cleanup after join timeouts is best-effort (the probes release the hold and join with a bounded timeout; a request that outlives the join is not forcibly stopped); (b) fixed-budget waits elsewhere (finding (1) above); (c) the single migration-test failure under triple-runner load (finding (2) above), still undiagnosed.
+
 ---
 
 ## A2b-1 implementation record (2026-11-07)
