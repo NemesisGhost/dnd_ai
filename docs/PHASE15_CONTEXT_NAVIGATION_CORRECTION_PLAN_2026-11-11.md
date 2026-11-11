@@ -1,6 +1,8 @@
 # Context-navigation correction plan (Infobox, timelines, World options) — 2026-11-11
 
-**Status:** planning only; nothing here is implemented. The normative contract is
+**Status:** implemented on `phase15/completion` and awaiting independent review; see the
+[implementation record](#10-implementation-record-2026-11-11-claude-code-sonnet-55) (§10). Sections 1-9 are the
+plan as approved and are kept unchanged below. The normative contract is
 [UI_DESIGN.md §4.8.12](UI_DESIGN.md#4812-context-navigation-correction-read-gates-destinations-and-meaningful-choice-approved-2026-11-11-implementation-pending).
 This plan adds the findings, implementation boundaries, tests, and handoff prompts; it
 does not restate that contract.
@@ -574,3 +576,116 @@ You may flag any of these as informational if the implementation makes them wors
 - the independent commands you ran and their results, kept separate from the
   implementer's reported evidence;
 - the remaining manual checks.
+
+## 10. Implementation record (2026-11-11, Claude Code Sonnet 5.5)
+
+**Status: implemented on `phase15/completion` and awaiting independent review (Codex Luna Medium, §9). Not
+owner-accepted.** PR #68 stays draft and unmerged; A4 acceptance is unchanged; A5–A7 are not started. Portal and
+one database test only: no `src/dnd_ai/**`, migration, route, selection-store, reconciler, `CampaignLayout`
+adoption, entry-stamp or departure-guard change.
+
+| Commit | Parent | Content |
+|---|---|---|
+| `652e0f3c527d349c092a28b94d55772177c2a2ab` | `00c463f284f725b74d696452c59b0862fae7b679` | Plan and contract (planning commit) |
+| `f7dc8bebafd335e397fd4878705cfaef16e43fe6` | `652e0f3` | **CNC-1** read gates: Infobox, sidebar, Timelines tree, World overview tree follow `world.view`; backend regression |
+| `4cade3df91a22489c80ebe24aa63c8636458dfe0` | `f7dc8be` | **CNC-2** option model, reasons, retries, `startedSeq`, World reconciliation |
+| `af44bcb9fa3b6af609f8370f331e49e8400c5f79` | `4cade3d` | **CNC-3** campaign-only Timeline destinations, inline chooser, §4.1 documentation fold-in |
+| `0428960cf7f4eece40ea5caa6475e98600738ce7` | `af44bcb` | Fix found by the real-browser check: Back must not reopen a closed chooser |
+| the commit that adds this section | `0428960` | This record and the ledger row (documentation only) |
+
+**Decisions applied.** Q1: the campaign-derived World rule is unchanged and the new chooser is not used for World
+selection (a possible improvement, recorded separately in the final report). Q2: a caller with `world.view`
+keeps world-route precedence. Pagination stays deferred. No backend authorization expansion.
+
+### 10.1 Deviations from the plan, with reasons
+
+1. **Evidence is derived while rendering, not stored by an effect.** The plan's wording ("records an entry each
+   time its world read settles") was first implemented with an effect and `setState`. That added a provider
+   commit after every settle and made two existing suites fail under concurrency (`CampaignLayout.contextTransition`
+   and the panel's cascade test; the slice-1 tree passed the same three-file loop 3 of 3). The shipped version
+   merges the settled read into the stored record during render (`mergeEvidence`), changes the stored value only
+   when the evidence changes, and keeps the exposed map's identity otherwise. Same contract, no extra commit.
+2. **Request-start ordering reviewed against the real lifecycle; the mechanism holds.** `startedSeq` is taken
+   where each read starts (the load effect or `refetch`), belongs to the data on screen (a refetch in flight
+   keeps the earlier value until its own answer is applied), and an aborted or superseded read never reaches
+   `apply`. React runs child effects first, so on a first mount the panel's list starts before the provider's
+   world read; a refusal of that read is therefore newer and withdraws the option, and a refusal that started
+   before a later list read (for example a retry) is outranked by it however late it answers. Both are tested.
+   A transient failure records nothing. No policy was changed.
+3. **`canReadWorld` lives in `utils/worldAccess.ts`** (CNC-1 needed it before the model existed; the plan allows
+   adding a predicate there) and is re-exported by `navigation/contextOptions.ts`.
+4. **The chooser survives a REPLACE of its own address.** The plan keys it to `location.key`. The selection
+   owners write their context stamp onto the entry with a REPLACE (a new key, same address), which closed an
+   open chooser in the production-tree test. A same-address REPLACE is now treated as the same location; a PUSH,
+   a POP or another address ends it. The real-browser run then showed the closed chooser could return on Back
+   (the panel stays mounted and the old key came back), so state whose location is gone is now forgotten at
+   once (commit `0428960`, with a jsdom test that fails without it).
+5. **"Choosing the committed timeline closes it"** is implemented on the select's change event. A controlled
+   select reverts to the committed value, and browsers fire no change for re-picking the value the control
+   already shows, so this is a defensive path in a browser; Cancel and Escape are the real dismissals.
+6. **Focus return uses the retry rule.** When a chooser closes because access changed (or the world became
+   readable) with focus inside, focus returns to the Timeline select, or to the reason text when nothing else
+   remains to choose and the select is disabled (a disabled select cannot take focus).
+7. **Existing tests changed beyond the two named in §2** (each keeps its coverage): the panel test "never invents
+   timeline options when the world read is denied" and the option test "a refusal is not a failure" now expect
+   the campaign-derived Timeline options CN-1 introduces; the CNC-1 panel test for a read that carries no
+   `world.view` uses a caller with no campaigns; and `App.contextPropagation.integration.test.tsx` waits for the
+   World select to be enabled before choosing (the contract makes campaign-derived entries wait for the list).
+   No assertion was weakened; the changed ones assert the new rule.
+
+### 10.2 Findings and grading ([rubric](ISSUE_GRADING_RUBRIC.md))
+
+| ID | Finding | Exp | Imp | Trig | Det | Blast | Score | Disposition |
+|---|---|---:|---:|---:|---:|---:|---|---|
+| F1, F2, F3, F4 | The plan's findings | | | | | | as §2 | Implemented (CNC-1 to CNC-3); F5 stays deferred |
+| N1 | A closed chooser reopened when Back returned to the entry it was opened at (found by the real-browser run; jsdom could not see it) | 2 | 1 | 1 | 0 | 0 | **4 Medium** | Fixed in `0428960`; test fails without the fix; not blocking |
+| N2 | The first (effect-based) evidence recording added a provider commit that made two existing suites fail under concurrency (deviation 1) | | | | | | n/a | Never committed; replaced before CNC-2 landed |
+| N3 | `App.readRecovery` "keeps focus on the retry button while it reads" failed in 2 of 6 full runs during development (before and after the render-phase change); not reproduced in 3 later full runs, 8 runs beside a full suite, or the final full run. The ledger already records this test as an unattributed intermittency (2026-11-06). `WorldSharingPage` (one 8 s timeout in one full run; 3 of 3 alone) and a different 8.7 s timeout on the unmodified slice-1 tree show the suite has load-sensitive timeouts | 1 | 0 | 1 | 1 | 0 | **3 Low** | Not classified as a flake: unexplained, pre-existing, not shown to be caused by this change; follow-up |
+| N4 | `portal/.tmp/infobox-review.test.tsx` (gitignored review scratch, not part of this change) fails `npm run lint` on an unused variable, and its probe "world editor with two readable timelines is blocked by the manage alias" asserts the old behavior, so the default `npm test` fails that one test | 0 | 0 | 0 | 0 | 0 | 0 Informational | Left untouched (not mine); the owner or reviewer may delete it |
+| N5 | `TimelinePage` builds its "World overview" and "Timelines" breadcrumb links from the typed route id even when the read was refused, so a caller without access sees links to `/worlds/{typed id}` on the non-disclosing page. They disclose nothing (the visitor typed the id; the targets are non-disclosing) and the page is outside this change's scope | 1 | 0 | 1 | 0 | 0 | 0 Informational | Not changed; the reviewer's "no `/worlds/...` link" check may flag it; follow-up decision |
+
+### 10.3 Verification (executed)
+
+- **Portal, final tree (`0428960`):** `eslint src` clean; `npm run build` (`tsc -b` and `vite build`) clean; full
+  `vitest run` (excluding the gitignored `.tmp/` probe) 423 files, 5,117 tests, all passed. `npm run lint` as
+  written also lints `portal/.tmp/` and fails on N4. A run that includes `.tmp/` fails its one probe (N4).
+- **Initial failures and reruns, reported separately.** Full runs on the way: (1) 1 failure, `.tmp` probe (N4), on
+  the CNC-1 tree; (2) CNC-2 work, run 1: 2 failures (`App.readRecovery`, `CampaignLayout.contextTransition`); run
+  2: 2 failures (`contextTransition`, panel cascade) — both traced to the effect-based evidence commit and fixed
+  (deviation 1), the same three files then passed 4 of 4; run 3: 2 failures (`App.contextPropagation` "world change
+  to a campaign-visible world", `App.readRecovery`) — the first is the contract's new "Loading worlds…" wait
+  (reproduced under load; the helper now waits for the select to be enabled), the second is N3; runs 4–6 passed
+  (422 files, 5,082 tests). CNC-3 tree: one failure, `WorldSharingPage` 8 s timeout (N3), 16 of 16 on three reruns.
+  Unmodified slice-1 tree, for comparison: run 1 clean, run 2 one unrelated 8.7 s timeout.
+- **Baseline check for every new test** (source stashed, tests kept): CNC-1 8 failed as intended; CNC-2 17 of 21
+  failed (the 4 that pass on the baseline are regression guards and are not counted as closing a finding); CNC-3
+  32 failed; the Back test fails without its fix. Counts are the evidence that each test fails for the stated reason.
+- **Backend (no product code changed):** `uv run pytest tests/database/test_world_visibility.py` on the
+  suite's own ephemeral PostgreSQL 18 database: 16 passed (14 existing, 2 new); `ruff format --check`
+  (847 files), `ruff check`, `mypy src` (279 files), `uv lock --check`, `git diff --check` clean. The full
+  four-shard backend run was not run (portal-only change plus one database test, as §5.4 allows).
+
+### 10.4 Real-browser checks (§6)
+
+**Performed (scripted, not a person at a keyboard):** Chrome 156.0.8078.80 headless on Windows through
+`playwright-core` (real keyboard events, a real native `<dialog>`, real layout), against a throwaway stack on ports
+8002 and 5175 and a disposable database created and dropped by the run; the owner's servers were not touched and the
+temporary Vite config was removed. Accounts: a campaign-only player, a campaign-only GM, and a world viewer who is
+also a campaign player. 53 checks passed on the final tree (casey 25, gwen and mika 16, retries 12): Tab/Shift+Tab
+order around the levels, the chooser opening from an arrow key with focus kept on the select and the chooser as the
+next Tab stop, Escape and Cancel returning focus, a pointer press outside not closing it, a reload not restoring it,
+navigation and Back not reopening it, Enter on a link landing on the destination heading, the instruction announced
+once and withdrawn and "Campaign changed to ‹name›." appearing in the live region (DOM text only), Stay (same page,
+history and draft, chooser open, focus back on the link) and Leave on a dirty form, the world read never sent for a
+campaign-only caller, no `/worlds/...` anchor, world routes and no chooser for the viewer, failed-read reasons with
+Try again repeating exactly one GET and moving focus to the select or reason, the non-disclosing direct entry, and
+no horizontal scroll at 320 px with the chooser open in both themes. **Recorded behavior (§6.1):** a closed select
+changed with an arrow key to a one-campaign timeline navigates immediately, as every Infobox select already does;
+the chooser did not flicker. Evidence (logs, scripts, screenshots): `C:\Users\nemes\dnd_ai_evidence_20261111\cnc\`.
+
+**Pending (not performed; no substitute claimed):** NVDA with Chrome or Firefox and VoiceOver with Safari
+(chooser instruction, disabled selects read with reasons, ordering of focus change and polite message); Edge on
+Windows and any other browser's arrow-key behavior; a physical keyboard run (the scripted keys are real events but
+not a person); visible-focus review of every new control beyond the captured screenshots; actual 400% browser zoom
+(320 CSS px was checked, which is the same width); Back/Forward across a campaign-derived timeline switch beyond the
+chooser case above; two-tab revocation while the chooser is open and while an explicit World option is shown.
