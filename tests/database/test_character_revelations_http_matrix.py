@@ -15,6 +15,10 @@ rows are in test_character_revelations_matrix.py; the mapping is in plan section
 """
 
 import json
+import sys
+import threading
+import time
+import traceback
 import uuid
 from collections.abc import Callable
 from typing import Any
@@ -80,7 +84,7 @@ from tests.database.test_character_revelations_matrix import (  # noqa: F401 - f
     stranded,
 )
 from tests.factories import make_external_identity
-from tests.lock_race_support import LockRace
+from tests.lock_race_support import Budget, LockRace
 
 pytestmark = pytest.mark.database
 
@@ -118,13 +122,87 @@ def blocked_pid(engine: Engine, holder_pid: int) -> int:
     return holder[0]
 
 
-def wait_waiting_on(engine: Engine, pid: int, request: _Request) -> None:
-    """`request` is blocked (directly or in the queue) by the backend `pid`."""
-    wait_until(
-        lambda: _blocked_by(engine, pid) >= 1 or request.done,
-        "the second request to wait on the first",
+def _sessions(engine: Engine) -> list[tuple[object, ...]]:
+    """Every backend of this database, for failure messages: pid, state, wait event, blockers,
+    transaction age, backend age and the head of its last statement."""
+    with engine.connect() as connection:
+        rows = connection.execute(
+            text(r"""
+                SELECT pid, state, wait_event_type, wait_event, pg_blocking_pids(pid),
+                       now() - xact_start AS xact_age, now() - backend_start AS backend_age,
+                       left(regexp_replace(query, '\s+', ' ', 'g'), 110)
+                FROM pg_stat_activity
+                WHERE datname = current_database() AND pid <> pg_backend_pid()
+                ORDER BY pid
+            """)
+        ).all()
+    return [tuple(row) for row in rows]
+
+
+def _recent_commits(engine: Engine) -> dict[str, object]:
+    """What committed in the last two minutes, so a failure says whether the request ever reached
+    the database (a revelation or a receipt) and when, against the holder's transaction age."""
+    with engine.connect() as connection:
+        return dict(
+            connection.execute(
+                text("""
+                    SELECT
+                      (SELECT count(*) FROM security.character_revelations
+                         WHERE created_at > now() - interval '120 seconds') AS revelations,
+                      (SELECT count(*) FROM security.idempotent_requests
+                         WHERE created_at > now() - interval '120 seconds') AS receipts,
+                      (SELECT count(*) FROM security.idempotent_requests
+                         WHERE completed_at > now() - interval '120 seconds') AS completed
+                """)
+            )
+            .mappings()
+            .one()
+        )
+
+
+def _thread_stacks(request: _Request) -> str:
+    """Where the request's thread, and every thread it started, is right now: a request that is not
+    waiting in the database is somewhere else, and this says where."""
+    frames = sys._current_frames()
+    named = {thread.ident: thread.name for thread in threading.enumerate()}
+    out = []
+    for ident, frame in frames.items():
+        if ident == threading.get_ident():
+            continue
+        stack = "".join(traceback.format_stack(frame, limit=6))
+        mine = ident == request.thread.ident
+        out.append(f"--- thread {named.get(ident, ident)} (request thread: {mine})\n{stack}")
+    return "\n".join(out)
+
+
+def wait_waiting_on(engine: Engine, pid: int, request: _Request, seconds: float = 15.0) -> None:
+    """`request` is blocked (directly or in the queue) by the backend `pid`.
+
+    A request that finishes first is reported as it finished (an early 201 means it was never
+    held). A wait that expires reports every backend, so which session the request is really
+    waiting on, and whether the holder is still open, is in the failure rather than a bare timeout.
+    The budget is not charged for time the whole process did not run (`Budget`): a freeze right
+    after the hold otherwise ends the wait the instant the process resumes, before the request,
+    frozen with it, has been scheduled to reach the database."""
+    budget = Budget(seconds)
+    while not budget.expired():
+        if request.done:
+            raise AssertionError(
+                f"the request finished before it waited on backend {pid}: "
+                f"{getattr(request.response, 'status_code', None)} "
+                f"{getattr(request.response, 'text', request.error)}; "
+                f"committed={_recent_commits(engine)} sessions={_sessions(engine)}"
+            )
+        if _blocked_by(engine, pid) >= 1:
+            return
+        time.sleep(0.02)
+    if _blocked_by(engine, pid) >= 1:  # the last look is after the deadline, not before it
+        return
+    raise AssertionError(
+        f"the request never waited on backend {pid} (request done={request.done}){budget.note()}; "
+        f"committed={_recent_commits(engine)} sessions={_sessions(engine)}\n"
+        f"threads:\n{_thread_stacks(request)}"
     )
-    assert not request.done, getattr(request.response, "text", request.error)
 
 
 def in_flight(
@@ -675,3 +753,100 @@ def test_v1_v2_a_revoke_and_the_end_of_the_target(
             one_receipt(postgres_engine, g, g.o1_user_id, revoke_key, revoked)
         race.join_all()
     assert_roles(postgres_engine, g, ended=(g.player,))
+
+
+# --- the harness's own waits (the 2026-11 intermittent M2 failure) -------------------------------
+#
+# Under load the whole test process has been seen to stop for tens of seconds right after a hold was
+# taken, and the 15 second wait then expired the instant the process resumed, before the request had
+# run. These pin the behaviours that stand between that and a misleading failure.
+
+
+def test_an_early_completion_is_reported_as_it_finished(
+    client_factory: Factory, postgres_engine: Engine, g: Gate, rev: Rev
+) -> None:
+    """An early completion is a diagnosis (with the committed rows and the backends), not a timeout."""
+    with LockRace(postgres_engine) as race:
+        held = race.hold(lambda cn: cn.execute(text("SELECT 1")).all())  # holds no row at all
+        created = post(
+            client_factory, g.o1_user_id, url(g, rev.character_id), member_body(g.player),
+            key("early"),
+        )  # fmt: skip
+        created.thread.join(15)
+        with pytest.raises(AssertionError) as raised:
+            wait_waiting_on(postgres_engine, held.pid, created, seconds=5.0)
+        message = str(raised.value)
+        assert "finished before it waited" in message and "201" in message
+        assert "committed=" in message and "sessions=" in message
+        held.commit()
+        race.join_all()
+
+
+def test_a_wait_that_expires_says_where_the_request_is(
+    client_factory: Factory, postgres_engine: Engine, g: Gate, rev: Rev
+) -> None:
+    """The expiry reports the backends, what committed and the threads, and (the request being held
+    by a different session than the one asked about) is a failure, not a pass."""
+    with LockRace(postgres_engine) as race:
+        held = race.hold(end_of(g, g.player, g.o2))
+        created = post(
+            client_factory, g.o1_user_id, url(g, rev.character_id), member_body(g.player),
+            key("expire"),
+        )  # fmt: skip
+        with pytest.raises(AssertionError) as raised:
+            wait_waiting_on(postgres_engine, held.pid + 1, created, seconds=1.0)
+        message = str(raised.value)
+        assert "never waited on backend" in message
+        assert "sessions=" in message and "committed=" in message and "threads:" in message
+        assert "request thread: True" in message
+        held.commit()
+        created.join()
+        race.join_all()
+
+
+def _frozen_start(factory: Factory, seconds: float) -> Factory:
+    """A client factory that does not return for `seconds`: the request thread stopped with the rest
+    of a frozen process, before it builds its application and posts."""
+
+    def make(user: uuid.UUID) -> TestClient:
+        time.sleep(seconds)
+        return factory(user)
+
+    return make
+
+
+def test_a_frozen_process_is_not_charged_to_the_wait(
+    client_factory: Factory,
+    postgres_engine: Engine,
+    g: Gate,
+    rev: Rev,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The failure as it happened, reproduced: the waiter is frozen for longer than the whole
+    budget at its first look (as the whole process was), the request is held at its target the
+    whole time, and the wait still observes it blocked instead of expiring when it resumes. The
+    request is delayed by the same freeze (a stopped process stops both), so it reaches its lock only
+    after the waiter is running again; without the compensation the wait has already expired."""
+    real = _blocked_by
+    frozen = []
+
+    def freeze_once(engine: Engine, pid: int) -> int:
+        if not frozen:
+            frozen.append(True)
+            time.sleep(1.6)  # longer than the budget below, and than STALL_SECONDS
+        return real(engine, pid)
+
+    monkeypatch.setattr(sys.modules[__name__], "_blocked_by", freeze_once)
+    with LockRace(postgres_engine) as race:
+        held = race.hold(end_of(g, g.player, g.o2))
+        created = post(
+            _frozen_start(client_factory, 1.6), g.o1_user_id, url(g, rev.character_id),
+            member_body(g.player), key("frozen"),
+        )  # fmt: skip
+        wait_waiting_on(postgres_engine, held.pid, created, seconds=1.0)
+        assert frozen
+        held.commit()
+        response = created.join()
+        assert _status(response) == 409  # type: ignore[arg-type]
+        assert error_code(response) == "revelation_target_not_active"
+        race.join_all()

@@ -40,6 +40,41 @@ from typing import Any
 from sqlalchemy import Connection, Engine, event, text
 
 WAIT_SECONDS = 15.0
+STALL_SECONDS = 1.0
+
+
+class Budget:
+    """A wait budget of `seconds` that is not charged for time the process itself did not run.
+
+    A polling wait asks `expired()` once per iteration, roughly every 20 to 100 ms. A gap between two
+    asks longer than `STALL_SECONDS` can only be the whole process not running (a collection pause,
+    paging under memory pressure, a suspended machine): the waiter was not running, so neither was
+    the request it is waiting for, and charging that time would end the wait the instant the process
+    resumes, before the request has been scheduled. The gap is added to the deadline and reported in
+    `note()`. A request that is hung in a process that keeps running still expires at `seconds`;
+    nothing here lengthens a wait that was not frozen.
+
+    Observed 2026-11 under three concurrent full runs: a 44 second freeze right after a hold was
+    taken, then the wait failing the moment the process resumed, with the request's first statement
+    beginning at that same instant (see docs/PHASE14_15_P03A_IMPLEMENTATION_PLAN)."""
+
+    def __init__(self, seconds: float, clock: Callable[[], float] = time.monotonic) -> None:
+        self._clock = clock
+        self._last = clock()
+        self.deadline = self._last + seconds
+        self.stalled = 0.0
+
+    def expired(self) -> bool:
+        now = self._clock()
+        gap = now - self._last
+        self._last = now
+        if gap > STALL_SECONDS:
+            self.deadline += gap
+            self.stalled += gap
+        return now >= self.deadline
+
+    def note(self) -> str:
+        return f" (the process did not run for {self.stalled:.1f}s of it)" if self.stalled else ""
 
 
 class _Aborted(BaseException):
@@ -127,8 +162,8 @@ class Pause:
     def wait_reached(self, worker: Worker) -> None:
         """Waits until the paused thread is at the pause point; a worker that ended first is
         reported as it ended."""
-        deadline = time.monotonic() + WAIT_SECONDS
-        while time.monotonic() < deadline:
+        budget = Budget(WAIT_SECONDS)
+        while not budget.expired():
             if self.reached.wait(0.02):
                 return
             if worker.done:
@@ -212,8 +247,8 @@ class LockRace:
         """Waits until `expected` sessions (default: as many as `workers`) are blocked, directly or
         along the queue of waiters, by `blocker`'s session."""
         wanted = expected if expected is not None else len(workers)
-        deadline = time.monotonic() + WAIT_SECONDS
-        while time.monotonic() < deadline:
+        budget = Budget(WAIT_SECONDS)
+        while not budget.expired():
             for worker in workers:
                 if worker.done:
                     raise AssertionError(
@@ -223,9 +258,11 @@ class LockRace:
             if pid and self.blocked_by(pid) >= wanted:
                 return
             time.sleep(0.02)
+        if blocker.pid and self.blocked_by(blocker.pid) >= wanted:  # the last look is after expiry
+            return
         raise AssertionError(
             f"expected {wanted} session(s) blocked by pid {blocker.pid}; "
-            f"{self.blocked_by(blocker.pid) if blocker.pid else 0} were. "
+            f"{self.blocked_by(blocker.pid) if blocker.pid else 0} were{budget.note()}. "
             f"Waiting sessions: {self.waiting_sessions()}"
         )
 

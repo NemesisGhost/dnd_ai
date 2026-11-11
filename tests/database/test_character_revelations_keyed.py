@@ -63,7 +63,7 @@ from tests.database.test_character_revelations import (  # noqa: F401 - fixtures
     url,
 )
 from tests.database.test_idempotency_key_lock import _key_lock_state
-from tests.lock_race_support import LockRace
+from tests.lock_race_support import Budget, LockRace
 
 pytestmark = pytest.mark.database
 
@@ -112,12 +112,14 @@ def key_ids(engine: Engine, actor: uuid.UUID, g: Gate, key: str) -> tuple[int, i
 
 
 def wait_until(predicate: Callable[[], bool], what: str) -> None:
-    deadline = time.monotonic() + _WAIT_SECONDS
-    while time.monotonic() < deadline:
+    budget = Budget(_WAIT_SECONDS)
+    while not budget.expired():
         if predicate():
             return
         time.sleep(0.02)
-    raise AssertionError(f"timed out waiting for {what}")
+    if predicate():  # the last look is after the budget, not before it
+        return
+    raise AssertionError(f"timed out waiting for {what}{budget.note()}")
 
 
 def wait_blocked(engine: Engine, hold: _PidHold, request: _Request) -> None:
