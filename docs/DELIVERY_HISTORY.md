@@ -24,6 +24,7 @@ contract explicitly. Current roadmap, policy and contracts start at [the index](
 | Scoped roles / CP-4 | Integration evidence and PR #67 run 40151267535, third attempt green | Attempts/failures are not erased; snapshot rehearsal had no Viewer or deny-grant source rows |
 | CP-10 / DEF-001 | CP-10 complete; later operation inventory and browser retest recorded | RC-10 command variants, AT/layout gaps and run identities retained in coverage/ledger |
 | P02 | Owner approval 2026-11-06 at 81bf164 | Browser follow-ups and broader Phase 14/15 acceptance remain separate |
+| PR #68 (Phase 15 navigation and shared-actor contracts through P03-A A4) | Merged 2026-11-11 as b0910c4 (head d51e38a); post-merge main CI run 43113470050 succeeded | A merge checkpoint, not Phase 15 completion; A5–A7, P03-B/C/S, DEF-019 and integrated acceptance remain |
 
 ## Retired sources and maintained destinations
 
