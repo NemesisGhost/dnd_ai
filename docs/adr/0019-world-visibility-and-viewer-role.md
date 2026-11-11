@@ -46,6 +46,14 @@ The world and timeline read models also computed `available_actions` from lifecy
 - `world_viewer` access can only be granted by an operator until world-membership administration enters product scope; at that point the commands above are the write path an API would call.
 - An ineligible historical owner keeps ownership until an operator acts; `--list-ineligible-owners` makes that state visible.
 
+## Amendment: campaign-derived timeline navigation and stale world entries (2026-11-11)
+
+Owner decisions CN-1 and CN-2 ([UI_DESIGN.md §4.8.12](../UI_DESIGN.md), [correction plan](../PHASE15_CONTEXT_NAVIGATION_CORRECTION_PLAN_2026-11-11.md)); approved design, implementation pending. Decisions 1, 2 and 4–8 are unchanged, and no server authorization changes.
+
+- **Decision 3 is extended to timelines.** A caller without `world.view` on a world is offered, in the hierarchy panel only, the timelines of their authorized campaigns on it. A timeline with one such campaign opens that campaign; several require an explicit campaign choice; none is picked arbitrarily. This grants no world or timeline route and reveals no timeline that no authorized campaign is on. Where the caller holds `world.view`, explicit authority wins: timelines open `/worlds/{w}/timelines/{t}`.
+- **Decision 3's "the list does not depend on the current route" is qualified.** An explicit entry is withdrawn while a world read of it that started after the list read was refused (404/403); a campaign-derived entry for the same world survives. Transient failures change nothing.
+- **Unchanged:** a campaign-derived *world* entry still opens through the route campaign or the first campaign in bootstrap order. Whether that should also require an explicit choice is recorded as an open owner question in the correction plan.
+
 ## References
 
 - [ADR 0014](0014-world-authoring-authority.md), [ADR 0018](0018-world-creation-eligibility.md)
