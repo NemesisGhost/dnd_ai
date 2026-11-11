@@ -5,7 +5,13 @@ hold, then a 15 second wait expiring the instant the process resumed); these tes
 fake clock, so no real time passes and no database is involved.
 """
 
-from tests.lock_race_support import STALL_SECONDS, Budget
+import threading
+from typing import Any
+
+import pytest
+
+import tests.lock_race_support as support
+from tests.lock_race_support import STALL_SECONDS, Budget, Pause, Worker
 
 
 class Clock:
@@ -65,3 +71,87 @@ def test_a_gap_at_the_threshold_is_not_a_freeze() -> None:
     clock.now += STALL_SECONDS
     budget.expired()
     assert budget.stalled == 0.0
+
+
+def test_repeated_slow_polls_are_credited_only_up_to_the_cap() -> None:
+    clock = Clock()
+    budget = Budget(15.0, clock, max_credit=10.0)
+    budget.expired()
+    for _ in range(50):  # every poll slow (5 s): the credit stops at the cap
+        clock.now += 5.0
+        budget.expired()
+        if budget.stalled >= 10.0:
+            break
+    assert budget.stalled == 10.0
+    for _ in range(5):
+        clock.now += 5.0
+        budget.expired()
+    assert budget.stalled == 10.0  # not extended further
+    assert budget.expired()  # and the wait ends: 15 s + at most the cap
+
+
+def test_a_gap_is_credited_in_part_when_it_crosses_the_cap() -> None:
+    clock = Clock()
+    budget = Budget(15.0, clock, max_credit=10.0)
+    clock.now += 4.0
+    budget.expired()
+    clock.now += 30.0
+    budget.expired()
+    assert budget.stalled == 10.0
+    assert "10.0s" in budget.note()
+
+
+class _Race:
+    def waiting_sessions(self) -> list[object]:
+        return []
+
+
+class _ExpiresOnFirstAsk:
+    """A budget whose deadline is already past at the first ask, after running `before`: the
+    boundary the poll loop has to look again at."""
+
+    before: Any = None
+
+    def __init__(self, seconds: float) -> None:
+        pass
+
+    def expired(self) -> bool:
+        if _ExpiresOnFirstAsk.before is not None:
+            _ExpiresOnFirstAsk.before()
+        return True
+
+    def note(self) -> str:
+        return ""
+
+
+def _pause() -> Pause:
+    return Pause(_Race(), thread_name="t", pattern="x")  # type: ignore[arg-type]
+
+
+def _worker() -> Worker:
+    return Worker(name="w", thread=threading.Thread())
+
+
+def test_wait_reached_looks_again_after_expiry(monkeypatch: pytest.MonkeyPatch) -> None:
+    pause, worker = _pause(), _worker()
+    monkeypatch.setattr(support, "Budget", _ExpiresOnFirstAsk)
+    _ExpiresOnFirstAsk.before = pause.reached.set  # reached in the last poll interval
+    pause.wait_reached(worker)  # passes: the pause was reached before the final look
+
+
+def test_wait_reached_reports_a_worker_that_ended_at_the_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pause, worker = _pause(), _worker()
+    monkeypatch.setattr(support, "Budget", _ExpiresOnFirstAsk)
+    _ExpiresOnFirstAsk.before = worker.finished.set
+    with pytest.raises(AssertionError, match="ended before the pause point"):
+        pause.wait_reached(worker)
+
+
+def test_wait_reached_expires_when_neither_happened(monkeypatch: pytest.MonkeyPatch) -> None:
+    pause, worker = _pause(), _worker()
+    monkeypatch.setattr(support, "Budget", _ExpiresOnFirstAsk)
+    _ExpiresOnFirstAsk.before = None
+    with pytest.raises(AssertionError, match="never reached the pause point"):
+        pause.wait_reached(worker)

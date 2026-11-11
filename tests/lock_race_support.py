@@ -41,40 +41,60 @@ from sqlalchemy import Connection, Engine, event, text
 
 WAIT_SECONDS = 15.0
 STALL_SECONDS = 1.0
+MAX_STALL_CREDIT_SECONDS = 120.0
 
 
 class Budget:
-    """A wait budget of `seconds` that is not charged for time the process itself did not run.
+    """A wait budget of `seconds` that is not charged for a long gap between two of its own polls.
 
-    A polling wait asks `expired()` once per iteration, roughly every 20 to 100 ms. A gap between two
-    asks longer than `STALL_SECONDS` can only be the whole process not running (a collection pause,
-    paging under memory pressure, a suspended machine): the waiter was not running, so neither was
-    the request it is waiting for, and charging that time would end the wait the instant the process
-    resumes, before the request has been scheduled. The gap is added to the deadline and reported in
-    `note()`. A request that is hung in a process that keeps running still expires at `seconds`;
-    nothing here lengthens a wait that was not frozen.
+    A polling wait asks `expired()` once per iteration, roughly every 20 to 100 ms. What this class
+    *measures* is the gap between two asks. A gap longer than `STALL_SECONDS` is *inferred* to be the
+    whole process not running (a collection pause, paging under memory pressure, a suspended
+    machine): it cannot be told apart from one slow poll, but the inference is the one the observed
+    failure supports, since the request being waited for runs in the same process and was stopped
+    with the waiter. Charging that time would end the wait the instant the process resumes, before
+    the request has been scheduled. The gap is added to the deadline and reported in `note()`.
 
-    Observed 2026-11 under three concurrent full runs: a 44 second freeze right after a hold was
+    The credit is bounded, so slow polls cannot extend a wait indefinitely: the total added to the
+    deadline never exceeds `MAX_STALL_CREDIT_SECONDS` (default 120 s), and gaps beyond that are
+    counted against the budget as ordinary time. A request hung in a process that keeps running
+    (gaps of tens of milliseconds) is never credited and expires at `seconds`; a poll that is slow
+    for a reason of its own (a slow database query) is credited at most that cap in total, and the
+    wait then expires normally.
+
+    Observed 2026-11 under three concurrent full runs: a 44 second gap right after a hold was
     taken, then the wait failing the moment the process resumed, with the request's first statement
     beginning at that same instant (see docs/PHASE14_15_P03A_IMPLEMENTATION_PLAN)."""
 
-    def __init__(self, seconds: float, clock: Callable[[], float] = time.monotonic) -> None:
+    def __init__(
+        self,
+        seconds: float,
+        clock: Callable[[], float] = time.monotonic,
+        max_credit: float = MAX_STALL_CREDIT_SECONDS,
+    ) -> None:
         self._clock = clock
         self._last = clock()
+        self._max_credit = max_credit
         self.deadline = self._last + seconds
-        self.stalled = 0.0
+        self.stalled = 0.0  # polling-gap time credited to the deadline
 
     def expired(self) -> bool:
         now = self._clock()
         gap = now - self._last
         self._last = now
         if gap > STALL_SECONDS:
-            self.deadline += gap
-            self.stalled += gap
+            credit = min(gap, self._max_credit - self.stalled)
+            self.deadline += credit
+            self.stalled += credit
         return now >= self.deadline
 
     def note(self) -> str:
-        return f" (the process did not run for {self.stalled:.1f}s of it)" if self.stalled else ""
+        if not self.stalled:
+            return ""
+        return (
+            f" (the poll did not run for {self.stalled:.1f}s of it; "
+            "taken to be the process not running, and not charged to the wait)"
+        )
 
 
 class _Aborted(BaseException):
@@ -168,8 +188,12 @@ class Pause:
                 return
             if worker.done:
                 raise AssertionError(f"ended before the pause point: {worker.describe()}")
+        if self.reached.is_set():  # the last look is after expiry, as in the other waits
+            return
+        if worker.done:
+            raise AssertionError(f"ended before the pause point: {worker.describe()}")
         raise AssertionError(
-            f"{worker.name} never reached the pause point; waiting sessions: "
+            f"{worker.name} never reached the pause point{budget.note()}; waiting sessions: "
             f"{self.race.waiting_sessions()}"
         )
 

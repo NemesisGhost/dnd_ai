@@ -772,13 +772,16 @@ def test_an_early_completion_is_reported_as_it_finished(
             client_factory, g.o1_user_id, url(g, rev.character_id), member_body(g.player),
             key("early"),
         )  # fmt: skip
-        created.thread.join(15)
-        with pytest.raises(AssertionError) as raised:
-            wait_waiting_on(postgres_engine, held.pid, created, seconds=5.0)
-        message = str(raised.value)
-        assert "finished before it waited" in message and "201" in message
-        assert "committed=" in message and "sessions=" in message
-        held.commit()
+        try:
+            created.thread.join(15)
+            with pytest.raises(AssertionError) as raised:
+                wait_waiting_on(postgres_engine, held.pid, created, seconds=5.0)
+            message = str(raised.value)
+            assert "finished before it waited" in message and "201" in message
+            assert "committed=" in message and "sessions=" in message
+        finally:
+            held.commit()
+            created.thread.join(15)
         race.join_all()
 
 
@@ -793,13 +796,16 @@ def test_a_wait_that_expires_says_where_the_request_is(
             client_factory, g.o1_user_id, url(g, rev.character_id), member_body(g.player),
             key("expire"),
         )  # fmt: skip
-        with pytest.raises(AssertionError) as raised:
-            wait_waiting_on(postgres_engine, held.pid + 1, created, seconds=1.0)
-        message = str(raised.value)
-        assert "never waited on backend" in message
-        assert "sessions=" in message and "committed=" in message and "threads:" in message
-        assert "request thread: True" in message
-        held.commit()
+        try:
+            with pytest.raises(AssertionError) as raised:
+                wait_waiting_on(postgres_engine, held.pid + 1, created, seconds=1.0)
+            message = str(raised.value)
+            assert "never waited on backend" in message
+            assert "sessions=" in message and "committed=" in message and "threads:" in message
+            assert "request thread: True" in message
+        finally:  # the held end is released and the request joined, whatever the assertions did
+            held.commit()
+            created.thread.join(15)
         created.join()
         race.join_all()
 
@@ -843,9 +849,12 @@ def test_a_frozen_process_is_not_charged_to_the_wait(
             _frozen_start(client_factory, 1.6), g.o1_user_id, url(g, rev.character_id),
             member_body(g.player), key("frozen"),
         )  # fmt: skip
-        wait_waiting_on(postgres_engine, held.pid, created, seconds=1.0)
-        assert frozen
-        held.commit()
+        try:
+            wait_waiting_on(postgres_engine, held.pid, created, seconds=1.0)
+            assert frozen
+        finally:
+            held.commit()
+            created.thread.join(15)
         response = created.join()
         assert _status(response) == 409  # type: ignore[arg-type]
         assert error_code(response) == "revelation_target_not_active"
