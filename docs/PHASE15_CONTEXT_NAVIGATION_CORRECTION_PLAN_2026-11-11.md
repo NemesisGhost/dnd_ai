@@ -1,9 +1,11 @@
 # Context-navigation correction plan (Infobox, timelines, World options) — 2026-11-11
 
-**Status:** implemented on `phase15/completion` and awaiting independent review; see the
-[implementation record](#10-implementation-record-2026-11-11-claude-code-sonnet-55) (§10). Sections 1-9 are the
+**Status (reconciled 2026-11-11 at `d51e38a`):** implemented through `6cdc68b`;
+independent review recorded as PASS WITH NONBLOCKING VERIFICATION LIMITATION in
+[the closeout](#107-review-outcome-and-closeout-2026-11-11) (§10.7). Browser checks and
+retained follow-ups remain. Sections 1-9 are the
 plan as approved and are kept unchanged below. The normative contract is
-[UI_DESIGN.md §4.8.12](UI_DESIGN.md#4812-context-navigation-correction-read-gates-destinations-and-meaningful-choice-approved-2026-11-11-implementation-pending).
+[UI_DESIGN.md §4.8.12](UI_DESIGN.md#4812-context-navigation-correction-read-gates-destinations-and-meaningful-choice-approved-2026-11-11-implemented).
 This plan adds the findings, implementation boundaries, tests, and handoff prompts; it
 does not restate that contract.
 
@@ -790,3 +792,10 @@ Attribution is kept separate.
   breadcrumb links built from the typed id; informational, out of scope), and the possible World-selection
   chooser improvement (Q1, not implemented).
 - No overall Phase 15 acceptance or merge readiness is claimed.
+
+**Documentation cleanup (2026-11-11, after `d51e38a`):** N4's ignored
+`portal/.tmp/infobox-review.test.tsx` was inspected and removed as an obsolete diagnostic
+probe asserting pre-correction behavior. Its original bytes and hash are preserved in
+[DELIVERY_HISTORY](DELIVERY_HISTORY.md#2026-11-11-remaining-work-consolidation).
+The production regression suites remain; this retires N4 only, not the other follow-ups
+or browser limitations above. Current obligations are consolidated in [BACKLOG](BACKLOG.md).

@@ -86,3 +86,36 @@ pending requirements retain the original finding IDs in BACKLOG and the acceptan
 | `PHASE14_15_APP_INTERACTION_REPAIR_PLAN_BATCH1_2026-11-01.md` | `9632e562b527e350473989622ee1a53f832f973ecfbc32b16a90343dfe500170` |
 | `PHASE14_15_DEF007_EFFECTIVE_TIME_MEMBERSHIP_PLAN_2026-11-01.md` | `0c96475fcd1fa330d18826ce04ca98d726ea1ae3f80dd40cdaa22792a9aaef14` |
 | `PHASE14_15_P02_NAVIGATION_CONTEXT_PLAN_2026-11-02.md` | `c0e2489f8d4da5d471cb4a8ec06e6100852c6f6cb5289dba0ed4779184e9b613` |
+
+## 2026-11-11 remaining-work consolidation
+
+Reviewed `d51e38a` and the five local plans. Their open work now lives in
+[BACKLOG](BACKLOG.md), including R01–R18, package mappings, dependencies, scope decisions
+and acceptance limits. The three November 1–2 plans were already consolidated in the
+November 8 cleanup; their obsolete local copies are now removed. The two November 9
+reports are superseded by the same register. No historical test result or defect is
+closed by retiring a document.
+
+The November 9 review at `ac589ea` plus concurrent edits recorded two passing defect
+characterizations, six portal files/59 tests passing, and two registrations of the
+access-group member POST. Its full original (including commands, provisional severity
+recommendations and observation limits) is in the backup below. The fresh November 11
+checks are recorded separately in BACKLOG.
+
+The ignored `portal/.tmp/infobox-review.test.tsx` was a diagnostic probe asserting
+pre-correction navigation behavior, with unused declarations reported by lint (N4 in
+the correction review). It was removed, retaining the production regression suites and
+the deferred pagination finding. Other ignored evidence/logs were not removed.
+
+Before deletion all six files were copied byte-for-byte to
+`C:/Users/nemes/dnd_ai_documentation_sources_20261111/` and SHA-256 verified. This is
+local recovery provenance, not a claim that untracked originals are in Git.
+
+| Removed source | SHA-256 |
+|---|---|
+| `docs/PHASE14_15_APP_INTERACTION_REPAIR_PLAN_BATCH1_2026-11-01.md` | `9632e562b527e350473989622ee1a53f832f973ecfbc32b16a90343dfe500170` |
+| `docs/PHASE14_15_DEF007_EFFECTIVE_TIME_MEMBERSHIP_PLAN_2026-11-01.md` | `0c96475fcd1fa330d18826ce04ca98d726ea1ae3f80dd40cdaa22792a9aaef14` |
+| `docs/PHASE14_15_P02_NAVIGATION_CONTEXT_PLAN_2026-11-02.md` | `c0e2489f8d4da5d471cb4a8ec06e6100852c6f6cb5289dba0ed4779184e9b613` |
+| `docs/PHASE15_POST_CHARACTER_REFACTOR_REMAINING_WORK_2026-11-09.md` | `03ef048f3593ce611c7b880b3e5f667197284e488db4242cad27553cdb6dcbd9` |
+| `docs/PHASE15_POST_CHARACTER_REFACTOR_REVIEW_AND_SONNET_PLAN_2026-11-09.md` | `fef7d45e7638cf8338fff3afaae1a7e496de700288f6c1a6a16cf97e9b34702e` |
+| `portal/.tmp/infobox-review.test.tsx` | `2b1d3bccd76d0207340caca8385e49388796ac3f18b76b9059f380b88a3654d0` |

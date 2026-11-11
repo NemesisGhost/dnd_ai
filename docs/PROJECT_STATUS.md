@@ -1,10 +1,8 @@
 # Project status
 
-Documentation reconciled 2026-11-08 against committed baseline `53416d5`; the P03-A row was
-updated 2026-11-10 against `bfa64f2`.
-This page summarizes recorded delivery state; it is not a new verification run.
-Concurrent implementation can be ahead of this baseline. Consult the latest active-plan
-handoff and Git history before starting a checkpoint.
+Reconciled 2026-11-11 against committed baseline `d51e38a`. This page summarizes
+recorded delivery state; fresh targeted checks and the consolidated unresolved work are
+in [BACKLOG](BACKLOG.md). Historical CI and review records do not certify the current head.
 
 **Phase 15 is not complete.** The earlier GM-authoring checkpoint sequence is implemented,
 but expanded character/revelation work and broader acceptance remain. Phase 16 is gated on
@@ -19,7 +17,9 @@ Phase 15 closure. P02 acceptance does not close Phase 14/15 as a whole.
 | Authoring kernel, Phase 14 | Closed with accepted limitations; PR #64, merge `3046714`, recorded green CI `37227612984` | Historical navigation/manual limitations must be reconciled with later P02 evidence, not retroactively marked passed |
 | GM authoring, Phase 15 | Earlier authoring sequence implemented; active P03-A extends character/public-profile/revelation behavior | [Active plan](PHASE14_15_P03A_IMPLEMENTATION_PLAN_2026-11-06.md), [phase evidence](PHASE15_VERIFICATION.md), integrated acceptance/review/CI/merge gates |
 | P02 navigation | Owner acceptance recorded on 2026-11-06 for `81bf164` | B20 keyboard activation, B9 physical Escape/backdrop, B16 actual 200%/400% zoom, B21 deferred/unverified screen reader remain separate; [ledger](PHASE14_15_ACCEPTANCE_LEDGER.md) |
-| P03-A prerequisites and profiles | A0/A1/P0/P1/A2a/A2a-R/A2b/P2/P3/A3a/A3b delivered with review records; A3b verification closeout PASS WITH NONBLOCKING FINDINGS; CI run 42755362414 green at `bfa64f2`, draft PR #68 open and unmerged (2026-11-10) | D6 approved 2026-11-10; A4 designed (plan §12), not started; A5–A7 not started. DEF-019/020/021, stale authorization and the A1 wait-observation flake remain open. No new closure inferred here |
+| P03-A prerequisites and profiles | A0–A4 and P0–P3 delivered with review records. A4 production review accepted; HTTP-race/disclosure gaps resolved. A3 harness closeout records 7,550/7,550 at `1cb3b2b` | A5 player-profile storage/GM read, A6 portal and A7 reconciliation/acceptance remain (preview optional). Fix DEF-019 before A6. DEF-020/021, stale authorization, DEF-016/017 and retained harness findings remain. Current-head CI/PR/merge status was not queried |
+| P03-B/C/S | Accepted actor/control/authoring/mechanical-state contracts; implementation still outstanding | Campaign control and bounded player writes; canonical authoring responsibility and compatibility; campaign mechanical-state isolation and reviewed migration. [Roadmap §15H](PLANv2.md#15h-shared-actor-identity-revelation-and-control-p03-abc), [ADR 0021](adr/0021-shared-actor-identity-control-and-authoring-responsibility.md) |
+| Context-navigation correction | CNC-1–3 plus owner-evidence and pending-state fixes through `6cdc68b`; review closeout at `bdd541b`: PASS WITH NONBLOCKING VERIFICATION LIMITATION | Real-browser owner transitions and remaining keyboard/zoom/history/two-tab/browser/AT checks; N3/N5 and optional Q1 follow-ups. Obsolete N4 scratch probe removed by this cleanup; pagination remains owner-deferred. [Correction plan](PHASE15_CONTEXT_NAVIGATION_CORRECTION_PLAN_2026-11-11.md#107-review-outcome-and-closeout-2026-11-11) |
 | Scoped roles | Implemented and integrated into this branch; historical PR #67 CI and snapshot-upgrade evidence exist | Retain exact rehearsal limits and current acceptance evidence; [ADR 0020](adr/0020-scoped-system-world-and-campaign-roles.md) |
 | R19 foundations | ADRs 0021–0023 accepted on 2026-11-06 at reviewed revision `2ca4648`; implementation plan remains proposed | Primary-PC acknowledgment and checkpoint gates in [R19 plan](R19_FOUNDATION_IMPLEMENTATION_PLAN.md) |
 | Standalone production packaging, Phase 17 | Base Compose database/migration/API and recovery tooling exist | Portal/worker/ingress/TLS/operations and deployment acceptance per [runbook](LOCAL_DEPLOYMENT.md) and roadmap |

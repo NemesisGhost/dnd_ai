@@ -1,11 +1,11 @@
 # P03-A implementation plan: public profiles, revelation and audience-safe character reads
 
-**Status (2026-11-10):** Approved planning document.
+**Status (reconciled 2026-11-11 at `d51e38a`):** Approved plan with implementation through A4. Dated implementation and review entries below preserve their original evidence.
 
-- **Implemented and independently reviewed:** A0, A1, P0, P1, A2a, A2a-R, A2b-1, A2b-2, P2, P3, A3a and A3b. The A3b verification closeout is complete (PASS WITH NONBLOCKING FINDINGS).
-- **CI and PR:** CI run 42755362414 passed all ten jobs at `bfa64f2`, the head of draft PR #68, which is open and unmerged.
+- **Implemented and reviewed:** A0, A1, P0, P1, A2a, A2a-R, A2b-1, A2b-2, P2, P3, A3a, A3b and A4a/b. A4 production correctness was accepted; its HTTP-race and disclosure-sweep gaps are resolved. The A3 harness closeout records 7,550/7,550 tests at `1cb3b2b`, with retained nonblocking findings; see the 2026-11-11 closeout below.
+- **CI and PR:** historical run 42755362414 passed at `bfa64f2`; later closeout entries refer to PR evidence. Current-head CI/PR/merge status was not queried for this reconciliation and is not established by the earlier pass.
 - **Decisions:** D6 was approved on 2026-11-10, so every owner decision this plan has raised is now approved.
-- **Next:** A4 is designed (§12) and not started; it is for Sonnet as A4a, then A4b. A5 to A7 are outlined in §4 only.
+- **Remaining:** A5 to A7 are outlined in §4 and not started. Fix DEF-019 before A6; A5 is optional for entry to A6. A7's audience preview is optional. See [BACKLOG](BACKLOG.md) for the consolidated work and acceptance gates.
 - **History:** the plan was committed on its own as the design commit (`3b3d637`) before A2a's code. The dated entries below record each step.
 
 *Superseded status line (2026-11-08), for the record:* A0, A1, P0, P1, A2a and A2a-R are implemented and independently reviewed (A2a and A2a-R: PASS WITH NONBLOCKING FINDINGS; handoff `523ae5c`). D7 and D8 are approved (recorded 2026-11-07). A2b-1 and A2b-2 are implemented and reviewed (handoff `a9ec4c4`). A3a (storage, create/revoke/list, lifecycle hooks) is implemented locally and awaits independent review (see the A3a implementation record); A3b is not started. A3 is designed and finalized (§10; D4, D5 and D9–D12 approved, §10.15, including the D9-a candidate-statement cutoff approved 2026-11-08) and not implemented. P2, the shared idempotency key lock, is implemented at `d36d565` and independently reviewed (PASS WITH NONBLOCKING FINDINGS; record below §10). A3a now needs P3, committing the request transaction before the response (DEF-022, §11), which is designed and not implemented.
@@ -159,10 +159,10 @@ Every code claim was checked by reading source at the stated commit. No applicat
 
 ## Recommendation
 
-**Next (2026-11-10): A4a, then A4b (§12, for Sonnet), then one independent review covering both.** D6 is approved and no owner decision is open.
+**Next (reconciled 2026-11-11): resolve DEF-019 before A6, then deliver the remaining A5–A7 scope under §4.** A4a/b and their review corrections are implemented. D6 is approved; the plan's D decisions are settled. This does not settle the separate DEF-016 or other backlog policy questions.
 
-- **A4a** adds migration 146, the D6 draft controls, the release's identity snapshot, token and retry key, and the GM read additions. No audience response changes.
-- **A4b** adds the public-profile tier, the `public_profile` section, `sections` and `can_open_character`.
+- **A4a (done)** added migration 146, the D6 draft controls, the release's identity snapshot, token and retry key, and the GM read additions.
+- **A4b (done)** added the public-profile tier, the `public_profile` section, `sections` and `can_open_character`.
 - **Not started:** A5 to A7. DEF-019 should still be fixed before A6.
 
 *Previous recommendation (2026-11-08; done: P3, A3a and A3b are implemented and reviewed):*
