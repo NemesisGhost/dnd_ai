@@ -345,12 +345,13 @@ describe("loading, failure and retry", () => {
     expect(location()).toHaveTextContent("/app/c1/home")
   })
 
-  it("a refusal is not a failure: no retry is offered", async () => {
+  it("a refusal is not a failure: no retry is offered, and the caller's own campaigns still lead somewhere", async () => {
     server.on("GET", "/worlds/world-a", { status: 404, body: {} })
     renderAt("/app/c1/home")
 
     await waitFor(() => expect(server.callsTo("GET", "/worlds/world-a")).not.toHaveLength(0))
-    await waitFor(() => expect(level("Timeline")).toBeDisabled())
+    await waitFor(() => expect(optionNames(level("Timeline"))).toEqual(["No selection", "Branch A", "Main A"]))
+    expect(level("Timeline")).not.toHaveAccessibleDescription()
     expect(screen.queryByRole("button", { name: "Try again" })).toBeNull()
   })
 })

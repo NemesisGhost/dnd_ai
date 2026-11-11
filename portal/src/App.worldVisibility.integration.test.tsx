@@ -189,3 +189,48 @@ describe("world visibility for a player who also owns a legacy world", () => {
     expect(server.calls.some((call) => call.path.includes("camp-b"))).toBe(false)
   })
 })
+
+describe("a caller with no world.view builds no world route from campaigns (CN-1)", () => {
+  it("offers the timelines their campaigns represent, and links no world or world timeline route anywhere", async () => {
+    const first = bootstrap.campaigns[0]!
+    vi.mocked(useSessionBootstrap).mockReturnValue({
+      state: {
+        status: "authenticated",
+        bootstrap: {
+          ...bootstrap,
+          campaigns: [
+            { ...first, world_capabilities: [] },
+            {
+              ...first,
+              campaign_id: "camp-x",
+              campaign_name: "Phase13C Campaign X",
+              timeline_id: "timeline-x",
+              timeline_name: "Phase13C Timeline X",
+              world_capabilities: [],
+            },
+          ],
+        },
+      },
+      reload: vi.fn(),
+      refresh: vi.fn(),
+    })
+    renderAt("/app/camp-a/home")
+
+    const timeline = await screen.findByRole("combobox", { name: "Timeline" })
+    await waitFor(() =>
+      expect(within(timeline).getAllByRole("option").map((option) => option.textContent)).toEqual([
+        "No selection",
+        "Phase13C Timeline A",
+        "Phase13C Timeline X",
+      ]),
+    )
+    expect(timeline).toBeEnabled()
+    // The bootstrap says no world.view, so the world is not even asked about.
+    expect(server.calls.some((call) => call.path === "/worlds/world-hosted")).toBe(false)
+    // Across the Infobox, the sidebar and the page: no link into the world or any of its timelines.
+    for (const anchor of document.querySelectorAll("a")) {
+      expect(anchor.getAttribute("href") ?? "").not.toMatch(/^\/worlds\/world-hosted/)
+    }
+    expect(document.body.innerHTML).not.toContain("/worlds/world-hosted/timelines")
+  })
+})

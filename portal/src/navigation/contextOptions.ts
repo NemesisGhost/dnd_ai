@@ -22,6 +22,7 @@ export type LevelReason =
     | "no_other_world"
     | "no_other_timeline"
     | "no_other_campaign"
+    | "timeline_gone"
 
 export interface RouteDestination {
     kind: "route"
@@ -31,7 +32,16 @@ export interface RouteDestination {
     note: { level: "campaign" | "world" | "timeline"; id: string }
 }
 
-export type LevelDestination = RouteDestination
+// A timeline reachable only through several of the caller's campaigns: nothing navigates until the person
+// chooses one of them (the Infobox's inline campaign chooser). It carries ids only; the chooser derives its
+// entries from the current bootstrap each time it renders, never from this snapshot.
+export interface ChooseCampaignDestination {
+    kind: "chooseCampaign"
+    timelineId: string
+    campaignIds: readonly string[]
+}
+
+export type LevelDestination = RouteDestination | ChooseCampaignDestination
 
 export interface LevelOption {
     id: string
@@ -208,10 +218,71 @@ export interface TimelineLevelInput {
     activeTimelineName: string | null
     // The world read's timelines, in server order. Used only when `worldRead` is "readable".
     worldTimelines: readonly { timeline_id: string; name: string }[]
+    // The caller's authorized campaigns (the current bootstrap). Used only when the world is not readable.
+    campaigns: readonly CampaignContext[]
+    // A chooser the person opened lost its last campaign: say so (UI_DESIGN §4.8.12).
+    timelineGone?: boolean
+}
+
+const UNNAMED_TIMELINE = "Unnamed timeline"
+
+// CN-1: a caller who cannot read the world is offered the timelines their authorized campaigns on it
+// represent, never a world route. Distinct timelines by case-insensitive name then id; a campaign with no
+// timeline adds nothing. One campaign on a timeline opens that campaign; several need an explicit choice.
+function campaignDerivedTimelines(
+    campaigns: readonly CampaignContext[],
+    activeWorldId: string,
+): LevelOption[] {
+    const byTimeline = new Map<string, { name: string; campaigns: CampaignContext[] }>()
+    for (const item of campaigns) {
+        if (item.world_id !== activeWorldId || item.timeline_id === null) continue
+        const entry = byTimeline.get(item.timeline_id)
+        if (entry === undefined) {
+            byTimeline.set(item.timeline_id, {
+                name: item.timeline_name ?? UNNAMED_TIMELINE,
+                campaigns: [item],
+            })
+        } else {
+            entry.campaigns.push(item)
+        }
+    }
+    return [...byTimeline.entries()]
+        .sort(([leftId, left], [rightId, right]) => {
+            const a = left.name.toLocaleLowerCase()
+            const b = right.name.toLocaleLowerCase()
+            if (a !== b) return a < b ? -1 : 1
+            return leftId < rightId ? -1 : leftId > rightId ? 1 : 0
+        })
+        .map(([timelineId, entry]): LevelOption => {
+            const [only] = entry.campaigns
+            return {
+                id: timelineId,
+                label: entry.name,
+                destination:
+                    entry.campaigns.length === 1 && only !== undefined
+                        ? route(`/app/${encodeURIComponent(only.campaign_id)}/home`, "campaign", {
+                              level: "campaign",
+                              id: only.campaign_id,
+                          })
+                        : {
+                              kind: "chooseCampaign",
+                              timelineId,
+                              campaignIds: entry.campaigns.map((c) => c.campaign_id),
+                          },
+            }
+        })
 }
 
 export function timelineLevel(input: TimelineLevelInput): LevelModel {
-    const { worldRead, activeWorldId, activeTimelineId, activeTimelineName, worldTimelines } = input
+    const {
+        worldRead,
+        activeWorldId,
+        activeTimelineId,
+        activeTimelineName,
+        worldTimelines,
+        campaigns,
+        timelineGone = false,
+    } = input
     const selected =
         activeTimelineId !== null && activeTimelineName !== null
             ? { id: activeTimelineId, label: activeTimelineName }
@@ -222,9 +293,12 @@ export function timelineLevel(input: TimelineLevelInput): LevelModel {
     }
     if (activeWorldId === null) return blocked("select_world_first", selected)
 
+    // Explicit authority wins: a readable world offers its timelines as world routes even when the caller
+    // also has campaigns on them (the world route's Campaign level then offers those campaigns).
     const options: LevelOption[] =
-        worldRead === "readable"
-            ? worldTimelines.map((timeline) => ({
+        worldRead !== "readable"
+            ? campaignDerivedTimelines(campaigns, activeWorldId)
+            : worldTimelines.map((timeline) => ({
                   id: timeline.timeline_id,
                   label: timeline.name,
                   destination: route(
@@ -233,16 +307,16 @@ export function timelineLevel(input: TimelineLevelInput): LevelModel {
                       { level: "timeline", id: timeline.timeline_id },
                   ),
               }))
-            : []
     const counted: Counted = {
         options,
         selectedId: activeTimelineId,
         selectedLabel: options.find((o) => o.id === activeTimelineId)?.label ?? activeTimelineName,
     }
     const reasons: EmptyReasons = { none: "no_timeline", sole: "no_other_timeline" }
-    return worldRead === "failed"
-        ? settle(counted, reasons, { reason: "timelines_failed", retry: "world" })
-        : settle(counted, reasons)
+    if (worldRead === "failed") {
+        return settle(counted, reasons, { reason: "timelines_failed", retry: "world" })
+    }
+    return settle(counted, reasons, timelineGone ? { reason: "timeline_gone" } : {})
 }
 
 // --- Campaign ------------------------------------------------------------------------------------------

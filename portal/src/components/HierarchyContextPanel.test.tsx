@@ -450,7 +450,8 @@ describe("HierarchyContextPanel disclosure", () => {
         timelines: [timeline("timeline-a", "Main A")],
       },
     })
-    renderAt("/worlds/world-a")
+    // No campaign of the caller is on it either, so nothing is derived from campaigns.
+    renderAt("/worlds/world-a", null, { ...bootstrap, campaigns: [] })
 
     await waitFor(() => expect(server.callsTo("GET", "/worlds/world-a")).not.toHaveLength(0))
     await waitFor(() => expect(level("Timeline")).toBeDisabled())
@@ -466,15 +467,16 @@ describe("HierarchyContextPanel disclosure", () => {
     expect(level("Campaign")).toBeDisabled()
   })
 
-  it("never invents timeline options when the world read is denied, on a campaign page", async () => {
+  it("offers only the caller's own campaigns' timelines when the world read is denied, on a campaign page", async () => {
     server.on("GET", "/worlds/world-a", { status: 403, body: { detail: "no" } })
     renderAt("/app/c1/home")
 
     await waitFor(() => expect(server.callsTo("GET", "/worlds/world-a")).not.toHaveLength(0))
-    // The campaign's own authorized timeline stays shown, but cannot be changed.
+    // The authorized timeline stays shown; the other one is offered only because the caller's own
+    // campaign c2 is on it (CN-1). Nothing comes from the refused world read, and no world route is built.
     expect(shown(level("Timeline"))).toBe("Main A")
-    await waitFor(() => expect(level("Timeline")).toBeDisabled())
-    expect(screen.queryByText("Branch A")).toBeNull()
+    await waitFor(() => expect(optionNames(level("Timeline"))).toEqual(["No selection", "Branch A", "Main A"]))
+    expect(screen.getByRole("main").innerHTML).not.toContain("/worlds/world-a/timelines")
   })
 
   it("renders no raw identifiers", async () => {

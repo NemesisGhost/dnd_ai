@@ -690,3 +690,97 @@ describe("campaign, World and timeline selections start the matching task", () =
     expect(router.state.location).toBe(before)
   })
 })
+
+// CN-1: a caller with no world.view reaches a timeline only through their campaigns. A timeline with
+// several of them opens an inline chooser; only a chooser LINK is a departure, so only it asks.
+describe("the campaign chooser is an ordinary departure only when a link is followed", () => {
+  // Alpha and beta are on Timeline w1; delta is on Branch w1. None of them carries world.view.
+  const campaignOnly = (): SessionBootstrap => {
+    const base = bootstrapOf()
+    const bare = (item: CampaignContext): CampaignContext => ({ ...item, world_capabilities: [] })
+    return {
+      ...base,
+      campaigns: [
+        ...base.campaigns.map(bare),
+        bare({ ...campaign("delta", "w1", [], null), timeline_id: "t-w1-b", timeline_name: "Branch w1" }),
+      ],
+    }
+  }
+  const group = () => screen.queryByRole("group", { name: "Choose a campaign to open Timeline w1" })
+  const readsOfWorld = () => requests.filter((url) => /\/worlds\/w\d$/.test(url))
+
+  async function openChooser() {
+    control.bootstrap = campaignOnly()
+    mount("/app/delta/home")
+    await onPage("Home")
+    await waitFor(() => expect(level("Timeline")).toBeEnabled())
+    act(() => level("Timeline").focus())
+    fireEvent.change(level("Timeline"), { target: { value: "t-w1" } })
+    await screen.findByRole("group", { name: "Choose a campaign to open Timeline w1" })
+  }
+
+  it("opening it asks nothing, even on a dirty page, and adds no entry; no world read was ever sent", async () => {
+    await openChooser()
+    typeDraft()
+    const before = router.state.location
+    const entries = pushes
+
+    fireEvent.change(level("Timeline"), { target: { value: "t-w1-b" } })
+    fireEvent.change(level("Timeline"), { target: { value: "t-w1" } })
+
+    expect(screen.queryByRole("dialog")).toBeNull()
+    expect(router.state.location).toBe(before)
+    expect(pushes).toBe(entries)
+    expect(group()).not.toBeNull()
+    expect(readsOfWorld()).toEqual([])
+    expect(screen.getByLabelText("Draft")).toHaveValue("half a thought")
+  })
+
+  it("Cancel never asks, even on a dirty page", async () => {
+    await openChooser()
+    typeDraft()
+
+    fireEvent.click(within(group()!).getByRole("button", { name: "Cancel" }))
+
+    expect(screen.queryByRole("dialog")).toBeNull()
+    expect(group()).toBeNull()
+    expect(level("Timeline")).toHaveFocus()
+    expect(screen.getByLabelText("Draft")).toHaveValue("half a thought")
+  })
+
+  it("dirty: a chooser link asks; Stay changes nothing and leaves the chooser open", async () => {
+    await openChooser()
+    typeDraft()
+    const before = router.state.location
+    const entries = pushes
+    const link = within(group()!).getByRole("link", { name: "Campaign alpha" })
+
+    act(() => link.focus())
+    fireEvent.click(link)
+    await answer("Stay")
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+    expect(router.state.location).toBe(before)
+    expect(pushes).toBe(entries)
+    // Still open, and the activated link is where focus returns (the dialog's activated-control rule).
+    expect(group()).not.toBeNull()
+    await waitFor(() => expect(link).toHaveFocus())
+    expect(screen.getByLabelText("Draft")).toHaveValue("half a thought")
+    expect(task()).not.toMatchObject({ root: "campaign", scope: { campaignId: "alpha" } })
+  })
+
+  it("dirty: Leave arrives at that campaign as a new Campaign task, and announces the campaign changed", async () => {
+    await openChooser()
+    typeDraft()
+
+    fireEvent.click(within(group()!).getByRole("link", { name: "Campaign alpha" }))
+    await answer("Leave")
+
+    await onPage("Home")
+    await waitFor(() => expect(where()).toBe("/app/alpha/home"))
+    expect(task()).toMatchObject({ root: "campaign", scope: { campaignId: "alpha" }, trail: [] })
+    await screen.findByText("Campaign changed to Campaign alpha.")
+    expect(group()).toBeNull()
+    expect(readsOfWorld()).toEqual([])
+  })
+})

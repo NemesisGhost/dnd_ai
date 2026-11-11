@@ -9,7 +9,7 @@ import {
   timelineLevel,
   worldLevel,
 } from "./contextOptions"
-import type { WorldEvidenceMap, WorldLevelInput, WorldListState } from "./contextOptions"
+import type { RouteDestination, WorldEvidenceMap, WorldLevelInput, WorldListState } from "./contextOptions"
 
 const world = (id: string, name: string, capabilities = ["world.view"]): WorldSummary =>
   ({ world_id: id, name, capabilities, description: null, lifecycle_status: "active" }) as WorldSummary
@@ -138,7 +138,7 @@ describe("meaningful choice (CN-2): World", () => {
       campaigns: [campaign("c1", "w1", "t1"), campaign("c2", "w2", "t2"), campaign("c3", "w2", "t3")],
       routeCampaignId: "c3",
     })
-    const byId = Object.fromEntries(model.options.map((option) => [option.id, option.destination]))
+    const byId = Object.fromEntries(model.options.map((option) => [option.id, option.destination])) as Record<string, RouteDestination>
     expect(byId.w1).toEqual({ kind: "route", to: "/worlds/w1", root: "world", note: { level: "world", id: "w1" } })
     expect(byId.w2).toMatchObject({ to: "/app/c3/world", root: "world" })
   })
@@ -155,6 +155,7 @@ describe("meaningful choice (CN-2): Timeline", () => {
     activeTimelineId: null,
     activeTimelineName: null,
     worldTimelines: timelines,
+    campaigns: [] as CampaignContext[],
   }
 
   it("lists the world's timelines in server order as world routes", () => {
@@ -345,8 +346,130 @@ describe("World reconciliation by read start order", () => {
       activeWorldName: null,
       evidence: NO_EVIDENCE,
     })
-    expect(model.options.map((option) => [option.id, option.label, option.destination.to])).toEqual(
+    expect(model.options.map((option) => [option.id, option.label, (option.destination as RouteDestination).to])).toEqual(
       direct.map((choice) => [choice.world_id, choice.name, choice.to]),
     )
+  })
+})
+
+describe("campaign-only Timeline destinations (CN-1)", () => {
+  const input = (over: Partial<Parameters<typeof timelineLevel>[0]> = {}) =>
+    timelineLevel({
+      worldRead: "not_requested",
+      activeWorldId: "w1",
+      activeTimelineId: "t1",
+      activeTimelineName: "Alpha",
+      worldTimelines: [],
+      campaigns: [],
+      ...over,
+    })
+  const on = (id: string, timelineId: string | null, name: string | null, worldId = "w1") =>
+    campaign(id, worldId, timelineId ?? "x", { timeline_id: timelineId, timeline_name: name } as Partial<CampaignContext>)
+  const ids = (model: ReturnType<typeof timelineLevel>) => model.options.map((option) => option.id)
+
+  it("derives one option per distinct timeline the caller's campaigns on the world represent", () => {
+    const model = input({
+      campaigns: [on("c1", "t1", "Alpha"), on("c2", "t1", "Alpha"), on("c3", "t2", "Beta"), on("c9", "t9", "Other", "w2")],
+    })
+    expect(ids(model)).toEqual(["t1", "t2"])
+  })
+
+  it("opens the campaign directly when exactly one is on the timeline, as a campaign task", () => {
+    const model = input({ campaigns: [on("c1", "t1", "Alpha"), on("c3", "t2", "Beta")] })
+    expect(model.options.find((option) => option.id === "t2")!.destination).toEqual({
+      kind: "route",
+      to: "/app/c3/home",
+      root: "campaign",
+      note: { level: "campaign", id: "c3" },
+    })
+  })
+
+  it("asks for a choice when several campaigns are on it, in bootstrap order, never picking one", () => {
+    const model = input({
+      activeTimelineId: "t2",
+      activeTimelineName: "Beta",
+      campaigns: [on("c2", "t1", "Alpha"), on("c1", "t1", "Alpha"), on("c3", "t2", "Beta")],
+    })
+    expect(model.options.find((option) => option.id === "t1")!.destination).toEqual({
+      kind: "chooseCampaign",
+      timelineId: "t1",
+      campaignIds: ["c2", "c1"],
+    })
+  })
+
+  it("sorts by case-insensitive name then id, names a null name 'Unnamed timeline', and skips a campaign without a timeline", () => {
+    const model = input({
+      activeTimelineId: null,
+      activeTimelineName: null,
+      campaigns: [
+        on("c1", "t3", "beta"),
+        on("c2", "t2", "Alpha"),
+        on("c3", "t1", "Alpha"),
+        on("c4", "t4", null),
+        on("c5", null, "Ghost"),
+      ],
+    })
+    expect(ids(model)).toEqual(["t1", "t2", "t3", "t4"])
+    expect(model.options.map((option) => option.label)).toEqual(["Alpha", "Alpha", "beta", "Unnamed timeline"])
+  })
+
+  it("enables the level only when another timeline exists, and counts the selected one once", () => {
+    expect(input({ campaigns: [on("c1", "t1", "Alpha")] })).toMatchObject({
+      enabled: false,
+      reason: "no_other_timeline",
+    })
+    expect(input({ campaigns: [on("c1", "t1", "Alpha"), on("c2", "t2", "Beta")] })).toMatchObject({
+      enabled: true,
+      reason: null,
+    })
+  })
+
+  it("derives from campaigns for a refused world and keeps them with a retry for a failed read", () => {
+    const campaigns = [on("c1", "t1", "Alpha"), on("c2", "t2", "Beta")]
+    expect(ids(input({ worldRead: "refused", campaigns }))).toEqual(["t1", "t2"])
+    const failed = input({ worldRead: "failed", campaigns })
+    expect(ids(failed)).toEqual(["t1", "t2"])
+    expect(failed).toMatchObject({ enabled: true, reason: "timelines_failed", retry: "world" })
+  })
+
+  it("never derives while the read is pending, and says so", () => {
+    expect(input({ worldRead: "pending", campaigns: [on("c1", "t1", "Alpha"), on("c2", "t2", "Beta")] })).toMatchObject({
+      enabled: false,
+      reason: "loading_timelines",
+    })
+  })
+
+  it("explicit authority wins: a readable world offers only world routes, one option per timeline", () => {
+    const model = input({
+      worldRead: "readable",
+      worldTimelines: [
+        { timeline_id: "t1", name: "Alpha" },
+        { timeline_id: "t2", name: "Beta" },
+      ],
+      campaigns: [on("c1", "t1", "Alpha"), on("c2", "t1", "Alpha"), on("c3", "t2", "Beta")],
+    })
+    expect(ids(model)).toEqual(["t1", "t2"])
+    for (const option of model.options) {
+      expect(option.destination).toMatchObject({ kind: "route", root: "world" })
+      expect((option.destination as RouteDestination).to).toMatch(/^\/worlds\/w1\/timelines\//)
+    }
+  })
+
+  it("never builds a world route from campaigns", () => {
+    const model = input({
+      worldRead: "refused",
+      campaigns: [on("c1", "t1", "Alpha"), on("c2", "t1", "Alpha"), on("c3", "t2", "Beta")],
+    })
+    for (const option of model.options) {
+      const destination = option.destination
+      expect(destination.kind === "route" ? destination.to : "").not.toContain("/worlds/")
+    }
+  })
+
+  it("reports a vanished chooser timeline without changing the options", () => {
+    expect(input({ timelineGone: true, campaigns: [on("c1", "t1", "Alpha"), on("c2", "t2", "Beta")] })).toMatchObject({
+      enabled: true,
+      reason: "timeline_gone",
+    })
   })
 })
