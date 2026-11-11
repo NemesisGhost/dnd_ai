@@ -22,7 +22,8 @@ export interface WorkspaceHierarchy {
     authoringTimelineId: string | null
     // How the caller may use `authoringWorldId`, from that world's own
     // server-computed capabilities ("edit" or "view"); null with no world.
-    // Timeline-authoring navigation is offered only for "edit".
+    // "edit" means `world.manage` and selects the management overview only. Timeline READ
+    // navigation follows `world.view` (any ready read implies it), never this value.
     authoringWorldAccess: WorldAccess | null
     // True while the route names a concrete world (`/worlds/{id}/...`, not
     // `/worlds` or `/worlds/new`), whether or not the server has confirmed it.

@@ -233,6 +233,43 @@ def test_world_owner_still_sees_every_applicable_action(harness: AuthoringHarnes
     assert set(timeline["available_actions"]) == {"update", "create_branch", "create_campaign"}
 
 
+@pytest.mark.parametrize("role", ["world_editor", "world_owner_without_system_gm"])
+def test_timeline_read_is_world_view_and_offers_timeline_manage_without_world_manage(
+    harness: AuthoringHarness, role: str
+) -> None:
+    """The portal links Timeline overview on `world.view` (not `world.manage`). Pin what the server
+    answers those callers: 200, with `timeline.manage` actions offered, and `campaign.create`
+    (a world-management capability needing system GM) withheld from an Owner who lacks it."""
+    world = _world(harness, "Timeline Readers")
+    caller = harness.new_actor("Caller", world_creator=role != "world_editor")
+    set_world_role(
+        harness.connection,
+        world_id=world.world_id,
+        user_id=caller.user_id,
+        role_code="world_editor" if role == "world_editor" else "world_owner",
+    )
+    if role != "world_editor":
+        # Eligible to be named Owner at the time, then system GM is revoked.
+        harness.connection.execute(
+            text("""
+                UPDATE security.user_system_roles SET revoked_at = now(), revoked_by_user_id = :u
+                WHERE user_id = :u AND revoked_at IS NULL
+                  AND system_role_id = (SELECT system_role_id FROM security.system_roles WHERE code = 'gm')
+            """),
+            {"u": caller.user_id},
+        )
+
+    response = caller.get(f"/worlds/{world.world_id}/timelines/{world.primary_timeline_id}")
+
+    assert response.status_code == 200, response.text
+    actions = set(response.json()["available_actions"])
+    assert {"update", "create_branch"} <= actions
+    assert "create_campaign" not in actions
+    detail = caller.get(f"/worlds/{world.world_id}").json()
+    assert "world.view" in detail["capabilities"]
+    assert "world.manage" not in detail["capabilities"]
+
+
 # --- campaign.view is not world authority -------------------------------------------------
 
 

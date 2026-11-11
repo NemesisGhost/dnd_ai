@@ -1368,10 +1368,15 @@ describe("PortalSidebar World authoring navigation on a campaign route", () => {
         )
     })
 
-    it("gives a view-only world its read-only overview but no timeline-authoring destination", async () => {
-        server.on("GET", "/worlds/world-a", {
-            body: { ...worldDetail, capabilities: ["world.view"] },
-        })
+    // Timeline overview is a READ destination: it follows `world.view`, not `world.manage` (the
+    // server's GET /worlds/{w}/timelines/{t} requires exactly world.view). Mutation controls on that
+    // page keep their own gates.
+    it.each([
+        ["a viewer", ["world.view"]],
+        ["an editor", ["world.view", "timeline.manage"]],
+        ["an owner without system GM", ["world.view", "timeline.manage", "world.canon.read"]],
+    ])("links Timeline overview for %s of the world", async (_who, capabilities) => {
+        server.on("GET", "/worlds/world-a", { body: { ...worldDetail, capabilities } })
         renderSidebar("/app/campaign-a/home", campaignState())
         openWorlds()
 
@@ -1379,10 +1384,9 @@ describe("PortalSidebar World authoring navigation on a campaign route", () => {
             await within(nav()).findByRole("link", { name: "World overview" }),
         ).toHaveAttribute("href", "/worlds/world-a")
         expect(within(nav()).getByRole("link", { name: "Timelines" })).toBeInTheDocument()
-        expect(within(nav()).queryByRole("link", { name: "Timeline overview" })).toBeNull()
-        expect(disabledEntry("Timeline overview")).toHaveAccessibleDescription(
-            "Not available for your account",
-        )
+        expect(
+            within(nav()).getByRole("link", { name: "Timeline overview" }),
+        ).toHaveAttribute("href", "/worlds/world-a/timelines/timeline-a")
     })
 
     it("keeps Timeline overview disabled when the world response does not list the campaign's timeline", async () => {

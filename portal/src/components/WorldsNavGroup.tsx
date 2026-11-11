@@ -21,10 +21,6 @@ interface WorldsNavGroupProps {
   campaignWorldPath: string | null
   // From the bootstrap's server-computed `global_capabilities` only.
   canCreateWorld: boolean
-  // True when the active world's own server-computed capabilities let the
-  // caller author it. A view-only world keeps its read-only overview and
-  // timeline list; timeline-authoring routes stay visible but disabled.
-  canAuthorWorld: boolean
   // From the active world's own server-computed capabilities: `world.share` (Owner with system
   // GM) and `world.canon.read` (any role that may read published canon).
   canShareWorld: boolean
@@ -48,7 +44,6 @@ export function WorldsNavGroup({
   activeTimelineId,
   campaignWorldPath,
   canCreateWorld,
-  canAuthorWorld,
   canShareWorld,
   canReadCanon,
   canViewWorld,
@@ -153,7 +148,7 @@ export function WorldsNavGroup({
             )}
           </li>
           <li>
-            {worldPath !== null && activeTimelineId !== null && canAuthorWorld ? (
+            {worldPath !== null && activeTimelineId !== null && canViewWorld ? (
               <NavLink
                 className={subLinkClassName}
                 to={`${worldPath}/timelines/${activeTimelineId}`}
@@ -166,7 +161,7 @@ export function WorldsNavGroup({
               <DisabledNavItem
                 label="Timeline overview"
                 reason={
-                  worldPath !== null && activeTimelineId !== null
+                  worldPath !== null && !canViewWorld
                     ? NOT_AVAILABLE_FOR_ACCOUNT
                     : SELECT_TIMELINE_FIRST
                 }

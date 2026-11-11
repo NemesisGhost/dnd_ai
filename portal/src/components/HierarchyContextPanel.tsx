@@ -9,7 +9,7 @@ import type { WorldListResponse } from "../types/worldAuthoring"
 import { scopeRequest } from "../navigation/selectionTransitions"
 import { selectionFor, useSelectedContextSnapshot } from "../navigation/selectedContextStore"
 import { resolveNavigationCampaign } from "../utils/resolveNavigationCampaign"
-import { buildWorldChoices, worldAccess } from "../utils/worldAccess"
+import { buildWorldChoices, canReadWorld } from "../utils/worldAccess"
 import { CharacterContextDetails } from "./CharacterContextDetails"
 import { CharacterParties } from "./CharacterParties"
 import { CharacterPerspectiveSelector } from "./CharacterPerspectiveSelector"
@@ -147,10 +147,11 @@ export function HierarchyContextPanel({
       : null,
   )
 
-  // Timeline: choosing one opens a timeline-authoring route, so it is offered
-  // only for a world the caller may author (server-computed capabilities).
+  // Timeline: choosing one opens that timeline's overview, a read route, so it is offered
+  // for a world the caller may read (`world.view`, server-computed capabilities). Mutation
+  // controls on that page keep their own server-provided gates.
   const timelineListReady =
-    activeWorldId !== null && worldDetail !== null && worldAccess(worldDetail) === "edit"
+    activeWorldId !== null && worldDetail !== null && canReadWorld(worldDetail.capabilities)
   const timelineName =
     activeTimelineId === null
       ? null

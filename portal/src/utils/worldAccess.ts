@@ -31,6 +31,13 @@ export function worldAccess(world: Partial<Pick<WorldSummary, "capabilities">>):
     return "none"
 }
 
+// Whether the caller may READ a world and its timelines (`world.view`, the server's gate for
+// GET /worlds/{id} and GET /worlds/{id}/timelines/{t}). Distinct from `worldAccess(...) === "edit"`,
+// which means `world.manage` and gates only the management overview. Fails closed.
+export function canReadWorld(capabilities: readonly string[] | undefined): boolean {
+    return capabilities?.includes(WORLD_VIEW) === true
+}
+
 // The one destination a world-selection link may point at, or null when the
 // caller has no world access. A view-only world opens the same overview route,
 // which renders it read-only (WorldOverviewPage) with no authoring controls.

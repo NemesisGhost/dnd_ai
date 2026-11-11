@@ -345,11 +345,6 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
               <WorldsNavGroup
                 activeWorldId={selectedWorldId}
                 activeTimelineId={routeWorldId === null ? null : authoringTimelineId}
-                canAuthorWorld={
-                  routeWorldId === null
-                    ? worldHasSelected("timeline.manage")
-                    : authoringWorldAccess === "edit" || worldHas("timeline.manage")
-                }
                 canShareWorld={
                   routeWorldId === null ? worldHasSelected("world.share") : worldHas("world.share")
                 }

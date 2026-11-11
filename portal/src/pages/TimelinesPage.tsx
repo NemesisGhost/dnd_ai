@@ -4,13 +4,12 @@ import { TimelineTree } from "../components/TimelineTree"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { usePageArrival } from "../hooks/usePageArrival"
 import type { WorldDetail } from "../types/worldAuthoring"
-import { worldAccess } from "../utils/worldAccess"
 import "../components/authoring/authoring.css"
 
 // The world-scoped Timelines collection: every timeline the server returns for
 // this world to the signed-in user (GET /worlds/{id}), as a lineage, each
-// linking to its independently reloadable detail route — or, for a world the
-// server returns as view only, as plain names with no authoring destination. It never narrows to a
+// linking to its independently reloadable detail route (the read that returned them implies
+// `world.view`, the timeline read gate; mutation controls keep their own gates). It never narrows to a
 // campaign's timeline and never lists a timeline the server did not return.
 export function TimelinesPage() {
     const { worldId = "" } = useParams()
@@ -77,7 +76,7 @@ export function TimelinesPage() {
                         <TimelineTree
                             worldId={worldId}
                             timelines={state.data.timelines}
-                            linked={worldAccess(state.data) === "edit"}
+                            linked
                         />
                     </>
                 )}

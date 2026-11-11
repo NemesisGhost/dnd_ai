@@ -406,11 +406,16 @@ describe("HierarchyContextPanel disclosure", () => {
     expect(optionNames(level("World"))).toEqual(["No selection", "World A", "World B"])
   })
 
-  it("offers only worlds returned with world access, and no timeline choice for a view-only world", async () => {
+  // Timeline overview is a READ destination gated by `world.view`; `world.manage` is not required.
+  it.each([
+    ["a viewer", ["world.view"]],
+    ["an editor", ["world.view", "timeline.manage"]],
+    ["an owner without system GM", ["world.view", "timeline.manage", "world.canon.read"]],
+  ])("offers only worlds returned with world access, and a timeline choice for %s", async (_who, capabilities) => {
     server.on("GET", /^\/worlds\?status=all/, {
       body: {
         items: [
-          { world_id: "world-a", name: "World A", capabilities: ["world.view"] },
+          { world_id: "world-a", name: "World A", capabilities },
           { world_id: "world-b", name: "World B", capabilities: OWNER },
           { world_id: "world-z", name: "World Z", capabilities: [] },
         ],
@@ -421,16 +426,34 @@ describe("HierarchyContextPanel disclosure", () => {
       body: {
         world_id: "world-a",
         name: "World A",
-        capabilities: ["world.view"],
-        timelines: [timeline("timeline-a", "Main A")],
+        capabilities,
+        timelines: [timeline("timeline-a", "Main A"), timeline("timeline-b", "Branch A")],
       },
     })
     renderAt("/worlds/world-a")
 
     await waitFor(() => expect(shown(level("World"))).toBe("World A"))
     expect(optionNames(level("World"))).toEqual(["No selection", "World A", "World B"])
-    // Choosing a timeline would open a timeline-authoring route.
-    expect(level("Timeline")).toBeDisabled()
+    await waitFor(() => expect(level("Timeline")).toBeEnabled())
+    expect(optionNames(level("Timeline"))).toEqual(["No selection", "Main A", "Branch A"])
+
+    fireEvent.change(level("Timeline"), { target: { value: "timeline-b" } })
+    expect(screen.getByTestId("location")).toHaveTextContent("/worlds/world-a/timelines/timeline-b")
+  })
+
+  it("offers no timeline choice for a world read that carries no world.view", async () => {
+    server.on("GET", "/worlds/world-a", {
+      body: {
+        world_id: "world-a",
+        name: "World A",
+        capabilities: ["timeline.manage"],
+        timelines: [timeline("timeline-a", "Main A")],
+      },
+    })
+    renderAt("/worlds/world-a")
+
+    await waitFor(() => expect(server.callsTo("GET", "/worlds/world-a")).not.toHaveLength(0))
+    await waitFor(() => expect(level("Timeline")).toBeDisabled())
   })
 
   it("treats a timeline from another world as no selection", async () => {
