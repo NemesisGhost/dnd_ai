@@ -4,15 +4,32 @@ import { worldsListPath } from "../api/worlds"
 import { useSession } from "../context/SessionContext"
 import { useWorkspaceHierarchy } from "../context/WorkspaceHierarchyContext"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
+import { useRetryFocus } from "../hooks/useRetryFocus"
 import type { CampaignContext } from "../types/bootstrap"
 import type { WorldListResponse } from "../types/worldAuthoring"
+import { campaignLevel, canReadWorld, timelineLevel, worldLevel } from "../navigation/contextOptions"
+import type { LevelModel, LevelReason, WorldListState, WorldReadState } from "../navigation/contextOptions"
 import { scopeRequest } from "../navigation/selectionTransitions"
 import { selectionFor, useSelectedContextSnapshot } from "../navigation/selectedContextStore"
 import { resolveNavigationCampaign } from "../utils/resolveNavigationCampaign"
-import { buildWorldChoices, canReadWorld } from "../utils/worldAccess"
 import { CharacterContextDetails } from "./CharacterContextDetails"
 import { CharacterParties } from "./CharacterParties"
 import { CharacterPerspectiveSelector } from "./CharacterPerspectiveSelector"
+import {
+  LOADING_TIMELINES,
+  LOADING_WORLDS,
+  NO_CAMPAIGN,
+  NO_OTHER_CAMPAIGN,
+  NO_OTHER_TIMELINE,
+  NO_OTHER_WORLD,
+  NO_TIMELINE,
+  NO_WORLD,
+  SELECT_CAMPAIGN_FIRST,
+  SELECT_TIMELINE_FIRST,
+  SELECT_WORLD_FIRST,
+  TIMELINES_FAILED,
+  WORLDS_FAILED,
+} from "./navigationReasons"
 
 interface HierarchyContextPanelProps {
   // The authorized campaign the route selects, or null on World and Timeline
@@ -22,64 +39,104 @@ interface HierarchyContextPanelProps {
   onSelectCharacter: (characterId: string | null) => void
 }
 
-interface LevelOption {
-  id: string
-  label: string
+const NO_SELECTION = "No selection"
+
+const REASON_TEXT: Record<LevelReason, string> = {
+  select_world_first: SELECT_WORLD_FIRST,
+  select_timeline_first: SELECT_TIMELINE_FIRST,
+  loading_worlds: LOADING_WORLDS,
+  loading_timelines: LOADING_TIMELINES,
+  worlds_failed: WORLDS_FAILED,
+  timelines_failed: TIMELINES_FAILED,
+  no_world: NO_WORLD,
+  no_timeline: NO_TIMELINE,
+  no_campaign: NO_CAMPAIGN,
+  no_other_world: NO_OTHER_WORLD,
+  no_other_timeline: NO_OTHER_TIMELINE,
+  no_other_campaign: NO_OTHER_CAMPAIGN,
+}
+
+// After a successful retry the button is gone: focus goes to the level's select when it is usable, else to
+// the reason text that explains the level (UI_DESIGN §4.8.12).
+function retryTarget(section: HTMLElement): HTMLElement | null {
+  return (
+    section.querySelector<HTMLElement>("select:not(:disabled)") ??
+    section.querySelector<HTMLElement>("[data-level-reason]")
+  )
+}
+
+function RetryButton({ onRetry }: { onRetry: () => void }) {
+  const { ref, used, left } = useRetryFocus<HTMLButtonElement>(retryTarget)
+  return (
+    <button
+      ref={ref}
+      type="button"
+      className="campaign-context-panel__retry"
+      onClick={() => {
+        used()
+        onRetry()
+      }}
+      onBlur={left}
+    >
+      Try again
+    </button>
+  )
 }
 
 interface LevelSelectProps {
   headingId: string
-  value: string
-  options: LevelOption[]
-  enabled: boolean
+  reasonId: string
+  model: LevelModel
+  onRetry: (retry: NonNullable<LevelModel["retry"]>) => void
   onSelect: (id: string) => void
 }
 
-const NO_SELECTION = "No selection"
-
-// One hierarchy level's selector. The empty placeholder is never a choice;
-// a disabled select keeps its slot and exposes its state to assistive tech.
-function LevelSelect({
-  headingId,
-  value,
-  options,
-  enabled,
-  onSelect,
-}: LevelSelectProps) {
+// One hierarchy level: its selector and, whenever the level is disabled, loading or failed, the visible
+// reason the selector is described by. The empty placeholder is never a choice, a display-only current
+// value is shown but inert, and `onSelect` resolves an id only through the model's real options.
+function LevelSelect({ headingId, reasonId, model, onRetry, onSelect }: LevelSelectProps) {
+  const known =
+    model.selectedId !== null &&
+    (model.options.some((option) => option.id === model.selectedId) ||
+      model.displayOnly?.id === model.selectedId)
+  const reason = model.reason === null ? null : REASON_TEXT[model.reason]
   return (
-    <select
-      className="campaign-context-panel__control"
-      aria-labelledby={headingId}
-      value={value}
-      disabled={!enabled}
-      onChange={(event) => {
-        const next = event.currentTarget.value
-        if (next !== "" && next !== value) {
-          onSelect(next)
-        }
-      }}
-    >
-      <option value="" disabled>
-        {NO_SELECTION}
-      </option>
-      {options.map((option) => (
-        <option key={option.id} value={option.id}>
-          {option.label}
+    <>
+      <select
+        className="campaign-context-panel__control"
+        aria-labelledby={headingId}
+        aria-describedby={reason === null ? undefined : reasonId}
+        value={known ? model.selectedId! : ""}
+        disabled={!model.enabled}
+        onChange={(event) => {
+          const next = event.currentTarget.value
+          if (next !== "" && next !== model.selectedId) {
+            onSelect(next)
+          }
+        }}
+      >
+        <option value="" disabled>
+          {NO_SELECTION}
         </option>
-      ))}
-    </select>
+        {model.options.map((option) => (
+          <option key={option.id} value={option.id}>
+            {option.label}
+          </option>
+        ))}
+        {model.displayOnly !== null && (
+          <option value={model.displayOnly.id} disabled>
+            {model.displayOnly.label}
+          </option>
+        )}
+      </select>
+      {reason !== null && (
+        <p id={reasonId} className="campaign-context-panel__reason" data-level-reason tabIndex={-1}>
+          {reason}
+        </p>
+      )}
+      {model.retry !== null && <RetryButton onRetry={() => onRetry(model.retry!)} />}
+    </>
   )
-}
-
-// Adds the currently selected item when the authoritative list does not carry
-// it, so the control never shows a blank value for a context it is in.
-function withCurrent(
-  options: LevelOption[],
-  current: LevelOption | null,
-): LevelOption[] {
-  return current === null || options.some((option) => option.id === current.id)
-    ? options
-    : [...options, current]
 }
 
 // The World → Timeline → Campaign → Character context for every page of the
@@ -87,9 +144,10 @@ function withCurrent(
 // hierarchy provider and the route campaign); choosing an option only
 // asks the router for the destination with a new task (navigation/selectionTransitions), so the
 // departure guard decides first and lower levels clear because their routes unmount. Option lists
-// come from authoritative responses only: the worlds list, the selected
-// world's timelines, and the session's authorized campaigns. A level without
-// such a list stays visible and disabled.
+// come from authoritative responses only — the worlds list, the selected world's timelines, and the
+// session's authorized campaigns — through one pure model (navigation/contextOptions) that also decides
+// when a level is worth enabling and why it is not. A level without options stays visible and disabled,
+// with its reason beside it.
 export function HierarchyContextPanel({
   campaign,
   selectedCharacterId,
@@ -99,9 +157,21 @@ export function HierarchyContextPanel({
   const timelineHeadingId = useId()
   const campaignHeadingId = useId()
   const characterHeadingId = useId()
+  const worldReasonId = useId()
+  const timelineReasonId = useId()
+  const campaignReasonId = useId()
+  const characterReasonId = useId()
   const navigate = useNavigate()
   const { state } = useSession()
-  const { activeWorldId, activeTimelineId, routeNamesWorld, routeNamesTimeline, world } = useWorkspaceHierarchy()
+  const {
+    activeWorldId,
+    activeTimelineId,
+    routeNamesWorld,
+    routeNamesTimeline,
+    world,
+    worldEvidence,
+    refetchWorld,
+  } = useWorkspaceHierarchy()
   const retained = useSelectedContextSnapshot()
   const worlds = useAuthoringResource<WorldListResponse>(
     `${worldsListPath("all")}&limit=100`,
@@ -124,60 +194,68 @@ export function HierarchyContextPanel({
           selectionFor(retained, state.bootstrap).campaignId,
         )
 
-  // World: the same deduplicated choices All worlds shows — explicit world
-  // authority from GET /worlds, plus every world visible through an
-  // authorized campaign (opened via that campaign's World Explorer, preferring
-  // the route campaign). The list does not depend on the current route.
-  const worldChoices = buildWorldChoices(
-    worlds.state.kind === "ready" ? worlds.state.data.items : [],
-    bootstrapCampaigns,
-    campaign?.campaign_id ?? null,
-  )
+  const worldList: WorldListState =
+    worlds.state.kind === "ready"
+      ? { kind: "ready", items: worlds.state.data.items, startedSeq: worlds.startedSeq }
+      : worlds.state.kind === "loading"
+        ? { kind: "loading" }
+        : { kind: "failed" }
+  // The current world's name when the list does not carry it (the world read, or the route campaign).
   const worldName =
     activeWorldId === null
       ? null
-      : (worldChoices.find((item) => item.world_id === activeWorldId)?.name ??
+      : ((worldList.kind === "ready"
+          ? worldList.items.find((item) => item.world_id === activeWorldId)?.name
+          : undefined) ??
         worldDetail?.name ??
         campaign?.world_name ??
+        bootstrapCampaigns.find((item) => item.world_id === activeWorldId)?.world_name ??
         null)
-  const worldOptions = withCurrent(
-    worldChoices.map((item) => ({ id: item.world_id, label: item.name })),
-    activeWorldId !== null && worldName !== null
-      ? { id: activeWorldId, label: worldName }
-      : null,
-  )
+  const worldModel = worldLevel({
+    list: worldList,
+    campaigns: bootstrapCampaigns,
+    routeCampaignId: campaign?.campaign_id ?? null,
+    activeWorldId,
+    activeWorldName: worldName,
+    evidence: worldEvidence,
+  })
 
-  // Timeline: choosing one opens that timeline's overview, a read route, so it is offered
-  // for a world the caller may read (`world.view`, server-computed capabilities). Mutation
-  // controls on that page keep their own server-provided gates.
-  const timelineListReady =
-    activeWorldId !== null && worldDetail !== null && canReadWorld(worldDetail.capabilities)
+  const worldRead: WorldReadState =
+    world === null
+      ? "not_requested"
+      : world.kind === "loading"
+        ? "pending"
+        : world.kind === "error"
+          ? "failed"
+          : world.kind === "ready" && canReadWorld(world.data.capabilities)
+            ? "readable"
+            : "refused"
   const timelineName =
     activeTimelineId === null
       ? null
-      : (worldDetail?.timelines.find((item) => item.timeline_id === activeTimelineId)
-          ?.name ??
+      : (worldDetail?.timelines.find((item) => item.timeline_id === activeTimelineId)?.name ??
         campaign?.timeline_name ??
         null)
-  const timelineOptions = withCurrent(
-    timelineListReady
-      ? worldDetail.timelines.map((item) => ({ id: item.timeline_id, label: item.name }))
-      : [],
-    activeTimelineId !== null && timelineName !== null
-      ? { id: activeTimelineId, label: timelineName }
-      : null,
-  )
+  const timelineModel = timelineLevel({
+    worldRead,
+    activeWorldId,
+    activeTimelineId,
+    activeTimelineName: timelineName,
+    worldTimelines: worldDetail?.timelines ?? [],
+  })
 
-  // Campaign: only authorized campaigns in the selected world and timeline.
-  const campaignOptions: LevelOption[] =
-    activeWorldId === null || activeTimelineId === null
-      ? []
-      : bootstrapCampaigns
-          .filter(
-            (item) =>
-              item.world_id === activeWorldId && item.timeline_id === activeTimelineId,
-          )
-          .map((item) => ({ id: item.campaign_id, label: item.campaign_name }))
+  const campaignSelected =
+    campaign !== null
+      ? { id: campaign.campaign_id, label: campaign.campaign_name }
+      : selectedCampaign === null
+        ? null
+        : { id: selectedCampaign.campaign_id, label: selectedCampaign.campaign_name }
+  const campaignModel = campaignLevel({
+    campaigns: bootstrapCampaigns,
+    activeWorldId,
+    activeTimelineId,
+    selected: campaignSelected,
+  })
 
   const selectedCharacter = campaign?.character_perspectives.find(
     (character) => character.character_id === selectedCharacterId,
@@ -186,13 +264,6 @@ export function HierarchyContextPanel({
     campaign !== null && campaign.roles.length > 0
       ? campaign.roles.join(", ")
       : "Not available"
-
-  const campaignOptionsShown = withCurrent(
-    campaignOptions,
-    selectedCampaign === null
-      ? null
-      : { id: selectedCampaign.campaign_id, label: selectedCampaign.campaign_name },
-  )
 
   const summaryParts = [worldName, timelineName, campaign?.campaign_name ?? null].filter(
     (part): part is string => part !== null,
@@ -205,6 +276,21 @@ export function HierarchyContextPanel({
           ? "Context: nothing selected"
           : `Context: Selected campaign: ${selectedCampaign.campaign_name}`
       : `Campaign context: ${summaryParts.join(" › ")} — Viewing as ${selectedCharacter?.character_name ?? "No character perspective selected"}`
+
+  // A choice is an ordinary departure: the model names the destination, the same request every
+  // Infobox departure makes carries the task and the note, and the guard decides before anything commits.
+  function choose(model: LevelModel, id: string): void {
+    const option = model.options.find((item) => item.id === id)
+    if (option === undefined) return
+    const { to, root, note } = option.destination
+    const request = scopeRequest(to, root, note)
+    navigate(request.to, { state: request.state })
+  }
+
+  function retry(which: NonNullable<LevelModel["retry"]>): void {
+    // Repeats exactly the failed read: no navigation, no mutation, no bootstrap refresh.
+    void (which === "worlds" ? worlds.refetch() : refetchWorld())
+  }
 
   return (
     <details className="campaign-context-panel" open>
@@ -223,16 +309,10 @@ export function HierarchyContextPanel({
           </h3>
           <LevelSelect
             headingId={worldHeadingId}
-            value={activeWorldId ?? ""}
-            options={worldOptions}
-            enabled={worldOptions.length > 0}
-            onSelect={(worldId) => {
-              const choice = worldChoices.find((item) => item.world_id === worldId)
-              if (choice !== undefined) {
-                const request = scopeRequest(choice.to, "world", { level: "world", id: worldId })
-                navigate(request.to, { state: request.state })
-              }
-            }}
+            reasonId={worldReasonId}
+            model={worldModel}
+            onRetry={retry}
+            onSelect={(id) => choose(worldModel, id)}
           />
         </section>
 
@@ -248,17 +328,10 @@ export function HierarchyContextPanel({
           </h3>
           <LevelSelect
             headingId={timelineHeadingId}
-            value={activeTimelineId ?? ""}
-            options={timelineOptions}
-            enabled={timelineListReady && timelineOptions.length > 0}
-            onSelect={(timelineId) => {
-              const request = scopeRequest(
-                `/worlds/${encodeURIComponent(activeWorldId ?? "")}/timelines/${encodeURIComponent(timelineId)}`,
-                "world",
-                { level: "timeline", id: timelineId },
-              )
-              navigate(request.to, { state: request.state })
-            }}
+            reasonId={timelineReasonId}
+            model={timelineModel}
+            onRetry={retry}
+            onSelect={(id) => choose(timelineModel, id)}
           />
         </section>
 
@@ -274,13 +347,10 @@ export function HierarchyContextPanel({
           </h3>
           <LevelSelect
             headingId={campaignHeadingId}
-            value={campaign?.campaign_id ?? selectedCampaign?.campaign_id ?? ""}
-            options={campaignOptionsShown}
-            enabled={campaignOptionsShown.length > 0}
-            onSelect={(campaignId) => {
-              const request = scopeRequest(`/app/${encodeURIComponent(campaignId)}/home`, "campaign", { level: "campaign", id: campaignId })
-              navigate(request.to, { state: request.state })
-            }}
+            reasonId={campaignReasonId}
+            model={campaignModel}
+            onRetry={retry}
+            onSelect={(id) => choose(campaignModel, id)}
           />
 
           {campaign !== null && (
@@ -304,14 +374,20 @@ export function HierarchyContextPanel({
             Character
           </h3>
           {campaign === null ? (
-            <select
-              className="campaign-context-panel__control"
-              aria-label="Character perspective"
-              value=""
-              disabled
-            >
-              <option value="">{NO_SELECTION}</option>
-            </select>
+            <>
+              <select
+                className="campaign-context-panel__control"
+                aria-label="Character perspective"
+                aria-describedby={characterReasonId}
+                value=""
+                disabled
+              >
+                <option value="">{NO_SELECTION}</option>
+              </select>
+              <p id={characterReasonId} className="campaign-context-panel__reason">
+                {SELECT_CAMPAIGN_FIRST}
+              </p>
+            </>
           ) : (
             <CharacterPerspectiveSelector
               perspectives={campaign.character_perspectives}

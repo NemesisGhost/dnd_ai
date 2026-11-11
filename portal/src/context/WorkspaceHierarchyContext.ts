@@ -1,5 +1,6 @@
 import { createContext, useContext } from "react"
 import type { AuthoringResourceState } from "../hooks/useAuthoringResource"
+import type { WorldEvidenceMap } from "../navigation/contextOptions"
 import type { WorldDetail } from "../types/worldAuthoring"
 import type { WorldAccess } from "../utils/worldAccess"
 
@@ -40,6 +41,10 @@ export interface WorkspaceHierarchy {
     // world's response is never shown for the next one. `null` when the route
     // names no world.
     world: AuthoringResourceState<WorldDetail> | null
+    // What authoritative world reads have said about each world this session, ordered by when each read
+    // started (navigation/contextOptions). Only the Infobox's World options read it; it is evidence for
+    // withdrawing an option, never authority to offer one, and it is empty after a change of user.
+    worldEvidence: WorldEvidenceMap
     // Re-reads the world after a write that changes its timelines.
     refetchWorld: () => Promise<unknown>
 }

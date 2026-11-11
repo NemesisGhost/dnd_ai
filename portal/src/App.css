@@ -1407,6 +1407,30 @@ a.app-header__title:focus-visible {
   text-transform: uppercase;
 }
 
+.campaign-context-panel__reason {
+  margin: 0.3rem 0 0;
+  color: var(--color-infobox-muted);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.campaign-context-panel__reason:focus-visible,
+.campaign-context-panel__retry:focus-visible {
+  outline: 2px solid var(--color-infobox-link);
+  outline-offset: 2px;
+}
+
+.campaign-context-panel__retry {
+  margin: 0.3rem 0 0;
+  padding: 0.25rem 0.6rem;
+  color: var(--color-infobox-link);
+  font-size: 0.85rem;
+  background: transparent;
+  border: 1px solid var(--color-infobox-border);
+  border-radius: 0.25rem;
+  cursor: pointer;
+}
+
 .campaign-context-panel__value {
   margin: 0;
   overflow-wrap: anywhere;

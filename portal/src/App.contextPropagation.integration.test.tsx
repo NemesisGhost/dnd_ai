@@ -275,6 +275,9 @@ async function chooseInfoBoxWorld(id: string) {
     expect(server.requests.some((entry) => entry.startsWith("GET /api/worlds?"))).toBe(true),
   )
   await sleep(50)
+  // The World level stays disabled ("Loading worlds…") until that list answers, so a destination never
+  // changes under the person (docs/UI_DESIGN.md §4.8.12): wait for it to be usable.
+  await waitFor(() => expect(select).toBeEnabled())
   fireEvent.change(select, { target: { value: id } })
 }
 
@@ -351,6 +354,8 @@ describe("Access follows the selected campaign", () => {
     const router = renderAt("/app/a/home")
 
     const select = await screen.findByLabelText("World", { selector: "select" })
+    // Campaign-derived entries wait for the worlds list (§4.8.12), so wait until the level is usable.
+    await waitFor(() => expect(select).toBeEnabled())
     fireEvent.change(select, { target: { value: "w2" } })
     await waitFor(() => expect(router.state.location.pathname).toBe("/app/c/world"))
     await openAccess()

@@ -32,13 +32,22 @@ export interface UseAuthoringResourceResult<T> {
     // (loading, no label registry, or a read begun without one). Only breadcrumb label publication reads
     // it (navigation/BreadcrumbLabelContext). Callers that ignore it are unaffected.
     authority: LabelRegistry | null
+    // When the read behind `state` STARTED, as a position in one module-wide monotonic order shared by every
+    // authoring read (a first load or a refetch), or null while loading. Sources are compared by when they
+    // started, never when they answered (docs/UI_DESIGN.md §4.8.12). It belongs to the data on screen: a
+    // refetch in flight keeps the earlier value until its own answer is applied. Callers that ignore it are
+    // unaffected.
+    startedSeq: number | null
 }
 
 interface Snapshot<T> {
     path: string | null
     state: AuthoringResourceState<T>
     authority: LabelRegistry | null
+    startedSeq: number | null
 }
+
+let readSequence = 0
 
 type Outcome<T> =
     | { kind: "ready"; data: T }
@@ -78,7 +87,7 @@ export function useAuthoringResource<T>(
     path: string | null,
 ): UseAuthoringResourceResult<T> {
     const { reload } = useSession()
-    const [snapshot, setSnapshot] = useState<Snapshot<T>>({ path, state: LOADING, authority: null })
+    const [snapshot, setSnapshot] = useState<Snapshot<T>>({ path, state: LOADING, authority: null, startedSeq: null })
     const refetchController = useRef<AbortController | null>(null)
     const loadController = useRef<AbortController | null>(null)
     // The label authority now in force, read when a request starts. A ref, not a dependency: an authority
@@ -91,7 +100,7 @@ export function useAuthoringResource<T>(
     const refreshOk = useRef(true)
 
     const apply = useCallback(
-        (forPath: string, outcome: Outcome<T>, authority: LabelRegistry | null) => {
+        (forPath: string, outcome: Outcome<T>, authority: LabelRegistry | null, startedSeq: number) => {
             if (outcome.kind === "expired") {
                 reload()
                 return
@@ -99,6 +108,7 @@ export function useAuthoringResource<T>(
             setSnapshot({
                 path: forPath,
                 authority,
+                startedSeq,
                 state:
                     outcome.kind === "ready"
                         ? { kind: "ready", data: outcome.data, refreshing: false }
@@ -115,9 +125,10 @@ export function useAuthoringResource<T>(
         const controller = new AbortController()
         loadController.current = controller
         const authority = currentAuthority.current
+        const startedSeq = ++readSequence
         void load<T>(path, controller.signal).then((outcome) => {
             if (!controller.signal.aborted) {
-                apply(path, outcome, authority)
+                apply(path, outcome, authority, startedSeq)
             }
         })
         return () => {
@@ -137,6 +148,7 @@ export function useAuthoringResource<T>(
         const controller = new AbortController()
         refetchController.current = controller
         const authority = currentAuthority.current
+        const startedSeq = ++readSequence
         setSnapshot((current) =>
             current.path === path && current.state.kind === "ready"
                 ? { ...current, path, state: { ...current.state, refreshing: true } }
@@ -147,10 +159,17 @@ export function useAuthoringResource<T>(
             return "superseded"
         }
         refreshOk.current = outcome.kind === "ready"
-        apply(path, outcome, authority)
+        apply(path, outcome, authority, startedSeq)
         return outcome.kind === "ready" ? "ok" : "failed"
     }, [path, apply])
 
     const state = snapshot.path === path ? snapshot.state : LOADING
-    return { state, refetch, refreshOk, authority: snapshot.path === path ? snapshot.authority : null }
+    const current = snapshot.path === path
+    return {
+        state,
+        refetch,
+        refreshOk,
+        authority: current ? snapshot.authority : null,
+        startedSeq: current && state.kind !== "loading" ? snapshot.startedSeq : null,
+    }
 }
