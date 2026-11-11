@@ -8,6 +8,7 @@ not a filter: if a later change joined the profile into the character detail, th
 Campaign B's GM gets 404 from A's profile routes.
 """
 
+import json
 import re
 import uuid
 from collections.abc import Callable
@@ -124,14 +125,18 @@ def test_no_other_response_carries_draft_or_release_text(
                 response = client.get(path)
                 text_ = response.text
                 if name == "player with view_full" and path == detail_path:
-                    # D11 (A4): a summary-or-better reader sees the latest release in exactly the
-                    # character detail's `public_profile` section, and nowhere else.
-                    section = response.json()["public_profile"]
+                    # D11 (A4): a summary-or-better reader sees the latest release in exactly two
+                    # places, `public_profile.appearance` and `public_profile.background` of the
+                    # character detail. Those two values are removed structurally (by key, not by
+                    # string), so a marker anywhere else in the response, or the same marker under
+                    # another key, still counts as a leak.
+                    assert text_.count(RELEASED_APPEARANCE) == text_.count(RELEASED_BACKGROUND) == 1
+                    payload = response.json()
+                    section = payload["public_profile"]
                     assert section["appearance"] == RELEASED_APPEARANCE
                     assert section["background"] == RELEASED_BACKGROUND
-                    text_ = text_.replace(f'"{RELEASED_APPEARANCE}"', "").replace(
-                        f'"{RELEASED_BACKGROUND}"', ""
-                    )
+                    section["appearance"] = section["background"] = None
+                    text_ = json.dumps(payload)
                 leaks.extend((name, path, marker) for marker in MARKERS if marker in text_)
     assert leaks == []
 

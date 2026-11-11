@@ -8,10 +8,12 @@ The release holds the character's `core.entities` row `FOR KEY SHARE`; the edit 
 UPDATE`. Each wait is observed through `pg_blocking_pids` as blocked by the intended session, both
 orders are run, and no scenario deadlocks.
 
-The release is called as the command, as the existing release races are: the route adds no lock, and
-its checks (token, tier, receipt, audit) are covered over HTTP in test_public_profile_identity_api.py.
+The first group calls the release as the command, as the existing release races do. The last group
+(follow-up to A4) runs the real HTTP route through the same orders and asserts the response, the
+release rows, the idempotency receipts and the audit rows.
 """
 
+import time
 import uuid
 from collections.abc import Callable
 from typing import Any
@@ -41,6 +43,7 @@ from tests.database.test_character_reveal_delegation import (  # noqa: F401 - fi
     Members,
     m,
 )
+from tests.database.test_public_profile_identity_api import identity_release
 from tests.lock_race_support import LockRace
 
 pytestmark = pytest.mark.database
@@ -262,3 +265,227 @@ def test_a_draft_save_and_an_identity_edit_never_wait_on_each_other(
         pause.release()
         race.join_all()
     assert saving.error is None and updating.error is None, (saving.describe(), updating.describe())
+
+
+# --- the HTTP release route under the same races (follow-up to A4) -----------------------------
+#
+# The command races above prove the lock order; these run the real route, so the response, the
+# release rows, the `security.idempotent_requests` receipts and the audit rows are asserted too.
+# The route runs on a framework thread, so the HTTP request cannot be paused by name; each order is
+# instead built from a held transaction (`LockRace.hold`) and the waits are observed through
+# `pg_blocking_pids`, the HTTP session being identified as the one the holder blocks.
+
+_RELEASE_COMMAND = "release_character_public_profile"
+
+
+def http_release(
+    client_factory: Callable[[uuid.UUID], Any],
+    g: Gate,
+    character: uuid.UUID,
+    version: int,
+    token: int,
+    key: str,
+) -> Callable[[Connection], Any]:
+    def run(_connection: Connection) -> Any:
+        return identity_release(client_factory, g.o1_user_id, g, character, version, token, key=key)
+
+    return run
+
+
+def lock_draft_row(g: Gate, character: uuid.UUID) -> Callable[[Connection], Any]:
+    """Locks the profile draft row `FOR UPDATE` without changing it: a release has by then taken
+    the entity `FOR KEY SHARE` (the lock order), and waits here."""
+    return lambda c: c.execute(
+        text(
+            "SELECT 1 FROM campaign.character_public_profiles "
+            "WHERE campaign_id = :c AND character_id = :ch FOR UPDATE"
+        ),
+        {"c": g.campaign_id, "ch": character},
+    )
+
+
+def waiters_of(engine: Engine, holder_pid: int) -> list[int]:
+    """The sessions directly blocked by `holder_pid`."""
+    with engine.connect() as connection:
+        return [
+            int(pid)
+            for pid in connection.execute(
+                text("""
+                    SELECT a.pid FROM pg_stat_activity a
+                    WHERE a.datname = current_database() AND :h = ANY(pg_blocking_pids(a.pid))
+                    ORDER BY a.pid
+                """),
+                {"h": holder_pid},
+            ).scalars()
+        ]
+
+
+def wait_for_session_blocked_by(race: LockRace, pid: int, count: int = 1) -> None:
+    deadline = time.monotonic() + 15.0
+    while time.monotonic() < deadline:
+        if race.blocked_by(pid) >= count:
+            return
+        time.sleep(0.02)
+    raise AssertionError(f"fewer than {count} session(s) blocked by pid {pid}")
+
+
+def receipts(engine: Engine, g: Gate, keys: list[str]) -> dict[str, tuple[int | None, Any]]:
+    with engine.connect() as connection:
+        return {
+            str(row.idempotency_key): (row.response_status_code, row.response_body)
+            for row in connection.execute(
+                text(
+                    "SELECT idempotency_key, response_status_code, response_body "
+                    "FROM security.idempotent_requests "
+                    "WHERE campaign_id = :c AND idempotency_key = ANY(:k)"
+                ),
+                {"c": g.campaign_id, "k": keys},
+            )
+        }
+
+
+def release_audits(engine: Engine, g: Gate, character: uuid.UUID) -> list[dict[str, Any]]:
+    with engine.connect() as connection:
+        return [
+            dict(row)
+            for row in connection.execute(
+                text(
+                    "SELECT changed_fields FROM audit.change_log "
+                    "WHERE world_id = :w AND command_name = :n AND entity_id = :ch "
+                    "ORDER BY recorded_at"
+                ),
+                {"w": g.world_id, "n": _RELEASE_COMMAND, "ch": character},
+            ).mappings()
+        ]
+
+
+def test_http_identity_edit_first_returns_stale_write_and_leaves_no_release_receipt_or_audit(
+    client_factory: Callable[[uuid.UUID], Any],
+    postgres_engine: Engine,
+    g: Gate,
+    m: Members,
+    kind: str,
+    subject: uuid.UUID,
+) -> None:
+    c = subject
+    version = seed_flagged_draft(postgres_engine, g, c)
+    token = entity_version(postgres_engine, c)
+    key = f"edit-first-{uuid.uuid4().hex[:8]}"
+    with LockRace(postgres_engine) as race:
+        updating = race.hold(edit_identity(g, kind, c, m.gm_user_id))
+        releasing = race.start("release", http_release(client_factory, g, c, version, token, key))
+        race.wait_blocked_by(updating, releasing)  # at the entity row the edit holds FOR UPDATE
+        updating.commit()
+        race.join_all()
+    assert releasing.error is None, releasing.describe()
+    response = releasing.result
+    assert response.status_code == 409 and response.json()["error"]["code"] == "stale_write", (
+        releasing.describe()
+    )
+    assert released(postgres_engine, g, c) == []
+    assert release_audits(postgres_engine, g, c) == []
+    # The failed request rolled back with its reservation: nothing is left under the key.
+    assert receipts(postgres_engine, g, [key]) == {}
+    assert live_size(postgres_engine, c) == "large" and entity_version(postgres_engine, c) > token
+
+    # The key is not poisoned: a retry with the current token succeeds and is then the one receipt.
+    fresh = entity_version(postgres_engine, c)
+    retry = identity_release(client_factory, g.o1_user_id, g, c, version, fresh, key=key)
+    assert retry.status_code == 201 and retry.json()["identity_entity_row_version"] == fresh
+    [row] = released(postgres_engine, g, c)
+    assert row.released_size_category == "large" and row.identity_entity_row_version == fresh
+    [audit] = release_audits(postgres_engine, g, c)
+    assert audit["changed_fields"]["identity_entity_row_version"] == fresh
+    stored = receipts(postgres_engine, g, [key])
+    assert stored[key][0] == 201
+    assert stored[key][1]["identity_entity_row_version"] == fresh
+
+
+def test_http_release_first_snapshots_the_old_values_and_the_edit_waits_for_it(
+    client_factory: Callable[[uuid.UUID], Any],
+    postgres_engine: Engine,
+    g: Gate,
+    m: Members,
+    kind: str,
+    subject: uuid.UUID,
+) -> None:
+    c = subject
+    version = seed_flagged_draft(postgres_engine, g, c)
+    token = entity_version(postgres_engine, c)
+    old_size = live_size(postgres_engine, c)
+    assert old_size != "large"
+    key = f"release-first-{uuid.uuid4().hex[:8]}"
+    with LockRace(postgres_engine) as race:
+        gate = race.hold(lock_draft_row(g, c))
+        releasing = race.start("release", http_release(client_factory, g, c, version, token, key))
+        race.wait_blocked_by(gate, releasing)  # past the entity lock, waiting for the draft row
+        [release_pid] = waiters_of(postgres_engine, gate.pid)
+        updating = race.start("update", edit_identity(g, kind, c, m.gm_user_id))
+        wait_for_session_blocked_by(race, release_pid)  # the edit waits at the entity row
+        assert not updating.done
+        gate.commit()
+        race.join_all()
+    assert releasing.error is None and updating.error is None, (
+        releasing.describe(),
+        updating.describe(),
+    )
+    response = releasing.result
+    assert response.status_code == 201, releasing.describe()
+    [row] = released(postgres_engine, g, c)
+    assert row.released_size_category == old_size and row.identity_entity_row_version == token
+    assert live_size(postgres_engine, c) == "large" and entity_version(postgres_engine, c) > token
+    [audit] = release_audits(postgres_engine, g, c)
+    assert audit["changed_fields"]["identity_entity_row_version"] == token
+    assert audit["changed_fields"]["species_published"] is True
+    assert audit["changed_fields"]["size_published"] is True
+    stored = receipts(postgres_engine, g, [key])
+    assert stored[key][0] == 201
+    assert stored[key][1]["identity_entity_row_version"] == token
+    assert "species_code" not in str(stored[key][1]) and old_size not in str(stored[key][1])
+
+
+def test_http_concurrent_natural_retries_under_separate_keys_make_one_release(
+    client_factory: Callable[[uuid.UUID], Any],
+    postgres_engine: Engine,
+    g: Gate,
+    m: Members,
+    npc: uuid.UUID,
+) -> None:
+    c = npc
+    version = seed_flagged_draft(postgres_engine, g, c)
+    token = entity_version(postgres_engine, c)
+    keys = [f"retry-a-{uuid.uuid4().hex[:8]}", f"retry-b-{uuid.uuid4().hex[:8]}"]
+    with LockRace(postgres_engine) as race:
+        gate = race.hold(lock_draft_row(g, c))
+        first = race.start("first", http_release(client_factory, g, c, version, token, keys[0]))
+        second = race.start("second", http_release(client_factory, g, c, version, token, keys[1]))
+        race.wait_blocked_by(gate, first, second)  # both wait on the same draft row
+        gate.commit()
+        race.join_all()
+    assert first.error is None and second.error is None, (first.describe(), second.describe())
+    answers = [first.result, second.result]
+    assert sorted(a.status_code for a in answers) == [200, 201], (
+        first.describe(),
+        second.describe(),
+    )
+    created = next(a for a in answers if a.status_code == 201).json()
+    natural = next(a for a in answers if a.status_code == 200).json()
+    assert created["created"] is True and natural["created"] is False
+    assert (
+        natural["character_public_profile_release_id"]
+        == (created["character_public_profile_release_id"])
+    )
+    assert natural["identity_entity_row_version"] == token == created["identity_entity_row_version"]
+    [row] = released(postgres_engine, g, c)  # never a second snapshot
+    assert row.identity_entity_row_version == token
+    [audit] = release_audits(postgres_engine, g, c)  # only the creating request is audited
+    assert audit["changed_fields"]["identity_entity_row_version"] == token
+    stored = receipts(postgres_engine, g, keys)
+    assert sorted(status for status, _ in stored.values()) == [200, 201]
+    for status, stored_body in stored.values():
+        expected = created if status == 201 else natural
+        assert (
+            stored_body["character_public_profile_release_id"]
+            == (expected["character_public_profile_release_id"])
+        )
+        assert stored_body["identity_entity_row_version"] == token
