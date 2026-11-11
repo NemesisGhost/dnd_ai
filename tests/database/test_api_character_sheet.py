@@ -1,6 +1,6 @@
 """Tests for `dnd_ai.api.characters.get_character_sheet_endpoint` —
 `GET /campaigns/{campaign_id}/characters/{character_id}/sheet`
-(docs/PHASE13D_CHARACTER_SHEET_BACKEND.md).
+(docs/api/CHARACTER_SHEET.md).
 
 Mirrors `tests/database/test_api_characters.py`'s access-control shape
 (`get_authenticated_user_id` overridden directly, since these tests

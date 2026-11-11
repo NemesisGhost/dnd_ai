@@ -1,4 +1,4 @@
-import { useLocation, useSearchParams } from "react-router"
+import { useSearchParams } from "react-router"
 import type { CharacterType } from "../types/world"
 
 export interface CharactersBrowseState {
@@ -13,7 +13,6 @@ export interface CharactersBrowseState {
     pageNumber: number
     // The path and query string this view is at, carried as router state on a row link so the
     // sheet's "Back to characters" returns to this exact view.
-    returnTo: string
     // The query string (leading "?", or "") for a changed state; changing the type, the search or
     // the draft preview restarts paging, because a cursor is only valid for the inputs it was
     // issued for.
@@ -50,7 +49,6 @@ function buildSearch(state: Inputs): string {
 // work. A search keystroke replaces the entry; a type or page change pushes one.
 export function useCharactersBrowseState(): CharactersBrowseState {
     const [params, setParams] = useSearchParams()
-    const { pathname, search } = useLocation()
     const state: Inputs = {
         type: parseCharacterType(params.get("type")),
         query: params.get("q") ?? "",
@@ -64,7 +62,6 @@ export function useCharactersBrowseState(): CharactersBrowseState {
         ...state,
         cursor: state.cursors.length > 0 ? state.cursors[state.cursors.length - 1]! : null,
         pageNumber: state.cursors.length + 1,
-        returnTo: `${pathname}${search}`,
         hrefFor: (change) => buildSearch({ ...state, ...change, cursors: [] }) || "?",
         setQuery: (query) => navigateTo({ ...state, query, cursors: [] }, true),
         setShowHidden: (showHidden) => navigateTo({ ...state, showHidden, cursors: [] }, false),

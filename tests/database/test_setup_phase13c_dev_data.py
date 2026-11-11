@@ -202,6 +202,11 @@ def _resolve_campaign_a_characters(
     return campaign_a.timeline_id, world_id, character_a_id, character_b_id
 
 
+def _campaign_a_id(db_connection: Connection, *, user_id: uuid.UUID) -> uuid.UUID:
+    view = get_session_bootstrap(db_connection, user_id=user_id)
+    return next(c for c in view.campaigns if c.campaign_name == "Phase13C Campaign A").campaign_id
+
+
 def test_character_a_and_b_current_state_matches_the_documented_fixture(
     db_connection: Connection,
 ) -> None:
@@ -233,6 +238,7 @@ def test_character_a_and_b_current_state_matches_the_documented_fixture(
         timeline_id=timeline_a_id,
         expected_world_id=world_id,
         include_full=True,
+        campaign_id=_campaign_a_id(db_connection, user_id=user_id),
     )
     assert view_a.current_hit_points == 6
     assert view_a.maximum_hit_points == 12
@@ -254,6 +260,7 @@ def test_character_a_and_b_current_state_matches_the_documented_fixture(
         timeline_id=timeline_a_id,
         expected_world_id=world_id,
         include_full=True,
+        campaign_id=_campaign_a_id(db_connection, user_id=user_id),
     )
     assert view_b.current_hit_points == 20
     assert view_b.maximum_hit_points == 20
@@ -327,6 +334,7 @@ def test_rerun_reconciles_character_a_state_condition_and_resource_after_drift(
         timeline_id=timeline_a_id,
         expected_world_id=world_id,
         include_full=True,
+        campaign_id=_campaign_a_id(db_connection, user_id=user_id),
     )
     assert view_a.current_hit_points == 6
     assert view_a.temporary_hit_points == 2

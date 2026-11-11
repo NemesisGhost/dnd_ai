@@ -12,6 +12,10 @@ interface CharacterPerspectiveContextValue {
     characterId: string | null,
   ) => void
 
+  /** Makes the route campaign the selected campaign. The route scope governs: a retained selection of
+   * another campaign is replaced, and this campaign's own perspective choice (including none) is kept. */
+  adoptRouteCampaign?: (campaignId: string) => void
+
   /** Synchronizes an authorized-looking character id carried in a URL
    * (e.g. a Knowledge detail link's `character_id` query parameter) into
    * the visible selected perspective, without the guarded navigation an

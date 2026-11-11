@@ -115,7 +115,7 @@ function Shell({
 }: {
     initial: SessionBootstrap
     reload: () => void
-    onRefresh?: () => Promise<SessionBootstrap>
+    onRefresh?: () => Promise<SessionBootstrap | null>
 }) {
     const [bootstrap, setBootstrap] = useState(initial)
     return (
@@ -125,9 +125,13 @@ function Shell({
                 reload,
                 // A refresh applies the authoritative bootstrap the test supplies,
                 // exactly as the real hook replaces it in place.
+                // A refresh that resolves null models one the real hook does not apply (superseded or
+                // aborted): it resolves false and changes nothing.
                 refresh: async () => {
                     if (onRefresh !== undefined) {
-                        setBootstrap(await onRefresh())
+                        const next = await onRefresh()
+                        if (next === null) return false
+                        setBootstrap(next)
                     }
                     return true
                 },
@@ -148,7 +152,7 @@ export interface RenderOptions {
     routes: { path: string; element: ReactNode }[]
     bootstrap?: SessionBootstrap
     reload?: () => void
-    onRefresh?: () => Promise<SessionBootstrap>
+    onRefresh?: () => Promise<SessionBootstrap | null>
 }
 
 export function renderAuthoringRoutes({

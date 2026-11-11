@@ -1660,6 +1660,266 @@ Index(
 )
 
 # ---------------------------------------------------------------------------
+# Character reveal delegations (revision 141)
+# ---------------------------------------------------------------------------
+
+character_reveal_delegations = Table(
+    "character_reveal_delegations",
+    metadata,
+    _uuid_pk("character_reveal_delegation_id"),
+    Column(
+        "campaign_id",
+        UUID(),
+        ForeignKey("campaign.campaigns.campaign_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "grantee_campaign_membership_id",
+        UUID(),
+        ForeignKey("security.campaign_memberships.campaign_membership_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "gm_membership_role_id",
+        UUID(),
+        ForeignKey("security.membership_roles.membership_role_id", ondelete="CASCADE"),
+        nullable=False,
+        comment=(
+            "The grantee's built-in gm assignment this delegation is bound to. Immutable; the "
+            "delegation authorizes only while this exact row is live."
+        ),
+    ),
+    Column(
+        "granted_by_membership_id",
+        UUID(),
+        ForeignKey("security.campaign_memberships.campaign_membership_id", ondelete="SET NULL"),
+        comment=(
+            "The owner membership that granted it. Provenance, not authority: the delegation "
+            "survives the grantor losing ownership. NULL only if that membership row was "
+            "physically deleted."
+        ),
+    ),
+    Column("granted_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    Column("reason", Text(), nullable=False),
+    Column("revoked_at", TIMESTAMP(timezone=True)),
+    Column(
+        "revoked_by_membership_id",
+        UUID(),
+        ForeignKey("security.campaign_memberships.campaign_membership_id", ondelete="SET NULL"),
+    ),
+    Column("revocation_reason", Text()),
+    Column(
+        "end_reason",
+        Text(),
+        comment=(
+            "Why the row was closed; NULL while it is live. revoked_by_owner is an explicit "
+            "revocation (revoked_by_membership_id and revocation_reason set); the others are "
+            "closed by the membership and role commands, or by a later grant that found the "
+            "bound gm assignment lapsed (gm_assignment_lapsed)."
+        ),
+    ),
+    *_timestamps(),
+    schema="security",
+    comment=(
+        "A campaign owner's delegation of character.reveal to a member holding the built-in gm "
+        "role (P03-A A1). Bound to the grantee's specific gm assignment (gm_membership_role_id): "
+        "it authorizes only while that assignment is live, and losing it, ending the membership "
+        "or regaining GM status later ends the grant, which needs a fresh row. Closed rows are "
+        "kept as history (never deleted by commands). One live row per grantee."
+    ),
+)
+
+Index("ix_character_reveal_delegations_campaign_id", character_reveal_delegations.c.campaign_id)
+Index(
+    "ix_character_reveal_delegations_grantee",
+    character_reveal_delegations.c.grantee_campaign_membership_id,
+)
+Index(
+    "ix_character_reveal_delegations_gm_membership_role_id",
+    character_reveal_delegations.c.gm_membership_role_id,
+)
+Index(
+    "ix_character_reveal_delegations_granted_by",
+    character_reveal_delegations.c.granted_by_membership_id,
+    postgresql_where=character_reveal_delegations.c.granted_by_membership_id.isnot(None),
+)
+Index(
+    "ix_character_reveal_delegations_revoked_by",
+    character_reveal_delegations.c.revoked_by_membership_id,
+    postgresql_where=character_reveal_delegations.c.revoked_by_membership_id.isnot(None),
+)
+Index(
+    "ux_character_reveal_delegations_live",
+    character_reveal_delegations.c.grantee_campaign_membership_id,
+    unique=True,
+    postgresql_where=character_reveal_delegations.c.revoked_at.is_(None),
+)
+
+# ---------------------------------------------------------------------------
+# Character revelations (revision 145)
+# ---------------------------------------------------------------------------
+
+revelation_audience_kinds = _lookup_table(
+    "security",
+    "revelation_audience_kinds",
+    "revelation_audience_kind_id",
+    "Who a character revelation reaches: one member, one access group, the campaign's "
+    "current members (a snapshot), or its current and future members (P03-A A3).",
+)
+
+character_revelations = Table(
+    "character_revelations",
+    metadata,
+    _uuid_pk("character_revelation_id"),
+    Column(
+        "campaign_id",
+        UUID(),
+        ForeignKey("campaign.campaigns.campaign_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "character_id",
+        UUID(),
+        ForeignKey("character.characters.character_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "revelation_audience_kind_id",
+        UUID(),
+        ForeignKey(
+            "security.revelation_audience_kinds.revelation_audience_kind_id", ondelete="RESTRICT"
+        ),
+        nullable=False,
+    ),
+    Column(
+        "target_campaign_membership_id",
+        UUID(),
+        ForeignKey("security.campaign_memberships.campaign_membership_id", ondelete="RESTRICT"),
+    ),
+    Column(
+        "target_access_group_id",
+        UUID(),
+        ForeignKey("security.access_groups.access_group_id", ondelete="RESTRICT"),
+    ),
+    Column(
+        "created_by_membership_id",
+        UUID(),
+        ForeignKey("security.campaign_memberships.campaign_membership_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("authority_source_code", Text(), nullable=False),
+    Column(
+        "character_reveal_delegation_id",
+        UUID(),
+        ForeignKey(
+            "security.character_reveal_delegations.character_reveal_delegation_id",
+            ondelete="RESTRICT",
+        ),
+    ),
+    Column("reason", Text(), nullable=False),
+    Column("created_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    Column("ended_at", TIMESTAMP(timezone=True)),
+    Column(
+        "ended_by_membership_id",
+        UUID(),
+        ForeignKey("security.campaign_memberships.campaign_membership_id", ondelete="RESTRICT"),
+    ),
+    Column("end_reason", Text()),
+    Column("revocation_reason", Text()),
+    Column("updated_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    schema="security",
+    comment=(
+        "A deliberate revelation of one character to an audience in one campaign (P03-A A3): a "
+        "member, an access group, the campaign's current members (a snapshot in "
+        "character_revelation_members) or its current and future members. It confers discovery "
+        "and the character's latest public-profile release for that character only, and "
+        "survives the revealer losing authority. Closed at most once (ended_at/end_reason), "
+        "never otherwise edited; one live row per audience."
+    ),
+)
+
+Index("ix_character_revelations_campaign_id", character_revelations.c.campaign_id)
+Index("ix_character_revelations_character_id", character_revelations.c.character_id)
+Index("ix_character_revelations_kind", character_revelations.c.revelation_audience_kind_id)
+Index(
+    "ix_character_revelations_target_membership",
+    character_revelations.c.target_campaign_membership_id,
+    postgresql_where=character_revelations.c.target_campaign_membership_id.isnot(None),
+)
+Index(
+    "ix_character_revelations_target_group",
+    character_revelations.c.target_access_group_id,
+    postgresql_where=character_revelations.c.target_access_group_id.isnot(None),
+)
+Index(
+    "ix_character_revelations_delegation",
+    character_revelations.c.character_reveal_delegation_id,
+    postgresql_where=character_revelations.c.character_reveal_delegation_id.isnot(None),
+)
+Index(
+    "ix_character_revelations_ended_by",
+    character_revelations.c.ended_by_membership_id,
+    postgresql_where=character_revelations.c.ended_by_membership_id.isnot(None),
+)
+Index("ix_character_revelations_created_by", character_revelations.c.created_by_membership_id)
+Index(
+    "ux_character_revelations_live",
+    character_revelations.c.campaign_id,
+    character_revelations.c.character_id,
+    character_revelations.c.revelation_audience_kind_id,
+    character_revelations.c.target_campaign_membership_id,
+    character_revelations.c.target_access_group_id,
+    unique=True,
+    postgresql_where=character_revelations.c.ended_at.is_(None),
+    postgresql_nulls_not_distinct=True,
+)
+
+character_revelation_members = Table(
+    "character_revelation_members",
+    metadata,
+    _uuid_pk("character_revelation_member_id"),
+    Column(
+        "character_revelation_id",
+        UUID(),
+        ForeignKey("security.character_revelations.character_revelation_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "campaign_id",
+        UUID(),
+        ForeignKey("campaign.campaigns.campaign_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "campaign_membership_id",
+        UUID(),
+        ForeignKey("security.campaign_memberships.campaign_membership_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("added_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    Column("removed_at", TIMESTAMP(timezone=True)),
+    Column("removal_reason", Text()),
+    UniqueConstraint(
+        "character_revelation_id",
+        "campaign_membership_id",
+        name="ux_character_revelation_members_member",
+    ),
+    schema="security",
+    comment=(
+        "The campaign_current snapshot of a revelation (P03-A A3): the active memberships at the "
+        "moment of creation. Rows are inserted only by the creating transaction; the only change "
+        "ever made is setting removed_at once, when the membership ends. A reopened membership "
+        "never regains a removed row."
+    ),
+)
+
+Index("ix_character_revelation_members_campaign_id", character_revelation_members.c.campaign_id)
+Index(
+    "ix_character_revelation_members_membership",
+    character_revelation_members.c.campaign_membership_id,
+)
+
+# ---------------------------------------------------------------------------
 # System roles (revision 137)
 # ---------------------------------------------------------------------------
 

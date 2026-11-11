@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import { MemoryRouter, Route, Routes } from "react-router"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import type { CharacterDetail } from "../types/character"
@@ -144,9 +144,10 @@ describe("CampaignWorldDetailPage", () => {
             expect.any(AbortSignal),
         )
 
-        expect(
-            screen.getByRole("link", { name: "Back to World" }),
-        ).toHaveAttribute("href", "/app/campaign-a/world")
+        // A direct entry to the World route: the breadcrumb is World, then the character.
+        const trail = screen.getByRole("navigation", { name: "Breadcrumb" })
+        expect(within(trail).getByRole("link", { name: "World" })).toHaveAttribute("href", "/app/campaign-a/world")
+        expect(within(trail).getByText("Character")).toHaveAttribute("aria-current", "page")
     })
 
     it("fails closed for an unsupported category (relationship)", () => {

@@ -44,7 +44,8 @@ active (checkpoint 5) — the same generalization `dnd_ai.domain.access.
 resolve_access_context`'s own docstring describes in full, applied here so
 this overview can never show a grant targeting a resource that resolver
 would no longer authorize through. `MemberResourceGrantView.target_
-display_name` (checkpoint 5) is populated only for a `character_id` target
+display_name` (checkpoint 5) is populated only for a `character_id` target (and, since P03-A
+A2a-R, for an `entity_id` target that is a character: the whole-character and `canon.edit` denies)
 — resolved from `core.entities.canonical_name`, the identical safe display
 name `character_relationships` already uses — and left `None` for every
 other target kind, per this module's own "specific display identity...is a
@@ -119,7 +120,13 @@ from datetime import datetime
 from sqlalchemy import Connection, text
 
 from dnd_ai.commands.local_auth import normalize_login_name
-from dnd_ai.domain.access import LOCAL_AUTH_ISSUER, RESOURCE_GRANT_CAPABILITY_CATALOG
+from dnd_ai.domain.access import (
+    BUILTIN_CAMPAIGN_OWNER_ROLE_CODE,
+    LIVE_REVELATIONS_FOR_MEMBERSHIP_SQL,
+    LOCAL_AUTH_ISSUER,
+    RESOURCE_GRANT_CAPABILITY_CATALOG,
+    find_live_builtin_owner_assignment,
+)
 
 _GRANT_TARGET_COLUMNS = (
     "character_id",
@@ -148,6 +155,18 @@ class MemberCharacterRelationshipView:
     relationship_type_display_name: str
     granted_at: datetime
     expires_at: datetime | None
+
+
+@dataclass(frozen=True)
+class MemberRevelationView:
+    """One live character revelation that reaches a member (P03-A A3b): the character it names
+    and the audience kind it reaches them through. A source of its own beside roles, relationships
+    and grants; never its id, reason, creator or the rest of its audience."""
+
+    character_id: uuid.UUID
+    character_display_name: str
+    audience_kind_code: str
+    audience_kind_display_name: str
 
 
 @dataclass(frozen=True)
@@ -194,6 +213,7 @@ class CampaignMemberView:
     roles: tuple[MemberRoleView, ...]
     character_relationships: tuple[MemberCharacterRelationshipView, ...]
     grants: tuple[MemberResourceGrantView, ...]
+    revelations: tuple[MemberRevelationView, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -365,6 +385,7 @@ def get_campaign_access_overview(
                    cap.code AS capability_code, cap.display_name AS capability_display_name,
                    rg.effect, rg.reason, rg.granted_at, rg.expires_at,
                    target_entity.canonical_name AS target_entity_display_name,
+                   target_character.character_id IS NOT NULL AS entity_target_is_character,
                    {target_column_list}
             FROM security.resource_grants rg
             JOIN security.capabilities cap ON cap.capability_id = rg.capability_id
@@ -374,6 +395,8 @@ def get_campaign_access_overview(
               ON target_entity.entity_id = COALESCE(
                      rg.character_id, rg.entity_id, rg.knowledge_item_id, rg.quest_id, rg.event_id
                  )
+            LEFT JOIN character.characters target_character
+              ON target_character.character_id = rg.entity_id
             LEFT JOIN core.lifecycle_statuses target_entity_status
               ON target_entity_status.lifecycle_status_id = target_entity.lifecycle_status_id
             LEFT JOIN campaign.sessions target_session ON target_session.session_id = rg.session_id
@@ -396,8 +419,13 @@ def get_campaign_access_overview(
     ).mappings():
         target_column = next(column for column in _GRANT_TARGET_COLUMNS if row[column] is not None)
         target_type = target_column.removesuffix("_id")
+        # A character is named whether it is a `character_id` target or the `entity_id` target
+        # of a deny (P03-A A2a-R, DEF-018); `target_type` stays what the grant was written under.
         target_display_name = (
-            row["target_entity_display_name"] if target_column == "character_id" else None
+            row["target_entity_display_name"]
+            if target_column == "character_id"
+            or (target_column == "entity_id" and row["entity_target_is_character"])
+            else None
         )
         grants_by_membership.setdefault(row["grantee_campaign_membership_id"], []).append(
             MemberResourceGrantView(
@@ -414,6 +442,31 @@ def get_campaign_access_overview(
             )
         )
 
+    # Live revelations, from the resolver's own query (one definition), for each member that
+    # resolves access at all (an open, `active` membership).
+    revelations_by_membership: dict[uuid.UUID, list[MemberRevelationView]] = {}
+    for member_row in member_rows:
+        if member_row["status_code"] != "active":
+            continue
+        for row in connection.execute(
+            text(
+                LIVE_REVELATIONS_FOR_MEMBERSHIP_SQL
+                + " ORDER BY e.canonical_name, r.created_at, r.character_revelation_id"
+            ),
+            {
+                "campaign_id": campaign_id,
+                "membership_id": member_row["campaign_membership_id"],
+            },
+        ).mappings():
+            revelations_by_membership.setdefault(member_row["campaign_membership_id"], []).append(
+                MemberRevelationView(
+                    character_id=row["character_id"],
+                    character_display_name=row["character_display_name"],
+                    audience_kind_code=row["audience_kind"],
+                    audience_kind_display_name=row["audience_kind_display_name"],
+                )
+            )
+
     return tuple(
         CampaignMemberView(
             campaign_membership_id=row["campaign_membership_id"],
@@ -428,13 +481,14 @@ def get_campaign_access_overview(
                 relationships_by_membership.get(row["campaign_membership_id"], [])
             ),
             grants=tuple(grants_by_membership.get(row["campaign_membership_id"], [])),
+            revelations=tuple(revelations_by_membership.get(row["campaign_membership_id"], [])),
         )
         for row in member_rows
     )
 
 
 def list_assignable_campaign_roles(
-    connection: Connection, *, campaign_id: uuid.UUID
+    connection: Connection, *, campaign_id: uuid.UUID, caller_campaign_membership_id: uuid.UUID
 ) -> tuple[AssignableRoleView, ...]:
     """Every role `dnd_ai.commands.memberships.assign_membership_role()`/
     `change_membership_role()` would actually accept for `campaign_id`
@@ -448,7 +502,19 @@ def list_assignable_campaign_roles(
     delegation narrows this further — this codebase's role model is flat
     (`dnd_ai.commands.memberships`' own module docstring), so every role
     `access.manage` may assign is equally assignable regardless of which
-    membership holds `access.manage`, including the caller's own."""
+    membership holds `access.manage`, including the caller's own — with one
+    exception (P03-A decision D3): the built-in `campaign_owner` template is
+    left out unless the caller is a live built-in owner of this campaign
+    (`find_live_builtin_owner_assignment`), because those commands refuse it
+    to anyone else and the portal must not offer an action that would fail."""
+    caller_is_owner = (
+        find_live_builtin_owner_assignment(
+            connection,
+            campaign_id=campaign_id,
+            campaign_membership_id=caller_campaign_membership_id,
+        )
+        is not None
+    )
     return tuple(
         AssignableRoleView(
             role_id=row["role_id"], code=row["code"], display_name=row["display_name"]
@@ -459,9 +525,14 @@ def list_assignable_campaign_roles(
                 FROM security.roles
                 WHERE (campaign_id IS NULL OR campaign_id = :campaign_id)
                   AND is_active
+                  AND (:caller_is_owner OR campaign_id IS NOT NULL OR code <> :owner_code)
                 ORDER BY sort_order, display_name
             """),
-            {"campaign_id": campaign_id},
+            {
+                "campaign_id": campaign_id,
+                "caller_is_owner": caller_is_owner,
+                "owner_code": BUILTIN_CAMPAIGN_OWNER_ROLE_CODE,
+            },
         ).mappings()
     )
 
@@ -544,7 +615,10 @@ def list_grantable_resource_capabilities(
     by `campaign_id`/`world_id` — see that constant's own docstring for the
     full delegation-policy rationale (which capability codes apply to which
     target kind, and why `access.manage`/`import.approve`/`rules_source.
-    manage` are excluded from every kind entirely). The portal's own
+    manage` are excluded from every kind entirely). The `(code, target_type)` grain is coarser
+    than one sub-rule `create_resource_grant` applies: an `entity` target that is a character is
+    accepted for a `deny` of `campaign.view` or `canon.edit` only (P03-A A2a-R, DEF-018); the
+    portal's `entity` selector excludes characters until A6. The portal's own
     resource-grant management UI only offers `character` as a selectable
     resource type this checkpoint (see `dnd_ai.commands.access_grants`'
     module docstring for why the other five target kinds are deferred), so
@@ -733,6 +807,7 @@ def list_campaign_access_groups(
                    cap.code AS capability_code, cap.display_name AS capability_display_name,
                    rg.effect, rg.reason, rg.granted_at, rg.expires_at,
                    target_entity.canonical_name AS target_entity_display_name,
+                   target_character.character_id IS NOT NULL AS entity_target_is_character,
                    {target_column_list}
             FROM security.resource_grants rg
             JOIN security.capabilities cap ON cap.capability_id = rg.capability_id
@@ -743,6 +818,8 @@ def list_campaign_access_groups(
               ON target_entity.entity_id = COALESCE(
                      rg.character_id, rg.entity_id, rg.knowledge_item_id, rg.quest_id, rg.event_id
                  )
+            LEFT JOIN character.characters target_character
+              ON target_character.character_id = rg.entity_id
             LEFT JOIN core.lifecycle_statuses target_entity_status
               ON target_entity_status.lifecycle_status_id = target_entity.lifecycle_status_id
             LEFT JOIN campaign.sessions target_session ON target_session.session_id = rg.session_id
@@ -765,8 +842,13 @@ def list_campaign_access_groups(
     ).mappings():
         target_column = next(column for column in _GRANT_TARGET_COLUMNS if row[column] is not None)
         target_type = target_column.removesuffix("_id")
+        # A character is named whether it is a `character_id` target or the `entity_id` target
+        # of a deny (P03-A A2a-R, DEF-018); `target_type` stays what the grant was written under.
         target_display_name = (
-            row["target_entity_display_name"] if target_column == "character_id" else None
+            row["target_entity_display_name"]
+            if target_column == "character_id"
+            or (target_column == "entity_id" and row["entity_target_is_character"])
+            else None
         )
         grants_by_group.setdefault(row["grantee_access_group_id"], []).append(
             AccessGroupResourceGrantView(

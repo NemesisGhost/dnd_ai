@@ -1,6 +1,8 @@
 import {
     useCallback,
+    useContext,
     useEffect,
+    useLayoutEffect,
     useRef,
     useState,
 } from "react"
@@ -9,6 +11,8 @@ import {
     KnowledgeRequestError,
 } from "../api/knowledge"
 import { useSession } from "../context/SessionContext"
+import { BreadcrumbLabelContext } from "../navigation/BreadcrumbLabelContext"
+import type { LabelRegistry } from "../navigation/labelRegistry"
 import { usePartyNotFoundEpisodes } from "./usePartyScopeRecovery"
 import type { RefetchOutcome } from "./useAuthoringResource"
 import type { KnowledgeDetail } from "../types/knowledge"
@@ -35,6 +39,9 @@ export type KnowledgeDetailState =
 export interface UseKnowledgeDetailResult {
     state: KnowledgeDetailState
     retry: () => void
+    // The breadcrumb-label authority under which the read behind `state` STARTED (see
+    // useAuthoringResource): the only registry its answer may publish the record's name into.
+    authority: LabelRegistry | null
     // Re-reads the detail in place: the current item stays on screen (nothing remounts)
     // until the new one arrives, unlike `retry`, which starts again from "loading". It resolves
     // with what the read did and never rejects. "failed": it was not applied; a recoverable
@@ -51,6 +58,7 @@ interface KnowledgeDetailSnapshot {
     partyId: string | null
     requestVersion: number
     state: KnowledgeDetailState
+    authority: LabelRegistry | null
 }
 
 const initialState: KnowledgeDetailState = {
@@ -80,13 +88,23 @@ export function useKnowledgeDetail(
             partyId,
             requestVersion: 0,
             state: initialState,
+            authority: null,
         }))
+
+    // The label authority now in force, read when a request starts (a ref: a change of authority must
+    // not start a read).
+    const registry = useContext(BreadcrumbLabelContext)
+    const currentAuthority = useRef(registry)
+    useLayoutEffect(() => {
+        currentAuthority.current = registry
+    })
 
     const refresh = useCallback(async (): Promise<RefetchOutcome> => {
         refreshController.current?.abort()
         const controller = new AbortController()
         refreshController.current = controller
-        const keys = { campaignId, knowledgeItemId, characterId, partyId, requestVersion }
+        const authority = currentAuthority.current
+        const keys = { campaignId, knowledgeItemId, characterId, partyId, requestVersion, authority }
         try {
             const item = await fetchKnowledgeDetail(
                 campaignId,
@@ -136,6 +154,7 @@ export function useKnowledgeDetail(
 
     useEffect(() => {
         const controller = new AbortController()
+        const authority = currentAuthority.current
 
         void fetchKnowledgeDetail(
             campaignId,
@@ -155,6 +174,7 @@ export function useKnowledgeDetail(
                     characterId,
                     partyId,
                     requestVersion,
+                    authority,
                     state: {
                         status: "success",
                         item,
@@ -183,6 +203,7 @@ export function useKnowledgeDetail(
                         characterId,
                         partyId,
                         requestVersion,
+                        authority,
                         state: initialState,
                     })
                     void reload()
@@ -195,7 +216,7 @@ export function useKnowledgeDetail(
                     characterId !== null &&
                     partyId !== null
                 ) {
-                    const scope = { campaignId, knowledgeItemId, characterId, partyId, requestVersion }
+                    const scope = { campaignId, knowledgeItemId, characterId, partyId, requestVersion, authority }
                     setSnapshot({ ...scope, state: initialState })
                     void partyEpisode(
                         [campaignId, knowledgeItemId, characterId, partyId, requestVersion].join("|"),
@@ -225,6 +246,7 @@ export function useKnowledgeDetail(
                         characterId,
                         partyId,
                         requestVersion,
+                        authority,
                         state: {
                             status: "unavailable",
                         },
@@ -238,6 +260,7 @@ export function useKnowledgeDetail(
                     characterId,
                     partyId,
                     requestVersion,
+                    authority,
                     state: {
                         status: "error",
                         error,
@@ -262,6 +285,7 @@ export function useKnowledgeDetail(
     return {
         state,
         retry,
+        authority: snapshotMatchesRequest ? snapshot.authority : null,
         refresh,
     }
 }

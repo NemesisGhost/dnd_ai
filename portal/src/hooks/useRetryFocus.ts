@@ -8,7 +8,14 @@ import type { RefObject } from "react"
 // control, it still owned focus when it was removed, and focus then has nowhere else to be (nothing
 // else took it, as a navigation or a background refresh would). A failed retry keeps the same
 // button, so focus never moves; a re-render, a refresh or a button nobody used never moves it.
-export function useRetryFocus<E extends HTMLElement>(): {
+//
+// A retry that sits inside a group of controls rather than a page may pass `resolveTarget`: it receives the
+// `<section>` that held the button and returns where focus goes instead of the page heading (the Infobox
+// passes "that level's select when usable, otherwise its reason text"). It runs after the commit, so it
+// sees what replaced the button.
+export function useRetryFocus<E extends HTMLElement>(
+    resolveTarget?: (section: HTMLElement) => HTMLElement | null,
+): {
     ref: RefObject<E | null>
     // Call from the click handler.
     used: () => void
@@ -18,6 +25,10 @@ export function useRetryFocus<E extends HTMLElement>(): {
     const ref = useRef<E>(null)
     const active = useRef(false)
     const element = useRef<E | null>(null)
+    const resolver = useRef(resolveTarget)
+    useLayoutEffect(() => {
+        resolver.current = resolveTarget
+    })
 
     useLayoutEffect(() => {
         element.current = ref.current
@@ -27,16 +38,24 @@ export function useRetryFocus<E extends HTMLElement>(): {
             if (!active.current || button === null || document.activeElement !== button) {
                 return
             }
-            const heading = button
-                .closest<HTMLElement>(".authoring-page, section, main")
-                ?.querySelector<HTMLElement>("h1")
-            if (heading === null || heading === undefined) {
+            const resolve = resolver.current
+            const section = button.closest<HTMLElement>("section")
+            const heading = resolve
+                ? null
+                : button
+                      .closest<HTMLElement>(".authoring-page, section, main")
+                      ?.querySelector<HTMLElement>("h1")
+            if (resolve ? section === null : heading === null || heading === undefined) {
                 return
             }
             setTimeout(() => {
                 const focused = document.activeElement
-                if (heading.isConnected && (focused === null || focused === document.body)) {
-                    heading.focus()
+                if (focused !== null && focused !== document.body) {
+                    return
+                }
+                const target = resolve ? (section?.isConnected ? resolve(section) : null) : heading
+                if (target?.isConnected) {
+                    target.focus()
                 }
             }, 0)
         }

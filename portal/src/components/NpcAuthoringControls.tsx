@@ -11,6 +11,8 @@ import type { RecordAuthoring } from "../utils/recordAuthoring"
 interface NpcAuthoringControlsProps {
     campaignId: string
     characterId: string
+    // Router state for the links: the task the page is in, so the builds and portrayal pages keep it.
+    linkState?: object
 }
 
 // The editor-only links of a character's workspace (components/world/WorldRecordWorkspace): the Access
@@ -70,14 +72,14 @@ function LoadedPlayerAccessLink({
 // Editors get a link to a character's builds and starting state. The builds read
 // is a 404 for anything that is not an NPC or player character, so a bare
 // character shows no link, and a player sends no request at all.
-export function BuildsLink({ campaignId, characterId }: NpcAuthoringControlsProps) {
+export function BuildsLink({ campaignId, characterId, linkState }: NpcAuthoringControlsProps) {
     if (!useCampaignCapability(campaignId, "canon.edit")) {
         return null
     }
-    return <LoadedBuildsLink campaignId={campaignId} characterId={characterId} />
+    return <LoadedBuildsLink campaignId={campaignId} characterId={characterId} linkState={linkState} />
 }
 
-function LoadedBuildsLink({ campaignId, characterId }: NpcAuthoringControlsProps) {
+function LoadedBuildsLink({ campaignId, characterId, linkState }: NpcAuthoringControlsProps) {
     const { state } = useAuthoringResource<CharacterBuilds>(
         characterBuildsPath(campaignId, characterId),
     )
@@ -89,6 +91,7 @@ function LoadedBuildsLink({ campaignId, characterId }: NpcAuthoringControlsProps
             <Link
                 className="authoring-button"
                 to={`/app/${encodeURIComponent(campaignId)}/characters/${encodeURIComponent(characterId)}/builds`}
+                state={linkState}
             >
                 Builds and starting state
             </Link>
@@ -105,6 +108,7 @@ export function PortrayalLink({
     detail,
     asButton,
     authoring,
+    linkState,
 }: NpcAuthoringControlsProps & { detail: number; asButton?: boolean; authoring: RecordAuthoring }) {
     if (!useCampaignCapability(campaignId, "canon.edit") || !authoring.can_read_private) {
         return null
@@ -115,6 +119,7 @@ export function PortrayalLink({
             characterId={characterId}
             detail={detail}
             asButton={asButton}
+            linkState={linkState}
         />
     )
 }
@@ -124,6 +129,7 @@ function LoadedPortrayalLink({
     characterId,
     detail,
     asButton,
+    linkState,
 }: NpcAuthoringControlsProps & { detail: number; asButton?: boolean }) {
     const { state } = useAuthoringResource<unknown>(
         `${npcAuthoringPath(campaignId, characterId)}${detail === 0 ? "" : `?v=${detail}`}`,
@@ -136,6 +142,7 @@ function LoadedPortrayalLink({
             <Link
                 className={asButton === true ? "authoring-button" : undefined}
                 to={`/app/${encodeURIComponent(campaignId)}/characters/${encodeURIComponent(characterId)}/portrayal`}
+                state={linkState}
             >
                 How this NPC is played
             </Link>

@@ -3,7 +3,7 @@ read API (unified entity search/browse, relationship list, and typed
 detail routes for religions / item instances / historical events /
 generic locations).
 
-Covers, per docs/PHASE13D_BACKEND_READINESS.md §9: access control; every
+Covers, per docs/api/READ_API.md §9: access control; every
 supported category in search; category/type filtering; case-insensitive
 search; deterministic ordering; first and subsequent cursor pages; invalid
 cursor / invalid limit; empty results; GM canonical view; player/observer;

@@ -15,7 +15,7 @@ import { combineRefetchOutcomes } from "../../utils/refreshOutcome"
 import { useCampaignCapability } from "../../hooks/useCampaignCapability"
 import { useHeldWorldCapability, WORLD_CANON_READ_PRIVATE } from "../../hooks/useWorldCapability"
 import { usePageArrival } from "../../hooks/usePageArrival"
-import { pickWorldReturnState, useReviewBackPath, useWorldBackPath } from "../../hooks/useWorldBackPath"
+import { useReviewBackPath, useWorldBackPath } from "../../hooks/useWorldBackPath"
 import { CharacterPanels } from "../../pages/CharacterDetailPage"
 import { LocationPanels } from "../../pages/WorldLocationDetailPage"
 import { OrganizationPanels } from "../../pages/WorldOrganizationDetailPage"
@@ -39,6 +39,11 @@ import { LifecycleActionsProvider } from "../EntityLifecyclePanel"
 import { EntitySourcesSection } from "../EntitySourcesSection"
 import { CharacterInventoryPanel } from "../InventoryPanels"
 import { BuildsLink, PlayerAccessLink, PortrayalLink } from "../NpcAuthoringControls"
+import { useBreadcrumbLabel } from "../../navigation/BreadcrumbLabelContext"
+import { continuedState, outsideTaskOf, taskOf } from "../../navigation/breadcrumbModel"
+import { carriedState } from "../../navigation/taskReturn"
+import { navTaskState } from "../../navigation/navStart"
+import { TaskBreadcrumb } from "../navigation/TaskBreadcrumb"
 import { NpcRuntimePanel } from "../NpcRuntimePanel"
 import { OrganizationMembers } from "../OrganizationMembers"
 import { RelationshipsPanel } from "../RelationshipsPanel"
@@ -130,10 +135,28 @@ export function WorldRecordWorkspace(props: Props) {
 
 function Loaded({ campaignId, category, entityId }: Props) {
     const detail = useAuthoringResource<WorkspaceDetail>(worldDetailPath(campaignId, category, entityId))
+    // A character's name, from this page's own authorized read, for the breadcrumbs of its Characters
+    // pages (builds, portrayal, edit). Other categories register nothing.
+    useBreadcrumbLabel({
+        route: "characters.detail",
+        params: { campaignId, characterId: entityId },
+        name: category === "character" && detail.state.kind === "ready" ? (detail.state.data as CharacterDetail).name : undefined,
+        denied: category === "character" && (detail.state.kind === "denied" || detail.state.kind === "unavailable"),
+        authority: category === "character" ? detail.authority : null,
+    })
     // The last read that succeeded for this record. A refresh that fails recoverably (a network or
     // server error) keeps the workspace mounted on it, so unsent input in any section survives and
     // the person can retry; a denied or unavailable answer, or a loading state, discards it and
     // fails closed. The workspace is keyed by record, so this never outlives it.
+    // The same name for the pages that list this record in their trail (a related record, an edit
+    // page): the World record route, under the authority the read started under.
+    useBreadcrumbLabel({
+        route: "world.record",
+        params: { campaignId, category, entityId },
+        name: detail.state.kind === "ready" ? (detail.state.data as { name: string }).name : undefined,
+        denied: detail.state.kind === "denied" || detail.state.kind === "unavailable",
+        authority: detail.authority,
+    })
     const [kept, setKept] = useState<WorkspaceDetail | null>(null)
     if (detail.state.kind === "ready" && kept !== detail.state.data) setKept(detail.state.data)
     if ((detail.state.kind === "denied" || detail.state.kind === "unavailable") && kept !== null) setKept(null)
@@ -363,10 +386,31 @@ function Workspace({
     const location = useLocation()
     // Router state naming where the record was opened from (the World browser, the Review queue)
     // rides along every in-page link, so moving between sections never forgets where Back returns.
-    const linkState = pickWorldReturnState(location.state)
     const worldBack = useWorldBackPath(campaignId)
     const reviewBack = useReviewBackPath(campaignId)
-    const back = reviewBack !== null ? { href: reviewBack, label: "Back to Review queue" } : { href: worldBack, label: "Back to World" }
+    // A character opened from a task other than World's own (Characters, Parties, a session) keeps that
+    // task: the header shows the task's breadcrumb instead of a World back link, and the section links
+    // carry the validated task. A character opened from World, the Review queue or directly is unchanged.
+    // Every other record keeps the task it was opened in whatever its root (the World browser with its
+    // filters, the Review queue, a related record, a character's inventory): the breadcrumb replaces the
+    // back link, and the section links carry the task. After a direct
+    // entry there is no origin on evidence and the back link stays.
+    const taskBack =
+        category === "character" ? outsideTaskOf(location.pathname, location.state) : taskOf(location.pathname, location.state)
+    // Where the person started rides along even in the roots this page keeps its own back link for
+    // (World's own task, the Review queue).
+    const linkState = taskBack !== null ? taskBack.state : carriedState(location.pathname, location.state)
+    // Edit continues the task with this page added, so the edit page's breadcrumb names the record. Only
+    // World's own task is valid on the edit routes; any other, and a direct entry, carries the section links' state.
+    const editTask = taskBack !== null && category !== "character" && taskBack.nearest.state.task.root === "world"
+        ? continuedState(location.pathname, location.state)
+        : null
+    const back =
+        taskBack !== null
+            ? { href: taskBack.nearest.to, label: `Back to ${taskBack.nearest.generic}` }
+            : reviewBack !== null
+              ? { href: reviewBack, label: "Back to Review queue" }
+              : { href: worldBack, label: "Back to World" }
 
     const settled = lifecycle.state.kind !== "loading"
     // A lifecycle read that succeeded and says the record is not lifecycle-managed (a bare
@@ -486,6 +530,7 @@ function Workspace({
     // The page as it is now, so Save and Cancel on an edit page return to the section left.
     const editStateFor = (section: WorldSection) => ({
         ...linkState,
+        ...(editTask ?? {}),
         returnTo: { pathname: here, search: nav.sectionHref(section) },
     })
     const editState = editStateFor("details")
@@ -663,6 +708,7 @@ function Workspace({
                     summary={info.summary}
                     status={null}
                     back={back}
+                    breadcrumb={taskBack === null ? undefined : <TaskBreadcrumb current={info.name} />}
                     headingRef={headingRef}
                     guidance={null}
                     guidanceHref={null}
@@ -711,6 +757,7 @@ function Workspace({
                 summary={info.summary}
                 status={lifecycleView}
                 back={back}
+                breadcrumb={taskBack === null ? undefined : <TaskBreadcrumb current={info.name} />}
                 headingRef={headingRef}
                 guidance={guidance}
                 guidanceHref={guidance === null ? null : sectionHref(guidance.section)}
@@ -874,7 +921,11 @@ function DetailsSection({
                     <CharacterPanels character={character} />
                     {/* The sheet is its own page: linked, never embedded a second time here. */}
                     <p className="authoring-page__actions-row">
-                        <Link className="authoring-button" to={`${root}/characters/${encodeURIComponent(id)}`}>
+                        <Link
+                            className="authoring-button"
+                            to={`${root}/characters/${encodeURIComponent(id)}`}
+                            state={navTaskState(`${root}/characters/${encodeURIComponent(id)}`, "characters")}
+                        >
                             Open character sheet
                         </Link>
                     </p>

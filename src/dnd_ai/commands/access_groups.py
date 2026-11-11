@@ -55,13 +55,14 @@ first, then `campaign.campaigns` where campaign lifecycle actually matters
 here, like `revoke_resource_grant`/`end_campaign_membership`, deliberately
 stay available regardless of campaign lifecycle so cleanup is never
 blocked), then any secondary lookup (a target membership's owning user).
-`add_access_group_member()` locks group, then membership, then campaign,
-then the membership's owning user — group first (its own outer container),
-then the membership being added (the row its own insert actually depends
-on), then campaign, then owning user, mirroring `create_resource_grant()`'s
-own "dependent-row-then-campaign-row-then-owning-user" relative order for
-its own, disjoint row set, so the two can never deadlock against each
-other. `reactivate_access_group()` locks its own group row before
+`add_access_group_members()` is the exception for the campaign: it locks
+the group, then the members' memberships (`FOR NO KEY UPDATE`), then the
+acting membership (`FOR KEY SHARE`), then the campaign `FOR KEY SHARE`,
+then each owning user — memberships before the campaign, the order every
+authoring command uses, so it cannot deadlock with a member's own write,
+the end of a membership or an A2a release (DEF-015; the function's
+docstring has the reasons for each mode). An earlier version took the
+campaign `FOR UPDATE` before the memberships and did. `reactivate_access_group()` locks its own group row before
 `campaign.campaigns`, matching `create_resource_grant()`'s own group-
 grantee branch (hardened this checkpoint to lock the group row too) rather
 than inverting that relative order."""
@@ -81,6 +82,7 @@ from dnd_ai.commands.memberships import CampaignNotActiveError
 from dnd_ai.domain.errors import DomainAuthorizationError, SafeMessageError
 
 from ._shared import lookup_id
+from .character_revelations import close_group_revelations_for_deactivated_group
 
 __all__ = [
     "CampaignNotActiveError",
@@ -403,6 +405,7 @@ class DeactivateAccessGroupResult:
     deactivated: bool
     removed_access_group_membership_ids: tuple[uuid.UUID, ...] = ()
     revoked_resource_grant_ids: tuple[uuid.UUID, ...] = ()
+    closed_character_revelation_ids: tuple[uuid.UUID, ...] = ()
 
 
 def deactivate_access_group(
@@ -489,11 +492,17 @@ def deactivate_access_group(
         .all()
     )
 
+    # P03-A A3: a deactivated group's live revelations close; reactivation does not restore them.
+    closed_revelation_ids = close_group_revelations_for_deactivated_group(
+        connection, access_group_id=access_group_id
+    )
+
     return DeactivateAccessGroupResult(
         access_group_id=access_group_id,
         deactivated=True,
         removed_access_group_membership_ids=removed_membership_ids,
         revoked_resource_grant_ids=revoked_grant_ids,
+        closed_character_revelation_ids=closed_revelation_ids,
     )
 
 
@@ -610,6 +619,36 @@ def add_access_group_members(
 
     The caller's transaction makes the operation atomic: if validation or
     insertion fails for any member, no membership from this batch commits.
+
+    **Lock order (DEF-015).** The group `FOR UPDATE`; then each member's
+    membership `FOR NO KEY UPDATE`, in ascending id order, in a statement
+    without a join; then the acting membership `FOR KEY SHARE`; then the
+    campaign `FOR KEY SHARE`; then, per member, the owning account `FOR
+    UPDATE`. Only then are the members validated, in the same order as
+    always (campaign active, then each member in the campaign, open, active,
+    on an active account), so the same request raises the same error class.
+
+    - Memberships come before the campaign, as `lock_authoring_scope`,
+      `end_campaign_membership` and the reveal delegation grant take them.
+      Campaign-first made the add deadlock with that member's own authoring
+      write, with ending the member's (or the actor's) membership, and with
+      an A2a release.
+    - The campaign is `FOR KEY SHARE`, not `FOR UPDATE`: an archive still
+      conflicts with it, but administrative recovery (campaign `FOR NO KEY
+      UPDATE`, then the membership it promotes) does not, so the two
+      serialize at the membership in both orders.
+    - Members are `FOR NO KEY UPDATE`, not `FOR UPDATE`: the foreign key of a
+      resource grant made by a member being added takes `KEY SHARE` on that
+      member's membership after its own campaign lock, which `FOR UPDATE`
+      would deadlock with. `NO KEY UPDATE` still excludes ending the
+      membership, role changes, recovery and a grant to the member, and
+      conflicts with the member's authoring locks (`FOR SHARE`).
+    - The acting membership is locked before the campaign because the insert's
+      `added_by_membership_id` foreign key takes it anyway, and taking it late
+      deadlocked with ending the actor's own membership.
+    - The member rows are locked without a join to `membership_statuses`
+      (READ COMMITTED re-checks a joined locking statement against the old
+      status row after a wait and returns no row).
     """
     requested_ids = tuple(
         uuid.UUID(str(membership_id)) for membership_id in campaign_membership_ids
@@ -650,6 +689,33 @@ def add_access_group_members(
     if group_row["lifecycle_status_code"] != "active":
         raise AccessGroupNotActiveError(f"access group {access_group_id} is not currently active")
 
+    # Lock every row the batch will read or write before validating any of it (DEF-015). The
+    # modes are chosen so that none of them waits for a lock another command takes while it holds
+    # what this one wants next; see the function docstring for the order and the reasons.
+    locked_members = {
+        campaign_membership_id: connection.execute(
+            text("""
+                SELECT campaign_id, ended_at, user_id, membership_status_id
+                FROM security.campaign_memberships
+                WHERE campaign_membership_id = :membership
+                FOR NO KEY UPDATE
+            """),
+            {"membership": campaign_membership_id},
+        )
+        .mappings()
+        .one_or_none()
+        for campaign_membership_id in normalized_ids
+    }
+    # The row the inserts' `added_by_membership_id` foreign key will touch, in the mode that
+    # foreign key takes itself, ahead of the campaign (a no-op when the actor is also a member
+    # being added: that row is already held more strongly by this transaction).
+    connection.execute(
+        text(
+            "SELECT 1 FROM security.campaign_memberships "
+            "WHERE campaign_membership_id = :actor FOR KEY SHARE"
+        ),
+        {"actor": added_by_membership_id},
+    ).all()
     campaign_status_code = connection.execute(
         text("""
             SELECT ls.code
@@ -657,7 +723,7 @@ def add_access_group_members(
             JOIN core.lifecycle_statuses ls
                 ON ls.lifecycle_status_id = c.lifecycle_status_id
             WHERE c.campaign_id = :campaign
-            FOR UPDATE OF c
+            FOR KEY SHARE OF c
         """),
         {"campaign": campaign_id},
     ).scalar()
@@ -668,27 +734,7 @@ def add_access_group_members(
     eligible_membership_ids: list[uuid.UUID] = []
 
     for campaign_membership_id in normalized_ids:
-        membership_row = (
-            connection.execute(
-                text("""
-                    SELECT
-                        cm.campaign_id,
-                        cm.ended_at,
-                        cm.user_id,
-                        ms.code AS membership_status_code,
-                        ms.is_active AS membership_status_is_active
-                    FROM security.campaign_memberships cm
-                    JOIN security.membership_statuses ms
-                        ON ms.membership_status_id =
-                           cm.membership_status_id
-                    WHERE cm.campaign_membership_id = :membership
-                    FOR UPDATE OF cm
-                """),
-                {"membership": campaign_membership_id},
-            )
-            .mappings()
-            .one_or_none()
-        )
+        membership_row = locked_members[campaign_membership_id]
 
         if membership_row is None or membership_row["campaign_id"] != campaign_id:
             actual_campaign_id = (
@@ -700,10 +746,22 @@ def add_access_group_members(
                 f"(actual campaign: {actual_campaign_id})"
             )
 
+        # The status is read after the lock, separately from it: a locking statement joined to
+        # `membership_statuses` that waited behind a status change re-checks the join against the
+        # old status row and returns no row, which would misreport an end that raced this add as
+        # "not in the campaign" (404) instead of "not active" (409).
+        membership_status = connection.execute(
+            text(
+                "SELECT code, is_active FROM security.membership_statuses "
+                "WHERE membership_status_id = :status"
+            ),
+            {"status": membership_row["membership_status_id"]},
+        ).one()
+
         membership_is_eligible = (
             membership_row["ended_at"] is None
-            and membership_row["membership_status_code"] == "active"
-            and membership_row["membership_status_is_active"]
+            and membership_status.code == "active"
+            and membership_status.is_active
         )
 
         if not membership_is_eligible:

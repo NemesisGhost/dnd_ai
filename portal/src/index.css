@@ -305,8 +305,9 @@ body,
   min-height: 100%;
 }
 
+/* No width floor: a floor of 320px is wider than a 320 CSS px viewport (or a 400% zoom of a 1280px one) once a
+   vertical scrollbar takes its share, which forced a horizontal page scroll (WCAG 1.4.10). */
 body {
-  min-width: 320px;
   margin: 0;
   color: var(--color-text);
   background-color: var(--color-background);

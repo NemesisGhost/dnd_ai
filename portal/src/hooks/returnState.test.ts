@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { pickQueryStates, readQueryState, resolveReturnTo } from "./returnState"
+import { readQueryState, resolveReturnTo } from "./returnState"
 
 describe("return state readers", () => {
     it("honours only a string that is a query", () => {
@@ -11,12 +11,6 @@ describe("return state readers", () => {
         expect(readQueryState("?x", "worldSearch")).toBeUndefined()
     })
 
-    it("picks the named keys that are valid, and nothing when none are", () => {
-        const state = { a: "?one", b: "nope", c: "?three", unrelated: "?x" }
-        expect(pickQueryStates(state, ["a", "b", "c"] as const)).toEqual({ a: "?one", c: "?three" })
-        expect(pickQueryStates(state, ["b"] as const)).toBeUndefined()
-        expect(pickQueryStates(undefined, ["a"] as const)).toBeUndefined()
-    })
 })
 
 describe("resolveReturnTo", () => {

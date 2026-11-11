@@ -1,5 +1,5 @@
 """`dnd_ai.queries.character_sheet.get_character_sheet_view` — the Phase 13D
-Character workspace Sheet-panel query (docs/PHASE13D_CHARACTER_SHEET_BACKEND.md).
+Character workspace Sheet-panel query (docs/api/CHARACTER_SHEET.md).
 
 Every test builds its own character/build graph with `tests/factories.py`
 builders on the function-scoped, always-rolled-back `db_connection` fixture

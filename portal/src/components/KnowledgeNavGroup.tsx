@@ -28,6 +28,7 @@ export function KnowledgeNavGroup({
     <ExpandableNavGroup
       icon={BookOpen}
       label="Knowledge"
+      root="knowledge"
       sectionActive={inKnowledge}
       collapsed={collapsed}
       onNavigate={onNavigate}

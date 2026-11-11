@@ -17,6 +17,7 @@ import { SIDEBAR_COLLAPSED_STORAGE_KEY } from "../hooks/useSidebarCollapsed"
 import { useNavigationDrawer } from "../hooks/useNavigationDrawer"
 import type { SessionBootstrapState } from "../hooks/useSessionBootstrap"
 import type { CampaignContext, SessionBootstrap } from "../types/bootstrap"
+import { createSelectedContextStore, selectionOwner, SelectedContextStoreContext } from "../navigation/selectedContextStore"
 import { PortalSidebar } from "./PortalSidebar"
 
 const first: CampaignContext = {
@@ -77,8 +78,21 @@ function renderSidebar(
         status: "authenticated",
         bootstrap: makeBootstrap(),
     },
+    selectedCampaignId: string | null = null,
 ) {
+    // The person's explicit selection, retained by the tab (never a last-visited or startup guess).
+    const store = createSelectedContextStore()
+    if (selectedCampaignId !== null && state.status === "authenticated") {
+        store.commit({
+            owner: selectionOwner(state.bootstrap),
+            campaignId: selectedCampaignId,
+            worldId: null,
+            timelineId: null,
+            characterId: undefined,
+        })
+    }
     return render(
+        <SelectedContextStoreContext.Provider value={store}>
         <SessionContext.Provider value={{ state, reload: vi.fn(), refresh: vi.fn() }}>
             <CharacterPerspectiveContext.Provider
                 value={{
@@ -95,12 +109,13 @@ function renderSidebar(
                     </WorkspaceHierarchyProvider>
                 </MemoryRouter>
             </CharacterPerspectiveContext.Provider>
-        </SessionContext.Provider>,
+        </SessionContext.Provider>
+        </SelectedContextStoreContext.Provider>,
     )
 }
 
 function openWorlds() {
-    fireEvent.click(within(nav()).getByRole("button", { name: "Worlds" }))
+    fireEvent.click(within(nav()).getByRole("button", { name: "Show world menu" }))
 }
 
 function authenticated(bootstrap: SessionBootstrap): SessionBootstrapState {
@@ -203,9 +218,12 @@ describe("PortalSidebar destinations", () => {
     it("targets the route campaign for every campaign-specific link", () => {
         renderSidebar("/app/campaign-a/home")
 
+        // Campaign is a button here (the page shown is its Home), so Home is in its menu.
+        fireEvent.click(within(nav()).getByRole("button", { name: "Show campaign menu" }))
         const expected: Array<[string, string]> = [
             ["Campaign Home", "/app/campaign-a/home"],
-            ["Characters", "/app/campaign-a/characters"],
+            // The selected (server-default) perspective's record shell.
+            ["Characters: open Ixamarra", "/app/campaign-a/characters/character-ixamarra"],
             ["Quests", "/app/campaign-a/quests"],
             ["Sessions", "/app/campaign-a/sessions"],
             ["Knowledge", "/app/campaign-a/knowledge"],
@@ -236,7 +254,7 @@ describe("PortalSidebar destinations", () => {
             "page",
         )
         expect(
-            within(nav()).getByRole("link", { name: "Characters" }),
+            within(nav()).getByRole("link", { name: "Characters: open Ixamarra" }),
         ).not.toHaveAttribute("aria-current")
     })
 
@@ -271,7 +289,7 @@ describe("PortalSidebar destinations", () => {
 })
 
 describe("PortalSidebar campaign resolution", () => {
-    it("shows on global routes and targets last visited", () => {
+    it("shows on global routes and targets the selected campaign", () => {
         renderSidebar(
             "/settings",
             authenticated(
@@ -279,10 +297,11 @@ describe("PortalSidebar campaign resolution", () => {
                     campaign_preferences: {
                         startup_mode: "resume_last_visited",
                         preferred_campaign_id: null,
-                        last_visited_campaign_id: "campaign-b",
+                        last_visited_campaign_id: "campaign-a",
                     },
                 }),
             ),
+            "campaign-b",
         )
 
         expect(within(nav()).getByRole("link", { name: "Quests" })).toHaveAttribute(
@@ -294,16 +313,44 @@ describe("PortalSidebar campaign resolution", () => {
         ).not.toHaveAttribute("aria-current")
     })
 
-    it("falls back to the startup campaign", () => {
+    it("targets the selected campaign, not the startup campaign", () => {
         renderSidebar(
             "/account",
             authenticated(makeBootstrap({ startup_campaign_id: "campaign-a" })),
+            "campaign-b",
         )
 
         openWorlds()
         expect(
             within(nav()).getByRole("link", { name: "Campaign world" }),
-        ).toHaveAttribute("href", "/app/campaign-a/world")
+        ).toHaveAttribute("href", "/app/campaign-b/world")
+    })
+
+    it("never guesses a campaign from the last-visited or startup preference when none is selected", () => {
+        renderSidebar(
+            "/settings",
+            authenticated(
+                makeBootstrap({
+                    startup_campaign_id: "campaign-a",
+                    campaign_preferences: {
+                        startup_mode: "resume_last_visited",
+                        preferred_campaign_id: null,
+                        last_visited_campaign_id: "campaign-b",
+                    },
+                }),
+            ),
+        )
+
+        expect(within(nav()).queryByRole("link", { name: "Quests" })).not.toBeInTheDocument()
+        expect(disabledEntry("Quests")).toBeInTheDocument()
+        for (const name of ["Characters", "Parties", "Sessions", "Knowledge", "Ask"]) {
+            expect(within(nav()).queryByRole("link", { name })).not.toBeInTheDocument()
+        }
+    })
+
+    it("ignores a retained campaign the session no longer lists", () => {
+        renderSidebar("/settings", authenticated(makeBootstrap()), "campaign-gone")
+        expect(within(nav()).queryByRole("link", { name: "Quests" })).not.toBeInTheDocument()
     })
 
     it("never builds a link from an unauthorized route campaign", () => {
@@ -316,22 +363,22 @@ describe("PortalSidebar campaign resolution", () => {
         // does not stand in for it, so campaign-scoped entries stay disabled.
         expect(nav().innerHTML).not.toContain("ghost-campaign")
         openWorlds()
-        for (const name of ["Campaign world", "Characters", "Campaign Home"]) {
+        for (const name of ["Campaign world", "All characters", "Campaign Home"]) {
             expect(within(nav()).queryByRole("link", { name })).not.toBeInTheDocument()
         }
-        expect(disabledEntry("Characters")).toBeInTheDocument()
+        expect(disabledEntry("All characters")).toBeInTheDocument()
     })
 
     it("keeps campaign destinations as disabled slots with no resolvable campaign", () => {
         renderSidebar("/campaigns")
 
-        for (const name of ["Campaign world", "Characters", "Ask"]) {
+        for (const name of ["Campaign world", "All characters", "Ask"]) {
             expect(
                 within(nav()).queryByRole("link", { name }),
             ).not.toBeInTheDocument()
         }
         expect(disabledEntry("Ask")).toBeInTheDocument()
-        expect(disabledEntry("Characters")).toBeInTheDocument()
+        expect(disabledEntry("All characters")).toBeInTheDocument()
     })
 
     it("handles an account with no campaigns", () => {
@@ -341,7 +388,7 @@ describe("PortalSidebar campaign resolution", () => {
         )
 
         const group = within(nav()).getByRole("button", {
-            name: "Choose campaign",
+            name: "Show campaign menu",
         })
         expect(group).toBeInTheDocument()
         expect(disabledEntry("Campaign Home")).toBeInTheDocument()
@@ -357,7 +404,7 @@ describe("PortalSidebar campaign submenu", () => {
 
         const list = document.getElementById(
             within(nav())
-                .getByRole("button", { name: "Choose campaign" })
+                .getByRole("button", { name: "Show campaign menu" })
                 .getAttribute("aria-controls")!,
         )!
         const links = within(list).getAllByRole("link")
@@ -377,12 +424,12 @@ describe("PortalSidebar campaign submenu", () => {
     it("is open on /campaigns and closed elsewhere", () => {
         const { unmount } = renderSidebar("/campaigns")
         expect(
-            within(nav()).getByRole("button", { name: "Choose campaign" }),
+            within(nav()).getByRole("button", { name: "Show campaign menu" }),
         ).toHaveAttribute("aria-expanded", "true")
         unmount()
 
         renderSidebar("/app/campaign-a/home")
-        const button = within(nav()).getByRole("button", { name: "Choose campaign" })
+        const button = within(nav()).getByRole("button", { name: "Show campaign menu" })
         expect(button).toHaveAttribute("aria-expanded", "false")
         expect(
             within(nav()).queryByRole("link", { name: "Beta Campaign" }),
@@ -390,18 +437,19 @@ describe("PortalSidebar campaign submenu", () => {
     })
 
     it("uses separate controls for navigation and disclosure", () => {
-        renderSidebar("/app/campaign-a/home")
+        renderSidebar("/app/campaign-a/quests")
 
+        // Away from Home, with a campaign resolved, the main control is a link to its Home.
         expect(
-            within(nav()).getByRole("link", { name: "Campaign Home" }),
+            within(nav()).getByRole("link", { name: "Campaign: open Alpha Campaign" }),
         ).toHaveAttribute("href", "/app/campaign-a/home")
-        const button = within(nav()).getByRole("button", { name: "Choose campaign" })
+        const button = within(nav()).getByRole("button", { name: "Show campaign menu" })
 
         fireEvent.click(button)
 
         expect(button).toHaveAttribute("aria-expanded", "true")
         expect(screen.getByTestId("location")).toHaveTextContent(
-            "/app/campaign-a/home",
+            "/app/campaign-a/quests",
         )
     })
 
@@ -410,7 +458,7 @@ describe("PortalSidebar campaign submenu", () => {
             "/app/campaign-b/quests",
             authenticated(makeBootstrap({ startup_campaign_id: "campaign-a" })),
         )
-        fireEvent.click(within(nav()).getByRole("button", { name: "Choose campaign" }))
+        fireEvent.click(within(nav()).getByRole("button", { name: "Show campaign menu" }))
 
         expect(
             within(nav()).getByRole("link", { name: "Beta Campaign" }),
@@ -425,7 +473,7 @@ describe("PortalSidebar campaign submenu", () => {
             "/settings",
             authenticated(makeBootstrap({ startup_campaign_id: "campaign-a" })),
         )
-        fireEvent.click(within(nav()).getByRole("button", { name: "Choose campaign" }))
+        fireEvent.click(within(nav()).getByRole("button", { name: "Show campaign menu" }))
 
         expect(
             within(nav()).getByRole("link", { name: "Alpha Campaign" }),
@@ -434,7 +482,7 @@ describe("PortalSidebar campaign submenu", () => {
 
     it("navigates to the chosen campaign Home without selecting or clearing a perspective first", () => {
         renderSidebar("/app/campaign-a/quests/quest-7")
-        fireEvent.click(within(nav()).getByRole("button", { name: "Choose campaign" }))
+        fireEvent.click(within(nav()).getByRole("button", { name: "Show campaign menu" }))
 
         fireEvent.click(within(nav()).getByRole("link", { name: "Beta Campaign" }))
 
@@ -446,7 +494,7 @@ describe("PortalSidebar campaign submenu", () => {
 
     it("does not clear the perspective when the active campaign is re-selected", () => {
         renderSidebar("/app/campaign-a/quests")
-        fireEvent.click(within(nav()).getByRole("button", { name: "Choose campaign" }))
+        fireEvent.click(within(nav()).getByRole("button", { name: "Show campaign menu" }))
 
         fireEvent.click(within(nav()).getByRole("link", { name: "Alpha Campaign" }))
 
@@ -455,7 +503,7 @@ describe("PortalSidebar campaign submenu", () => {
 
     it("goes to the complete list through View all campaigns", () => {
         renderSidebar("/app/campaign-a/home")
-        fireEvent.click(within(nav()).getByRole("button", { name: "Choose campaign" }))
+        fireEvent.click(within(nav()).getByRole("button", { name: "Show campaign menu" }))
 
         fireEvent.click(
             within(nav()).getByRole("link", { name: "View all campaigns" }),
@@ -466,7 +514,7 @@ describe("PortalSidebar campaign submenu", () => {
 
     it("closes on Escape and returns focus to the disclosure button", () => {
         renderSidebar("/app/campaign-a/home")
-        const button = within(nav()).getByRole("button", { name: "Choose campaign" })
+        const button = within(nav()).getByRole("button", { name: "Show campaign menu" })
         fireEvent.click(button)
 
         fireEvent.keyDown(
@@ -480,7 +528,7 @@ describe("PortalSidebar campaign submenu", () => {
 
     it("closes on an outside pointer press", () => {
         renderSidebar("/app/campaign-a/home")
-        const button = within(nav()).getByRole("button", { name: "Choose campaign" })
+        const button = within(nav()).getByRole("button", { name: "Show campaign menu" })
         fireEvent.click(button)
 
         fireEvent.pointerDown(screen.getByText("Outside link"))
@@ -520,7 +568,8 @@ describe("PortalSidebar Access group", () => {
     it("targets the resolved campaign on a global route", () => {
         renderSidebar(
             "/settings",
-            authenticated(makeBootstrap({ startup_campaign_id: "campaign-b" })),
+            authenticated(makeBootstrap({ startup_campaign_id: "campaign-a" })),
+            "campaign-b",
         )
         fireEvent.click(screen.getByRole("button", { name: "Access" }))
 
@@ -635,16 +684,19 @@ describe("PortalSidebar collapse", () => {
         })
         expect(expand).toHaveAttribute("aria-expanded", "false")
         expect(within(nav()).getByRole("link", { name: "Knowledge" })).toBeVisible()
+        // The rail keeps the split controls: a main control with a title, and the disclosure.
+        expect(within(nav()).getByRole("button", { name: "Campaign menu" })).toHaveAttribute(
+            "title",
+            "Campaign",
+        )
+        const disclosure = within(nav()).getByRole("button", { name: "Show campaign menu" })
+        fireEvent.click(disclosure)
         expect(
             within(nav()).getByRole("link", { name: "Campaign Home" }),
         ).toHaveAttribute("href", "/app/campaign-a/home")
         expect(
-            within(nav()).getByRole("link", { name: "All campaigns" }),
+            within(nav()).getByRole("link", { name: "View all campaigns" }),
         ).toHaveAttribute("href", "/campaigns")
-        // The disclosure needs visible labels, so the rail omits it.
-        expect(
-            within(nav()).queryByRole("button", { name: "Choose campaign" }),
-        ).not.toBeInTheDocument()
     })
 
     it("persists the collapsed choice across mounts", () => {
@@ -709,7 +761,7 @@ describe("PortalSidebar drawer", () => {
         expect(nav()).toHaveClass("portal-sidebar--mobile-open")
         await waitFor(() => {
             expect(
-                within(nav()).getByRole("link", { name: "Campaign Home" }),
+                within(nav()).getByRole("button", { name: "Campaign menu" }),
             ).toHaveFocus()
         })
     })
@@ -742,15 +794,17 @@ describe("PortalSidebar drawer", () => {
         renderSidebar("/app/campaign-a/home")
         openDrawer()
 
-        fireEvent.click(within(nav()).getByRole("link", { name: "Characters" }))
+        fireEvent.click(within(nav()).getByRole("link", { name: "Quests" }))
 
+        // Closed because the navigation was accepted, not because it was clicked.
+        expect(screen.getByTestId("location")).toHaveTextContent("/app/campaign-a/quests")
         expect(nav()).not.toHaveClass("portal-sidebar--mobile-open")
     })
 
     it("lets an open disclosure take Escape before the drawer", () => {
         renderSidebar("/app/campaign-a/home")
         openDrawer()
-        const button = within(nav()).getByRole("button", { name: "Choose campaign" })
+        const button = within(nav()).getByRole("button", { name: "Show campaign menu" })
         fireEvent.click(button)
 
         fireEvent.keyDown(
@@ -765,7 +819,7 @@ describe("PortalSidebar drawer", () => {
     it("wraps Tab at both ends while open", async () => {
         renderSidebar("/app/campaign-a/home")
         openDrawer()
-        const first = within(nav()).getByRole("link", { name: "Campaign Home" })
+        const first = within(nav()).getByRole("button", { name: "Campaign menu" })
         const last = within(nav()).getByRole("button", {
             name: "Collapse navigation",
         })
@@ -789,18 +843,19 @@ describe("PortalSidebar Worlds group (Phase 14)", () => {
             }),
         )
 
-    it("renders exactly one top-level Worlds group and no singular World item", () => {
+    it("renders exactly one top-level World group with no separate singular World item", () => {
         renderSidebar("/app/campaign-a/home")
 
-        expect(within(nav()).getAllByRole("button", { name: "Worlds" })).toHaveLength(1)
+        // With nothing applicable selected the main control is a button; its disclosure is separate.
+        expect(within(nav()).getAllByRole("button", { name: "World menu" })).toHaveLength(1)
+        expect(within(nav()).getAllByRole("button", { name: "Show world menu" })).toHaveLength(1)
         expect(within(nav()).queryByRole("link", { name: "Worlds" })).toBeNull()
         expect(within(nav()).queryByRole("link", { name: "World" })).toBeNull()
-        expect(within(nav()).queryByRole("button", { name: "World" })).toBeNull()
     })
 
     it("communicates expanded state and keeps the collection reachable", () => {
         renderSidebar("/campaigns")
-        const button = within(nav()).getByRole("button", { name: "Worlds" })
+        const button = within(nav()).getByRole("button", { name: "Show world menu" })
         expect(button).toHaveAttribute("aria-expanded", "false")
 
         fireEvent.click(button)
@@ -872,7 +927,7 @@ describe("PortalSidebar Worlds group (Phase 14)", () => {
     it("starts open and marks only Timeline overview active on a timeline route", async () => {
         renderSidebar("/worlds/world-a/timelines/timeline-a", withWorld())
 
-        expect(within(nav()).getByRole("button", { name: "Worlds" })).toHaveAttribute(
+        expect(within(nav()).getByRole("button", { name: "Show world menu" })).toHaveAttribute(
             "aria-expanded",
             "true",
         )
@@ -943,13 +998,13 @@ describe("PortalSidebar Worlds group (Phase 14)", () => {
         window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, "true")
         renderSidebar("/campaigns")
 
-        const button = within(nav()).getByRole("button", { name: "Worlds" })
-        expect(button).toHaveAttribute("title", "Worlds")
+        const button = within(nav()).getByRole("button", { name: "World menu" })
+        expect(button).toHaveAttribute("title", "World")
     })
 
     it("closes with Escape and returns focus to the Worlds button", () => {
         renderSidebar("/campaigns")
-        const button = within(nav()).getByRole("button", { name: "Worlds" })
+        const button = within(nav()).getByRole("button", { name: "Show world menu" })
         fireEvent.click(button)
 
         fireEvent.keyDown(within(nav()).getByRole("link", { name: "All worlds" }), {
@@ -960,14 +1015,14 @@ describe("PortalSidebar Worlds group (Phase 14)", () => {
         expect(button).toHaveFocus()
     })
 
-    it("leaves the Campaign group unchanged", () => {
+    it("keeps the Campaign group's own menu beside the World group", () => {
         renderSidebar("/app/campaign-a/home", withWorld())
 
         expect(
-            within(nav()).getByRole("link", { name: "Campaign Home" }),
-        ).toHaveAttribute("href", "/app/campaign-a/home")
+            within(nav()).getByRole("button", { name: "Campaign menu" }),
+        ).toBeInTheDocument()
         expect(
-            within(nav()).getByRole("button", { name: "Choose campaign" }),
+            within(nav()).getByRole("button", { name: "Show campaign menu" }),
         ).toBeInTheDocument()
     })
 })
@@ -1098,7 +1153,8 @@ describe("PortalSidebar stable navigation structure (Phase 14)", () => {
 
         for (const label of [
             "Campaign Home",
-            "Characters",
+            "Selected character",
+            "All characters",
             "Quests",
             "Sessions",
             "Knowledge",
@@ -1121,8 +1177,11 @@ describe("PortalSidebar stable navigation structure (Phase 14)", () => {
     it("enables campaign destinations once an authorized campaign resolves", () => {
         renderSidebar("/app/campaign-a/home", withWorld())
 
+        // Characters opens the selected perspective's record shell (a link away from Characters).
+        expect(
+            within(nav()).getByRole("link", { name: "Characters: open Ixamarra" }),
+        ).toHaveAttribute("href", "/app/campaign-a/characters/character-ixamarra")
         for (const [label, path] of [
-            ["Characters", "characters"],
             ["Quests", "quests"],
             ["Sessions", "sessions"],
             ["Knowledge", "knowledge"],
@@ -1137,7 +1196,7 @@ describe("PortalSidebar stable navigation structure (Phase 14)", () => {
     it("does not navigate when a disabled entry is activated", () => {
         renderSidebar("/campaigns", withWorld())
 
-        fireEvent.click(disabledEntry("Characters"))
+        fireEvent.click(disabledEntry("All characters"))
         fireEvent.click(disabledEntry("Campaign Home"))
 
         expect(screen.getByTestId("location")).toHaveTextContent("/campaigns")
@@ -1148,7 +1207,7 @@ describe("PortalSidebar stable navigation structure (Phase 14)", () => {
         openWorlds()
         expect(disabledEntry("World overview")).toBeInTheDocument()
         expect(disabledEntry("Timelines")).toBeInTheDocument()
-        expect(disabledEntry("Characters")).toBeInTheDocument()
+        expect(disabledEntry("All characters")).toBeInTheDocument()
         expect(nav().innerHTML).not.toContain("ghost")
     })
 
@@ -1164,9 +1223,9 @@ describe("PortalSidebar stable navigation structure (Phase 14)", () => {
         window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, "true")
         renderSidebar("/campaigns", withWorld())
 
-        const entry = disabledEntry("Characters")
-        expect(entry).toHaveAttribute("title", "Characters: Select a campaign first")
-        expect(entry).toHaveTextContent("Characters")
+        const entry = disabledEntry("All characters")
+        expect(entry).toHaveAttribute("title", "All characters: Select a campaign first")
+        expect(entry).toHaveTextContent("All characters")
         expect(entry).toHaveAccessibleDescription("Select a campaign first")
     })
 
@@ -1229,10 +1288,9 @@ describe("PortalSidebar World authoring navigation on a campaign route", () => {
             expect(
                 within(nav()).getByRole("link", { name: "Campaign world" }),
             ).toHaveAttribute("href", "/app/campaign-a/world")
-            expect(within(nav()).getByRole("link", { name: "Characters" })).toHaveAttribute(
-                "href",
-                "/app/campaign-a/characters",
-            )
+            expect(
+                within(nav()).getByRole("link", { name: "Characters: open Ixamarra" }),
+            ).toHaveAttribute("href", "/app/campaign-a/characters/character-ixamarra")
         },
     )
 
@@ -1310,10 +1368,15 @@ describe("PortalSidebar World authoring navigation on a campaign route", () => {
         )
     })
 
-    it("gives a view-only world its read-only overview but no timeline-authoring destination", async () => {
-        server.on("GET", "/worlds/world-a", {
-            body: { ...worldDetail, capabilities: ["world.view"] },
-        })
+    // Timeline overview is a READ destination: it follows `world.view`, not `world.manage` (the
+    // server's GET /worlds/{w}/timelines/{t} requires exactly world.view). Mutation controls on that
+    // page keep their own gates.
+    it.each([
+        ["a viewer", ["world.view"]],
+        ["an editor", ["world.view", "timeline.manage"]],
+        ["an owner without system GM", ["world.view", "timeline.manage", "world.canon.read"]],
+    ])("links Timeline overview for %s of the world", async (_who, capabilities) => {
+        server.on("GET", "/worlds/world-a", { body: { ...worldDetail, capabilities } })
         renderSidebar("/app/campaign-a/home", campaignState())
         openWorlds()
 
@@ -1321,10 +1384,9 @@ describe("PortalSidebar World authoring navigation on a campaign route", () => {
             await within(nav()).findByRole("link", { name: "World overview" }),
         ).toHaveAttribute("href", "/worlds/world-a")
         expect(within(nav()).getByRole("link", { name: "Timelines" })).toBeInTheDocument()
-        expect(within(nav()).queryByRole("link", { name: "Timeline overview" })).toBeNull()
-        expect(disabledEntry("Timeline overview")).toHaveAccessibleDescription(
-            "Not available for your account",
-        )
+        expect(
+            within(nav()).getByRole("link", { name: "Timeline overview" }),
+        ).toHaveAttribute("href", "/worlds/world-a/timelines/timeline-a")
     })
 
     it("keeps Timeline overview disabled when the world response does not list the campaign's timeline", async () => {

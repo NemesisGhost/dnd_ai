@@ -24,6 +24,8 @@ interface KnowledgeSubjectLinkProps {
     separateOpen?: boolean
     /** Buttons that sit with the selected subject (Change, Clear). */
     actions?: ReactNode
+    /** The task the host page is in, continued: opening the subject is a step of it. */
+    linkState?: object
 }
 
 function describeSubjectType(subject: KnowledgeSubject): string {
@@ -44,6 +46,7 @@ export function KnowledgeSubjectLink({
     children,
     separateOpen = false,
     actions,
+    linkState,
 }: KnowledgeSubjectLinkProps) {
     const hasSubject = subject !== null && subject !== undefined
     if (!hasSubject && children === undefined) {
@@ -71,7 +74,7 @@ export function KnowledgeSubjectLink({
                     {separateOpen ? (
                         <strong className="knowledge-about__name">{subject.name}</strong>
                     ) : (
-                        <Link to={to} className="knowledge-about__name">
+                        <Link to={to} state={linkState} className="knowledge-about__name">
                             {subject.name}
                         </Link>
                     )}{" "}
@@ -80,7 +83,7 @@ export function KnowledgeSubjectLink({
                 {separateOpen || actions !== undefined ? (
                     <div className="knowledge-about__actions">
                         {separateOpen ? (
-                            <Link to={to} className="authoring-button">
+                            <Link to={to} state={linkState} className="authoring-button">
                                 Open World entry
                             </Link>
                         ) : null}

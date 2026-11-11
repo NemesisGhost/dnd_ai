@@ -61,6 +61,9 @@ import { humanizeCode } from "../utils/humanize"
 import { canonStatusLabel } from "../utils/lifecycleNextStep"
 import { FIELD, STATEMENT_MAX, fromView, same, toBody, validate } from "../utils/knowledgeForm"
 import type { KnowledgeFormValues } from "../utils/knowledgeForm"
+import { retainedState } from "../navigation/breadcrumbModel"
+import { PERSPECTIVE_QUERY_CHANGED } from "../navigation/queryKeys"
+import { useTaskLinkState } from "../navigation/useTaskLinkState"
 import { knowledgeSubjectHref } from "../utils/knowledgeSubject"
 import { statusDetail } from "../utils/locationForm"
 import "../components/authoring/authoring.css"
@@ -184,6 +187,10 @@ export function KnowledgeClaimPage({
         allowed: usableSections,
     })
     const location = useLocation()
+    // Links to other records (a replacement, the subject) continue the task the claim was opened in; after
+    // a direct entry there is no origin to carry and the destination's defaults apply. Links to this
+    // page's own sections keep the task as it is (nav.linkState).
+    const outboundState = useTaskLinkState({ requireOrigin: true })
 
     // Move focus to the section heading when the section changes after arrival (a link, Back or
     // Forward), so a keyboard or screen reader user lands on the new content.
@@ -202,6 +209,8 @@ export function KnowledgeClaimPage({
         item.subject == null ? null : knowledgeSubjectHref(campaignId, item.subject, characterId, partyId)
 
     const guidance = lifecycleView === null ? null : claimGuidance(lifecycleView)
+    const guidanceStateOf = (g: ClaimGuidance): object | undefined =>
+        g.target.kind === "section" ? nav.linkState : outboundState
     const hrefOf = (g: ClaimGuidance): string | null =>
         g.target.kind === "section"
             ? nav.sectionHref(g.target.section)
@@ -220,7 +229,9 @@ export function KnowledgeClaimPage({
                           <>
                               This claim is archived. What was recorded is kept, but nothing new can be recorded or
                               changed until it is restored.{" "}
-                              {lifecycleView !== null ? <Link to={nav.sectionHref("publication")}>Open Publication</Link> : null}
+                              {lifecycleView !== null ? <Link to={nav.sectionHref("publication")} state={nav.linkState}>
+                                  Open Publication
+                              </Link> : null}
                           </>
                       ) : canonStatus === "superseded" ? (
                           <>
@@ -230,7 +241,9 @@ export function KnowledgeClaimPage({
                                       {" "}
                                       by{" "}
                                       {replacementHref !== null ? (
-                                          <Link to={replacementHref}>{replacement.canonical_name}</Link>
+                                          <Link to={replacementHref} state={outboundState}>
+                                              {replacement.canonical_name}
+                                          </Link>
                                       ) : (
                                           replacement.canonical_name
                                       )}
@@ -246,7 +259,9 @@ export function KnowledgeClaimPage({
                                   <>
                                       Next:{" "}
                                       {hrefOf(guidance) !== null ? (
-                                          <Link to={hrefOf(guidance) as string}>{guidance.text}</Link>
+                                          <Link to={hrefOf(guidance) as string} state={guidanceStateOf(guidance)}>
+                                              {guidance.text}
+                                          </Link>
                                       ) : (
                                           guidance.text
                                       )}
@@ -272,11 +287,13 @@ export function KnowledgeClaimPage({
             item={item}
             characterId={characterId}
             partyId={partyId}
+            linkState={outboundState}
             listHref={listHref}
             status={headerStatus}
             replacementHref={replacementHref}
             guidance={guidance}
             guidanceHref={guidance === null ? null : hrefOf(guidance)}
+            guidanceState={guidance === null ? undefined : guidanceStateOf(guidance)}
             canEdit={canEdit}
         />
     )
@@ -431,6 +448,7 @@ export function KnowledgeClaimPage({
                         })}
                         current={nav.stage}
                         hrefFor={nav.stageHref}
+                        linkState={nav.linkState}
                     />
                     <div className="staged-workspace">
                         <div className="session-run__layout">
@@ -442,6 +460,7 @@ export function KnowledgeClaimPage({
                                 })}
                                 current={nav.section}
                                 hrefFor={nav.sectionHref}
+                                linkState={nav.linkState}
                             />
                             <div className="session-run__content">
                                 {CLAIM_SECTIONS.filter((section) => usableSections.includes(section.key)).map((section) => (
@@ -470,7 +489,10 @@ export function KnowledgeClaimPage({
 // a knowledge entry): leaving the page asks first, and so does closing the tab
 // (docs/UI_DESIGN.md §5.11). Only mounted for editors; a reader has nothing to lose.
 function UnsavedInputGuard({ unsaved }: { unsaved: string[] }) {
-    const guard = useUnsavedChangesGuard(unsaved.length > 0)
+    // A deliberate change of character or party in the address would re-read the claim under another
+    // perspective with the editor mounted: it asks like a departure. The page's own cleanup of a party
+    // that is no longer authorized does not (CampaignKnowledgeDetailPage runs it as permission loss).
+    const guard = useUnsavedChangesGuard(unsaved.length > 0, { disposingQuery: PERSPECTIVE_QUERY_CHANGED })
     return (
         <ConfirmDialog
             open={guard.blocked}
@@ -496,10 +518,14 @@ function editBlockedNote(
     view: KnowledgeAuthoringView,
     replacement: { name: string; href: string | null } | null,
     publicationHref: string,
+    linkState: object | undefined,
 ): ReactNode {
     const unlock = (text: string) => (
         <>
-            {text} <Link to={publicationHref}>Open Publication</Link>
+            {text}{" "}
+            <Link to={publicationHref} state={linkState}>
+                Open Publication
+            </Link>
         </>
     )
     if (view.lifecycle_status === "archived") return unlock("This claim is archived. Restore it before editing.")
@@ -545,6 +571,8 @@ function EditableClaim({
         publicationHref: string
         replacement: { name: string; href: string | null } | null
     }) {
+    const here = useLocation()
+    const ownState = retainedState(here.pathname, here.state) ?? undefined
     if (view.state.kind === "loading" || options.state.kind === "loading") {
         return <p role="status">Loading the claim…</p>
     }
@@ -579,7 +607,7 @@ function EditableClaim({
                     partyId={props.partyId}
                     inPanel
                     edit={null}
-                    note={editBlockedNote(data, replacement, publicationHref)}
+                    note={editBlockedNote(data, replacement, publicationHref, ownState)}
                 />
                 {claimDirty ? (
                     <div className="authoring-message authoring-message--warning" role="status">
@@ -723,6 +751,8 @@ function ClaimLayout({
     const hasCanonical = item.truth_status_code !== null || item.sensitivity !== null
     const [changingSubject, setChangingSubject] = useState(false)
     const Heading = inPanel ? "h3" : "h2"
+    // The subject opened from the claim is a step of the task the claim was opened in.
+    const subjectState = useTaskLinkState({ requireOrigin: true })
 
     const savedSubjectId = item.subject?.entity_id ?? null
     const draftSubjectChanged = edit !== null && (edit.values.subject?.id ?? null) !== savedSubjectId
@@ -822,6 +852,7 @@ function ClaimLayout({
                     variant="claim"
                     separateOpen
                     actions={subjectActions}
+                    linkState={subjectState}
                 >
                     {changingSubject ? subjectSelector : null}
                     {lockedSubjectNote}

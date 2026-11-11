@@ -203,34 +203,42 @@ describe("NPC authoring routes", () => {
     )
   })
 
-  it("offers New PC on the Characters page to editors, even with no character selected", async () => {
-    const editor = openApp("/app/mundivita/characters")
-    expect(await screen.findByRole("link", { name: "New PC" })).toHaveAttribute(
+  it("offers one New character action on the Characters page to editors, even with no character selected", async () => {
+    const editor = openApp("/app/mundivita/characters", ["access.manage", "canon.edit"], {
+      character_perspectives: [],
+      selected_character_id: null,
+    })
+    expect(await screen.findByRole("link", { name: "New character" })).toHaveAttribute(
       "href",
-      "/app/mundivita/characters/pc/new",
+      "/app/mundivita/characters/new",
     )
-    expect(screen.queryByRole("link", { name: "New character" })).toBeNull()
+    expect(screen.getAllByRole("link", { name: "New character" })).toHaveLength(1)
+    expect(screen.queryByRole("link", { name: "New PC" })).toBeNull()
     expect(screen.queryByRole("link", { name: "New NPC" })).toBeNull()
     editor.unmount()
-    openApp("/app/mundivita/characters", ["campaign.view"])
+    openApp("/app/mundivita/characters", ["campaign.view"], { character_perspectives: [], selected_character_id: null })
     await screen.findByRole("navigation", { name: "Characters views" })
-    expect(screen.queryByRole("link", { name: "New PC" })).toBeNull()
+    expect(screen.queryByRole("link", { name: "New character" })).toBeNull()
   })
 
-  it("opens player-character creation directly from Characters and returns there with its filters", async () => {
-    const app = openApp("/app/mundivita/characters/all?type=npc&q=mi")
-    fireEvent.click(await screen.findByRole("link", { name: "New PC" }))
+  it.each([
+    ["New NPC", "New NPC"],
+    ["New player character", "New player character"],
+  ])("%s through the chooser from Characters returns there with its filters and paging", async (option, heading) => {
+    const app = openApp("/app/mundivita/characters/all?type=npc&q=mi&cursor=c2")
+    fireEvent.click(await screen.findByRole("link", { name: "New character" }))
+    fireEvent.click(await screen.findByRole("link", { name: option }))
     expect(
-      await screen.findByRole("heading", { level: 1, name: "New player character" }),
+      await screen.findByRole("heading", { level: 1, name: heading }),
     ).toBeInTheDocument()
     expect(within(screen.getByRole("main")).getByRole("link", { name: "Characters" })).toHaveAttribute(
       "href",
-      "/app/mundivita/characters/all?type=npc&q=mi",
+      "/app/mundivita/characters/all?type=npc&q=mi&cursor=c2",
     )
     fireEvent.click(await screen.findByRole("button", { name: "Cancel" }))
     await screen.findByRole("navigation", { name: "Characters views" })
     expect(app.router.state.location.pathname).toBe("/app/mundivita/characters/all")
-    expect(app.router.state.location.search).toBe("?type=npc&q=mi")
+    expect(app.router.state.location.search).toBe("?type=npc&q=mi&cursor=c2")
   })
 
   it("keeps the World breadcrumb on creation pages opened without a Characters or World context", async () => {

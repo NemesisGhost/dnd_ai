@@ -250,6 +250,12 @@ MANAGED_TABLES = [
     ("security", "system_roles"),
     ("security", "user_system_roles"),
     ("security", "world_use_grants"),
+    # P03-A A1 reveal delegations (migration 141)
+    ("security", "character_reveal_delegations"),
+    # P03-A A2a public-profile origins lookup (migration 142)
+    ("campaign", "public_profile_field_origins"),
+    # P03-A A3a revelation audience-kind lookup (migration 145)
+    ("security", "revelation_audience_kinds"),
     ("security", "actor_idempotent_requests"),
 ]
 
@@ -276,6 +282,25 @@ EXCLUDED_TABLES: dict[tuple[str, str], str] = {
     ("core", "entity_revisions"): (
         "append-only revision history (Phase 15, revision 117): app roles hold SELECT/INSERT "
         "only, and the reporting role holds nothing — asserted in test_entity_revisions.py"
+    ),
+    ("campaign", "character_public_profiles"): (
+        "the public-profile draft (P03-A A2a, revision 142): app roles hold SELECT/INSERT/UPDATE "
+        "but never DELETE or TRUNCATE, and the reporting role holds nothing — asserted in "
+        "test_character_public_profile_schema.py"
+    ),
+    ("campaign", "character_public_profile_releases"): (
+        "append-only releases (P03-A A2a, revision 142): app roles hold SELECT/INSERT only, and "
+        "the reporting role holds nothing — asserted in test_character_public_profile_schema.py"
+    ),
+    ("security", "character_revelations"): (
+        "closed-once revelations (P03-A A3a, revision 145): app roles hold SELECT/INSERT and "
+        "UPDATE of the closure columns only, never DELETE or TRUNCATE, and the reporting role "
+        "holds nothing — asserted in test_character_revelations_schema.py"
+    ),
+    ("security", "character_revelation_members"): (
+        "the campaign_current snapshot (P03-A A3a, revision 145): app roles hold SELECT/INSERT "
+        "and UPDATE of the removal columns only, never DELETE or TRUNCATE, and the reporting "
+        "role holds nothing — asserted in test_character_revelations_schema.py"
     ),
     ("core", "alembic_version"): (
         "Alembic's own migration-bookkeeping table, not project data — owned and used "

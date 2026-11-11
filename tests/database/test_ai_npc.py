@@ -30,6 +30,8 @@ from tests.factories import (
     make_campaign,
     make_campaign_party,
     make_character,
+    make_encounter,
+    make_encounter_participant,
     make_knowledge_item,
     make_party,
     make_party_knowledge,
@@ -112,6 +114,7 @@ def test_context_assembly_offers_only_unknown_facts(db_connection: Connection, f
     context = assemble_npc_conversation_context(
         db_connection,
         npc_entity_id=f.npc_id,
+        campaign_id=f.campaign_id,
         timeline_id=f.timeline_id,
         expected_world_id=f.world_id,
         requesting_character_id=f.pc_id,
@@ -129,6 +132,7 @@ def test_context_assembly_includes_the_partys_own_quest_state(
     context = assemble_npc_conversation_context(
         db_connection,
         npc_entity_id=f.npc_id,
+        campaign_id=f.campaign_id,
         timeline_id=f.timeline_id,
         expected_world_id=f.world_id,
         requesting_character_id=f.pc_id,
@@ -143,10 +147,33 @@ def test_context_assembly_includes_the_partys_own_quest_state(
     assert quest.status_code == "active"
 
 
+def test_context_assembly_carries_no_encounter_reference(
+    db_connection: Connection, f: Fixture
+) -> None:
+    """P03-A slice A0: context assembly has no audience context from which to establish encounter
+    discovery, so the reference is suppressed even for a same-campaign active encounter."""
+    encounter_id = make_encounter(
+        db_connection, f.timeline_id, f.world_time_id, campaign_id=f.campaign_id, status="active"
+    )
+    make_encounter_participant(db_connection, encounter_id, f.npc_id)
+
+    context = assemble_npc_conversation_context(
+        db_connection,
+        npc_entity_id=f.npc_id,
+        campaign_id=f.campaign_id,
+        timeline_id=f.timeline_id,
+        expected_world_id=f.world_id,
+        requesting_character_id=f.pc_id,
+        requesting_party_id=f.party_id,
+    )
+    assert context.active_encounter_id is None
+
+
 def test_context_payload_is_json_serializable(db_connection: Connection, f: Fixture) -> None:
     context = assemble_npc_conversation_context(
         db_connection,
         npc_entity_id=f.npc_id,
+        campaign_id=f.campaign_id,
         timeline_id=f.timeline_id,
         expected_world_id=f.world_id,
         requesting_character_id=f.pc_id,

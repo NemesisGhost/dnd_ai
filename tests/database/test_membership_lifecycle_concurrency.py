@@ -29,6 +29,7 @@ ERRORS` helpers directly:
    manager()` trigger."""
 
 import uuid
+from collections.abc import Callable
 
 import pytest
 from sqlalchemy import Connection, Engine, text
@@ -41,12 +42,9 @@ from dnd_ai.commands.memberships import (
 )
 from dnd_ai.domain.access import LOCAL_AUTH_ISSUER
 from tests.database.test_membership_role_concurrency import (
-    CONSTRAINT_ERRORS,
     RetentionRaceFixture,
-    _audit_row_count,
     _cleanup_retention_fixture,
     _manager_count,
-    _run_with_precommit_barrier,
 )
 from tests.factories import (
     lookup_id,
@@ -60,6 +58,7 @@ from tests.factories import (
     make_user,
     make_world,
 )
+from tests.lock_race_support import LockRace
 
 pytestmark = pytest.mark.database
 
@@ -527,88 +526,88 @@ def test_a_role_change_cannot_race_a_removal_of_the_same_membership(
 def test_two_managers_concurrently_removing_their_own_memberships_cannot_both_leave_zero_managers(
     postgres_engine: Engine,
 ) -> None:
-    """Both workers end a *distinct* manager-bearing membership on the same
-    active campaign — `_run_with_precommit_barrier` guarantees both `end_
-    campaign_membership` calls (and their own in-process retention
-    pre-checks, provably a no-op for both sides) complete before either
-    commits, so the rejection can only come from the database's own
-    deferred retention trigger."""
+    """Two managers each end their own membership on a campaign that has exactly these two.
+
+    Since P03-A A3a, `end_campaign_membership` takes the campaign row `FOR UPDATE` itself, before its
+    in-command retention check, so the two ends serialize there (before, both reached commit and the
+    deferred retention trigger rejected one). The test is deterministic: the first end is paused just
+    after it holds the campaign row, the second is proven (through `pg_blocking_pids`) to wait on it
+    at that lock, and only then is the first released. The second then finds one manager left and is
+    refused by its own check; the trigger stays the backstop for other paths."""
     engine = postgres_engine
     slug = f"conc-end-end-retention-{uuid.uuid4().hex[:8]}"
     with engine.begin() as setup:
         rf = RetentionRaceFixture(setup, slug)
 
+    def end_own(membership_id: uuid.UUID, user_id: uuid.UUID) -> Callable[[Connection], None]:
+        # Each worker ends its own membership (the actor is the row being closed), never the other
+        # worker's, which would add a foreign-key cycle this test is not about.
+        def operation(connection: Connection) -> None:
+            end_campaign_membership(
+                connection,
+                campaign_membership_id=membership_id,
+                campaign_id=rf.campaign_id,
+                ended_by_membership_id=membership_id,
+            )
+            record_change_log(
+                connection,
+                change_action_code=_UPDATED_ACTION,
+                schema_name="security",
+                table_name="campaign_memberships",
+                record_id=membership_id,
+                entity_id=None,
+                world_id=rf.world_id,
+                actor_user_id=user_id,
+                correlation_id=None,
+                command_name=_END_COMMAND_NAME,
+                event_id=None,
+            )
+
+        return operation
+
     try:
-        # Each worker ends its *own* membership (ended_by_membership_id
-        # self-references the row being closed) — deliberately never
-        # cross-referencing the other worker's row: an earlier version of
-        # this test had each worker record the *other* row as its actor,
-        # which made each worker's own UPDATE request a FOR KEY SHARE lock
-        # on the row the *other* worker already held FOR UPDATE (`security.
-        # campaign_memberships.ended_by_membership_id`'s own FK), a genuine
-        # cross-dependency the database's own deadlock detector correctly
-        # killed — a real deadlock, but not the retention-trigger rejection
-        # this test exists to prove.
-
-        def end_first(connection: Connection) -> None:
-            end_campaign_membership(
-                connection,
-                campaign_membership_id=rf.first_membership_id,
-                campaign_id=rf.campaign_id,
-                ended_by_membership_id=rf.first_membership_id,
+        with LockRace(engine) as race:
+            # Paused after the campaign `FOR UPDATE`, at the statement that follows it.
+            pause = race.pause(
+                thread_name="first",
+                pattern=r"SELECT clock_timestamp\(\)",
+                after=r"FROM campaign\.campaigns WHERE campaign_id = .* FOR UPDATE",
             )
-            record_change_log(
-                connection,
-                change_action_code=_UPDATED_ACTION,
-                schema_name="security",
-                table_name="campaign_memberships",
-                record_id=rf.first_membership_id,
-                entity_id=None,
-                world_id=rf.world_id,
-                actor_user_id=rf.first_user_id,
-                correlation_id=None,
-                command_name=_END_COMMAND_NAME,
-                event_id=None,
-            )
+            first = race.start("first", end_own(rf.first_membership_id, rf.first_user_id))
+            pause.wait_reached(first)
+            second = race.start("second", end_own(rf.second_membership_id, rf.second_user_id))
+            race.wait_blocked_by(pause, second)  # the second waits on the first's campaign lock
+            assert not second.done
+            pause.release()
+            race.join_all()
 
-        def end_second(connection: Connection) -> None:
-            end_campaign_membership(
-                connection,
-                campaign_membership_id=rf.second_membership_id,
-                campaign_id=rf.campaign_id,
-                ended_by_membership_id=rf.second_membership_id,
-            )
-            record_change_log(
-                connection,
-                change_action_code=_UPDATED_ACTION,
-                schema_name="security",
-                table_name="campaign_memberships",
-                record_id=rf.second_membership_id,
-                entity_id=None,
-                world_id=rf.world_id,
-                actor_user_id=rf.second_user_id,
-                correlation_id=None,
-                command_name=_END_COMMAND_NAME,
-                event_id=None,
-            )
-
-        outcomes = _run_with_precommit_barrier(engine, {"first": end_first, "second": end_second})
-
-        committed = [o for o in outcomes.values() if o.committed]
-        rejected = [o for o in outcomes.values() if not o.committed]
-        assert len(committed) == 1, f"expected exactly one commit, got: {outcomes}"
-        assert len(rejected) == 1, f"expected exactly one rejection, got: {outcomes}"
-        assert isinstance(rejected[0].error, CONSTRAINT_ERRORS), (
-            f"expected the rejected removal to fail via the database's own deferred "
-            f"retention trigger specifically, got: {rejected[0].error!r}"
-        )
-        assert "access.manage" in str(rejected[0].error) or "access_manager" in str(
-            rejected[0].error
-        ), f"expected the rejection to name the retention invariant, got: {rejected[0].error!r}"
+        assert first.error is None, first.error
+        assert isinstance(second.error, ValueError), second.error
+        assert "access.manage" in str(second.error), second.error
 
         with engine.connect() as verify:
-            assert _manager_count(verify, rf.campaign_id) == 1
-            assert _audit_row_count(verify, rf.world_id) == 1
+            ended = {
+                row[0]: row[1]
+                for row in verify.execute(
+                    text("""
+                        SELECT campaign_membership_id, ended_at IS NOT NULL
+                        FROM security.campaign_memberships WHERE campaign_id = :c
+                    """),
+                    {"c": rf.campaign_id},
+                )
+            }
+            assert ended[rf.first_membership_id] is True  # exactly the first was ended
+            assert ended[rf.second_membership_id] is False  # the second kept its membership
+            assert _manager_count(verify, rf.campaign_id) == 1  # and is the remaining manager
+            rows = verify.execute(
+                text("""
+                    SELECT command_name, record_id FROM audit.change_log WHERE world_id = :w
+                """),
+                {"w": rf.world_id},
+            ).all()
+            assert [(r[0], r[1]) for r in rows] == [
+                (_END_COMMAND_NAME, rf.first_membership_id)
+            ]  # one end_campaign_membership row, for the membership that ended
     finally:
         _cleanup_retention_fixture(engine, rf.timeline_id, rf.world_id)
 

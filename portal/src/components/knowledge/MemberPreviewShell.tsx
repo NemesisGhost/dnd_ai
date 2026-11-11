@@ -5,6 +5,7 @@ import { previewPerspectivesPath } from "../../api/knowledgePreview"
 import { useSession } from "../../context/SessionContext"
 import { useAccessOverview } from "../../hooks/useAccessOverview"
 import { useAuthoringResource } from "../../hooks/useAuthoringResource"
+import { TaskBreadcrumb } from "../navigation/TaskBreadcrumb"
 import type { PreviewPerspectives } from "../../types/knowledgePreview"
 import { canPreviewAudience } from "../../utils/canPreviewAudience"
 import { memberPreviewPath, memberPreviewSearch } from "../../utils/memberPreviewContext"
@@ -42,26 +43,13 @@ export function MemberPreviewShell({ campaignId, context, mode, onContextChange,
     const permitted = canPreviewAudience(state, campaignId)
     const collection = mode === "collection"
 
+    // The task the preview was opened in; the collection is opened under the member and perspective the
+    // claim was previewed with.
     const crumbs = (
-        <nav aria-label="Breadcrumb" className="authoring-page__breadcrumb">
-            <ol className="session-run__breadcrumb">
-                <li>
-                    <Link to={knowledgePath(campaignId)}>Knowledge</Link>
-                </li>
-                {collection ? (
-                    <li aria-current="page">Member preview</li>
-                ) : (
-                    <>
-                        <li>
-                            <Link to={`${memberPreviewPath(campaignId)}${memberPreviewSearch({ ...context, cursor: context.cursor })}`}>
-                                Member preview
-                            </Link>
-                        </li>
-                        <li aria-current="page">Claim</li>
-                    </>
-                )}
-            </ol>
-        </nav>
+        <TaskBreadcrumb
+            current={collection ? "Member preview" : "Claim"}
+            queries={{ "knowledge.memberPreview": memberPreviewSearch({ ...context, cursor: context.cursor }) }}
+        />
     )
 
     return (

@@ -11,6 +11,8 @@ interface QuestCardProps {
      * detail shows the same party's status and objectives. */
     characterId?: string | null
     partyId?: string | null
+    /** The task the list is the page of: a quest opened from it is a step of it. */
+    linkState?: object
 }
 
 // The list contract supplies only a quest name and status — this card
@@ -21,6 +23,7 @@ export function QuestCard({
     quest,
     characterId = null,
     partyId = null,
+    linkState,
 }: QuestCardProps) {
     const untracked = quest.tracked === false
     const progress =
@@ -47,6 +50,7 @@ export function QuestCard({
             // (the list only includes those for editors); everyone else opens the reader.
             to={`${base}${questPerspectiveSearch(characterId, partyId)}`}
             linkLabel={`${quest.name}, ${status}`}
+            linkState={linkState}
         />
     )
 }

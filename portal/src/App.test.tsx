@@ -273,6 +273,7 @@ beforeEach(() => {
       status: "unavailable",
     },
     retry: vi.fn(),
+    authority: null,
   })
 
   useCampaignSessionsMock.mockReset()
@@ -293,6 +294,7 @@ beforeEach(() => {
       session: campaignSessionDetail,
     },
     retry: vi.fn(),
+    authority: null,
     refresh: vi.fn(() => Promise.resolve(true)),
   })
 
@@ -314,6 +316,7 @@ beforeEach(() => {
       quest: campaignQuestDetail,
     },
     retry: vi.fn(),
+    authority: null,
   })
 
   useWorldEntitiesMock.mockReset()
@@ -550,10 +553,12 @@ describe("portal routing", () => {
       }),
     ).toBeInTheDocument()
 
+    // On Campaign Home the Campaign control is a button; Home is its menu's current entry.
     expect(
-      screen.getByRole("link", {
-        name: "Campaign Home",
-      }),
+      screen.getByRole("button", { name: "Campaign menu" }),
+    ).toHaveAttribute("aria-expanded", "false")
+    expect(
+      screen.getByRole("link", { name: "Campaign Home", hidden: true }),
     ).toHaveAttribute("aria-current", "page")
 
     expect(
@@ -597,7 +602,7 @@ describe("portal routing", () => {
     renderAppAt("/app/mundivita/quests")
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Choose campaign" }),
+      screen.getByRole("button", { name: "Show campaign menu" }),
     )
     expect(
       screen.getByRole("link", { name: "View all campaigns" }),
@@ -640,14 +645,15 @@ describe("portal routing", () => {
     ).not.toContain("not-a-real-campaign")
   })
 
-  it("routes Characters to the selected character workspace", () => {
+  it("routes Characters to the selected character workspace", async () => {
     renderAppAt("/app/mundivita/characters")
 
+    // The index is replaced by the selected character's record (PD-4), which reads that character.
     expect(
-      screen.getByRole("link", {
-        name: "Characters",
+      await screen.findByRole("heading", {
+        name: "Character unavailable",
       }),
-    ).toHaveAttribute("aria-current", "page")
+    ).toBeInTheDocument()
 
     expect(
       useCharacterMock,
@@ -656,11 +662,10 @@ describe("portal routing", () => {
       "character-ixamarra",
     )
 
+    // On that record the Characters control is the section's toggle, current for the section.
     expect(
-      screen.getByRole("heading", {
-        name: "Character unavailable",
-      }),
-    ).toBeInTheDocument()
+      screen.getByRole("button", { name: /Characters/ }),
+    ).toHaveClass("portal-sidebar__link--active")
   })
 
   it("routes Quests through the selected character perspective", () => {
@@ -724,16 +729,16 @@ describe("portal routing", () => {
     ).toBeInTheDocument()
 
     expect(
-      screen.getByRole("link", {
-        name: "Back to quests",
-      }),
+      within(
+        screen.getByRole("navigation", { name: "Breadcrumb" }),
+      ).getByRole("link", { name: "Quests" }),
     ).toHaveAttribute(
       "href",
-      "/app/mundivita/quests",
+      "/app/mundivita/quests?character_id=character-ixamarra&party_id=party-primary",
     )
 
     expect(
-      screen.getByRole("link", {
+      within(screen.getByRole("navigation", { name: "Main" })).getByRole("link", {
         name: "Quests",
       }),
     ).toHaveAttribute(
@@ -822,19 +827,20 @@ describe("portal routing", () => {
       "The party entered the dormant facility.",
     )
 
+    // The breadcrumb's Sessions ancestor replaces the former "Back to sessions" link.
     expect(
-      screen.getByRole("link", {
-        name: "Back to sessions",
-      }),
+      within(
+        screen.getByRole("navigation", { name: "Breadcrumb" }),
+      ).getByRole("link", { name: "Sessions" }),
     ).toHaveAttribute(
       "href",
       "/app/mundivita/sessions",
     )
 
     expect(
-      screen.getByRole("link", {
-        name: "Sessions",
-      }),
+      within(
+        screen.getByRole("navigation", { name: "Main" }),
+      ).getByRole("link", { name: "Sessions" }),
     ).toHaveAttribute(
       "aria-current",
       "page",

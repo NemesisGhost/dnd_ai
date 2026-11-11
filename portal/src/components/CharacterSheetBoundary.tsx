@@ -1,4 +1,5 @@
 import type { ReactNode } from "react"
+import { ArrivalHeadingFocus } from "../navigation/ArrivalHeadingFocus"
 import { useCharacterSheet } from "../hooks/useCharacterSheet"
 import PlaceholderPage from "../pages/PlaceholderPage"
 import type { CharacterSheet } from "../types/characterSheet"
@@ -26,6 +27,7 @@ export function CharacterSheetBoundary({
     if (state.status === "loading") {
         return (
             <PlaceholderPage
+                busy
                 title="Loading character sheet"
                 description="Loading the latest authorized character sheet."
             />
@@ -34,19 +36,29 @@ export function CharacterSheetBoundary({
 
     if (state.status === "unavailable") {
         if (fallback !== undefined) {
-            return <>{fallback()}</>
+            return (
+                <>
+                    {fallback()}
+                    <ArrivalHeadingFocus />
+                </>
+            )
         }
 
         return (
-            <PlaceholderPage
-                title="Character sheet unavailable"
-                description="The requested character sheet is not available."
-            />
+            <>
+                <PlaceholderPage
+                    title="Character sheet unavailable"
+                    description="The requested character sheet is not available."
+                />
+                <ArrivalHeadingFocus />
+            </>
         )
     }
 
     if (state.status === "error") {
         return (
+            <>
+            <ArrivalHeadingFocus />
             <section
                 className="placeholder-page"
                 aria-labelledby="character-sheet-error-heading"
@@ -67,8 +79,14 @@ export function CharacterSheetBoundary({
                     Try again
                 </button>
             </section>
+            </>
         )
     }
 
-    return <>{children(state.sheet)}</>
+    return (
+        <>
+            {children(state.sheet)}
+            <ArrivalHeadingFocus />
+        </>
+    )
 }

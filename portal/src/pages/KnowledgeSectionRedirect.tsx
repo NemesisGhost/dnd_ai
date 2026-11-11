@@ -5,12 +5,13 @@ import { Navigate, useLocation, useParams } from "react-router"
 // so the campaign's character and party perspective survive the redirect.
 export function KnowledgeSectionRedirect({ section }: { section: "claim" | "who-knows" }) {
     const { campaignId = "", knowledgeItemId = "" } = useParams()
-    const { search } = useLocation()
+    const { search, state } = useLocation()
     const params = new URLSearchParams(search)
     params.set("section", section)
     return (
         <Navigate
             replace
+            state={state}
             to={{
                 pathname: `/app/${encodeURIComponent(campaignId)}/knowledge/${encodeURIComponent(knowledgeItemId)}`,
                 search: `?${params.toString()}`,

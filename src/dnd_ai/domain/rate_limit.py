@@ -15,7 +15,7 @@ over-reach the plan explicitly warns against. The real limitation this
 carries — each Uvicorn worker process has its own independent counters, so
 a multi-worker/horizontally-scaled deployment enforces the limit
 *per worker*, not globally — is a known, documented scope boundary
-(docs/PHASE11_VERIFICATION.md records it as such), not an oversight; the
+(docs/DELIVERY_HISTORY.md records it as such), not an oversight; the
 current `compose.yaml` topology runs one `api` worker.
 
 Deterministic in tests because `now` is always an explicit parameter, never

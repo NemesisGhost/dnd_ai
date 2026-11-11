@@ -139,6 +139,7 @@ def _context(connection: Connection, f: Fixture) -> NpcConversationContext:
     return assemble_npc_conversation_context(
         connection,
         npc_entity_id=f.npc_id,
+        campaign_id=f.campaign_id,
         timeline_id=f.timeline_id,
         expected_world_id=f.world_id,
         requesting_character_id=f.pc_id,

@@ -5,7 +5,7 @@
 
 ## Context
 
-*Stub — to be written.* The reasoning behind this decision currently lives in [PLAN.md §2.3](../PLAN.md#23-worlds-timelines-campaigns-and-sessions-are-separate-concepts) and [DOMAIN_MODEL.md](../DOMAIN_MODEL.md) and has not yet been extracted into a standalone record.
+A setting can host multiple campaigns and alternative histories. Combining world definitions, timeline state and the game played by one group would couple unrelated campaigns and prevent bounded branches.
 
 ## Decision
 
@@ -13,8 +13,8 @@ A world holds persistent setting definitions, a timeline holds one evolving hist
 
 ## Consequences
 
-*Stub — to be written.*
+World, timeline and campaign remain separate identities. Branch inheritance stops at its branch point; campaign authority does not imply shared-world authority.
 
 ## References
 
-- [PLAN.md §2.3](../PLAN.md#23-worlds-timelines-campaigns-and-sessions-are-separate-concepts) and [DOMAIN_MODEL.md](../DOMAIN_MODEL.md)
+- [PLAN.md §2.3](../README.md) and [DOMAIN_MODEL.md](../DOMAIN_MODEL.md)

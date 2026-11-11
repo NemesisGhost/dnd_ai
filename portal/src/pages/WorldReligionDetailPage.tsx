@@ -1,5 +1,4 @@
-import { useWorldBackPath } from "../hooks/useWorldBackPath"
-import { Link } from "react-router"
+import { WorldRecordBack } from "../components/world/WorldRecordBack"
 import { religionAuthoringPath } from "../api/organizationAuthoring"
 import { AuthoringEditLink } from "../components/AuthoringEditLink"
 import { DetailPanel } from "../components/DetailPanel"
@@ -41,15 +40,10 @@ export function WorldReligionDetailPage({
     campaignId,
     religion,
 }: WorldReligionDetailPageProps) {
-    const worldBackPath = useWorldBackPath(campaignId)
     const headingRef = usePageArrival(true)
     return (
         <section aria-labelledby="world-religion-heading">
-            <p>
-                <Link to={worldBackPath}>
-                    Back to World
-                </Link>
-            </p>
+            <WorldRecordBack campaignId={campaignId} current={religion.name} />
 
             <p className="world-detail__eyebrow">Religion</p>
             <h1 id="world-religion-heading" ref={headingRef} tabIndex={-1}>

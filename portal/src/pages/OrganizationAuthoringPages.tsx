@@ -8,6 +8,7 @@ import { ContentCreatePage } from "../components/authoring/ContentCreatePage"
 import type { ContentCreateConfig } from "../components/authoring/ContentCreatePage"
 import { ContentEditPage } from "../components/authoring/ContentEditPage"
 import type { ContentEditConfig } from "../components/authoring/ContentEditPage"
+import { inWorldTask } from "../navigation/breadcrumbModel"
 import { worldEditNavigation } from "../components/world/editNavigation"
 import { OrganizationFields } from "../components/authoring/OrganizationFields"
 import type {
@@ -58,6 +59,7 @@ const createConfig: ContentCreateConfig<
     create: createOrganization,
     resultPath: (campaignId, created) =>
         `${worldPath(campaignId)}/organization/${encodeURIComponent(created.organization_id)}`,
+    taskBreadcrumb: true,
     announce: "Organization created as a draft",
     saveLabel: "Create organization",
     pendingLabel: "Creating…",
@@ -91,6 +93,13 @@ const editConfig: ContentEditConfig<
     worldPath,
     detailPath: (campaignId, id) => `${worldPath(campaignId)}/organization/${encodeURIComponent(id)}`,
     navigation: worldEditNavigation("organization"),
+    // Inside World's own task the shared breadcrumb replaces the single back link; opened any other way
+    // the page keeps the links it has always had.
+    taskBreadcrumb: {
+        applies: inWorldTask,
+        labelRoute: "world.record",
+        labelParams: (campaignId, entityId) => ({ campaignId, category: "organization", entityId }),
+    },
     viewPath: organizationAuthoringPath,
     optionsPath: organizationOptionsPath,
     name: (view) => view.name,

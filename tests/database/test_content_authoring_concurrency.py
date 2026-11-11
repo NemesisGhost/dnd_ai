@@ -62,6 +62,7 @@ from tests.database.test_authoring_concurrency import (
     _wait_until_blocked,
 )
 from tests.factories import make_campaign_party, make_party, make_user, make_world_time
+from tests.lock_race_support import LockRace
 
 pytestmark = pytest.mark.database
 
@@ -183,6 +184,27 @@ def race(
     thread.join(timeout=20)
     assert not thread.is_alive()
     return out
+
+
+def observed_race(
+    engine: Engine,
+    hold: Callable[[Connection], object],
+    racer: Callable[[Connection], object],
+) -> dict[str, Any]:
+    """Like `race`, but proves the intended blocker: the racer's session must be blocked, through
+    `pg_blocking_pids`, by the *holder's own session* (not merely waiting on some lock whose text
+    matches). A racer that finishes or fails before it blocks is reported as that, not as a
+    timeout. On exit, success or failure, the holder is rolled back and the racer joined before
+    any fixture teardown (`LockRace`)."""
+    with LockRace(engine) as lock_race:
+        holder = lock_race.hold(hold)
+        worker = lock_race.start("racer", racer)
+        lock_race.wait_blocked_by(holder, worker)
+        holder.commit()
+        lock_race.join_all()
+    if worker.error is not None:
+        return {"error": worker.error}
+    return {"value": worker.result}
 
 
 # --- edit vs edit / archive / publish / submit ---------------------------------------
@@ -555,7 +577,9 @@ def test_a_role_revocation_waits_for_an_in_flight_creation_and_the_write_stands(
 
 
 def test_a_creation_waits_for_an_in_flight_campaign_archive_and_is_refused(fx: Fixture) -> None:
-    out = race(
+    # The wait is observed through `pg_blocking_pids`, not through the text of the author's lock
+    # statement, which changed from `FOR SHARE` to `FOR KEY SHARE` (DEF-014).
+    out = observed_race(
         fx.engine,
         lambda c: archive_campaign(
             c,
@@ -564,7 +588,6 @@ def test_a_creation_waits_for_an_in_flight_campaign_archive_and_is_refused(fx: F
             expected_row_version=fx.campaign_version,
         ),
         _create_as(fx, fx.owner, "Too late"),
-        "query LIKE '%FROM campaign.campaigns WHERE campaign_id = %FOR SHARE%'",
     )
     assert isinstance(out["error"], CampaignArchivedError)
     assert fx.count("SELECT count(*) FROM core.entities WHERE canonical_name = 'Too late'") == 0

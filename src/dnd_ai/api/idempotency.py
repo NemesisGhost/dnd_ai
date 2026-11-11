@@ -16,11 +16,10 @@ command, a different target resource, or a different payload) is *not*
 treated as "the same logical request retried" — it is rejected as a
 conflict, per `compute_request_fingerprint`'s own docstring below.
 
-## Concurrency: reserve, execute, complete — no separate lock, no
-## check-then-insert race
+## Concurrency: key lock, reserve, execute, complete — no check-then-insert race
 
-`begin_idempotent_request()` does exactly one statement to determine
-whether this call owns the key: `INSERT ... ON CONFLICT (...) DO NOTHING
+`begin_idempotent_request()` first takes `lock_idempotency_key()` (below), then does exactly one
+statement to determine whether this call owns the key: `INSERT ... ON CONFLICT (...) DO NOTHING
 RETURNING ...`. This is not a check-then-insert race — PostgreSQL resolves
 the conflict as part of the single INSERT statement, against its own
 unique index, atomically. Two concurrent transactions racing for the same
@@ -29,9 +28,29 @@ second transaction's INSERT blocks until the first transaction's row
 either commits (the second sees a real conflict and gets zero rows back)
 or rolls back (the second sees no conflict at all and reserves the key
 itself, exactly as if it had been first). No `SELECT ... FOR UPDATE`, no
-advisory lock, no in-memory cache — the same first-write-wins guarantee
+in-memory cache — the same first-write-wins guarantee
 `dnd_ai.commands.items._lock_item_instance` gets from an explicit row
 lock, here obtained from the unique constraint itself.
+
+### The key lock (P03-A P2)
+
+The unique index alone made a second request with the same key wait on the first's *uncommitted
+reservation row* after the second had already taken row locks of its own. Two routes that take
+row locks in different orders (an end of a membership and a role grant, both reached with one key)
+then deadlocked. `lock_idempotency_key()` removes that: it takes a transaction-scoped advisory
+lock on the scope `(actor, campaign, key)` immediately before the INSERT, while the request still
+holds no row lock, so a same-key waiter holds nothing anyone waits for. The lock is a queue only.
+The natural key and the fingerprint remain the authority for replay and conflict. No key means no
+key lock. A transaction takes at most one distinct key lock (a second raises
+`IdempotencyKeyLockError`). It does not touch the two stores below. It addresses same-key cycles
+only: cycles between *different* keys (DEF-019) and a request's stale authorization are separate
+defects.
+
+The request transaction is committed before the response is sent (`dnd_ai.api.deps.
+commit_request_transaction`, P03-A P3): a 2xx means the reservation, mutation, audit row and receipt
+are committed and the key lock is released. If a COMMIT's acknowledgement is lost the response is a
+500 and the transaction may have committed; retrying with the same key and body replays the stored
+receipt, so a keyed request resolves an uncertain commit by retrying.
 
 Because the reservation INSERT runs inside the *same* transaction as the
 command it guards (the request's own `get_connection` transaction — see
@@ -131,6 +150,87 @@ class IdempotentReplay:
     response_body: dict[str, Any]
 
 
+_KEY_LOCK_PREFIX = "dnd_ai.idempotency.campaign_key.v1"
+_KEY_LOCK_STATE = "idempotency_key_lock"
+
+
+class IdempotencyKeyLockError(RuntimeError):
+    """A second, different idempotency key lock was requested in one transaction: a programming
+    error, never a client error (it is not a `ConflictError`)."""
+
+
+def idempotency_key_lock_scope(
+    *, actor_user_id: uuid.UUID, campaign_id: uuid.UUID, idempotency_key: str
+) -> str:
+    """The text the key lock hashes: a version prefix, the two canonical UUIDs, and the key behind
+    its length, joined by `|`. Unambiguous without relying on the key's character set: the UUIDs
+    are fixed-width, and the length prefix means no key can run into another field. Two different
+    `(actor, campaign, key)` triples therefore never encode to the same text."""
+    return "|".join(
+        (
+            _KEY_LOCK_PREFIX,
+            str(actor_user_id),
+            str(campaign_id),
+            f"{len(idempotency_key)}:{idempotency_key}",
+        )
+    )
+
+
+def lock_idempotency_key(
+    connection: Connection,
+    *,
+    actor_user_id: uuid.UUID,
+    campaign_id: uuid.UUID,
+    idempotency_key: str | None,
+) -> bool:
+    """Serialize every request that uses this `(actor, campaign, key)` before any of them holds a
+    row lock or writes a row. Returns `False`, taking nothing, when there is no key.
+
+    `pg_advisory_xact_lock(hashtextextended(scope, 0))`: exclusive, transaction-scoped, released at
+    commit or rollback (the instant the reservation row becomes visible or vanishes), and a 64-bit
+    hash, as the codebase's other advisory locks use. The lock is only a queue. The natural key
+    `(actor, campaign, key)` in `security.idempotent_requests` and the request fingerprint stay the
+    authority for replay and conflict: a hash collision between two scopes only makes them wait for
+    each other briefly.
+
+    **Invariants.**
+
+    - It is requested first, before any row lock, row write or other advisory lock of the request.
+      Ordinary reads (resolving the caller's access) may precede it. A request that waits here
+      therefore holds nothing anyone else is waiting for and cannot be part of a deadlock.
+    - A transaction takes at most one distinct key lock: a second, different scope raises
+      `IdempotencyKeyLockError`. Requesting the same scope again is allowed and does not wait (an
+      advisory lock is reentrant within its transaction).
+    - Only the campaign-scoped store takes it. `campaign_creation_reservations` and
+      `actor_idempotent_requests` have their own scopes and do not.
+    """
+    if idempotency_key is None:
+        return False
+    scope = idempotency_key_lock_scope(
+        actor_user_id=actor_user_id, campaign_id=campaign_id, idempotency_key=idempotency_key
+    )
+    # One transaction is identified by its transaction id; a connection that serves several
+    # requests in one outer transaction (a test harness) calls `reset_idempotency_key_lock` between
+    # them, as each request would otherwise have its own connection.
+    transaction = str(connection.execute(text("SELECT pg_current_xact_id()")).scalar_one())
+    held = connection.info.get(_KEY_LOCK_STATE)
+    if held is not None and held[0] == transaction and held[1] != scope:
+        raise IdempotencyKeyLockError(
+            "a transaction may take only one idempotency key lock; a request reserved a second key"
+        )
+    connection.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:scope, 0))"), {"scope": scope}
+    )
+    connection.info[_KEY_LOCK_STATE] = (transaction, scope)
+    return True
+
+
+def reset_idempotency_key_lock(connection: Connection) -> None:
+    """Forget the key lock this connection recorded. For a harness that runs several requests on
+    one connection and one outer transaction; a real request has its own connection."""
+    connection.info.pop(_KEY_LOCK_STATE, None)
+
+
 def begin_idempotent_request(
     connection: Connection,
     *,
@@ -152,6 +252,12 @@ def begin_idempotent_request(
     than a guess."""
     fingerprint = compute_request_fingerprint(command_name=command_name, payload=payload)
 
+    lock_idempotency_key(
+        connection,
+        actor_user_id=actor_user_id,
+        campaign_id=campaign_id,
+        idempotency_key=idempotency_key,
+    )
     reserved = connection.execute(
         text("""
             INSERT INTO security.idempotent_requests

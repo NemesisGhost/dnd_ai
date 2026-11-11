@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react"
-import { useSearchParams } from "react-router"
+import { useLocation } from "react-router"
+import { retainedState } from "../../navigation/breadcrumbModel"
+import type { CrumbState } from "../../navigation/breadcrumbModel"
+import { useStagedNavigation } from "../staged/useStagedNavigation"
 import type { CampaignSessionDetail } from "../../types/campaignSession"
-import { defaultSection, parseSection, sectionsOf, stageOf } from "./runStages"
+import { SECTIONS, defaultSection } from "./runStages"
 import type { SectionKey, Stage } from "./runStages"
-
-type Remembered = Partial<Record<Stage, SectionKey>>
 
 export interface RunNavigation {
     section: SectionKey
@@ -13,33 +13,20 @@ export interface RunNavigation {
     sectionHref: (key: SectionKey) => string
     // The address of a stage: its remembered section, else its first.
     stageHref: (stage: Stage) => string
+    // The router state every in-page link carries so that moving between sections keeps the task the
+    // session was opened in (null after a direct entry, where the destination's defaults apply).
+    linkState: CrumbState | undefined
 }
 
-// The current section lives in `?section=`; the stage follows from it. A user's change pushes a
-// history entry (Back and Forward walk the sections); fixing a missing or unknown value replaces
-// it. The query is the only thing that changes, so the page stays mounted and drafts survive.
+// The current section lives in `?section=`; the stage follows from it. The shared staged navigation
+// owns the mechanics: a user's change pushes a history entry (Back and Forward walk the sections),
+// fixing a missing or unknown value replaces it and keeps the entry's state (the task, and a selection
+// arrival's stamp), and the query is the only thing that changes, so the page stays mounted and drafts
+// survive.
 export function useRunNavigation(
     session: Pick<CampaignSessionDetail, "status_code" | "play_status">,
 ): RunNavigation {
-    const [params, setParams] = useSearchParams()
-    const parsed = parseSection(params.get("section"))
-    const section = parsed ?? defaultSection(session)
-    const stage = stageOf(section)
-    const [remembered, setRemembered] = useState<Remembered>({})
-
-    useEffect(() => {
-        if (parsed === null) {
-            setParams({ section }, { replace: true })
-        }
-    }, [parsed, section, setParams])
-
-    // Remember the section last shown in each stage (adjusted during render, not in an effect).
-    if (remembered[stage] !== section) {
-        setRemembered({ ...remembered, [stage]: section })
-    }
-
-    const sectionHref = (key: SectionKey): string => `?section=${key}`
-    const stageHref = (target: Stage): string =>
-        sectionHref(target === stage ? section : (remembered[target] ?? sectionsOf(target)[0]!.key))
-    return { section, stage, sectionHref, stageHref }
+    const { pathname, state } = useLocation()
+    const nav = useStagedNavigation<Stage, SectionKey>(SECTIONS, defaultSection(session), { ready: true })
+    return { ...nav, linkState: retainedState(pathname, state) ?? undefined }
 }

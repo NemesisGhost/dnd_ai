@@ -28,7 +28,7 @@ export function WorldOverviewPage() {
     // so the page that reports the save is not replaced by "could not be loaded".
     const kept = useKept(state, url)
     const stale = state.kind === "error" && kept !== null
-    const headingRef = usePageArrival(state.kind === "ready")
+    const headingRef = usePageArrival(state.kind !== "loading")
 
     return (
         <div className="world-page">
@@ -152,7 +152,8 @@ function ReadOnlyWorldOverview({ world, headingRef }: ReadOnlyWorldOverviewProps
 
             <section className="authoring-section" aria-labelledby="world-timelines-heading">
                 <h2 id="world-timelines-heading">Timelines</h2>
-                <TimelineTree worldId={world.world_id} timelines={world.timelines} linked={false} />
+                <TimelineTree worldId={world.world_id} timelines={world.timelines} linked />
+                {/* Linked: this read implies world.view, the timeline read gate. */}
             </section>
         </>
     )

@@ -5,7 +5,7 @@ same way, so no command can forget a step.
 
 - `lock_authoring_scope` -- the head of the lock order and the authority
   re-check under lock (world `FOR SHARE`, the actor's membership and role rows
-  `FOR SHARE`, the actor's account `FOR SHARE`, campaign `FOR SHARE`, then
+  `FOR SHARE`, the actor's account `FOR SHARE`, campaign `FOR KEY SHARE`, then
   `canon.edit` re-resolved from committed state). The world is derived from the
   campaign, never from a request.
 - `lock_entities` -- entities locked one at a time in `entity_id` order, in
@@ -145,8 +145,8 @@ def lock_authoring_scope(
     # These are locked BEFORE the campaign row, not after: a role revocation
     # writes the membership-role row and then, at commit, its deferred
     # access-manager retention trigger takes the campaign row FOR UPDATE. A
-    # command holding the campaign FOR SHARE while waiting on the revoked row
-    # would deadlock with it (found by the real-PostgreSQL race test).
+    # command holding the campaign lock while waiting on the revoked row would
+    # deadlock with it (found by the real-PostgreSQL race test).
     connection.execute(
         text("""
             SELECT mr.membership_role_id
@@ -165,8 +165,21 @@ def lock_authoring_scope(
         {"u": actor_user_id},
     ).one_or_none()
 
+    # FOR KEY SHARE, not FOR SHARE (DEF-014). It still conflicts with every FOR UPDATE
+    # taker, which is what keeps the campaign active for this command: archive,
+    # reactivate and settings edits (`_lock_campaign_for_manage`), the retention trigger
+    # at commit, the resource-grant and relationship writes, access-group creation and
+    # reactivation. (Adding access-group members takes the campaign `FOR KEY SHARE` too, after
+    # the members' memberships, and serializes with an author at the membership.) It does not
+    # conflict with FOR NO KEY UPDATE, which `recover_campaign_access_manager` holds
+    # while it waits for the membership row this command already holds FOR SHARE above;
+    # FOR SHARE here made the two wait on each other (SQLSTATE 40P01). Nothing locks
+    # this row again later in any caller, so no later upgrade can reintroduce a wait.
     campaign = connection.execute(
-        text("SELECT lifecycle_status_id FROM campaign.campaigns WHERE campaign_id = :c FOR SHARE"),
+        text(
+            "SELECT lifecycle_status_id FROM campaign.campaigns "
+            "WHERE campaign_id = :c FOR KEY SHARE"
+        ),
         {"c": campaign_id},
     ).one_or_none()
     if campaign is None:

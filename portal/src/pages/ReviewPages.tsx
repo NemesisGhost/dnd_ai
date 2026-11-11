@@ -13,10 +13,13 @@ import type {
     RevisionComparison,
     RevisionHistory,
 } from "../types/review"
-import { pickWorldReturnState } from "../hooks/useWorldBackPath"
+import { continuedListState } from "../navigation/breadcrumbModel"
+import { carriedListSearch, carriedState } from "../navigation/taskReturn"
+import type { CrumbState } from "../navigation/breadcrumbModel"
 import { humanizeCode } from "../utils/humanize"
 import { recordPath, reviewTarget } from "../utils/reviewTarget"
 import "../components/authoring/authoring.css"
+import { REVIEW_STATUS_ORDER } from "../utils/reviewStatus"
 
 const humanize = (code: string): string => code.replace(/_/g, " ")
 const when = (value: string): string => new Date(value).toLocaleString()
@@ -33,7 +36,7 @@ const historyPath = (campaignId: string, category: string | null, entityId: stri
 // approve their own work (it is audited); the queue says when the latest change was theirs.
 // The filters live in the address, so Back from a record returns to the same list.
 const DEFAULT_STATUS = "in_review"
-const STATUS_ORDER = ["in_review", "approved", "pending", "draft", "rejected", "archived"]
+const STATUS_ORDER = REVIEW_STATUS_ORDER
 // The statuses whose counts add up to "needs attention".
 const PENDING_PARTS = ["draft", "in_review", "approved", "rejected"]
 
@@ -117,8 +120,10 @@ function Queue({ campaignId }: { campaignId: string }) {
         else next.set("type", value)
         setParams(next)
     }
-    // What a record opened from here leads back to: this list, as it is now.
-    const reviewSearch = `?${new URLSearchParams({ status, ...(type === "" ? {} : { type }) }).toString()}`
+    // What a record opened from here leads back to: this list, as it is now, as the task's list state.
+    const queueSearch = `?${new URLSearchParams({ status, ...(type === "" ? {} : { type }) }).toString()}`
+    const location = useLocation()
+    const taskState = continuedListState(location.pathname, location.state, queueSearch) ?? undefined
 
     return (
         <>
@@ -171,7 +176,7 @@ function Queue({ campaignId }: { campaignId: string }) {
                             status={status}
                             type={type}
                             data={data}
-                            reviewSearch={reviewSearch}
+                            taskState={taskState}
                             onShowAllKinds={() => change("type", "")}
                         />
                     )}
@@ -197,14 +202,14 @@ function QueueList({
     status,
     type,
     data,
-    reviewSearch,
+    taskState,
     onShowAllKinds,
 }: {
     campaignId: string
     status: string
     type: string
     data: ReviewQueue
-    reviewSearch: string
+    taskState: CrumbState | undefined
     onShowAllKinds: () => void
 }) {
     const [more, setMore] = useState<ReviewRow[]>([])
@@ -249,8 +254,8 @@ function QueueList({
                         const target = reviewTarget(campaignId, row)
                         // The record's own page learns the queue only where it supports a way back; the
                         // history page always does, whatever kind of record this is.
-                        const state = target?.carriesReturn ? { reviewSearch } : undefined
-                        const queueState = { reviewSearch }
+                        const state = target?.carriesReturn ? taskState : undefined
+                        const queueState = taskState
                         return (
                             <li key={row.entity_id}>
                                 {target !== null ? (
@@ -341,13 +346,13 @@ function LoadedHistory() {
     const { campaignId = "", category = "", entityId = "" } = useParams()
     const { state } = useAuthoringResource<RevisionHistory>(revisionsPath(campaignId, entityId))
     const headingRef = usePageArrival(state.kind === "ready")
-    const { state: routerState } = useLocation()
+    const { pathname, state: routerState } = useLocation()
     // Where the person came from (the Review queue's filters, the World browser), validated; it
     // rides along every link out of this page and every comparison.
-    const returnState = pickWorldReturnState(routerState)
-    const queueHref = `${base(campaignId)}/review${returnState?.reviewSearch ?? ""}`
+    const queueHref = `${base(campaignId)}/review${carriedListSearch(pathname, routerState, "review", "review.queue") ?? ""}`
     const detail =
         state.kind === "ready" ? recordPath(campaignId, entityId, state.data.entity_type_code, category) : null
+    const returnState = carriedState(pathname, routerState, detail ?? undefined)
     return (
         <>
             <p className="authoring-page__breadcrumb">

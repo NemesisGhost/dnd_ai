@@ -1,5 +1,6 @@
 import type { KnowledgeListItem } from "../types/knowledge"
 import { humanizeCode } from "../utils/humanize"
+import { useTaskLinkState } from "../navigation/useTaskLinkState"
 import { EntityCard } from "./EntityCard"
 import { KnowledgeSubjectLink } from "./KnowledgeSubjectLink"
 
@@ -78,6 +79,8 @@ export function KnowledgeCard({
     partyId,
     detailHref,
 }: KnowledgeCardProps) {
+    // A claim (or its subject) opened from a list is a step of the task the list is the page of.
+    const taskState = useTaskLinkState()
     const metadata: string[] = [humanizeCode(item.knowledge_type_code)]
 
     if (item.awareness_level !== null) {
@@ -107,6 +110,7 @@ export function KnowledgeCard({
                 buildDetailPath(campaignId, item.knowledge_item_id, characterId, partyId)
             }
             linkLabel={item.statement}
+            linkState={taskState}
             footer={
                 detailHref !== undefined ||
                 item.subject === null ||
@@ -117,6 +121,7 @@ export function KnowledgeCard({
                         characterId={characterId}
                         partyId={partyId}
                         variant="card"
+                        linkState={taskState}
                     />
                 )
             }

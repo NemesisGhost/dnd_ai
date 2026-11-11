@@ -240,13 +240,12 @@ describe("persistent sidebar through the real route tree", () => {
         expect(screen.queryByRole("navigation", { name: "Main" })).not.toBeInTheDocument()
     })
 
-    it("keeps campaign links on the resolved campaign across global routes", () => {
+    it("guesses no campaign on a global route: the startup campaign is a landing input, not a selection", () => {
         renderAt(["/settings"], admin)
 
-        expect(screen.getByRole("link", { name: "Quests" })).toHaveAttribute(
-            "href",
-            "/app/alpha/quests",
-        )
+        // Nothing was selected in this tab, so no campaign link is built from the startup preference.
+        expect(screen.queryByRole("link", { name: "Quests" })).not.toBeInTheDocument()
+        expect(screen.queryByRole("link", { name: "Characters" })).not.toBeInTheDocument()
     })
 
     it("hides Access without access.manage and Platform Accounts without admin", () => {

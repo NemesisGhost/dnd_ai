@@ -417,6 +417,9 @@ def deactivate_access_group_endpoint(
                     result.removed_access_group_membership_ids
                 ),
                 "revoked_resource_grants": _bounded_id_sample(result.revoked_resource_grant_ids),
+                "closed_character_revelations": _bounded_id_sample(
+                    result.closed_character_revelation_ids
+                ),
             },
         )
 

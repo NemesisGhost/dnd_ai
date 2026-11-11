@@ -1,4 +1,7 @@
-import { Link } from "react-router"
+import { Link, useLocation, useParams } from "react-router"
+import { useTaskLinkState } from "../navigation/useTaskLinkState"
+import { continuedStateVia } from "../navigation/breadcrumbModel"
+import type { CrumbState } from "../navigation/breadcrumbModel"
 import { SortableTable } from "../components/SortableTable"
 import { canRunSession } from "../components/sessionRun/runAccess"
 import type { SortableTableColumn } from "../components/SortableTable"
@@ -51,13 +54,14 @@ const PLAY_STATUS_LABEL: Readonly<Record<string, string>> = {
     completed: "Completed",
 }
 
-const columns: SortableTableColumn<CampaignSessionListItem>[] = [
+// `state` is the Sessions task the list is the page of: a session opened from here is a step of it.
+const columnsFor = (state: CrumbState | undefined): SortableTableColumn<CampaignSessionListItem>[] => [
     {
         key: "session_title",
         label: "Title",
         compare: compareTitles,
         render: (session) => (
-            <Link to={encodeURIComponent(session.session_id)}>
+            <Link to={encodeURIComponent(session.session_id)} state={state}>
                 {session.title ?? "Untitled session"}
             </Link>
         ),
@@ -105,7 +109,11 @@ const columns: SortableTableColumn<CampaignSessionListItem>[] = [
 // Editors (the server sends them `available_actions`) get a Run link where a
 // session can be run, and a link to schedule a new one. Editing happens on the
 // session detail page that the title links to.
-const editColumn: SortableTableColumn<CampaignSessionListItem> = {
+// `runState` is the task for a session's Run link. Run belongs under the session, which the list skips, so
+// the session is part of the trail the link carries and Run keeps its documented hierarchy.
+const editColumnFor = (
+    runState: (sessionId: string) => CrumbState | undefined,
+): SortableTableColumn<CampaignSessionListItem> => ({
     key: "session_actions",
     label: "Actions",
     compare: () => 0,
@@ -113,21 +121,36 @@ const editColumn: SortableTableColumn<CampaignSessionListItem> = {
         const actions = session.available_actions ?? []
         const name = session.title ?? `session ${session.session_number}`
         if (!canRunSession(actions)) return null
-        return <Link to={`${encodeURIComponent(session.session_id)}/run`}>Run {name}</Link>
+        return (
+            <Link to={`${encodeURIComponent(session.session_id)}/run`} state={runState(session.session_id)}>
+                Run {name}
+            </Link>
+        )
     },
-}
+})
 
 export function SessionsPage({
     sessions,
     canSchedule = false,
 }: SessionsPageProps) {
     const editor = sessions.some((session) => session.available_actions != null)
+    const taskState = useTaskLinkState()
+    const { pathname, state } = useLocation()
+    const { campaignId = "" } = useParams()
+    const runState = (sessionId: string): CrumbState | undefined =>
+        continuedStateVia(
+            pathname,
+            state,
+            { route: "sessions.detail", params: { campaignId, sessionId } },
+            { route: "sessions.run", params: { campaignId, sessionId } },
+        ) ?? undefined
+    const columns = columnsFor(taskState)
     return (
         <section aria-labelledby="sessions-heading">
             <h1 id="sessions-heading">Sessions</h1>
             {canSchedule ? (
                 <p>
-                    <Link className="authoring-button" to="new">
+                    <Link className="authoring-button" to="new" state={taskState}>
                         Schedule a session
                     </Link>
                 </p>
@@ -135,7 +158,7 @@ export function SessionsPage({
             {sessions.length > 0 ? (
                 <SortableTable
                     caption="Sessions"
-                    columns={editor ? [...columns, editColumn] : columns}
+                    columns={editor ? [...columns, editColumnFor(runState)] : columns}
                     rows={sessions}
                     getRowKey={(session) => session.session_id}
                     initialSort={{ column: "session_started_at", direction: "desc" }}

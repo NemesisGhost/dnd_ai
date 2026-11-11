@@ -1,6 +1,8 @@
 import {
     useCallback,
+    useContext,
     useEffect,
+    useLayoutEffect,
     useRef,
     useState,
 } from "react"
@@ -9,6 +11,8 @@ import {
     fetchCampaignSession,
 } from "../api/campaignSessions"
 import { useSession } from "../context/SessionContext"
+import { BreadcrumbLabelContext } from "../navigation/BreadcrumbLabelContext"
+import type { LabelRegistry } from "../navigation/labelRegistry"
 import type {
     CampaignSessionDetail,
 } from "../types/campaignSession"
@@ -32,6 +36,9 @@ export type CampaignSessionState =
 export interface UseCampaignSessionResult {
     state: CampaignSessionState
     retry: () => void
+    // The breadcrumb-label authority under which the read behind `state` STARTED (see
+    // useAuthoringResource): the only registry its answer may publish the session's title into.
+    authority: LabelRegistry | null
     // Re-fetches the session in place. The displayed session stays mounted (no
     // loading state) until the response replaces it, so callers keep their
     // unsaved input. Resolves true when fresh data was applied.
@@ -43,6 +50,7 @@ interface CampaignSessionSnapshot {
     sessionId: string
     requestVersion: number
     state: CampaignSessionState
+    authority: LabelRegistry | null
 }
 
 const initialState: CampaignSessionState = {
@@ -64,7 +72,16 @@ export function useCampaignSession(
             sessionId,
             requestVersion: 0,
             state: initialState,
+            authority: null,
         }))
+
+    // The label authority now in force, read when a request starts (a ref: a change of authority must
+    // not start a read).
+    const registry = useContext(BreadcrumbLabelContext)
+    const currentAuthority = useRef(registry)
+    useLayoutEffect(() => {
+        currentAuthority.current = registry
+    })
 
     const retry = useCallback(() => {
         setRequestVersion(
@@ -83,6 +100,7 @@ export function useCampaignSession(
 
     useEffect(() => {
         const controller = new AbortController()
+        const authority = currentAuthority.current
 
         void fetchCampaignSession(
             campaignId,
@@ -98,6 +116,7 @@ export function useCampaignSession(
                     campaignId,
                     sessionId,
                     requestVersion,
+                    authority,
                     state: {
                         status: "success",
                         session,
@@ -132,6 +151,7 @@ export function useCampaignSession(
                         campaignId,
                         sessionId,
                         requestVersion,
+                        authority,
                         state: {
                             status: "unavailable",
                         },
@@ -143,6 +163,7 @@ export function useCampaignSession(
                     campaignId,
                     sessionId,
                     requestVersion,
+                    authority,
                     state: {
                         status: "error",
                         error,
@@ -172,6 +193,7 @@ export function useCampaignSession(
         refreshController.current?.abort()
         const controller = new AbortController()
         refreshController.current = controller
+        const authority = currentAuthority.current
 
         try {
             const session = await fetchCampaignSession(
@@ -188,6 +210,7 @@ export function useCampaignSession(
                 campaignId,
                 sessionId,
                 requestVersion,
+                authority,
                 state: {
                     status: "success",
                     session,
@@ -212,6 +235,7 @@ export function useCampaignSession(
                     campaignId,
                     sessionId,
                     requestVersion,
+                    authority,
                     state: {
                         status: "unavailable",
                     },
@@ -225,6 +249,7 @@ export function useCampaignSession(
     return {
         state,
         retry,
+        authority: snapshotMatchesRequest ? snapshot.authority : null,
         refresh,
     }
 }

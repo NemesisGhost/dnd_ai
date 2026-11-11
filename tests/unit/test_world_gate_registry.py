@@ -77,12 +77,15 @@ EXPECTED_PRIVATE_READS: frozenset[str] = frozenset(
 
 # `lock_authoring_scope` call sites that pass `world_capability=None`: item instances (decision
 # E2), the campaign-state wrapper `lock_operation_scope` (world-time points E1 and every runtime
-# operation), and the shared identity helper, which passes None only for a player character (E3).
+# operation), the shared identity helper, which passes None only for a player character (E3), and
+# the campaign-scoped public-profile draft save (P03-A A2a: a campaign's draft, not shared world
+# canon, so campaign `canon.edit` plus the D8 character rule is the authority).
 EXPECTED_CAMPAIGN_ONLY_SCOPES: frozenset[tuple[str, str]] = frozenset(
     {
         ("item_instances.py", "create_item_instance"),
         ("item_instances.py", "update_item_instance"),
         ("_operations.py", "lock_operation_scope"),
+        ("character_public_profile.py", "save_character_public_profile_draft"),
     }
 )
 
@@ -174,3 +177,18 @@ def test_every_lifecycle_action_has_a_world_capability() -> None:
     assert len(actions) == 9
     assert set(LIFECYCLE_ACTION_CAPABILITIES) == actions
     assert ALL_ACTIONS not in LIFECYCLE_ACTION_CAPABILITIES
+
+
+def test_the_legacy_copy_passes_the_npc_world_capability_only_for_an_npc() -> None:
+    """The copy's source-read rule is keyed by the character's kind (P03-A A2b-2): an NPC needs
+    `world.canon.read_private`, a player character needs the campaign role alone. Its single scope
+    call is pinned to exactly that conditional so a change to it is a conscious one."""
+    calls = [
+        call
+        for module, function, call in _scope_calls()
+        if (module, function)
+        == ("character_public_profile.py", "copy_legacy_text_to_public_profile_draft")
+    ]
+    assert len(calls) == 1
+    value = {kw.arg: kw.value for kw in calls[0].keywords}["world_capability"]
+    assert ast.unparse(value) == "WORLD_CANON_READ_PRIVATE if kind == KIND_NPC else None"

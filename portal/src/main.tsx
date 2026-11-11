@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client"
 import { RouterProvider, createBrowserRouter } from "react-router"
 import App from "./App.tsx"
 import { RouteSessionProvider } from "./context/RouteSessionProvider"
+import { SelectedContextProvider } from "./navigation/SelectedContextProvider"
 import { ThemeProvider } from "./themes/ThemeProvider"
 import "./index.css"
 
@@ -14,9 +15,11 @@ const router = createBrowserRouter([
   {
     path: "*",
     element: (
-      <RouteSessionProvider>
-        <App />
-      </RouteSessionProvider>
+      <SelectedContextProvider>
+        <RouteSessionProvider>
+          <App />
+        </RouteSessionProvider>
+      </SelectedContextProvider>
     ),
   },
 ])

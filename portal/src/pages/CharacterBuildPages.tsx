@@ -8,6 +8,9 @@ import {
     initializeCharacterState,
 } from "../api/characterBuilds"
 import { StaleReadNotice } from "../components/StaleReadNotice"
+import { TaskBreadcrumb } from "../components/navigation/TaskBreadcrumb"
+import { useBreadcrumbLabel } from "../navigation/BreadcrumbLabelContext"
+import { useAncestorLink, useTaskLinkState } from "../navigation/useTaskLinkState"
 import { ConfirmDialog } from "../components/authoring/ConfirmDialog"
 import { useAnnounce } from "../components/authoring/announcer"
 import { SelectField, TextField } from "../components/authoring/fields"
@@ -72,6 +75,14 @@ export function CharacterBuildsPage() {
     const resource = useAuthoringResource<CharacterBuilds>(buildsPath)
     const ready = resource.state.kind === "ready"
     const headingRef = usePageArrival(ready)
+    // The character's name, from this page's own authorized read, for the breadcrumbs below it.
+    useBreadcrumbLabel({
+        route: "characters.detail",
+        params: { campaignId, characterId },
+        name: resource.state.kind === "ready" ? resource.state.data.character.name : undefined,
+        denied: resource.state.kind === "denied" || resource.state.kind === "unavailable",
+        authority: resource.authority,
+    })
     // The last builds that loaded stay through a failed re-read after a write, so the page that
     // reports the save is not replaced by an error screen; a denied or missing answer drops them.
     const data = useKept(resource.state, buildsPath)
@@ -84,19 +95,7 @@ export function CharacterBuildsPage() {
 
     return (
         <section className="authoring-page" aria-labelledby="builds-heading">
-            <p className="authoring-page__breadcrumb">
-                <Link to={`${base(campaignId)}/world`}>World</Link>
-                {data !== null ? (
-                    <>
-                        {" / "}
-                        <Link
-                            to={`${base(campaignId)}/world/character/${encodeURIComponent(characterId)}`}
-                        >
-                            {data.character.name}
-                        </Link>
-                    </>
-                ) : null}
-            </p>
+            <TaskBreadcrumb />
             <h1 id="builds-heading" ref={headingRef} tabIndex={-1}>
                 Builds
             </h1>
@@ -289,6 +288,7 @@ function BuildList({
 }) {
     const { reload } = useSession()
     const announce = useAnnounce()
+    const taskState = useTaskLinkState()
     const [target, setTarget] = useState<BuildSummary | null>(null)
     const mutation = useAuthoringMutation<BuildSummary, BuildReceipt>({
         scopeKey: `activate-build:${campaignId}:${characterId}`,
@@ -324,6 +324,7 @@ function BuildList({
                 <Link
                     className="authoring-button"
                     to={`${buildsPage(campaignId, characterId)}/new`}
+                    state={taskState}
                 >
                     New build
                 </Link>
@@ -409,9 +410,7 @@ export function CreateCharacterBuildPage() {
     const headingRef = usePageArrival(options.state.kind === "ready")
     return (
         <section className="authoring-page" aria-labelledby="new-build-heading">
-            <p className="authoring-page__breadcrumb">
-                <Link to={buildsPage(campaignId, characterId)}>Builds</Link>
-            </p>
+            <TaskBreadcrumb />
             <h1 id="new-build-heading" ref={headingRef} tabIndex={-1}>
                 New build
             </h1>
@@ -438,6 +437,9 @@ function BuildForm({
     options: BuildOptions
 }) {
     const navigate = useNavigate()
+    // Back to the builds page inside the task this form was opened in (the task cut back to it).
+    const buildsLink = useAncestorLink("characters.builds")
+    const buildsTarget = buildsLink ?? { to: buildsPage(campaignId, characterId), state: undefined }
     const { reload } = useSession()
     const [values, setValues] = useState<BuildFormValues>(EMPTY_BUILD)
     const [errors, setErrors] = useState<FieldError[]>([])
@@ -448,9 +450,9 @@ function BuildForm({
         request: (body, ctx) => createBuild(campaignId, characterId, body, ctx),
         onSuccess: () => {
             guard.release()
-            void navigate(buildsPage(campaignId, characterId), {
+            void navigate(buildsTarget.to, {
                 replace: true,
-                state: { announce: "Build created" },
+                state: { ...buildsTarget.state, announce: "Build created" },
             })
         },
     })
@@ -764,7 +766,7 @@ function BuildForm({
                     pending={pending}
                     saveLabel="Create build"
                     pendingLabel="Creating…"
-                    onCancel={() => void navigate(buildsPage(campaignId, characterId))}
+                    onCancel={() => void navigate(buildsTarget.to, { state: buildsTarget.state })}
                 />
             </AuthoringForm>
             <ConfirmDialog

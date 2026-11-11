@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react"
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { CampaignQuestDetailPage } from "../../pages/CampaignQuestDetailPage"
 import { QuestSectionRedirect } from "../../pages/QuestSectionRedirect"
@@ -22,6 +22,11 @@ const shown = async (text: RegExp) => {
 const reader = new RegExp(`^${RUNTIME}(\\?.*)?$`)
 const writes = (server: ReturnType<typeof setupQuestWorkspace>["server"]) =>
     server.calls.filter((c) => c.method !== "GET")
+
+// The state a link out of the Review queue carries: the Review task with the queue as it was left.
+const reviewTask = (search: string) => ({
+    task: { v: 1, root: "review", scope: { campaignId: "c1" }, trail: [], list: { route: "review.queue", search } },
+})
 
 describe("Quest workspace: header and workflow", () => {
     it("shows the quest, its real lifecycle status, and a three-phase workflow without a progress status", async () => {
@@ -170,6 +175,26 @@ describe("Quest workspace: navigation changes nothing", () => {
         expect(dialog).toHaveTextContent("quest details")
         fireEvent.click(within(dialog).getByRole("button", { name: "Keep editing" }))
         expect(router.state.location.pathname).toBe("/app/c1/quests/q1")
+    })
+})
+
+// F-2, inspected. The editor neither reads nor sends `character_id` or `party_id` (it only carries them to its
+// back link), and every section stays mounted, so a change of those keys disposes none of its input and is
+// not guarded. The perspective-dependent quest reader is a different component with its own reads.
+describe("Quest workspace: a perspective query change", () => {
+    it("keeps unsent input, asks nothing and sends no extra read for the quest definition", async () => {
+        const { router, server } = setupQuestWorkspace({ section: "details" })
+        fireEvent.change(await screen.findByRole("textbox", { name: /^Name/ }), { target: { value: "Renamed" } })
+        const definitionReads = () => server.callsTo("GET", `${AUTHORING}/q1`).length
+        const before = definitionReads()
+        await act(async () => {
+            await router.navigate({ search: "?section=details&character_id=c9&party_id=p9" })
+        })
+        expect(screen.queryByRole("dialog")).toBeNull()
+        expect(screen.getByRole("textbox", { name: /^Name/ })).toHaveValue("Renamed")
+        expect(router.state.location.search).toBe("?section=details&character_id=c9&party_id=p9")
+        expect(definitionReads()).toBe(before)
+        expect(writes(server)).toHaveLength(0)
     })
 })
 
@@ -380,22 +405,22 @@ describe("Quest workspace: where the quest was opened from", () => {
 
     it("returns to the Review queue as it was left, and carries that through every link", async () => {
         const ctx = setupQuestWorkspace({
-            entry: { pathname: "/app/c1/quests/q1", search: "?section=review", state: { reviewSearch: "?status=proposed" } },
+            entry: { pathname: "/app/c1/quests/q1", search: "?section=review", state: reviewTask("?status=in_review") },
         })
         expect(await screen.findByRole("link", { name: "Back to Review queue" })).toHaveAttribute(
             "href",
-            "/app/c1/review?status=proposed",
+            "/app/c1/review?status=in_review",
         )
         expect(screen.queryByRole("link", { name: "Back to Quests" })).toBeNull()
         fireEvent.click(screen.getByRole("link", { name: "Publication" }))
-        expect(ctx.router.state.location.state).toEqual({ reviewSearch: "?status=proposed" })
+        expect(ctx.router.state.location.state).toEqual(reviewTask("?status=in_review"))
         fireEvent.click(screen.getByRole("link", { name: /Use in play/ }))
-        expect(ctx.router.state.location.state).toEqual({ reviewSearch: "?status=proposed" })
+        expect(ctx.router.state.location.state).toEqual(reviewTask("?status=in_review"))
     })
 
     it("ignores a crafted return address", async () => {
         setupQuestWorkspace({
-            entry: { pathname: "/app/c1/quests/q1", search: "?section=review", state: { reviewSearch: "//evil.example" } },
+            entry: { pathname: "/app/c1/quests/q1", search: "?section=review", state: reviewTask("//evil.example") },
         })
         expect(await screen.findByRole("link", { name: "Back to Quests" })).toBeInTheDocument()
     })
@@ -540,7 +565,7 @@ describe("QuestSectionRedirect", () => {
             initialEntry: {
                 pathname: `/app/c1/quests/q1/${suffix}`,
                 search: "?character_id=c9&party_id=p9",
-                state: { reviewSearch: "?status=proposed" },
+                state: reviewTask("?status=in_review"),
             },
             routes: [
                 { path: "/app/:campaignId/quests/:questId/edit", element: <QuestSectionRedirect section="details" /> },
@@ -550,7 +575,7 @@ describe("QuestSectionRedirect", () => {
         })
         expect(
             await screen.findByText(
-                `at /app/c1/quests/q1?character_id=c9&party_id=p9&section=${section} state {"reviewSearch":"?status=proposed"}`,
+                `at /app/c1/quests/q1?character_id=c9&party_id=p9&section=${section} state ${JSON.stringify(reviewTask("?status=in_review"))}`,
             ),
         ).toBeInTheDocument()
         expect(ctx.router.state.historyAction).toBe("REPLACE")
@@ -562,11 +587,11 @@ describe("Quest workspace: the provenance round trip", () => {
 
     it("returns to Sources with the perspective, and to the Review queue the quest was opened from", async () => {
         const ctx = setupQuestWorkspace({
-            entry: { pathname: "/app/c1/quests/q1", search: sources, state: { reviewSearch: "?status=proposed&type=quest" } },
+            entry: { pathname: "/app/c1/quests/q1", search: sources, state: reviewTask("?status=in_review&type=quest") },
         })
         expect(await screen.findByRole("link", { name: "Back to Review queue" })).toHaveAttribute(
             "href",
-            "/app/c1/review?status=proposed&type=quest",
+            "/app/c1/review?status=in_review&type=quest",
         )
         fireEvent.click(await screen.findByRole("link", { name: "View provenance" }))
         expect(await screen.findByRole("heading", { level: 1, name: "Provenance" })).toBeInTheDocument()
@@ -578,28 +603,55 @@ describe("Quest workspace: the provenance round trip", () => {
         expect(screen.getByRole("heading", { level: 2, name: "Sources" })).toBeVisible()
         expect(screen.getByRole("link", { name: "Back to Review queue" })).toHaveAttribute(
             "href",
-            "/app/c1/review?status=proposed&type=quest",
+            "/app/c1/review?status=in_review&type=quest",
         )
         expect(screen.queryByRole("link", { name: "Back to Quests" })).toBeNull()
     })
 
     it("carries the queue through the history link too", async () => {
         const ctx = setupQuestWorkspace({
-            entry: { pathname: "/app/c1/quests/q1", search: sources, state: { reviewSearch: "?status=proposed" } },
+            entry: { pathname: "/app/c1/quests/q1", search: sources, state: reviewTask("?status=in_review") },
         })
         fireEvent.click(await screen.findByRole("link", { name: "View provenance" }))
         fireEvent.click(await screen.findByRole("link", { name: "Revision history and comparison" }))
         await waitFor(() => expect(ctx.router.state.location.pathname).toBe("/app/c1/world/record/q1/history"))
-        expect(ctx.router.state.location.state).toMatchObject({ reviewSearch: "?status=proposed" })
+        expect(ctx.router.state.location.state).toMatchObject(reviewTask("?status=in_review"))
+    })
+
+    it("returns to the filtered Review queue after the history page's record link, with the quest's own back-link presentation", async () => {
+        const queue = "?status=in_review&type=quest"
+        const ctx = setupQuestWorkspace({
+            entry: { pathname: "/app/c1/world/record/q1/history", state: reviewTask(queue) },
+        })
+        ctx.server.on("GET", "/campaigns/c1/entities/q1/revisions", {
+            body: {
+                entity_id: "q1",
+                name: "The Lost Amulet",
+                entity_type_code: "quest",
+                canon_status: "proposed",
+                lifecycle_status: "active",
+                row_version: 1,
+                revisions: [{ row_version: 1, kind: "created", created_at: "2026-01-01T10:00:00Z", created_by_name: "Gina", canon_status: null, lifecycle_status: null }],
+            },
+        })
+        fireEvent.click(await screen.findByRole("link", { name: "The Lost Amulet" }))
+        await waitFor(() => expect(ctx.router.state.location.pathname).toBe("/app/c1/quests/q1"))
+        expect(ctx.router.state.location.state).toMatchObject(reviewTask(queue))
+        const back = await screen.findByRole("link", { name: "Back to Review queue" })
+        expect(back).toHaveAttribute("href", `/app/c1/review${queue}`)
+        expect(screen.queryByRole("link", { name: "Back to Quests" })).toBeNull()
+        fireEvent.click(back)
+        await waitFor(() => expect(ctx.router.state.location.pathname).toBe("/app/c1/review"))
+        expect(ctx.router.state.location.search).toBe(queue)
     })
 
     it("opened directly, still returns to Quests, and ignores a crafted queue address", async () => {
         const ctx = setupQuestWorkspace({
-            entry: { pathname: "/app/c1/quests/q1", search: sources, state: { reviewSearch: "//evil.example" } },
+            entry: { pathname: "/app/c1/quests/q1", search: sources, state: reviewTask("//evil.example") },
         })
         fireEvent.click(await screen.findByRole("link", { name: "View provenance" }))
         fireEvent.click(await screen.findByRole("link", { name: "The Lost Amulet" }))
         expect(await screen.findByRole("link", { name: "Back to Quests" })).toBeInTheDocument()
-        expect(ctx.router.state.location.state ?? {}).not.toHaveProperty("reviewSearch")
+        expect(ctx.router.state.location.state ?? {}).not.toHaveProperty("task")
     })
 })

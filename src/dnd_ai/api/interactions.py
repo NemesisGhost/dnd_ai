@@ -1,7 +1,7 @@
 """Interaction performance and check-resolution endpoints.
 
 Exposes `perform_interaction` and
-`resolve_check` (docs/PHASE6_VERIFICATION.md) over HTTP, on the same
+`resolve_check` (docs/DELIVERY_HISTORY.md) over HTTP, on the same
 already-delivered OIDC authentication (`dnd_ai.api.auth`), transaction
 management (`dnd_ai.api.deps`), and access resolution (`dnd_ai.api.access`,
 `dnd_ai.domain.access`) every other command router uses.

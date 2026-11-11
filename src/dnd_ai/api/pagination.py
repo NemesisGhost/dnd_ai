@@ -1,6 +1,6 @@
 """Keyset (cursor) pagination for the Phase 13D World Explorer and Knowledge
 browse endpoints — introduced narrowly for exactly those routes, not as a
-generalized query framework (docs/PHASE13D_BACKEND_READINESS.md §3/§9,
+generalized query framework (docs/api/READ_API.md §3/§9,
 docs/DATABASE_CONVENTIONS.md §30.4 "use keyset pagination for large tables
 where practical").
 

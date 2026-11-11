@@ -27,8 +27,11 @@ import { useSession } from "../context/SessionContext"
 import { AwardItemSection } from "../components/AwardItemSection"
 import { EncounterList } from "../components/EncounterList"
 import { TravelSection } from "../components/TravelSection"
+import { TaskBreadcrumb } from "../components/navigation/TaskBreadcrumb"
+import { sessionLabel } from "../components/sessionRun/sessionLabel"
+import { useBreadcrumbLabel } from "../navigation/BreadcrumbLabelContext"
 import { SessionEventList } from "../components/sessionRun/SessionActivity"
-import { RunBreadcrumb, RunSectionNav, RunSectionPanel, RunStageNav } from "../components/sessionRun/RunNav"
+import { RunSectionNav, RunSectionPanel, RunStageNav } from "../components/sessionRun/RunNav"
 import { CODE_MESSAGE } from "../components/sessionRun/runMessages"
 import { ParticipantForm } from "../components/sessionRun/ParticipantForm"
 import { RealWorldTime } from "../components/sessionRun/RealWorldTime"
@@ -83,6 +86,16 @@ export function SessionRunPage() {
     // answer drops it: protected data is never shown past the end of the right to see it.
     const data = useKept(detail.state, path)
     const refreshFailed = detail.state.kind === "error" && data !== null
+    // The session's title, from this page's own authorized read, for the breadcrumbs beneath it (a
+    // character or an event opened from here). A refused or missing answer drops it; a kept session
+    // after a failed re-read is not an answer and registers nothing.
+    useBreadcrumbLabel({
+        route: "sessions.detail",
+        params: { campaignId, sessionId },
+        name: detail.state.kind === "ready" ? sessionLabel(detail.state.data) : undefined,
+        denied: detail.state.kind === "denied" || detail.state.kind === "unavailable",
+        authority: detail.authority,
+    })
     // A start or an end that was saved but not read back is announced once the session is read: the
     // control that sent it is replaced by then (a started session no longer offers Start).
     const announceWhenRead = useAnnounceWhenRead(
@@ -92,13 +105,9 @@ export function SessionRunPage() {
 
     return (
         <section className="authoring-page" aria-labelledby="run-session-heading">
-            <RunBreadcrumb
-                campaignId={campaignId}
-                sessionId={sessionId}
-                title={data !== null ? (data.title ?? `Session ${data.session_number}`) : null}
-            />
+            <TaskBreadcrumb />
             <h1 id="run-session-heading" ref={headingRef} tabIndex={-1}>
-                {data !== null ? `Run: ${data.title ?? `Session ${data.session_number}`}` : "Run session"}
+                {data !== null ? `Run: ${sessionLabel(data)}` : "Run session"}
             </h1>
             {!canEdit ? (
                 <p role="alert">You do not have permission to run sessions in this campaign.</p>
@@ -243,7 +252,7 @@ function RunBody({
                 {encountersList("No encounter is waiting to be started.", pending)}
                 {started.length > 0 ? (
                     <p>
-                        <Link to={nav.sectionHref("encounters")}>
+                        <Link to={nav.sectionHref("encounters")} state={nav.linkState}>
                             {started.length} started or finished: see Encounters
                         </Link>
                     </p>
@@ -285,7 +294,7 @@ function RunBody({
                 {encountersList("No encounter has started yet.", started)}
                 {pending.length > 0 ? (
                     <p>
-                        <Link to={nav.sectionHref("encounter-prep")}>
+                        <Link to={nav.sectionHref("encounter-prep")} state={nav.linkState}>
                             {pending.length} prepared and waiting: see Encounter preparation
                         </Link>
                     </p>
@@ -298,6 +307,7 @@ function RunBody({
                 session={session}
                 encounters={encounters}
                 sectionHref={nav.sectionHref}
+                linkState={nav.linkState}
                 canPrepareEncounters={canPrepareEncounters}
                 reasonLog={logReason}
                 reasonTravel={whyNotPlayable(session, "record travel")}
@@ -316,7 +326,7 @@ function RunBody({
             <>
                 {notice === "ended" ? (
                     <p role="status">
-                        Session ended. <Link to={nav.sectionHref("review")}>Go to the session review</Link>
+                        Session ended. <Link to={nav.sectionHref("review")} state={nav.linkState}>Go to the session review</Link>
                     </p>
                 ) : null}
                 <p className="authoring-note">
@@ -352,10 +362,15 @@ function RunBody({
                 <p role="status">This session is not active, so it cannot be started or changed.</p>
             ) : null}
             <CampaignClockCard campaignId={campaignId} variant="compact" actionsVisible={nav.stage === "run"} />
-            <RunStageNav current={nav.stage} hrefFor={nav.stageHref} />
+            <RunStageNav current={nav.stage} hrefFor={nav.stageHref} linkState={nav.linkState} />
             <div className="staged-workspace">
                 <div className="session-run__layout">
-                    <RunSectionNav stage={nav.stage} current={nav.section} hrefFor={nav.sectionHref} />
+                    <RunSectionNav
+                        stage={nav.stage}
+                        current={nav.section}
+                        hrefFor={nav.sectionHref}
+                        linkState={nav.linkState}
+                    />
                     <div className="session-run__content">
                         <div hidden={nav.stage !== "run"}>
                             {actions.includes("start") ? (
@@ -370,7 +385,7 @@ function RunBody({
                             ) : null}
                             {notice === "started" ? (
                                 <p role="status">
-                                    Session started. <Link to={nav.sectionHref("log")}>Go to the session log</Link>
+                                    Session started. <Link to={nav.sectionHref("log")} state={nav.linkState}>Go to the session log</Link>
                                 </p>
                             ) : null}
                         </div>

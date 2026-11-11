@@ -12,39 +12,36 @@ export interface NavigationWorldScope {
 }
 
 // The campaign the persistent sidebar's campaign-specific links target
-// (docs/UI_DESIGN.md §4.5). Precedence, most to least authoritative:
+// (docs/UI_DESIGN.md §4.5, §4.8). Precedence, most to least authoritative:
 //
 //   1. the route campaign, when it is in the current bootstrap. A route that
 //      names a campaign the bootstrap does not contain (unknown, revoked,
 //      unauthorized) resolves nothing -- the ID is never used or echoed and a
-//      saved campaign never stands in for it;
-//   2. a route that names a world (and possibly a timeline): a campaign of
-//      that confirmed world and timeline only -- saved last-visited, then
-//      startup, then the world's only campaign, else none. An explicit
-//      destination that is not confirmed (still loading, unknown, denied, or
-//      failed world; unknown or unauthorized timeline) resolves nothing: a
-//      saved campaign never stands in for it;
-//   3. otherwise (no world in the route): the last-visited campaign, then the
-//      startup campaign.
+//      retained selection never stands in for it;
+//   2. a route that names a world (and possibly a timeline): the person's
+//      selected campaign, only when it belongs to that confirmed world and
+//      timeline. An explicit destination that is not confirmed (still loading,
+//      unknown, denied, or failed world; unknown or unauthorized timeline)
+//      resolves nothing;
+//   3. otherwise (an unscoped route): the person's selected campaign.
 //
-// Every candidate must be present in `bootstrap.campaigns`; an ID that is
-// not (unknown route, stale preference) is treated as absent, so a link is
-// never built from a guessed, stale, or unauthorized campaign ID. Saved
-// preferences are fallbacks only: they never override a campaign or world the
-// route selects. Returns null when nothing resolves, and the sidebar then
-// shows its campaign-specific entries as disabled.
+// The selected campaign is the explicit selection this tab retains
+// (navigation/selectedContextStore.ts). There is no fallback to the last-visited or
+// startup campaign and no guess from a world's only campaign: with nothing selected the
+// sidebar shows its campaign-specific entries as disabled ("Select a campaign first").
+// Those preferences remain inputs of the /home landing only. Every candidate must be present
+// in `bootstrap.campaigns`; an ID that is not (revoked, unknown) is treated as absent, so a
+// link is never built from a stale or unauthorized campaign ID.
 export function resolveNavigationCampaign(
     bootstrap: SessionBootstrap,
     routeCampaignId: string | undefined,
     worldScope: NavigationWorldScope | null = null,
+    selectedCampaignId: string | null = null,
 ): CampaignContext | null {
-    const find = (
-        id: string | null | undefined,
-        pool: readonly CampaignContext[] = bootstrap.campaigns,
-    ): CampaignContext | null =>
+    const find = (id: string | null | undefined): CampaignContext | null =>
         id === null || id === undefined
             ? null
-            : (pool.find((campaign) => campaign.campaign_id === id) ?? null)
+            : (bootstrap.campaigns.find((campaign) => campaign.campaign_id === id) ?? null)
 
     const routeCampaign = find(routeCampaignId)
     if (routeCampaign !== null) {
@@ -54,28 +51,20 @@ export function resolveNavigationCampaign(
         return null
     }
 
+    const selected = find(selectedCampaignId)
     if (worldScope?.routeNamesWorld === true) {
         if (
+            selected === null ||
             worldScope.activeWorldId === null ||
             (worldScope.routeNamesTimeline && worldScope.activeTimelineId === null)
         ) {
             return null
         }
-        const inScope = bootstrap.campaigns.filter(
-            (campaign) =>
-                campaign.world_id === worldScope.activeWorldId &&
-                (worldScope.activeTimelineId === null ||
-                    campaign.timeline_id === worldScope.activeTimelineId),
-        )
-        return (
-            find(bootstrap.campaign_preferences.last_visited_campaign_id, inScope) ??
-            find(bootstrap.startup_campaign_id, inScope) ??
-            (inScope.length === 1 ? inScope[0]! : null)
-        )
+        return selected.world_id === worldScope.activeWorldId &&
+            (worldScope.activeTimelineId === null || selected.timeline_id === worldScope.activeTimelineId)
+            ? selected
+            : null
     }
 
-    return (
-        find(bootstrap.campaign_preferences.last_visited_campaign_id) ??
-        find(bootstrap.startup_campaign_id)
-    )
+    return selected
 }

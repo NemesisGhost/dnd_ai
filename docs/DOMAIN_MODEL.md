@@ -436,6 +436,18 @@ Shared character data includes:
 - conditions
 - current resources
 
+### 8.1a Public profile (P03-A A2a)
+
+A **public-profile draft** is a campaign's working copy of what an audience may eventually be told about a character: two text fields, `public_appearance` and `public_background`, each with a **field origin** (authored by a GM, or copied by the server from a legacy description field). A **release** is an immutable, numbered snapshot of the draft at a draft version, made by someone holding `character.reveal` (an owner or a delegated GM) and recording which authority they used. The latest release is the profile's current public text. Text copied from a character's legacy description is **restricted**: it keeps the source-read restriction (for an NPC, campaign `canon.edit` and the world capability `world.canon.read_private`) until a release covers it. Each draft field carries a **restriction watermark**, the draft version at which its copied content last changed; a release **covers** a field when it snapshots the draft at or after that version. A restricted field is **withheld** from a reader who may not read the source: the read shows that it is withheld and where it came from, never the text. A draft and its releases belong to a campaign: another campaign has its own, and nothing written in one changes the other. A release makes nothing visible by itself; an audience sees it only through a revelation (A3). The definition, the draft, the release and the revelation stay four separate concerns.
+
+A draft can also choose to publish the character's **actual species and size** (two separate controls, both off by default; P03-A A4, decision D6). A release snapshots the selected definition values, with their labels and the character's `row_version`, and a later definition or ruleset change never alters it; a later release may withhold either. There is no apparent-species or apparent-size override, and publication opens no mechanics and no other section.
+
+### 8.1b Character revelation (P03-A A3a)
+
+A **character revelation** makes one character discoverable, and its latest released public profile readable, to an **audience**: one campaign member, one access group, the campaign's *current* members (a **snapshot** taken when the revelation is created, so later joiners and returning members are not in it), or its *current and future* members. A character must have a release in the campaign first. A revelation is created and revoked by someone holding `character.reveal` authority, survives that person losing it, and is closed by the system when its target membership ends or its target group is deactivated; a closed revelation is history and is never reopened. Revoking it is independent of every other capability source. A revelation confers `character.discover` and `character.view_public_profile` for that character only, as a source of its own beside roles, relationships and grants (A3b): it adds the character to the audience's discoverable set across every discovery surface, shows a reader whose only path is a revelation the latest *released* summary and never the canonical one, and opens nothing else (no detail, sheet, inventory, Knowledge perspective or control). A whole-character deny from any source suppresses it. The party roster separately names a party's current members to that party's current controllers; that is not discovery and not a revelation.
+
+**The public tier (P03-A A4).** A revelation now opens the character's detail at a distinct **public-profile tier**: the canonical name, the kind and the latest release of this campaign (summary, appearance, background and the published species and size), and nothing else. A reader with the summary or full tier keeps that tier and also receives the same latest release as a `public_profile` section. A `character.view_public_profile` deny withholds the section on every path and removes no other tier; a `character.discover` deny hides discovery only. A revealed character therefore opens (`can_open`) wherever a link names it, except for a paired Foundry credential, which is never served the public tier.
+
 ### 8.2 Character build
 
 A **Character Build** is a versioned mechanical configuration.
@@ -1632,3 +1644,29 @@ The following are recognized but will receive dedicated design later:
 - cross-world travel
 
 These areas must extend the existing entity, relationship, event, state, and knowledge foundations rather than creating incompatible parallel models.
+
+## 28. Modeling decision checklist
+
+Before adding a field, decide whether it describes stable identity/definition, time-scoped
+state, a knower's belief/discovery, or historical causality. Put each in its own domain.
+A global `is_discovered` flag cannot express per-character knowledge. Use typed state
+and atomic event/state commands instead of a generic JSONB state bag. JSONB is appropriate
+for bounded flexible payloads, not a substitute for relational identities and constraints.
+Use class-table inheritance for a subtype's additional structured data; a classification
+with no additional fields need not create an empty subtype table. Consult the database
+conventions and current schema before inventing a name or column.
+
+### 28.1 Effective-time membership
+
+Resolve the campaign timeline's effective clock once per request (once per campaign in
+bootstrap) and reuse it for membership decisions. Intervals are half-open: join included,
+leave excluded. A finite interval containing Now is current; an open-ended future join is
+not. With no effective clock, membership status is undetermined (`clock_unset`), not ended
+or upcoming, and current-membership-derived authority is not granted. Independent GM,
+public, character and direct-grant authority remains, with denies still enforced.
+
+A root with no clock can be undetermined. A branch uses its own clock or bounded inherited
+clock/branch point. Clock inheritance does not inherit membership rows: evaluate only the
+branch's own timeline-scoped memberships. As-of queries retain their requested time.
+Travel candidate semantics are a separately tracked policy question in BACKLOG; this
+description does not silently change travel commands or previews.

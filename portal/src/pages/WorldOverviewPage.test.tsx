@@ -358,12 +358,15 @@ describe("WorldOverviewPage", () => {
         for (const name of ["Archive world", "Restore world"]) {
             expect(screen.queryByRole("button", { name })).not.toBeInTheDocument()
         }
-        // Timelines are names, not links into timeline authoring; managed
-        // campaigns are not listed.
-        expect(screen.queryByRole("link", { name: "Main Timeline" })).not.toBeInTheDocument()
+        // Timelines are READ destinations (world.view): linked to their overview, with no
+        // management control beside them. Managed campaigns are not listed.
+        expect(screen.getByRole("link", { name: "Main Timeline" })).toHaveAttribute(
+            "href",
+            "/worlds/w1/timelines/t1",
+        )
         expect(screen.queryByText("Skyfall")).not.toBeInTheDocument()
         const links = screen.getAllByRole("link").map((link) => link.getAttribute("href"))
-        expect(links).toEqual(["/worlds"])
+        expect(links.filter((href) => !href?.startsWith("/worlds/w1/timelines/"))).toEqual(["/worlds"])
     })
 
     it("keeps a view-only world read-only even if the server listed actions", async () => {

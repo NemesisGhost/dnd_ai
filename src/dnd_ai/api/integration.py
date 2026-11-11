@@ -144,11 +144,12 @@ advisory-lock design cannot run inside a caller-supplied connection/
 transaction the way every other command here does. `require_campaign_
 capability` (used for authorization only) still injects its own
 `Depends(get_connection)` internally, so a request to this route holds
-two separate pooled connections briefly rather than one — an idle
-authorization-check connection alongside `apply_foundry_combat_sync`'s own
-`lock_connection` — never two connections contending with each other, so
-this introduces no new deadlock risk beyond what `dnd_ai.commands.
-integration`'s own docstring already analyzes for `lock_connection` alone.
+a request transaction for authorization alone. The handler ends it
+(`end_request_transaction`, P03-A P3) once authorization is decided and before
+`apply_foundry_combat_sync` opens its own `lock_connection`, so the two are never
+open together and never contend with each other; this introduces no new deadlock
+risk beyond what `dnd_ai.commands.integration`'s own docstring already analyzes
+for `lock_connection` alone.
 Authorized via `canon.edit`, matching `dnd_ai.api.encounters.
 resolve_combat_turn_endpoint` exactly (see `dnd_ai.commands.integration`'s
 own docstring, "Foundry combat-sync endpoint", for the full reasoning).
@@ -192,7 +193,7 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import Connection, Engine, text
 
@@ -210,7 +211,7 @@ from ._shared import timeline_world_id
 from .access import require_campaign_capability
 from .audit import record_change_log
 from .correlation import get_request_correlation_id
-from .deps import get_connection, get_engine, get_idempotency_key
+from .deps import end_request_transaction, get_connection, get_engine, get_idempotency_key
 from .errors import NotFoundError
 from .idempotency import IdempotentReplay, begin_idempotent_request, complete_idempotent_request
 
@@ -555,6 +556,7 @@ def link_foundry_identity_endpoint(
     status_code=201,
 )
 def apply_foundry_combat_sync_endpoint(
+    request: Request,
     campaign_id: uuid.UUID,
     body: ApplyFoundryCombatSyncRequest,
     # Authorization, plus (Phase 11 workstream 2 correction) the source of
@@ -578,6 +580,7 @@ def apply_foundry_combat_sync_endpoint(
 ) -> ApplyFoundryCombatSyncResponse:
     assert access.principal is not None
     assert_foundry_system_matches(access.principal, body.external_system_id)
+    end_request_transaction(request)
 
     result = apply_foundry_combat_sync(
         engine,

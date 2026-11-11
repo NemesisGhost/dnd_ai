@@ -54,6 +54,7 @@ _GM_FAMILIES: dict[str, tuple[str, str, bool]] = {
     "invitations": ("campaign invitations", "access.manage", False),
     "memberships": ("memberships and roles", "access.manage", False),
     "ownership-transfer": ("campaign ownership transfer", "access.manage", False),
+    "reveal-delegations": ("character reveal delegation", "access.manage", False),
     "character-relationships": ("character-relationship administration", "access.manage", True),
     "resource-grants": ("resource grants", "access.manage", False),
     "access-groups": ("access groups", "access.manage", False),
@@ -70,13 +71,30 @@ _GM_FAMILIES: dict[str, tuple[str, str, bool]] = {
     "settings": ("campaign administration", "canon.edit", False),
 }
 
+_PUBLIC_PROFILE = f"{CAMPAIGN}/characters/{{character_id}}/public-profile"
+_PUBLIC_PROFILE_FAMILY = (
+    "character public profile (draft save, legacy copy, release)",
+    "canon.edit (draft save, legacy copy); character.reveal (release)",
+    True,
+)
+
+_REVELATIONS = f"{CAMPAIGN}/characters/{{character_id}}/revelations"
+_REVELATIONS_FAMILY = (
+    "character revelation (create, revoke)",
+    "character.reveal",
+    True,
+)
+
 # Reads open to every member: each is player-safe (content is filtered for the caller).
 _MEMBER_READS = frozenset(
     {
         f"{CAMPAIGN}/characters/{{character_id}}",
         f"{CAMPAIGN}/characters/{{character_id}}/inventory",
         f"{CAMPAIGN}/characters/{{character_id}}/parties",
+        f"{CAMPAIGN}/characters/{{character_id}}/public-profile",
+        f"{CAMPAIGN}/characters/{{character_id}}/public-profile/releases/{{version_number}}",
         f"{CAMPAIGN}/characters/{{character_id}}/relationships",
+        f"{CAMPAIGN}/characters/{{character_id}}/revelations",
         f"{CAMPAIGN}/characters/{{character_id}}/sheet",
         f"{CAMPAIGN}/clock",
         f"{CAMPAIGN}/dungeon-areas/{{dungeon_area_id}}",
@@ -208,6 +226,14 @@ def classify(openapi_paths: dict) -> tuple[list[Entry], list[tuple[str, str]]]:
                 continue
             segment = template[len(CAMPAIGN) + 1 :].split("/", 1)[0]
             family = _GM_FAMILIES.get(segment)
+            if template.startswith(_PUBLIC_PROFILE):
+                # The draft save (role `canon.edit`) and the release (`character.reveal`); the two
+                # reads above are member reads that a player gets a non-disclosing 404 from.
+                family = _PUBLIC_PROFILE_FAMILY
+            if template.startswith(_REVELATIONS):
+                # Create and revoke (`character.reveal`); the list is a member read that a
+                # player gets a non-disclosing 404 from.
+                family = _REVELATIONS_FAMILY
             if family is None:
                 unclassified.append((method_name, template))
                 continue

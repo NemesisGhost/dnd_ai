@@ -156,7 +156,7 @@ live-verification checkpoints (the portal's read-only
 `GET /campaigns/{id}/world/search`, `.../world/{locations,religions,items,
 events}/{id}`, `.../world/relationships`, `GET /campaigns/{id}/knowledge`
 and `.../knowledge/{id}` screens — docs/UI_DESIGN.md §5.4/§5.6,
-docs/PHASE13D_BACKEND_READINESS.md §10 — read back through
+docs/api/READ_API.md §10 — read back through
 `dnd_ai.queries.world_explorer` and `dnd_ai.queries.knowledge_browse`).
 See `_ensure_world_and_knowledge_fixtures` and the long block comment
 above the `_WK_*` / `_CAMPAIGN_A_LOCATIONS` / `_CAMPAIGN_A_EVENTS` /
@@ -193,7 +193,7 @@ state, events, and knowledge are Campaign B only.
 
 Unlike the character-state / session / quest fixtures above, the World and
 Knowledge screens are read-only — no Phase 13D screen that consumes this
-data has a write path (docs/PHASE13D_BACKEND_READINESS.md §10.2), so a
+data has a write path (docs/api/READ_API.md §10.2), so a
 live-testing session cannot drift any of these rows. They are therefore
 pure create-or-reuse by their own fixed names / natural keys, with no
 reconciliation branch.
@@ -1143,13 +1143,13 @@ _CAMPAIGN_B_QUEST: _QuestFixture = _QuestFixture(
 # Everything below is READ-ONLY portal data. Unlike the character-state /
 # session / quest fixtures above, no Phase 13D screen that consumes it has a
 # write path (the World and Knowledge screens are read-only —
-# docs/PHASE13D_BACKEND_READINESS.md §10.2), so a live-testing session
+# docs/api/READ_API.md §10.2), so a live-testing session
 # cannot drift any of these rows. They are therefore pure create-or-reuse
 # by their own fixed names / natural keys (`_get_or_create_*`), with no
 # reconciliation branch — the same idempotency `_get_or_create_quest`
 # already relies on for a quest entity, applied throughout.
 #
-# Visibility model (owner decision, docs/PHASE13D_BACKEND_READINESS.md
+# Visibility model (owner decision, docs/api/READ_API.md
 # §10.1): World Explorer mirrors the existing detail endpoints — a
 # `campaign.view` baseline, world-canon entities (locations, organizations,
 # religions, items, characters) visible to every `campaign.view` holder on
@@ -1319,7 +1319,7 @@ class _EventFixture:
     """One `narrative.events` row for the World Explorer historical-event
     category. `status_code` is `recorded` for the two visible events and
     `draft` for the one only a GM may see (the World Explorer draft/voided
-    split — docs/PHASE13D_BACKEND_READINESS.md §10.1). Participants and
+    split — docs/api/READ_API.md §10.1). Participants and
     locations are resolved by fixture name at insert time."""
 
     name: str

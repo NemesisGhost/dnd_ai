@@ -172,12 +172,12 @@ describe("session authoring pages", () => {
     server.on("GET", LIST, { body: [item("s1", 1)] })
     const { router } = openApp("/app/mundivita/sessions/s1")
     fireEvent.change(await screen.findByLabelText("Title"), { target: { value: "Draft" } })
-    fireEvent.click(screen.getByRole("link", { name: "Back to sessions" }))
+    fireEvent.click(within(screen.getByRole("navigation", { name: "Breadcrumb" })).getByRole("link", { name: "Sessions" }))
     const dialog = await screen.findByRole("dialog", { name: "Discard your changes?" })
     expect(router.state.location.pathname).toBe("/app/mundivita/sessions/s1")
     fireEvent.click(within(dialog).getByRole("button", { name: "Keep editing" }))
     expect(screen.getByLabelText("Title")).toHaveValue("Draft")
-    fireEvent.click(screen.getByRole("link", { name: "Back to sessions" }))
+    fireEvent.click(within(screen.getByRole("navigation", { name: "Breadcrumb" })).getByRole("link", { name: "Sessions" }))
     fireEvent.click(
       within(await screen.findByRole("dialog", { name: "Discard your changes?" })).getByRole(
         "button",

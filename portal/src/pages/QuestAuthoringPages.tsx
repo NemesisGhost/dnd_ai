@@ -32,6 +32,7 @@ const createConfig: ContentCreateConfig<
     heading: "New quest",
     lead: "A new quest is saved as a draft. Next you add its stages and objectives. Only people who can edit canon see it until it is published.",
     breadcrumbLabel: "Quests",
+    taskBreadcrumb: true,
     worldPath: questsPath,
     optionsPath: questOptionsPath,
     canCreate: (options) => options.can_create,

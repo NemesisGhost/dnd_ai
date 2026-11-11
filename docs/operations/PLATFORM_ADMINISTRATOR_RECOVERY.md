@@ -4,7 +4,7 @@ Authoritative operator reference for recovering from the loss of the
 platform's last active administrator, and for the standing practice that
 makes that recovery unnecessary in the first place: promoting a second
 administrator early. See
-[PHASE13E_ACCESS_CONTRACT.md](../PHASE13E_ACCESS_CONTRACT.md) for the
+[PHASE13E_ACCESS_CONTRACT.md](../api/ACCESS_CONTROL.md) for the
 account-lifecycle contract this recovery path sits underneath.
 
 ## Why this exists (D-10)

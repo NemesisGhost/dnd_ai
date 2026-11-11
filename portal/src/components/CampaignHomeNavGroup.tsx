@@ -1,206 +1,118 @@
-import { useEffect, useId, useRef, useState } from "react"
-import type { KeyboardEvent as ReactKeyboardEvent } from "react"
 import { Link, NavLink, useLocation } from "react-router"
-import { ChevronDown, House, LayoutList } from "lucide-react"
+import { House } from "lucide-react"
 import type { CampaignContext } from "../types/bootstrap"
 import { DisabledNavItem } from "./DisabledNavItem"
 import { SELECT_CAMPAIGN_FIRST } from "./navigationReasons"
+import { SplitNavGroup } from "./SplitNavGroup"
+import { navTaskState } from "../navigation/navStart"
+import type { PrimaryAction } from "../navigation/navbarDestinations"
+import type { SelectionChange } from "../navigation/selectionChange"
 
 interface CampaignHomeNavGroupProps {
   campaigns: CampaignContext[]
-  // The campaign the campaign-specific links target (route campaign, else
-  // last visited, else startup), or null when none resolves.
+  // The campaign the campaign-specific links target (route campaign, else the
+  // selected campaign; never a last-visited or startup guess), or null when none resolves.
   resolvedCampaign: CampaignContext | null
   // The route's campaign, only when it is in the current bootstrap — drives
   // aria-current on its list entry. Never a fallback-resolved campaign.
   authorizedRouteCampaignId: string | undefined
+  // What the main control does (navigation/navbarDestinations.campaignAction).
+  action: PrimaryAction
+  // Whether the current task is a Campaign task (Campaign Home, setup and settings).
+  sectionActive: boolean
   collapsed: boolean
   onNavigate: () => void
 }
 
-// Campaign Home plus the authorized-campaign subnavigation and
-// "View all campaigns" (UI_DESIGN §4.5). Navigation and disclosure are two
-// separate controls: the Campaign Home link navigates, the chevron button
-// only discloses the list.
+// The Campaign control (UI_DESIGN §4.5): a main control that opens the selected campaign's Home, or toggles
+// the menu where Home is already where the person is or no campaign is selected, and a separate disclosure.
+// The menu lists the selected campaign's Home, every authorized campaign, and "View all campaigns".
 export function CampaignHomeNavGroup({
   campaigns,
   resolvedCampaign,
   authorizedRouteCampaignId,
+  action,
+  sectionActive,
   collapsed,
   onNavigate,
 }: CampaignHomeNavGroupProps) {
   const location = useLocation()
-  // Open on the complete campaign list route, closed elsewhere; read once
-  // so choosing an entry (which navigates) is not undone by the route
-  // becoming active underneath it.
-  const [open, setOpen] = useState(() => location.pathname === "/campaigns")
-  const containerRef = useRef<HTMLLIElement>(null)
-  const buttonRef = useRef<HTMLButtonElement>(null)
-  const listId = useId()
-
-  useEffect(() => {
-    if (!open) {
-      return
-    }
-
-    function handlePointerDown(event: PointerEvent): void {
-      const target = event.target as Node | null
-
-      if (target !== null && containerRef.current?.contains(target)) {
-        return
-      }
-
-      setOpen(false)
-    }
-
-    document.addEventListener("pointerdown", handlePointerDown)
-
-    return () => {
-      document.removeEventListener("pointerdown", handlePointerDown)
-    }
-  }, [open])
-
-  function handleKeyDown(event: ReactKeyboardEvent<HTMLLIElement>): void {
-    if (event.key === "Escape" && open) {
-      // Handled here so it never also closes the mobile drawer.
-      event.stopPropagation()
-      setOpen(false)
-      buttonRef.current?.focus()
-    }
-  }
-
-  const homeLinkClassName = ({ isActive }: { isActive: boolean }): string =>
+  const subLinkClassName = ({ isActive }: { isActive: boolean }): string =>
     isActive
-      ? "portal-sidebar__link portal-sidebar__link--active"
-      : "portal-sidebar__link"
-
-  if (collapsed) {
-    // Icon rail: the Campaign Home link (when a campaign resolves) and a
-    // separate link to the complete list; the disclosure needs labels.
-    return (
-      <>
-        <li>
-          {resolvedCampaign !== null ? (
-            <NavLink
-              end
-              className={homeLinkClassName}
-              to={`/app/${resolvedCampaign.campaign_id}/home`}
-              title="Campaign Home"
-              onClick={onNavigate}
-            >
-              <House className="portal-sidebar__icon" aria-hidden="true" />
-              <span className="portal-sidebar__label">Campaign Home</span>
-            </NavLink>
-          ) : (
-            <DisabledNavItem
-              icon={House}
-              label="Campaign Home"
-              reason={SELECT_CAMPAIGN_FIRST}
-              collapsed={collapsed}
-            />
-          )}
-        </li>
-        <li>
-          <NavLink
-            end
-            className={homeLinkClassName}
-            to="/campaigns"
-            title="All campaigns"
-            onClick={onNavigate}
-          >
-            <LayoutList className="portal-sidebar__icon" aria-hidden="true" />
-            <span className="portal-sidebar__label">All campaigns</span>
-          </NavLink>
-        </li>
-      </>
-    )
-  }
+      ? "portal-sidebar__sublink portal-sidebar__sublink--active"
+      : "portal-sidebar__sublink"
 
   return (
-    <li
-      ref={containerRef}
-      className="portal-sidebar__campaign-group"
-      onKeyDown={handleKeyDown}
+    <SplitNavGroup
+      icon={House}
+      label="Campaign"
+      noun="campaign"
+      action={action}
+      sectionActive={sectionActive}
+      // Open on the complete campaign list route, closed elsewhere.
+      initialOpen={location.pathname === "/campaigns"}
+      collapsed={collapsed}
+      onNavigate={onNavigate}
     >
-      <div className="portal-sidebar__row">
-        {resolvedCampaign !== null ? (
-          <NavLink
-            end
-            className={homeLinkClassName}
-            to={`/app/${resolvedCampaign.campaign_id}/home`}
-            onClick={onNavigate}
-          >
-            <House className="portal-sidebar__icon" aria-hidden="true" />
-            <span className="portal-sidebar__label">Campaign Home</span>
-          </NavLink>
-        ) : (
-          <DisabledNavItem
-            icon={House}
-            label="Campaign Home"
-            reason={SELECT_CAMPAIGN_FIRST}
-            collapsed={collapsed}
-          />
-        )}
-        <button
-          ref={buttonRef}
-          type="button"
-          className="portal-sidebar__link portal-sidebar__link--icon-only"
-          aria-expanded={open}
-          aria-controls={listId}
-          aria-label="Choose campaign"
-          onClick={() => setOpen((current) => !current)}
-        >
-          <ChevronDown
-            className={
-              open
-                ? "portal-sidebar__chevron portal-sidebar__chevron--open"
-                : "portal-sidebar__chevron"
-            }
-            aria-hidden="true"
-          />
-        </button>
-      </div>
-
-      <ul id={listId} className="portal-sidebar__submenu" hidden={!open}>
-        {campaigns.map((campaign) => (
-          <li key={campaign.campaign_id}>
-            <Link
-              className="portal-sidebar__sublink"
-              to={`/app/${campaign.campaign_id}/home`}
-              aria-current={
-                campaign.campaign_id === authorizedRouteCampaignId
-                  ? "true"
-                  : undefined
-              }
-              onClick={() => {
-                setOpen(false)
-                onNavigate()
-              }}
-            >
-              <span className="portal-sidebar__label">
-                {campaign.campaign_name}
-              </span>
-            </Link>
+      {(menu) => (
+        <>
+          <li>
+            {resolvedCampaign !== null ? (
+              <NavLink
+                end
+                className={subLinkClassName}
+                to={`/app/${resolvedCampaign.campaign_id}/home`}
+                state={navTaskState(`/app/${resolvedCampaign.campaign_id}/home`, "campaign")}
+                onClick={menu.onItemClick(`/app/${resolvedCampaign.campaign_id}/home`)}
+              >
+                <span className="portal-sidebar__label">Campaign Home</span>
+              </NavLink>
+            ) : (
+              <DisabledNavItem
+                label="Campaign Home"
+                reason={SELECT_CAMPAIGN_FIRST}
+                collapsed={collapsed}
+              />
+            )}
           </li>
-        ))}
-        <li>
-          <NavLink
-            end
-            className={({ isActive }) =>
-              isActive
-                ? "portal-sidebar__sublink portal-sidebar__sublink--active"
-                : "portal-sidebar__sublink"
-            }
-            to="/campaigns"
-            onClick={() => {
-              setOpen(false)
-              onNavigate()
-            }}
-          >
-            <span className="portal-sidebar__label">View all campaigns</span>
-          </NavLink>
-        </li>
-      </ul>
-    </li>
+          {campaigns.map((campaign) => (
+            <li key={campaign.campaign_id}>
+              <Link
+                className="portal-sidebar__sublink"
+                to={`/app/${campaign.campaign_id}/home`}
+                state={{
+                  ...navTaskState(`/app/${campaign.campaign_id}/home`, "campaign"),
+                  // Choosing a campaign other than the one in force is a selection (announced once it is
+                  // accepted and committed, UI_DESIGN §4.8.4); the one already in force is only a link.
+                  ...(campaign.campaign_id === resolvedCampaign?.campaign_id
+                    ? {}
+                    : { selection: { level: "campaign", id: campaign.campaign_id } satisfies SelectionChange }),
+                }}
+                aria-current={
+                  campaign.campaign_id === authorizedRouteCampaignId
+                    ? "true"
+                    : undefined
+                }
+                onClick={menu.onItemClick(`/app/${campaign.campaign_id}/home`)}
+              >
+                <span className="portal-sidebar__label">
+                  {campaign.campaign_name}
+                </span>
+              </Link>
+            </li>
+          ))}
+          <li>
+            <NavLink
+              end
+              className={subLinkClassName}
+              to="/campaigns"
+              onClick={menu.onItemClick("/campaigns")}
+            >
+              <span className="portal-sidebar__label">View all campaigns</span>
+            </NavLink>
+          </li>
+        </>
+      )}
+    </SplitNavGroup>
   )
 }

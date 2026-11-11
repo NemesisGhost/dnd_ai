@@ -21,6 +21,7 @@ import {
 } from "../components/authoring/feedback"
 import type { FieldError } from "../components/authoring/feedback"
 import { WorldTimePicker } from "../components/authoring/WorldTimePicker"
+import { TaskBreadcrumb } from "../components/navigation/TaskBreadcrumb"
 import { StaleReadNotice } from "../components/StaleReadNotice"
 import { combineRefetchOutcomes } from "../utils/refreshOutcome"
 import { useSession } from "../context/SessionContext"
@@ -32,6 +33,8 @@ import { useKept } from "../hooks/useKeptResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { usePageArrival } from "../hooks/usePageArrival"
 import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard"
+import { useBreadcrumbLabel } from "../navigation/BreadcrumbLabelContext"
+import { useHasTaskOrigin, useTaskLinkState } from "../navigation/useTaskLinkState"
 import type {
     CorrectionPreview,
     CorrectionReceipt,
@@ -243,6 +246,19 @@ export function EventDetailPage() {
     const event = useAuthoringResource<EventAuthoringView>(eventUrl)
     const preview = useAuthoringResource<CorrectionPreview>(previewUrl)
     const headingRef = usePageArrival(event.state.kind !== "loading")
+    // An event opened from a task (a session's log or review, an event it relates to) shows that task's
+    // trail. After a direct entry, or from Campaign Home's tools, there is no origin and the page keeps
+    // its Campaign Home link.
+    const hasOrigin = useHasTaskOrigin()
+    // The event's name, from this page's own authorized read, for the trails of the pages opened from it
+    // (a character, a party, its session). A refused or missing answer drops it.
+    useBreadcrumbLabel({
+        route: "events.detail",
+        params: { campaignId, eventId },
+        name: event.state.kind === "ready" ? event.state.data.name : undefined,
+        denied: event.state.kind === "denied" || event.state.kind === "unavailable",
+        authority: event.authority,
+    })
     // Both reads keep their last good answer through a failed re-read (after a void or a
     // correction), so the page that reports the save is not replaced by "does not exist".
     const data = useKept(event.state, eventUrl)
@@ -269,9 +285,13 @@ export function EventDetailPage() {
 
     return (
         <section className="authoring-page" aria-labelledby="event-heading">
-            <p className="authoring-page__breadcrumb">
-                <Link to={base(campaignId)}>Campaign Home</Link>
-            </p>
+            {hasOrigin ? (
+                <TaskBreadcrumb current={data?.name} />
+            ) : (
+                <p className="authoring-page__breadcrumb">
+                    <Link to={base(campaignId)}>Campaign Home</Link>
+                </p>
+            )}
             <h1 id="event-heading" ref={headingRef} tabIndex={-1}>
                 {data !== null ? data.name : "Event"}
             </h1>
@@ -339,6 +359,8 @@ function EventBody({
     onUnread: (message: string) => void
 }) {
     const link = (id: string) => `${base(campaignId)}/events/${encodeURIComponent(id)}`
+    // Every link of the page is a step of the task the event was opened in.
+    const taskState = useTaskLinkState({ requireOrigin: true })
     const blocked = plan !== null ? plan.effects.filter((e) => !e.reversible) : []
     return (
         <>
@@ -352,17 +374,22 @@ function EventBody({
                     density="detail"
                     campaignId={campaignId}
                     eventHref={link}
+                    linkState={taskState}
                 />
             ) : null}
             {event.details !== null ? <p className="authoring-note">GM notes: {event.details}</p> : null}
             {event.session_id !== null ? (
                 <p>
-                    Part of <Link to={`${base(campaignId)}/sessions/${encodeURIComponent(event.session_id)}`}>its session</Link>.
+                    Part of <Link to={`${base(campaignId)}/sessions/${encodeURIComponent(event.session_id)}`} state={taskState}>
+                        its session
+                    </Link>.
                 </p>
             ) : null}
             {event.corrects_event_id !== null ? (
                 <p>
-                    Relates to <Link to={link(event.corrects_event_id)}>an earlier event</Link>.
+                    Relates to <Link to={link(event.corrects_event_id)} state={taskState}>
+                        an earlier event
+                    </Link>.
                 </p>
             ) : null}
             {event.participants.length > 0 ? (
@@ -398,11 +425,15 @@ function EventBody({
                         This event was {event.correction.kind === "void" ? "voided" : "corrected"}: {event.correction.reason}
                     </p>
                     <p>
-                        <Link to={link(event.correction.correcting_event_id)}>The correcting event</Link>
+                        <Link to={link(event.correction.correcting_event_id)} state={taskState}>
+                            The correcting event
+                        </Link>
                         {event.correction.replacement_event_id !== null ? (
                             <>
                                 {" · "}
-                                <Link to={link(event.correction.replacement_event_id)}>The replacement</Link>
+                                <Link to={link(event.correction.replacement_event_id)} state={taskState}>
+                                    The replacement
+                                </Link>
                             </>
                         ) : null}
                     </p>

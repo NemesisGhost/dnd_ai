@@ -12,7 +12,20 @@ import {
 import { WorkspaceFrame } from "../components/WorkspaceFrame"
 import { usePerspective } from "../context/CharacterPerspectiveContext"
 import { useSession } from "../context/SessionContext"
-import { readEntryPerspective, runPermissionLossCleanup, setCommittedPerspective } from "../hooks/navigationHolds"
+import { setCommittedPerspective } from "../hooks/navigationHolds"
+import { asRecord, replaceOwnEntry } from "../navigation/replaceOwnEntry"
+import {
+  entryContextStamp,
+  entryContextWithinScope,
+  perspectiveOfRead,
+  readEntryContext,
+  stampEquals,
+} from "../navigation/contexts"
+// A perspective change must not leave the old character/party query pair in the address: pages prefer
+// it to the selection, and syncCharacterFromUrl would otherwise turn the accepted change back.
+import { PERSPECTIVE_QUERY_KEYS } from "../navigation/queryKeys"
+import { perspectiveRequest } from "../navigation/selectionTransitions"
+import { BreadcrumbLabelProvider } from "../navigation/BreadcrumbLabelProvider"
 import { useRecordLastVisitedCampaign } from "../hooks/useRecordLastVisitedCampaign"
 import PlaceholderPage from "../pages/PlaceholderPage"
 import type { SessionBootstrap } from "../types/bootstrap"
@@ -21,16 +34,7 @@ interface CampaignLayoutProps {
   bootstrap: SessionBootstrap
 }
 
-// The query parameters that carry a character perspective (and the party chosen under it). A
-// perspective change must not leave the old pair in the address: pages prefer it to the selection,
-// and syncCharacterFromUrl would otherwise turn the accepted change back.
-const PERSPECTIVE_QUERY_KEYS = ["character_id", "party_id"] as const
-
 const REVOKED_NOTICE = "Your selected character is no longer available."
-
-function asRecord(state: unknown): Record<string, unknown> {
-  return typeof state === "object" && state !== null ? (state as Record<string, unknown>) : {}
-}
 
 function withoutPerspectiveQuery(search: string): string {
   const params = new URLSearchParams(search)
@@ -52,7 +56,7 @@ function withoutPerspectiveQuery(search: string): string {
 // question: the content remounts, an address that still names it is cleaned, and a polite notice says so.
 export function CampaignLayout({ bootstrap }: CampaignLayoutProps) {
   const { campaignId } = useParams<{ campaignId: string }>()
-  const { getSelectedCharacterId, selectCharacter } = usePerspective()
+  const { getSelectedCharacterId, selectCharacter, adoptRouteCampaign } = usePerspective()
   const { refresh } = useSession()
   const location = useLocation()
   const navigationType = useNavigationType()
@@ -69,6 +73,9 @@ export function CampaignLayout({ bootstrap }: CampaignLayoutProps) {
   useRecordLastVisitedCampaign(campaign?.campaign_id ?? null, bootstrap)
 
   const activeCampaignId = campaign?.campaign_id ?? null
+  // The levels the route campaign fixes. They are what an entry stamp must agree with to be honored.
+  const worldId = campaign?.world_id ?? null
+  const timelineId = campaign?.timeline_id ?? null
   const selectedCharacterId =
     activeCampaignId === null ? null : getSelectedCharacterId(activeCampaignId)
   const authorized = new Set(
@@ -84,7 +91,20 @@ export function CampaignLayout({ bootstrap }: CampaignLayoutProps) {
   // records an authorized perspective is honored before any page reads under the default. Afterwards
   // the selection may legitimately move on its own (a URL-carried character) and the entry is
   // re-stamped instead.
-  const stamped = readEntryPerspective(location.state, authorized)
+  // A stamp that names another campaign, world or timeline than this route's was not made under this
+  // scope (foreign, tampered or stale) and is no stamp: the route scope governs.
+  const stampRead = entryContextWithinScope(readEntryContext(location.state, authorized), {
+    campaignId: activeCampaignId,
+    worldId,
+    timelineId,
+  })
+  const stamped = perspectiveOfRead(stampRead)
+  const stampCurrent = stampEquals(stampRead, {
+    campaignId: activeCampaignId,
+    worldId,
+    timelineId,
+    characterId: selectedCharacterId,
+  })
   const [processedKey, setProcessedKey] = useState<string | null>(null)
   // The first location is "POP" to the router but is not a return to an older entry: with no valid
   // stamp it keeps whatever the session already shows rather than resolving to the default.
@@ -124,58 +144,17 @@ export function CampaignLayout({ bootstrap }: CampaignLayoutProps) {
       return
     }
 
-    // A replacement that belongs to one entry. It runs only while that entry is still the router's
-    // current location and nothing is pending or waiting on a decision, and is dropped the moment a
-    // newer location exists (which stamps itself), so it can never overwrite a newer PUSH, REPLACE
-    // or POP, or cut across a blocked one. State and the rest of the query are carried over from the
-    // router's own copy of the entry.
-    //
-    // Permission loss is the one case that does not wait for a blocked transition: the page whose
-    // question that is has just been removed, nothing will say so, and the loss may not wait for an
-    // answer. Its replacement runs under the narrow exemption in `runPermissionLossCleanup`, which
-    // covers exactly this entry and this call; the held navigation is cancelled by its owner as it
-    // goes away, never approved.
-    function replaceOwnEntry(
+    // The route campaign is the selected campaign. A retained selection of another campaign is
+    // replaced before anything reads under it (I-1); this campaign's own choice is kept.
+    adoptRouteCampaign?.(activeCampaignId)
+
+    // Entry-bound replacements are written by navigation/replaceOwnEntry (one implementation for the
+    // stamps of every authenticated route).
+    const replaceOwn = (
       entryKey: string,
       next: (current: Location) => { search: string; state: unknown },
       permissionLoss = false,
-    ) {
-      if (dataRouter === null) {
-        const { search, state } = next(location)
-        navigate({ pathname: location.pathname, search, hash: location.hash }, { replace: true, state })
-        return undefined
-      }
-      const router = dataRouter
-      let finished = false
-      const finish = () => {
-        finished = true
-        unsubscribe()
-      }
-      const attempt = () => {
-        if (finished) return
-        const current = router.state
-        if (current.location.key !== entryKey) {
-          finish()
-          return
-        }
-        const waiting =
-          current.navigation.state !== "idle" ||
-          (!permissionLoss && [...current.blockers.values()].some((blocker) => blocker.state === "blocked"))
-        if (waiting) return
-        finish()
-        const { search, state } = next(current.location)
-        const apply = () =>
-          void router.navigate(
-            { pathname: current.location.pathname, search, hash: current.location.hash },
-            { replace: true, state, preventScrollReset: true },
-          )
-        if (permissionLoss) runPermissionLossCleanup(entryKey, apply)
-        else apply()
-      }
-      const unsubscribe = router.subscribe(attempt)
-      attempt()
-      return finish
-    }
+    ) => replaceOwnEntry({ router: dataRouter, navigate, location, entryKey, next, permissionLoss })
 
     if (unprocessed) {
       // StrictMode runs this effect twice before the state below renders.
@@ -190,7 +169,15 @@ export function CampaignLayout({ bootstrap }: CampaignLayoutProps) {
         // bookkeeping that remembers the committed one, and (next) the entry's stamp all name the
         // same perspective, so a revocation of the previous selection that is still outstanding has
         // nothing left to clear, including when this location and that revocation arrive together.
-        setCommittedPerspective({ characterId: requested, defaultCharacterId, authorized })
+        setCommittedPerspective({
+          characterId: requested,
+          defaultCharacterId,
+          authorized,
+          campaignId: activeCampaignId,
+          worldId,
+          timelineId,
+          routeScoped: true,
+        })
         selectCharacter(activeCampaignId, requested)
         // These record the commit just made (see the ownership note above).
         // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -200,7 +187,15 @@ export function CampaignLayout({ bootstrap }: CampaignLayoutProps) {
       }
     }
 
-    setCommittedPerspective({ characterId: selectedCharacterId, defaultCharacterId, authorized })
+    setCommittedPerspective({
+      characterId: selectedCharacterId,
+      defaultCharacterId,
+      authorized,
+      campaignId: activeCampaignId,
+      worldId,
+      timelineId,
+      routeScoped: true,
+    })
 
     // The bootstrap default only initializes the selection. Once a perspective is in use, however it
     // was reached, it is stored as the selection (idempotently), so a later bootstrap that names a
@@ -210,11 +205,14 @@ export function CampaignLayout({ bootstrap }: CampaignLayoutProps) {
     if (revokedId !== null) {
       // First the address: the page must not read as the perspective that was just lost.
       if (staleQuery) {
-        return replaceOwnEntry(
+        return replaceOwn(
           location.key,
           (current) => ({
             search: withoutPerspectiveQuery(current.search),
-            state: { ...asRecord(current.state), ctx: { v: 1, characterId: null } },
+            state: {
+              ...asRecord(current.state),
+              ctx: entryContextStamp({ campaignId: activeCampaignId, worldId, timelineId, characterId: null }),
+            },
           }),
           true,
         )
@@ -230,12 +228,21 @@ export function CampaignLayout({ bootstrap }: CampaignLayoutProps) {
     }
     if (committedId !== selectedCharacterId) setCommittedId(selectedCharacterId)
 
-    // Record the committed perspective on the accepted entry. Same path and same perspective, so the
-    // replacement is never guarded, adds no history entry, and does not remount anything.
-    if (!commitPending && stamped !== selectedCharacterId) {
-      return replaceOwnEntry(location.key, (current) => ({
+    // Record the committed context on the accepted entry (this also upgrades a perspective-only stamp
+    // and replaces a foreign one). Same path and same context, so the replacement is never guarded,
+    // adds no history entry, and does not remount anything. Unrelated router state is carried over.
+    if (!commitPending && !stampCurrent) {
+      return replaceOwn(location.key, (current) => ({
         search: current.search,
-        state: { ...asRecord(current.state), ctx: { v: 1, characterId: committedNow.current } },
+        state: {
+          ...asRecord(current.state),
+          ctx: entryContextStamp({
+            campaignId: activeCampaignId,
+            worldId,
+            timelineId,
+            characterId: committedNow.current,
+          }),
+        },
       }))
     }
     // `authorized` is rebuilt every render; its content follows the bootstrap, tracked below.
@@ -251,9 +258,12 @@ export function CampaignLayout({ bootstrap }: CampaignLayoutProps) {
     requested,
     revokedId,
     selectedCharacterId,
+    stampCurrent,
     stamped,
     staleQuery,
+    timelineId,
     unprocessed,
+    worldId,
   ])
 
   useLayoutEffect(() => () => setCommittedPerspective(null), [])
@@ -281,31 +291,34 @@ export function CampaignLayout({ bootstrap }: CampaignLayoutProps) {
     if (characterId !== null && !authorized.has(characterId)) {
       return
     }
-    navigate(
-      { pathname: location.pathname, search: withoutPerspectiveQuery(location.search), hash: location.hash },
-      { state: { ...asRecord(location.state), ctx: { v: 1, characterId } } },
-    )
+    // A deliberate perspective change is a departure to that character's Characters details (PD-6), even
+    // when the pathname would not change: the same blocker decides, nothing is written first, and the
+    // selection, task and entry are committed from the accepted location (a fresh task, no carried state).
+    const request = perspectiveRequest(activeCampaign.campaign_id, characterId, { campaignId: activeCampaign.campaign_id, worldId, timelineId })
+    navigate(request.to, { state: request.state })
   }
 
   const showNotice = noticePath === location.pathname && selectedCharacterId === null
 
   return (
-    <WorkspaceFrame
-      campaign={activeCampaign}
-      selectedCharacterId={selectedCharacterId}
-      onSelectCharacter={requestPerspective}
-    >
-      {showNotice ? (
-        <p className="authoring-message authoring-message--warning" role="status">
-          {REVOKED_NOTICE}
-        </p>
-      ) : null}
-      {/* Keyed on campaign and perspective, never the location: every perspective-dependent page
-          remounts (and reads again) when the perspective changes, and nothing else does. Nothing
-          renders while a commit is pending or the address still names a perspective just lost. */}
-      <Fragment key={`${activeCampaign.campaign_id}:${selectedCharacterId ?? "none"}`}>
-        {commitPending || staleQuery ? null : <Outlet />}
-      </Fragment>
-    </WorkspaceFrame>
+    <BreadcrumbLabelProvider campaignId={activeCampaign.campaign_id} characterId={selectedCharacterId}>
+      <WorkspaceFrame
+        campaign={activeCampaign}
+        selectedCharacterId={selectedCharacterId}
+        onSelectCharacter={requestPerspective}
+      >
+        {showNotice ? (
+          <p className="authoring-message authoring-message--warning" role="status">
+            {REVOKED_NOTICE}
+          </p>
+        ) : null}
+        {/* Keyed on campaign and perspective, never the location: every perspective-dependent page
+            remounts (and reads again) when the perspective changes, and nothing else does. Nothing
+            renders while a commit is pending or the address still names a perspective just lost. */}
+        <Fragment key={`${activeCampaign.campaign_id}:${selectedCharacterId ?? "none"}`}>
+          {commitPending || staleQuery ? null : <Outlet />}
+        </Fragment>
+      </WorkspaceFrame>
+    </BreadcrumbLabelProvider>
   )
 }

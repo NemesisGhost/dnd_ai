@@ -1,4 +1,6 @@
 import { Link } from "react-router"
+import { navTaskState } from "../navigation/navStart"
+import { useTaskLinkState } from "../navigation/useTaskLinkState"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { useHeldWorldCapability, WORLD_CANON_READ_PRIVATE } from "../hooks/useWorldCapability"
 import type { CharacterKind } from "../types/character"
@@ -28,6 +30,10 @@ export function CharacterManageLinks({
     // A relationship is shared world canon whatever it relates (even a player character), so its
     // section is the world's private side, not the record's own eligibility.
     const canPrepareWorld = useHeldWorldCapability(campaignId, WORLD_CANON_READ_PRIVATE)
+    // The record's own authoring pages (edit, builds, portrayal, relationships, run) continue the task
+    // this record was opened in. "Open in World" is the one explicit new task: World's workspace as a
+    // place of its own, not a step of the Characters (or Parties, or session) task.
+    const taskState = useTaskLinkState()
     if (!canEdit) {
         return null
     }
@@ -35,23 +41,31 @@ export function CharacterManageLinks({
     const id = encodeURIComponent(characterId)
     return (
         <nav aria-label="Manage character" className="authoring-page__actions-row character-manage">
-            <Link className="authoring-button" to={`${root}/world/character/${id}`}>
+            <Link
+                className="authoring-button"
+                to={`${root}/world/character/${id}`}
+                state={navTaskState(`${root}/world/character/${id}`, "world")}
+            >
                 Open in World
             </Link>
             {authoring.can_edit ? (
-                <Link className="authoring-button" to={`${root}/characters/${id}/edit`}>
+                <Link className="authoring-button" to={`${root}/characters/${id}/edit`} state={taskState}>
                     Edit
                 </Link>
             ) : null}
             {canPrepareWorld ? (
-                <Link className="authoring-button" to={`${root}/world/character/${id}?section=relationships`}>
+                <Link
+                    className="authoring-button"
+                    to={`${root}/world/character/${id}?section=relationships`}
+                    state={taskState}
+                >
                     Relationships
                 </Link>
             ) : null}
-            <BuildsLink campaignId={campaignId} characterId={characterId} />
+            <BuildsLink campaignId={campaignId} characterId={characterId} linkState={taskState} />
             {kind === "npc" ? (
                 <>
-                    <Link className="authoring-button" to={`${root}/world/character/${id}?section=run`}>
+                    <Link className="authoring-button" to={`${root}/world/character/${id}?section=run`} state={taskState}>
                         Run this NPC
                     </Link>
                     <PortrayalLink
@@ -60,6 +74,7 @@ export function CharacterManageLinks({
                         detail={0}
                         asButton
                         authoring={authoring}
+                        linkState={taskState}
                     />
                 </>
             ) : null}

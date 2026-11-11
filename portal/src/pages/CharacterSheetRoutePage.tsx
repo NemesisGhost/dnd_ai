@@ -1,9 +1,10 @@
-import { Link, useParams } from "react-router"
+import { useParams } from "react-router"
 import { CharacterBoundary } from "../components/CharacterBoundary"
 import { CharacterManageLinks } from "../components/CharacterManageLinks"
+import { CharacterBreadcrumb } from "../components/characters/CharacterBreadcrumb"
+import { CharactersCreateAction } from "../components/characters/CharactersCreateAction"
 import { CharacterRecordSections } from "../components/characters/CharacterRecordNav"
 import { CharacterSheetBoundary } from "../components/CharacterSheetBoundary"
-import { useCharactersBackPath } from "../hooks/useCharactersBackPath"
 import type { CharacterDetail } from "../types/character"
 import { characterKindLabel } from "../utils/characterKind"
 import { sectionsOf } from "../utils/characterSections"
@@ -31,12 +32,10 @@ function SummaryPanels({ character }: { character: CharacterDetail }) {
 }
 
 function CharacterSheetRoute({ campaignId, characterId }: { campaignId: string; characterId: string }) {
-    const back = useCharactersBackPath(campaignId)
     return (
         <div className="character-sheet-route">
-            <p className="authoring-page__breadcrumb">
-                <Link to={back}>Back to characters</Link>
-            </p>
+            <CharacterBreadcrumb campaignId={campaignId} characterId={characterId} />
+            <CharactersCreateAction campaignId={campaignId} />
             <CharacterBoundary campaignId={campaignId} characterId={characterId}>
                 {(character) => (
                     <>

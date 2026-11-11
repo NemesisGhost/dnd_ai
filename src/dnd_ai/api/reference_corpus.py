@@ -32,7 +32,7 @@ implement it.
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import Connection, Engine
 
@@ -51,7 +51,7 @@ from dnd_ai.domain.access import AccessContext
 from .access import require_campaign_capability
 from .audit import record_change_log
 from .correlation import get_request_correlation_id
-from .deps import get_connection, get_engine
+from .deps import end_request_transaction, get_connection, get_engine
 
 router = APIRouter(tags=["reference-corpus"])
 
@@ -205,12 +205,14 @@ def register_source_document_endpoint(
     status_code=201,
 )
 def ingest_reference_passages_endpoint(
+    request: Request,
     campaign_id: uuid.UUID,  # noqa: ARG001
     source_document_id: uuid.UUID,
     body: IngestReferencePassagesRequest,
     access: Annotated[AccessContext, Depends(require_campaign_capability(_MANAGE_CAPABILITY))],  # noqa: ARG001
     engine: Annotated[Engine, Depends(get_engine)],
 ) -> IngestReferencePassagesResponse:
+    end_request_transaction(request)
     passage_ids = ingest_reference_passages(
         engine,
         source_document_id=source_document_id,
@@ -235,12 +237,14 @@ def ingest_reference_passages_endpoint(
     status_code=201,
 )
 def grant_source_to_campaign_endpoint(
+    request: Request,
     campaign_id: uuid.UUID,
     source_document_id: uuid.UUID,
     body: GrantSourceToCampaignRequest,
     access: Annotated[AccessContext, Depends(require_campaign_capability(_MANAGE_CAPABILITY))],
     engine: Annotated[Engine, Depends(get_engine)],
 ) -> GrantSourceToCampaignResponse:
+    end_request_transaction(request)
     grant_id = grant_source_to_campaign(
         engine,
         source_document_id=source_document_id,
@@ -256,11 +260,13 @@ def grant_source_to_campaign_endpoint(
     status_code=204,
 )
 def revoke_source_campaign_grant_endpoint(
+    request: Request,
     campaign_id: uuid.UUID,  # noqa: ARG001
     reference_source_campaign_id: uuid.UUID,
     access: Annotated[AccessContext, Depends(require_campaign_capability(_MANAGE_CAPABILITY))],  # noqa: ARG001
     engine: Annotated[Engine, Depends(get_engine)],
 ) -> None:
+    end_request_transaction(request)
     revoke_source_campaign_grant(engine, reference_source_campaign_id=reference_source_campaign_id)
 
 
@@ -298,11 +304,13 @@ def remove_source_document_endpoint(
     status_code=200,
 )
 def retrieve_cited_passages_endpoint(
+    request: Request,
     campaign_id: uuid.UUID,
     body: RetrieveCitedPassagesRequest,
     access: Annotated[AccessContext, Depends(require_campaign_capability(_VIEW_CAPABILITY))],
     engine: Annotated[Engine, Depends(get_engine)],
 ) -> RetrieveCitedPassagesResponse:
+    end_request_transaction(request)
     passages = retrieve_cited_passages(
         engine,
         campaign_id=campaign_id,

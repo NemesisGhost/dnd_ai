@@ -1,5 +1,5 @@
 """Audience-filtered browse/search/detail reads for the Phase 13D World
-Explorer screen (docs/UI_DESIGN.md §5.4, docs/PHASE13D_BACKEND_READINESS.md
+Explorer screen (docs/UI_DESIGN.md §5.4, docs/api/READ_API.md
 §3/§9).
 
 Every existing world read in this codebase is a single-resource "get by
@@ -201,6 +201,10 @@ class CharacterVisibility:
     discover_all: bool
     force_visible: frozenset[uuid.UUID] = field(default_factory=frozenset)
     force_hidden: frozenset[uuid.UUID] = field(default_factory=frozenset)
+    # D5-c (P03-A A3b): the caller's revelation-only characters, whose summary is the latest
+    # deliberately released one in `campaign_id`, never the canonical `core.entities.summary`.
+    released_summary_ids: frozenset[uuid.UUID] = field(default_factory=frozenset)
+    campaign_id: uuid.UUID | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -251,7 +255,16 @@ def _escape_like(term: str) -> str:
 # The visibility/search filter shared by the result list and the category
 # counts, so a count can never disagree with the rows it counts. Callers bind
 # the parameters built by `_search_params`.
-_VISIBLE_ENTITIES_SQL = """
+# The summary the caller is entitled to see (D5-c, P03-A A3b): for a character the caller reaches
+# only through a revelation, the latest release's `public_summary` (NULL when that release has
+# none, or none exists), never the canonical `core.entities.summary`; for everything else the
+# canonical summary. Used for the card, the search match and so the counts, from one definition.
+_PROJECTED_SUMMARY_SQL = (
+    "CASE WHEN e.entity_id = ANY(CAST(:released_summary_ids AS uuid[])) "
+    "THEN latest.public_summary ELSE e.summary END"
+)
+
+_VISIBLE_ENTITIES_SQL = f"""
 FROM core.entities e
 JOIN core.entity_types et ON et.entity_type_id = e.entity_type_id
 JOIN core.canon_statuses cs ON cs.canon_status_id = e.canon_status_id
@@ -259,12 +272,23 @@ JOIN core.lifecycle_statuses lst ON lst.lifecycle_status_id = e.lifecycle_status
 LEFT JOIN narrative.events ev ON ev.event_id = e.entity_id
 LEFT JOIN narrative.event_statuses es
        ON es.event_status_id = ev.event_status_id
+LEFT JOIN LATERAL (
+    SELECT r.public_summary
+    FROM campaign.character_public_profiles p
+    JOIN campaign.character_public_profile_releases r
+      ON r.character_public_profile_id = p.character_public_profile_id
+    WHERE e.entity_id = ANY(CAST(:released_summary_ids AS uuid[]))
+      AND p.campaign_id = CAST(:released_campaign_id AS uuid)
+      AND p.character_id = e.entity_id
+    ORDER BY r.version_number DESC
+    LIMIT 1
+) latest ON TRUE
 WHERE e.world_id = :world_id
   AND et.code = ANY(CAST(:type_codes AS text[]))
   AND (
         CAST(:like_pattern AS text) IS NULL
         OR e.canonical_name ILIKE CAST(:like_pattern AS text) ESCAPE '\\'
-        OR e.summary ILIKE CAST(:like_pattern AS text) ESCAPE '\\'
+        OR ({_PROJECTED_SUMMARY_SQL}) ILIKE CAST(:like_pattern AS text) ESCAPE '\\'
       )
   AND NOT (e.entity_id = ANY(CAST(:cv_denied AS uuid[])))
   AND (CAST(:canon_statuses AS text[]) IS NULL
@@ -318,6 +342,8 @@ def _search_params(
         "discover_all": character_visibility.discover_all,
         "char_visible": list(character_visibility.force_visible),
         "char_hidden": list(character_visibility.force_hidden),
+        "released_summary_ids": list(character_visibility.released_summary_ids),
+        "released_campaign_id": character_visibility.campaign_id,
         "include_draft": include_draft_events,
         "draft_allowed": list(draft_event_allowed_ids),
         "draft_denied": list(draft_event_denied_ids),
@@ -422,7 +448,8 @@ def search_world_entities(
 
     rows = connection.execute(
         text(f"""
-            SELECT e.entity_id, e.canonical_name, e.summary, et.code AS entity_type_code,
+            SELECT e.entity_id, e.canonical_name, {_PROJECTED_SUMMARY_SQL} AS shown_summary,
+                   et.code AS entity_type_code,
                    lower(left(e.canonical_name, {_NAME_SORT_PREFIX})) AS name_sort,
                    cs.code AS canon_status, lst.code AS lifecycle_status
             {_VISIBLE_ENTITIES_SQL}
@@ -443,7 +470,7 @@ def search_world_entities(
             category=_TYPE_CODE_TO_CATEGORY[row["entity_type_code"]],
             entity_type_code=row["entity_type_code"],
             name=row["canonical_name"],
-            summary=row["summary"],
+            summary=row["shown_summary"],
             name_sort=row["name_sort"],
             canon_status=row["canon_status"],
             lifecycle_status=row["lifecycle_status"],
@@ -1117,7 +1144,7 @@ def get_item_view(
 ) -> ItemDetailView:
     """One `world.item_instances` row plus its current `campaign.item_state`.
     Ownership/inventory (who currently holds it) is deliberately deferred —
-    it needs its own audience design (docs/PHASE13D_BACKEND_READINESS.md
+    it needs its own audience design (docs/api/READ_API.md
     §9.3) and no World Explorer bullet requires it for the MVP."""
     if item_instance_id in denied_entity_ids:
         raise WorldResourceNotFoundError(f"item {item_instance_id} denied to caller")

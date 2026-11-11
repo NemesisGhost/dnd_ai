@@ -85,6 +85,7 @@ describe("QuestDetailBoundary", () => {
                 status: "loading",
             },
             retry: retryMock,
+            authority: null,
         })
 
         renderBoundary()
@@ -115,6 +116,7 @@ describe("QuestDetailBoundary", () => {
                 status: "unavailable",
             },
             retry: retryMock,
+            authority: null,
         })
 
         renderBoundary()
@@ -149,6 +151,7 @@ describe("QuestDetailBoundary", () => {
                 error: diagnosticError,
             },
             retry: retryMock,
+            authority: null,
         })
 
         renderBoundary()
@@ -185,6 +188,7 @@ describe("QuestDetailBoundary", () => {
                 quest: questFixture,
             },
             retry: retryMock,
+            authority: null,
         })
 
         renderBoundary()

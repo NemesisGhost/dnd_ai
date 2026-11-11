@@ -514,7 +514,7 @@ def get_organization_endpoint(
     if not access.has_capability(_RELATIONSHIP_VIEW_CAPABILITY, entity_id=organization_id):
         # A per-organization `campaign.view` resource-grant deny —
         # indistinguishable from a nonexistent organization, matching the
-        # quest-detail hardening (docs/PHASE13D_BACKEND_READINESS.md §4.2)
+        # quest-detail hardening (docs/api/READ_API.md §4.2)
         # and keeping this route in agreement with the Phase 13D World
         # Explorer list (`dnd_ai.api.world_explorer`), which excludes a
         # `campaign.view`-denied `entity_id` in SQL.

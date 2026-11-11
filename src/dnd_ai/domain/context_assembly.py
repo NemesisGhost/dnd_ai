@@ -348,6 +348,7 @@ def assemble_npc_conversation_context(
     connection: Connection,
     *,
     npc_entity_id: uuid.UUID,
+    campaign_id: uuid.UUID,
     timeline_id: uuid.UUID,
     expected_world_id: uuid.UUID,
     requesting_character_id: uuid.UUID,
@@ -365,6 +366,9 @@ def assemble_npc_conversation_context(
         timeline_id=timeline_id,
         expected_world_id=expected_world_id,
         include_full=True,
+        campaign_id=campaign_id,
+        # No audience context here, so the encounter reference is suppressed.
+        encounter_reader=None,
     )
     requester = get_character_view(
         connection,
@@ -372,6 +376,7 @@ def assemble_npc_conversation_context(
         timeline_id=timeline_id,
         expected_world_id=expected_world_id,
         include_full=False,
+        campaign_id=campaign_id,
     )
     status_code, affinity, trust = _relationship_state(
         connection,

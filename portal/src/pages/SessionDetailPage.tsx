@@ -11,8 +11,10 @@ import {
     StaleWriteNotice,
 } from "../components/authoring/feedback"
 import type { FieldError } from "../components/authoring/feedback"
+import { TaskBreadcrumb } from "../components/navigation/TaskBreadcrumb"
 import { SessionLifecycleControls } from "../components/SessionLifecycleControls"
 import { TravelSummary } from "../components/sessionRun/SessionActivity"
+import { sessionLabel } from "../components/sessionRun/sessionLabel"
 import { SessionRoster } from "../components/sessionRun/SessionRoster"
 import { canRunSession } from "../components/sessionRun/runAccess"
 import { SortableTable } from "../components/SortableTable"
@@ -21,6 +23,7 @@ import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard"
+import { useTaskLinkState } from "../navigation/useTaskLinkState"
 import type {
     CampaignSessionDetail,
     CampaignSessionEvent,
@@ -210,7 +213,9 @@ export function SessionDetailPage({
     const { reload } = useSession()
     const announce = useAnnounce()
     const hasCapability = useCampaignCapability(campaignId, "canon.edit")
-    const title = session.title ?? `Session ${session.session_number}`
+    const title = sessionLabel(session)
+    // Run session is a step of the task this session was opened in.
+    const taskState = useTaskLinkState()
     const events = session.events
 
     const blocker = editBlocker(session, hasCapability)
@@ -340,9 +345,7 @@ export function SessionDetailPage({
 
     return (
         <section aria-labelledby="session-heading">
-            <Link to=".." relative="path">
-                Back to sessions
-            </Link>
+            <TaskBreadcrumb current={title} />
             <h1 id="session-heading">{title}</h1>
             <section aria-labelledby="session-overview-heading">
                 <h2 id="session-overview-heading">Overview</h2>
@@ -511,6 +514,7 @@ export function SessionDetailPage({
                         <p>
                             <Link
                                 to={`/app/${encodeURIComponent(campaignId)}/sessions/${encodeURIComponent(session.session_id)}/run?section=participants`}
+                                state={taskState}
                             >
                                 Change participants in Run session
                             </Link>

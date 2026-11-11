@@ -2,7 +2,7 @@
 
 **Restarted Phase 14/15 acceptance guide (CP-11).** Written 2026-10-26 for code `9ab549ddbc78cb9b5c1aac9c99f3a967112edc62` (`phase15/completion`, CP-10 approved head), schema `140_clock_advance_details`.
 
-> **Status: every task and variant below starts UNEXECUTED.** This guide is a test specification, not evidence. Nothing here has been passed by a human. Automated and scripted results are recorded separately in the [results ledger](PHASE14_15_ACCEPTANCE_LEDGER.md) and never change a human result. Historical markings in [PHASE14_15_MANUAL_TESTING.md](PHASE14_15_MANUAL_TESTING.md) are preserved and are **not** fresh passes.
+> **Status: every task and variant below starts UNEXECUTED.** This guide is a test specification, not evidence. Nothing here has been passed by a human. Automated and scripted results are recorded separately in the [results ledger](PHASE14_15_ACCEPTANCE_LEDGER.md) and never change a human result. Historical markings in [PHASE14_15_MANUAL_TESTING.md](PHASE14_15_HOWTO_FIRST_CAMPAIGN.md) are preserved and are **not** fresh passes.
 
 Companion documents (all under `docs/`):
 
@@ -13,7 +13,7 @@ Companion documents (all under `docs/`):
 | [PHASE14_15_COVERAGE_MATRIX.md](PHASE14_15_COVERAGE_MATRIX.md) | Every original case/variant → task, evidence method, ledger row; gaps |
 | [PHASE14_15_COMPANION_SCENARIOS.md](PHASE14_15_COMPANION_SCENARIOS.md) | Negative, recovery, scoped-role (SR), clean-install (TC-56) and accessibility (TC-55) scenarios |
 | [PHASE14_15_DEFECT_REGISTER.md](PHASE14_15_DEFECT_REGISTER.md) | Known and deferred defects with rubric scores; where to record new ones |
-| [PHASE14_15_ACCOUNT_MANIFEST.md](PHASE14_15_ACCOUNT_MANIFEST.md) | What was copied from the dev database, the rename map, verification |
+| [PHASE14_15_ACCOUNT_MANIFEST.md](PHASE14_15_ACCEPTANCE_ENVIRONMENT.md) | What was copied from the dev database, the rename map, verification |
 
 ## 1. What you are doing
 
@@ -60,7 +60,7 @@ Open **five separate browser profiles** (use `stack\open_personas.ps1`, which cr
 | **PLAYER-B** | `player_b` | Player B | Player | Plays Tobin Reed |
 | **OBSERVER** | `observer` | Observer | Player | Campaign Observer; world Viewer in companion TC-53 |
 
-Also present and **never signed into** in the main journey: `disabled` (Disabled User, inactive — used only to confirm login refusal) and six other inactive accounts preserved from the old data (see the [account manifest](PHASE14_15_ACCOUNT_MANIFEST.md)).
+Also present and **never signed into** in the main journey: `disabled` (Disabled User, inactive — used only to confirm login refusal) and six other inactive accounts preserved from the old data (see the [account manifest](PHASE14_15_ACCEPTANCE_ENVIRONMENT.md)).
 
 **The login name does not grant authority.** `admin` and `gm` are only names. Authority comes from four independent layers, and each task states which one it is testing:
 

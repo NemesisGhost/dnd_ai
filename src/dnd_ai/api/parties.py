@@ -25,7 +25,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 from pydantic import Field
-from sqlalchemy import Connection
+from sqlalchemy import Connection, text
 
 from dnd_ai.commands.parties import (
     PartyResult,
@@ -45,7 +45,13 @@ from dnd_ai.domain.data_classification import content_receipt
 from dnd_ai.queries.entity_lifecycle import lifecycle_hidden_entity_ids
 from dnd_ai.queries.parties import PartyView, get_campaign_party, list_campaign_parties
 from dnd_ai.queries.party_members import list_party_members
-from dnd_ai.queries.party_membership_period import resolve_membership_clock
+from dnd_ai.queries.party_membership_period import (
+    CURRENT_PARTY_MEMBERSHIP_SQL,
+    MembershipClock,
+    membership_clock_params,
+    resolve_membership_clock,
+)
+from dnd_ai.queries.world_explorer import discoverable_entity_ids
 
 from ._authoring import (
     BaseAuthoringRequest,
@@ -59,6 +65,7 @@ from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .errors import NotFoundError
+from .world_explorer import resolve_world_entity_visibility
 
 router = APIRouter(tags=["parties"])
 
@@ -131,41 +138,136 @@ def get_party_endpoint(party_id: uuid.UUID, access: _View, connection: _Conn) ->
     return _json(view, editor=editor)
 
 
+# Relationship types that make a reader a current controller of a character (decision D4-C). No
+# relationship type confers `character.control` today, so the type codes are the test; after P03-B a
+# live, in-effect assignment qualifies instead and this set is retired with the legacy rows (ADR
+# 0021 section 2.10).
+_PARTY_CONTROLLER_RELATIONSHIP_TYPES = ("owner", "primary_controller", "co_controller")
+
+
+def party_roster_controller_qualifies(
+    connection: Connection,
+    access: AccessContext,
+    *,
+    party_id: uuid.UUID,
+    membership_clock: MembershipClock,
+) -> bool:
+    """Decision D4-C (P03-A A3b, plan section 10.13): whether the caller currently controls a
+    character that is a current member of this party, in this campaign. Such a caller may see that
+    one party's current members on the roster, by id and canonical name, and nothing more.
+
+    All of these hold, per request: the party's membership is judged against the campaign's
+    effective clock (no clock, nobody qualifies); the caller holds a live `owner`,
+    `primary_controller` or `co_controller` relationship to the character, resolved on this
+    campaign membership and timeline exactly as `resolve_access_context` resolves relationships
+    (not revoked or expired, no closed fictional interval, type active, character active and
+    canon); the character is a current member of this party on this timeline; and the character is
+    not under a whole-character `campaign.view` deny for the caller, so a controller denied their
+    own character does not qualify through it.
+
+    This is a second, named audience for one response and is not discovery: its result is never
+    written to, or read into, `AccessContext`, the discovery bundle or any other consumer, and it
+    confers no capability. `get_party_roster_endpoint` is its only caller (a structural test pins
+    that)."""
+    if not membership_clock.is_set:
+        return False
+    controlled = connection.execute(
+        text(f"""
+            SELECT DISTINCT mcr.character_id
+            FROM security.membership_character_relationships mcr
+            JOIN security.character_relationship_types crt
+              ON crt.character_relationship_type_id = mcr.character_relationship_type_id
+            JOIN core.entities e ON e.entity_id = mcr.character_id
+            JOIN core.lifecycle_statuses cls ON cls.lifecycle_status_id = e.lifecycle_status_id
+            JOIN core.canon_statuses ccs ON ccs.canon_status_id = e.canon_status_id
+            JOIN campaign.party_memberships pm
+              ON pm.member_entity_id = mcr.character_id
+             AND pm.timeline_id = :timeline_id
+             AND pm.party_id = :party_id
+            WHERE mcr.campaign_membership_id = :membership_id
+              AND mcr.revoked_at IS NULL
+              AND (mcr.expires_at IS NULL OR mcr.expires_at > now())
+              AND mcr.effective_to_world_time_id IS NULL
+              AND (mcr.timeline_id IS NULL OR mcr.timeline_id = :timeline_id)
+              AND crt.is_active
+              AND crt.code = ANY(CAST(:controller_types AS text[]))
+              AND cls.code = 'active'
+              AND ccs.code = 'canon'
+              AND {CURRENT_PARTY_MEMBERSHIP_SQL}
+        """),
+        {
+            "membership_id": access.campaign_membership_id,
+            "timeline_id": access.timeline_id,
+            "party_id": party_id,
+            "controller_types": list(_PARTY_CONTROLLER_RELATIONSHIP_TYPES),
+            **membership_clock_params(membership_clock),
+        },
+    ).scalars()
+    return any(
+        access.has_capability("campaign.view", entity_id=character_id)
+        for character_id in controlled
+    )
+
+
 @router.get(_BASE + "/{party_id}/roster")
 def get_party_roster_endpoint(
     party_id: uuid.UUID, access: _View, connection: _Conn
 ) -> dict[str, Any]:
     """Read-only roster for anyone with `campaign.view`: the party and who is a member now on the
-    campaign's own timeline — character id and name only. Join/leave reasons, history and times
-    are management data and stay on the `canon.edit` members read. A member whose entity the caller cannot see (an unpublished
-    definition for a non-editor, or an entity-level `campaign.view` deny) is left out, and
-    `member_count` counts only what is listed. Party membership is enough context to show a
-    member's name: no character-view tier is required, and listing grants none (character detail,
-    sheet and build routes keep their own checks). Archived parties are the same 404 as a missing
-    one for a non-editor. Reading grants nothing."""
+    campaign's own timeline, by character id and name only. Join/leave reasons, history and times
+    are management data and stay on the `canon.edit` members read. `member_count` counts only what
+    is listed. Archived parties are the same 404 as a missing one for a non-editor.
+
+    Who is listed (P03-A A3b, decisions D4-C and D12): a caller who currently controls a character
+    that is a current member of this party sees every current member, because a party's own
+    controllers know the people their character travels with; everyone else sees the current
+    members shared discovery lets them see (a GM sees all of them). In both cases a member is left
+    out when it is hidden from the caller as an unpublished definition, when the caller holds a
+    whole-character `campaign.view` deny on it, or when the caller holds a `character.discover`
+    deny on it. The controller exception is roster visibility only: no summary, profile, inventory,
+    sheet or detail tier, no link, and no discovery anywhere else. Reading grants nothing."""
     editor = access.has_capability("canon.edit")
     party = get_campaign_party(
         connection, campaign_id=access.campaign_id, party_id=party_id, include_archived=editor
     )
     if party is None:
         raise NotFoundError()
-    hidden = lifecycle_hidden_entity_ids(
-        connection,
-        world_id=timeline_world_id(connection, access.timeline_id),
-        mode="reference",
-        viewer_user_id=access.user_id,
-        can_edit_canon=editor,
-    )
     clock = resolve_membership_clock(connection, timeline_id=access.timeline_id)
-    members = [
+    current = [
         m
         for m in list_party_members(
             connection, timeline_id=access.timeline_id, party_id=party_id, membership_clock=clock
         )
         if m.is_current
-        and m.character_id not in hidden
-        and access.has_capability("campaign.view", entity_id=m.character_id)
     ]
+    world_id = timeline_world_id(connection, access.timeline_id)
+    if party_roster_controller_qualifies(
+        connection, access, party_id=party_id, membership_clock=clock
+    ):
+        hidden = lifecycle_hidden_entity_ids(
+            connection,
+            world_id=world_id,
+            mode="reference",
+            viewer_user_id=access.user_id,
+            can_edit_canon=editor,
+        )
+        discover_denied, _ = access.resource_grant_targets("character.discover", "character_id")
+        members = [
+            m
+            for m in current
+            if m.character_id not in hidden
+            and m.character_id not in discover_denied
+            and access.has_capability("campaign.view", entity_id=m.character_id)
+        ]
+    else:
+        visible = discoverable_entity_ids(
+            connection,
+            [m.character_id for m in current],
+            world_id=world_id,
+            timeline_id=access.timeline_id,
+            visibility=resolve_world_entity_visibility(access, connection),
+        )
+        members = [m for m in current if m.character_id in visible]
     return {
         "party": _json(party, editor=editor),
         "member_count": len(members),

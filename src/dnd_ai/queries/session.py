@@ -33,7 +33,7 @@ verbatim (same columns, same `include_draft_events`/
 inventing a second one — see that module's docstring for the full
 rationale. This module does not re-aggregate session participants,
 locations visited, or encounter/quest/character-state changes; those
-remain deferred (see docs/PHASE13D_BACKEND_READINESS.md). Each event also carries its in-world
+remain deferred (see docs/api/READ_API.md). Each event also carries its in-world
 time as display text; travel entries (names, origins, destinations) are built from these events
 by `dnd_ai.queries.session_travel`, which owns that audience filtering.
 

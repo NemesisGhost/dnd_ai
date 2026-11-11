@@ -72,6 +72,27 @@ describe("TimelinesPage", () => {
         expect(screen.queryByRole("link", { name: "New timeline" })).toBeNull()
     })
 
+    // The tree is a READ destination (`world.view`); only mutation controls follow other gates.
+    it.each([
+        ["a viewer", ["world.view"], []],
+        ["an editor", ["world.view", "timeline.manage"], ["create_timeline"]],
+        ["an owner without system GM", ["world.view", "timeline.manage"], ["create_timeline"]],
+    ])("links every timeline for %s and shows New timeline only when offered", async (_who, capabilities, actions) => {
+        const server = installMockServer()
+        server.on("GET", "/worlds/w1", { body: world({ capabilities, available_actions: actions }) })
+        renderAuthoringRoutes({ initialEntry: "/worlds/w1/timelines", routes })
+
+        expect(await screen.findByRole("link", { name: "Main" })).toHaveAttribute(
+            "href",
+            "/worlds/w1/timelines/t1",
+        )
+        expect(screen.getByRole("link", { name: "Bridge" })).toHaveAttribute(
+            "href",
+            "/worlds/w1/timelines/t2",
+        )
+        expect(screen.queryByRole("link", { name: "New timeline" }) !== null).toBe(actions.length > 0)
+    })
+
     it("shows a loading status, then an empty state", async () => {
         const server = installMockServer()
         server.on("GET", "/worlds/w1", { body: world({ timelines: [] }) })

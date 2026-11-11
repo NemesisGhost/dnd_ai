@@ -28,35 +28,17 @@ Resolution, in order:
    timeline. This is the only way to recover a value from an ancestor whose
    row has since changed again: the *current* row could reflect a change
    made after the branch, but the bounded event history cannot.
-3. **Administrative baseline fallback.** No command in this codebase yet
-   changes `character_build_id` through a causal event — the only writer
-   today is administrative (dev/setup tooling, `last_event_id IS NULL`),
-   which CLAUDE.md rule 6 explicitly allows ("or explicit administrative
-   source"). An administrative write has no recorded time, so it cannot be
-   bounded against a branch point the way an event can. Since in current
-   practice such a write only ever happens once, at character setup, before
-   any branching involving that character could occur, an ancestor's
-   administrative row is treated as safe to inherit unconditionally: walk
-   `parent_timeline_id` one level at a time and return the first ancestor
-   that has its own row with `last_event_id IS NULL` (its `character_build_id`,
-   possibly `NULL`, wins and stops the walk — same "local, even if NULL,
-   wins" rule as step 1).
+3. **Administrative baseline fallback.** Walk ancestors for the initial
+   administrative state (`last_event_id IS NULL`). Since checkpoint 15.2B-2,
+   `activate_character_build` makes the first activation on untouched state
+   administrative and records every later activation through a causal event.
+   If an ancestor has since activated another build by event, recover its
+   baseline from the `previous_value` of its earliest build effect.
 
-   This is a genuine, documented schema limitation, not a design choice:
-   if a *second* administrative write ever changed an ancestor's build
-   after a descendant had already branched off it, this fallback could not
-   detect that and would incorrectly treat the new value as always having
-   been true. Closing this gap for good requires routing every
-   `character_build_id` change through a causal event (mirroring the
-   existing HP/condition/resource commands in
-   `dnd_ai.commands.character_state`) — no such "select active build"
-   command exists yet because nothing in the product calls it; see
-   docs/PHASE13D_CHARACTER_SHEET_BACKEND.md for the full writeup.
-
-   Since checkpoint 15.2B-2 the fallback also recovers the baseline when the
-   ancestor has since changed the build by event (every event activation records
-   the value it replaced), so a branch made before such a change keeps the build
-   that was active at the branch point.
+   Arbitrary later event-less rewrites bypass that history and are not made
+   branch-safe by this fallback. Use the supported activation command rather
+   than rewriting an ancestor's administrative row after branching. See
+   docs/api/CHARACTER_SHEET.md for the contract.
 
 Steps 2 and 3 only ever run when step 1 finds no local row at all, and step
 3 only runs when step 2's bounded event search finds nothing — an ancestor

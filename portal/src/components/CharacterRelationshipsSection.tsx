@@ -1,5 +1,6 @@
 import { useId, useState } from "react"
 import { Link } from "react-router"
+import { useTaskLinkState } from "../navigation/useTaskLinkState"
 import { characterRelationshipsPath } from "../api/characterRelationships"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
@@ -38,7 +39,14 @@ function recordPath(campaignId: string, p: ReaderRelationshipParticipant): strin
 
 function Who({ campaignId, participant }: { campaignId: string; participant: ReaderRelationshipParticipant }) {
     const to = recordPath(campaignId, participant)
-    return to === null ? <>{participant.name}</> : <Link to={to}>{participant.name}</Link>
+    // Another character is a step of the task this record was opened in; other records keep their own links.
+    const taskState = useTaskLinkState()
+    if (to === null) return <>{participant.name}</>
+    return (
+        <Link to={to} state={taskState}>
+            {participant.name}
+        </Link>
+    )
 }
 
 // The counterpart names, each a link only where the server said the caller can open that record.

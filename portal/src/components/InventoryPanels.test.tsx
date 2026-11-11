@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, screen, waitFor } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import { bootstrapWith, installMockServer, renderAuthoringRoutes } from "../test/authoringHarness"
@@ -30,6 +30,48 @@ function render(element: React.ReactElement, server = installMockServer()) {
     })
     return server
 }
+
+describe("an item opened from an inventory", () => {
+    function mount(server = installMockServer()) {
+        server.on("GET", "/campaigns/c1/characters/n1/inventory", { body: [ROW] })
+        return renderAuthoringRoutes({
+            initialEntry: "/app/c1/characters/n1",
+            bootstrap: bootstrapWith({
+                campaigns: [{ ...sessionBootstrapFixture.campaigns[0]!, campaign_id: "c1" }],
+            }),
+            routes: [
+                {
+                    path: "/app/:campaignId/characters/:characterId",
+                    element: <CharacterInventoryPanel campaignId="c1" characterId="n1" />,
+                },
+                { path: "/app/:campaignId/world/item/:itemId", element: <p>Item page</p> },
+            ],
+        })
+    }
+
+    it("is a step of the task the character was opened in", async () => {
+        const { router } = mount()
+        await act(async () => {
+            await router.navigate("/app/c1/characters/n1", {
+                state: { task: { v: 1, root: "characters", scope: { campaignId: "c1" }, trail: [] } },
+            })
+        })
+        fireEvent.click(await screen.findByRole("link", { name: "Moonblade" }))
+        await screen.findByText("Item page")
+        const state = router.state.location.state as { task: { root: string; trail: Array<{ route: string }> } }
+        expect(state.task.root).toBe("characters")
+        expect(state.task.trail.map((entry) => entry.route)).toEqual(["characters.detail"])
+        expect(JSON.stringify(state)).not.toContain("Moonblade")
+    })
+
+    it("carries no origin after a direct entry", async () => {
+        const { router } = mount()
+        fireEvent.click(await screen.findByRole("link", { name: "Moonblade" }))
+        await screen.findByText("Item page")
+        const state = router.state.location.state as { task?: unknown } | null
+        expect(state?.task).toBeUndefined()
+    })
+})
 
 describe("CharacterInventoryPanel", () => {
     it("lists what a character carries with links to the items", async () => {

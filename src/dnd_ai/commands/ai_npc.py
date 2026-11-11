@@ -116,6 +116,7 @@ def _record_request_and_context(
     context = assemble_npc_conversation_context(
         connection,
         npc_entity_id=assignment.npc_entity_id,
+        campaign_id=assignment.campaign_id,
         timeline_id=timeline_id,
         expected_world_id=expected_world_id,
         requesting_character_id=requesting_character_id,

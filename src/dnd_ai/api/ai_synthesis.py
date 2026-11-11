@@ -28,7 +28,7 @@ assembled-then-withheld.
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from sqlalchemy import Connection, Engine
 
@@ -39,7 +39,7 @@ from dnd_ai.domain.context_assembly import GM_BRIEF, OBSERVER_SUMMARY, PLAYER_SU
 
 from .access import require_campaign_capability, resolve_party_perspective
 from .ai_npc import _resolve_provider
-from .deps import get_connection, get_engine
+from .deps import end_request_transaction, get_connection, get_engine
 from .errors import ApiError, ForbiddenError
 
 router = APIRouter(tags=["ai-synthesis"])
@@ -79,6 +79,7 @@ class CampaignSynthesisResponse(BaseModel):
     status_code=200,
 )
 def request_campaign_synthesis_endpoint(
+    request: Request,
     campaign_id: uuid.UUID,
     body: CampaignSynthesisRequest,
     access: Annotated[AccessContext, Depends(require_campaign_capability(_BASELINE_CAPABILITY))],
@@ -109,6 +110,10 @@ def request_campaign_synthesis_endpoint(
     # observer_summary: baseline campaign.view already checked; no further
     # authorization, and the request's own character_id/party_id are never
     # forwarded — see this module's own docstring.
+
+    # Authorization (including the party-perspective read above) is decided; end the request
+    # transaction before the provider is called.
+    end_request_transaction(request)
 
     result = request_campaign_synthesis(
         engine,

@@ -1,4 +1,5 @@
 import { Link } from "react-router"
+import { useTaskLinkState } from "../../navigation/useTaskLinkState"
 import type { EventExplanation as EventExplanationData } from "../../types/eventExplanation"
 import { EventExplanation } from "../events/EventExplanation"
 import type {
@@ -85,14 +86,25 @@ export function TravelEntry({
     entry,
     href,
     showNote = true,
+    linkState,
 }: {
     entry: SessionTravelEntry
     href?: string | null
     showNote?: boolean
+    // The task the event's page is opened in (the host page's own, continued).
+    linkState?: object
 }) {
     return (
         <>
-            <strong>{href ? <Link to={href}>Travel</Link> : "Travel"}</strong>{" "}
+            <strong>
+                {href ? (
+                    <Link to={href} state={linkState}>
+                        Travel
+                    </Link>
+                ) : (
+                    "Travel"
+                )}
+            </strong>{" "}
             <InWorldTime value={entry.world_time} />
             <TravelSummary entry={entry} showNote={showNote} />
         </>
@@ -118,6 +130,8 @@ export function SessionEventList({
     ordered?: boolean
     eventHref: (eventId: string) => string | null
 }) {
+    // An event opened from the log is a step of the task the page is in (the Run session, the review).
+    const taskState = useTaskLinkState()
     const byEvent = new Map((travel ?? []).map((entry) => [entry.event_id, entry]))
     const explained = new Map(
         (explanations ?? []).filter((x) => x.family !== "other").map((x) => [x.event_id, x]),
@@ -131,10 +145,16 @@ export function SessionEventList({
                 return (
                     <li key={event.event_id}>
                         {entry !== undefined ? (
-                            <TravelEntry entry={entry} href={href} />
+                            <TravelEntry entry={entry} href={href} linkState={taskState} />
                         ) : explained.has(event.event_id) ? (
                             <>
-                                {href ? <Link to={href}>{event.name}</Link> : event.name}
+                                {href ? (
+                                    <Link to={href} state={taskState}>
+                                        {event.name}
+                                    </Link>
+                                ) : (
+                                    event.name
+                                )}
                                 <EventExplanation explanation={explained.get(event.event_id)!} />
                                 {event.details !== null ? (
                                     <p className="authoring-note">GM notes: {event.details}</p>
@@ -142,7 +162,13 @@ export function SessionEventList({
                             </>
                         ) : (
                             <>
-                                {href ? <Link to={href}>{event.name}</Link> : event.name}{" "}
+                                {href ? (
+                                    <Link to={href} state={taskState}>
+                                        {event.name}
+                                    </Link>
+                                ) : (
+                                    event.name
+                                )}{" "}
                                 <InWorldTime value={event.world_time} />
                                 {event.details !== null ? (
                                     <p className="authoring-note">GM notes: {event.details}</p>
@@ -166,11 +192,12 @@ export function TravelHistory({
     label: string
     eventHref: (eventId: string) => string | null
 }) {
+    const taskState = useTaskLinkState()
     return (
         <ul className="record-list" aria-label={label}>
             {travel.map((entry) => (
                 <li key={entry.event_id}>
-                    <TravelEntry entry={entry} href={eventHref(entry.event_id)} />
+                    <TravelEntry entry={entry} href={eventHref(entry.event_id)} linkState={taskState} />
                 </li>
             ))}
         </ul>

@@ -8,7 +8,10 @@ import { useAuthoringResource } from "../../hooks/useAuthoringResource"
 import type { RefetchOutcome, UseAuthoringResourceResult } from "../../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../../hooks/useCampaignCapability"
 import { usePageArrival } from "../../hooks/usePageArrival"
-import { pickWorldReturnState, useReviewBackPath } from "../../hooks/useWorldBackPath"
+import { useReviewBackPath } from "../../hooks/useWorldBackPath"
+import { useBreadcrumbLabel } from "../../navigation/BreadcrumbLabelContext"
+import { outsideTaskOf } from "../../navigation/breadcrumbModel"
+import { carriedState } from "../../navigation/taskReturn"
 import type { EntityLifecycleView } from "../../types/entityLifecycle"
 import type { QuestAuthoringView, QuestOptions } from "../../types/questAuthoring"
 import type { RevisionHistory } from "../../types/review"
@@ -16,6 +19,7 @@ import { questPerspectiveSearch } from "../../utils/questPerspectiveSearch"
 import { combineRefetchOutcomes } from "../../utils/refreshOutcome"
 import { QuestStructureEditor } from "../authoring/QuestEditor"
 import { AudiencePreviewSection } from "../AudiencePreviewSection"
+import { TaskBreadcrumb } from "../navigation/TaskBreadcrumb"
 import { LifecycleActionsProvider } from "../EntityLifecyclePanel"
 import { EntitySourcesSection } from "../EntitySourcesSection"
 import { SectionNav, SectionPanel, StageNav } from "../staged/StagedNav"
@@ -88,6 +92,15 @@ function Loaded({ campaignId, questId }: Props) {
     const lifecycle = useAuthoringResource<EntityLifecycleView>(entityLifecyclePath(campaignId, questId))
     const revisions = useAuthoringResource<RevisionHistory>(revisionsPath(campaignId, questId))
     const headingRef = usePageArrival(authoring.state.kind === "ready" && options.state.kind === "ready", "path")
+    // The quest's name, from this page's own authorized read, for the breadcrumbs of the pages opened
+    // from it. A denied or unavailable answer drops it; a kept view after a failed re-read is not an answer.
+    useBreadcrumbLabel({
+        route: "quests.detail",
+        params: { campaignId, questId },
+        name: authoring.state.kind === "ready" ? authoring.state.data.name : undefined,
+        denied: authoring.state.kind === "denied" || authoring.state.kind === "unavailable",
+        authority: authoring.authority,
+    })
     // The last quest read that succeeded. A refresh that fails recoverably (a network or server
     // error) keeps the workspace mounted on it, so unsent input in any section survives and the
     // person can retry; a denied or unavailable answer discards it and fails closed.
@@ -177,7 +190,11 @@ function Workspace({
     const [params] = useSearchParams()
     // Router state naming where the quest was opened from (the Review queue) rides along every
     // in-page link, so moving between sections never forgets where Back returns.
-    const linkState = pickWorldReturnState(location.state)
+    // A quest opened inside a task of its own (Quests, a session, a character) shows that task's trail
+    // and its links carry the task. Opened from the Review queue or World, or directly, it keeps the
+    // single back link it had (and the Review queue's return state).
+    const taskBack = outsideTaskOf(location.pathname, location.state)
+    const linkState = taskBack !== null ? taskBack.state : carriedState(location.pathname, location.state)
     const reviewBack = useReviewBackPath(campaignId)
     const back = reviewBack !== null
         ? { href: reviewBack, label: "Back to Review queue" }
@@ -361,6 +378,16 @@ function Workspace({
                 summary={view.summary}
                 status={lifecycleView}
                 back={back}
+                breadcrumb={
+                    taskBack === null ? undefined : (
+                        <TaskBreadcrumb
+                            current={view.name}
+                            queries={{
+                                "quests.list": questPerspectiveSearch(params.get("character_id"), params.get("party_id")),
+                            }}
+                        />
+                    )
+                }
                 headingRef={headingRef}
                 guidance={guidance}
                 guidanceHref={guidanceHref}

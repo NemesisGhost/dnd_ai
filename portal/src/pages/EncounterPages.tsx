@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { useNavigate, useParams } from "react-router"
+import { useLocation, useNavigate, useParams } from "react-router"
 import {
     abortEncounter,
     addParticipant,
@@ -25,13 +25,16 @@ import type { ReferenceOption } from "../components/authoring/ReferenceCombobox"
 import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { retryFailedReads, useAuthoringResource } from "../hooks/useAuthoringResource"
-import type { RefetchOutcome } from "../hooks/useAuthoringResource"
+import type { RefetchOutcome, UseAuthoringResourceResult } from "../hooks/useAuthoringResource"
 import { useAnnounceWhenRead, useConfirmedRefresh } from "../hooks/useConfirmedRefresh"
 import { useKept } from "../hooks/useKeptResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { usePageArrival } from "../hooks/usePageArrival"
 import { sessionPath } from "../api/sessionAuthoring"
-import { RunBreadcrumb } from "../components/sessionRun/RunNav"
+import { TaskBreadcrumb } from "../components/navigation/TaskBreadcrumb"
+import { sessionLabel } from "../components/sessionRun/sessionLabel"
+import { retainedState } from "../navigation/breadcrumbModel"
+import { useBreadcrumbLabel } from "../navigation/BreadcrumbLabelContext"
 import type { CampaignSessionDetail } from "../types/campaignSession"
 import type { EncounterOptions, PreparedEncounter } from "../types/encounters"
 import type { WorldCategory } from "../types/world"
@@ -65,10 +68,21 @@ function useSearch(campaignId: string, category: WorldCategory) {
     }
 }
 
-const sessionTitle = (state: { kind: string; data?: CampaignSessionDetail }): string | null =>
-    state.kind === "ready" && state.data !== undefined
-        ? (state.data.title ?? `Session ${state.data.session_number}`)
-        : null
+// The session's title for the Run breadcrumb, from the session read this page already makes (nothing
+// broader is read for it). A refused or missing answer drops it.
+function useSessionBreadcrumbLabel(
+    campaignId: string,
+    sessionId: string,
+    session: UseAuthoringResourceResult<CampaignSessionDetail>,
+): void {
+    useBreadcrumbLabel({
+        route: "sessions.detail",
+        params: { campaignId, sessionId },
+        name: session.state.kind === "ready" ? sessionLabel(session.state.data) : undefined,
+        denied: session.state.kind === "denied" || session.state.kind === "unavailable",
+        authority: session.authority,
+    })
+}
 
 const without = (record: Record<string, string>, key: string): Record<string, string> =>
     Object.fromEntries(Object.entries(record).filter(([k]) => k !== key))
@@ -78,11 +92,13 @@ export function PrepareEncounterPage() {
     const { campaignId = "", sessionId = "" } = useParams()
     const canEdit = useCampaignCapability(campaignId, "canon.edit")
     const navigate = useNavigate()
+    const { pathname, state } = useLocation()
     const { reload } = useSession()
     const announce = useAnnounce()
     const options = useAuthoringResource<EncounterOptions>(encounterOptionsPath(campaignId))
     const headingRef = usePageArrival(options.state.kind === "ready")
     const session = useAuthoringResource<CampaignSessionDetail>(sessionPath(campaignId, sessionId))
+    useSessionBreadcrumbLabel(campaignId, sessionId, session)
     const [place, setPlace] = useState<ReferenceOption | null>(null)
     const [summary, setSummary] = useState("")
     const searchPlaces = useSearch(campaignId, "location")
@@ -94,7 +110,11 @@ export function PrepareEncounterPage() {
         request: (body, ctx) => prepareEncounter(campaignId, { session_id: sessionId, ...body }, ctx),
         onSuccess: (created) => {
             announce("Encounter prepared")
-            void navigate(encounterPath(campaignId, sessionId, created.encounter_id), { replace: true })
+            // The prepared encounter takes the place of the form in the same task (same root and trail).
+            void navigate(encounterPath(campaignId, sessionId, created.encounter_id), {
+                replace: true,
+                state: retainedState(pathname, state) ?? undefined,
+            })
         },
     })
     const error = mutation.status.kind === "error" ? mutation.status.error : null
@@ -103,12 +123,7 @@ export function PrepareEncounterPage() {
     const tooLong = summary.trim().length > max
     return (
         <section className="authoring-page" aria-labelledby="prepare-encounter-heading">
-            <RunBreadcrumb
-                campaignId={campaignId}
-                sessionId={sessionId}
-                title={sessionTitle(session.state)}
-                from={{ section: "encounter-prep", label: "Prepare an encounter" }}
-            />
+            <TaskBreadcrumb current="Prepare an encounter" sections={{ "sessions.run": "encounter-prep" }} />
             <h1 id="prepare-encounter-heading" ref={headingRef} tabIndex={-1}>
                 Prepare an encounter
             </h1>
@@ -193,21 +208,17 @@ export function PreparedEncounterPage() {
     )
     const headingRef = usePageArrival(resource.state.kind !== "loading" && options.state.kind !== "loading")
     const session = useAuthoringResource<CampaignSessionDetail>(sessionPath(campaignId, sessionId))
+    useSessionBreadcrumbLabel(campaignId, sessionId, session)
     return (
         <section className="authoring-page" aria-labelledby="encounter-heading">
-            <RunBreadcrumb
-                campaignId={campaignId}
-                sessionId={sessionId}
-                title={sessionTitle(session.state)}
-                from={{
-                    section:
-                        encounter !== null
-                            ? encounter.status === "pending"
-                                ? "encounter-prep"
-                                : "encounters"
-                            : undefined,
-                    label: "Encounter",
-                }}
+            <TaskBreadcrumb
+                current="Encounter"
+                // Back to the stage the encounter belongs to: preparation while pending, else the run.
+                sections={
+                    encounter === null
+                        ? {}
+                        : { "sessions.run": encounter.status === "pending" ? "encounter-prep" : "encounters" }
+                }
             />
             <h1 id="encounter-heading" ref={headingRef} tabIndex={-1}>
                 Encounter

@@ -5,7 +5,7 @@
 
 ## Context
 
-*Stub — to be written.* The reasoning behind this decision currently lives in [PLAN.md §15.2](../PLAN.md#152-truth-and-belief) and [DATABASE_CONVENTIONS.md §15](../DATABASE_CONVENTIONS.md#15-knowledge-and-visibility-conventions) and has not yet been extracted into a standalone record.
+A fact may be true but unknown, or believed but false. Different characters, parties and organizations can hold different beliefs about the same subject.
 
 ## Decision
 
@@ -13,8 +13,8 @@ A knowledge item stores the canonical claim and its truth status. What a given k
 
 ## Consequences
 
-*Stub — to be written.*
+Knowledge and belief are per knower. Discovery is not a boolean on the object, and audience filtering must happen before retrieval results or AI context are exposed.
 
 ## References
 
-- [PLAN.md §15.2](../PLAN.md#152-truth-and-belief) and [DATABASE_CONVENTIONS.md §15](../DATABASE_CONVENTIONS.md#15-knowledge-and-visibility-conventions)
+- [PLAN.md §15.2](../README.md) and [DATABASE_CONVENTIONS.md §15](../DATABASE_CONVENTIONS.md#15-knowledge-and-visibility-conventions)

@@ -5,7 +5,7 @@
 
 ## Context
 
-*Stub — to be written.* The reasoning behind this decision currently lives in [PLAN.md §18.2](../PLAN.md#182-controlled-mutation) and [DATABASE_CONVENTIONS.md §17](../DATABASE_CONVENTIONS.md#17-ai-data-conventions) and has not yet been extracted into a standalone record.
+Generated suggestions can conflict with established history or user authority. Human-controlled canon requires an explicit validation and approval boundary.
 
 ## Decision
 
@@ -13,8 +13,8 @@ AI agents never write directly to canonical tables. They submit proposed changes
 
 ## Consequences
 
-*Stub — to be written.*
+AI output is a proposal with provenance. Only normal authorized commands promote it; automatic approval requires an explicitly approved category and cannot be invented by a caller.
 
 ## References
 
-- [PLAN.md §18.2](../PLAN.md#182-controlled-mutation) and [DATABASE_CONVENTIONS.md §17](../DATABASE_CONVENTIONS.md#17-ai-data-conventions)
+- [PLAN.md §18.2](../README.md) and [DATABASE_CONVENTIONS.md §17](../DATABASE_CONVENTIONS.md#17-ai-data-conventions)

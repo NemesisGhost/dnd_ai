@@ -1,13 +1,34 @@
-import { useEffect, useMemo, useRef } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import type { ReactNode } from "react"
 import { useLocation, useMatch } from "react-router"
 import { worldPath } from "../api/worlds"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
+import type { WorldEvidenceMap, WorldReadEvidence } from "../navigation/contextOptions"
+import { selectionOwner } from "../navigation/selectedContextStore"
 import type { WorldDetail } from "../types/worldAuthoring"
 import { worldAccess } from "../utils/worldAccess"
 import { useSession } from "./SessionContext"
 import { WorkspaceHierarchyContext } from "./WorkspaceHierarchyContext"
 import type { WorkspaceHierarchy } from "./WorkspaceHierarchyContext"
+
+interface EvidenceRecord {
+    owner: string | null
+    entries: WorldEvidenceMap
+}
+
+const NO_EVIDENCE: WorldEvidenceMap = new Map()
+
+// A read replaces what is known about its world only when it STARTED later; an older answer, however late
+// it arrives, changes nothing.
+function mergeEvidence(
+    entries: WorldEvidenceMap,
+    worldId: string,
+    evidence: WorldReadEvidence,
+): WorldEvidenceMap {
+    const known = entries.get(worldId)
+    if (known !== undefined && known.startedSeq >= evidence.startedSeq) return entries
+    return new Map(entries).set(worldId, evidence)
+}
 
 // Static route segments that share a position with an ID.
 const RESERVED_SEGMENTS = new Set(["new"])
@@ -55,9 +76,42 @@ export function WorkspaceHierarchyProvider({ children }: { children: ReactNode }
         routeCampaign?.world_capabilities === undefined ||
         routeCampaign.world_capabilities.includes("world.view")
     const fetchedWorldId = worldReadable ? requestedWorldId : null
-    const { state: worldState, refetch } = useAuthoringResource<WorldDetail>(
-        fetchedWorldId === null ? null : worldPath(fetchedWorldId),
-    )
+    const {
+        state: worldState,
+        refetch,
+        startedSeq: worldStartedSeq,
+        startedOwner: worldStartedOwner,
+    } = useAuthoringResource<WorldDetail>(fetchedWorldId === null ? null : worldPath(fetchedWorldId))
+
+    // What authoritative world reads have said, per world, so the Infobox can withdraw an explicit World
+    // option a newer read refused (UI_DESIGN §4.8.12). Ordered by when each read STARTED, never when it
+    // answered; a transient failure, an abort or a read in flight records nothing. It belongs to one user
+    // and browser session and is dropped with it; it never writes the selection store.
+    const owner = bootstrap === null ? null : selectionOwner(bootstrap)
+    const [recorded, setRecorded] = useState<EvidenceRecord>({ owner, entries: NO_EVIDENCE })
+    const settledEvidence = ((): { worldId: string; evidence: WorldReadEvidence } | null => {
+        if (fetchedWorldId === null || worldStartedSeq === null) return null
+        // Bound to the owner the read STARTED under: a result that settled before the owner changed is
+        // the previous owner's and is never recorded for this one, however long it stays on screen.
+        if (worldStartedOwner !== owner) return null
+        if (worldState.kind === "ready") {
+            return { worldId: fetchedWorldId, evidence: { verdict: "readable", startedSeq: worldStartedSeq } }
+        }
+        if (worldState.kind === "unavailable" || worldState.kind === "denied") {
+            return { worldId: fetchedWorldId, evidence: { verdict: "refused", startedSeq: worldStartedSeq } }
+        }
+        return null
+    })()
+    // Derived while rendering, not in an effect: the read behind the current state counts the moment it
+    // settles, with no extra commit and no frame where a stale list entry outlives a newer refusal. The
+    // stored record only changes when the evidence does, so the exposed map keeps its identity otherwise.
+    let current: EvidenceRecord = recorded.owner === owner ? recorded : { owner, entries: NO_EVIDENCE }
+    if (settledEvidence !== null) {
+        const merged = mergeEvidence(current.entries, settledEvidence.worldId, settledEvidence.evidence)
+        if (merged !== current.entries) current = { owner, entries: merged }
+    }
+    if (current !== recorded) setRecorded(current)
+    const worldEvidence = current.entries
 
     // Timeline options change when a page writes (for example creating a
     // timeline). Refresh them when navigation moves to another route within the
@@ -128,6 +182,7 @@ export function WorkspaceHierarchyProvider({ children }: { children: ReactNode }
             routeNamesTimeline:
                 worldMatch !== null && timelineMatch !== null && routeTimelineId !== null,
             world: fetchedWorldId === null ? null : worldState,
+            worldEvidence,
             refetchWorld: refetch,
         }
     }, [
@@ -139,6 +194,7 @@ export function WorkspaceHierarchyProvider({ children }: { children: ReactNode }
         requestedWorldId,
         fetchedWorldId,
         routeTimelineId,
+        worldEvidence,
         refetch,
     ])
 

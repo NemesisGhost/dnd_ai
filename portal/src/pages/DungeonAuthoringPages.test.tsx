@@ -7,6 +7,17 @@ import { CreateDungeonPage, EditDungeonAreaPage, EditDungeonPage } from "./Dunge
 
 const BASE = "/campaigns/c1/authoring"
 
+// The task a link out of a list carries (the producers' own shape), seeded as the entry a page was opened with.
+const listTask = (root: string, route: string, search: string) => ({
+    v: 1,
+    root,
+    scope: { campaignId: "c1" },
+    trail: [],
+    list: { route, search },
+})
+const worldTask = (search: string) => ({ task: listTask("world", "campaign.world", search) })
+const reviewTask = (search: string) => ({ task: listTask("review", "review.queue", search) })
+
 const OPTIONS = {
     can_create: true,
     connection_types: [
@@ -227,7 +238,7 @@ function setup(path: string | { pathname: string; state?: unknown }, element: Re
 describe("CreateDungeonPage", () => {
     it("creates a draft dungeon and opens its Areas, keeping where the person came from", async () => {
         const server = setup(
-            { pathname: "/app/c1/world/dungeon/new", state: { worldSearch: "?category=location", junk: "x" } },
+            { pathname: "/app/c1/world/dungeon/new", state: { ...worldTask("?category=location"), junk: "x" } },
             <CreateDungeonPage />,
             "/app/:campaignId/world/dungeon/new",
             dungeon(),
@@ -239,7 +250,8 @@ describe("CreateDungeonPage", () => {
         fireEvent.change(screen.getByRole("combobox", { name: /Danger level/ }), { target: { value: "6" } })
         fireEvent.click(screen.getByRole("button", { name: "Create dungeon" }))
         const opened = await screen.findByText(/Location page \?section=areas/)
-        expect(opened).toHaveTextContent('"worldSearch":"?category=location"')
+        expect(opened).toHaveTextContent('"root":"world"')
+        expect(opened).toHaveTextContent('"list":{"route":"campaign.world","search":"?category=location"}')
         expect(opened).toHaveTextContent('"announce":"Dungeon created as a draft"')
         expect(opened).not.toHaveTextContent("junk")
         expect(server.callsTo("POST", `${BASE}/dungeons`)[0]!.body).toEqual({
@@ -264,7 +276,7 @@ describe("EditDungeonPage", () => {
 
     it("edits the details only, and points to the workspace for areas, connections and publication", async () => {
         const server = setup(
-            { pathname: "/app/c1/world/dungeon/d1/edit", state: { reviewSearch: "?status=draft" } },
+            { pathname: "/app/c1/world/dungeon/d1/edit", state: reviewTask("?status=draft") },
             <EditDungeonPage />,
             route,
             dungeon(),
@@ -286,15 +298,16 @@ describe("EditDungeonPage", () => {
 
     it("carries the return state on those links", async () => {
         setup(
-            { pathname: "/app/c1/world/dungeon/d1/edit", state: { reviewSearch: "?status=draft" } },
+            { pathname: "/app/c1/world/dungeon/d1/edit", state: reviewTask("?status=draft") },
             <EditDungeonPage />,
             route,
             dungeon(),
         )
         fireEvent.click(await screen.findByRole("link", { name: "Connections" }))
-        expect(await screen.findByText(/Location page \?section=connections/)).toHaveTextContent(
-            '{"reviewSearch":"?status=draft"}',
-        )
+        // This route accepts no Review task, but the page hands it on for the record, which does.
+        const opened = await screen.findByText(/Location page \?section=connections/)
+        expect(opened).toHaveTextContent('"root":"review"')
+        expect(opened).toHaveTextContent('"list":{"route":"review.queue","search":"?status=draft"}')
     })
 })
 
@@ -304,7 +317,7 @@ describe("EditDungeonAreaPage", () => {
 
     it("links back to the dungeon client-side, carrying the return state", async () => {
         setup(
-            { pathname: path, state: { worldSearch: "?q=vault", reviewSearch: "?scope=mine", junk: "x" } },
+            { pathname: path, state: { ...worldTask("?q=vault"), junk: "x" } },
             <EditDungeonAreaPage />,
             route,
             area(),
@@ -312,14 +325,14 @@ describe("EditDungeonAreaPage", () => {
         const link = await screen.findByRole("link", { name: "Back to The Sunken Vault" })
         expect(link).toHaveAttribute("href", "/app/c1/world/location/d1?section=areas")
         fireEvent.click(link)
-        expect(await screen.findByText(/Location page \?section=areas/)).toHaveTextContent(
-            '{"worldSearch":"?q=vault","reviewSearch":"?scope=mine"}',
-        )
+        const opened = await screen.findByText(/Location page \?section=areas/)
+        expect(opened).toHaveTextContent('"list":{"route":"campaign.world","search":"?q=vault"}')
+        expect(opened).not.toHaveTextContent("junk")
     })
 
     it("edits the area's details only, and points to Contents, Area now and Publication in the workspace", async () => {
         const server = setup(
-            { pathname: path, state: { worldSearch: "?q=vault" } },
+            { pathname: path, state: worldTask("?q=vault") },
             <EditDungeonAreaPage />,
             route,
             area(),
@@ -343,7 +356,7 @@ describe("EditDungeonAreaPage", () => {
             {
                 pathname: path,
                 state: {
-                    worldSearch: "?q=vault",
+                    ...worldTask("?q=vault"),
                     returnTo: { pathname: "/app/c1/world/location/d1", search: "?section=areas" },
                 },
             },
@@ -352,7 +365,9 @@ describe("EditDungeonAreaPage", () => {
             area(),
         )
         fireEvent.click(await screen.findByRole("button", { name: "Cancel" }))
-        expect(await screen.findByText(/Location page \?section=areas/)).toHaveTextContent('"worldSearch":"?q=vault"')
+        expect(await screen.findByText(/Location page \?section=areas/)).toHaveTextContent(
+            '"list":{"route":"campaign.world","search":"?q=vault"}',
+        )
     })
 
     it("does not return to a dungeon that only the state names", async () => {

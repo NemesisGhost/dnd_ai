@@ -5,6 +5,7 @@ import { CardGrid } from "../components/CardGrid"
 import { MembershipClockUnsetNotice } from "../components/MembershipClockUnsetNotice"
 import { QuestCard } from "../components/QuestCard"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
+import { useTaskLinkState } from "../navigation/useTaskLinkState"
 import type { AuthorizedParty } from "../types/bootstrap"
 import type { CampaignQuestListItem } from "../types/quest"
 import { sortQuests } from "../utils/questSorting"
@@ -39,6 +40,8 @@ export function QuestsPage({
     const partySelectId = useId()
     // Offered from the bootstrap's capability list; the server re-checks.
     const canAuthor = useCampaignCapability(campaignId, "canon.edit")
+    // A quest, and New quest, opened from the list are steps of the task the list is the page of.
+    const taskState = useTaskLinkState()
 
     const sortedQuests = sortQuests(quests, sortColumn, direction)
 
@@ -51,6 +54,7 @@ export function QuestsPage({
                     <Link
                         className="authoring-button"
                         to={`/app/${encodeURIComponent(campaignId)}/quests/new`}
+                        state={taskState}
                     >
                         New quest
                     </Link>
@@ -146,6 +150,7 @@ export function QuestsPage({
                                 quest={quest}
                                 characterId={characterId}
                                 partyId={partyId}
+                                linkState={taskState}
                             />
                         ))}
                     </CardGrid>

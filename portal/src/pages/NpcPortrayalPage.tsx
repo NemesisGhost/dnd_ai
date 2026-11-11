@@ -1,11 +1,13 @@
 import { useState } from "react"
-import { Link, useParams } from "react-router"
+import { useParams } from "react-router"
 import { apiRequest } from "../api/http"
 import { npcPortrayalPath, saveNpcPortrayal, setNpcDetailLevel } from "../api/npcPortrayal"
 import { useAnnounce } from "../components/authoring/announcer"
 import { SelectField, TextAreaField, TextField } from "../components/authoring/fields"
 import { MutationStatusMessage, StaleWriteNotice } from "../components/authoring/feedback"
 import { StaleReadNotice } from "../components/StaleReadNotice"
+import { TaskBreadcrumb } from "../components/navigation/TaskBreadcrumb"
+import { useBreadcrumbLabel } from "../navigation/BreadcrumbLabelContext"
 import { useSession } from "../context/SessionContext"
 import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
@@ -29,7 +31,15 @@ export function NpcPortrayalPage() {
     const { campaignId = "", characterId = "" } = useParams()
     const canEdit = useCampaignCapability(campaignId, "canon.edit")
     const portrayalPath = npcPortrayalPath(campaignId, characterId)
-    const { state, refetch } = useAuthoringResource<NpcPortrayalView>(portrayalPath)
+    const { state, refetch, authority } = useAuthoringResource<NpcPortrayalView>(portrayalPath)
+    // The NPC's name, from this page's own authorized read, for the breadcrumbs below it.
+    useBreadcrumbLabel({
+        route: "characters.detail",
+        params: { campaignId, characterId },
+        name: state.kind === "ready" ? state.data.name : undefined,
+        denied: state.kind === "denied" || state.kind === "unavailable",
+        authority,
+    })
     // The last portrayal that loaded stays through a failed re-read after a save, so the page and
     // what was typed are not replaced by "does not exist"; a denied or missing answer drops it.
     const view = useKept(state, portrayalPath)
@@ -38,11 +48,7 @@ export function NpcPortrayalPage() {
     const headingRef = usePageArrival(state.kind === "ready")
     return (
         <section className="authoring-page" aria-labelledby="portrayal-heading">
-            <p className="authoring-page__breadcrumb">
-                <Link to={`/app/${encodeURIComponent(campaignId)}/world/character/${encodeURIComponent(characterId)}`}>
-                    {view !== null ? view.name : "Character"}
-                </Link>
-            </p>
+            <TaskBreadcrumb />
             <h1 id="portrayal-heading" ref={headingRef} tabIndex={-1}>
                 Portrayal
             </h1>

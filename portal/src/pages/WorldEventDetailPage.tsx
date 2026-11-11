@@ -1,5 +1,5 @@
-import { useWorldBackPath } from "../hooks/useWorldBackPath"
-import { Link } from "react-router"
+import { useWorldReturnState } from "../hooks/useWorldBackPath"
+import { WorldRecordBack } from "../components/world/WorldRecordBack"
 import { DetailPanel } from "../components/DetailPanel"
 import { EventExplanation } from "../components/events/EventExplanation"
 import { FactGrid } from "../components/FactGrid"
@@ -22,14 +22,12 @@ export function WorldEventDetailPage({
     campaignId,
     event,
 }: WorldEventDetailPageProps) {
-    const worldBackPath = useWorldBackPath(campaignId)
+    // Another event, or a record, opened from the explanation is a step of the task this event was
+    // opened in; after a direct entry it carries nothing, as before.
+    const relatedState = useWorldReturnState()
     return (
         <section aria-labelledby="world-event-heading">
-            <p>
-                <Link to={worldBackPath}>
-                    Back to World
-                </Link>
-            </p>
+            <WorldRecordBack campaignId={campaignId} current={event.name} />
 
             <p className="world-detail__eyebrow">
                 {humanizeCode(event.event_type_code)}
@@ -47,6 +45,7 @@ export function WorldEventDetailPage({
                             explanation={event.explanation}
                             density="detail"
                             campaignId={campaignId}
+                            linkState={relatedState}
                             eventHref={(id) => `/app/${encodeURIComponent(campaignId)}/world/event/${encodeURIComponent(id)}`}
                         />
                     </DetailPanel>

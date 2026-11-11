@@ -30,10 +30,10 @@ from tests.scenario.phase15_route_manifest import CAMPAIGN, FOUNDRY_PERMITTED, E
 pytestmark = pytest.mark.scenario
 
 # Pinned on purpose: adding or removing a route changes these and forces a conscious update.
-EXPECTED_GUARDED = 239  # 194 Phase 15 (incl. the clock cause-choices read, CP-9b, (incl. session-scoped travel and the area runtime projection) + 43 earlier-phase GM routes (two are Knowledge preview reads; one is campaign ownership transfer) + 2 world-scoped
-EXPECTED_PHASE15_GM = 194
+EXPECTED_GUARDED = 246  # 194 Phase 15 (incl. the clock cause-choices read, CP-9b, (incl. session-scoped travel and the area runtime projection) + 45 earlier-phase GM routes (two are Knowledge preview reads; one is campaign ownership transfer; two are the character.reveal delegation grant and revoke) + 2 world-scoped
+EXPECTED_PHASE15_GM = 199
 # 25 + the character's party list + the party roster + the World category counts + the character's reader relationships
-EXPECTED_MEMBER_READS = 29
+EXPECTED_MEMBER_READS = 32
 
 
 @pytest.fixture
@@ -138,6 +138,17 @@ def test_the_manifest_covers_every_phase15_family_and_its_size_is_pinned(s: Cont
         "portrayal",
     ):
         assert any(part in t for t in authoring), part
+
+
+def test_the_manifest_lists_the_four_public_profile_routes(s: ContentSetup) -> None:
+    """P03-A A2a: the draft read and the release read are member reads (a player gets a
+    non-disclosing 404); the draft save and the release are guarded routes."""
+    by_route = {(e.method, e.template): e for e in manifest(s)}
+    base = f"{CAMPAIGN}/characters/{{character_id}}/public-profile"
+    assert by_route[("GET", base)].klass == "member_read"
+    assert by_route[("GET", base + "/releases/{version_number}")].klass == "member_read"
+    assert by_route[("POST", base + "/draft")].klass == "gm"
+    assert by_route[("POST", base + "/releases")].klass == "gm"
 
 
 def test_players_are_refused_every_gm_route(s: ContentSetup) -> None:

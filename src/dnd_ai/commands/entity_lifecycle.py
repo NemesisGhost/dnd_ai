@@ -135,6 +135,11 @@ ENTITY_REFERENCE_CLASSIFICATION: dict[tuple[str, str, str], str] = {
     ("campaign", "party_memberships", "member_entity_id"): BLOCKING,
     # A character that has taken part in a session keeps that history (15.2D-2).
     ("campaign", "session_participants", "character_id"): BLOCKING,
+    # A character with a public-profile draft or release keeps it (P03-A A2): releases are
+    # append-only history, so legal removal needs its own reviewed procedure.
+    ("campaign", "character_public_profiles", "character_id"): BLOCKING,
+    ("campaign", "character_public_profile_releases", "character_id"): BLOCKING,
+    ("security", "character_revelations", "character_id"): BLOCKING,
     ("campaign", "relationship_state", "perspective_holder_entity_id"): BLOCKING,
     ("integration", "external_identifiers", "entity_id"): BLOCKING,
     ("integration", "sync_jobs", "target_entity_id"): BLOCKING,

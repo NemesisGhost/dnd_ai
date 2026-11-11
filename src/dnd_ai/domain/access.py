@@ -51,7 +51,10 @@ Deferred to later Phase 10 workstreams, per §19.7's own step list:
 
 import hashlib
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Literal
 
 from sqlalchemy import Connection, text
 
@@ -223,6 +226,11 @@ def relationship_capability_permitted(type_code: str, capability_code: str) -> b
     return capability_code in BUILTIN_RELATIONSHIP_CAPABILITIES.get(type_code, frozenset())
 
 
+# For a character, `campaign.view` and `canon.edit` are *not* in the `character_id` entry: every
+# reader looks them up under `entity_id` (the whole-character deny and the per-character
+# `canon.edit` deny, ADR 0021 section 2.9 and plan decision D8). `create_resource_grant` therefore
+# accepts a character as an `entity_id` target for a `deny` only (P03-A A2a-R, DEF-018); an
+# `allow` of either code on a character stays refused.
 RESOURCE_GRANT_CAPABILITY_CATALOG: dict[str, frozenset[str]] = {
     "character_id": CHARACTER_TARGET_CAPABILITY_CODES,
     "entity_id": GENERIC_TARGET_CAPABILITY_CODES,
@@ -233,6 +241,77 @@ RESOURCE_GRANT_CAPABILITY_CATALOG: dict[str, frozenset[str]] = {
 }
 
 _GrantKey = tuple[str, uuid.UUID]
+
+# What a live revelation confers on its one character, and nothing else (P03-A A3b, plan
+# section 10.1): discovery and the released public profile. Never `view_summary`, `view_full`,
+# `view_inventory`, `view_knowledge`, `view_private`, control or play. A revelation is a source of
+# its own and never becomes a relationship capability.
+REVELATION_CONFERRED_CAPABILITIES: frozenset[str] = frozenset(
+    {"character.discover", "character.view_public_profile"}
+)
+
+
+@dataclass(frozen=True)
+class RevelationSource:
+    """One live revelation that reaches the caller for one character: its id and audience kind
+    code (`member`, `access_group`, `campaign_current`, `campaign_current_and_future`). Kept in
+    `AccessContext.revelations`, separate from `character_capabilities`, so each revelation stays
+    a distinct, individually revocable source."""
+
+    character_revelation_id: uuid.UUID
+    audience_kind: str
+
+
+# The live revelations that reach one campaign membership (plan section 10.5, "Resolution"). The
+# one definition, shared by `resolve_access_context` and the effective-access explanation so the
+# two cannot disagree. A revelation applies while it is unclosed and its character is active and
+# canon (an archived or non-canon character is inert, and applies again if restored); the audience
+# test is by kind: the member itself, an open link to an active target group, an unremoved
+# snapshot row, or every active member (`campaign_current_and_future`). Binds `:campaign_id` and
+# `:membership_id`; the membership must already be open and active (the caller checks).
+LIVE_REVELATIONS_FOR_MEMBERSHIP_SQL = """
+    SELECT r.character_revelation_id, r.character_id, k.code AS audience_kind,
+           k.display_name AS audience_kind_display_name,
+           e.canonical_name AS character_display_name
+    FROM security.character_revelations r
+    JOIN security.revelation_audience_kinds k
+      ON k.revelation_audience_kind_id = r.revelation_audience_kind_id
+    JOIN core.entities e ON e.entity_id = r.character_id
+    JOIN core.lifecycle_statuses cls ON cls.lifecycle_status_id = e.lifecycle_status_id
+    JOIN core.canon_statuses ccs ON ccs.canon_status_id = e.canon_status_id
+    WHERE r.campaign_id = :campaign_id
+      AND r.ended_at IS NULL
+      AND cls.code = 'active'
+      AND ccs.code = 'canon'
+      AND (
+            (k.code = 'member' AND r.target_campaign_membership_id = :membership_id)
+            OR (
+                k.code = 'access_group'
+                AND r.target_access_group_id IN (
+                    SELECT agm.access_group_id
+                    FROM security.access_group_memberships agm
+                    JOIN security.access_groups ag
+                      ON ag.access_group_id = agm.access_group_id
+                    JOIN core.lifecycle_statuses ag_status
+                      ON ag_status.lifecycle_status_id = ag.lifecycle_status_id
+                    WHERE agm.campaign_membership_id = :membership_id
+                      AND agm.removed_at IS NULL
+                      AND ag_status.code = 'active'
+                )
+            )
+            OR (
+                k.code = 'campaign_current'
+                AND EXISTS (
+                    SELECT 1
+                    FROM security.character_revelation_members rm
+                    WHERE rm.character_revelation_id = r.character_revelation_id
+                      AND rm.campaign_membership_id = :membership_id
+                      AND rm.removed_at IS NULL
+                )
+            )
+            OR k.code = 'campaign_current_and_future'
+          )
+"""
 
 
 def _as_uuid(value: object) -> uuid.UUID:
@@ -281,6 +360,12 @@ class AccessContext:
     # (`dnd_ai.api.access`); `pending`/`inactive` still authorize because only
     # fixtures produce them.
     campaign_lifecycle_status: str = "active"
+    # Live revelations that reach this caller, by character (P03-A A3b, plan section 10.6). Each
+    # source is its own revelation; revoking one leaves the others, and every relationship, role
+    # and grant, exactly as they were.
+    revelations: Mapping[uuid.UUID, frozenset[RevelationSource]] = field(
+        default_factory=dict, repr=False
+    )
 
     def has_capability(
         self,
@@ -292,6 +377,7 @@ class AccessContext:
         quest_id: uuid.UUID | None = None,
         session_id: uuid.UUID | None = None,
         event_id: uuid.UUID | None = None,
+        include_revelations: bool = True,
     ) -> bool:
         """Deny-by-default: True only if a role, character relationship, or
         active `allow` resource grant supplies the capability, and no
@@ -322,6 +408,15 @@ class AccessContext:
         if character_id is not None:
             baseline = baseline or capability_code in self.character_capabilities.get(
                 character_id, frozenset()
+            )
+            # A live revelation confers discovery and the released public profile for that one
+            # character, as a source of its own. A role-only check (no `character_id`) gains
+            # nothing, and a resource-grant `deny` below still wins. `include_revelations=False`
+            # asks what the caller holds through every *other* source (the D5-c projection).
+            baseline = baseline or (
+                include_revelations
+                and capability_code in REVELATION_CONFERRED_CAPABILITIES
+                and bool(self.revelations.get(character_id))
             )
 
         if not supplied:
@@ -1132,6 +1227,18 @@ def resolve_access_context(
             continue
         bucket[capability_code] = _as_str(row["effect"])
 
+    revelations: dict[uuid.UUID, set[RevelationSource]] = {}
+    for revelation_row in connection.execute(
+        text(LIVE_REVELATIONS_FOR_MEMBERSHIP_SQL),
+        {"campaign_id": campaign_id, "membership_id": membership_id},
+    ).mappings():
+        revelations.setdefault(_as_uuid(revelation_row["character_id"]), set()).add(
+            RevelationSource(
+                character_revelation_id=_as_uuid(revelation_row["character_revelation_id"]),
+                audience_kind=_as_str(revelation_row["audience_kind"]),
+            )
+        )
+
     return AccessContext(
         user_id=user_id,
         campaign_id=campaign_id,
@@ -1143,4 +1250,135 @@ def resolve_access_context(
         },
         grant_effects=grant_effects,
         campaign_lifecycle_status=campaign_lifecycle_status,
+        revelations={
+            character_id: frozenset(sources) for character_id, sources in revelations.items()
+        },
     )
+
+
+BUILTIN_CAMPAIGN_OWNER_ROLE_CODE = "campaign_owner"
+BUILTIN_CAMPAIGN_GM_ROLE_CODE = "gm"
+
+OwnerAssignmentLock = Literal["none", "share", "update"]
+
+_OWNER_ASSIGNMENT_LOCK_CLAUSES: dict[str, str] = {
+    "none": "",
+    "share": "FOR SHARE OF mr",
+    "update": "FOR UPDATE OF mr",
+}
+
+
+def is_builtin_campaign_owner_role(*, role_campaign_id: uuid.UUID | None, role_code: str) -> bool:
+    """Whether a `security.roles` row is the built-in owner template. `security.roles.code` is
+    unique only among templates, so the code alone never identifies it: a campaign-scoped role may
+    be named `campaign_owner` and is not this role."""
+    return role_campaign_id is None and role_code == BUILTIN_CAMPAIGN_OWNER_ROLE_CODE
+
+
+def find_live_builtin_owner_assignment(
+    connection: Connection,
+    *,
+    campaign_id: uuid.UUID,
+    campaign_membership_id: uuid.UUID,
+    lock: OwnerAssignmentLock = "none",
+    as_of: datetime | None = None,
+) -> uuid.UUID | None:
+    """The `membership_role_id` of this membership's live built-in `campaign_owner` assignment in
+    `campaign_id`, or `None`. The single definition of "is a current campaign owner", shared by the
+    ownership gate on the commands that hand out the owner role and by the reveal-authority
+    resolver, so the two cannot drift.
+
+    Live means: the role row is the built-in template (matched by `role_id` through
+    `campaign_id IS NULL`, never by code alone) and is active; the assignment is neither revoked nor
+    expired; the membership belongs to `campaign_id`, is open and in the `active` status; and the
+    account is active.
+
+    `lock` takes a row lock on the assignment: `share` for a caller that only needs it to stay live
+    until commit (revoking, ending or relinquishing it waits for the caller), `update` for a caller
+    that goes on to change that same row (taking `share` first would turn the later write into a
+    lock upgrade that deadlocks against a concurrent identical request).
+
+    `as_of` is the instant expiry is judged at; the default is the transaction's start (`now()`).
+    A caller that has waited on locks passes a fresh `clock_timestamp()` read taken after the
+    waits, because an assignment can expire during a wait and `now()` would still call it live
+    (DEF-011)."""
+    return _find_live_builtin_assignment(
+        connection,
+        role_code=BUILTIN_CAMPAIGN_OWNER_ROLE_CODE,
+        campaign_id=campaign_id,
+        campaign_membership_id=campaign_membership_id,
+        lock=lock,
+        as_of=as_of,
+    )
+
+
+def find_live_builtin_gm_assignment(
+    connection: Connection,
+    *,
+    campaign_id: uuid.UUID,
+    campaign_membership_id: uuid.UUID,
+    lock: OwnerAssignmentLock = "none",
+    as_of: datetime | None = None,
+) -> uuid.UUID | None:
+    """The `membership_role_id` of this membership's live built-in `gm` assignment in
+    `campaign_id`, or `None`: the same definition of "live" as
+    `find_live_builtin_owner_assignment` (built-in template matched by `role_id` through
+    `campaign_id IS NULL`, active; assignment neither revoked nor expired; membership open and
+    `active`; account active) applied to the `gm` template. A campaign-scoped role named `gm`
+    and the `assistant_gm` role are not this role. A reveal delegation binds to the row this
+    returns."""
+    return _find_live_builtin_assignment(
+        connection,
+        role_code=BUILTIN_CAMPAIGN_GM_ROLE_CODE,
+        campaign_id=campaign_id,
+        campaign_membership_id=campaign_membership_id,
+        lock=lock,
+        as_of=as_of,
+    )
+
+
+def _find_live_builtin_assignment(
+    connection: Connection,
+    *,
+    role_code: str,
+    campaign_id: uuid.UUID,
+    campaign_membership_id: uuid.UUID,
+    lock: OwnerAssignmentLock,
+    as_of: datetime | None,
+) -> uuid.UUID | None:
+    return connection.execute(
+        text(f"""
+            SELECT mr.membership_role_id
+            FROM security.membership_roles mr
+            JOIN security.roles r ON r.role_id = mr.role_id
+            JOIN security.campaign_memberships cm
+                ON cm.campaign_membership_id = mr.campaign_membership_id
+            JOIN security.membership_statuses ms
+                ON ms.membership_status_id = cm.membership_status_id
+            JOIN security.users u ON u.user_id = cm.user_id
+            JOIN core.lifecycle_statuses uls ON uls.lifecycle_status_id = u.lifecycle_status_id
+            WHERE mr.campaign_membership_id = :membership
+              AND cm.campaign_id = :campaign
+              AND r.campaign_id IS NULL
+              AND r.code = :role_code
+              AND r.is_active
+              AND mr.revoked_at IS NULL
+              AND (
+                  mr.expires_at IS NULL
+                  OR mr.expires_at > COALESCE(CAST(:as_of AS timestamptz), now())
+              )
+              AND cm.ended_at IS NULL
+              AND ms.code = 'active'
+              AND ms.is_active
+              AND uls.code = 'active'
+            ORDER BY mr.membership_role_id
+            LIMIT 1
+            {_OWNER_ASSIGNMENT_LOCK_CLAUSES[lock]}
+        """),  # noqa: S608 - the lock clause comes from a closed literal mapping
+        {
+            "membership": campaign_membership_id,
+            "campaign": campaign_id,
+            "role_code": role_code,
+            "as_of": as_of,
+        },
+    ).scalar()

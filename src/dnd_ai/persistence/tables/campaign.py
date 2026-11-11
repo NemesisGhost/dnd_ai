@@ -12,6 +12,7 @@ from sqlalchemy import (
     Boolean,
     Column,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     PrimaryKeyConstraint,
     Table,
@@ -1637,4 +1638,386 @@ Index(
     sessions.c.campaign_id,
     unique=True,
     postgresql_where=sessions.c.started_at.isnot(None) & sessions.c.ended_at.is_(None),
+)
+
+# ---------------------------------------------------------------------------
+# campaign — character public profiles (revision 142)
+# ---------------------------------------------------------------------------
+
+public_profile_field_origins = _lookup_table(
+    "campaign",
+    "public_profile_field_origins",
+    "public_profile_field_origin_id",
+    "Where a public-profile field's text came from: authored by a GM, or copied by the "
+    "server from a legacy character description field (P03-A A2). A record of provenance, "
+    "not a safety label.",
+)
+
+character_public_profiles = Table(
+    "character_public_profiles",
+    metadata,
+    _uuid_pk("character_public_profile_id"),
+    Column(
+        "campaign_id",
+        UUID(),
+        ForeignKey("campaign.campaigns.campaign_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "character_id",
+        UUID(),
+        ForeignKey("character.characters.character_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "public_appearance",
+        Text(),
+        comment=(
+            "Draft text for the public appearance; at most 4000 characters (the legacy source "
+            "field's limit). GM-only until released."
+        ),
+    ),
+    Column(
+        "public_appearance_origin_id",
+        UUID(),
+        ForeignKey(
+            "campaign.public_profile_field_origins.public_profile_field_origin_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    ),
+    Column(
+        "public_appearance_origin_entity_row_version",
+        BigInteger(),
+        comment=(
+            "The character's core.entities.row_version when the appearance text was copied from "
+            "legacy material; NULL unless the origin is a legacy origin."
+        ),
+    ),
+    Column("public_summary", Text()),
+    Column(
+        "public_background",
+        Text(),
+        comment=(
+            "Draft text for the public background; at most 4000 characters. GM-only until released."
+        ),
+    ),
+    Column(
+        "public_background_origin_id",
+        UUID(),
+        ForeignKey(
+            "campaign.public_profile_field_origins.public_profile_field_origin_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    ),
+    Column(
+        "public_background_origin_entity_row_version",
+        BigInteger(),
+        comment=(
+            "The character's core.entities.row_version when the background text was copied from "
+            "legacy material; NULL unless the origin is a legacy origin."
+        ),
+    ),
+    Column(
+        "row_version",
+        BigInteger(),
+        nullable=False,
+        server_default=text("1"),
+        comment=(
+            "Optimistic-concurrency token, incremented by every UPDATE (core.bump_row_version()). "
+            "A save and a release name it as the draft version they were made against."
+        ),
+    ),
+    Column(
+        "public_appearance_restricted_row_version",
+        BigInteger(),
+        comment=(
+            "The draft row_version at which this field's current content was last written while it "
+            "had a legacy origin (the restriction watermark). A release covers the field when its "
+            "from_draft_row_version is at or above it. NULL exactly when the field is not copied."
+        ),
+    ),
+    Column(
+        "public_background_restricted_row_version",
+        BigInteger(),
+        comment=(
+            "The draft row_version at which this field's current content was last written while it "
+            "had a legacy origin (the restriction watermark). A release covers the field when its "
+            "from_draft_row_version is at or above it. NULL exactly when the field is not copied."
+        ),
+    ),
+    Column(
+        "should_publish_species",
+        Boolean(),
+        nullable=False,
+        server_default=text("false"),
+        comment=(
+            "Whether the next release publishes the character's actual species. Off by default. "
+            "It only selects what the next release snapshots; it publishes nothing by itself "
+            "(P03-A A4, decision D6)."
+        ),
+    ),
+    Column(
+        "should_publish_size",
+        Boolean(),
+        nullable=False,
+        server_default=text("false"),
+        comment=(
+            "Whether the next release publishes the character's actual size. Off by default. "
+            "It only selects what the next release snapshots; it publishes nothing by itself "
+            "(P03-A A4, decision D6)."
+        ),
+    ),
+    Column(
+        "created_by_membership_id",
+        UUID(),
+        ForeignKey("security.campaign_memberships.campaign_membership_id", ondelete="SET NULL"),
+    ),
+    Column(
+        "updated_by_membership_id",
+        UUID(),
+        ForeignKey("security.campaign_memberships.campaign_membership_id", ondelete="SET NULL"),
+    ),
+    *_timestamps(),
+    UniqueConstraint(
+        "campaign_id", "character_id", name="ux_character_public_profiles_campaign_character"
+    ),
+    UniqueConstraint(
+        "character_public_profile_id",
+        "campaign_id",
+        "character_id",
+        name="ux_character_public_profiles_scope",
+    ),
+    schema="campaign",
+    comment=(
+        "The mutable public-profile draft of one character in one campaign (P03-A A2). GM-only. "
+        "Never visible to an audience: only a release, made visible by a later revelation, is. "
+        "One row per (campaign, character); campaign B has its own draft for the same character."
+    ),
+)
+
+Index("ix_character_public_profiles_character_id", character_public_profiles.c.character_id)
+Index(
+    "ix_character_public_profiles_appearance_origin_id",
+    character_public_profiles.c.public_appearance_origin_id,
+)
+Index(
+    "ix_character_public_profiles_background_origin_id",
+    character_public_profiles.c.public_background_origin_id,
+)
+Index(
+    "ix_character_public_profiles_created_by",
+    character_public_profiles.c.created_by_membership_id,
+    postgresql_where=character_public_profiles.c.created_by_membership_id.isnot(None),
+)
+Index(
+    "ix_character_public_profiles_updated_by",
+    character_public_profiles.c.updated_by_membership_id,
+    postgresql_where=character_public_profiles.c.updated_by_membership_id.isnot(None),
+)
+
+character_public_profile_releases = Table(
+    "character_public_profile_releases",
+    metadata,
+    _uuid_pk("character_public_profile_release_id"),
+    Column("character_public_profile_id", UUID(), nullable=False),
+    Column(
+        "campaign_id",
+        UUID(),
+        ForeignKey("campaign.campaigns.campaign_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "character_id",
+        UUID(),
+        ForeignKey("character.characters.character_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "version_number",
+        Integer(),
+        nullable=False,
+        comment="Gapless 1..n per profile, allocated under the draft row lock.",
+    ),
+    Column(
+        "from_draft_row_version",
+        BigInteger(),
+        nullable=False,
+        comment=(
+            "The draft row_version this release snapshots. With identity_entity_row_version it is "
+            "the natural retry key: a draft version that publishes neither species nor size is "
+            "released at most once; one that does may be released again under a new character "
+            "row_version."
+        ),
+    ),
+    Column(
+        "public_appearance",
+        Text(),
+        comment="Snapshot of the draft's public appearance at from_draft_row_version.",
+    ),
+    Column(
+        "public_appearance_origin_id",
+        UUID(),
+        ForeignKey(
+            "campaign.public_profile_field_origins.public_profile_field_origin_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    ),
+    Column("public_appearance_origin_entity_row_version", BigInteger()),
+    Column("public_summary", Text()),
+    Column(
+        "public_background",
+        Text(),
+        comment="Snapshot of the draft's public background at from_draft_row_version.",
+    ),
+    Column(
+        "public_background_origin_id",
+        UUID(),
+        ForeignKey(
+            "campaign.public_profile_field_origins.public_profile_field_origin_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    ),
+    Column("public_background_origin_entity_row_version", BigInteger()),
+    Column(
+        "authority_source_code",
+        Text(),
+        nullable=False,
+        comment=(
+            "How the releaser held character.reveal: owner (a live built-in campaign_owner "
+            "assignment) or delegation (a live reveal delegation)."
+        ),
+    ),
+    Column(
+        "character_reveal_delegation_id",
+        UUID(),
+        ForeignKey("security.character_reveal_delegations.character_reveal_delegation_id"),
+        comment=(
+            "The delegation the release was made under; NULL unless authority_source_code is "
+            "delegation. The delegation may have ended since; the release stays."
+        ),
+    ),
+    Column(
+        "released_by_membership_id",
+        UUID(),
+        ForeignKey("security.campaign_memberships.campaign_membership_id"),
+        nullable=False,
+    ),
+    Column(
+        "released_at",
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=text("now()"),
+    ),
+    Column(
+        "release_note",
+        Text(),
+        comment="An optional GM-only note on why the release was made. Never shown to an audience.",
+    ),
+    Column(
+        "released_species_id",
+        UUID(),
+        ForeignKey("rules.species.species_id", ondelete="RESTRICT"),
+        comment=(
+            "The character's species_id when a release published its species; NULL when it did "
+            "not. Kept for GM provenance and never sent to an audience. ON DELETE RESTRICT: a "
+            "species a release names cannot be deleted."
+        ),
+    ),
+    Column(
+        "released_species_code",
+        Text(),
+        comment=(
+            "The released species' rules.species.code at release time; NULL unless the species "
+            "was published. A snapshot: later ruleset changes never alter it."
+        ),
+    ),
+    Column(
+        "released_species_display_name",
+        Text(),
+        comment=(
+            "The released species' rules.species.display_name at release time; NULL unless the "
+            "species was published. A snapshot, so a relabelled species never changes what "
+            "audiences were told."
+        ),
+    ),
+    Column(
+        "released_size_category",
+        Text(),
+        comment=(
+            "The character's size_category (one of the six size codes) when a release published "
+            "its size; NULL when it did not."
+        ),
+    ),
+    Column(
+        "identity_entity_row_version",
+        BigInteger(),
+        comment=(
+            "The character's core.entities.row_version the species and size snapshot was read "
+            "at; set exactly when species or size is published. Part of the retry key: the same "
+            "draft version may be released again after a definition change."
+        ),
+    ),
+    ForeignKeyConstraint(
+        ["character_public_profile_id", "campaign_id", "character_id"],
+        [
+            "campaign.character_public_profiles.character_public_profile_id",
+            "campaign.character_public_profiles.campaign_id",
+            "campaign.character_public_profiles.character_id",
+        ],
+        name="fk_character_public_profile_releases_profile",
+    ),
+    UniqueConstraint(
+        "character_public_profile_id",
+        "version_number",
+        name="ux_character_public_profile_releases_version",
+    ),
+    UniqueConstraint(
+        "character_public_profile_id",
+        "from_draft_row_version",
+        "identity_entity_row_version",
+        name="ux_character_public_profile_releases_draft_identity",
+        postgresql_nulls_not_distinct=True,
+    ),
+    schema="campaign",
+    comment=(
+        "An immutable, versioned snapshot of a character's public-profile draft in one campaign "
+        "(P03-A A2). Append-only: UPDATE, DELETE and TRUNCATE are refused. A release outlives "
+        "the authority that made it. It makes nothing visible by itself; an audience sees the "
+        "latest release only through a revelation."
+    ),
+)
+
+Index(
+    "ix_character_public_profile_releases_campaign_id",
+    character_public_profile_releases.c.campaign_id,
+)
+Index(
+    "ix_character_public_profile_releases_character_id",
+    character_public_profile_releases.c.character_id,
+)
+Index(
+    "ix_character_public_profile_releases_appearance_origin_id",
+    character_public_profile_releases.c.public_appearance_origin_id,
+)
+Index(
+    "ix_character_public_profile_releases_background_origin_id",
+    character_public_profile_releases.c.public_background_origin_id,
+)
+Index(
+    "ix_character_public_profile_releases_released_species_id",
+    character_public_profile_releases.c.released_species_id,
+    postgresql_where=character_public_profile_releases.c.released_species_id.isnot(None),
+)
+Index(
+    "ix_character_public_profile_releases_delegation",
+    character_public_profile_releases.c.character_reveal_delegation_id,
+    postgresql_where=character_public_profile_releases.c.character_reveal_delegation_id.isnot(None),
+)
+Index(
+    "ix_character_public_profile_releases_released_by",
+    character_public_profile_releases.c.released_by_membership_id,
 )

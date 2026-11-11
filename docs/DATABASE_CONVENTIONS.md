@@ -36,7 +36,7 @@ The goals are consistency, maintainability, predictable querying, safe evolution
 | CI | `postgres:18.4` GitHub Actions service container ([DEVELOPMENT.md §8](DEVELOPMENT.md#8-continuous-integration)) |
 | AWS `dev` / `staging` / `prod` (optional, legacy) | `postgres_version` in `terraform/modules/database`, if deployed |
 
-The major version was 15.x until 2026-08-07, when the development loop moved to a local server ([ADR 0011](adr/0011-local-first-development-aws-verified-delivery.md), later superseded by [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)) and 18.x became the version every target could share. `dev` was replaced with a fresh PostgreSQL 18.4 instance on 2026-08-08 to close that gap ([POSTGRES18_UPGRADE_PLAN.md](POSTGRES18_UPGRADE_PLAN.md)); CI's containerized target and `compose.yaml` were both pinned to that same `18.4` when self-hosted Docker became the default deployment topology.
+The major version was 15.x until 2026-08-07, when the development loop moved to a local server ([ADR 0011](adr/0011-local-first-development-aws-verified-delivery.md), later superseded by [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)) and 18.x became the version every target could share. `dev` was replaced with a fresh PostgreSQL 18.4 instance on 2026-08-08 to close that gap ([POSTGRES18_UPGRADE_PLAN.md](DELIVERY_HISTORY.md)); CI's containerized target and `compose.yaml` were both pinned to that same `18.4` when self-hosted Docker became the default deployment topology.
 
 **A local server on a different major version than what CI runs is a defect, not a preference.** It produces green local runs that fail CI, and it reintroduces the divergence between what is verified and what is deployed that [ADR 0008](adr/0008-aws-first-deployment-and-verification.md) was originally written to eliminate — now addressed by [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md) verifying the same self-hosted target it deploys. Match the version; do not use whatever is already installed.
 
@@ -71,7 +71,7 @@ CREATE EXTENSION IF NOT EXISTS vector;
 
 Extensions are installed through migrations or infrastructure bootstrap under a controlled database owner. Application users must not have extension-management permissions.
 
-`pgcrypto`, `pg_trgm`, and `btree_gist` are all **trusted** extensions on PostgreSQL 13+ (verified as trusted on the AWS `dev` instance, both on 15.18 originally and again on 18.4 after the [POSTGRES18_UPGRADE_PLAN.md](POSTGRES18_UPGRADE_PLAN.md) replacement — the full `001_bootstrap` migration and later extension-adding revisions all succeeded without `rds_superuser`). A non-superuser may therefore install them with only `CREATE` on the database — the roles never need `rds_superuser`.
+`pgcrypto`, `pg_trgm`, and `btree_gist` are all **trusted** extensions on PostgreSQL 13+ (verified as trusted on the AWS `dev` instance, both on 15.18 originally and again on 18.4 after the [POSTGRES18_UPGRADE_PLAN.md](DELIVERY_HISTORY.md) replacement — the full `001_bootstrap` migration and later extension-adding revisions all succeeded without `rds_superuser`). A non-superuser may therefore install them with only `CREATE` on the database — the roles never need `rds_superuser`.
 
 The same extensions must be installable on a local development server, since the identical `001_bootstrap` revision runs there ([DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup)). A stock local install provides all three in `contrib`; a missing one shows up as a bootstrap failure on the first `alembic upgrade head`, not as a subtle divergence later.
 
@@ -901,7 +901,7 @@ World-authored entities and facts require a canon status.
 
 AI-generated, imported, and integration-created content must always identify a source.
 
-This is an **application-command obligation, not a database constraint** (resolved in the Phase 4 closeout recorded by [PHASE4_VERIFICATION.md](PHASE4_VERIFICATION.md#closeout-2026-08-02)): every `source_id UUID FK` column is nullable with `ON DELETE SET NULL`, because official/officially-seeded content legitimately has no single authored source row and there is no schema concept of content *origin* independent of `canon_status_id` to key a structural check off of. The command handler that creates AI-generated, imported, homebrew, or integration-created rule content is responsible for requiring and validating a source before that content is written, with its own tests at that boundary, once such a command exists. Do not describe nullable `source_id` as database-enforced provenance.
+This is an **application-command obligation, not a database constraint** (resolved in the Phase 4 closeout recorded by [PHASE4_VERIFICATION.md](DELIVERY_HISTORY.md)): every `source_id UUID FK` column is nullable with `ON DELETE SET NULL`, because official/officially-seeded content legitimately has no single authored source row and there is no schema concept of content *origin* independent of `canon_status_id` to key a structural check off of. The command handler that creates AI-generated, imported, homebrew, or integration-created rule content is responsible for requiring and validating a source before that content is written, with its own tests at that boundary, once such a command exists. Do not describe nullable `source_id` as database-enforced provenance.
 
 ### 16.3 Proposed content
 
@@ -1192,6 +1192,8 @@ Audit:
 
 **Idempotency replay bodies are minimal receipts**: typed authoring writes store and return only ids, `row_version`, and `created`/`changed` flags (plus `record_id` for a quest stage or objective); the portal refetches the authoritative view. Existing rows written before this change are handled by the owner-gated scrub checkpoint (15.2A-4).
 
+**One approved exception to the receipt's contents:** the public-profile legacy copy (`POST …/public-profile/draft/copy-legacy`, P03-A A2b-2) also stores and returns `origin_entity_row_version`, an integer: the source character's `core.entities.row_version` at the copy. It is provenance metadata that the draft read already discloses (decision D7-f), it is a number and never text, and it lets a client tell which source version it copied without a refetch. The exception covers that one field of that one receipt; it does not allow any other command to add a field, and no receipt, response, error or audit row may carry the copied text.
+
 ### 24.2 Audit immutability
 
 Audit tables are append-only to normal application roles.
@@ -1243,7 +1245,7 @@ Each migration must include:
 
 Do not use `DROP TABLE IF EXISTS ... CASCADE` in persistent environment migrations.
 
-Destructive reset scripts may exist only under clearly labeled local test tooling. A developer's local PostgreSQL server is disposable by definition ([PLAN.md §26.2](PLAN.md#262-environments)) and is the one place such tooling is appropriate — never write a reset script that could resolve its target to `dev`, `staging`, or `prod`.
+Destructive reset scripts may exist only under clearly labeled local test tooling. A developer's local PostgreSQL server is disposable by definition ([PLAN.md §26.2](README.md)) and is the one place such tooling is appropriate — never write a reset script that could resolve its target to `dev`, `staging`, or `prod`.
 
 ### 25.4 Seed data
 
@@ -1263,7 +1265,7 @@ Before production, use expand-and-contract migrations for breaking changes:
 
 ### 25.6 Migration testing
 
-CI must test, against a disposable containerized PostgreSQL 18 instance ([PLAN.md §24.0](PLAN.md#240-verification-policy), [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)):
+CI must test, against a disposable containerized PostgreSQL 18 instance ([PLAN.md §24.0](README.md), [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)):
 
 - migration from empty database
 - upgrade through all revisions
@@ -1326,6 +1328,10 @@ A numeric `row_version` is preferred for high-conflict records.
 External commands and integration messages should support idempotency keys.
 
 **Three stores, chosen by route scope (Phase 14):** `security.campaign_creation_reservations` (scope `(actor, key)`, `POST /campaigns` only), `security.idempotent_requests` (scope `(actor, campaign, key)`, every campaign-scoped command), and `security.actor_idempotent_requests` (scope `(actor, key)`, world and timeline commands). Reservation, command, audit, and completion share one transaction, so a failed attempt never consumes a key. Authorization runs *before* the idempotency lookup, so a caller who has lost authority cannot replay a stored response, and a replay is answered *before* any `expected_row_version` check so a retried successful write returns its original success rather than a false `stale_write`.
+
+**The key lock (P03-A P2).** A keyed campaign-scoped request takes a transaction-scoped advisory lock on its `(actor, campaign, key)` scope immediately before the reservation INSERT (`dnd_ai.api.idempotency.lock_idempotency_key`): `pg_advisory_xact_lock(hashtextextended(scope, 0))`, a 64-bit hash of a versioned, length-prefixed encoding of the actor and campaign UUIDs and the key. It exists so a second request with the same key waits in a queue that holds no row lock, instead of waiting on the first request's uncommitted reservation row after taking row locks of its own (two routes taking the same rows in different orders then deadlocked). Rules: the lock is requested before the request holds any row lock, row write or other advisory lock (ordinary access-resolution reads may precede it); a request without a key takes no key lock; a transaction takes at most one distinct key lock (a second raises `IdempotencyKeyLockError`; the same scope again is reentrant); the lock is only a queue, so the natural key `(actor, campaign, key)` and the request fingerprint remain the authority for replay and conflict, and a hash collision between two scopes only makes them wait briefly; the campaign-creation and actor-scoped stores do not take it. It addresses same-key cycles only. Cycles between different keys (DEF-019) and a request's stale authorization are separate defects and stay open.
+
+**Committed before the response (P03-A P3).** The request transaction is committed by an app-wide dependency before the response is sent (SYSTEM_ARCHITECTURE section 7.0). A keyed request's reservation, mutation, audit row and completed receipt are therefore visible, and its key lock is released, by the time any 2xx reaches the client; a commit-time failure is never a 2xx. If a COMMIT's acknowledgement is lost, the response is a 500 and the transaction may have committed; retrying with the same key and body replays the stored receipt without a second mutation or audit row, which is how an uncertain commit is resolved. An unkeyed request has no such protection.
 
 ---
 
@@ -1488,7 +1494,7 @@ Maintain database scenario tests for:
 - NPC knowledge filtering
 - AI proposal approval
 
-Each becomes required in the phase that first makes it provable, not before. In particular, **branch isolation** — a timeline inherits parent history only up to its branch point — is a **Phase 6** scenario test, because there is no history to inherit until `narrative.events` exists. Phase 3 delivers branch *structure* (parent, branch world time, world agreement) and timeline-scoped membership rows; neither demonstrates isolation, and neither should be recorded as satisfying this item. See [PLAN.md Phase 3](PLAN.md#phase-3-timelines-and-campaigns) and [Phase 6](PLAN.md#phase-6-events-and-interactions).
+Each becomes required in the phase that first makes it provable, not before. In particular, **branch isolation** — a timeline inherits parent history only up to its branch point — is a **Phase 6** scenario test, because there is no history to inherit until `narrative.events` exists. Phase 3 delivers branch *structure* (parent, branch world time, world agreement) and timeline-scoped membership rows; neither demonstrates isolation, and neither should be recorded as satisfying this item. See [PLAN.md Phase 3](README.md) and [Phase 6](README.md).
 
 ### 32.3 Data builders
 

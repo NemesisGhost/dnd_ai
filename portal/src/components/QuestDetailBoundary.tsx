@@ -1,5 +1,6 @@
 import type { ReactNode } from "react"
 import { useQuest } from "../hooks/useQuest"
+import { useBreadcrumbLabel } from "../navigation/BreadcrumbLabelContext"
 import PlaceholderPage from "../pages/PlaceholderPage"
 import type {
     QuestDetail,
@@ -22,12 +23,21 @@ export function QuestDetailBoundary({
     partyId = null,
     children,
 }: QuestDetailBoundaryProps) {
-    const { state, retry } = useQuest(
+    const { state, retry, authority } = useQuest(
         campaignId,
         questId,
         characterId,
         partyId,
     )
+    // The quest's name, from this authorized read, for the breadcrumbs of the pages beneath it. An
+    // unavailable (403/404) answer drops it; nothing is registered from any other state.
+    useBreadcrumbLabel({
+        route: "quests.detail",
+        params: { campaignId, questId },
+        name: state.status === "success" ? state.quest.name : undefined,
+        denied: state.status === "unavailable",
+        authority,
+    })
 
     if (state.status === "loading") {
         return (

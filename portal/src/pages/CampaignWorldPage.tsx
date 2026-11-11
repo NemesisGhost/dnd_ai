@@ -3,8 +3,10 @@ import {
     useState,
 } from "react"
 import {
+    useLocation,
     useParams,
 } from "react-router"
+import { continuedListState } from "../navigation/breadcrumbModel"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { useWorldCategoryCounts } from "../hooks/useWorldCategoryCounts"
 import { useWorldBrowseState } from "../hooks/useWorldBrowseState"
@@ -36,6 +38,10 @@ function CampaignWorldContent({
     // useWorldBrowseState), so entries return to the same view and Back,
     // Forward and deep links work. Only the text being typed is local.
     const browse = useWorldBrowseState()
+    // What a record or a creation page opened from here returns to: the task with this list and the
+    // category, search and page it is on (when the list's contract accepts them).
+    const location = useLocation()
+    const taskState = continuedListState(location.pathname, location.state, location.search) ?? undefined
     const [searchInputValue, setSearchInputValue] = useState(browse.query)
     const [seenUrlQuery, setSeenUrlQuery] = useState(browse.query)
     if (browse.query !== seenUrlQuery) {
@@ -77,27 +83,31 @@ function CampaignWorldContent({
               {
                   label: "New location",
                   to: `/app/${encodeURIComponent(campaignId)}/world/location/new`,
+                  state: taskState,
               },
               {
                   label: "New dungeon",
                   to: `/app/${encodeURIComponent(campaignId)}/world/dungeon/new`,
+                  state: taskState,
               },
               {
                   label: "New organization",
                   to: `/app/${encodeURIComponent(campaignId)}/world/organization/new`,
+                  state: taskState,
               },
               ...(browse.category === "character"
                   ? [
                         {
                             label: "New NPC",
                             to: `/app/${encodeURIComponent(campaignId)}/characters/npc/new`,
-                            state: { worldSearch: browse.returnSearch },
+                            state: taskState,
                         },
                     ]
                   : []),
               {
                   label: "New religion",
                   to: `/app/${encodeURIComponent(campaignId)}/world/religion/new`,
+                  state: taskState,
               },
           ]
         : []
@@ -142,7 +152,7 @@ function CampaignWorldContent({
                         query={browse.query}
                         categoryNoun={categoryItem.noun}
                         onClearSearch={clearSearch}
-                        returnSearch={browse.returnSearch}
+                        taskState={taskState}
                     />
                 )}
             </WorldEntitiesBoundary>

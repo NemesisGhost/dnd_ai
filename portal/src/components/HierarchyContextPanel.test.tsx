@@ -105,6 +105,8 @@ function renderAt(
               <Route path="/app/:campaignId" element={<CampaignLayout bootstrap={session} />}>
                 <Route path="home" element={<h1>Campaign home</h1>} />
                 <Route path="world" element={<h1>Campaign world</h1>} />
+                <Route path="characters/:characterId" element={<h1>Character details</h1>} />
+                <Route path="characters/all" element={<h1>All characters</h1>} />
               </Route>
             </Routes>
             <LocationProbe />
@@ -138,7 +140,7 @@ const OWNER = ["campaign.create", "timeline.manage", "world.manage", "world.view
 beforeEach(() => {
   selectCharacter.mockReset()
   useCharacterMock.mockReset()
-  useCharacterMock.mockReturnValue({ state: { status: "unavailable" }, retry: vi.fn() })
+  useCharacterMock.mockReturnValue({ state: { status: "unavailable" }, retry: vi.fn(), authority: null })
   server = installMockServer()
   server.on("GET", /^\/worlds\?status=all/, {
     body: {
@@ -253,12 +255,13 @@ describe("HierarchyContextPanel placement and levels", () => {
     expect(screen.queryByText(/Hero of c3/)).toBeNull()
   })
 
-  it("keeps character perspective Campaign-scoped: reports changes for the route campaign only", () => {
+  it("keeps character perspective Campaign-scoped: a change opens the route campaign's character details (PD-6)", async () => {
     renderAt("/app/c1/home", "c1-hero")
 
     expect(character()).toHaveValue("c1-hero")
     fireEvent.change(character(), { target: { value: "c1-ally" } })
-    expect(selectCharacter).toHaveBeenCalledWith("c1", "c1-ally")
+    await screen.findByRole("heading", { name: "Character details" })
+    expect(screen.getByTestId("location")).toHaveTextContent("/app/c1/characters/c1-ally")
   })
 
   it("shows character detail only when a perspective is selected", () => {
@@ -403,11 +406,16 @@ describe("HierarchyContextPanel disclosure", () => {
     expect(optionNames(level("World"))).toEqual(["No selection", "World A", "World B"])
   })
 
-  it("offers only worlds returned with world access, and no timeline choice for a view-only world", async () => {
+  // Timeline overview is a READ destination gated by `world.view`; `world.manage` is not required.
+  it.each([
+    ["a viewer", ["world.view"]],
+    ["an editor", ["world.view", "timeline.manage"]],
+    ["an owner without system GM", ["world.view", "timeline.manage", "world.canon.read"]],
+  ])("offers only worlds returned with world access, and a timeline choice for %s", async (_who, capabilities) => {
     server.on("GET", /^\/worlds\?status=all/, {
       body: {
         items: [
-          { world_id: "world-a", name: "World A", capabilities: ["world.view"] },
+          { world_id: "world-a", name: "World A", capabilities },
           { world_id: "world-b", name: "World B", capabilities: OWNER },
           { world_id: "world-z", name: "World Z", capabilities: [] },
         ],
@@ -418,16 +426,35 @@ describe("HierarchyContextPanel disclosure", () => {
       body: {
         world_id: "world-a",
         name: "World A",
-        capabilities: ["world.view"],
-        timelines: [timeline("timeline-a", "Main A")],
+        capabilities,
+        timelines: [timeline("timeline-a", "Main A"), timeline("timeline-b", "Branch A")],
       },
     })
     renderAt("/worlds/world-a")
 
     await waitFor(() => expect(shown(level("World"))).toBe("World A"))
     expect(optionNames(level("World"))).toEqual(["No selection", "World A", "World B"])
-    // Choosing a timeline would open a timeline-authoring route.
-    expect(level("Timeline")).toBeDisabled()
+    await waitFor(() => expect(level("Timeline")).toBeEnabled())
+    expect(optionNames(level("Timeline"))).toEqual(["No selection", "Main A", "Branch A"])
+
+    fireEvent.change(level("Timeline"), { target: { value: "timeline-b" } })
+    expect(screen.getByTestId("location")).toHaveTextContent("/worlds/world-a/timelines/timeline-b")
+  })
+
+  it("offers no timeline choice for a world read that carries no world.view", async () => {
+    server.on("GET", "/worlds/world-a", {
+      body: {
+        world_id: "world-a",
+        name: "World A",
+        capabilities: ["timeline.manage"],
+        timelines: [timeline("timeline-a", "Main A")],
+      },
+    })
+    // No campaign of the caller is on it either, so nothing is derived from campaigns.
+    renderAt("/worlds/world-a", null, { ...bootstrap, campaigns: [] })
+
+    await waitFor(() => expect(server.callsTo("GET", "/worlds/world-a")).not.toHaveLength(0))
+    await waitFor(() => expect(level("Timeline")).toBeDisabled())
   })
 
   it("treats a timeline from another world as no selection", async () => {
@@ -440,15 +467,16 @@ describe("HierarchyContextPanel disclosure", () => {
     expect(level("Campaign")).toBeDisabled()
   })
 
-  it("never invents timeline options when the world read is denied, on a campaign page", async () => {
+  it("offers only the caller's own campaigns' timelines when the world read is denied, on a campaign page", async () => {
     server.on("GET", "/worlds/world-a", { status: 403, body: { detail: "no" } })
     renderAt("/app/c1/home")
 
     await waitFor(() => expect(server.callsTo("GET", "/worlds/world-a")).not.toHaveLength(0))
-    // The campaign's own authorized timeline stays shown, but cannot be changed.
+    // The authorized timeline stays shown; the other one is offered only because the caller's own
+    // campaign c2 is on it (CN-1). Nothing comes from the refused world read, and no world route is built.
     expect(shown(level("Timeline"))).toBe("Main A")
-    await waitFor(() => expect(level("Timeline")).toBeDisabled())
-    expect(screen.queryByText("Branch A")).toBeNull()
+    await waitFor(() => expect(optionNames(level("Timeline"))).toEqual(["No selection", "Branch A", "Main A"]))
+    expect(screen.getByRole("main").innerHTML).not.toContain("/worlds/world-a/timelines")
   })
 
   it("renders no raw identifiers", async () => {

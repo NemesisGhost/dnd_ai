@@ -286,12 +286,17 @@ def test_viewer_types_read_the_restricted_inventory_and_nothing_more(
     # Not the full sheet, no controlling perspective, no GM-only surfaces.
     assert client.get(w.url("/sheet")).status_code == 404
     detail = client.get(w.url()).json()
+    # These relationships hold the summary tier (details and relationships open) but this
+    # character has no release, so under D11 there is no public-profile section to carry:
+    # `public_profile` is false and null. The restricted inventory adds nothing to it (A4).
+    assert detail["view_tier"] == "summary" and detail["public_profile"] is None
     assert detail["sections"] == {
         "details": True,
         "sheet": False,
         "relationships": True,
         "inventory": True,
         "parties": False,
+        "public_profile": False,
     }
     assert client.get(w.url("/parties")).status_code in (403, 404)
 

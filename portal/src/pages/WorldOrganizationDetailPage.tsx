@@ -1,4 +1,5 @@
-import { useWorldBackPath, useWorldReturnState } from "../hooks/useWorldBackPath"
+import { useWorldReturnState } from "../hooks/useWorldBackPath"
+import { WorldRecordBack } from "../components/world/WorldRecordBack"
 import { Link } from "react-router"
 import { organizationAuthoringPath } from "../api/organizationAuthoring"
 import { AuthoringEditLink } from "../components/AuthoringEditLink"
@@ -114,14 +115,11 @@ export function WorldOrganizationDetailPage({
     campaignId,
     organization,
 }: WorldOrganizationDetailPageProps) {
-    const worldBackPath = useWorldBackPath(campaignId)
     const headingRef = usePageArrival(true)
     const base = `/app/${encodeURIComponent(campaignId)}/world`
     return (
         <section aria-labelledby="world-organization-heading">
-            <p>
-                <Link to={worldBackPath}>Back to World</Link>
-            </p>
+            <WorldRecordBack campaignId={campaignId} current={organization.name} />
 
             <p className="world-detail__eyebrow">{humanizeCode(organization.kind_code)}</p>
             <h1 id="world-organization-heading" ref={headingRef} tabIndex={-1}>

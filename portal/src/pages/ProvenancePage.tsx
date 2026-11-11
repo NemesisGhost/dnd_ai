@@ -4,7 +4,7 @@ import { LifecycleBadge } from "../components/authoring/feedback"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { usePageArrival } from "../hooks/usePageArrival"
-import { pickWorldReturnState } from "../hooks/useWorldBackPath"
+import { carriedState } from "../navigation/taskReturn"
 import type { Provenance } from "../types/provenance"
 import { isWorldDetailCategory } from "../types/world"
 import "../components/authoring/authoring.css"
@@ -29,12 +29,12 @@ export function ProvenancePage() {
     const canEdit = useCampaignCapability(campaignId, "canon.edit")
     const { state } = useAuthoringResource<Provenance>(provenancePath(campaignId, entityId))
     const headingRef = usePageArrival(state.kind === "ready")
-    const { state: locationState } = useLocation()
+    const { pathname, state: locationState } = useLocation()
     // A Knowledge claim that opened this page names where to go back to (its section and the
     // perspective); anything else, or an address outside this campaign's Knowledge, is ignored.
     const returnTo = knowledgeReturnPath(campaignId, locationState)
     // Where the record was opened from (the Review queue as it was left) rides back to it, validated.
-    const carried = pickWorldReturnState(locationState)
+    const carried = carriedState(pathname, locationState)
     // A record with no World detail page (a quest, a dungeon) links back to the World list.
     const detailPath = returnTo ?? (isWorldDetailCategory(category)
         ? `/app/${encodeURIComponent(campaignId)}/world/${encodeURIComponent(category)}/${encodeURIComponent(entityId)}`

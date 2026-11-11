@@ -2,6 +2,7 @@ import {
     fireEvent,
     render,
     screen,
+    within,
 } from "@testing-library/react"
 import {
     MemoryRouter,
@@ -89,7 +90,7 @@ function renderQuestDetail(
 }
 
 describe("QuestDetailPage", () => {
-    it("renders one page heading, status, and a Back to quests link", () => {
+    it("renders one page heading, status, and a Quests breadcrumb ancestor", () => {
         renderQuestDetail(questFixture)
 
         expect(
@@ -111,8 +112,8 @@ describe("QuestDetailPage", () => {
         ).toBeInTheDocument()
 
         expect(
-            screen.getByRole("link", {
-                name: "Back to quests",
+            within(screen.getByRole("navigation", { name: "Breadcrumb" })).getByRole("link", {
+                name: "Quests",
             }),
         ).toHaveAttribute(
             "href",

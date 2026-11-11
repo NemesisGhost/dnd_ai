@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { Link, useNavigate, useParams } from "react-router"
+import { useNavigate, useParams } from "react-router"
 import { archiveCampaign, campaignSettingsPath, updateCampaign } from "../api/campaignSettings"
 import { ConfirmDialog } from "../components/authoring/ConfirmDialog"
 import { TextAreaField, TextField } from "../components/authoring/fields"
@@ -21,6 +21,7 @@ import type { RefetchOutcome } from "../hooks/useAuthoringResource"
 import { useKept } from "../hooks/useKeptResource"
 import { usePageArrival } from "../hooks/usePageArrival"
 import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard"
+import { TaskBreadcrumb } from "../components/navigation/TaskBreadcrumb"
 import type { CampaignMutationResponse, CampaignSettings, UpdateCampaignRequest } from "../types/campaignSettings"
 import type { TransitionRequest } from "../types/worldAuthoring"
 import { bootstrapRefreshOutcome } from "../utils/refreshOutcome"
@@ -83,6 +84,7 @@ export function CampaignSettingsPage() {
 
     return (
         <div className="authoring-page">
+            <TaskBreadcrumb />
             <h1 ref={headingRef} tabIndex={-1}>
                 Campaign settings
             </h1>
@@ -419,9 +421,6 @@ function SettingsForm({ settings, refreshing, readStale, kept, onKeep, refetch, 
                 onCancel={guard.stay}
                 cancelLabel="Keep editing"
             />
-            <p>
-                <Link to={`/app/${settings.campaign_id}/home`}>Back to Campaign Home</Link>
-            </p>
         </>
     )
 }

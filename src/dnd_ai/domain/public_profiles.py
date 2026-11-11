@@ -1,0 +1,319 @@
+"""Character public-profile drafts and releases: vocabulary, errors and the read/edit/release policy
+(P03-A slice A2a, docs/PHASE14_15_P03A_IMPLEMENTATION_PLAN_2026-11-06.md section 5, decision D8).
+
+A campaign's GMs author a public profile for a character (two text fields) in a mutable draft and
+publish immutable, versioned releases of it. A release makes nothing visible by itself; an audience
+sees one only through a later revelation (A3/A4), which A2a does not add.
+
+The policy here is pure, resolved from a loaded `AccessContext`; the commands re-resolve the context
+under their locks (section 5.7a "Under lock"):
+
+- **Whole-character deny.** An `entity_id` `campaign.view` deny for the character blocks reading,
+  editing and releasing for every source, an owner included (ADR 0021 section 2.9).
+- **Effective character-scoped `canon.edit`.** The role `canon.edit` in the campaign, with no
+  whole-character deny and no `canon.edit` deny on the character. An *allow* grant of `canon.edit`
+  on the character never confers it (D8): a resource grant is not an authoring path.
+- **Reading** needs effective character-scoped `canon.edit` or current `character.reveal`
+  authority; reveal authority confers reading only.
+- **Releasing** needs `character.reveal` authority (`resolve_reveal_authority`) and no
+  whole-character deny. A `canon.edit` deny does not stop it: a different operation.
+"""
+
+import uuid
+
+from .access import AccessContext
+from .errors import DomainAuthorizationError, SafeMessageError
+from .npc_authoring import NPC_TEXT_MAX_LENGTH
+from .world_authority import WORLD_CANON_READ_PRIVATE, WorldAuthority
+
+PUBLIC_PROFILE_TEXT_MAX_LENGTH = NPC_TEXT_MAX_LENGTH
+PUBLIC_PROFILE_NOTE_MAX_LENGTH = 1000
+
+FIELD_APPEARANCE = "public_appearance"
+FIELD_BACKGROUND = "public_background"
+PUBLIC_PROFILE_FIELDS = (FIELD_APPEARANCE, FIELD_BACKGROUND)
+# D5-c: a third, authored-only field with no origin, watermark or copy source.
+FIELD_SUMMARY = "public_summary"
+PUBLIC_PROFILE_SAVEABLE_FIELDS = (*PUBLIC_PROFILE_FIELDS, FIELD_SUMMARY)
+# D6 (A4): two strict-boolean draft controls, never text. They select what the next release
+# snapshots and take no part in origins, watermarks, the copy aid or the withheld check. Request
+# field -> draft column. `PUBLIC_PROFILE_SAVEABLE_FIELDS` stays text-only so no text path iterates
+# over a boolean.
+FLAG_SPECIES = "publish_species"
+FLAG_SIZE = "publish_size"
+PUBLIC_PROFILE_IDENTITY_FLAGS = {
+    FLAG_SPECIES: "should_publish_species",
+    FLAG_SIZE: "should_publish_size",
+}
+
+ORIGIN_AUTHORED = "authored"
+ORIGIN_LEGACY_APPEARANCE = "legacy_appearance"
+ORIGIN_LEGACY_BACKGROUND = "legacy_background"
+LEGACY_ORIGINS = frozenset({ORIGIN_LEGACY_APPEARANCE, ORIGIN_LEGACY_BACKGROUND})
+
+# The two supported copy sources (plan section 9.1): the request names the legacy description field,
+# and the target is the draft field of the same name. `notes` is never a source. Each entry is
+# (draft field, origin code, `character.character_descriptions` column).
+LEGACY_COPY_SOURCES = {
+    "appearance": (FIELD_APPEARANCE, ORIGIN_LEGACY_APPEARANCE, "appearance"),
+    "background": (FIELD_BACKGROUND, ORIGIN_LEGACY_BACKGROUND, "background"),
+}
+
+KIND_NPC = "npc"
+KIND_PLAYER_CHARACTER = "player_character"
+
+AUTHORITY_OWNER = "owner"
+AUTHORITY_DELEGATION = "delegation"
+
+CANON_EDIT = "canon.edit"
+CAMPAIGN_VIEW = "campaign.view"
+VIEW_PUBLIC_PROFILE = "character.view_public_profile"
+
+
+class PublicProfileNotFoundError(DomainAuthorizationError):
+    """The character is not a canon character of the campaign's world, or a whole-character deny
+    removes it from the caller: indistinguishable (fixed 404)."""
+
+
+class PublicProfileEditDeniedError(DomainAuthorizationError):
+    """The caller can still read this profile but a `canon.edit` deny on the character removes the
+    right to edit it. 403 `public_profile_edit_denied`: the caller can already see the character,
+    so the code discloses nothing."""
+
+    safe_status_code = 403
+    safe_error_code = "public_profile_edit_denied"
+    safe_message = "You may not edit this character's public profile."
+
+
+class CharacterRevealRequiredError(DomainAuthorizationError):
+    """The caller does not hold `character.reveal` authority in the campaign. Reveal authority
+    depends only on the campaign, so this says nothing about the character. 403
+    `character_reveal_required`."""
+
+    safe_status_code = 403
+    safe_error_code = "character_reveal_required"
+    safe_message = "Only a campaign owner or a delegated GM may release a public profile."
+
+
+class PublicProfileFieldWithheldError(DomainAuthorizationError):
+    """The request would put text into a draft field the caller may not read (copied text still
+    under its source-read restriction), or would release a draft holding such a field. 403
+    `public_profile_field_withheld`. The caller has already been told the field is withheld (the
+    profile read shows `withheld: true`), so the code discloses nothing more."""
+
+    safe_status_code = 403
+    safe_error_code = "public_profile_field_withheld"
+    safe_message = "This draft holds copied text you cannot read."
+
+
+class PublicProfileDraftMissingError(SafeMessageError):
+    """A release (or a save with a token) named a draft that does not exist."""
+
+    safe_status_code = 409
+    safe_error_code = "public_profile_draft_missing"
+    safe_message = "This character has no public-profile draft yet."
+
+
+class PublicProfileLegacyTextMissingError(SafeMessageError):
+    """The legacy description field the copy named is empty, so there is nothing to copy. 409
+    `public_profile_legacy_text_missing`. Raised only to a caller who may read the source."""
+
+    safe_status_code = 409
+    safe_error_code = "public_profile_legacy_text_missing"
+    safe_message = "The character has no text in that description field to copy."
+
+
+class PublicProfileCharacterNotActiveError(SafeMessageError):
+    """The character is archived (or otherwise not active): a profile cannot be saved or released."""
+
+    safe_status_code = 409
+    safe_error_code = "public_profile_character_not_active"
+    safe_message = "The character is not active."
+
+
+class PublicProfileIdentityVersionRequiredError(SafeMessageError):
+    """A release of a draft that publishes species or size named no `expected_character_row_version`.
+    422 `public_profile_identity_version_required`; nothing is written."""
+
+    safe_status_code = 422
+    safe_error_code = "public_profile_identity_version_required"
+    safe_message = "Releasing a published species or size needs expected_character_row_version."
+
+
+class PublicProfileIdentityUnavailableError(SafeMessageError):
+    """The character's species or size could not be read for a release that publishes them.
+    409 `public_profile_identity_unavailable`. Defensive: the source columns are NOT NULL."""
+
+    safe_status_code = 409
+    safe_error_code = "public_profile_identity_unavailable"
+    safe_message = "The character's species or size is not available to publish."
+
+
+class PublicProfileNotReleasedError(SafeMessageError):
+    """A revelation was requested for a character with no release in this campaign (D9-d). 409
+    `public_profile_not_released`. Raised only to a caller who holds reveal authority."""
+
+    safe_status_code = 409
+    safe_error_code = "public_profile_not_released"
+    safe_message = "This character has no released public profile in this campaign."
+
+
+class RevelationTargetNotActiveError(SafeMessageError):
+    """The revelation's target membership has ended or is not active, or its target group is
+    archived. 409 `revelation_target_not_active`."""
+
+    safe_status_code = 409
+    safe_error_code = "revelation_target_not_active"
+    safe_message = "The revelation's target is not active."
+
+
+# --- revelations (P03-A A3) ---------------------------------------------------------------------
+
+AUDIENCE_MEMBER = "member"
+AUDIENCE_ACCESS_GROUP = "access_group"
+AUDIENCE_CAMPAIGN_CURRENT = "campaign_current"
+AUDIENCE_CAMPAIGN_CURRENT_AND_FUTURE = "campaign_current_and_future"
+AUDIENCE_KINDS = (
+    AUDIENCE_MEMBER,
+    AUDIENCE_ACCESS_GROUP,
+    AUDIENCE_CAMPAIGN_CURRENT,
+    AUDIENCE_CAMPAIGN_CURRENT_AND_FUTURE,
+)
+
+REVELATION_REASON_MAX_LENGTH = 1000
+
+END_REASON_REVOKED = "revoked"
+END_REASON_TARGET_MEMBERSHIP_ENDED = "target_membership_ended"
+END_REASON_ACCESS_GROUP_DEACTIVATED = "access_group_deactivated"
+REMOVAL_REASON_MEMBERSHIP_ENDED = "membership_ended"
+
+# --- policy ------------------------------------------------------------------------------------
+
+
+def whole_character_denied(access: AccessContext, character_id: uuid.UUID) -> bool:
+    """A `campaign.view` deny on the character's entity: the resource is removed for this caller.
+    The same test `resolve_character_inventory_access` uses."""
+    return not access.has_capability(CAMPAIGN_VIEW, entity_id=character_id)
+
+
+def canon_edit_denied_for_character(access: AccessContext, character_id: uuid.UUID) -> bool:
+    """A `canon.edit` deny on the character. Under `entity_id`, the only key a `canon.edit` grant
+    can be created under; a stray `character_id` row counts too, so it fails closed.
+    `has_capability("canon.edit", character_id=...)` alone is not enough: it never sees the
+    `entity_id` key."""
+    return any(
+        access.grant_effects.get((key, character_id), {}).get(CANON_EDIT) == "deny"
+        for key in ("entity_id", "character_id")
+    )
+
+
+def has_effective_character_canon_edit(access: AccessContext, character_id: uuid.UUID) -> bool:
+    """The role `canon.edit`, with no whole-character deny and no `canon.edit` deny on the
+    character. An `allow` grant on the character does not count."""
+    return (
+        CANON_EDIT in access.role_capabilities
+        and not whole_character_denied(access, character_id)
+        and not canon_edit_denied_for_character(access, character_id)
+    )
+
+
+def holds_character_view_tier(access: AccessContext, character_id: uuid.UUID) -> bool:
+    """Whether the caller holds a character-view tier for the character: `canon.edit`,
+    `character.view_full` or `character.view_summary`, each checked with `character_id=` exactly as
+    `api.access.resolve_character_view_tier` does. The commands and queries layers cannot import
+    the API layer, so this pure predicate mirrors that function's three checks; a unit test pins the
+    two together (D6: species and size are summary-tier fields)."""
+    return any(
+        access.has_capability(capability, character_id=character_id)
+        for capability in ("canon.edit", "character.view_full", "character.view_summary")
+    )
+
+
+def view_public_profile_denied(access: AccessContext, character_id: uuid.UUID) -> bool:
+    """A `character.view_public_profile` deny on the character (D12: honoured if present, not
+    creatable through the application). Both keys are checked, `entity_id` and `character_id`, so a
+    stray raw row fails closed; the `canon_edit_denied_for_character` pattern."""
+    return any(
+        access.grant_effects.get((key, character_id), {}).get(VIEW_PUBLIC_PROFILE) == "deny"
+        for key in ("entity_id", "character_id")
+    )
+
+
+def may_read_released_profile(
+    access: AccessContext, character_id: uuid.UUID, *, holds_view_tier: bool
+) -> bool:
+    """Whether the caller may read the latest release of the character in this campaign (D11-a,
+    plan section 10.14; D12-a).
+
+    False under a whole-character deny or a `character.view_public_profile` deny, on every path.
+    Otherwise true for a caller who holds a character-view tier (`holds_view_tier`: summary, full or
+    `canon.edit`), or one a live revelation reaches: migration 145's guard makes a revelation the
+    capability's only allow source, so `has_capability("character.view_public_profile")` means
+    exactly that. Bare `character.discover` and the D4-C roster confer nothing here (publication is
+    not revelation). Pure: resolved from the loaded `AccessContext`."""
+    if whole_character_denied(access, character_id) or view_public_profile_denied(
+        access, character_id
+    ):
+        return False
+    return holds_view_tier or access.has_capability(VIEW_PUBLIC_PROFILE, character_id=character_id)
+
+
+def may_read_profile(
+    access: AccessContext, character_id: uuid.UUID, *, has_reveal_authority: bool
+) -> bool:
+    """Draft and release reads: effective character-scoped `canon.edit`, or current reveal
+    authority. A whole-character deny overrides both."""
+    if whole_character_denied(access, character_id):
+        return False
+    return has_reveal_authority or has_effective_character_canon_edit(access, character_id)
+
+
+# --- legacy-copy restriction (A2b, decision D7) --------------------------------------------------
+
+
+def may_read_legacy_source(
+    kind: str | None, *, access: AccessContext, world_authority: WorldAuthority | None
+) -> bool:
+    """The source-read rule: may this caller read the legacy description of a character of `kind`?
+
+    One function, keyed by the character's kind and never by the caller's choice, equal to the gate
+    of that kind's legacy authoring read today (D7-e): a `player_character` needs role `canon.edit`
+    in the campaign; an `npc` needs role `canon.edit` and the world capability
+    `world.canon.read_private`; any other kind has no authoring read, so nobody may. The role
+    check is role-only (`has_capability("canon.edit")` with no target), so per-character denies do
+    not enter the rule, as they do not enter the authoring reads; a whole-character deny still
+    removes the profile entirely (D8).
+
+    **Assumption: a character's kind is stable on every application path.** The rule uses the
+    current kind at each check. No `src/` code changes `core.entities.entity_type_id` or deletes a
+    `character.npcs` or `character.player_characters` row, and ADR 0021 section 1 says no code
+    converts one marker into the other, but the database does not forbid it (migration 048 refuses
+    a type change only while a subtype row of the old type exists). If a later slice makes kind
+    mutable, the copy must first snapshot the rule into the field."""
+    if CANON_EDIT not in access.role_capabilities:
+        return False
+    if kind == KIND_PLAYER_CHARACTER:
+        return True
+    if kind == KIND_NPC:
+        return world_authority is not None and world_authority.has_capability(
+            WORLD_CANON_READ_PRIVATE
+        )
+    return False
+
+
+def field_is_restricted(
+    *, has_text: bool, is_legacy: bool, watermark: int | None, covering_draft_version: int | None
+) -> bool:
+    """A draft field is restricted when it has text, a legacy origin, and no release covers it.
+
+    A release covers a field when its `from_draft_row_version` is at or above the field's
+    restriction watermark (the draft `row_version` at which the field's content last changed while
+    legacy). `covering_draft_version` is the highest `from_draft_row_version` among the profile's
+    releases. Because a release snapshots the draft exactly at that version, a covering release
+    holds the field's current content (a later change moves the watermark past every release).
+    A legacy field with no watermark is treated as restricted: it cannot be proven covered."""
+    if not has_text or not is_legacy:
+        return False
+    if watermark is None or covering_draft_version is None:
+        return True
+    return covering_draft_version < watermark

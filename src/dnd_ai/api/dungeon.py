@@ -190,7 +190,7 @@ def get_dungeon_area_endpoint(
         # excludes a `campaign.view`-denied `entity_id` in SQL, and with
         # `GET /campaigns/{id}/world/locations/{id}` which honors the same
         # deny. The quest-detail route was hardened the same way
-        # (docs/PHASE13D_BACKEND_READINESS.md §4.2).
+        # (docs/api/READ_API.md §4.2).
         raise NotFoundError()
 
     # dungeon_area_id doubles as the area's own core.entities.entity_id

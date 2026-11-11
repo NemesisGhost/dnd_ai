@@ -5,6 +5,8 @@ import { PortalFooter } from "../components/PortalFooter"
 import { PortalSidebar } from "../components/PortalSidebar"
 import { useNavigationDrawer } from "../hooks/useNavigationDrawer"
 import { WorkspaceHierarchyProvider } from "../context/WorkspaceHierarchyProvider"
+import { SelectedContextReconciler } from "../navigation/SelectedContextReconciler"
+import { SelectionArrivalProvider } from "../navigation/SelectionArrivalProvider"
 import { AnnouncerProvider } from "../components/authoring/AnnouncerProvider"
 import type { AuthenticatedOutletContext } from "./useAuthenticatedSession"
 
@@ -25,6 +27,8 @@ export function AuthenticatedAppLayout() {
   return (
     <AnnouncerProvider>
     <WorkspaceHierarchyProvider>
+    <SelectedContextReconciler />
+    <SelectionArrivalProvider>
     <div className="authenticated-shell">
       <PortalHeader drawer={drawer} drawerToggleRef={toggleRef} />
 
@@ -46,6 +50,7 @@ export function AuthenticatedAppLayout() {
 
       <PortalFooter />
     </div>
+    </SelectionArrivalProvider>
     </WorkspaceHierarchyProvider>
     </AnnouncerProvider>
   )

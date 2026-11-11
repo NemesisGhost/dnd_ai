@@ -1,5 +1,7 @@
 import type { ReactNode } from "react"
 import { useCampaignSession } from "../hooks/useCampaignSession"
+import { sessionLabel } from "./sessionRun/sessionLabel"
+import { useBreadcrumbLabel } from "../navigation/BreadcrumbLabelContext"
 import PlaceholderPage from "../pages/PlaceholderPage"
 import type {
     CampaignSessionDetail,
@@ -19,10 +21,19 @@ export function CampaignSessionDetailBoundary({
     sessionId,
     children,
 }: CampaignSessionDetailBoundaryProps) {
-    const { state, retry, refresh } = useCampaignSession(
+    const { state, retry, refresh, authority } = useCampaignSession(
         campaignId,
         sessionId,
     )
+    // The session's title, from this authorized read, for the breadcrumbs of the pages beneath it (Run,
+    // an event or a character reached from it). An unavailable (403/404) answer drops it.
+    useBreadcrumbLabel({
+        route: "sessions.detail",
+        params: { campaignId, sessionId },
+        name: state.status === "success" ? sessionLabel(state.session) : undefined,
+        denied: state.status === "unavailable",
+        authority,
+    })
 
     if (state.status === "loading") {
         return (

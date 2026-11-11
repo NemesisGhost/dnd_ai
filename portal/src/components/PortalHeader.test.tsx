@@ -18,6 +18,7 @@ function drawerControl(open = false): NavigationDrawerControl {
         toggle: vi.fn(),
         close: vi.fn(),
         closeAndFocusToggle: vi.fn(),
+        toggleElement: () => null,
     }
 }
 

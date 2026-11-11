@@ -52,11 +52,7 @@ from dnd_ai.queries.session import (
 from dnd_ai.queries.session_travel import TRAVEL_EVENT_TYPE, list_session_travel
 
 from ._shared import timeline_world_id
-from .access import (
-    CharacterViewNotAuthorizedError,
-    require_campaign_capability,
-    resolve_character_view_tier,
-)
+from .access import can_open_character, require_campaign_capability
 from .deps import get_connection
 from .errors import NotFoundError
 from .event_explanations import (
@@ -166,16 +162,6 @@ class SessionDetailResponse(BaseModel):
     participant_role_options: dict[str, list[str]] | None = None
 
 
-def _can_open_character(access: AccessContext, character_id: uuid.UUID) -> bool:
-    """The character route's own gate, after the entity deny and lifecycle checks the member
-    roster query has already applied: some character-view tier must be held."""
-    try:
-        resolve_character_view_tier(access, character_id=character_id)
-    except CharacterViewNotAuthorizedError:
-        return False
-    return True
-
-
 def _participants(
     connection: Connection, access: AccessContext, *, session_id: uuid.UUID, can_edit: bool
 ) -> list[SessionParticipantResponse]:
@@ -195,7 +181,7 @@ def _participants(
             participation_role=p.participation_role,
             added_at=p.added_at,
             removed_at=p.removed_at,
-            can_open_character=can_edit or _can_open_character(access, p.character_id),
+            can_open_character=can_edit or can_open_character(access, p.character_id),
         )
         for p in list_session_participants(connection, session_id=session_id, audience=audience)
     ]

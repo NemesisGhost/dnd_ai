@@ -1,4 +1,5 @@
 import { Link } from "react-router"
+import { useTaskLinkState } from "../navigation/useTaskLinkState"
 import type { EncounterSummary } from "../types/encounters"
 import "./authoring/authoring.css"
 
@@ -21,13 +22,15 @@ export function EncounterList({
     prepareLink: boolean
 }) {
     const base = encountersBase(campaignId, sessionId)
+    // An encounter opened from the session's Run page is a step of the task the page is in.
+    const taskState = useTaskLinkState()
     return (
         <>
             {items.length === 0 ? <p>{emptyText}</p> : null}
             <ul className="op-list">
                 {items.map((e) => (
                     <li key={e.encounter_id}>
-                        <Link to={`${base}/${encodeURIComponent(e.encounter_id)}`}>
+                        <Link to={`${base}/${encodeURIComponent(e.encounter_id)}`} state={taskState}>
                             {e.summary ?? "Untitled encounter"}
                         </Link>{" "}
                         ({e.status}
@@ -38,7 +41,7 @@ export function EncounterList({
             </ul>
             {prepareLink ? (
                 <p>
-                    <Link className="authoring-button" to={`${base}/new`}>
+                    <Link className="authoring-button" to={`${base}/new`} state={taskState}>
                         Prepare an encounter
                     </Link>
                 </p>

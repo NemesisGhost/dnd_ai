@@ -83,6 +83,9 @@ afterEach(() => {
 const SHEET = "/app/mundivita/characters/pc-1"
 const WORLD = "/app/mundivita/world/character/pc-1"
 const calls = (suffix: string) => server.calls.filter((c) => c.path === `/campaigns/mundivita/characters/pc-1${suffix}`)
+const crumb = (name: string) =>
+    within(screen.getByRole("navigation", { name: "Breadcrumb" })).getByRole("link", { name })
+
 const rowLinks = () => within(screen.getByRole("navigation", { name: "Character sections" })).getAllByRole("link")
 const rowNames = () => rowLinks().map((link) => link.textContent)
 const sectionLink = (name: string) =>
@@ -157,18 +160,18 @@ describe("Character record: reached from Characters", () => {
         expect(await screen.findByRole("heading", { name: /^Relationships/ })).toBeInTheDocument()
         fireEvent.click(sectionLink("Inventory"))
         await screen.findByRole("link", { name: "Longsword" })
-        expect(screen.getByRole("link", { name: "Back to characters" })).toHaveAttribute(
-            "href",
-            "/app/mundivita/characters/all?type=npc",
-        )
-        // Across to the World details and back to the sheet it is still the same list.
+        expect(crumb("Characters")).toHaveAttribute("href", "/app/mundivita/characters/all?type=npc")
+        // Across to the World details and back to the sheet it is still the same Characters task and list:
+        // the World route does not turn it into a World breadcrumb.
         fireEvent.click(sectionLink("Details"))
-        await screen.findByRole("link", { name: "Back to World" })
+        await screen.findByRole("heading", { level: 1, name: "Aldric" })
+        expect(crumb("Characters")).toHaveAttribute("href", "/app/mundivita/characters/all?type=npc")
+        expect(
+            within(screen.getByRole("navigation", { name: "Breadcrumb" })).queryByRole("link", { name: "World" }),
+        ).toBeNull()
         fireEvent.click(sectionLink("Sheet"))
-        expect(await screen.findByRole("link", { name: "Back to characters" })).toHaveAttribute(
-            "href",
-            "/app/mundivita/characters/all?type=npc",
-        )
+        await screen.findByRole("heading", { level: 1, name: "Aldric" })
+        expect(crumb("Characters")).toHaveAttribute("href", "/app/mundivita/characters/all?type=npc")
     })
 
     it("selects no perspective by being read, and writes nothing", async () => {

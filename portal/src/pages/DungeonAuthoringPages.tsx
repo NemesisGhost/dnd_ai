@@ -12,9 +12,10 @@ import { ContentCreatePage } from "../components/authoring/ContentCreatePage"
 import type { ContentCreateConfig } from "../components/authoring/ContentCreatePage"
 import { ContentEditPage } from "../components/authoring/ContentEditPage"
 import type { ContentEditConfig } from "../components/authoring/ContentEditPage"
+import { inWorldTask } from "../navigation/breadcrumbModel"
 import { worldEditNavigation } from "../components/world/editNavigation"
 import { worldRecordPath } from "../components/world/worldPaths"
-import { pickWorldReturnState } from "../hooks/useWorldBackPath"
+import { carriedState } from "../navigation/taskReturn"
 import type { FieldError } from "../components/authoring/feedback"
 import { SelectField, TextAreaField, TextField } from "../components/authoring/fields"
 import { ReferenceCombobox } from "../components/authoring/ReferenceCombobox"
@@ -50,14 +51,14 @@ function WorkspaceLinks({
     entityId: string
     sections: readonly { section: string; label: string }[]
 }) {
-    const { state } = useLocation()
+    const { pathname, state } = useLocation()
     return (
         <nav aria-label="Other parts of this record" className="page-section">
             <p className="authoring-note">This page edits the details only. The rest is in the workspace:</p>
             <ul className="world-detail__links">
                 {sections.map(({ section, label }) => (
                     <li key={section}>
-                        <Link to={`${locationDetail(campaignId, entityId)}?section=${section}`} state={pickWorldReturnState(state)}>
+                        <Link to={`${locationDetail(campaignId, entityId)}?section=${section}`} state={carriedState(pathname, state, locationDetail(campaignId, entityId))}>
                             {label}
                         </Link>
                     </li>
@@ -230,7 +231,7 @@ const createDungeonConfig: ContentCreateConfig<
     toBody: (values) => dungeonBody(values),
     create: createDungeon,
     resultPath: (campaignId, created) => `${locationDetail(campaignId, created.dungeon_id)}?section=areas`,
-    resultState: (state) => pickWorldReturnState(state),
+    taskBreadcrumb: true,
     announce: "Dungeon created as a draft",
     saveLabel: "Create dungeon",
     pendingLabel: "Creating…",
@@ -263,6 +264,13 @@ const editDungeonConfig: ContentEditConfig<
     worldPath,
     detailPath: locationDetail,
     navigation: worldEditNavigation("location"),
+    // Inside World's own task the shared breadcrumb replaces the single back link; opened any other way
+    // the page keeps the links it has always had.
+    taskBreadcrumb: {
+        applies: inWorldTask,
+        labelRoute: "world.record",
+        labelParams: (campaignId, entityId) => ({ campaignId, category: "location", entityId }),
+    },
     viewPath: dungeonAuthoringPath,
     optionsPath: dungeonOptionsPath,
     name: (view) => view.name,
@@ -379,6 +387,13 @@ const editAreaConfig: ContentEditConfig<AreaAuthoringView, DungeonOptions, AreaV
     navigation: worldEditNavigation("location", ({ campaignId, params }) =>
         params.dungeonId === undefined ? [] : [worldRecordPath(campaignId, "location", params.dungeonId)],
     ),
+    // Inside World's own task the shared breadcrumb replaces the single back link; opened any other way
+    // the page keeps the links it has always had.
+    taskBreadcrumb: {
+        applies: inWorldTask,
+        labelRoute: "world.record",
+        labelParams: (campaignId, entityId) => ({ campaignId, category: "location", entityId }),
+    },
     viewPath: areaAuthoringPath,
     optionsPath: dungeonOptionsPath,
     name: (view) => view.name,
@@ -456,12 +471,12 @@ const editAreaConfig: ContentEditConfig<AreaAuthoringView, DungeonOptions, AreaV
 
 // The area's dungeon, as a client-side link that carries the World or Review return state.
 function DungeonLink({ campaignId, dungeonId, name }: { campaignId: string; dungeonId: string; name: string }) {
-    const { state } = useLocation()
+    const { pathname, state } = useLocation()
     return (
         <p>
             <Link
                 to={`${locationDetail(campaignId, dungeonId)}?section=areas`}
-                state={pickWorldReturnState(state)}
+                state={carriedState(pathname, state, locationDetail(campaignId, dungeonId))}
             >
                 Back to {name}
             </Link>

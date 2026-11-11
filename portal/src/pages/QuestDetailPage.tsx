@@ -1,7 +1,8 @@
 import { useState } from "react"
-import { Link } from "react-router"
 import { AudiencePreviewSection } from "../components/AudiencePreviewSection"
 import { FactGrid } from "../components/FactGrid"
+import { TaskBreadcrumb } from "../components/navigation/TaskBreadcrumb"
+import { questPerspectiveSearch } from "../utils/questPerspectiveSearch"
 import type {
     QuestDetail,
     QuestObjective,
@@ -13,6 +14,9 @@ import "../components/authoring/authoring.css"
 interface QuestDetailPageProps {
     campaignId: string
     quest: QuestDetail
+    // The perspective the quest was read under: the Quests ancestor returns to the list under it.
+    characterId?: string | null
+    partyId?: string | null
 }
 
 function ObjectiveItem({ objective }: { objective: QuestObjective }) {
@@ -134,6 +138,8 @@ function StagePanel({
 export function QuestDetailPage({
     campaignId,
     quest,
+    characterId = null,
+    partyId = null,
 }: QuestDetailPageProps) {
     const stages = quest.stages
     // Presentation only: stages start collapsed; nothing is persisted or sent.
@@ -149,11 +155,10 @@ export function QuestDetailPage({
 
     return (
         <section aria-labelledby="quest-heading">
-            <p>
-                <Link to=".." relative="path">
-                    Back to quests
-                </Link>
-            </p>
+            <TaskBreadcrumb
+                current={quest.name}
+                queries={{ "quests.list": questPerspectiveSearch(characterId, partyId) }}
+            />
 
             <p className="quest-detail__eyebrow">Quest</p>
             <h1 id="quest-heading">{quest.name}</h1>

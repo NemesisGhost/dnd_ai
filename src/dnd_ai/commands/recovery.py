@@ -33,6 +33,10 @@ from dnd_ai.queries.stranded import campaign_has_active_access_manager, world_ha
 from dnd_ai.queries.system_authority import has_system_capability
 
 from ._shared import lookup_id
+from .reveal_delegation_lifecycle import (
+    END_REASON_MEMBERSHIP_STATUS_CHANGED,
+    close_reveal_delegations_for_membership,
+)
 from .world_access import (
     TargetRequiresSystemGmError,
     WorldRoleTargetIneligibleError,
@@ -139,8 +143,14 @@ def recover_campaign_access_manager(
     clean_reason = normalize_reason(reason, required=True)
     assert clean_reason is not None
     _require_administrator(connection, admin_user_id)
+    # `FOR NO KEY UPDATE`, not `FOR UPDATE`: recovery serializes with another recovery and with
+    # every campaign-row `FOR UPDATE` taker either way, but it takes this lock *before* the
+    # membership it promotes, the reverse of the membership-then-campaign order the other
+    # commands use. `FOR UPDATE` conflicts with the `FOR KEY SHARE` that a reveal-delegation
+    # insert takes on the campaign while it holds that membership, so the two waited on each other;
+    # `FOR NO KEY UPDATE` does not (design section 3).
     locked = connection.execute(
-        text("SELECT 1 FROM campaign.campaigns WHERE campaign_id = :c FOR UPDATE"),
+        text("SELECT 1 FROM campaign.campaigns WHERE campaign_id = :c FOR NO KEY UPDATE"),
         {"c": campaign_id},
     ).first()
     if locked is None:
@@ -172,13 +182,22 @@ def recover_campaign_access_manager(
             {"c": campaign_id, "u": new_user_id, "s": active_status},
         ).scalar()
     else:
-        connection.execute(
+        status_changed = connection.execute(
             text(
                 "UPDATE security.campaign_memberships SET membership_status_id = :s "
-                "WHERE campaign_membership_id = :m"
+                "WHERE campaign_membership_id = :m AND membership_status_id <> :s "
+                "RETURNING 1"
             ),
             {"s": active_status, "m": membership_id},
-        )
+        ).first()
+        if status_changed is not None:
+            # A status flip back to `active` must not revive a reveal delegation bound to a gm
+            # assignment that is still live: authority returns only by a fresh grant.
+            close_reveal_delegations_for_membership(
+                connection,
+                grantee_campaign_membership_id=membership_id,
+                end_reason=END_REASON_MEMBERSHIP_STATUS_CHANGED,
+            )
     assert isinstance(membership_id, uuid.UUID)
     role_id = connection.execute(
         text(

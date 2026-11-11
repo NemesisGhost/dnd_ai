@@ -678,6 +678,13 @@ a.app-header__title:focus-visible {
   overflow-wrap: anywhere;
 }
 
+/* A record's own name shown beside a fixed menu label ("Selected character" + the name). */
+.portal-sidebar__detail {
+  display: block;
+  font-size: 0.85em;
+  opacity: 0.85;
+}
+
 .portal-sidebar__note {
   padding: 0.5rem 0.75rem;
   color: var(--color-chrome-muted);
@@ -706,6 +713,23 @@ a.app-header__title:focus-visible {
 
 .portal-sidebar--collapsed .portal-sidebar__chevron {
   display: none;
+}
+
+/* Collapsed rail, split controls (Campaign, World, Characters): the main icon and the disclosure stay
+   two separate controls, stacked, with the disclosure's chevron kept visible so expanding the flyout
+   is still directly usable. */
+.portal-sidebar--collapsed .portal-sidebar__split-group .portal-sidebar__row {
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.portal-sidebar--collapsed .portal-sidebar__split-group .portal-sidebar__link--icon-only {
+  width: auto;
+  min-height: 1.75rem;
+}
+
+.portal-sidebar--collapsed .portal-sidebar__split-group .portal-sidebar__chevron {
+  display: block;
 }
 
 /* Collapsed rail: the Access children have no icon, so their
@@ -773,6 +797,16 @@ a.app-header__title:focus-visible {
 
   .portal-sidebar--collapsed .portal-sidebar__chevron {
     display: block;
+  }
+
+  .portal-sidebar--collapsed .portal-sidebar__split-group .portal-sidebar__row {
+    flex-direction: row;
+    gap: 0.25rem;
+  }
+
+  .portal-sidebar--collapsed .portal-sidebar__split-group .portal-sidebar__link--icon-only {
+    width: 2.75rem;
+    min-height: 0;
   }
 
   .portal-sidebar--collapsed .portal-sidebar__access-group {
@@ -1371,6 +1405,68 @@ a.app-header__title:focus-visible {
   font-weight: 700;
   letter-spacing: 0.05em;
   text-transform: uppercase;
+}
+
+/* The inline campaign chooser under the Timeline select (UI_DESIGN 4.8.12). Not a dialog or popover: an
+   ordinary bordered group in the flow of the section, wrapping at any width. */
+.campaign-context-panel__chooser {
+  margin: 0.4rem 0 0;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--color-infobox-border);
+  border-radius: 0.25rem;
+  background-color: var(--color-infobox-status-background);
+}
+
+.campaign-context-panel__chooser-instruction {
+  margin: 0 0 0.35rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.campaign-context-panel__chooser-instruction:focus-visible,
+.campaign-context-panel__chooser a:focus-visible {
+  outline: 2px solid var(--color-infobox-link);
+  outline-offset: 2px;
+}
+
+.campaign-context-panel__chooser-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0 0 0.35rem;
+  padding: 0;
+  list-style: none;
+  font-size: 0.85rem;
+}
+
+.campaign-context-panel__chooser a {
+  color: var(--color-infobox-link);
+  overflow-wrap: anywhere;
+}
+
+.campaign-context-panel__reason {
+  margin: 0.3rem 0 0;
+  color: var(--color-infobox-muted);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.campaign-context-panel__reason:focus-visible,
+.campaign-context-panel__retry:focus-visible {
+  outline: 2px solid var(--color-infobox-link);
+  outline-offset: 2px;
+}
+
+.campaign-context-panel__retry {
+  margin: 0.3rem 0 0;
+  padding: 0.25rem 0.6rem;
+  color: var(--color-infobox-link);
+  font-size: 0.85rem;
+  background: transparent;
+  border: 1px solid var(--color-infobox-border);
+  border-radius: 0.25rem;
+  cursor: pointer;
 }
 
 .campaign-context-panel__value {

@@ -451,6 +451,9 @@ describe("CampaignKnowledgeDetailPage: a party that stops being authorized", () 
     const authorized = (partyIds: string[]) => ({
         status: "authenticated",
         bootstrap: {
+            // The resource hook names the owner a read started under (user and browser session).
+            user: { user_id: "user-a" },
+            browser_session_id: "browser-session-a",
             campaigns: [
                 {
                     campaign_id: "campaign-a",

@@ -1,6 +1,9 @@
 import {
     useCallback,
+    useContext,
     useEffect,
+    useLayoutEffect,
+    useRef,
     useState,
 } from "react"
 import {
@@ -8,6 +11,8 @@ import {
     QuestRequestError,
 } from "../api/quests"
 import { useSession } from "../context/SessionContext"
+import { BreadcrumbLabelContext } from "../navigation/BreadcrumbLabelContext"
+import type { LabelRegistry } from "../navigation/labelRegistry"
 import { usePartyNotFoundEpisodes } from "./usePartyScopeRecovery"
 import type {
     QuestDetail,
@@ -32,6 +37,9 @@ export type QuestState =
 export interface UseQuestResult {
     state: QuestState
     retry: () => void
+    // The breadcrumb-label authority under which the read behind `state` STARTED (see
+    // useAuthoringResource): the only registry its answer may publish the record's name into.
+    authority: LabelRegistry | null
 }
 
 interface QuestSnapshot {
@@ -41,6 +49,7 @@ interface QuestSnapshot {
     partyId: string | null
     requestVersion: number
     state: QuestState
+    authority: LabelRegistry | null
 }
 
 const initialState: QuestState = {
@@ -67,7 +76,16 @@ export function useQuest(
             partyId,
             requestVersion: 0,
             state: initialState,
+            authority: null,
         }))
+
+    // The label authority now in force, read when a request starts (a ref: a change of authority must
+    // not start a read).
+    const registry = useContext(BreadcrumbLabelContext)
+    const currentAuthority = useRef(registry)
+    useLayoutEffect(() => {
+        currentAuthority.current = registry
+    })
 
     const retry = useCallback(() => {
         setRequestVersion(
@@ -88,6 +106,7 @@ export function useQuest(
 
     useEffect(() => {
         const controller = new AbortController()
+        const authority = currentAuthority.current
 
         void fetchQuest(
             campaignId,
@@ -107,6 +126,7 @@ export function useQuest(
                     characterId,
                     partyId,
                     requestVersion,
+                    authority,
                     state: {
                         status: "success",
                         quest,
@@ -147,6 +167,7 @@ export function useQuest(
                         characterId,
                         partyId,
                         requestVersion,
+                        authority,
                         state: initialState,
                     })
                     void partyEpisode(
@@ -162,6 +183,7 @@ export function useQuest(
                             characterId,
                             partyId,
                             requestVersion,
+                            authority,
                             state:
                                 outcome === "failed"
                                     ? { status: "error", error }
@@ -182,6 +204,7 @@ export function useQuest(
                         characterId,
                         partyId,
                         requestVersion,
+                        authority,
                         state: {
                             status: "unavailable",
                         },
@@ -195,6 +218,7 @@ export function useQuest(
                     characterId,
                     partyId,
                     requestVersion,
+                    authority,
                     state: {
                         status: "error",
                         error,
@@ -218,5 +242,6 @@ export function useQuest(
     return {
         state,
         retry,
+        authority: snapshotMatchesRequest ? snapshot.authority : null,
     }
 }

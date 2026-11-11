@@ -171,7 +171,7 @@ describe("saved startup preference reaches the shared session", () => {
         await saveFixed("alpha")
         const getsAfterSave = server.sessionGets
 
-        fireEvent.click(screen.getByRole("button", { name: "Choose campaign" }))
+        fireEvent.click(screen.getByRole("button", { name: "Show campaign menu" }))
         fireEvent.click(screen.getByRole("link", { name: "View all campaigns" }))
         await screen.findByRole("heading", { level: 1, name: "Campaigns" })
         fireEvent.click(screen.getByRole("button", { name: /account menu/i }))

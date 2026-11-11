@@ -98,10 +98,23 @@ from datetime import datetime
 
 from sqlalchemy import Connection, text
 
-from dnd_ai.domain.access import LOCAL_AUTH_ISSUER
+from dnd_ai.domain.access import (
+    LOCAL_AUTH_ISSUER,
+    OwnerAssignmentLock,
+    find_live_builtin_owner_assignment,
+    is_builtin_campaign_owner_role,
+)
 from dnd_ai.domain.errors import DomainAuthorizationError, SafeMessageError
 
 from ._shared import lookup_id
+from .character_revelations import close_member_revelations_for_ended_membership
+from .reveal_delegation_lifecycle import (
+    END_REASON_GM_ROLE_CHANGED,
+    END_REASON_GM_ROLE_REVOKED,
+    END_REASON_MEMBERSHIP_ENDED,
+    close_reveal_delegations_for_membership,
+    close_reveal_delegations_for_role,
+)
 
 
 class MembershipNotInCampaignError(DomainAuthorizationError):
@@ -299,6 +312,131 @@ class ChangeMembershipRoleNoOpError(SafeMessageError):
     safe_message = "The selected role is already this member's current role for this assignment."
 
 
+class CampaignOwnerRequiredError(DomainAuthorizationError):
+    """Raised when a caller who is not a live built-in `campaign_owner` of the campaign tries to
+    grant that role: assign it, change a role to it, add a member with it, or transfer ownership
+    (P03-A decision D3, docs/PHASE14_15_P03A_A1_OWNERSHIP_AUTHORITY_DESIGN_2026-11-06.md).
+    `access.manage` alone no longer reaches those four paths. 403 `campaign_owner_required`, not the
+    base 404: the caller is an authorized campaign member and learns nothing about any target from
+    being told the role is owner-only."""
+
+    safe_status_code = 403
+    safe_error_code = "campaign_owner_required"
+    safe_message = "Only a campaign owner may grant the campaign owner role."
+
+
+class OwnershipTransferRecipientChangedError(SafeMessageError):
+    """Raised by `transfer_campaign_ownership` when the recipient's owner assignment stopped being
+    live while the transfer was waiting on a lock, in a way the transfer cannot repair under the
+    reviewed lock order (DEF-011): an assignment that expired after the recipient's role rows were
+    locked would have to be locked again after the recipient's membership. Nothing is written and
+    the caller keeps ownership; a retry locks the now-expired row first and replaces it. 409."""
+
+    safe_status_code = 409
+    safe_error_code = "ownership_transfer_recipient_changed"
+    safe_message = (
+        "The recipient's ownership changed while the transfer was in progress. "
+        "Nothing was changed; try again."
+    )
+
+
+class OwnershipTransferRecipientAssignmentExpiresError(SafeMessageError):
+    """Raised by a relinquishing `transfer_campaign_ownership` when the recipient's live owner
+    assignment has an `expires_at` (DEF-011, owner-approved policy option b, 2026-11-06). Handing
+    ownership over requires a live, non-expiring recipient assignment: row locks cannot stop a
+    finite expiry from passing between final validation and commit, so a finite one could leave
+    the campaign without the owner the caller handed it to. The transfer is refused before any
+    write, both assignments stay as they are, and the recipient's assignment is never extended.
+    409."""
+
+    safe_status_code = 409
+    safe_error_code = "ownership_transfer_recipient_assignment_expires"
+    safe_message = (
+        "The recipient's owner role has an end date, so ownership cannot be handed over to them. "
+        "Nothing was changed."
+    )
+
+
+def _require_builtin_campaign_owner(
+    connection: Connection,
+    *,
+    campaign_id: uuid.UUID,
+    actor_membership_id: uuid.UUID,
+    lock: OwnerAssignmentLock = "share",
+) -> None:
+    """The D3 ownership gate. Locks the caller's live owner assignment (see
+    `find_live_builtin_owner_assignment`) so that revoking it, ending the membership or
+    relinquishing it waits for this transaction, and a revocation that committed first refuses
+    this one. Checked against the database, never a request-time `AccessContext`.
+
+    Lock order: every gated command takes this lock first, before any other row lock it needs, so
+    two gated commands by the same owner cannot wait on each other, and a revocation (which also
+    takes the campaign row lock at commit, through the access-manager retention trigger) cannot
+    cycle with a gated command that holds the campaign row."""
+    if (
+        find_live_builtin_owner_assignment(
+            connection,
+            campaign_id=campaign_id,
+            campaign_membership_id=actor_membership_id,
+            lock=lock,
+        )
+        is None
+    ):
+        raise CampaignOwnerRequiredError(
+            f"membership {actor_membership_id} holds no live campaign_owner assignment in "
+            f"campaign {campaign_id}"
+        )
+
+
+def _require_owner_if_granting_owner_role(
+    connection: Connection,
+    *,
+    campaign_id: uuid.UUID,
+    actor_membership_id: uuid.UUID,
+    role_id: uuid.UUID,
+) -> None:
+    """Applies the D3 gate when `role_id` is the built-in owner template and does nothing for any
+    other role. The template's `campaign_id` and `code` never change, so this unlocked read can
+    safely run before the caller's other locks; a missing or unusable role is left for the
+    command's own later check."""
+    role = connection.execute(
+        text("SELECT campaign_id, code FROM security.roles WHERE role_id = :role"),
+        {"role": role_id},
+    ).one_or_none()
+    if role is not None and is_builtin_campaign_owner_role(
+        role_campaign_id=role.campaign_id, role_code=role.code
+    ):
+        _require_builtin_campaign_owner(
+            connection, campaign_id=campaign_id, actor_membership_id=actor_membership_id
+        )
+
+
+def _recheck_caller_is_live_owner(
+    connection: Connection, *, campaign_id: uuid.UUID, actor_membership_id: uuid.UUID
+) -> None:
+    """DEF-013. The gate judged the caller at the transaction's start `now()`, before the command's
+    other lock waits, and a finite owner assignment can expire during them. Called after the
+    command's last lock wait and before its first protected write, this judges the same shared
+    predicate at a fresh database instant. The caller's assignment is already locked by the gate
+    (it cannot be revoked, and its membership cannot end, before this transaction finishes), so no
+    lock is taken and nothing here can wait: only the passing of `expires_at` can change the
+    answer. Refuses with the gate's own `CampaignOwnerRequiredError` (403); the command has written
+    nothing yet, and a caller that rolls back on the error leaves no change and no audit row."""
+    if (
+        find_live_builtin_owner_assignment(
+            connection,
+            campaign_id=campaign_id,
+            campaign_membership_id=actor_membership_id,
+            as_of=_database_clock(connection),
+        )
+        is None
+    ):
+        raise CampaignOwnerRequiredError(
+            f"membership {actor_membership_id} no longer holds a live campaign_owner assignment "
+            f"in campaign {campaign_id}"
+        )
+
+
 @dataclass(frozen=True)
 class CreateCampaignMembershipResult:
     campaign_membership_id: uuid.UUID
@@ -379,7 +517,17 @@ def assign_membership_role(
     of-check snapshot. Locks are always acquired membership-then-role (the
     same order `change_membership_role()` uses for its own target-row/
     candidate-role pair), so the two commands can never deadlock against
-    each other."""
+    each other.
+
+    Granting the built-in `campaign_owner` role additionally requires the caller to be a live
+    built-in owner of `campaign_id` (`CampaignOwnerRequiredError`, 403; decision D3). That check is
+    the first lock this function takes, ahead of the membership and role locks above."""
+    _require_owner_if_granting_owner_role(
+        connection,
+        campaign_id=campaign_id,
+        actor_membership_id=granted_by_membership_id,
+        role_id=role_id,
+    )
     membership_row = (
         connection.execute(
             text("""
@@ -432,7 +580,8 @@ def assign_membership_role(
     role_row = (
         connection.execute(
             text(
-                "SELECT campaign_id, is_active FROM security.roles WHERE role_id = :role FOR UPDATE"
+                "SELECT campaign_id, code, is_active FROM security.roles "
+                "WHERE role_id = :role FOR UPDATE"
             ),
             {"role": role_id},
         )
@@ -447,6 +596,14 @@ def assign_membership_role(
         raise RoleNotUsableByCampaignError(
             f"role {role_id} is not usable by campaign {campaign_id} "
             f"(actual campaign: {role_row['campaign_id'] if role_row is not None else None})"
+        )
+
+    # DEF-013: every lock wait above is behind us; judge the caller again before the first write.
+    if is_builtin_campaign_owner_role(
+        role_campaign_id=role_row["campaign_id"], role_code=role_row["code"]
+    ):
+        _recheck_caller_is_live_owner(
+            connection, campaign_id=campaign_id, actor_membership_id=granted_by_membership_id
         )
 
     membership_role_id = connection.execute(
@@ -535,6 +692,13 @@ def revoke_membership_role(
             "WHERE membership_role_id = :membership_role AND revoked_at IS NULL"
         ),
         {"membership_role": membership_role_id},
+    )
+    # A reveal delegation is bound to one gm assignment: closing it here ends the grant (the role
+    # row is already locked; the delegation row is the next lock, ahead of the campaign row).
+    close_reveal_delegations_for_role(
+        connection,
+        gm_membership_role_id=membership_role_id,
+        end_reason=END_REASON_GM_ROLE_REVOKED,
     )
 
     _assert_active_campaign_retains_access_manager(
@@ -659,7 +823,17 @@ def change_membership_role(
     manager()`'s `campaign.campaigns` row lock, invoked by the `DEFERRABLE
     INITIALLY DEFERRED` constraint trigger on `security.membership_roles`
     (migration 080) — which this function relies on rather than duplicates;
-    see `docs/PHASE13E_ACCESS_CONTRACT.md` §3a for the full argument."""
+    see `docs/PHASE13E_ACCESS_CONTRACT.md` §3a for the full argument.
+
+    Changing a role to the built-in `campaign_owner` additionally requires the caller to be a live
+    built-in owner of `campaign_id` (`CampaignOwnerRequiredError`, 403; decision D3), checked first,
+    before the row locks above and before the no-op check, so a non-owner learns nothing from it."""
+    _require_owner_if_granting_owner_role(
+        connection,
+        campaign_id=campaign_id,
+        actor_membership_id=granted_by_membership_id,
+        role_id=new_role_id,
+    )
     row = (
         connection.execute(
             text("""
@@ -730,12 +904,25 @@ def change_membership_role(
             f"{membership_role_id}"
         )
 
+    # DEF-013: every lock wait above is behind us; judge the caller again before the first write.
+    if is_builtin_campaign_owner_role(
+        role_campaign_id=new_role_row["campaign_id"], role_code=new_role_row["code"]
+    ):
+        _recheck_caller_is_live_owner(
+            connection, campaign_id=campaign_id, actor_membership_id=granted_by_membership_id
+        )
+
     connection.execute(
         text(
             "UPDATE security.membership_roles SET revoked_at = now() "
             "WHERE membership_role_id = :membership_role AND revoked_at IS NULL"
         ),
         {"membership_role": membership_role_id},
+    )
+    close_reveal_delegations_for_role(
+        connection,
+        gm_membership_role_id=membership_role_id,
+        end_reason=END_REASON_GM_ROLE_CHANGED,
     )
 
     new_membership_role_id = connection.execute(
@@ -850,7 +1037,17 @@ def add_campaign_member(
     No access-manager retention check is needed here (unlike `revoke_
     membership_role`/`change_membership_role`/`end_campaign_membership`):
     granting a new membership and role can only ever add to a campaign's
-    set of qualifying managers, never remove from it."""
+    set of qualifying managers, never remove from it.
+
+    Adding a member with the built-in `campaign_owner` role additionally requires the caller to be
+    a live built-in owner of `campaign_id` (`CampaignOwnerRequiredError`, 403; decision D3), taken
+    before the campaign-row lock below."""
+    _require_owner_if_granting_owner_role(
+        connection,
+        campaign_id=campaign_id,
+        actor_membership_id=added_by_membership_id,
+        role_id=role_id,
+    )
     campaign_status_code = connection.execute(
         text("""
             SELECT ls.code FROM campaign.campaigns c
@@ -893,7 +1090,8 @@ def add_campaign_member(
     role_row = (
         connection.execute(
             text(
-                "SELECT campaign_id, is_active FROM security.roles WHERE role_id = :role FOR UPDATE"
+                "SELECT campaign_id, code, is_active FROM security.roles "
+                "WHERE role_id = :role FOR UPDATE"
             ),
             {"role": role_id},
         )
@@ -908,6 +1106,14 @@ def add_campaign_member(
         raise RoleNotUsableByCampaignError(
             f"role {role_id} is not usable by campaign {campaign_id} "
             f"(actual campaign: {role_row['campaign_id'] if role_row is not None else None})"
+        )
+
+    # DEF-013: every lock wait above is behind us; judge the caller again before the first write.
+    if is_builtin_campaign_owner_role(
+        role_campaign_id=role_row["campaign_id"], role_code=role_row["code"]
+    ):
+        _recheck_caller_is_live_owner(
+            connection, campaign_id=campaign_id, actor_membership_id=added_by_membership_id
         )
 
     campaign_membership_id = create_campaign_membership(
@@ -959,6 +1165,8 @@ class EndCampaignMembershipResult:
     revoked_membership_character_relationship_ids: tuple[uuid.UUID, ...]
     revoked_resource_grant_ids: tuple[uuid.UUID, ...]
     removed_access_group_membership_ids: tuple[uuid.UUID, ...]
+    closed_character_revelation_ids: tuple[uuid.UUID, ...] = ()
+    removed_character_revelation_member_ids: tuple[uuid.UUID, ...] = ()
 
 
 def end_campaign_membership(
@@ -1060,9 +1268,11 @@ def end_campaign_membership(
     case, since an already-ended membership cannot newly violate an
     invariant nothing about this call changed.
 
-    Locks the target membership row (`FOR UPDATE`) before evaluating
-    anything, matching `revoke_membership_role`'s identical discipline for
-    its own target row — so a concurrent removal of the same membership,
+    Locks the membership's active role rows (`FOR UPDATE`, by id) and then
+    the target membership row (`FOR UPDATE`) before evaluating anything —
+    role rows first, the order every other command that holds both uses
+    (design record §3) — matching `revoke_membership_role`'s identical
+    discipline for its own target row — so a concurrent removal of the same membership,
     or a concurrent role add/change/revoke against one of its role rows
     (each of which independently locks that specific `membership_roles`
     row, and, for `assign_membership_role`, the membership row itself), or
@@ -1080,6 +1290,21 @@ def end_campaign_membership(
     has no command anywhere in this codebase that mutates an existing row
     (only inserts new ones), so there is no concurrent writer for this
     `UPDATE` to race against."""
+    # Lock order (docs/PHASE14_15_P03A_A1_OWNERSHIP_AUTHORITY_DESIGN_2026-11-06.md §3): this
+    # membership's active role rows first, then the membership row. Every command that holds a
+    # role row and later wants its membership (change, a gated assign) takes them in that order, so
+    # ending a membership can no longer wait on a role row the other side holds while holding the
+    # membership row that side wants. The campaign row comes last, at commit, from the retention
+    # trigger.
+    connection.execute(
+        text("""
+            SELECT membership_role_id FROM security.membership_roles
+            WHERE campaign_membership_id = :membership AND revoked_at IS NULL
+            ORDER BY membership_role_id
+            FOR UPDATE
+        """),
+        {"membership": campaign_membership_id},
+    ).all()
     row = (
         connection.execute(
             text("""
@@ -1109,14 +1334,18 @@ def end_campaign_membership(
             removed_access_group_membership_ids=(),
         )
 
+    # `now()` is the transaction's start time, which can precede a grant another request created
+    # while this one waited on the locks above; a revocation stamped earlier than its own grant
+    # violates the table's `revoked_at >= granted_at` check. Read the clock once, after the locks.
+    closed_at = connection.execute(text("SELECT clock_timestamp()")).scalar()
     revoked_role_ids = (
         connection.execute(
             text("""
-                UPDATE security.membership_roles SET revoked_at = now()
+                UPDATE security.membership_roles SET revoked_at = :closed_at
                 WHERE campaign_membership_id = :membership AND revoked_at IS NULL
                 RETURNING membership_role_id
             """),
-            {"membership": campaign_membership_id},
+            {"membership": campaign_membership_id, "closed_at": closed_at},
         )
         .scalars()
         .all()
@@ -1125,11 +1354,11 @@ def end_campaign_membership(
     revoked_relationship_ids = (
         connection.execute(
             text("""
-                UPDATE security.membership_character_relationships SET revoked_at = now()
+                UPDATE security.membership_character_relationships SET revoked_at = :closed_at
                 WHERE campaign_membership_id = :membership AND revoked_at IS NULL
                 RETURNING membership_character_relationship_id
             """),
-            {"membership": campaign_membership_id},
+            {"membership": campaign_membership_id, "closed_at": closed_at},
         )
         .scalars()
         .all()
@@ -1138,11 +1367,11 @@ def end_campaign_membership(
     revoked_resource_grant_ids = (
         connection.execute(
             text("""
-                UPDATE security.resource_grants SET revoked_at = now()
+                UPDATE security.resource_grants SET revoked_at = :closed_at
                 WHERE grantee_campaign_membership_id = :membership AND revoked_at IS NULL
                 RETURNING resource_grant_id
             """),
-            {"membership": campaign_membership_id},
+            {"membership": campaign_membership_id, "closed_at": closed_at},
         )
         .scalars()
         .all()
@@ -1151,14 +1380,46 @@ def end_campaign_membership(
     removed_access_group_membership_ids = (
         connection.execute(
             text("""
-                UPDATE security.access_group_memberships SET removed_at = now()
+                UPDATE security.access_group_memberships SET removed_at = :closed_at
                 WHERE campaign_membership_id = :membership AND removed_at IS NULL
                 RETURNING access_group_membership_id
             """),
-            {"membership": campaign_membership_id},
+            {"membership": campaign_membership_id, "closed_at": closed_at},
         )
         .scalars()
         .all()
+    )
+
+    # The member's role rows and the membership row are held: the delegation row is next, ahead of
+    # the campaign row the retention trigger takes at commit. Delegations this member granted stay.
+    close_reveal_delegations_for_membership(
+        connection,
+        grantee_campaign_membership_id=campaign_membership_id,
+        end_reason=END_REASON_MEMBERSHIP_ENDED,
+        closed_at=closed_at,
+    )
+
+    # P03-A A3: two explicit locks, then the revelation closures. The actor's membership
+    # `FOR KEY SHARE` keeps today's relative order (actor, then campaign: the status UPDATE's
+    # foreign key took it before the commit-time retention trigger took the campaign). The campaign
+    # row `FOR UPDATE` comes before any revelation or snapshot row, because every other writer of a
+    # member-target revelation (create, revoke) takes the campaign row first. The retention
+    # trigger's own campaign lock at commit then finds it already held.
+    connection.execute(
+        text(
+            "SELECT 1 FROM security.campaign_memberships "
+            "WHERE campaign_membership_id = :actor FOR KEY SHARE"
+        ),
+        {"actor": ended_by_membership_id},
+    ).all()
+    connection.execute(
+        text("SELECT 1 FROM campaign.campaigns WHERE campaign_id = :campaign FOR UPDATE"),
+        {"campaign": campaign_id},
+    ).all()
+    revelation_closed_at = connection.execute(text("SELECT clock_timestamp()")).scalar_one()
+    assert isinstance(revelation_closed_at, datetime)
+    closed_revelation_ids, removed_snapshot_ids = close_member_revelations_for_ended_membership(
+        connection, campaign_membership_id=campaign_membership_id, closed_at=revelation_closed_at
     )
 
     revoked_status_id = lookup_id(
@@ -1167,13 +1428,14 @@ def end_campaign_membership(
     connection.execute(
         text("""
             UPDATE security.campaign_memberships
-            SET ended_at = now(), ended_by_membership_id = :actor, membership_status_id = :status
+            SET ended_at = :closed_at, ended_by_membership_id = :actor, membership_status_id = :status
             WHERE campaign_membership_id = :membership
         """),
         {
             "actor": ended_by_membership_id,
             "status": revoked_status_id,
             "membership": campaign_membership_id,
+            "closed_at": closed_at,
         },
     )
 
@@ -1193,6 +1455,153 @@ def end_campaign_membership(
         revoked_membership_character_relationship_ids=tuple(revoked_relationship_ids),
         revoked_resource_grant_ids=tuple(revoked_resource_grant_ids),
         removed_access_group_membership_ids=tuple(removed_access_group_membership_ids),
+        closed_character_revelation_ids=closed_revelation_ids,
+        removed_character_revelation_member_ids=removed_snapshot_ids,
+    )
+
+
+def _lock_for_relinquishing_transfer(
+    connection: Connection,
+    *,
+    campaign_id: uuid.UUID,
+    target_campaign_membership_id: uuid.UUID,
+    owner_role_id: uuid.UUID,
+) -> None:
+    """Takes, in the codebase's one lock order, every lock a relinquishing transfer needs before it
+    reads who currently owns the campaign: the recipient's membership, the recipient's account,
+    the owner role template and, last, the campaign row. The caller's own owner assignment is
+    already held.
+
+    Why the recipient's account, and why `FOR KEY SHARE` (DEF-011): deactivating an account locks
+    its row `FOR UPDATE` before changing its status (`dnd_ai.commands.local_auth`), and an account
+    deactivated between the recipient check and commit would leave the caller relinquished to an
+    inactive owner. `FOR KEY SHARE` is the weakest lock that conflicts with `FOR UPDATE`, so a
+    deactivation that holds the row first makes the transfer wait and then see the inactive
+    account, and one that comes later waits for this transfer's commit. It does not conflict with
+    another key-share lock, which is all the other side of a mutual transfer takes on this row
+    (its audit row's foreign key to its own account), nor with a login's `last_login_at` update. An
+    earlier version took `FOR UPDATE` here and deadlocked exactly that mutual pair. When the
+    recipient is not yet an owner, `assign_membership_role` later raises this to `FOR UPDATE`
+    under the same membership lock.
+
+    Why the campaign row: two owners relinquishing to each other at once each see the other as the
+    remaining owner and would both commit, leaving the campaign with no built-in owner (the
+    commit-time retention rule only needs some `access.manage` holder). Holding the campaign row
+    makes the second transfer re-read the first's committed result.
+
+    Why last: the retention trigger takes the campaign row at commit, after the membership rows, so
+    a command that held the campaign row while waiting for a membership (the first version of this
+    guard) deadlocked against `end_campaign_membership`. A recipient who is ended first is then
+    refused by `assign_membership_role`'s eligibility check, under the locks taken here. A
+    recipient that does not exist or is in another campaign is left for that same check to refuse.
+    """
+    connection.execute(
+        text("""
+            SELECT 1 FROM security.campaign_memberships
+            WHERE campaign_membership_id = :membership AND campaign_id = :campaign
+            FOR UPDATE
+        """),
+        {"membership": target_campaign_membership_id, "campaign": campaign_id},
+    ).all()
+    connection.execute(
+        text("""
+            SELECT 1
+            FROM security.users u
+            JOIN security.campaign_memberships cm ON cm.user_id = u.user_id
+            WHERE cm.campaign_membership_id = :membership AND cm.campaign_id = :campaign
+            FOR KEY SHARE OF u
+        """),
+        {"membership": target_campaign_membership_id, "campaign": campaign_id},
+    ).all()
+    connection.execute(
+        text("SELECT 1 FROM security.roles WHERE role_id = :role FOR UPDATE"),
+        {"role": owner_role_id},
+    ).all()
+    connection.execute(
+        text("SELECT 1 FROM campaign.campaigns WHERE campaign_id = :campaign FOR UPDATE"),
+        {"campaign": campaign_id},
+    ).all()
+
+
+def _database_clock(connection: Connection) -> datetime:
+    """The database's current instant (`clock_timestamp()`), not the transaction's start."""
+    value = connection.execute(text("SELECT clock_timestamp()")).scalar()
+    assert isinstance(value, datetime)
+    return value
+
+
+def _require_live_recipient_at_completion(
+    connection: Connection,
+    *,
+    campaign_id: uuid.UUID,
+    actor_membership_id: uuid.UUID,
+    target_campaign_membership_id: uuid.UUID,
+    require_non_expiring: bool,
+) -> None:
+    """A transfer's last check, made after the caller's own assignment has been revoked: the
+    recipient must still be a live owner by the shared definition, judged at a fresh instant, or
+    the whole transfer is refused and rolled back with the caller's assignment intact. With
+    `require_non_expiring` (a relinquishing transfer, approved policy option b) that live
+    assignment must also have no `expires_at`.
+
+    Nothing may wait between this check and commit, or an assignment could expire during the wait
+    and the caller would already have relinquished. The endpoint's audit row has a foreign key to
+    the caller's account, which takes a key-share lock on that row, and that lock can wait on a
+    concurrent assignment to the same account. So it is taken here, before the check; it is the
+    same lock the audit insert took after the campaign row before, so the lock order is unchanged.
+    The only other step before commit is the retention trigger's campaign row lock, which a
+    relinquishing transfer already holds.
+
+    A concurrent revocation of the recipient's assignment takes that campaign row at commit, ending
+    the recipient's membership needs the recipient's membership row, and deactivating the
+    recipient's account needs the account row `FOR UPDATE`, which conflicts with the key-share lock
+    `_lock_for_relinquishing_transfer` holds. A relinquishing transfer holds all three. Any of them
+    that committed before the check is seen by it; one that had not committed is ordered after this
+    transfer. A non-relinquishing transfer gives nothing up, so a later change to the recipient
+    only makes its result older, never wrong at commit.
+
+    Row locks cannot stop a finite `expires_at` from passing, which is why a relinquishing
+    transfer requires a non-expiring assignment: with no expiry and those three writes held off,
+    the recipient that is live at this check is still live at commit (design §3, "Time
+    boundary"). No command changes an existing assignment's `expires_at`."""
+    connection.execute(
+        text("""
+            SELECT 1
+            FROM security.users u
+            JOIN security.campaign_memberships cm ON cm.user_id = u.user_id
+            WHERE cm.campaign_membership_id = :actor
+            FOR KEY SHARE OF u
+        """),
+        {"actor": actor_membership_id},
+    ).all()
+    live = find_live_builtin_owner_assignment(
+        connection,
+        campaign_id=campaign_id,
+        campaign_membership_id=target_campaign_membership_id,
+        as_of=_database_clock(connection),
+    )
+    if live is None:
+        raise OwnershipTransferRecipientChangedError(
+            f"membership {target_campaign_membership_id} is no longer a live owner of campaign "
+            f"{campaign_id} at the end of the transfer"
+        )
+    if require_non_expiring and _owner_assignment_expires(connection, membership_role_id=live):
+        raise OwnershipTransferRecipientAssignmentExpiresError(
+            f"membership {target_campaign_membership_id}'s owner assignment {live} has an expiry "
+            "at the end of the transfer"
+        )
+
+
+def _owner_assignment_expires(connection: Connection, *, membership_role_id: uuid.UUID) -> bool:
+    """Whether an assignment carries a finite `expires_at` (whether or not it has passed)."""
+    return bool(
+        connection.execute(
+            text(
+                "SELECT expires_at IS NOT NULL FROM security.membership_roles "
+                "WHERE membership_role_id = :r"
+            ),
+            {"r": membership_role_id},
+        ).scalar_one()
     )
 
 
@@ -1201,6 +1610,10 @@ class TransferCampaignOwnershipResult:
     target_campaign_membership_id: uuid.UUID
     assigned_membership_role_id: uuid.UUID | None
     revoked_membership_role_ids: tuple[uuid.UUID, ...]
+    # The recipient's own expired, unrevoked owner rows that this transfer closed so a live one
+    # could be assigned in their place (DEF-011). Not part of `revoked_membership_role_ids`, which
+    # is only the caller's relinquished ownership.
+    replaced_expired_membership_role_ids: tuple[uuid.UUID, ...] = ()
 
 
 def transfer_campaign_ownership(
@@ -1221,20 +1634,139 @@ def transfer_campaign_ownership(
     and everything they authored stay as they were, and the target's system roles
     are neither read nor written (any active account may own a campaign, D11).
     Idempotent: a target who already owns the campaign is not given a second
-    assignment."""
+    assignment.
+
+    The caller must be a live built-in owner (`CampaignOwnerRequiredError`, 403; decision D3),
+    checked first so a non-owner gets no `assigned: false` answer to probe with. When
+    `relinquish_own_ownership` is set the caller's assignment is locked `FOR UPDATE` up front,
+    because it is rewritten below: taking a shared lock first would deadlock two identical
+    concurrent requests on the upgrade.
+
+    The recipient (DEF-011) counts as an existing owner only by the shared live-owner definition,
+    judged at a fresh `clock_timestamp()` read after the lock waits; otherwise it is assigned a
+    live row through `assign_membership_role`, which refuses a recipient in another campaign, with
+    an ended or inactive membership or with an inactive account. An owner row that had already
+    expired is locked before the recipient's membership and replaced. One that expires while the
+    transfer waits cannot be locked again under the lock order, so the transfer is refused
+    (`OwnershipTransferRecipientChangedError`, 409). A relinquishing transfer also requires the
+    recipient's live assignment to have no `expires_at` (owner-approved policy option b): a live,
+    finite one is refused before any write (`OwnershipTransferRecipientAssignmentExpiresError`,
+    409) and never extended; a non-relinquishing transfer is unchanged. The recipient is checked
+    once more after the caller's own assignment is revoked
+    (`_require_live_recipient_at_completion`)."""
+    relinquishing = (
+        relinquish_own_ownership and actor_membership_id != target_campaign_membership_id
+    )
+    _require_builtin_campaign_owner(
+        connection,
+        campaign_id=campaign_id,
+        actor_membership_id=actor_membership_id,
+        lock="update" if relinquishing else "share",
+    )
     owner_role_id = connection.execute(
         text(
             "SELECT role_id FROM security.roles WHERE code = 'campaign_owner' AND campaign_id IS NULL"
         )
     ).scalar()
     assert isinstance(owner_role_id, uuid.UUID)
-    already = connection.execute(
-        text("""
-            SELECT membership_role_id FROM security.membership_roles
-            WHERE campaign_membership_id = :m AND role_id = :r AND revoked_at IS NULL
-        """),
-        {"m": target_campaign_membership_id, "r": owner_role_id},
-    ).scalar()
+    # The recipient's expired, unrevoked owner rows are role rows, so they are locked before the
+    # recipient's membership row (the order `end_campaign_membership` uses). Only expired rows are
+    # locked: a live row is the other half of a mutual transfer's own lock and locking it here
+    # would deadlock the pair. Expiry is judged by the statement's own clock, since the gate above
+    # may have waited.
+    locked_expired = set(
+        connection.execute(
+            text("""
+                SELECT mr.membership_role_id
+                FROM security.membership_roles mr
+                JOIN security.campaign_memberships cm
+                    ON cm.campaign_membership_id = mr.campaign_membership_id
+                WHERE mr.campaign_membership_id = :m AND cm.campaign_id = :campaign
+                  AND mr.role_id = :r AND mr.revoked_at IS NULL
+                  AND mr.expires_at IS NOT NULL AND mr.expires_at <= clock_timestamp()
+                ORDER BY mr.membership_role_id
+                FOR UPDATE OF mr
+            """),
+            {"m": target_campaign_membership_id, "r": owner_role_id, "campaign": campaign_id},
+        ).scalars()
+    )
+    if relinquishing:
+        _lock_for_relinquishing_transfer(
+            connection,
+            campaign_id=campaign_id,
+            target_campaign_membership_id=target_campaign_membership_id,
+            owner_role_id=owner_role_id,
+        )
+    # Every lock wait before the recipient check is behind us, so expiry is judged at a fresh
+    # database instant: `now()` is the transaction's start and would still call an assignment
+    # live that expired while this transfer waited.
+    checked_at = _database_clock(connection)
+    current = (
+        connection.execute(
+            text("""
+                SELECT mr.membership_role_id,
+                       (mr.expires_at IS NOT NULL AND mr.expires_at <= :checked_at) AS is_expired
+                FROM security.membership_roles mr
+                JOIN security.campaign_memberships cm
+                    ON cm.campaign_membership_id = mr.campaign_membership_id
+                WHERE mr.campaign_membership_id = :m AND cm.campaign_id = :campaign
+                  AND mr.role_id = :r AND mr.revoked_at IS NULL
+                ORDER BY mr.membership_role_id
+            """),
+            {
+                "m": target_campaign_membership_id,
+                "r": owner_role_id,
+                "campaign": campaign_id,
+                "checked_at": checked_at,
+            },
+        )
+        .mappings()
+        .all()
+    )
+    # An expired row that was never revoked still occupies `ux_membership_roles_active`, so a new
+    # assignment cannot be inserted beside it, and it grants nothing: close it (the same
+    # revocation `revoke_membership_role` makes) and give the recipient a live row. Only a row
+    # locked above can be closed: one that expired later would have to be locked after the
+    # recipient's membership, against the lock order, so the transfer is refused instead and a
+    # retry replaces it.
+    replaced = [row["membership_role_id"] for row in current if row["is_expired"]]
+    if any(membership_role_id not in locked_expired for membership_role_id in replaced):
+        raise OwnershipTransferRecipientChangedError(
+            f"membership {target_campaign_membership_id}'s owner assignment expired while the "
+            "transfer was waiting"
+        )
+    # DEF-013: every lock wait of the transfer's own is behind us; judge the caller again, at a
+    # fresh instant, before the first write (closing the recipient's expired row below).
+    _recheck_caller_is_live_owner(
+        connection, campaign_id=campaign_id, actor_membership_id=actor_membership_id
+    )
+    for membership_role_id in replaced:
+        revoke_membership_role(
+            connection, membership_role_id=membership_role_id, campaign_id=campaign_id
+        )
+    # "Already an owner" is the shared live-owner definition (same campaign, active built-in role,
+    # assignment neither revoked nor expired, open active membership, active account). Anything
+    # short of that goes to `assign_membership_role`, whose eligibility checks refuse a recipient
+    # in another campaign or with an ended membership or an inactive account.
+    already = find_live_builtin_owner_assignment(
+        connection,
+        campaign_id=campaign_id,
+        campaign_membership_id=target_campaign_membership_id,
+        as_of=checked_at,
+    )
+    # Approved policy (option b): a handoff needs a non-expiring recipient assignment, because no
+    # lock can stop a finite one from passing between the final check and commit. Refused here,
+    # before any write; never extended. A recipient has at most one unrevoked owner row, so a live
+    # finite one means nothing was replaced above. A newly assigned row never expires.
+    if (
+        relinquishing
+        and already is not None
+        and _owner_assignment_expires(connection, membership_role_id=already)
+    ):
+        raise OwnershipTransferRecipientAssignmentExpiresError(
+            f"membership {target_campaign_membership_id}'s live owner assignment {already} has an "
+            "expiry"
+        )
     assigned: uuid.UUID | None = None
     if already is None:
         assigned = assign_membership_role(
@@ -1245,7 +1777,12 @@ def transfer_campaign_ownership(
             granted_by_membership_id=actor_membership_id,
         ).membership_role_id
     revoked: list[uuid.UUID] = []
-    if relinquish_own_ownership and actor_membership_id != target_campaign_membership_id:
+    if relinquishing:
+        # DEF-013: the assignment above may have waited; recheck immediately before giving up the
+        # caller's own ownership. A failure raises, rolling back the recipient's assignment too.
+        _recheck_caller_is_live_owner(
+            connection, campaign_id=campaign_id, actor_membership_id=actor_membership_id
+        )
         own = connection.execute(
             text("""
                 SELECT membership_role_id FROM security.membership_roles
@@ -1259,8 +1796,16 @@ def transfer_campaign_ownership(
                 connection, membership_role_id=membership_role_id, campaign_id=campaign_id
             ).revoked:
                 revoked.append(membership_role_id)
+    _require_live_recipient_at_completion(
+        connection,
+        campaign_id=campaign_id,
+        actor_membership_id=actor_membership_id,
+        target_campaign_membership_id=target_campaign_membership_id,
+        require_non_expiring=relinquishing,
+    )
     return TransferCampaignOwnershipResult(
         target_campaign_membership_id=target_campaign_membership_id,
         assigned_membership_role_id=assigned,
         revoked_membership_role_ids=tuple(revoked),
+        replaced_expired_membership_role_ids=tuple(replaced),
     )

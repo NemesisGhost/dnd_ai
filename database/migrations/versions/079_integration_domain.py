@@ -46,7 +46,7 @@ Purpose:
     snapshot").
 
     integration.sync_jobs.external_operation_id (added in review, before
-    this PR merged — see docs/PHASE9_VERIFICATION.md's correction-pass
+    this PR merged — see docs/DELIVERY_HISTORY.md's correction-pass
     note) is a stable idempotency key an inbound job's external system
     supplies, unique per external_system_id
     (ux_sync_jobs_system_operation). The command layer
@@ -63,7 +63,7 @@ Purpose:
     via narrative.event_effects keyed off resulting_event_id) without
     re-running resolve_combat_turn().
 
-    Second correction, before this PR merged (docs/PHASE9_VERIFICATION.md's
+    Second correction, before this PR merged (docs/DELIVERY_HISTORY.md's
     "atomic completion" note): the two partial unique indexes on
     integration.sync_state — one per target column — are designed to be
     the target of an `INSERT ... ON CONFLICT (...) WHERE ... DO UPDATE`
@@ -79,7 +79,7 @@ Purpose:
     per PostgreSQL's inference rules, and a target-scoped partial index is
     exactly what makes that inference unambiguous per target type.
 
-    Third correction, before this PR merged (docs/PHASE9_VERIFICATION.md's
+    Third correction, before this PR merged (docs/DELIVERY_HISTORY.md's
     "single-connection" note): no schema change, but worth recording here
     since it changes how the command layer's advisory lock interacts with
     connection pooling. The second correction's claim/work/fail steps each

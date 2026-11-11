@@ -16,6 +16,7 @@ import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { usePageArrival } from "../hooks/usePageArrival"
 import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard"
+import { queryKeysChanged } from "../navigation/queryKeys"
 import type { CreateCampaignRequest, CreateCampaignResponse } from "../types/campaignSettings"
 import type { WorldDetail, WorldListResponse } from "../types/worldAuthoring"
 import { DESCRIPTION_MAX, NAME_MAX, validateDescription, validateName } from "../utils/authoringValidation"
@@ -272,13 +273,28 @@ function DetailsForm({
     const [createdId, setCreatedId] = useState<string | null>(null)
     const [refreshFailed, setRefreshFailed] = useState(false)
     const version = versionState ?? (versions.length === 1 ? versions[0]!.value : "")
-    const guard = useUnsavedChangesGuard(createdId === null && (name !== "" || description !== ""))
+    // Navigate only once the authoritative bootstrap lists the new campaign;
+    // never to a guessed route, which the campaign boundary would reject.
+    const listed =
+        createdId !== null &&
+        session.status === "authenticated" &&
+        session.bootstrap.campaigns.some((c) => c.campaign_id === createdId)
+    // The wizard's step and its world and timeline live in the query, and a step is a different component:
+    // changing either key (for example "Back to timeline choice") unmounts this form, so it is a departure.
+    // Once the server has confirmed the create, this component still owns the created id and the recovery
+    // action until the bootstrap lists the campaign, so the guard stays active for that whole time
+    // (entered values, a confirmation read in flight, or a failed or unapplied one). Leaving then abandons
+    // only this page: nothing here ever sends the create again.
+    const guard = useUnsavedChangesGuard(
+        createdId === null ? name !== "" || description !== "" : !listed,
+        { disposingQuery: queryKeysChanged("worldId", "timelineId") },
+    )
+    const { release: releaseGuard } = guard
 
     const mutation = useAuthoringMutation<CreateCampaignRequest, CreateCampaignResponse>({
         scopeKey: `create-campaign:${timelineId}`,
         request: (body, ctx) => createCampaign(body, ctx),
         onSuccess: async (result) => {
-            guard.release()
             setCreatedId(result.campaign_id)
             try {
                 await refresh()
@@ -288,17 +304,13 @@ function DetailsForm({
         },
     })
 
-    // Navigate only once the authoritative bootstrap lists the new campaign;
-    // never to a guessed route, which the campaign boundary would reject.
-    const listed =
-        createdId !== null &&
-        session.status === "authenticated" &&
-        session.bootstrap.campaigns.some((c) => c.campaign_id === createdId)
     useEffect(() => {
         if (listed && createdId !== null) {
+            // The recovery hold is settled: the campaign is confirmed, so this deliberate navigation is not a departure.
+            releaseGuard()
             void navigate(`/app/${createdId}/home`, { state: { announce: "Campaign created" } })
         }
-    }, [listed, createdId, navigate])
+    }, [listed, createdId, navigate, releaseGuard])
 
     const error = mutation.status.kind === "error" ? mutation.status.error : null
 
@@ -320,8 +332,25 @@ function DetailsForm({
         })
     }
 
+    const leaveDialog = (
+        <ConfirmDialog
+            open={guard.blocked}
+            title={createdId === null ? "Discard unsaved changes?" : "Leave before the campaign is confirmed?"}
+            description={
+                createdId === null
+                    ? "You have entered campaign details that have not been saved."
+                    : "The campaign was created, but this page has not yet confirmed it with the server. You can open it later from your campaigns."
+            }
+            confirmLabel={createdId === null ? "Discard changes" : "Leave"}
+            onConfirm={guard.discard}
+            onCancel={guard.stay}
+            cancelLabel={createdId === null ? "Keep editing" : "Stay"}
+        />
+    )
+
     if (createdId !== null) {
         return refreshFailed || (mutation.status.kind === "success" && !listed) ? (
+            <>
             <div role="alert" className="authoring-message authoring-message--warning">
                 <div>
                     <p>Campaign created. We could not confirm it with the server yet.</p>
@@ -337,8 +366,13 @@ function DetailsForm({
                     </button>
                 </div>
             </div>
+            {leaveDialog}
+            </>
         ) : (
-            <p role="status">Campaign created. Opening it…</p>
+            <>
+                <p role="status">Campaign created. Opening it…</p>
+                {leaveDialog}
+            </>
         )
     }
 
@@ -393,15 +427,7 @@ function DetailsForm({
             <p>
                 <Link to={`/campaigns/new?worldId=${encodeURIComponent(worldId)}`}>Back to timeline choice</Link>
             </p>
-            <ConfirmDialog
-                open={guard.blocked}
-                title="Discard unsaved changes?"
-                description="You have entered campaign details that have not been saved."
-                confirmLabel="Discard changes"
-                onConfirm={guard.discard}
-                onCancel={guard.stay}
-                cancelLabel="Keep editing"
-            />
+            {leaveDialog}
         </>
     )
 }

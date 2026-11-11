@@ -147,6 +147,16 @@ class CharacterRelationshipSummaryResponse(BaseModel):
     expires_at: datetime | None
 
 
+class RevelationSummaryResponse(BaseModel):
+    """A live character revelation that reaches a member: the character and the audience kind it
+    reaches them through, as a source of its own. No id, reason, creator or other audience."""
+
+    character_id: uuid.UUID
+    character_display_name: str
+    audience_kind_code: str
+    audience_kind_display_name: str
+
+
 class ResourceGrantSummaryResponse(BaseModel):
     resource_grant_id: uuid.UUID
     capability_code: str
@@ -194,6 +204,7 @@ class CampaignMemberSummaryResponse(BaseModel):
     roles: list[RoleSummaryResponse]
     character_relationships: list[CharacterRelationshipSummaryResponse]
     grants: list[ResourceGrantSummaryResponse]
+    revelations: list[RevelationSummaryResponse]
 
 
 class AccessGroupMemberSummaryResponse(BaseModel):
@@ -292,7 +303,11 @@ def get_campaign_access_overview_endpoint(
     members = get_campaign_access_overview(
         connection, campaign_id=campaign_id, timeline_id=access.timeline_id
     )
-    assignable_roles = list_assignable_campaign_roles(connection, campaign_id=campaign_id)
+    assignable_roles = list_assignable_campaign_roles(
+        connection,
+        campaign_id=campaign_id,
+        caller_campaign_membership_id=access.campaign_membership_id,
+    )
     assignable_characters = list_assignable_campaign_characters(
         connection, world_id=timeline_world_id(connection, access.timeline_id)
     )
@@ -379,6 +394,15 @@ def get_campaign_access_overview_endpoint(
                         expires_at=grant.expires_at,
                     )
                     for grant in member.grants
+                ],
+                revelations=[
+                    RevelationSummaryResponse(
+                        character_id=revelation.character_id,
+                        character_display_name=revelation.character_display_name,
+                        audience_kind_code=revelation.audience_kind_code,
+                        audience_kind_display_name=revelation.audience_kind_display_name,
+                    )
+                    for revelation in member.revelations
                 ],
             )
             for member in members

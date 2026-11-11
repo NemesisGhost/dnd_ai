@@ -5,7 +5,7 @@
 
 ## Context
 
-[DATABASE_CONVENTIONS.md §27.1](../DATABASE_CONVENTIONS.md#271-database-roles) originally specified five database roles, all of them login roles, with `migration_owner` doing double duty: it both owned every schema object *and* was the identity the migration runner authenticated as ([PLAN.md §29.6](../PLAN.md#296-migration-execution-mechanism)).
+[DATABASE_CONVENTIONS.md §27.1](../DATABASE_CONVENTIONS.md#271-database-roles) originally specified five database roles, all of them login roles, with `migration_owner` doing double duty: it both owned every schema object *and* was the identity the migration runner authenticated as ([PLAN.md §29.6](../README.md)).
 
 Deploying `dev` to a real AWS account for the first time showed that combination is not viable. Two PostgreSQL/RDS behaviors collide:
 
@@ -58,7 +58,7 @@ Three rules make this work and must survive future edits:
 
 **Foreclosed**
 
-- `migration_owner` can never be used to connect, so it cannot be the subject of an `rds-db:connect` grant, hold `CREATEDB` for the ephemeral test databases in [§29.9](../PLAN.md#299-shared-dev-verification-mechanism-ci), or serve as a break-glass login. Those all need login roles.
+- `migration_owner` can never be used to connect, so it cannot be the subject of an `rds-db:connect` grant, hold `CREATEDB` for the ephemeral test databases in [§29.9](../README.md), or serve as a break-glass login. Those all need login roles.
 
 ## Verification status
 
@@ -67,8 +67,8 @@ The role SQL was verified offline (`alembic upgrade head --sql`) and the Terrafo
 ## References
 
 - [DATABASE_CONVENTIONS.md §27.1](../DATABASE_CONVENTIONS.md#271-database-roles), [§27.2](../DATABASE_CONVENTIONS.md#272-least-privilege) — the role model
-- [PLAN.md §29.5](../PLAN.md#295-database-role-schema-and-extension-bootstrap) — bootstrap requirements
-- [PLAN.md §29.6](../PLAN.md#296-migration-execution-mechanism) — which role the migration runner connects as
-- [PLAN.md §30.5](../PLAN.md#305-identity-and-secrets) — task roles and IAM database authentication
+- [PLAN.md §29.5](../README.md) — bootstrap requirements
+- [PLAN.md §29.6](../README.md) — which role the migration runner connects as
+- [PLAN.md §30.5](../README.md) — task roles and IAM database authentication
 - [ADR 0008](0008-aws-first-deployment-and-verification.md) — the AWS-first policy that surfaced this
 - `database/migrations/versions/001_bootstrap.py`, `database/migrations/env.py`

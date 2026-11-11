@@ -34,6 +34,7 @@ from sqlalchemy import Connection, text
 from dnd_ai.api.app import create_app
 from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_connection
+from dnd_ai.api.idempotency import reset_idempotency_key_lock
 from dnd_ai.api.local_auth import (
     get_login_account_rate_limiter,
     get_login_ip_rate_limiter,
@@ -177,6 +178,7 @@ class AuthoringHarness:
         return client
 
     def _connection(self) -> Iterator[Connection]:
+        reset_idempotency_key_lock(self.connection)  # one outer transaction serves many requests
         savepoint = self.connection.begin_nested()
         try:
             yield self.connection

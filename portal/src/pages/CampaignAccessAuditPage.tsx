@@ -1,5 +1,6 @@
 import { useParams } from "react-router"
 import { AccessTabNav } from "../components/AccessTabNav"
+import { TaskBreadcrumb } from "../components/navigation/TaskBreadcrumb"
 import { AuditHistory } from "../components/AuditHistory"
 import { useAuditActors } from "../hooks/useAuditActors"
 import PlaceholderPage from "./PlaceholderPage"
@@ -43,6 +44,7 @@ function CampaignAccessAuditContent({ campaignId }: { campaignId: string }) {
 
     return (
         <>
+            <TaskBreadcrumb />
             <AccessTabNav campaignId={campaignId} />
             <AuditHistory campaignId={campaignId} actors={actors} />
         </>

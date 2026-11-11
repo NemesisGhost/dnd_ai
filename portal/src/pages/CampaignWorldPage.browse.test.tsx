@@ -284,12 +284,19 @@ describe("CampaignWorldPage browsing state in the address", () => {
         })
         renderAt(origin)
 
-        for (const related of ["The Crown", "Mapmakers' Hall", "The Sun Faith"]) {
+        // A related organization is another organization page (the shared breadcrumb, whose World crumb
+        // returns to the same browser view); the location and religion entries here are stubs that read the
+        // older key. Both lead back to where the browser was left.
+        for (const [related, back] of [
+            ["The Crown", "World"],
+            ["Mapmakers' Hall", "Back to World"],
+            ["The Sun Faith", "Back to World"],
+        ]) {
             fireEvent.click(screen.getByRole("link", { name: /Cartographers/ }))
-            fireEvent.click(screen.getByRole("link", { name: related }))
+            fireEvent.click(screen.getByRole("link", { name: related! }))
             expect(here()).not.toBe(origin)
 
-            fireEvent.click(screen.getByRole("link", { name: "Back to World" }))
+            fireEvent.click(screen.getByRole("link", { name: back! }))
 
             expect(here()).toBe(origin)
         }

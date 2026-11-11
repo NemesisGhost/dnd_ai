@@ -8,7 +8,6 @@ import pytest
 from sqlalchemy import Connection, create_engine, text
 
 from dnd_ai.commands.events import _insert_event_row
-from dnd_ai.commands.world_time import create_calendar, create_world_time
 from tests.builders import make_authored_campaign, make_authored_world
 from tests.database.test_organization_hierarchy_migration import _alembic
 from tests.database.test_phase8_populated_upgrade import (
@@ -17,7 +16,7 @@ from tests.database.test_phase8_populated_upgrade import (
     _drop_database,
     _provision_database,
 )
-from tests.factories import make_user
+from tests.factories import make_user, make_world_time
 
 pytestmark = pytest.mark.database
 
@@ -57,23 +56,9 @@ def test_populated_upgrade_and_documented_downgrade() -> None:
             owner = make_user(connection, "Migration Owner")
             world = make_authored_world(connection, owner_user_id=owner, name="Migration World")
             campaign_id = make_authored_campaign(connection, world, name="Migration Campaign")
-            calendar = create_calendar(
-                connection,
-                world_id=world.world_id,
-                actor_user_id=owner,
-                name="Cal",
-                description=None,
-                days_per_week=None,
-                epoch_label=None,
-                months=[("Only", 100)],
-            )
-            year = create_world_time(
-                connection,
-                campaign_id=campaign_id,
-                actor_user_id=owner,
-                calendar_id=calendar.calendar_id,
-                year=1,
-            ).world_time_id
+            # A plain world time: the application commands (create_world_time) resolve access,
+            # which reads tables newer than this test's schema revision.
+            year = make_world_time(connection, world.world_id, 1000)
             timeline_id = connection.execute(
                 text("SELECT timeline_id FROM campaign.campaigns WHERE campaign_id = :c"),
                 {"c": campaign_id},

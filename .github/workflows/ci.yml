@@ -185,7 +185,7 @@ jobs:
   postgres-tests:
     name: Tests (PostgreSQL 18, shard ${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     # The complete unit/database/scenario suite outgrew a single 30-minute
     # job (PR #66: ~26 minutes of pytest alone), so it runs as parallel
     # shards. Each shard gets its own fresh postgres:18.4 service container
@@ -234,6 +234,24 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --all-extras
+
+      # The suite includes tests/database/test_run_sharded_tests_servers.py,
+      # which starts real throwaway PostgreSQL clusters to verify the local
+      # sharded runner's server-identity and collision safeguards. The service
+      # container above is the application test database; it does not install
+      # host-side initdb/postgres binaries needed by those tests.
+      - name: Install PostgreSQL 18 binaries for runner safety tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ca-certificates curl postgresql-common
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          codename="$(. /etc/os-release && echo "$VERSION_CODENAME")"
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${codename}-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y postgresql-18
+          echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
+          /usr/lib/postgresql/18/bin/postgres --version
 
       - name: Run test suite shard (unit, database, scenario)
         run: uv run pytest -v --tb=short
