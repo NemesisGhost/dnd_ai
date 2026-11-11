@@ -102,3 +102,45 @@ describe("useAuthoringResource startedSeq", () => {
         expect(slow.result.current.startedSeq).toBeLessThan(fast.result.current.startedSeq!)
     })
 })
+
+// `startedOwner` is the user and browser session the data on screen STARTED under, so a settled result is
+// never read as a later owner's.
+describe("useAuthoringResource startedOwner", () => {
+    it("is null while loading, names the owner at start, and keeps naming it after the owner changes", async () => {
+        const server = installMockServer()
+        server.on("GET", "/a", { body: {} })
+        const reload = vi.fn()
+        const refresh = vi.fn()
+        let browserSession = "session-1"
+        function OwnerWrapper({ children }: PropsWithChildren) {
+            return (
+                <SessionContext.Provider
+                    value={{
+                        state: {
+                            status: "authenticated",
+                            bootstrap: { ...sessionBootstrapFixture, browser_session_id: browserSession },
+                        },
+                        reload,
+                        refresh,
+                    }}
+                >
+                    {children}
+                </SessionContext.Provider>
+            )
+        }
+        const { result, rerender } = renderHook(() => useAuthoringResource("/a"), { wrapper: OwnerWrapper })
+        expect(result.current.startedOwner).toBeNull()
+        await waitFor(() => expect(result.current.state.kind).toBe("ready"))
+        const first = result.current.startedOwner
+        expect(first).toContain("session-1")
+
+        // The same data stays on screen under the owner that started it; a refetch starts under the new one.
+        browserSession = "session-2"
+        rerender()
+        expect(result.current.startedOwner).toBe(first)
+        await act(async () => {
+            await result.current.refetch()
+        })
+        expect(result.current.startedOwner).toContain("session-2")
+    })
+})

@@ -80,6 +80,7 @@ export function WorkspaceHierarchyProvider({ children }: { children: ReactNode }
         state: worldState,
         refetch,
         startedSeq: worldStartedSeq,
+        startedOwner: worldStartedOwner,
     } = useAuthoringResource<WorldDetail>(fetchedWorldId === null ? null : worldPath(fetchedWorldId))
 
     // What authoritative world reads have said, per world, so the Infobox can withdraw an explicit World
@@ -90,6 +91,9 @@ export function WorkspaceHierarchyProvider({ children }: { children: ReactNode }
     const [recorded, setRecorded] = useState<EvidenceRecord>({ owner, entries: NO_EVIDENCE })
     const settledEvidence = ((): { worldId: string; evidence: WorldReadEvidence } | null => {
         if (fetchedWorldId === null || worldStartedSeq === null) return null
+        // Bound to the owner the read STARTED under: a result that settled before the owner changed is
+        // the previous owner's and is never recorded for this one, however long it stays on screen.
+        if (worldStartedOwner !== owner) return null
         if (worldState.kind === "ready") {
             return { worldId: fetchedWorldId, evidence: { verdict: "readable", startedSeq: worldStartedSeq } }
         }
@@ -108,6 +112,18 @@ export function WorkspaceHierarchyProvider({ children }: { children: ReactNode }
     }
     if (current !== recorded) setRecorded(current)
     const worldEvidence = current.entries
+
+    // A new owner's read of the same world path is not started by the path, so start it: the previous
+    // owner's answer (and any read still in flight for them) is superseded and the new read records fresh
+    // evidence. A change through signed-out starts a read by itself (the path goes null, then returns).
+    const lastOwner = useRef(owner)
+    useEffect(() => {
+        const before = lastOwner.current
+        lastOwner.current = owner
+        if (before !== null && owner !== null && before !== owner && fetchedWorldId !== null) {
+            void refetch()
+        }
+    }, [owner, fetchedWorldId, refetch])
 
     // Timeline options change when a page writes (for example creating a
     // timeline). Refresh them when navigation moves to another route within the

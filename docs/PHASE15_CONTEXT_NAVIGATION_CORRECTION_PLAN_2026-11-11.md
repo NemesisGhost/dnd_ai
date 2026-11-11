@@ -689,3 +689,39 @@ Windows and any other browser's arrow-key behavior; a physical keyboard run (the
 not a person); visible-focus review of every new control beyond the captured screenshots; actual 400% browser zoom
 (320 CSS px was checked, which is the same width); Back/Forward across a campaign-derived timeline switch beyond the
 chooser case above; two-tab revocation while the chooser is open and while an explicit World option is shown.
+
+### 10.5 Correction: World evidence is bound to the owner a read started under
+
+Review finding (parent `0565331`): the provider recorded a settled `useAuthoringResource` result under the
+*current* `selectionOwner(bootstrap)`. When the owner changed while the provider stayed on the same world path
+(a different user, or another browser session of the same user), the hook did not restart (the path was
+unchanged) and its still-settled result was relabeled as the new owner's evidence, so an old refusal could
+withdraw the new owner's explicit World option and an old success could stand in for a new refusal. Clearing the
+evidence map alone would not have helped: the same settled result repopulated it on the next render.
+
+Change (portal only; no backend, selection-store, route or breadcrumb change):
+- `useAuthoringResource` returns an additive `startedOwner`: the `selectionOwner` in force when the read behind
+  `state` started (a ref read at request start, like the label authority), null while loading or signed out. It
+  belongs to the data on screen, as `startedSeq` does. Existing callers that ignore it are unaffected; it does
+  not start, restart or reorder any read.
+- `WorkspaceHierarchyProvider` records evidence only when `startedOwner` equals the current owner. Start-order
+  comparison, abort and supersede handling and transient-error handling are unchanged.
+- When the owner changes directly (both owners non-null) on a fetched world path, the provider calls `refetch()`
+  so the new owner's read of the same path produces fresh evidence; that also aborts any read still in flight
+  for the old owner. A change through signed-out restarts the read through the path going null and back.
+- Consumer test fix: `CampaignKnowledgeDetailPage.test.tsx`'s partial session stub now carries `user` and
+  `browser_session_id`, which the hook reads to name the owner. The hook also tolerates a stub with no `state`.
+
+Tests: new `HierarchyContextPanel.ownerEvidence.test.tsx`, run for a different user and for a different browser
+session of the same user: old refusal does not suppress the new owner's option and a new-owner success restores
+it; the old refusal is not carried over while the new read is in flight; old success does not stand in for a new
+refusal, and a new-owner refusal still withdraws the option; an old-owner request that answers after the owner
+changed records nothing (refusal after new success, and success after new refusal). New `startedOwner` hook
+test. All 10 provider tests fail on the previous source (8 s timeouts or wrong options) and pass with the change.
+
+Verification: `eslint src`, `tsc -b` and `npm run build` clean; full portal suite (excluding the gitignored
+`.tmp/`) 424 files, 5,128 tests passed after one initial failure of 5 `CampaignKnowledgeDetailPage` tests caused
+by the partial session stub described above (fixed, not weakened); `git diff --check` clean.
+
+Limitations: the real-browser pending list in §10.4 is unchanged, and an owner change has not been exercised in a
+real browser (sign-in as another user in the same tab goes through a full session reload in the app).
