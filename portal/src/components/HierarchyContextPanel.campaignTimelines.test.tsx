@@ -106,6 +106,9 @@ function Probe() {
       <button type="button" onClick={() => navigate("/app/c3/world")}>
         Go to another page
       </button>
+      <button type="button" onClick={() => navigate(-1)}>
+        Back
+      </button>
       <p data-testid="location">{location.pathname}</p>
       <p data-testid="state">{JSON.stringify(location.state ?? null)}</p>
     </>
@@ -328,6 +331,19 @@ describe("the inline campaign chooser", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Push the same page with a query" }))
     await waitFor(() => expect(chooser()).toBeNull())
+  })
+
+  it("going Back to the entry it was opened at does not reopen it (found in a real browser)", async () => {
+    await openChooser()
+    fireEvent.click(screen.getByRole("button", { name: "Go to another page" }))
+    await waitFor(() => expect(location()).toHaveTextContent("/app/c3/world"))
+    expect(chooser()).toBeNull()
+
+    fireEvent.click(screen.getByRole("button", { name: "Back" }))
+
+    await waitFor(() => expect(location()).toHaveTextContent("/app/c3/home"))
+    await waitFor(() => expect(level("Timeline")).toBeEnabled())
+    expect(chooser()).toBeNull()
   })
 
   it("is closed by moving to another page", async () => {

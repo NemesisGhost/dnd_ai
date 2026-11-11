@@ -289,6 +289,10 @@ export function HierarchyContextPanel({
   ) {
     chooserHere = { ...chooser, locationKey: location.key }
     setChooser(chooserHere)
+  } else if (chooser !== null && chooserHere === null) {
+    // The location it belonged to is gone. Forget it now, so that going Back to that entry (whose key
+    // comes back) cannot reopen what only the person may open.
+    setChooser(null)
   }
   const chooserCampaigns =
     chooserHere === null || activeWorldId === null
