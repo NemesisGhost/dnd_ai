@@ -768,3 +768,25 @@ checkout.
 Limitations: a real-browser owner-transition check is still pending (the app reloads the session on sign-in,
 which jsdom does not model); the §10.4 pending list is unchanged. Every authoring read now restarts on an owner
 change, which is intended but is a wider effect than the two resources named in the review.
+
+### 10.7 Review outcome and closeout (2026-11-11)
+
+Attribution is kept separate.
+
+- **Reviewed correctness (independent Codex Luna Medium review, as reported to the owner):** CNC-1, CNC-3 and the
+  chooser-history correction passed earlier review; the CNC-2 owner-evidence defect (`03c46ff`) and the
+  pending-interval defect (`6cdc68b`) are resolved. Final correction verdict: PASS WITH NONBLOCKING VERIFICATION
+  LIMITATION. The reviewer ran focused tests, source lint, the build and diff checks, and they passed.
+- **Local verification (implementer):** as recorded in §10.3, §10.5 and §10.6; the implementer's runs were in the
+  working tree, not a clean checkout.
+- **CI:** recorded on the pull request for the pushed head; the earlier pass on `00c463f` does not cover these
+  changes.
+- **Still pending, unchanged:** the real-browser owner-transition check (user and browser-session change on the same
+  route, and sign-out then sign-in); the §10.4 manual/browser list (NVDA and VoiceOver, Edge and other browsers,
+  a physical-keyboard pass, real 400% zoom, Back/Forward across switches beyond the chooser case, two-tab
+  revocation).
+- **Retained follow-ups:** N3 (unexplained load-sensitive intermittency; Low), N4 (ignored `portal/.tmp` scratch
+  probe fails `npm run lint` and asserts the pre-correction behavior; informational), N5 (`TimelinePage`
+  breadcrumb links built from the typed id; informational, out of scope), and the possible World-selection
+  chooser improvement (Q1, not implemented).
+- No overall Phase 15 acceptance or merge readiness is claimed.
