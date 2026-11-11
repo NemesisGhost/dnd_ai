@@ -108,6 +108,14 @@ export function useAuthoringResource<T>(
     // Tolerates a session double that supplies no state (several consumer tests stub useSession).
     const owner = session?.status === "authenticated" ? selectionOwner(session.bootstrap) : null
     const currentOwner = useRef(owner)
+    // Forget everything read under another owner as soon as a render sees the change (derived state, the
+    // pattern React documents for resetting state when an input changes), so going back to an earlier
+    // owner cannot revive what was read before they left: that owner's read starts afresh as well.
+    const [seenOwner, setSeenOwner] = useState(owner)
+    if (seenOwner !== owner) {
+        setSeenOwner(owner)
+        setSnapshot({ path, state: LOADING, authority: null, startedSeq: null, startedOwner: null })
+    }
     useLayoutEffect(() => {
         currentOwner.current = owner
     })
@@ -157,7 +165,7 @@ export function useAuthoringResource<T>(
             controller.abort()
             refetchController.current?.abort()
         }
-    }, [path, apply])
+    }, [path, apply, owner])
 
     const refetch = useCallback(async (): Promise<RefetchOutcome> => {
         if (path === null) {
@@ -173,7 +181,7 @@ export function useAuthoringResource<T>(
         const startedSeq = ++readSequence
         const startedOwner = currentOwner.current
         setSnapshot((current) =>
-            current.path === path && current.state.kind === "ready"
+            current.path === path && current.state.kind === "ready" && current.startedOwner === startedOwner
                 ? { ...current, path, state: { ...current.state, refreshing: true } }
                 : current,
         )
@@ -186,8 +194,14 @@ export function useAuthoringResource<T>(
         return outcome.kind === "ready" ? "ok" : "failed"
     }, [path, apply])
 
-    const state = snapshot.path === path ? snapshot.state : LOADING
-    const current = snapshot.path === path
+    // Data fetched under another owner (user or browser session) is not this owner's: it stops being
+    // exposed in the very render that sees the new owner, with no effect or response awaited, and the read
+    // restarts for the new owner (the effect above depends on it). Within one owner, a refetch still keeps
+    // the data on screen. A read that settled under a previous owner can never be applied afterwards: its
+    // request was aborted when the owner changed.
+    const current =
+        snapshot.path === path && (snapshot.state.kind === "loading" || snapshot.startedOwner === owner)
+    const state = current ? snapshot.state : LOADING
     return {
         state,
         refetch,

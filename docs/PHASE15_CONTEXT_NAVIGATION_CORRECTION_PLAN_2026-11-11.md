@@ -725,3 +725,46 @@ by the partial session stub described above (fixed, not weakened); `git diff --c
 
 Limitations: the real-browser pending list in §10.4 is unchanged, and an owner change has not been exercised in a
 real browser (sign-in as another user in the same tab goes through a full session reload in the app).
+
+### 10.6 Correction: the pending interval after an owner change
+
+Review finding (parent `03c46ff`, §10.5): `startedOwner` kept an old result out of the evidence map, but the
+hook still exposed the previous owner's *ready* state while the new owner's read was pending. The provider's
+`worldState` (and so world readability, timeline options, `activeWorldId`, world-route precedence and the
+sidebar/Infobox gates) and the panel's separate World-list resource kept showing and offering the previous
+owner's data until the new answers arrived. A change A to B to A also revived A's earlier snapshot.
+
+Change (portal only; no backend, selection-store, route, guard, history or breadcrumb change):
+- `useAuthoringResource`, which both resources share, now treats data read under another owner as not
+  there. A render that sees a new owner resets the snapshot to loading (render-phase derived state, no effect), the
+  returned `state` is also gated on `startedOwner`, and the load effect depends on the owner so the read restarts
+  for the new owner and the previous owner's in-flight request is aborted. `startedSeq`, `startedOwner` and
+  `authority` read null in that interval. The same owner still keeps its data while a refetch is pending, and a
+  new bootstrap object for the same owner starts no read.
+- The provider's §10.5 `refetch` effect was removed: the hook now restarts the read itself (keeping it would have
+  read twice). The provider's `startedOwner` guard on evidence stays.
+- Consumers inspected: every `useAuthoringResource` caller (about 80) inherits the rule, including the
+  provider's world read (`hierarchy.world`, SelectionArrivalProvider, the sidebar and Infobox), and the panel's
+  World list. No consumer needed a change; campaign-derived destinations come from the current bootstrap and are
+  untouched.
+
+Tests: new `HierarchyContextPanel.ownerPending.test.tsx` (13 tests) for a different user and a different browser
+session of the same user, with deferred new-owner reads on a world route with distinctive old and new labels and ids:
+old labels, option values and destinations are absent in the pending interval, the Timeline select holds
+only its placeholder, the current bootstrap's campaign remains on a campaign route, and no old-owner answer
+repopulates anything when it arrives late; then the new reads settle as success, as a refusal with the detail
+before the list, and as a failed list with a successful detail. Also sign-out then sign-in, A to B to A, and the
+same owner with a new bootstrap object (no new read). The `startedOwner` hook test now expects the data to be
+hidden at once and the read to restart. The §10.5 regressions are unchanged. 12 of the 13 new tests fail on `03c46ff`.
+
+Verification: `eslint src`, `tsc -b`, `npm run build` clean; full portal suite (excluding the ignored `.tmp/`
+probe, which was preserved) 425 files, 5,141 tests passed on the first full run after the change (one
+type-only import fix to the new test followed, with the new file and build re-run); `git diff --check` clean.
+Before that, two focused re-runs failed on my own test expectations (placeholder-only Timeline select; a new
+detail that was a refusal where the test expected an option; shared ids in the late-arrival test) and one on the
+real A to B to A defect, which is why the render-phase reset exists. The full-suite run was in the working tree, not a clean
+checkout.
+
+Limitations: a real-browser owner-transition check is still pending (the app reloads the session on sign-in,
+which jsdom does not model); the §10.4 pending list is unchanged. Every authoring read now restarts on an owner
+change, which is intended but is a wider effect than the two resources named in the review.

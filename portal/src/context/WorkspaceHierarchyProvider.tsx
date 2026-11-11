@@ -113,18 +113,6 @@ export function WorkspaceHierarchyProvider({ children }: { children: ReactNode }
     if (current !== recorded) setRecorded(current)
     const worldEvidence = current.entries
 
-    // A new owner's read of the same world path is not started by the path, so start it: the previous
-    // owner's answer (and any read still in flight for them) is superseded and the new read records fresh
-    // evidence. A change through signed-out starts a read by itself (the path goes null, then returns).
-    const lastOwner = useRef(owner)
-    useEffect(() => {
-        const before = lastOwner.current
-        lastOwner.current = owner
-        if (before !== null && owner !== null && before !== owner && fetchedWorldId !== null) {
-            void refetch()
-        }
-    }, [owner, fetchedWorldId, refetch])
-
     // Timeline options change when a page writes (for example creating a
     // timeline). Refresh them when navigation moves to another route within the
     // same world; a first load or a world change is already fetched by the path.
