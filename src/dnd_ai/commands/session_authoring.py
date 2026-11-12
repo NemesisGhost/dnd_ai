@@ -18,6 +18,7 @@ from datetime import datetime
 from sqlalchemy import Connection, text
 
 from dnd_ai.domain.authoring import StaleWriteError, normalize_reason
+from dnd_ai.domain.authorization import R01_PENDING
 from dnd_ai.domain.content_authoring import diff_fields, initial_fields
 from dnd_ai.domain.session_authoring import (
     SESSION_ACTIVE,
@@ -109,7 +110,9 @@ def schedule_session(
 ) -> SessionResult:
     clean_title = normalize_title(title)
     clean_summary = normalize_description(summary)
-    scope = lock_operation_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_operation_scope(
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=R01_PENDING
+    )
     connection.execute(
         text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
         {"key": f"campaign.sessions.number:{campaign_id}"},
@@ -174,7 +177,9 @@ def update_session(
 ) -> SessionResult:
     clean_title = normalize_title(title)
     clean_summary = normalize_description(summary)
-    scope = lock_operation_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_operation_scope(
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=R01_PENDING
+    )
     current = lock_campaign_session(connection, campaign_id=campaign_id, session_id=session_id)
     if current.row_version != expected_row_version:
         raise StaleWriteError(f"session {session_id} is at {current.row_version}")
@@ -240,7 +245,9 @@ def _transition(
     expected_row_version: int,
     to_status: str,
 ) -> SessionResult:
-    scope = lock_operation_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_operation_scope(
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=R01_PENDING
+    )
     current = lock_campaign_session(connection, campaign_id=campaign_id, session_id=session_id)
     if current.row_version != expected_row_version:
         raise StaleWriteError(f"session {session_id} is at {current.row_version}")

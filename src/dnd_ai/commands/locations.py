@@ -29,6 +29,7 @@ from dnd_ai.domain.authoring import (
     ParentLocationInvalidError,
     normalize_reason,
 )
+from dnd_ai.domain.authorization import R01_PENDING
 from dnd_ai.domain.content_authoring import (
     AUTHORABLE_LOCATION_CATEGORIES,
     diff_fields,
@@ -126,6 +127,7 @@ def create_location(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
+        plan=R01_PENDING,
     )
     if parent_location_id is not None:
         _lock_parent(connection, world_id=scope.world_id, parent_location_id=parent_location_id)
@@ -248,6 +250,7 @@ def update_location(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
+        plan=R01_PENDING,
     )
 
     current_parent_hint = connection.execute(

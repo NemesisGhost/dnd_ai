@@ -29,6 +29,7 @@ from dnd_ai.domain.authoring import (
     KnowledgeSubjectInvalidError,
     normalize_reason,
 )
+from dnd_ai.domain.authorization import R01_PENDING
 from dnd_ai.domain.content_authoring import diff_fields, initial_fields
 from dnd_ai.domain.knowledge_authoring import (
     KNOWLEDGE_SUBJECT_TYPE_CODES,
@@ -101,6 +102,7 @@ def create_knowledge_item(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
+        plan=R01_PENDING,
     )
     locked = lock_entities(
         connection,
@@ -186,6 +188,7 @@ def update_knowledge_item(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
+        plan=R01_PENDING,
     )
     current_subject = connection.execute(
         text(

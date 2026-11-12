@@ -32,6 +32,7 @@ from dnd_ai.domain.authoring import (
     normalize_name,
     normalize_reason,
 )
+from dnd_ai.domain.authorization import R01_PENDING
 from dnd_ai.domain.content_authoring import (
     AUTHORABLE_LOCATION_CATEGORIES,
     content_edit_blocked_reason,
@@ -102,6 +103,7 @@ def create_dungeon(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
+        plan=R01_PENDING,
     )
     if parent_location_id is not None:
         locked = lock_entities(connection, world_id=scope.world_id, share_ids=[parent_location_id])
@@ -167,6 +169,7 @@ def update_dungeon(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
+        plan=R01_PENDING,
     )
     current = connection.execute(
         text(
@@ -272,6 +275,7 @@ def create_dungeon_area(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
+        plan=R01_PENDING,
     )
     locked = lock_entities(connection, world_id=scope.world_id, share_ids=[dungeon_id])
     usable_reference(locked, dungeon_id, type_codes=_DUNGEON, error=ParentLocationInvalidError)
@@ -344,6 +348,7 @@ def update_dungeon_area(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
+        plan=R01_PENDING,
     )
     current = connection.execute(
         text(
@@ -449,6 +454,7 @@ def _lock_aggregate(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
+        plan=R01_PENDING,
     )
     locked = lock_entities(
         connection,

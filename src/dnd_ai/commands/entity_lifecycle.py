@@ -50,6 +50,7 @@ from dnd_ai.domain.authoring import (
     SupersessionTargetInvalidError,
     normalize_reason,
 )
+from dnd_ai.domain.authorization import R01_PENDING
 from dnd_ai.domain.dungeon_authoring import DungeonHasActiveAreasError
 from dnd_ai.domain.entity_lifecycle import (
     APPROVE,
@@ -326,6 +327,7 @@ def _prepare(
         world_capability=_lifecycle_world_capability(
             connection, entity_id=entity_id, action=action
         ),
+        plan=R01_PENDING,
     )
     world_id = scope.world_id
     reference_ids = (
@@ -611,6 +613,7 @@ def supersede_entity(
         world_capability=_lifecycle_world_capability(
             connection, entity_id=entity_id, action=SUPERSEDE
         ),
+        plan=R01_PENDING,
     )
     # The replacement may be published by this call, so the records it refers to
     # are locked `FOR SHARE` together with the pair, in ascending id order, exactly

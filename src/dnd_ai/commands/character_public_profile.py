@@ -90,6 +90,7 @@ from dnd_ai.domain.authoring import (
     StaleWriteError,
     WorldAuthorityRequiredError,
 )
+from dnd_ai.domain.authorization import R01_PENDING
 from dnd_ai.domain.organization_authoring import normalize_optional_text
 from dnd_ai.domain.player_profiles import (
     COPY_ELIGIBLE_PLAYER_PROFILE_FIELDS,
@@ -369,6 +370,7 @@ def copy_legacy_text_to_public_profile_draft(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_READ_PRIVATE if kind == KIND_NPC else None,
+        plan=R01_PENDING,
     )
     access = resolve_access_context(connection, user_id=actor_user_id, campaign_id=campaign_id)
     if access is None:
@@ -537,7 +539,11 @@ def copy_player_profile_field_to_public_profile_draft(
     other_origin_column = _ORIGIN_COLUMNS[other][0]
 
     scope = lock_authoring_scope(
-        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, world_capability=None
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        world_capability=None,
+        plan=R01_PENDING,
     )
     access = resolve_access_context(connection, user_id=actor_user_id, campaign_id=campaign_id)
     if access is None:
@@ -709,7 +715,11 @@ def save_character_public_profile_draft(
     }
 
     scope = lock_authoring_scope(
-        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, world_capability=None
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        world_capability=None,
+        plan=R01_PENDING,
     )
     access = resolve_access_context(connection, user_id=actor_user_id, campaign_id=campaign_id)
     if access is None:

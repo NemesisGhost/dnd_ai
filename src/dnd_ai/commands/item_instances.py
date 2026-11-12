@@ -20,6 +20,7 @@ import uuid
 from sqlalchemy import Connection, text
 
 from dnd_ai.domain.authoring import normalize_description, normalize_name, normalize_reason
+from dnd_ai.domain.authorization import R01_PENDING
 from dnd_ai.domain.content_authoring import diff_fields, initial_fields
 from dnd_ai.domain.item_runtime import ItemDefinitionInvalidError, normalize_origin_notes
 
@@ -77,6 +78,7 @@ def create_item_instance(
         # D8/E2: item instances are created when loot is awarded; campaign authority
         # alone suffices (no world capability).
         world_capability=None,
+        plan=R01_PENDING,
     )
     _require_usable_definition(
         connection,
@@ -144,6 +146,7 @@ def update_item_instance(
         # D8/E2: item instances are created when loot is awarded; campaign authority
         # alone suffices (no world capability).
         world_capability=None,
+        plan=R01_PENDING,
     )
     locked = lock_entities(connection, world_id=scope.world_id, update_ids=[item_instance_id])
     target = editable_target(

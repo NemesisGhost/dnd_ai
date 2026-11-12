@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 
 from sqlalchemy import Connection, text
 
+from dnd_ai.domain.authorization import R01_PENDING
 from dnd_ai.domain.content_authoring import initial_fields
 from dnd_ai.domain.source_authoring import (
     SourceAlreadyAttachedError,
@@ -60,6 +61,7 @@ def create_source(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
+        plan=R01_PENDING,
     )
     type_id = lookup_id(connection, "core", "source_types", "source_type_id", code)
     source_id = connection.execute(
@@ -101,6 +103,7 @@ def _lock_pair(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
+        plan=R01_PENDING,
     )
     locked = lock_entities(connection, world_id=scope.world_id, share_ids=[entity_id])
     if entity_id not in locked:

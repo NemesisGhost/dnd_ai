@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 
 from sqlalchemy import Connection, text
 
+from dnd_ai.domain.authorization import R01_PENDING
 from dnd_ai.domain.content_authoring import diff_fields, initial_fields
 from dnd_ai.domain.encounter_preparation import (
     MAX_PARTICIPANTS,
@@ -122,7 +123,9 @@ def _prepare(
     encounter_id: uuid.UUID,
 ) -> tuple[OperationScope, uuid.UUID | None, str | None]:
     """Scope, the session, then the pending encounter; returns its location and summary."""
-    scope = lock_operation_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_operation_scope(
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=R01_PENDING
+    )
     session_id = connection.execute(
         text("SELECT session_id FROM narrative.encounters WHERE encounter_id = :e"),
         {"e": encounter_id},
@@ -144,7 +147,9 @@ def create_encounter(
     world_time_id: uuid.UUID | None = None,
 ) -> PreparationResult:
     clean_summary = normalize_summary(summary)
-    scope = lock_operation_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_operation_scope(
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=R01_PENDING
+    )
     validate_session_campaign(connection, campaign_id=campaign_id, session_id=session_id)
     _lock_session(connection, session_id)
     _require_location(connection, scope, location_id)

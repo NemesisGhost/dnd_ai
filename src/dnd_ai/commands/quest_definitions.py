@@ -35,6 +35,7 @@ from dnd_ai.domain.authoring import (
     normalize_name,
     normalize_reason,
 )
+from dnd_ai.domain.authorization import R01_PENDING
 from dnd_ai.domain.content_authoring import diff_fields, initial_fields
 from dnd_ai.domain.quest_authoring import (
     OBJECTIVE_TARGET_TYPE_CODES,
@@ -116,6 +117,7 @@ def _lock_quest(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
+        plan=R01_PENDING,
     )
     locked = lock_entities(
         connection,
@@ -229,6 +231,7 @@ def create_quest(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
+        plan=R01_PENDING,
     )
     source_id = insert_gm_source(connection, world_id=scope.world_id, actor_user_id=actor_user_id)
     entity_id, row_version = insert_draft_entity(

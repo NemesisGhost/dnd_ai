@@ -15,17 +15,15 @@ Commands re-read authority under lock at their protected write and never trust a
 
 import uuid
 from datetime import datetime
-from typing import Literal
 
 from sqlalchemy import Connection, text
 
 from .access import (
     OwnerAssignmentLock,
+    RevealAuthority,
     find_live_builtin_gm_assignment,
     find_live_builtin_owner_assignment,
 )
-
-RevealAuthority = Literal["owner", "delegation", "none"]
 
 REVEAL_CAPABILITY_CODE = "character.reveal"
 

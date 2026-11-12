@@ -28,6 +28,7 @@ from psycopg.pq import TransactionStatus
 from sqlalchemy import Connection, Engine, create_engine, text
 
 from dnd_ai.config import settings
+from dnd_ai.domain.authorization import install_authorization_guard
 
 # Mirrors dnd_ai.api.correlation's own reasoning for X-Correlation-Id:
 # bound length and character set before a client-supplied header value
@@ -82,7 +83,13 @@ def get_engine() -> Engine:
         # is populated by the time Settings() finishes constructing (either an
         # explicit value or the local-dev default) — never None here at runtime.
         assert settings.database_url is not None
-        _engine = create_engine(settings.database_url)
+        # READ COMMITTED is enforced here, not inherited from the database or role default: the R01
+        # decision (docs/R01_FRESH_AUTHORIZATION_PLAN_2026-11-12.md section 3.1) needs one fresh
+        # snapshot per statement. psycopg then begins every transaction with
+        # `BEGIN ISOLATION LEVEL READ COMMITTED`, so the setting travels with the transaction. The
+        # authorization guard (plan section 6.5) is installed on the engine at the same time.
+        _engine = create_engine(settings.database_url, isolation_level="READ COMMITTED")
+        install_authorization_guard(_engine)
     return _engine
 
 
@@ -253,6 +260,16 @@ def _finish(slot: _RequestTransaction, *, commit: bool) -> None:
         connection.close()
     except Exception as exc:  # the transaction is committed; do not report it as failed
         logger.error("request connection close failed: %s", type(exc).__name__)
+
+
+def finish_connection_transaction(connection: Connection, *, commit: bool) -> None:
+    """End one connection's transaction with the request transaction's exact finalization (T0,
+    plan section 6.8), for a direct caller that owns its connection (`authorized_transaction`): COMMIT
+    then close, or abandon (rollback verified idle, or invalidate) then close. A failed COMMIT, or a
+    refusal raised by a `commit` listener, abandons the transaction and re-raises."""
+    slot = _RequestTransaction()
+    slot.connection = connection
+    _finish(slot, commit=commit)
 
 
 async def commit_request_transaction(request: Request) -> AsyncIterator[None]:

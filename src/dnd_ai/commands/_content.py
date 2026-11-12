@@ -34,6 +34,7 @@ from dnd_ai.domain.authoring import (
     WorldAuthorityRequiredError,
     WorldNotAuthorizedError,
 )
+from dnd_ai.domain.authorization import AuthorizationPlan, PlanArgument, Requirement
 from dnd_ai.domain.content_authoring import content_edit_blocked_reason, is_reference_eligible
 from dnd_ai.domain.errors import DomainAuthorizationError, SafeMessageError
 from dnd_ai.queries.world_authority import resolve_world_authority
@@ -47,6 +48,36 @@ class EntityNotFoundError(DomainAuthorizationError):
     """No such entity *in this campaign's world* (or not of the type this
     command handles) -- a nonexistent entity, one belonging to another world,
     and one of another type are indistinguishable (fixed 404)."""
+
+
+def canon_edit_requirement(actor_user_id: uuid.UUID, campaign_id: uuid.UUID) -> Requirement:
+    """Campaign `canon.edit` for the actor, with the error `lock_authoring_scope` raises today."""
+    return Requirement(
+        name="campaign.canon.edit",
+        predicate=lambda snapshot: (
+            snapshot.access is not None and snapshot.access.has_capability(CANON_EDIT)
+        ),
+        refusal=lambda: CampaignNotAuthorizedError(
+            f"user {actor_user_id} lacks canon.edit on {campaign_id}"
+        ),
+    )
+
+
+def world_capability_requirement(
+    actor_user_id: uuid.UUID, world_id: uuid.UUID, world_capability: str
+) -> Requirement:
+    """`world_capability` on the campaign's world, with the error `lock_authoring_scope` raises."""
+    return Requirement(
+        name=f"world.{world_capability}",
+        predicate=lambda snapshot: (
+            snapshot.world_authority is not None
+            and snapshot.world_authority.has_capability(world_capability)
+        ),
+        refusal=lambda: WorldAuthorityRequiredError(
+            f"user {actor_user_id} lacks {world_capability} on world {world_id}"
+        ),
+        world_id=world_id,
+    )
 
 
 @dataclass(frozen=True)
@@ -98,6 +129,7 @@ def lock_authoring_scope(
     campaign_id: uuid.UUID,
     actor_user_id: uuid.UUID,
     world_capability: str | None,
+    plan: PlanArgument,
 ) -> AuthoringScope:
     """Lock and re-authorize. Raises `CampaignNotAuthorizedError` (404) if the
     campaign does not exist or the actor no longer holds `canon.edit`,
@@ -117,7 +149,13 @@ def lock_authoring_scope(
     campaign-originated records that live in world tables (D8: world-time points,
     item instances, player-character identity) and for the campaign-state
     operations wrapped by `dnd_ai.commands._operations.lock_operation_scope`. It is
-    required (no default) so no caller can omit the world check by accident."""
+    required (no default) so no caller can omit the world check by accident.
+
+    `plan` is required too (R01 plan section 6.5, rule 1). Given an `AuthorizationPlan`, each check
+    below that passes is also registered as a requirement, in this order (campaign `canon.edit`, then
+    the world capability), for the plan's final check; the early check itself is unchanged. Given
+    `R01_PENDING`, the helper behaves exactly as before and registers nothing: that is an explicit
+    marker for a family not yet migrated, and it protects nothing."""
     world_id = connection.execute(
         text("""
             SELECT t.world_id FROM campaign.campaigns c
@@ -195,11 +233,17 @@ def lock_authoring_scope(
     access = resolve_access_context(connection, user_id=actor_user_id, campaign_id=campaign_id)
     if access is None or not access.has_capability(CANON_EDIT):
         raise CampaignNotAuthorizedError(f"user {actor_user_id} lacks canon.edit on {campaign_id}")
+    if isinstance(plan, AuthorizationPlan):
+        plan.require(connection, canon_edit_requirement(actor_user_id, campaign_id))
     if world_capability is not None:
         authority = resolve_world_authority(connection, user_id=actor_user_id, world_id=world_id)
         if authority is None or not authority.has_capability(world_capability):
             raise WorldAuthorityRequiredError(
                 f"user {actor_user_id} lacks {world_capability} on world {world_id}"
+            )
+        if isinstance(plan, AuthorizationPlan):
+            plan.require(
+                connection, world_capability_requirement(actor_user_id, world_id, world_capability)
             )
     return AuthoringScope(world_id=world_id, campaign_id=campaign_id)
 

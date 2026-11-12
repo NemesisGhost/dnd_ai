@@ -314,3 +314,68 @@ def test_t0_6_the_stand_in_guard_error_is_a_sanitized_5xx(scratch: Engine, one: 
     assert "plan not finalised" not in refused.text
     assert "_Guard" not in refused.text
     assert _rows(scratch) == []
+
+
+def test_t0_gap_a_failed_driver_status_inspection_invalidates_and_the_connection_is_replaced(
+    scratch: Engine, one: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T0 review gap 1: when the driver's transaction status cannot be read, the connection is not
+    assumed clean. It is invalidated (the pool drops it), the original error is what the request
+    returns, and the next request runs on a different backend."""
+    _refuse_first_commit(one)
+    seen: list[tuple[int, str]] = []
+
+    def failing_status(connection: Connection) -> None:
+        raise OSError("status unreadable")
+
+    with TestClient(_app(one, seen=seen), raise_server_exceptions=False) as client:
+        with monkeypatch.context() as patched:
+            patched.setattr(deps, "_driver_transaction_status", failing_status)
+            refused = client.post("/write/1")
+        assert refused.status_code == 500  # the guard-stand-in's own mapping, not the OSError's
+        assert "status unreadable" not in refused.text
+        second = client.post("/write/2")
+        assert second.status_code == 200
+    first = seen[0]
+    assert (second.json()["pid"], second.json()["started"]) != first, (
+        "an uninspectable connection was returned to the pool and reused"
+    )
+    assert _backend_gone(scratch, *first)
+    assert _rows(scratch) == [2]
+
+
+def test_t0_gap_an_already_invalidated_connection_is_not_inspected_or_reconnected(
+    scratch: Engine, one: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T0 review gap 2: `_discard` of an invalidated connection reads no driver status, sends no
+    rollback and opens no new connection (reading `Connection.connection` would reconnect)."""
+    connects: list[int] = []
+    event.listen(one, "connect", lambda *_a: connects.append(1))
+
+    connection = one.connect()
+    connection.begin()
+    connection.execute(text(f"INSERT INTO {SCHEMA}.marker VALUES (1)"))
+    assert len(connects) == 1
+    connection.invalidate()
+    assert connection.invalidated
+
+    inspected: list[str] = []
+
+    def must_not_run(_connection: Connection) -> None:
+        # Recorded, not raised: `_discard` swallows every exception by design.
+        inspected.append("inspected")
+
+    monkeypatch.setattr(deps, "_driver_transaction_status", must_not_run)
+    monkeypatch.setattr(deps, "_driver_rollback", must_not_run)
+    monkeypatch.setattr(deps, "_rollback", must_not_run)
+
+    deps._discard(connection)
+
+    assert connection.closed
+    assert inspected == [], "an invalidated connection was inspected"
+    assert len(connects) == 1, "the invalidated connection was reconnected to be inspected"
+    assert _rows(scratch) == []
+    monkeypatch.undo()
+    with one.connect() as fresh:  # the pool then opens exactly one replacement
+        fresh.execute(text("SELECT 1"))
+    assert len(connects) == 2

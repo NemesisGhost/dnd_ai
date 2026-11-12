@@ -23,6 +23,7 @@ from dnd_ai.domain.authoring import (
     SpeciesNotAvailableError,
     normalize_reason,
 )
+from dnd_ai.domain.authorization import R01_PENDING
 from dnd_ai.domain.content_authoring import (
     AUTHORABLE_LOCATION_CATEGORIES,
     diff_fields,
@@ -110,6 +111,7 @@ def create_character_identity(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=_identity_world_capability(kind),
+        plan=R01_PENDING,
     )
     locked = lock_entities(
         connection,
@@ -212,6 +214,7 @@ def update_character_identity(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=_identity_world_capability(kind),
+        plan=R01_PENDING,
     )
     current_origin = connection.execute(
         text("SELECT origin_location_id FROM character.characters WHERE character_id = :id"),

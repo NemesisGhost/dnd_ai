@@ -54,11 +54,13 @@ import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Literal
+from typing import Final, Literal
 
-from sqlalchemy import Connection, text
+from sqlalchemy import Connection, RowMapping, text
 
 from .errors import DomainAuthorizationError
+from .system_authority import WORLD_ADMINISTER, capabilities_for_system_roles
+from .world_authority import WorldAuthority
 
 _TARGET_COLUMNS = (
     "character_id",
@@ -974,12 +976,566 @@ class UnauthorizedTimelineError(DomainAuthorizationError):
     `SafeMessageError` handler — no per-endpoint try/except required."""
 
 
+BUILTIN_CAMPAIGN_OWNER_ROLE_CODE = "campaign_owner"
+BUILTIN_CAMPAIGN_GM_ROLE_CODE = "gm"
+
+
+class IsolationLevelError(RuntimeError):
+    """The decision statement ran in a transaction that is not `read committed`.
+
+    The R01 argument (docs/R01_FRESH_AUTHORIZATION_PLAN_2026-11-12.md section 3.1) needs one fresh
+    snapshot per decision statement, which only READ COMMITTED gives. Under REPEATABLE READ the
+    statement would reuse the transaction's first snapshot, taken before the request's lock waits;
+    under SERIALIZABLE conflicts surface as serialization failures. A direct `RuntimeError`
+    subclass with a fixed message: the API maps it to the fixed 500, and nothing persists because
+    the request's transaction is abandoned."""
+
+    def __init__(self) -> None:
+        super().__init__("the authorization decision requires a READ COMMITTED transaction")
+
+
+class _FreshInstant:
+    """The marker for "judge expiry at the instant the statement itself reads"."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "FRESH_INSTANT"
+
+
+#: Judge every expiry at one `clock_timestamp()` read inside the decision statement (plan section 3):
+#: after the statement's relation-lock waits, once, and shared by every expiry predicate in it.
+FRESH_INSTANT: Final = _FreshInstant()
+
+#: The instant a read judges expiry at: `None` is the transaction's start (`now()`), the default and
+#: what every existing caller gets; a `datetime` is an explicit, deterministic instant;
+#: `FRESH_INSTANT` is the single in-statement `clock_timestamp()`.
+Instant = datetime | _FreshInstant | None
+
+RevealAuthority = Literal["owner", "delegation", "none"]
+
+
+@dataclass(frozen=True)
+class AuthoritySnapshot:
+    """Every authority source one decision declared, read by ONE SQL statement: one MVCC snapshot,
+    one `t_auth` (plan sections 3 and 6.1). Reads take no row locks.
+
+    `access` is `None` when the user has no active, authorizing membership. `world_authority` and
+    `reveal_authority` are `None` unless declared; `world_authority` is also `None` when the user
+    holds none over the declared world, and `reveal_authority` is `"none"` when declared and held by
+    nobody. `t_auth` is the instant every expiry was judged at; `isolation` is the transaction
+    isolation level the statement reported (always `read committed` here, or the read raised)."""
+
+    t_auth: datetime
+    isolation: str
+    access: AccessContext | None
+    world_id: uuid.UUID | None = None
+    world_authority: WorldAuthority | None = None
+    reveal_authority: RevealAuthority | None = None
+
+
+_LIVE_REVELATIONS_IN_STATEMENT_SQL = LIVE_REVELATIONS_FOR_MEMBERSHIP_SQL.replace(
+    ":membership_id", "(SELECT campaign_membership_id FROM m)"
+)
+
+_INSTANT_SQL = {
+    "now": "now()",
+    "explicit": "CAST(:as_of AS timestamptz)",
+    "fresh": "clock_timestamp()",
+}
+
+_T_AUTH = "(SELECT t_auth FROM clock)"
+_MEMBERSHIP = "(SELECT campaign_membership_id FROM m)"
+
+# Common table expressions of the access decision. `{t}` is the one instant, `{m}` the caller's
+# membership, `{tl}` the campaign's own timeline: every predicate reads the CTEs, never a parameter
+# that another statement resolved, so the whole decision is one snapshot.
+_ACCESS_CTES = f"""
+    m AS (
+        SELECT cm.campaign_membership_id
+        FROM security.campaign_memberships cm
+        JOIN security.membership_statuses ms
+          ON ms.membership_status_id = cm.membership_status_id
+        WHERE cm.campaign_id = :campaign_id
+          AND cm.user_id = :user_id
+          AND cm.ended_at IS NULL
+          AND ms.code = 'active'
+          AND ms.is_active
+        ORDER BY cm.campaign_membership_id
+        LIMIT 1
+    ),
+    camp AS (
+        SELECT c.timeline_id, ls.code AS lifecycle_code
+        FROM campaign.campaigns c
+        JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = c.lifecycle_status_id
+        WHERE c.campaign_id = :campaign_id
+    ),
+    roles AS (
+        SELECT COALESCE(jsonb_agg(DISTINCT cap.code), '[]'::jsonb) AS codes
+        FROM security.membership_roles mr
+        JOIN security.roles r ON r.role_id = mr.role_id
+        JOIN security.role_capabilities rc ON rc.role_id = r.role_id
+        JOIN security.capabilities cap ON cap.capability_id = rc.capability_id
+        WHERE mr.campaign_membership_id = {_MEMBERSHIP}
+          AND mr.revoked_at IS NULL
+          AND (mr.expires_at IS NULL OR mr.expires_at > {_T_AUTH})
+          AND r.is_active
+          AND cap.is_active
+    ),
+    rels AS (
+        SELECT COALESCE(
+                   jsonb_agg(
+                       jsonb_build_object(
+                           'character_id', mcr.character_id,
+                           'code', cap.code,
+                           'type_code', crt.code
+                       )
+                   ),
+                   '[]'::jsonb
+               ) AS found
+        FROM security.membership_character_relationships mcr
+        JOIN security.character_relationship_types crt
+          ON crt.character_relationship_type_id = mcr.character_relationship_type_id
+        JOIN security.character_relationship_type_capabilities rtc
+          ON rtc.character_relationship_type_id = mcr.character_relationship_type_id
+        JOIN security.capabilities cap ON cap.capability_id = rtc.capability_id
+        JOIN core.entities e ON e.entity_id = mcr.character_id
+        JOIN core.lifecycle_statuses cls ON cls.lifecycle_status_id = e.lifecycle_status_id
+        JOIN core.canon_statuses ccs ON ccs.canon_status_id = e.canon_status_id
+        WHERE mcr.campaign_membership_id = {_MEMBERSHIP}
+          AND mcr.revoked_at IS NULL
+          AND (mcr.expires_at IS NULL OR mcr.expires_at > {_T_AUTH})
+          AND mcr.effective_to_world_time_id IS NULL
+          AND (mcr.timeline_id IS NULL OR mcr.timeline_id = (SELECT timeline_id FROM camp))
+          AND crt.is_active
+          AND cap.is_active
+          AND cls.code = 'active'
+          -- A draft or unpublished character confers no perspective (Phase 15.2B-1).
+          AND ccs.code = 'canon'
+    ),
+    grants AS (
+        SELECT COALESCE(
+                   jsonb_agg(
+                       jsonb_build_object(
+                           {", ".join(f"'{column}', rg.{column}" for column in _TARGET_COLUMNS)},
+                           'capability_code', cap.code,
+                           'effect', rg.effect::text
+                       )
+                   ),
+                   '[]'::jsonb
+               ) AS found
+        FROM security.resource_grants rg
+        JOIN security.capabilities cap ON cap.capability_id = rg.capability_id
+        LEFT JOIN core.entities target_entity
+          ON target_entity.entity_id = COALESCE(
+                 rg.character_id, rg.entity_id, rg.knowledge_item_id, rg.quest_id, rg.event_id
+             )
+        LEFT JOIN core.lifecycle_statuses target_entity_status
+          ON target_entity_status.lifecycle_status_id = target_entity.lifecycle_status_id
+        LEFT JOIN campaign.sessions target_session ON target_session.session_id = rg.session_id
+        LEFT JOIN core.lifecycle_statuses target_session_status
+          ON target_session_status.lifecycle_status_id = target_session.lifecycle_status_id
+        WHERE rg.campaign_id = :campaign_id
+          AND rg.revoked_at IS NULL
+          AND (rg.expires_at IS NULL OR rg.expires_at > {_T_AUTH})
+          AND (rg.timeline_id IS NULL OR rg.timeline_id = (SELECT timeline_id FROM camp))
+          AND cap.is_active
+          AND (
+                (rg.session_id IS NULL AND target_entity_status.code = 'active')
+                OR (rg.session_id IS NOT NULL AND target_session_status.code = 'active')
+              )
+          AND (
+                rg.grantee_campaign_membership_id = {_MEMBERSHIP}
+                OR rg.grantee_access_group_id IN (
+                    SELECT agm.access_group_id
+                    FROM security.access_group_memberships agm
+                    JOIN security.access_groups ag
+                        ON ag.access_group_id = agm.access_group_id
+                    JOIN core.lifecycle_statuses ag_status
+                        ON ag_status.lifecycle_status_id = ag.lifecycle_status_id
+                    WHERE agm.campaign_membership_id = {_MEMBERSHIP}
+                      AND agm.removed_at IS NULL
+                      AND ag_status.code = 'active'
+                )
+              )
+    ),
+    revs AS (
+        SELECT COALESCE(
+                   jsonb_agg(
+                       jsonb_build_object(
+                           'character_revelation_id', q.character_revelation_id,
+                           'character_id', q.character_id,
+                           'audience_kind', q.audience_kind
+                       )
+                   ),
+                   '[]'::jsonb
+               ) AS found
+        FROM ({_LIVE_REVELATIONS_IN_STATEMENT_SQL}) q
+    )
+"""
+
+_ACCESS_COLUMNS = """
+        (SELECT campaign_membership_id FROM m) AS membership_id,
+        (SELECT timeline_id FROM camp) AS timeline_id,
+        (SELECT lifecycle_code FROM camp) AS campaign_lifecycle_code,
+        (SELECT codes FROM roles) AS role_codes,
+        (SELECT found FROM rels) AS relationships,
+        (SELECT found FROM grants) AS grants,
+        (SELECT found FROM revs) AS revelations
+"""
+
+# World authority (`dnd_ai.queries.world_authority.resolve_world_authority`), as CTEs of the same
+# statement. The caller's system roles are returned as codes; `may_administer` is derived from them
+# in Python by the same `capabilities_for_system_roles` the standalone resolver uses.
+_WORLD_CTES = """
+    w AS (
+        SELECT wls.code AS world_status
+        FROM core.worlds w
+        JOIN core.lifecycle_statuses wls ON wls.lifecycle_status_id = w.lifecycle_status_id
+        WHERE w.world_id = :world_id
+    ),
+    wroles AS (
+        SELECT COALESCE(jsonb_agg(wr.code), '[]'::jsonb) AS codes
+        FROM security.world_memberships wm
+        JOIN security.membership_statuses ms
+          ON ms.membership_status_id = wm.membership_status_id
+        JOIN security.world_roles wr ON wr.world_role_id = wm.world_role_id
+        JOIN security.users u ON u.user_id = wm.user_id
+        JOIN core.lifecycle_statuses uls ON uls.lifecycle_status_id = u.lifecycle_status_id
+        WHERE wm.world_id = :world_id
+          AND wm.user_id = :user_id
+          AND wm.ended_at IS NULL
+          AND ms.code = 'active' AND ms.is_active
+          AND wr.is_active
+          AND uls.code = 'active'
+    ),
+    wuse AS (
+        SELECT EXISTS (
+            SELECT 1
+            FROM security.world_use_grants g
+            JOIN security.users u ON u.user_id = g.user_id
+            JOIN core.lifecycle_statuses uls ON uls.lifecycle_status_id = u.lifecycle_status_id
+            WHERE g.world_id = :world_id AND g.user_id = :user_id
+              AND g.revoked_at IS NULL AND uls.code = 'active'
+        ) AS held
+    ),
+    sysroles AS (
+        SELECT COALESCE(jsonb_agg(sr.code), '[]'::jsonb) AS codes
+        FROM security.user_system_roles usr
+        JOIN security.system_roles sr ON sr.system_role_id = usr.system_role_id
+        JOIN security.users u ON u.user_id = usr.user_id
+        JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
+        WHERE usr.user_id = :user_id
+          AND usr.revoked_at IS NULL
+          AND sr.is_active
+          AND ls.code = 'active'
+    )
+"""
+
+_WORLD_COLUMNS = """
+        (SELECT world_status FROM w) AS world_status,
+        (SELECT codes FROM wroles) AS world_role_codes,
+        (SELECT held FROM wuse) AS world_use_grant,
+        (SELECT codes FROM sysroles) AS system_role_codes
+"""
+
+# Reveal authority (`dnd_ai.domain.reveal_authority.resolve_reveal_authority`, lock `none`): a live
+# built-in `campaign_owner` assignment; failing that, a live built-in `gm` assignment (the first by
+# id, as `find_live_builtin_gm_assignment` takes it) that an unrevoked delegation is bound to. Expiry
+# is judged at `t_auth`. Needs the caller's membership (`m`).
+_REVEAL_CTES = f"""
+    live_assignments AS (
+        SELECT mr.membership_role_id, r.code AS role_code
+        FROM security.membership_roles mr
+        JOIN security.roles r ON r.role_id = mr.role_id
+        JOIN security.campaign_memberships cm
+          ON cm.campaign_membership_id = mr.campaign_membership_id
+        JOIN security.membership_statuses ms
+          ON ms.membership_status_id = cm.membership_status_id
+        JOIN security.users u ON u.user_id = cm.user_id
+        JOIN core.lifecycle_statuses uls ON uls.lifecycle_status_id = u.lifecycle_status_id
+        WHERE mr.campaign_membership_id = {_MEMBERSHIP}
+          AND cm.campaign_id = :campaign_id
+          AND r.campaign_id IS NULL
+          AND r.code IN ('{BUILTIN_CAMPAIGN_OWNER_ROLE_CODE}', '{BUILTIN_CAMPAIGN_GM_ROLE_CODE}')
+          AND r.is_active
+          AND mr.revoked_at IS NULL
+          AND (mr.expires_at IS NULL OR mr.expires_at > {_T_AUTH})
+          AND cm.ended_at IS NULL
+          AND ms.code = 'active'
+          AND ms.is_active
+          AND uls.code = 'active'
+    ),
+    reveal AS (
+        SELECT CASE
+            WHEN EXISTS (
+                SELECT 1 FROM live_assignments
+                WHERE role_code = '{BUILTIN_CAMPAIGN_OWNER_ROLE_CODE}'
+            ) THEN 'owner'
+            WHEN (
+                SELECT membership_role_id FROM live_assignments
+                WHERE role_code = '{BUILTIN_CAMPAIGN_GM_ROLE_CODE}'
+                ORDER BY membership_role_id
+                LIMIT 1
+            ) IS NOT NULL
+            AND (
+                SELECT gm_membership_role_id
+                FROM security.character_reveal_delegations
+                WHERE campaign_id = :campaign_id
+                  AND grantee_campaign_membership_id = {_MEMBERSHIP}
+                  AND revoked_at IS NULL
+                LIMIT 1
+            ) = (
+                SELECT membership_role_id FROM live_assignments
+                WHERE role_code = '{BUILTIN_CAMPAIGN_GM_ROLE_CODE}'
+                ORDER BY membership_role_id
+                LIMIT 1
+            ) THEN 'delegation'
+            ELSE 'none'
+        END AS source
+    )
+"""
+
+_REVEAL_COLUMNS = """
+        (SELECT source FROM reveal) AS reveal_source
+"""
+
+
+#: Every table the single-statement authority reader reads (the access, world-authority and
+#: reveal-authority sources). A post-write plan is valid only for a request that writes none of them,
+#: except the reviewed classes below (R01 plan section 6.3); `tests/unit/test_r01_authorization_structure.py`
+#: keeps this constant equal to the tables the statement really names, and checks every post-write
+#: route's write targets against it. Reviewed classes, each with a stated argument in the plan:
+#: `core.entities` and `campaign.sessions` (inputs only of targeted requirements on OTHER resources)
+#: and the two `character_revelation*` tables (S2 must show the revelation requirement does not read
+#: the rows its own command writes).
+AUTHORITY_READER_TABLES: Final[frozenset[str]] = frozenset(
+    {
+        "campaign.campaigns",
+        "campaign.sessions",
+        "core.canon_statuses",
+        "core.entities",
+        "core.lifecycle_statuses",
+        "core.worlds",
+        "security.access_group_memberships",
+        "security.access_groups",
+        "security.campaign_memberships",
+        "security.capabilities",
+        "security.character_relationship_type_capabilities",
+        "security.character_relationship_types",
+        "security.character_reveal_delegations",
+        "security.character_revelation_members",
+        "security.character_revelations",
+        "security.membership_character_relationships",
+        "security.membership_roles",
+        "security.membership_statuses",
+        "security.resource_grants",
+        "security.revelation_audience_kinds",
+        "security.role_capabilities",
+        "security.roles",
+        "security.system_roles",
+        "security.user_system_roles",
+        "security.users",
+        "security.world_memberships",
+        "security.world_roles",
+        "security.world_use_grants",
+    }
+)
+
+#: The reader tables a post-write request MAY write (reviewed classes, plan section 6.3).
+REVIEWED_POST_WRITE_TABLES: Final[frozenset[str]] = frozenset(
+    {
+        "core.entities",
+        "campaign.sessions",
+        "security.character_revelations",
+        "security.character_revelation_members",
+    }
+)
+
+
+def _authority_snapshot_sql(*, instant: str, with_world: bool, with_reveal: bool) -> str:
+    ctes = [f"clock AS MATERIALIZED (SELECT {_INSTANT_SQL[instant]} AS t_auth)", _ACCESS_CTES]
+    columns = [
+        f"{_T_AUTH} AS t_auth",
+        "current_setting('transaction_isolation') AS isolation",
+        _ACCESS_COLUMNS,
+    ]
+    if with_world:
+        ctes.append(_WORLD_CTES)
+        columns.append(_WORLD_COLUMNS)
+    if with_reveal:
+        ctes.append(_REVEAL_CTES)
+        columns.append(_REVEAL_COLUMNS)
+    return "WITH " + ",\n".join(part.strip() for part in ctes) + "\nSELECT " + ",\n".join(columns)
+
+
+def read_authority_snapshot(
+    connection: Connection,
+    *,
+    user_id: uuid.UUID,
+    campaign_id: uuid.UUID,
+    timeline_id: uuid.UUID | None = None,
+    world_id: uuid.UUID | None = None,
+    with_reveal: bool = False,
+    as_of: Instant = None,
+) -> AuthoritySnapshot:
+    """Read the declared authority sources in ONE statement and return them with the instant expiry
+    was judged at (plan sections 3 and 6.1). Always declared: the caller's access to the campaign.
+    Optionally: the caller's authority over `world_id`, and the caller's reveal authority
+    (`with_reveal`). No row locks are taken.
+
+    `as_of` selects the instant (see `Instant`): the transaction's start by default, an explicit
+    `datetime`, or `FRESH_INSTANT`, the single in-statement `clock_timestamp()` that follows the
+    statement's own relation-lock waits. Raises `IsolationLevelError` unless the transaction is
+    `read committed` (section 3.1), checked from the same statement."""
+    if isinstance(as_of, _FreshInstant):
+        instant = "fresh"
+    elif as_of is None:
+        instant = "now"
+    else:
+        instant = "explicit"
+    sql = _authority_snapshot_sql(
+        instant=instant, with_world=world_id is not None, with_reveal=with_reveal
+    )
+    parameters: dict[str, object] = {"campaign_id": campaign_id, "user_id": user_id}
+    if instant == "explicit":
+        parameters["as_of"] = as_of
+    if world_id is not None:
+        parameters["world_id"] = world_id
+    row = connection.execute(text(sql), parameters).mappings().one()
+
+    isolation = _as_str(row["isolation"])
+    if isolation != "read committed":
+        raise IsolationLevelError()
+
+    world_authority = None
+    if world_id is not None:
+        world_authority = _world_authority_from_row(row, user_id=user_id, world_id=world_id)
+    reveal_authority: RevealAuthority | None = None
+    if with_reveal:
+        # No membership resolves to no authority, exactly as the standalone resolver would.
+        source = _as_str(row["reveal_source"])
+        if source == "owner":
+            reveal_authority = "owner"
+        elif source == "delegation":
+            reveal_authority = "delegation"
+        else:
+            assert source == "none"
+            reveal_authority = "none"
+
+    return AuthoritySnapshot(
+        t_auth=row["t_auth"],
+        isolation=isolation,
+        access=_access_context_from_row(
+            row, user_id=user_id, campaign_id=campaign_id, timeline_id=timeline_id
+        ),
+        world_id=world_id,
+        world_authority=world_authority,
+        reveal_authority=reveal_authority,
+    )
+
+
+def _world_authority_from_row(
+    row: RowMapping, *, user_id: uuid.UUID, world_id: uuid.UUID
+) -> WorldAuthority | None:
+    if row["world_status"] is None:
+        return None
+    role_codes = frozenset(_as_str(code) for code in row["world_role_codes"])
+    has_use_grant = bool(row["world_use_grant"])
+    if not role_codes and not has_use_grant:
+        return None
+    return WorldAuthority(
+        world_id=world_id,
+        user_id=user_id,
+        role_codes=role_codes,
+        world_lifecycle_status=_as_str(row["world_status"]),
+        may_administer=WORLD_ADMINISTER
+        in capabilities_for_system_roles(
+            frozenset(_as_str(code) for code in row["system_role_codes"]),
+            allow_in_app_admin_grant=False,
+        ),
+        has_use_grant=has_use_grant,
+    )
+
+
+def _access_context_from_row(
+    row: RowMapping,
+    *,
+    user_id: uuid.UUID,
+    campaign_id: uuid.UUID,
+    timeline_id: uuid.UUID | None,
+) -> AccessContext | None:
+    if row["membership_id"] is None:
+        return None
+    membership_id = _as_uuid(row["membership_id"])
+    if row["timeline_id"] is None:
+        raise ValueError(f"campaign {campaign_id} does not exist")
+    campaign_timeline_id = _as_uuid(row["timeline_id"])
+    campaign_lifecycle_status = _as_str(row["campaign_lifecycle_code"])
+
+    if timeline_id is not None and timeline_id != campaign_timeline_id:
+        raise UnauthorizedTimelineError(
+            f"timeline {timeline_id} is not campaign {campaign_id}'s own timeline "
+            f"({campaign_timeline_id}) — resolve_access_context only resolves access "
+            "for a campaign's own pinned timeline; see its docstring for the rule."
+        )
+
+    role_capabilities = frozenset(_as_str(code) for code in row["role_codes"])
+
+    character_capabilities: dict[uuid.UUID, set[str]] = {}
+    for relationship in row["relationships"]:
+        # A database mapping is effective only if the code-defined matrix also
+        # permits it (default deny for unknown/custom types and stray rows).
+        if not relationship_capability_permitted(
+            _as_str(relationship["type_code"]), _as_str(relationship["code"])
+        ):
+            continue
+        character_id = uuid.UUID(_as_str(relationship["character_id"]))
+        character_capabilities.setdefault(character_id, set()).add(_as_str(relationship["code"]))
+
+    grant_effects: dict[_GrantKey, dict[str, str]] = {}
+    for grant in row["grants"]:
+        target_field = next(column for column in _TARGET_COLUMNS if grant[column] is not None)
+        key = (target_field, uuid.UUID(_as_str(grant[target_field])))
+        capability_code = _as_str(grant["capability_code"])
+        bucket = grant_effects.setdefault(key, {})
+        if bucket.get(capability_code) == "deny":
+            continue
+        bucket[capability_code] = _as_str(grant["effect"])
+
+    revelations: dict[uuid.UUID, set[RevelationSource]] = {}
+    for revelation in row["revelations"]:
+        revelations.setdefault(uuid.UUID(_as_str(revelation["character_id"])), set()).add(
+            RevelationSource(
+                character_revelation_id=uuid.UUID(_as_str(revelation["character_revelation_id"])),
+                audience_kind=_as_str(revelation["audience_kind"]),
+            )
+        )
+
+    return AccessContext(
+        user_id=user_id,
+        campaign_id=campaign_id,
+        campaign_membership_id=membership_id,
+        timeline_id=campaign_timeline_id,
+        role_capabilities=role_capabilities,
+        character_capabilities={
+            character_id: frozenset(codes) for character_id, codes in character_capabilities.items()
+        },
+        grant_effects=grant_effects,
+        campaign_lifecycle_status=campaign_lifecycle_status,
+        revelations={
+            character_id: frozenset(sources) for character_id, sources in revelations.items()
+        },
+    )
+
+
 def resolve_access_context(
     connection: Connection,
     *,
     user_id: uuid.UUID,
     campaign_id: uuid.UUID,
     timeline_id: uuid.UUID | None = None,
+    as_of: Instant = None,
 ) -> AccessContext | None:
     """Resolve §19.7 steps 2-7 into one `AccessContext`, or None if the user
     has no active, authorizing membership in the campaign (suspended,
@@ -1081,183 +1637,23 @@ def resolve_access_context(
     access can never outlive the group's own status by so much as one
     request, even against a hypothetical direct data repair that left a
     stray open membership or unrevoked grant behind.
+
+    `as_of` selects the instant expiry is judged at (`Instant`): `None`, the default every existing
+    caller gets, is the transaction's start (`now()`); a `datetime` is an explicit, deterministic
+    instant; `FRESH_INSTANT` is one `clock_timestamp()` read inside the statement.
+
+    The whole resolution is ONE SQL statement (`read_authority_snapshot`): one MVCC snapshot, one
+    instant. It raises `IsolationLevelError` unless the transaction is `read committed` (R01 plan
+    section 3.1).
     """
-    membership_id = connection.execute(
-        text("""
-            SELECT cm.campaign_membership_id
-            FROM security.campaign_memberships cm
-            JOIN security.membership_statuses ms
-              ON ms.membership_status_id = cm.membership_status_id
-            WHERE cm.campaign_id = :campaign_id
-              AND cm.user_id = :user_id
-              AND cm.ended_at IS NULL
-              AND ms.code = 'active'
-              AND ms.is_active
-        """),
-        {"campaign_id": campaign_id, "user_id": user_id},
-    ).scalar()
-    if membership_id is None:
-        return None
-    membership_id = _as_uuid(membership_id)
-
-    campaign_row = connection.execute(
-        text("""
-            SELECT c.timeline_id, ls.code AS lifecycle_code
-            FROM campaign.campaigns c
-            JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = c.lifecycle_status_id
-            WHERE c.campaign_id = :campaign_id
-        """),
-        {"campaign_id": campaign_id},
-    ).one_or_none()
-    if campaign_row is None:
-        raise ValueError(f"campaign {campaign_id} does not exist")
-    campaign_timeline_id = _as_uuid(campaign_row.timeline_id)
-    campaign_lifecycle_status = _as_str(campaign_row.lifecycle_code)
-
-    if timeline_id is not None and timeline_id != campaign_timeline_id:
-        raise UnauthorizedTimelineError(
-            f"timeline {timeline_id} is not campaign {campaign_id}'s own timeline "
-            f"({campaign_timeline_id}) — resolve_access_context only resolves access "
-            "for a campaign's own pinned timeline; see its docstring for the rule."
-        )
-
-    role_capabilities = frozenset(
-        _as_str(code)
-        for code in connection.execute(
-            text("""
-                SELECT DISTINCT cap.code
-                FROM security.membership_roles mr
-                JOIN security.roles r ON r.role_id = mr.role_id
-                JOIN security.role_capabilities rc ON rc.role_id = r.role_id
-                JOIN security.capabilities cap ON cap.capability_id = rc.capability_id
-                WHERE mr.campaign_membership_id = :membership_id
-                  AND mr.revoked_at IS NULL
-                  AND (mr.expires_at IS NULL OR mr.expires_at > now())
-                  AND r.is_active
-                  AND cap.is_active
-            """),
-            {"membership_id": membership_id},
-        ).scalars()
-    )
-
-    character_capabilities: dict[uuid.UUID, set[str]] = {}
-    for row in connection.execute(
-        text("""
-            SELECT mcr.character_id, cap.code, crt.code AS type_code
-            FROM security.membership_character_relationships mcr
-            JOIN security.character_relationship_types crt
-              ON crt.character_relationship_type_id = mcr.character_relationship_type_id
-            JOIN security.character_relationship_type_capabilities rtc
-              ON rtc.character_relationship_type_id = mcr.character_relationship_type_id
-            JOIN security.capabilities cap ON cap.capability_id = rtc.capability_id
-            JOIN core.entities e ON e.entity_id = mcr.character_id
-            JOIN core.lifecycle_statuses cls ON cls.lifecycle_status_id = e.lifecycle_status_id
-            JOIN core.canon_statuses ccs ON ccs.canon_status_id = e.canon_status_id
-            WHERE mcr.campaign_membership_id = :membership_id
-              AND mcr.revoked_at IS NULL
-              AND (mcr.expires_at IS NULL OR mcr.expires_at > now())
-              AND mcr.effective_to_world_time_id IS NULL
-              AND (mcr.timeline_id IS NULL OR mcr.timeline_id = :timeline_id)
-              AND crt.is_active
-              AND cap.is_active
-              AND cls.code = 'active'
-              -- A draft or unpublished character confers no perspective (Phase 15.2B-1).
-              AND ccs.code = 'canon'
-        """),
-        {"membership_id": membership_id, "timeline_id": campaign_timeline_id},
-    ).mappings():
-        # A database mapping is effective only if the code-defined matrix also
-        # permits it (default deny for unknown/custom types and stray rows).
-        if not relationship_capability_permitted(_as_str(row["type_code"]), _as_str(row["code"])):
-            continue
-        character_id = _as_uuid(row["character_id"])
-        character_capabilities.setdefault(character_id, set()).add(_as_str(row["code"]))
-
-    grant_effects: dict[_GrantKey, dict[str, str]] = {}
-    target_column_list = ", ".join(f"rg.{column}" for column in _TARGET_COLUMNS)
-    for row in connection.execute(
-        text(f"""
-            SELECT {target_column_list}, cap.code AS capability_code, rg.effect
-            FROM security.resource_grants rg
-            JOIN security.capabilities cap ON cap.capability_id = rg.capability_id
-            LEFT JOIN core.entities target_entity
-              ON target_entity.entity_id = COALESCE(
-                     rg.character_id, rg.entity_id, rg.knowledge_item_id, rg.quest_id, rg.event_id
-                 )
-            LEFT JOIN core.lifecycle_statuses target_entity_status
-              ON target_entity_status.lifecycle_status_id = target_entity.lifecycle_status_id
-            LEFT JOIN campaign.sessions target_session ON target_session.session_id = rg.session_id
-            LEFT JOIN core.lifecycle_statuses target_session_status
-              ON target_session_status.lifecycle_status_id = target_session.lifecycle_status_id
-            WHERE rg.campaign_id = :campaign_id
-              AND rg.revoked_at IS NULL
-              AND (rg.expires_at IS NULL OR rg.expires_at > now())
-              AND (rg.timeline_id IS NULL OR rg.timeline_id = :timeline_id)
-              AND cap.is_active
-              AND (
-                    (rg.session_id IS NULL AND target_entity_status.code = 'active')
-                    OR (rg.session_id IS NOT NULL AND target_session_status.code = 'active')
-                  )
-              AND (
-                    rg.grantee_campaign_membership_id = :membership_id
-                    OR rg.grantee_access_group_id IN (
-                        SELECT agm.access_group_id
-                        FROM security.access_group_memberships agm
-                        JOIN security.access_groups ag
-                            ON ag.access_group_id = agm.access_group_id
-                        JOIN core.lifecycle_statuses ag_status
-                            ON ag_status.lifecycle_status_id = ag.lifecycle_status_id
-                        WHERE agm.campaign_membership_id = :membership_id
-                          AND agm.removed_at IS NULL
-                          AND ag_status.code = 'active'
-                    )
-                  )
-        """),
-        {
-            "campaign_id": campaign_id,
-            "timeline_id": campaign_timeline_id,
-            "membership_id": membership_id,
-        },
-    ).mappings():
-        target_field = next(column for column in _TARGET_COLUMNS if row[column] is not None)
-        key = (target_field, _as_uuid(row[target_field]))
-        capability_code = _as_str(row["capability_code"])
-        bucket = grant_effects.setdefault(key, {})
-        if bucket.get(capability_code) == "deny":
-            continue
-        bucket[capability_code] = _as_str(row["effect"])
-
-    revelations: dict[uuid.UUID, set[RevelationSource]] = {}
-    for revelation_row in connection.execute(
-        text(LIVE_REVELATIONS_FOR_MEMBERSHIP_SQL),
-        {"campaign_id": campaign_id, "membership_id": membership_id},
-    ).mappings():
-        revelations.setdefault(_as_uuid(revelation_row["character_id"]), set()).add(
-            RevelationSource(
-                character_revelation_id=_as_uuid(revelation_row["character_revelation_id"]),
-                audience_kind=_as_str(revelation_row["audience_kind"]),
-            )
-        )
-
-    return AccessContext(
+    return read_authority_snapshot(
+        connection,
         user_id=user_id,
         campaign_id=campaign_id,
-        campaign_membership_id=membership_id,
-        timeline_id=campaign_timeline_id,
-        role_capabilities=role_capabilities,
-        character_capabilities={
-            character_id: frozenset(codes) for character_id, codes in character_capabilities.items()
-        },
-        grant_effects=grant_effects,
-        campaign_lifecycle_status=campaign_lifecycle_status,
-        revelations={
-            character_id: frozenset(sources) for character_id, sources in revelations.items()
-        },
-    )
+        timeline_id=timeline_id,
+        as_of=as_of,
+    ).access
 
-
-BUILTIN_CAMPAIGN_OWNER_ROLE_CODE = "campaign_owner"
-BUILTIN_CAMPAIGN_GM_ROLE_CODE = "gm"
 
 OwnerAssignmentLock = Literal["none", "share", "update"]
 

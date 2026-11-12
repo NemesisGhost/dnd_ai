@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 
 from sqlalchemy import Connection, text
 
+from dnd_ai.domain.authorization import R01_PENDING
 from dnd_ai.domain.relationship_authoring import (
     MAX_TRAVELERS,
     PLACE_TYPE_CODES,
@@ -103,7 +104,9 @@ def record_travel(
     note: str | None = None,
     session_id: uuid.UUID | None = None,
 ) -> TravelResult:
-    scope = lock_operation_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_operation_scope(
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=R01_PENDING
+    )
     if session_id is not None:
         lock_session_in_progress(connection, campaign_id=campaign_id, session_id=session_id)
     travelers = set(character_ids)

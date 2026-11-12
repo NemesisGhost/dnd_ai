@@ -587,23 +587,28 @@ def _read_isolation_through_the_request_path(
 def test_a_request_runs_at_read_committed_because_the_server_default_is_inherited(
     postgres_engine: Engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """ESTABLISHES (plan section 12.1): through the real request path (`get_engine`'s production
-    constructor, the real `get_connection` and `commit_request_transaction`), a request's transaction
-    is `read committed` on PostgreSQL 18, and `src` never sets an isolation level itself: no
-    `create_engine` call passes `isolation_level`, and no `SET TRANSACTION` / `default_transaction_
-    isolation` text exists. So the level is **inherited from the server, database or role default**:
-    changing the database default to `repeatable read` changes what the same code runs at, which this
-    test shows and then reverts.
+    """CHARACTERISATION of S0 finding F-4, **updated by slice S1 (plan section 3.1)**.
 
-    CONSEQUENCE: the plan's single-statement argument (section 3) is a READ COMMITTED argument. S1
-    should assert the level rather than rely on it (a startup check, or a `SET TRANSACTION` in
-    `get_connection`); that is a production change and is **not** made in S0.
+    ORIGINAL S0 FINDING (historical evidence, observed 2026-11-12 at 395d595, before S1): through the
+    real request path a request's transaction was `read committed` on PostgreSQL 18 only because the
+    level was **inherited from the server, database or role default**. `src` never set an isolation
+    level (no `create_engine` passed `isolation_level`, no `SET TRANSACTION` text), and when this test
+    changed the database default to `repeatable read` the same code ran at `repeatable read`.
 
-    DOES NOT ESTABLISH: the level on a connection pooler, or with a role-level `ALTER ROLE ... SET`
-    (the same inheritance applies; only the database-level override is exercised)."""
+    AFTER S1: `get_engine` passes `isolation_level="READ COMMITTED"`, so the level no longer follows
+    the database default. This test now shows that a request still runs at `read committed` under a
+    database-level `repeatable read` default, that exactly one `create_engine` in `src` sets the level,
+    and that no `SET TRANSACTION` / `default_transaction_isolation` text exists. The role-level default,
+    `serializable`, the in-statement refusal and the structural rule are in
+    `tests/database/test_authorization_isolation.py`. The test name keeps its S0 spelling because the
+    plan refers to it.
+
+    DOES NOT ESTABLISH: the level behind a transaction-mode pooler or proxy that rewrites
+    transaction-control statements (the in-statement check refuses there; it is not exercised)."""
     url = postgres_engine.url.render_as_string(hide_password=False)
     assert _read_isolation_through_the_request_path(url, monkeypatch) == "read committed"
 
+    leveled: list[str] = []
     offenders: list[str] = []
     for path in SRC.rglob("*.py"):
         source = path.read_text(encoding="utf-8")
@@ -617,8 +622,9 @@ def test_a_request_runs_at_read_committed_because_the_server_default_is_inherite
                 and getattr(node.func, "id", getattr(node.func, "attr", "")) == "create_engine"
                 and any(kw.arg == "isolation_level" for kw in node.keywords)
             ):
-                offenders.append(f"{path.relative_to(REPO)}:{node.lineno}: isolation_level kwarg")
+                leveled.append(f"{path.relative_to(REPO)}:{node.lineno}")
     assert offenders == []
+    assert len(leveled) == 1 and "deps.py" in leveled[0], leveled
 
     database = postgres_engine.url.database
     admin = postgres_engine.execution_options(isolation_level="AUTOCOMMIT")
@@ -629,7 +635,7 @@ def test_a_request_runs_at_read_committed_because_the_server_default_is_inherite
             )
         )
     try:
-        assert _read_isolation_through_the_request_path(url, monkeypatch) == "repeatable read"
+        assert _read_isolation_through_the_request_path(url, monkeypatch) == "read committed"
     finally:
         with admin.connect() as connection:
             connection.execute(

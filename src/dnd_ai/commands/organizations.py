@@ -33,6 +33,7 @@ from dnd_ai.domain.authoring import (
     normalize_name,
     normalize_reason,
 )
+from dnd_ai.domain.authorization import R01_PENDING
 from dnd_ai.domain.content_authoring import (
     AUTHORABLE_LOCATION_CATEGORIES,
     diff_fields,
@@ -195,6 +196,7 @@ def create_organization(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
+        plan=R01_PENDING,
     )
     reference_ids = [
         r for r in (parent_organization_id, headquarters_location_id, religion_id) if r is not None
@@ -359,6 +361,7 @@ def update_organization(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
+        plan=R01_PENDING,
     )
 
     hint = connection.execute(

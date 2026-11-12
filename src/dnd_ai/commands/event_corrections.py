@@ -31,6 +31,7 @@ from typing import Any
 from sqlalchemy import Connection, text
 
 from dnd_ai.domain.authoring import normalize_reason
+from dnd_ai.domain.authorization import R01_PENDING
 from dnd_ai.domain.data_classification import audit_change, audit_initial
 from dnd_ai.domain.event_corrections import (
     CORRECTING_EVENT_TYPE,
@@ -800,7 +801,9 @@ def void_event(
     event_id: uuid.UUID,
     reason: str | None,
 ) -> CorrectionResult:
-    scope = lock_operation_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_operation_scope(
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=R01_PENDING
+    )
     return _apply(
         connection,
         scope=scope,
@@ -822,7 +825,9 @@ def correct_event(
     reason: str | None,
     replacement: dict[str, Any],
 ) -> CorrectionResult:
-    scope = lock_operation_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_operation_scope(
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=R01_PENDING
+    )
     return _apply(
         connection,
         scope=scope,

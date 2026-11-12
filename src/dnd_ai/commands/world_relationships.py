@@ -24,6 +24,7 @@ from sqlalchemy import Connection, text
 from sqlalchemy.exc import IntegrityError
 
 from dnd_ai.domain.authoring import StaleWriteError, normalize_reason
+from dnd_ai.domain.authorization import R01_PENDING
 from dnd_ai.domain.content_authoring import diff_fields, initial_fields
 from dnd_ai.domain.relationship_authoring import (
     KIND_EMPLOYMENT,
@@ -199,6 +200,7 @@ def _lock_relationship(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
+        plan=R01_PENDING,
     )
     participants = connection.execute(
         text(
@@ -271,6 +273,7 @@ def create_relationship(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
+        plan=R01_PENDING,
     )
     locked = lock_entities(connection, world_id=scope.world_id, share_ids=entity_ids)
     for entity_id in set(entity_ids):

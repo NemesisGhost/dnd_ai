@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from sqlalchemy import Connection, text
 
 from dnd_ai.domain.authoring import StaleWriteError, normalize_reason
+from dnd_ai.domain.authorization import R01_PENDING
 from dnd_ai.domain.content_authoring import diff_fields, initial_fields
 from dnd_ai.domain.party_authoring import (
     PARTY_ACTIVE,
@@ -87,7 +88,9 @@ def create_party(
 ) -> PartyResult:
     clean_name = normalize_name(name)
     clean_description = normalize_description(description)
-    scope = lock_operation_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_operation_scope(
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=R01_PENDING
+    )
     row = connection.execute(
         text("""
             INSERT INTO campaign.parties
@@ -132,7 +135,9 @@ def update_party(
 ) -> PartyResult:
     clean_name = normalize_name(name)
     clean_description = normalize_description(description)
-    scope = lock_operation_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_operation_scope(
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=R01_PENDING
+    )
     party = lock_campaign_party(connection, campaign_id=campaign_id, party_id=party_id)
     if party.row_version != expected_row_version:
         raise StaleWriteError(f"party {party_id} is at {party.row_version}")
@@ -180,7 +185,9 @@ def _transition(
     expected_row_version: int,
     to_status: str,
 ) -> PartyResult:
-    scope = lock_operation_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_operation_scope(
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=R01_PENDING
+    )
     party = lock_campaign_party(connection, campaign_id=campaign_id, party_id=party_id)
     if party.row_version != expected_row_version:
         raise StaleWriteError(f"party {party_id} is at {party.row_version}")
