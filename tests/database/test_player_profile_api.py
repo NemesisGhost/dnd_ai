@@ -751,3 +751,100 @@ def test_a_failing_read_builds_no_message_from_profile_text(
     for record in caplog.records:
         assert_all_markers_absent(record.getMessage(), pp.a_markers)
         assert_all_markers_absent(str(record.exc_info), pp.a_markers)
+
+
+# --- the version path segment (review correction) ---------------------------------------------------
+
+BIGINT_MAX = 9_223_372_036_854_775_807
+
+
+def test_an_over_long_version_segment_is_the_generic_404_for_every_caller_and_writes_nothing(
+    client_factory: Factory, postgres_engine: Engine, g: Gate, m: Members, pp: Pp
+) -> None:
+    """A 4,301-digit segment is past Python's integer-conversion limit; converting it raised and the
+    error escaped as `400 validation_failed`. It names no version, so it is the same profile-level
+    404 as any other miss, whoever asks, and the request changes and records nothing."""
+    with postgres_engine.begin() as connection:
+        outsider = make_user(connection, "Long Segment Outsider")
+    long_segment = "1" * 4301
+    before = (
+        _text_of_tables(postgres_engine, "%idempot%"),
+        _text_of_tables(postgres_engine, "audit", world=g.world_id),
+        _text_of_tables(postgres_engine, "character_player_profile%"),
+    )
+    reference = {}
+    for name, user in (
+        ("owner", g.o1_user_id),
+        ("gm", m.gm_user_id),
+        ("player", g.player_user_id),
+        ("observer", pp.observer_user),
+    ):
+        reference[name] = get(
+            client_factory, user, url(g.campaign_id, pp.character, "/versions/abc")
+        )
+        response = get(
+            client_factory, user, url(g.campaign_id, pp.character, f"/versions/{long_segment}")
+        )
+        assert response.status_code == 404, (name, response.status_code, response.text[:200])
+        assert response.json()["error"]["code"] == "not_found", name
+        assert response.json() == reference[name].json(), name  # the one generic body
+        assert long_segment not in response.text
+        assert_all_markers_absent(response.text, pp.a_markers)
+    # The same body for the authorized and the ordinary member.
+    assert reference["owner"].json() == reference["player"].json()
+    # A caller with no campaign access is unchanged: the campaign gate answers, as for any segment.
+    for segment in (long_segment, "abc", "1"):
+        refused = get(
+            client_factory, outsider, url(g.campaign_id, pp.character, f"/versions/{segment}")
+        )
+        assert refused.status_code == 404
+        assert (
+            refused.json()
+            == get(
+                client_factory, outsider, url(g.campaign_id, pp.character, "/versions/abc")
+            ).json()
+        )
+    after = (
+        _text_of_tables(postgres_engine, "%idempot%"),
+        _text_of_tables(postgres_engine, "audit", world=g.world_id),
+        _text_of_tables(postgres_engine, "character_player_profile%"),
+    )
+    assert after == before
+
+
+def test_the_version_segment_boundary_keeps_every_representable_version_readable(
+    client_factory: Factory, postgres_engine: Engine, g: Gate, pp: Pp
+) -> None:
+    ok = {
+        "1": 200,
+        "0001": 200,  # leading zeros name the same version
+        "0" * 5000 + "1": 200,  # ... however many, with nothing converted past the limit
+    }
+    missing = [
+        str(BIGINT_MAX),  # the largest storable version: a miss only because none is stored
+        "2",
+        str(BIGINT_MAX + 1),  # beyond BIGINT
+        "9" * 19,
+        "9" * 20,
+        "1" * 4300,
+        "1" * 4301,
+        "1" * 4302,
+        "0" * 4301,
+        "0",
+        "00",
+    ]
+    malformed = ["abc", "1.5", "-1", "+1", "1e3", " 1", "1 ", "%C2%B2", "%D9%A1", "٣"]
+    for segment, status in ok.items():
+        response = get(
+            client_factory, g.o1_user_id, url(g.campaign_id, pp.character, f"/versions/{segment}")
+        )
+        assert response.status_code == status, segment[:12]
+        assert response.json()["profile_row_version"] == 1
+    bodies = set()
+    for segment in [*missing, *malformed]:
+        response = get(
+            client_factory, g.o1_user_id, url(g.campaign_id, pp.character, f"/versions/{segment}")
+        )
+        assert response.status_code == 404, (segment[:12], response.status_code)
+        bodies.add(response.text)
+    assert len(bodies) == 1

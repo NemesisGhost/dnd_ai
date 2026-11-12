@@ -1251,7 +1251,7 @@ A campaign's draft of a character's public profile, and immutable releases of it
 
 ## 3x. Character player profile (P03-A A5a)
 
-A5a is **storage and GM reads only**. A character has at most one *player profile* per campaign: narrative its controllers write for the campaign's GMs and its eligible controllers. It is not world canon and not a GM-private store. **There is no production writer** (decision D18): no route, command, seed or backfill creates or edits a profile, and the application database roles can `SELECT` the profile tables and nothing else. Until P03-B delivers controller editing, a production read returns `profile: null`. Tests populate profiles through `tests/player_profile_support.py`.
+A5a is **storage and GM reads only**. A character has at most one *player profile* per campaign: narrative its controllers write for the campaign's GMs and its eligible controllers. It is not world canon and not a GM-private store. **There is no production writer** (decision D18): no route, command, seed or backfill creates or edits a profile, and no application database role can write the profile tables: `app_read_write` holds `SELECT` only, and `integration_worker` and `app_read_only` hold no access to them at all. Until P03-B delivers controller editing, a production read returns `profile: null`. Tests populate profiles through `tests/player_profile_support.py`.
 
 | Route | Route filter | Authority | Result |
 |---|---|---|---|

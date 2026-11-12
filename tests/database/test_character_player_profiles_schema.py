@@ -5,8 +5,9 @@ Each rule is exercised with the statement that would break it, on committed fixt
 campaign owners, a custom manager, a player), because several rules are triggers that read other
 tables. The raw statements in this file probe the schema's own refusals; the tests that need a
 *valid* profile use the one fixture writer (`tests/player_profile_support.py`). The application
-roles can read the profile tables and write none of them (decision D18), checked both from the
-catalog and by attempting the statements as the real runtime roles.
+roles write none of the profile tables (decision D18): `app_read_write` holds SELECT only, and
+`integration_worker` and `app_read_only` hold no access; checked both from the catalog and by
+attempting the statements as the real runtime roles.
 """
 
 import uuid
@@ -24,6 +25,7 @@ from dnd_ai.domain.player_profiles import (
 )
 from tests.database.test_campaign_owner_gate import (  # noqa: F401 - fixtures used by name
     Gate,
+    client_factory,
     g,
 )
 from tests.factories import (
@@ -58,6 +60,24 @@ def two(postgres_engine: Engine, g: Gate) -> tuple[uuid.UUID, uuid.UUID]:
             make_character(connection, g.world_id, name="Player Profile One"),
             make_character(connection, g.world_id, name="Player Profile Two"),
         )
+
+
+def _profile_state(engine: Engine, head: uuid.UUID) -> tuple[int, int, str | None]:
+    """(head row_version, number of versions, the `bonds` text of the newest version)."""
+    with engine.connect() as connection:
+        row = connection.execute(
+            text(f"""
+                SELECT h.row_version,
+                       (SELECT count(*) FROM {VERSIONS} v
+                         WHERE v.character_player_profile_id = h.character_player_profile_id),
+                       (SELECT v.bonds FROM {VERSIONS} v
+                         WHERE v.character_player_profile_id = h.character_player_profile_id
+                         ORDER BY v.profile_row_version DESC LIMIT 1)
+                FROM {HEAD} h WHERE h.character_player_profile_id = :h
+            """),  # noqa: S608
+            {"h": head},
+        ).one()
+    return (int(row[0]), int(row[1]), row[2])
 
 
 def _refused(engine: Engine, statement: Callable[[Any], object]) -> str:
@@ -142,6 +162,10 @@ def test_the_catalog_grants_the_application_roles_select_only_and_the_reporting_
         assert granted[(table, "app_read_write", "SELECT")], table
         assert not any(granted[(table, "app_read_only", p)] for p in PRIVILEGES), table
     assert granted[(LOOKUP, "app_read_write", "SELECT")]
+    # The narrower grants are the contract: no access at all for these two roles (not even SELECT).
+    for table in TABLES:
+        for role in ("integration_worker", "app_read_only"):
+            assert not any(granted[(table, role, p)] for p in PRIVILEGES), (table, role)
 
 
 def test_the_runtime_roles_can_read_the_profile_and_every_write_is_refused_by_the_database(
@@ -404,27 +428,30 @@ def test_scope_the_character_must_be_in_the_campaigns_world_and_the_editor_in_it
             editor_membership_id=g.o1,
             fields={},
         )
-        editor = _refused(
-            postgres_engine,
-            lambda c: _version(
-                c, g, head, character, row_version=1, editor=other_member, bonds="b"
-            ),
-        )
-        # Version 1 exists, so the first refusal is the scope check or the unique key; both refuse.
-        assert "Editing membership" in editor or "ux_character_player_profile_versions" in editor
 
-        # A version in another campaign naming this head fails the composite foreign key. The head
-        # is bumped first so that the row_version triggers and the unique key pass and only the
-        # composite key can refuse.
         def bump_then(connection: Connection, head_id: uuid.UUID, **version: Any) -> None:
             connection.execute(
                 text(
-                    f"UPDATE {HEAD} SET updated_at = now() WHERE character_player_profile_id = :h"
-                ),  # noqa: S608
+                    f"UPDATE {HEAD} SET updated_at = now() WHERE character_player_profile_id = :h"  # noqa: S608
+                ),
                 {"h": head_id},
             )
             _version(connection, g, head_id, character, row_version=2, **version)
 
+        # A fresh row_version (2, after bumping the head in the same transaction) so that neither
+        # the duplicate-version key nor the head-match trigger can be what refuses it: only the
+        # scope trigger's editor-campaign rule can. The whole transaction rolls back.
+        before = _profile_state(postgres_engine, head)
+        editor = _refused(
+            postgres_engine, lambda c: bump_then(c, head, editor=other_member, bonds="b")
+        )
+        assert "Editing membership" in editor and "does not belong to campaign" in editor
+        assert "ux_character_player_profile_versions" not in editor
+        assert _profile_state(postgres_engine, head) == before == (1, 1, None)
+
+        # A version in another campaign naming this head fails the composite foreign key. The head
+        # is bumped first so that the row_version triggers and the unique key pass and only the
+        # composite key can refuse.
         composite = _refused_exc(
             postgres_engine,
             lambda c: bump_then(c, head, campaign=other_campaign, editor=other_member),
@@ -719,3 +746,38 @@ def test_no_controller_profile_capability_exists_yet(postgres_engine: Engine) ->
             .all()
         )
     assert codes == []
+
+
+def test_a_stored_version_at_the_top_of_the_bigint_domain_is_readable_over_http(
+    postgres_engine: Engine, client_factory: Any, g: Gate, two: tuple[uuid.UUID, uuid.UUID]
+) -> None:
+    """The version route's bound is the column's (BIGINT), not something tighter: a version stored at
+    the largest value is read, and the next value up names nothing."""
+    character = two[0]
+    bigint_max = 9_223_372_036_854_775_807
+    head = seed_player_profile(
+        postgres_engine,
+        campaign_id=g.campaign_id,
+        character_id=character,
+        editor_membership_id=g.o1,
+        fields={"personality": "top"},
+    )
+    with postgres_engine.begin() as connection:
+        connection.execute(text("SET LOCAL session_replication_role = replica"))
+        connection.execute(
+            text(
+                f"UPDATE {VERSIONS} SET profile_row_version = :v WHERE character_player_profile_id = :h"
+            ),  # noqa: S608
+            {"v": bigint_max, "h": head},
+        )
+        connection.execute(
+            text(f"UPDATE {HEAD} SET row_version = :v WHERE character_player_profile_id = :h"),  # noqa: S608
+            {"v": bigint_max, "h": head},
+        )
+    base = f"/campaigns/{g.campaign_id}/characters/{character}/player-profile"
+    with client_factory(g.o1_user_id) as client:
+        top = client.get(f"{base}/versions/{bigint_max}")
+        assert top.status_code == 200 and top.json()["profile_row_version"] == bigint_max
+        assert top.json()["fields"]["personality"] == "top"
+        assert client.get(base).json()["profile"]["row_version"] == bigint_max
+        assert client.get(f"{base}/versions/{bigint_max + 1}").status_code == 404

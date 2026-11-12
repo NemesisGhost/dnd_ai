@@ -293,17 +293,17 @@ EXCLUDED_TABLES: dict[tuple[str, str], str] = {
         "the reporting role holds nothing — asserted in test_character_public_profile_schema.py"
     ),
     ("campaign", "player_profile_fields"): (
-        "the player-profile field catalog (P03-A A5a, revision 147): app roles hold SELECT only; "
+        "the player-profile field catalog (P03-A A5a, revision 147): app_read_write holds SELECT only; "
         "asserted in test_character_player_profiles_schema.py"
     ),
     ("campaign", "character_player_profiles"): (
         "the player-profile head (P03-A A5a, revision 147): infrastructure with no production "
-        "writer until P03-B, so app roles hold SELECT only and the reporting role holds nothing "
+        "writer until P03-B, so app_read_write holds SELECT only and the other roles hold nothing "
         "- asserted in test_character_player_profiles_schema.py"
     ),
     ("campaign", "character_player_profile_versions"): (
-        "append-only player-profile versions (P03-A A5a, revision 147): app roles hold SELECT "
-        "only until P03-B, and the reporting role holds nothing - asserted in "
+        "append-only player-profile versions (P03-A A5a, revision 147): app_read_write holds SELECT "
+        "only until P03-B, and the other roles hold nothing - asserted in "
         "test_character_player_profiles_schema.py"
     ),
     ("security", "character_revelations"): (

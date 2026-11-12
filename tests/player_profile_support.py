@@ -1,7 +1,8 @@
 """The only raw writer of the campaign player-profile tables (P03-A A5a, design section 11.1).
 
-A5 is infrastructure with no production writer (decision D18): the application roles can SELECT the
-profile tables and cannot write them, and nothing under `src/` writes them. Tests that need a
+A5 is infrastructure with no production writer (decision D18): no application role can write the
+profile tables (`app_read_write` holds SELECT only; `integration_worker` and `app_read_only` hold
+no access), and nothing under `src/` writes them. Tests that need a
 profile populate it through this module, which runs as the test superuser and follows the write
 shape P03-B's controller edit command will have (design section 6.2), minus the assignment row P03-B
 introduces:

@@ -35,6 +35,25 @@ _view_access = require_campaign_capability("campaign.view")
 _Conn = Annotated[Connection, Depends(get_connection)]
 
 _MAX_ROW_VERSION = 9_223_372_036_854_775_807  # BIGINT
+_MAX_ROW_VERSION_DIGITS = len(str(_MAX_ROW_VERSION))
+
+
+def _parse_row_version(segment: str) -> int | None:
+    """The version a path segment names, or `None` when it names none (the generic 404).
+
+    ASCII digits only, so a superscript digit is not a number. Leading zeros are dropped *before*
+    the length is bounded, so `0001` still names version 1, and anything with more significant
+    digits than the largest BIGINT is refused without ever being converted: `int()` raises on a
+    string beyond Python's integer-conversion limit (4,300 digits), and that error would otherwise
+    escape as a `400 validation_failed` that names this resource's profile route differently from
+    every other miss."""
+    if not (segment.isascii() and segment.isdigit()):
+        return None
+    significant = segment.lstrip("0")
+    if not significant or len(significant) > _MAX_ROW_VERSION_DIGITS:
+        return None
+    value = int(significant)
+    return value if value <= _MAX_ROW_VERSION else None
 
 
 @router.get(_BASE)
@@ -58,16 +77,11 @@ def get_character_player_profile_version_endpoint(
 ) -> dict[str, Any]:
     # A segment that is not a version number names nothing: the same 404 as a missing version (and
     # the route manifest's generic probes substitute a UUID here).
-    if (
-        not (profile_row_version.isascii() and profile_row_version.isdigit())
-        or not 1 <= int(profile_row_version) <= _MAX_ROW_VERSION
-    ):
+    number = _parse_row_version(profile_row_version)
+    if number is None:
         raise NotFoundError()
     version = read_player_profile_version(
-        connection,
-        access=access,
-        character_id=character_id,
-        profile_row_version=int(profile_row_version),
+        connection, access=access, character_id=character_id, profile_row_version=number
     )
     if version is None:
         raise NotFoundError()

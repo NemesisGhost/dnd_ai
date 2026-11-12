@@ -10,7 +10,8 @@ Purpose:
     narrative the character's controllers write for the campaign's GMs and for the character's
     eligible controllers. It is separate from world canon (`character.character_descriptions`) and
     from GM-private portrayal, and it is never canon. This revision is **storage only**: the
-    application roles can SELECT the tables and cannot write them, because the writer (the
+    application runtime roles cannot write the tables (app_read_write holds SELECT only; the
+    other roles hold no access), because the writer (the
     controller edit command, its grants, attribution and authorization) arrives with P03-B.
     Tests populate valid versions through `tests/player_profile_support.py`.
 

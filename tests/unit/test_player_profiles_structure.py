@@ -387,3 +387,36 @@ def test_raw_writes_of_the_profile_tables_under_tests_are_confined() -> None:
     assert offenders == []
     support = (ROOT / "tests" / "player_profile_support.py").read_text(encoding="utf-8")
     assert "INSERT INTO" in support
+
+
+@pytest.mark.parametrize(
+    ("segment", "expected"),
+    [
+        pytest.param("1", 1, id="one"),
+        pytest.param("0001", 1, id="leading-zeros"),
+        pytest.param("0" * 5000 + "7", 7, id="5000-leading-zeros"),
+        pytest.param(str(9_223_372_036_854_775_807), 9_223_372_036_854_775_807, id="bigint-max"),
+        pytest.param(
+            "0" + str(9_223_372_036_854_775_807), 9_223_372_036_854_775_807, id="zero-bigint-max"
+        ),
+        pytest.param(str(9_223_372_036_854_775_808), None, id="bigint-max-plus-one"),
+        pytest.param("9" * 20, None, id="20-nines"),
+        pytest.param("1" * 4300, None, id="4300-digits"),
+        pytest.param("1" * 4301, None, id="4301-digits"),
+        pytest.param("1" * 100_000, None, id="100000-digits"),
+        pytest.param("0", None, id="zero"),
+        pytest.param("0" * 4301, None, id="4301-zeros"),
+        pytest.param("", None, id="empty"),
+        pytest.param("-1", None, id="negative"),
+        pytest.param("1.5", None, id="decimal"),
+        pytest.param("²", None, id="superscript-two"),
+        pytest.param("١", None, id="arabic-indic-one"),
+        pytest.param("abc", None, id="letters"),
+    ],
+)
+def test_the_version_segment_parser_is_total_and_bounded_by_bigint_not_by_python(
+    segment: str, expected: int | None
+) -> None:
+    from dnd_ai.api.player_profiles import _parse_row_version
+
+    assert _parse_row_version(segment) == expected
