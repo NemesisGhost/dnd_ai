@@ -116,6 +116,28 @@ COLUMN_CLASSES: dict[str, DataClass] = {
     **_table("campaign.area_feature_state", {"condition_notes": _G}),
     **_table("campaign.campaigns", {"description": _C, "name": _C}),
     **_table("campaign.character_conditions", {"source_description": _G}),
+    # A5 (D17): player-authored profile text is character-visible content. The class describes
+    # the content and grants no permission; every reader passes an explicit rule (D15).
+    **_table(
+        "campaign.character_player_profile_versions",
+        {
+            "portrayal_guidance": _H,
+            "personality": _H,
+            "ideals": _H,
+            "bonds": _H,
+            "flaws": _H,
+            "goals": _H,
+            "fears": _H,
+            "loyalties": _H,
+            "boundaries": _H,
+            "speech_patterns": _H,
+            "profile_notes": _H,
+        },
+    ),
+    **_table(
+        "campaign.player_profile_fields",
+        {"code": _S, "description": _S, "display_name": _S},
+    ),
     # A2: the draft is GM-only; a release is campaign-visible once revealed (A3/A4), its note is not.
     **_table(
         "campaign.character_public_profiles",

@@ -10,6 +10,7 @@ exactly.
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     Column,
     ForeignKey,
     ForeignKeyConstraint,
@@ -24,6 +25,7 @@ from sqlalchemy.dialects.postgresql import INT8RANGE, TIMESTAMP, UUID
 from sqlalchemy.types import Integer, SmallInteger
 
 from ._shared import (
+    LOOKUP_CODE_COMMENT,
     NONNEGATIVE_INTEGER,
     PERCENTAGE_0_100,
     _lookup_table,
@@ -2020,4 +2022,232 @@ Index(
 Index(
     "ix_character_public_profile_releases_released_by",
     character_public_profile_releases.c.released_by_membership_id,
+)
+
+# ---------------------------------------------------------------------------
+# campaign — character player profiles (revision 147)
+# ---------------------------------------------------------------------------
+
+_PLAYER_PROFILE_FIELD_CODES = (
+    "portrayal_guidance",
+    "personality",
+    "ideals",
+    "bonds",
+    "flaws",
+    "goals",
+    "fears",
+    "loyalties",
+    "boundaries",
+    "speech_patterns",
+    "profile_notes",
+)
+_PLAYER_PROFILE_FIELD_LABELS = {
+    "portrayal_guidance": "Portrayal guidance",
+    "personality": "Personality",
+    "ideals": "Ideals",
+    "bonds": "Bonds",
+    "flaws": "Flaws",
+    "goals": "Goals",
+    "fears": "Fears",
+    "loyalties": "Loyalties",
+    "boundaries": "Boundaries",
+    "speech_patterns": "Speech patterns",
+    "profile_notes": "Notes for the GM and controllers",
+}
+
+
+def _player_profile_field_comment(code: str) -> str:
+    # Must match migration 147's COMMENT ON COLUMN text exactly.
+    shared = (
+        "Shared with the campaign's GMs and the character's controllers; not a private "
+        "notebook. Never copied into a public profile."
+        if code == "profile_notes"
+        else "Never copied into a public profile."
+        if code == "boundaries"
+        else "May be copied into a public-profile draft by a GM."
+    )
+    return (
+        f"{_PLAYER_PROFILE_FIELD_LABELS[code]}: player-authored profile text, at most 4000 "
+        f"characters, NULL when empty (whitespace-only text is refused). {shared}"
+    )
+
+
+player_profile_fields = Table(
+    "player_profile_fields",
+    metadata,
+    _uuid_pk("player_profile_field_id"),
+    Column("code", Text(), nullable=False, comment=LOOKUP_CODE_COMMENT),
+    Column("display_name", Text(), nullable=False),
+    Column("description", Text()),
+    Column(
+        "is_copy_eligible",
+        Boolean(),
+        nullable=False,
+        comment=(
+            "Whether the field may be copied into a public-profile draft. False for boundaries "
+            "and profile_notes, which no structured publication may carry. Manual transcription "
+            "by an authorized reader is not prevented."
+        ),
+    ),
+    Column("sort_order", NONNEGATIVE_INTEGER, nullable=False, server_default=text("0")),
+    Column("is_active", Boolean(), nullable=False, server_default=text("true")),
+    *_timestamps(),
+    UniqueConstraint("code", name="ux_player_profile_fields_code"),
+    schema="campaign",
+    comment=(
+        "The fields of a character's campaign player profile (P03-A A5, decision D13) and "
+        "whether a field may later be copied into a public-profile draft. A catalog, not a "
+        "safety label."
+    ),
+)
+
+character_player_profiles = Table(
+    "character_player_profiles",
+    metadata,
+    _uuid_pk("character_player_profile_id"),
+    Column(
+        "campaign_id",
+        UUID(),
+        ForeignKey("campaign.campaigns.campaign_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "character_id",
+        UUID(),
+        ForeignKey("character.characters.character_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "row_version",
+        BigInteger(),
+        nullable=False,
+        server_default=text("1"),
+        comment=(
+            "Optimistic-concurrency token, incremented by every UPDATE "
+            "(core.bump_row_version()). Every value has exactly one version row, checked at "
+            "commit."
+        ),
+    ),
+    *_timestamps(),
+    UniqueConstraint(
+        "campaign_id", "character_id", name="ux_character_player_profiles_campaign_character"
+    ),
+    UniqueConstraint(
+        "character_player_profile_id",
+        "campaign_id",
+        "character_id",
+        name="ux_character_player_profiles_scope",
+    ),
+    CheckConstraint("row_version >= 1", name="ck_character_player_profiles_row_version_positive"),
+    schema="campaign",
+    comment=(
+        "The head of one character's player profile in one campaign (P03-A A5): the "
+        "player-authored narrative for the campaign's GMs and the character's controllers. "
+        "Never world canon and never a GM-private store. One row per (campaign, character); "
+        "campaign B has its own for the same character. It holds no text: content lives in "
+        "character_player_profile_versions. It is the lock anchor of the edit protocol. The "
+        "application cannot write it until P03-B."
+    ),
+)
+
+Index("ix_character_player_profiles_character_id", character_player_profiles.c.character_id)
+
+character_player_profile_versions = Table(
+    "character_player_profile_versions",
+    metadata,
+    _uuid_pk("character_player_profile_version_id"),
+    Column("character_player_profile_id", UUID(), nullable=False),
+    Column(
+        "campaign_id",
+        UUID(),
+        ForeignKey("campaign.campaigns.campaign_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "character_id",
+        UUID(),
+        ForeignKey("character.characters.character_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "profile_row_version",
+        BigInteger(),
+        nullable=False,
+        comment=(
+            "The head row_version this version made current; unique per profile. The version "
+            "with the head's current row_version is the current profile."
+        ),
+    ),
+    *(
+        Column(code, Text(), comment=_player_profile_field_comment(code))
+        for code in _PLAYER_PROFILE_FIELD_CODES
+    ),
+    Column(
+        "edited_by_campaign_membership_id",
+        UUID(),
+        ForeignKey("security.campaign_memberships.campaign_membership_id"),
+        nullable=False,
+        comment=(
+            "The campaign membership that made this edit (attribution). The membership may have "
+            "ended since; the version keeps naming it."
+        ),
+    ),
+    Column(
+        "created_at",
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=text("now()"),
+        comment="When this version was written.",
+    ),
+    ForeignKeyConstraint(
+        ["character_player_profile_id", "campaign_id", "character_id"],
+        [
+            "campaign.character_player_profiles.character_player_profile_id",
+            "campaign.character_player_profiles.campaign_id",
+            "campaign.character_player_profiles.character_id",
+        ],
+        name="fk_character_player_profile_versions_profile",
+    ),
+    UniqueConstraint(
+        "character_player_profile_id",
+        "profile_row_version",
+        name="ux_character_player_profile_versions_row_version",
+    ),
+    UniqueConstraint(
+        "character_player_profile_version_id",
+        "campaign_id",
+        "character_id",
+        name="ux_character_player_profile_versions_scope",
+    ),
+    CheckConstraint(
+        "profile_row_version >= 1",
+        name="ck_character_player_profile_versions_row_version_positive",
+    ),
+    *(
+        CheckConstraint(
+            f"{code} IS NULL OR (char_length({code}) <= 4000 AND {code} ~ '\\S')",
+            name=f"ck_character_player_profile_versions_{code}_text",
+        )
+        for code in _PLAYER_PROFILE_FIELD_CODES
+    ),
+    schema="campaign",
+    comment=(
+        "Immutable versions of a character's campaign player profile (P03-A A5): one row per "
+        "profile state, attributed to the editing campaign membership. Append-only: UPDATE, "
+        "DELETE and TRUNCATE are refused. Player-authored, campaign-scoped, never canon. The "
+        "application cannot write it until P03-B."
+    ),
+)
+
+Index(
+    "ix_character_player_profile_versions_editor",
+    character_player_profile_versions.c.edited_by_campaign_membership_id,
+)
+Index(
+    "ix_character_player_profile_versions_campaign_id",
+    character_player_profile_versions.c.campaign_id,
+)
+Index(
+    "ix_character_player_profile_versions_character_id",
+    character_player_profile_versions.c.character_id,
 )

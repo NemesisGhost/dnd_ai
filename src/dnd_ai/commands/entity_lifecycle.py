@@ -139,6 +139,10 @@ ENTITY_REFERENCE_CLASSIFICATION: dict[tuple[str, str, str], str] = {
     # append-only history, so legal removal needs its own reviewed procedure.
     ("campaign", "character_public_profiles", "character_id"): BLOCKING,
     ("campaign", "character_public_profile_releases", "character_id"): BLOCKING,
+    # A character with a campaign player profile keeps it (P03-A A5): player-authored content
+    # cannot be recreated, and its versions are append-only.
+    ("campaign", "character_player_profiles", "character_id"): BLOCKING,
+    ("campaign", "character_player_profile_versions", "character_id"): BLOCKING,
     ("security", "character_revelations", "character_id"): BLOCKING,
     ("campaign", "relationship_state", "perspective_holder_entity_id"): BLOCKING,
     ("integration", "external_identifiers", "entity_id"): BLOCKING,

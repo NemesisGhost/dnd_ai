@@ -33,7 +33,7 @@ pytestmark = pytest.mark.scenario
 EXPECTED_GUARDED = 246  # 194 Phase 15 (incl. the clock cause-choices read, CP-9b, (incl. session-scoped travel and the area runtime projection) + 45 earlier-phase GM routes (two are Knowledge preview reads; one is campaign ownership transfer; two are the character.reveal delegation grant and revoke) + 2 world-scoped
 EXPECTED_PHASE15_GM = 199
 # 25 + the character's party list + the party roster + the World category counts + the character's reader relationships
-EXPECTED_MEMBER_READS = 32
+EXPECTED_MEMBER_READS = 34
 
 
 @pytest.fixture

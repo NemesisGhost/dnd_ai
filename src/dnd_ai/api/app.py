@@ -100,6 +100,7 @@ from .organization_authoring import router as organization_authoring_router
 from .organization_members import router as organization_members_router
 from .parties import router as parties_router
 from .player_character_authoring import router as player_character_authoring_router
+from .player_profiles import router as player_profiles_router
 from .preview import router as preview_router
 from .quest_authoring import router as quest_authoring_router
 from .quest_runtime import router as quest_runtime_router
@@ -217,6 +218,7 @@ def create_app() -> FastAPI:
     app.include_router(character_reveal_router)
     app.include_router(character_revelations_router)
     app.include_router(character_public_profile_router)
+    app.include_router(player_profiles_router)
     app.include_router(memberships_router)
     app.include_router(movement_router)
     app.include_router(npc_authoring_router)

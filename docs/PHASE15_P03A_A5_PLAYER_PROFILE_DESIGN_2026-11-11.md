@@ -1176,3 +1176,50 @@ Review one slice per pass, naming the parent and target SHAs. Run the new tests 
 ## 17. Records
 
 *(Implementation and review records are appended here, newest last.)*
+
+### A5a implementation record (2026-11-11)
+
+**Status: implemented, awaiting independent review (Codex Luna Medium). Not accepted, not run in CI, not pushed.** A5a is storage and GM reads: infrastructure. It is **not** usable player authoring: no production path creates or edits a profile, and a production read returns `profile: null` until P03-B.
+
+**Baseline.** Planning baseline `26662e2cd21ccc32040e6dc1619798a8267edd55`, whose parent is `f5774997fc47b585b908da8856ab23ebe561b3e6`. The implementation parent is `26662e2`; the target is the commit carrying this record. Migration head before the work: `146_public_profile_identity`; 147 was free.
+
+**Scope implemented.**
+- Migration `147_character_player_profiles` (lookup, head, versions, four trigger functions, SELECT-only grants, guarded downgrade).
+- Table metadata in `persistence/tables/campaign.py`, exported from the package; `COLUMN_CLASSES` (`CHARACTER_VISIBLE` for the eleven fields, `STRUCTURAL` for the lookup); two `BLOCKING` entries in `ENTITY_REFERENCE_CLASSIFICATION`.
+- `domain/player_profiles.py` (field constants, `may_read_player_profile` with its GM branch only), `queries/player_profiles.py` (one-statement current read, version read), `api/player_profiles.py` (two GET routes, `campaign.view` route filter), registered in `create_app`.
+- Tests: `tests/player_profile_support.py` (the only raw writer), `test_player_profile_api.py`, `test_player_profile_races.py` (RA1), `test_character_player_profiles_schema.py`, `test_character_player_profiles_migration.py`, `tests/unit/test_player_profiles_structure.py`.
+- Documents: `api/ACCESS_CONTROL.md` §3x (the maintained access reference), `architecture/DATABASE_MODEL.md` §6.5a, `DOMAIN_MODEL.md` §8.1c, status text in PROJECT_STATUS, BACKLOG, PLANv2 15H, the P03-A plan and docs/README.
+
+**Not done (out of A5a scope).** No controller read or edit, no `character.view_player_profile` / `character.edit_player_profile` vocabulary, no A5b provenance (`player_profile` origin), no A5c copy, no portal, A6, A7, preview adapter or world-canon publication.
+
+**Deviations from the design.**
+1. `PHASE13E_ACCESS_CONTRACT.md` is now a retired pointer, so the design §14 update of it was made in `api/ACCESS_CONTROL.md` instead.
+2. The lookup keeps the standard lookup shape (`is_active`) beside `is_copy_eligible`; the design listed no `is_active`.
+3. A member with no `campaign.view` at all (for example a custom role that only borrows the code `gm`) gets the existing campaign gate's `403`, not the generic `404`. The design names that gate refusal for callers without campaign access; `test_a_member_without_campaign_view_is_refused_by_the_campaign_gate_before_the_rule` pins it.
+4. The version route rejects non-ASCII digits (`isascii()`), unlike the public-profile release route, whose `isdigit()` check would raise on a superscript digit. That existing route is unchanged and is noted as a finding below.
+5. RA1's mid-request stop uses a small test-local statement gate, because `LockRace.pause` matches thread names and a `TestClient` runs the route on other threads. The in-flight-edit scenario uses `LockRace.hold` and `wait_done` as designed.
+6. Privileges were verified by actual statements: `app_read_write` and `integration_worker` are refused every write with `permission denied`; `app_read_write` can read all three tables.
+
+**Existing tests changed, and why.** Every original assertion is kept; each change is additive.
+- `tests/database/test_role_grants.py`: three entries added to `EXCLUDED_TABLES`. The standard rule expects full DML for every campaign table; these tables are deliberately SELECT-only (D18), and the new schema test asserts the narrower grants.
+- `tests/unit/test_persistence_tables_package.py`: the three new tables added to the expected per-schema table list.
+- `tests/scenario/phase15_route_manifest.py` and `test_phase15_acceptance_guards.py`: the two new routes added to the member-read set and `EXPECTED_MEMBER_READS` raised from 32 to 34. The player-gets-200-or-404 and outsider-gets-404 checks run unchanged on them.
+- `tests/database/test_campaign_owner_gate.py`: the two profile tables added to the Gate teardown list so committed profile rows are removed with their campaign.
+
+**Verification (tree: the working tree that became this commit, after the one fix noted).**
+- Focused run 1 (new tests plus the §11.7 regression files and grant, classification and manifest guards), `uv run pytest <files> -q -p no:cacheprovider` with the repository `.env` database URL; the tests provision their own throwaway databases and never touch `dnd_ai`: **1 failed, 1268 passed, 9m54s.** The failure was `tests/unit/test_character_public_profile_structure.py::test_the_legacy_description_table_is_named_by_no_new_module`: a docstring in the new query module named the legacy description table, which that existing test forbids by source text. Cause: my documentation wording. Fix: reworded the docstring; the test is unchanged.
+- Rerun after the fix (separate): that test file and `test_player_profiles_structure.py`, 116 passed. The other 1268 results attribute to the tree before the one-line docstring edit, which changes no code path.
+- `uv run ruff format --check .` (857 files formatted), `uv run ruff check .` (clean), `uv run mypy src` (282 files, no issues), `uv lock --check` (resolved), `git diff --check` (clean), all on the final code.
+- Migration: `test_character_player_profiles_migration.py` runs, via `alembic -c` on throwaway databases, upgrade to 146, upgrade to 147, a refused downgrade with data (nothing changed, no profile text in the output), downgrade on an empty store, re-upgrade to head and `alembic check` (clean); plus a fresh upgrade and `alembic check`.
+- Full backend: `uv run python scripts/run_sharded_tests.py` (defaults, `.env` override removed, four throwaway PostgreSQL 18 clusters): **PASSED, 7721 passed, 7721 collected and executed, 16m51s**; shards 1549, 2203, 2503, 1466; first run, no reruns. It ran after the docstring fix.
+
+**New functionality tests versus regression guards.** New behaviour (cannot exist at the parent, which has no migration 147, module or route): the migration, schema, API, race and unit-structure files, and the `player_profile_support` helper. Regression guards that pass at both parent and target: the §11.7 public-profile, revelation and delegation files, `test_data_classification_schema.py`, `test_request_transaction.py`, the lock suites, and the changed-list tests above in their original assertions. **Parent comparison: not executed**; no extra repository copy, worktree or checkout was made. It is left to the independent review.
+
+**Evidence summary.** Privileges: a catalog matrix for three roles by five privileges on all three tables, plus real `app_read_write` login and `SET ROLE integration_worker` attempts at INSERT, UPDATE, DELETE and TRUNCATE (all `permission denied`, nothing changed). Disclosure: all non-reader callers (player, observer, manager, relationship holder, GM with a `canon.edit` deny) get the byte-identical generic 404 (correlation id stripped) with no marker; receipts, world audit rows and DEBUG logs hold no marker; a profile read writes no receipt or audit row. RA1: a read during an uncommitted edit that holds the head `FOR UPDATE` (observed) returns the previous complete version without waiting, then the new one after commit; a read stopped before its profile statement returns the new version whole; three readers against twelve committed edits never saw a mixed version.
+
+**Findings and limitations (rubric).**
+- *Pending verification:* parent comparison, CI and independent review are not done.
+- *Existing, not worsened (Low, follow-up):* the public-profile release route uses `str.isdigit()`, which accepts non-ASCII digits that `int()` rejects (a likely 500 on such a path). Unrelated to A5a; not changed.
+- *Inherited, not reachable in A5a:* the R01 mid-wait role-expiry behaviour applies to lock-taking authoring writes. A5a has none and judges the read at the request instant, so there is no acceptance impact here; it returns with A5c.
+- *Existing, noted:* the OpenAPI "Duplicate Operation ID" warning for the access-group member route predates A5a.
+- *Test-reliability note:* RA1's mixture test is a bounded consistency check (3 readers, 12 edits), not a timing assertion; the two deterministic RA1 tests carry the ordering claims.

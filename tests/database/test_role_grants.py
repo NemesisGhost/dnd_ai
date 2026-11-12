@@ -292,6 +292,20 @@ EXCLUDED_TABLES: dict[tuple[str, str], str] = {
         "append-only releases (P03-A A2a, revision 142): app roles hold SELECT/INSERT only, and "
         "the reporting role holds nothing — asserted in test_character_public_profile_schema.py"
     ),
+    ("campaign", "player_profile_fields"): (
+        "the player-profile field catalog (P03-A A5a, revision 147): app roles hold SELECT only; "
+        "asserted in test_character_player_profiles_schema.py"
+    ),
+    ("campaign", "character_player_profiles"): (
+        "the player-profile head (P03-A A5a, revision 147): infrastructure with no production "
+        "writer until P03-B, so app roles hold SELECT only and the reporting role holds nothing "
+        "- asserted in test_character_player_profiles_schema.py"
+    ),
+    ("campaign", "character_player_profile_versions"): (
+        "append-only player-profile versions (P03-A A5a, revision 147): app roles hold SELECT "
+        "only until P03-B, and the reporting role holds nothing - asserted in "
+        "test_character_player_profiles_schema.py"
+    ),
     ("security", "character_revelations"): (
         "closed-once revelations (P03-A A3a, revision 145): app roles hold SELECT/INSERT and "
         "UPDATE of the closure columns only, never DELETE or TRUNCATE, and the reporting role "

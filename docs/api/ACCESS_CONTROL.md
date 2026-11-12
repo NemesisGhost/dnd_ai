@@ -1249,6 +1249,25 @@ A campaign's draft of a character's public profile, and immutable releases of it
 - **Not in A2a:** audience revelations (A3), the audience read (A4), the portal (A6).
 - **Tests:** `tests/database/test_character_public_profile_{api,schema,concurrency,markers,restrictions,restriction_races,watermarks,copy,copy_races}.py`, `test_character_public_profiles_migration.py`, `tests/unit/test_character_public_profile_structure.py`. Design: `docs/PHASE14_15_P03A_IMPLEMENTATION_PLAN_2026-11-06.md` §5 and §7.
 
+## 3x. Character player profile (P03-A A5a)
+
+A5a is **storage and GM reads only**. A character has at most one *player profile* per campaign: narrative its controllers write for the campaign's GMs and its eligible controllers. It is not world canon and not a GM-private store. **There is no production writer** (decision D18): no route, command, seed or backfill creates or edits a profile, and the application database roles can `SELECT` the profile tables and nothing else. Until P03-B delivers controller editing, a production read returns `profile: null`. Tests populate profiles through `tests/player_profile_support.py`.
+
+| Route | Route filter | Authority | Result |
+|---|---|---|---|
+| `GET /campaigns/{id}/characters/{character_id}/player-profile` | `campaign.view` | read rule (below); failing it is the generic `404` | `character_id`, `character_active`, `profile` (`null` or the current complete version: `character_player_profile_id`, `row_version`, `updated_at`, `edited_at`, `edited_by`, `fields`), `fields_catalog` |
+| `GET /campaigns/{id}/characters/{character_id}/player-profile/versions/{profile_row_version}` | `campaign.view` | read rule; `404` otherwise | `character_id`, `profile_row_version`, `edited_at`, `edited_by`, `fields` |
+
+- **Fields (D13).** `portrayal_guidance`, `personality`, `ideals`, `bonds`, `flaws`, `goals`, `fears`, `loyalties`, `boundaries`, `speech_patterns`, `profile_notes`, each text of at most 4000 characters or `null`. `fields` always carries all eleven keys. `profile_notes` is labelled "Notes for the GM and controllers": it is shared with the profile's readers and is **not** a private notebook. `boundaries` and `profile_notes` are not copy-eligible for any future structured publication; nothing prevents an authorized reader from retyping what they read into a public field.
+- **Read rule (D15).** `may_read_player_profile` is a disjunction of independent branches; A5a has one, the GM branch, which is exactly `has_effective_character_canon_edit`: the role `canon.edit` in the route's campaign, no whole-character deny (`entity_id` `campaign.view`) and no `canon.edit` deny on the character. Reveal authority confers no read; an `allow` grant of `canon.edit` confers none either (D8). The character's kind, a relationship label and world roles are never consulted.
+- **Reserved, not built.** P03-B adds a second, **independent** branch for the character's eligible, live controllers through `character.view_player_profile`. That branch must not require `canon.edit`, which is why these routes are filtered by `campaign.view` and not `canon.edit`. A5a adds no `character.view_player_profile` or `character.edit_player_profile` vocabulary, matrix entry or grant path.
+- **Errors.** Every refusal of the read rule (a non-reader, either deny, an ended membership's route, a wrong-world, non-canon or unknown character, a missing or malformed version) is the same `404` body, which never says whether a profile exists. A member without `campaign.view` is refused by the existing campaign gate (`403`). An archived character remains readable (`character_active` false); an archived campaign is refused by the campaign lifecycle gate.
+- **One statement.** The current profile is read by joining the head to the version whose `profile_row_version` equals the head's `row_version`, so a read during an edit returns the previous complete version, then the new one, never a mixture and never waiting for the editor.
+- **Disclosure (D17).** The columns are `CHARACTER_VISIBLE`; the classification grants nothing, the read rule does. Responses are built from explicit field lists and name only the editor's display name (no membership id, user id or e-mail). A read writes no audit row and stores no receipt. Profile text never appears in logs, receipts, audit rows, exception messages or error bodies.
+- **Campaign isolation.** The head is unique per `(campaign_id, character_id)` and a version's composite foreign key names its own campaign's head, so campaigns sharing a world, timeline and character keep separate profiles.
+- **Not in A5a:** provenance on public-profile drafts and releases (A5b), the GM-selected copy (A5c), controller read or edit (P03-B), the portal (A6), previews (A7), private notebooks (Phase 16B/16C) and world-canon publication (P03-C).
+- **Tests:** `tests/database/test_player_profile_{api,races}.py`, `test_character_player_profiles_{schema,migration}.py`, `tests/unit/test_player_profiles_structure.py`; the race RA1 runs over real HTTP.
+
 ## Recovery and audit
 
 Use [administrator recovery](../operations/PLATFORM_ADMINISTRATOR_RECOVERY.md) and

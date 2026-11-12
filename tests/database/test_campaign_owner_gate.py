@@ -123,6 +123,8 @@ def drop_gate(engine: Engine, fixture: Gate) -> None:
         for table in (
             "security.character_revelation_members",
             "security.character_revelations",
+            "campaign.character_player_profile_versions",
+            "campaign.character_player_profiles",
             "campaign.character_public_profile_releases",
             "campaign.character_public_profiles",
             "security.resource_grants",
