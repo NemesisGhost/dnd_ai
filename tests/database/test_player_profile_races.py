@@ -13,7 +13,6 @@ never a mixture, and never waits for the editor. The edit holds the head `FOR UP
 through `pg_locks`, not assumed) and a head update plus a version insert uncommitted.
 """
 
-import re
 import threading
 import uuid
 from collections.abc import Callable
@@ -21,7 +20,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import Engine, event, text
+from sqlalchemy import Engine, text
 from sqlalchemy.exc import DBAPIError
 
 from tests.database.test_campaign_owner_gate import (  # noqa: F401 - fixtures used by name
@@ -34,6 +33,7 @@ from tests.database.test_character_reveal_delegation import (  # noqa: F401 - fi
     m,
 )
 from tests.database.test_player_profile_api import Pp, pp, url  # noqa: F401 - fixtures by name
+from tests.http_race_support import StatementGate
 from tests.lock_race_support import LockRace
 from tests.player_profile_support import edit_player_profile, edit_player_profile_in, markers
 
@@ -104,38 +104,6 @@ def test_ra1_a_read_during_an_uncommitted_edit_gets_the_previous_complete_versio
     assert committed["profile"]["edited_by"] == "Gate Owner Two"
 
 
-class _StatementGate:
-    """Stops the first request statement that matches `pattern`, on whichever thread runs it.
-
-    `LockRace.pause` matches a worker by thread name, but a `TestClient` runs the route on its own
-    portal and thread-pool threads, so an HTTP request cannot be named that way. This listener keys
-    on the SQL alone, fires once, and is removed on exit; an unreleased gate is released then so no
-    request is left stuck.
-    """
-
-    def __init__(self, engine: Engine, pattern: str) -> None:
-        self.engine = engine
-        self.pattern = re.compile(pattern)
-        self.reached = threading.Event()
-        self.resume = threading.Event()
-        self._fired = False
-
-    def _hook(self, conn: Any, cursor: Any, statement: Any, *_: Any) -> None:
-        if self._fired or not self.pattern.search(" ".join(str(statement).split())):
-            return
-        self._fired = True
-        self.reached.set()
-        self.resume.wait(15)
-
-    def __enter__(self) -> "_StatementGate":
-        event.listen(self.engine, "before_cursor_execute", self._hook)
-        return self
-
-    def __exit__(self, *_: object) -> None:
-        self.resume.set()
-        event.remove(self.engine, "before_cursor_execute", self._hook)
-
-
 def test_ra1_a_read_stopped_before_its_profile_statement_sees_the_edit_whole_once_it_commits(
     postgres_engine: Engine, client_factory: Factory, g: Gate, pp: Pp
 ) -> None:
@@ -144,7 +112,7 @@ def test_ra1_a_read_stopped_before_its_profile_statement_sees_the_edit_whole_onc
     waited for the reader."""
     new_markers = markers("A-edit")
     with (
-        _StatementGate(postgres_engine, r"FROM campaign\.character_player_profiles h") as gate,
+        StatementGate(postgres_engine, r"FROM campaign\.character_player_profiles h") as gate,
         LockRace(postgres_engine) as race,
     ):
         reading = race.start("read", _read(client_factory, g.o1_user_id, g, pp.character))

@@ -1650,9 +1650,9 @@ public_profile_field_origins = _lookup_table(
     "campaign",
     "public_profile_field_origins",
     "public_profile_field_origin_id",
-    "Where a public-profile field's text came from: authored by a GM, or copied by the "
-    "server from a legacy character description field (P03-A A2). A record of provenance, "
-    "not a safety label.",
+    "Where a public-profile field's text came from: authored by a GM, copied by the server "
+    "from a legacy character description field (P03-A A2), or copied from a campaign player "
+    "profile (A5). A record of provenance, not a safety label.",
 )
 
 character_public_profiles = Table(
@@ -1736,7 +1736,7 @@ character_public_profiles = Table(
         BigInteger(),
         comment=(
             "The draft row_version at which this field's current content was last written while it "
-            "had a legacy origin (the restriction watermark). A release covers the field when its "
+            "had copied provenance (the restriction watermark). A release covers the field when its "
             "from_draft_row_version is at or above it. NULL exactly when the field is not copied."
         ),
     ),
@@ -1745,7 +1745,7 @@ character_public_profiles = Table(
         BigInteger(),
         comment=(
             "The draft row_version at which this field's current content was last written while it "
-            "had a legacy origin (the restriction watermark). A release covers the field when its "
+            "had copied provenance (the restriction watermark). A release covers the field when its "
             "from_draft_row_version is at or above it. NULL exactly when the field is not copied."
         ),
     ),
@@ -2251,3 +2251,62 @@ Index(
     "ix_character_player_profile_versions_character_id",
     character_player_profile_versions.c.character_id,
 )
+
+
+# ---------------------------------------------------------------------------
+# campaign — player-profile provenance on public-profile drafts and releases (revision 148)
+# ---------------------------------------------------------------------------
+
+for _pp_table, _pp_stem in (
+    (character_public_profiles, "character_public_profiles"),
+    (character_public_profile_releases, "character_public_profile_releases"),
+):
+    for _pp_field in ("appearance", "background"):
+        _pp_version = f"public_{_pp_field}_origin_player_profile_version_id"
+        _pp_code = f"public_{_pp_field}_origin_player_profile_field_id"
+        _pp_table.append_column(
+            Column(
+                _pp_version,
+                UUID(),
+                comment=(
+                    "The campaign player-profile version this field's text was copied from; NULL "
+                    "unless the origin is player_profile. The composite foreign key stops it "
+                    "naming another campaign's or another character's profile. A record of "
+                    "provenance for GMs; never sent to an audience."
+                ),
+            )
+        )
+        _pp_table.append_column(
+            Column(
+                _pp_code,
+                UUID(),
+                ForeignKey(
+                    "campaign.player_profile_fields.player_profile_field_id", ondelete="RESTRICT"
+                ),
+                comment=(
+                    "Which player-profile field (a copy-eligible one) this field's text was "
+                    "copied from; NULL exactly when the version column is NULL."
+                ),
+            )
+        )
+        _pp_table.append_constraint(
+            ForeignKeyConstraint(
+                [_pp_version, "campaign_id", "character_id"],
+                [
+                    "campaign.character_player_profile_versions.character_player_profile_version_id",
+                    "campaign.character_player_profile_versions.campaign_id",
+                    "campaign.character_player_profile_versions.character_id",
+                ],
+                name=f"fk_{_pp_stem}_{_pp_field}_pp_version",
+            )
+        )
+        Index(
+            f"ix_{_pp_stem}_{_pp_field}_pp_version",
+            _pp_table.c[_pp_version],
+            postgresql_where=_pp_table.c[_pp_version].isnot(None),
+        )
+        Index(
+            f"ix_{_pp_stem}_{_pp_field}_pp_field",
+            _pp_table.c[_pp_code],
+            postgresql_where=_pp_table.c[_pp_code].isnot(None),
+        )

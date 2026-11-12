@@ -589,9 +589,10 @@ def test_versions_refuse_update_delete_and_truncate(
             postgres_engine, lambda c, s=statement: c.execute(text(s), {"c": character})
         )
         assert "append-only" in message, statement
-    assert "append-only" in _refused(
-        postgres_engine, lambda c: c.execute(text(f"TRUNCATE {VERSIONS}"))
-    )
+    # TRUNCATE is refused either by the append-only trigger or, since migration 148 (the public-profile
+    # tables now reference this table), by PostgreSQL itself before any trigger can fire.
+    truncate = _refused(postgres_engine, lambda c: c.execute(text(f"TRUNCATE {VERSIONS}")))
+    assert "append-only" in truncate or "referenced in a foreign key constraint" in truncate
     with postgres_engine.connect() as connection:
         assert (
             connection.execute(

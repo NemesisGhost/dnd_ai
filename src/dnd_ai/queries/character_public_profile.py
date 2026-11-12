@@ -228,7 +228,65 @@ def _origin_codes(connection: Connection) -> dict[uuid.UUID, str]:
     return {row.public_profile_field_origin_id: str(row.code) for row in rows}
 
 
-def _release_json(row: Any, origins: dict[uuid.UUID, str], *, with_text: bool) -> dict[str, Any]:
+def _player_profile_field_codes(connection: Connection) -> dict[uuid.UUID, str]:
+    rows = connection.execute(
+        text("SELECT player_profile_field_id, code FROM campaign.player_profile_fields")
+    ).all()
+    return {row.player_profile_field_id: str(row.code) for row in rows}
+
+
+def _player_profile_provenance(
+    row: Any, field_name: str, pp_fields: dict[uuid.UUID, str], versions: dict[uuid.UUID, int]
+) -> dict[str, Any]:
+    """The player-profile provenance of one field as numbers and codes only: the copied head
+    `row_version` (never the version's UUID) and the source field's code (A5b, D16, section 9.4).
+    Both are `None` unless the field's origin is `player_profile`."""
+    version_id = getattr(row, f"{field_name}_origin_player_profile_version_id")
+    field_id = getattr(row, f"{field_name}_origin_player_profile_field_id")
+    return {
+        f"{field_name}_origin_player_profile_version": (
+            None if version_id is None else versions[version_id]
+        ),
+        f"{field_name}_origin_player_profile_field": (
+            None if field_id is None else pp_fields[field_id]
+        ),
+    }
+
+
+def _cited_profile_versions(
+    connection: Connection, *, campaign_id: uuid.UUID, character_id: uuid.UUID, rows: list[Any]
+) -> dict[uuid.UUID, int]:
+    """The `profile_row_version` of every player-profile version the rows cite, read in this
+    campaign for this character only (the composite foreign key guarantees the citations are its
+    own). Empty when nothing is cited."""
+    ids = {
+        value
+        for row in rows
+        for name in ("public_appearance", "public_background")
+        if (value := getattr(row, f"{name}_origin_player_profile_version_id")) is not None
+    }
+    if not ids:
+        return {}
+    found = connection.execute(
+        text("""
+            SELECT character_player_profile_version_id, profile_row_version
+            FROM campaign.character_player_profile_versions
+            WHERE campaign_id = :campaign AND character_id = :character
+              AND character_player_profile_version_id = ANY(:ids)
+        """),
+        {"campaign": campaign_id, "character": character_id, "ids": list(ids)},
+    ).all()
+    return {row.character_player_profile_version_id: int(row.profile_row_version) for row in found}
+
+
+def _release_json(
+    row: Any,
+    origins: dict[uuid.UUID, str],
+    *,
+    with_text: bool,
+    pp_fields: dict[uuid.UUID, str],
+    versions: dict[uuid.UUID, int],
+) -> dict[str, Any]:
     body: dict[str, Any] = {
         "character_public_profile_release_id": str(row.character_public_profile_release_id),
         "version_number": int(row.version_number),
@@ -244,6 +302,8 @@ def _release_json(row: Any, origins: dict[uuid.UUID, str], *, with_text: bool) -
                 "public_appearance_origin": origins[row.public_appearance_origin_id],
                 "public_background": row.public_background,
                 "public_background_origin": origins[row.public_background_origin_id],
+                **_player_profile_provenance(row, "public_appearance", pp_fields, versions),
+                **_player_profile_provenance(row, "public_background", pp_fields, versions),
                 "public_summary": row.public_summary,
                 "release_note": row.release_note,
                 # D6: the published values, from the snapshot alone (never the live definition).
@@ -275,6 +335,10 @@ _RELEASE_COLUMNS = """
     r.authority_source_code, r.released_at,
     r.public_appearance, r.public_appearance_origin_id,
     r.public_background, r.public_background_origin_id, r.public_summary, r.release_note,
+    r.public_appearance_origin_player_profile_version_id,
+    r.public_appearance_origin_player_profile_field_id,
+    r.public_background_origin_player_profile_version_id,
+    r.public_background_origin_player_profile_field_id,
     r.released_species_id, r.released_species_code, r.released_species_display_name,
     r.released_size_category, r.identity_entity_row_version,
     COALESCE(u.display_name, '') AS released_by_name
@@ -353,7 +417,11 @@ def read_character_public_profile(
                    public_appearance_origin_entity_row_version,
                    public_background, public_background_origin_id,
                    public_background_origin_entity_row_version, public_summary,
-                   should_publish_species, should_publish_size
+                   should_publish_species, should_publish_size,
+                   public_appearance_origin_player_profile_version_id,
+                   public_appearance_origin_player_profile_field_id,
+                   public_background_origin_player_profile_version_id,
+                   public_background_origin_player_profile_field_id
             FROM campaign.character_public_profiles
             WHERE campaign_id = :campaign AND character_id = :character
         """),
@@ -368,6 +436,13 @@ def read_character_public_profile(
         {"campaign": access.campaign_id, "character": character_id},
     ).all()
     latest = releases[0] if releases else None
+    pp_fields = _player_profile_field_codes(connection)
+    pp_versions = _cited_profile_versions(
+        connection,
+        campaign_id=access.campaign_id,
+        character_id=character_id,
+        rows=[row for row in (draft_row, *releases) if row is not None],
+    )
     draft: dict[str, Any] | None = None
     withheld: frozenset[str] = frozenset()
     if draft_row is not None:
@@ -410,6 +485,9 @@ def read_character_public_profile(
             draft[f"{field_name}_origin_entity_row_version"] = (
                 None if source_version is None else int(source_version)
             )
+            # D7-f analogue: the origin code, the copied version number and the source field code
+            # are disclosed even when the text is withheld; never the text.
+            draft.update(_player_profile_provenance(draft_row, field_name, pp_fields, pp_versions))
     unreleased = draft is not None and (
         latest is None or int(latest.from_draft_row_version) != draft["row_version"]
     )
@@ -452,9 +530,16 @@ def read_character_public_profile(
         "draft": draft,
         "has_unreleased_changes": unreleased,
         "latest_release": (
-            None if latest is None else _release_json(latest, origins, with_text=True)
+            None
+            if latest is None
+            else _release_json(
+                latest, origins, with_text=True, pp_fields=pp_fields, versions=pp_versions
+            )
         ),
-        "releases": [_release_json(row, origins, with_text=False) for row in releases],
+        "releases": [
+            _release_json(row, origins, with_text=False, pp_fields=pp_fields, versions=pp_versions)
+            for row in releases
+        ],
         "can_edit": character["active"]
         and has_effective_character_canon_edit(access, character_id),
         # A release would publish every field, so it needs the releaser to read each one (D7 item 3).
@@ -492,4 +577,18 @@ def read_character_public_profile_release(
     ).one_or_none()
     if row is None:
         return None
-    return {"character_id": str(character_id), **_release_json(row, origins, with_text=True)}
+    return {
+        "character_id": str(character_id),
+        **_release_json(
+            row,
+            origins,
+            with_text=True,
+            pp_fields=_player_profile_field_codes(connection),
+            versions=_cited_profile_versions(
+                connection,
+                campaign_id=access.campaign_id,
+                character_id=character_id,
+                rows=[row],
+            ),
+        ),
+    }

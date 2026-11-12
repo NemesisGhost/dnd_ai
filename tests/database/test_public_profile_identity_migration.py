@@ -210,14 +210,6 @@ def test_populated_upgrade_checks_guarded_downgrade_and_reupgrade() -> None:
             assert not _constraint(connection, "ux_character_public_profile_releases_draft_version")
             assert _trigger(connection)
 
-            # An existing release still returns from the GM read.
-            access = resolve_access_context(connection, user_id=owner, campaign_id=campaign)
-            assert access is not None
-            view = read_character_public_profile(connection, access=access, character_id=character)
-            assert view is not None
-            assert view["latest_release"]["version_number"] == 1
-            assert view["draft"]["row_version"] == draft_version
-
             # --- every CHECK, and the insert trigger -------------------------------------------
             species, size = connection.execute(
                 text(
@@ -350,6 +342,16 @@ def test_populated_upgrade_checks_guarded_downgrade_and_reupgrade() -> None:
                 == 1
             )
         _alembic_upgrade(test_url, "head")
+        # An existing release still returns from the GM read. (A5b: the current read selects the
+        # player-profile provenance columns migration 148 adds, so this assertion, which ran at 146,
+        # now runs after upgrading to head; the data it reads is the same pre-existing release.)
+        with engine.begin() as connection:
+            access = resolve_access_context(connection, user_id=owner, campaign_id=campaign)
+            assert access is not None
+            view = read_character_public_profile(connection, access=access, character_id=character)
+            assert view is not None
+            assert view["latest_release"]["version_number"] == 1
+            assert view["draft"]["row_version"] == draft_version
         checked = _alembic(test_url, "check")
         assert checked.returncode == 0, checked.stdout + checked.stderr
         engine.dispose()

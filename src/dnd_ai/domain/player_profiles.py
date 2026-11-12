@@ -27,7 +27,12 @@ import uuid
 from typing import Final
 
 from .access import AccessContext
-from .public_profiles import PUBLIC_PROFILE_TEXT_MAX_LENGTH, has_effective_character_canon_edit
+from .public_profiles import (
+    LEGACY_ORIGINS,
+    ORIGIN_PLAYER_PROFILE,
+    PUBLIC_PROFILE_TEXT_MAX_LENGTH,
+    has_effective_character_canon_edit,
+)
 
 PLAYER_PROFILE_TEXT_MAX_LENGTH: Final = PUBLIC_PROFILE_TEXT_MAX_LENGTH
 
@@ -65,3 +70,21 @@ def may_read_player_profile(access: AccessContext, character_id: uuid.UUID) -> b
     A disjunction of independent branches. P03-B's controller branch is added as a separate `or`;
     it must not require `canon.edit`."""
     return may_read_player_profile_as_gm(access, character_id)
+
+
+# --- the per-origin source rule (A5b, decision D16) ---------------------------------------------------
+
+SOURCE_RULE_LEGACY = "legacy"
+SOURCE_RULE_PLAYER_PROFILE = "player_profile"
+
+
+def source_rule_for_origin(origin_code: str) -> str | None:
+    """Which source-read rule governs a restricted draft field of this origin, or `None` when the
+    origin is not restricted (`authored`). Legacy origins keep `may_read_legacy_source` (by kind,
+    D7-e); `player_profile` uses `may_read_player_profile`. A field is judged by its own origin, so a
+    draft holding one of each is evaluated per field."""
+    if origin_code in LEGACY_ORIGINS:
+        return SOURCE_RULE_LEGACY
+    if origin_code == ORIGIN_PLAYER_PROFILE:
+        return SOURCE_RULE_PLAYER_PROFILE
+    return None

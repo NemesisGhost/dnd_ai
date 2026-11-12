@@ -9,6 +9,7 @@ preview adapter, and raw test writes confined to the one fixture helper.
 
 import ast
 import importlib.util
+import inspect
 import itertools
 import re
 import uuid
@@ -49,6 +50,10 @@ TABLE_MODULES = {
     "persistence/tables/__init__.py",
     "persistence/tables/campaign.py",
     "queries/player_profiles.py",
+    # A5b: the GM read of a public-profile draft or release reports a cited profile version as its
+    # `row_version` number and the source field's code (design section 9.4). The audience readers in
+    # the same module still read no profile table (see the audience-tier test below).
+    "queries/character_public_profile.py",
 }
 PROFILE_MODULES = (
     "api/player_profiles.py",
@@ -244,7 +249,10 @@ def test_the_edit_rule_implies_the_read_rule() -> None:
 def test_the_read_rule_never_consults_kind_labels_or_the_controller_vocabulary() -> None:
     tree = ast.parse((SRC / "domain" / "player_profiles.py").read_text(encoding="utf-8"))
     identifiers: set[str] = set()
-    for function in (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)):
+    read_rule = {"may_read_player_profile_as_gm", "may_read_player_profile"}
+    for function in (
+        n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name in read_rule
+    ):
         for statement in function.body:
             for node in ast.walk(statement):
                 if isinstance(node, ast.Name):
@@ -361,8 +369,12 @@ def test_released_profile_sql_and_the_audience_tier_do_not_read_the_profile() ->
     from dnd_ai.queries import character_public_profile as module
 
     assert not PROFILE_TABLE.search(module._RELEASED_PROFILE_SQL)
+    # The module also holds the GM read (which names the profile tables since A5b); the audience
+    # readers in it must not.
+    for audience_reader in (module.read_released_profile, module.read_public_character):
+        assert not PROFILE_TABLE.search(inspect.getsource(audience_reader)), audience_reader
+        assert "player_profile" not in inspect.getsource(audience_reader), audience_reader
     for relative in (
-        "queries/character_public_profile.py",
         "queries/public_profile_restrictions.py",
         "queries/world_explorer.py",
         "api/character_public_profile.py",
@@ -420,3 +432,74 @@ def test_the_version_segment_parser_is_total_and_bounded_by_bigint_not_by_python
     from dnd_ai.api.player_profiles import _parse_row_version
 
     assert _parse_row_version(segment) == expected
+
+
+# --- A5b: the per-origin source rule and restriction (decision D16) ---------------------------------
+
+
+def test_each_origin_has_its_own_source_rule_and_authored_has_none() -> None:
+    from dnd_ai.domain.player_profiles import (
+        SOURCE_RULE_LEGACY,
+        SOURCE_RULE_PLAYER_PROFILE,
+        source_rule_for_origin,
+    )
+    from dnd_ai.domain.public_profiles import LEGACY_ORIGINS, RESTRICTED_ORIGINS
+
+    assert LEGACY_ORIGINS | {"player_profile"} == RESTRICTED_ORIGINS
+    assert {source_rule_for_origin(o) for o in LEGACY_ORIGINS} == {SOURCE_RULE_LEGACY}
+    assert source_rule_for_origin("player_profile") == SOURCE_RULE_PLAYER_PROFILE
+    assert source_rule_for_origin("authored") is None
+    assert source_rule_for_origin("anything_else") is None
+
+
+@pytest.mark.parametrize("origin", ["legacy_appearance", "legacy_background", "player_profile"])
+@pytest.mark.parametrize(
+    ("has_text", "watermark", "covering", "restricted"),
+    [
+        (True, 3, None, True),  # no release at all
+        (True, 3, 2, True),  # the newest release predates the content
+        (True, 3, 3, False),  # a release at the watermark covers it
+        (True, 3, 7, False),
+        (True, None, 7, True),  # copied text with no watermark cannot be proven covered
+        (False, 3, None, False),  # no text: nothing to restrict (a cleared field)
+    ],
+)
+def test_a_copied_field_is_restricted_until_a_release_covers_its_watermark(
+    origin: str, has_text: bool, watermark: int | None, covering: int | None, restricted: bool
+) -> None:
+    from dnd_ai.domain.public_profiles import RESTRICTED_ORIGINS, field_is_restricted
+
+    assert (
+        field_is_restricted(
+            has_text=has_text,
+            is_legacy=origin in RESTRICTED_ORIGINS,
+            watermark=watermark,
+            covering_draft_version=covering,
+        )
+        is restricted
+    )
+
+
+def test_an_authored_field_is_never_restricted() -> None:
+    from dnd_ai.domain.public_profiles import RESTRICTED_ORIGINS, field_is_restricted
+
+    assert "authored" not in RESTRICTED_ORIGINS
+    assert not field_is_restricted(
+        has_text=True,
+        is_legacy="authored" in RESTRICTED_ORIGINS,
+        watermark=None,
+        covering_draft_version=None,
+    )
+
+
+def test_the_player_profile_provenance_never_reuses_the_legacy_source_version_column() -> None:
+    """A5b writes the pair `origin_player_profile_version_id` / `_field_id` and nothing in the
+    commands or queries assigns the legacy `origin_entity_row_version` for a player-profile field."""
+    commands = (SRC / "commands" / "character_public_profile.py").read_text(encoding="utf-8")
+    assert "_PLAYER_PROFILE_COLUMNS" in commands
+    migration = (
+        ROOT / "database" / "migrations" / "versions" / "148_player_profile_provenance.py"
+    ).read_text(encoding="utf-8")
+    assert "origin_player_profile_version_id" in migration
+    assert 'revision = "148_player_profile_provenance"' in migration
+    assert 'down_revision = "147_character_player_profiles"' in migration

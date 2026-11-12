@@ -37,6 +37,14 @@ write a new snapshot refuses when any field would be withheld from the releaser.
 already released version does not (D7-d). `queries/public_profile_restrictions.py` derives which
 fields are withheld; nothing per reader is stored.
 
+**Player-profile origin (A5b, decision D16).** A field copied from a campaign player profile is
+restricted the same way, with its own provenance pair (the source version and field, never the legacy
+`origin_entity_row_version`) and the same watermark, and is judged by its own origin's source rule
+(`may_read_player_profile`), so a draft holding one legacy and one player-profile field is evaluated
+per field. This slice adds no command that writes that origin (the copy is A5c); the save and the
+release only carry it correctly: a save of edited copied text keeps the provenance and advances the
+watermark, a clear ends both provenances, and a release snapshots the pair.
+
 **Copy** (`copy_legacy_text_to_public_profile_draft`, A2b-2). Copies one legacy description field
 (`appearance` or `background`) of an NPC or player character into the draft field of the same name.
 The kind comes from the character, never the request, and decides the source-read rule (`npc`: role
@@ -120,6 +128,20 @@ _ORIGIN_COLUMNS = {
         "public_background_origin_id",
         "public_background_origin_entity_row_version",
         "public_background_restricted_row_version",
+    ),
+}
+
+
+# A5b: the player-profile provenance pair of each draft field (source version, source field). Never
+# reused for the legacy `origin_entity_row_version`, which means something else.
+_PLAYER_PROFILE_COLUMNS = {
+    FIELD_APPEARANCE: (
+        "public_appearance_origin_player_profile_version_id",
+        "public_appearance_origin_player_profile_field_id",
+    ),
+    FIELD_BACKGROUND: (
+        "public_background_origin_player_profile_version_id",
+        "public_background_origin_player_profile_field_id",
     ),
 }
 
@@ -312,6 +334,7 @@ def copy_legacy_text_to_public_profile_draft(
         raise ValueError(f"unsupported legacy copy source: {source_field!r}")
     target, origin_code, description_column = LEGACY_COPY_SOURCES[source_field]
     origin_column, version_column, watermark_column = _ORIGIN_COLUMNS[target]
+    pp_version_column, pp_field_column = _PLAYER_PROFILE_COLUMNS[target]
     other = FIELD_BACKGROUND if target == FIELD_APPEARANCE else FIELD_APPEARANCE
     other_origin_column = _ORIGIN_COLUMNS[other][0]
 
@@ -424,6 +447,7 @@ def copy_legacy_text_to_public_profile_draft(
                 UPDATE campaign.character_public_profiles
                 SET {target} = :text, {origin_column} = :legacy,
                     {version_column} = :source_version, {watermark_column} = :new_version,
+                    {pp_version_column} = NULL, {pp_field_column} = NULL,
                     updated_by_membership_id = :membership
                 WHERE character_public_profile_id = :profile
             """),  # noqa: S608 - the column names come from LEGACY_COPY_SOURCES
@@ -539,7 +563,9 @@ def save_character_public_profile_draft(
             SELECT character_public_profile_id, row_version, public_appearance, public_background,
                    public_summary, should_publish_species, should_publish_size,
                    public_appearance_origin_entity_row_version,
-                   public_background_origin_entity_row_version
+                   public_background_origin_entity_row_version,
+                   public_appearance_origin_player_profile_version_id,
+                   public_background_origin_player_profile_version_id
             FROM campaign.character_public_profiles
             WHERE campaign_id = :campaign AND character_id = :character
             FOR UPDATE
@@ -603,15 +629,21 @@ def save_character_public_profile_draft(
             params[name] = clean[name]
             continue
         origin_column, version_column, watermark_column = _ORIGIN_COLUMNS[name]
+        pp_version_column, pp_field_column = _PLAYER_PROFILE_COLUMNS[name]
         assignments.append(f"{name} = :{name}")
         params[name] = clean[name]
         if clean[name] is None:
-            # Clearing ends the lineage (I6): the origin, its source version and the watermark go
+            # Clearing ends the lineage (I6): the origin, both provenances and the watermark go
             # together. Allowed even for a withheld field (D7-a).
             assignments.append(f"{origin_column} = :authored")
             assignments.append(f"{version_column} = NULL")
+            assignments.append(f"{pp_version_column} = NULL")
+            assignments.append(f"{pp_field_column} = NULL")
             assignments.append(f"{watermark_column} = NULL")
-        elif draft._mapping[version_column] is not None:
+        elif (
+            draft._mapping[version_column] is not None
+            or draft._mapping[pp_version_column] is not None
+        ):
             # Editing copied text keeps the origin (it over-attributes rather than under-
             # attributes) and advances the watermark to the new row_version (I2), so the field is
             # restricted again until a release covers the new text. The database refuses a content
@@ -728,7 +760,11 @@ def release_character_public_profile(
                    public_appearance_origin_entity_row_version,
                    public_background, public_background_origin_id,
                    public_background_origin_entity_row_version, public_summary,
-                   should_publish_species, should_publish_size
+                   should_publish_species, should_publish_size,
+                   public_appearance_origin_player_profile_version_id,
+                   public_appearance_origin_player_profile_field_id,
+                   public_background_origin_player_profile_version_id,
+                   public_background_origin_player_profile_field_id
             FROM campaign.character_public_profiles
             WHERE campaign_id = :campaign AND character_id = :character
             FOR UPDATE
@@ -850,6 +886,10 @@ def release_character_public_profile(
                 public_appearance_origin_entity_row_version,
                 public_background, public_background_origin_id,
                 public_background_origin_entity_row_version, public_summary,
+                public_appearance_origin_player_profile_version_id,
+                public_appearance_origin_player_profile_field_id,
+                public_background_origin_player_profile_version_id,
+                public_background_origin_player_profile_field_id,
                 authority_source_code, character_reveal_delegation_id,
                 released_by_membership_id, release_note,
                 released_species_id, released_species_code, released_species_display_name,
@@ -858,6 +898,7 @@ def release_character_public_profile(
             VALUES (:profile, :campaign, :character, :version, :from_version,
                     :appearance, :appearance_origin, :appearance_origin_version,
                     :background, :background_origin, :background_origin_version, :summary,
+                    :a_pp_version, :a_pp_field, :b_pp_version, :b_pp_field,
                     :source, :delegation, :membership, :note,
                     :species_id, :species_code, :species_name, :size, :identity_version)
             RETURNING character_public_profile_release_id
@@ -875,6 +916,10 @@ def release_character_public_profile(
             "background_origin": draft.public_background_origin_id,
             "background_origin_version": draft.public_background_origin_entity_row_version,
             "summary": draft.public_summary,
+            "a_pp_version": draft.public_appearance_origin_player_profile_version_id,
+            "a_pp_field": draft.public_appearance_origin_player_profile_field_id,
+            "b_pp_version": draft.public_background_origin_player_profile_version_id,
+            "b_pp_field": draft.public_background_origin_player_profile_field_id,
             "source": AUTHORITY_OWNER if source == "owner" else AUTHORITY_DELEGATION,
             "delegation": delegation_id,
             "membership": actor_membership_id,
