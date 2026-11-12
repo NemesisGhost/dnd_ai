@@ -67,6 +67,18 @@ class _FakeConnection:
         self.events = events
         self.open = True
 
+    invalidated = False
+
+    @property
+    def connection(self) -> Any:
+        """The pooled-connection facade, down to the driver's `info.transaction_status`."""
+        from psycopg.pq import TransactionStatus
+
+        status = TransactionStatus.INTRANS if self.open else TransactionStatus.IDLE
+        return SimpleNamespace(
+            driver_connection=SimpleNamespace(info=SimpleNamespace(transaction_status=status))
+        )
+
     def in_transaction(self) -> bool:
         return self.open
 

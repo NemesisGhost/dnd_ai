@@ -24,6 +24,7 @@ import anyio.lowlevel
 import anyio.to_thread
 from anyio import CapacityLimiter
 from fastapi import Depends, Header, Request
+from psycopg.pq import TransactionStatus
 from sqlalchemy import Connection, Engine, create_engine, text
 
 from dnd_ai.config import settings
@@ -173,14 +174,53 @@ def _rollback(connection: Connection) -> None:
     connection.rollback()
 
 
+def _driver_transaction_status(connection: Connection) -> TransactionStatus:
+    """The DBAPI driver's own view of the session (psycopg `info.transaction_status`), read without
+    a statement. SQLAlchemy's `in_transaction()` is not a substitute: when a `commit` event listener
+    raises, SQLAlchemy marks its transaction finished although no COMMIT or ROLLBACK was sent."""
+    driver = connection.connection.driver_connection
+    if driver is None:
+        raise RuntimeError("the connection has no driver connection")
+    status: TransactionStatus = driver.info.transaction_status
+    return status
+
+
+def _driver_rollback(connection: Connection) -> None:
+    """A ROLLBACK sent straight to the DBAPI connection (a seam: tests replace it). It is used only
+    when the driver reports a transaction that SQLAlchemy's own rollback did not end."""
+    driver = connection.connection.driver_connection
+    if driver is None:
+        raise RuntimeError("the connection has no driver connection")
+    driver.rollback()
+
+
+def _ensure_driver_idle(connection: Connection) -> None:
+    """Leave the session idle, or raise. If the driver reports anything but idle (open, failed or
+    unknown), roll it back and require idle afterwards."""
+    if _driver_transaction_status(connection) == TransactionStatus.IDLE:
+        return
+    _driver_rollback(connection)
+    if _driver_transaction_status(connection) != TransactionStatus.IDLE:
+        raise RuntimeError("the driver is not idle after a rollback")
+
+
 def _discard(connection: Connection) -> None:
-    """Roll back, and close the connection. Never raises, so the error that brought the request
-    here is the one that gets mapped. If the rollback fails, the connection is invalidated: the
-    pool drops it, and PostgreSQL aborts the transaction (releasing its locks) when the session
-    ends. Only the exception class is logged, never its message."""
+    """Abandon the transaction, and close the connection. Never raises, so the error that brought
+    the request here is the one that gets mapped.
+
+    The decision follows the driver's transaction status, not only SQLAlchemy's bookkeeping: after a
+    `commit` listener refuses, SQLAlchemy believes the transaction ended while the server session is
+    still in it, and closing would return it to the pool that way. So, unless the connection is
+    already invalidated (it is never reconnected just to be inspected): SQLAlchemy's rollback runs if
+    it believes a transaction is open, then the driver must report idle (a DBAPI ROLLBACK is sent if
+    it does not). If any of that fails, the connection is invalidated: the pool drops it, and
+    PostgreSQL aborts the transaction (releasing its locks) when the session ends. Only exception
+    classes are logged, never messages."""
     try:
-        if connection.in_transaction():
-            _rollback(connection)
+        if not connection.invalidated:
+            if connection.in_transaction():
+                _rollback(connection)
+            _ensure_driver_idle(connection)
     except Exception as exc:
         logger.error("request transaction rollback failed: %s", type(exc).__name__)
         try:
