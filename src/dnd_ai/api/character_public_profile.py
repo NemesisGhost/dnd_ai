@@ -4,6 +4,7 @@
     GET  /campaigns/{campaign_id}/characters/{character_id}/public-profile/releases/{version_number}
     POST /campaigns/{campaign_id}/characters/{character_id}/public-profile/draft
     POST /campaigns/{campaign_id}/characters/{character_id}/public-profile/draft/copy-legacy
+    POST /campaigns/{campaign_id}/characters/{character_id}/public-profile/draft/copy-player-profile
     POST /campaigns/{campaign_id}/characters/{character_id}/public-profile/releases
 
 Authorization (plan section 5.7, decision D8):
@@ -24,7 +25,13 @@ Authorization (plan section 5.7, decision D8):
   *before* the idempotency lookup, and again under lock inside the command. The request names only
   the legacy field; provenance and the restriction watermark are never request fields.
 
-All three POSTs put the path's `character_id` into the idempotency fingerprint: the key's scope is
+- The player-profile copy (A5c) needs the role `canon.edit` at the route, then the D8 edit rule and
+  the player-profile GM read rule, checked by a dependency *before* the idempotency lookup and again
+  under lock inside the command. It names a profile *version* (the source token), one of nine
+  eligible source fields and a target field; it never accepts text, origin or provenance. Its
+  response, receipt and audit row carry ids, codes and versions, never profile text.
+
+All four POSTs put the path's `character_id` into the idempotency fingerprint: the key's scope is
 (actor, campaign, key), so without it the same key and body posted to another character would replay
 the first character's stored response.
 
@@ -42,8 +49,10 @@ from sqlalchemy import Connection
 
 from dnd_ai.commands.character_public_profile import (
     copy_legacy_text_to_public_profile_draft,
+    copy_player_profile_field_to_public_profile_draft,
     release_character_public_profile,
     require_may_copy,
+    require_may_copy_player_profile,
     require_may_edit,
     require_may_release,
     save_character_public_profile_draft,
@@ -85,6 +94,7 @@ _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
 _SAVE_COMMAND = "save_character_public_profile_draft"
 _RELEASE_COMMAND = "release_character_public_profile"
 _COPY_COMMAND = "copy_legacy_text_to_public_profile_draft"
+_COPY_PLAYER_PROFILE_COMMAND = "copy_player_profile_field_to_public_profile_draft"
 
 
 class SaveCharacterPublicProfileDraftRequest(BaseAuthoringRequest):
@@ -108,6 +118,28 @@ class CopyLegacyTextRequest(BaseAuthoringRequest):
 
     expected_row_version: int | None = Field(ge=1)
     field: Literal["appearance", "background"]
+
+
+class CopyPlayerProfileFieldRequest(BaseAuthoringRequest):
+    """Copies one eligible player-profile field into a draft field. `expected_row_version` is the
+    draft version the caller read (`null`: no draft yet); `expected_player_profile_row_version` is
+    the profile version the caller read (the source token). `boundaries`, `profile_notes` and any
+    unknown field or target are a 422, and no text, origin or provenance can be named."""
+
+    expected_row_version: int | None = Field(ge=1)
+    expected_player_profile_row_version: int = Field(ge=1)
+    source_field: Literal[
+        "portrayal_guidance",
+        "personality",
+        "ideals",
+        "bonds",
+        "flaws",
+        "goals",
+        "fears",
+        "loyalties",
+        "speech_patterns",
+    ]
+    target_field: Literal["public_appearance", "public_background"]
 
 
 class ReleaseCharacterPublicProfileRequest(BaseAuthoringRequest):
@@ -137,6 +169,15 @@ def _copy_precheck(
 ) -> None:
     """Before the idempotency lookup and the body: the edit rule and the source-read rule."""
     require_may_copy(connection, access=access, character_id=character_id)
+
+
+def _copy_player_profile_precheck(
+    character_id: uuid.UUID,
+    access: Annotated[AccessContext, Depends(_edit_access)],
+    connection: _Conn,
+) -> None:
+    """Before the idempotency lookup and the body: the edit rule and the player-profile read rule."""
+    require_may_copy_player_profile(connection, access=access, character_id=character_id)
 
 
 def _release_precheck(
@@ -311,6 +352,76 @@ def copy_legacy_text_endpoint(
         "created": result.created,
         "changed": True,
         "origin_entity_row_version": result.origin_entity_row_version,
+    }
+    response.status_code = 201 if result.created else 200
+    finish_campaign_idempotency(connection, idem, status_code=response.status_code, body=payload)
+    return payload
+
+
+@router.post(_BASE + "/draft/copy-player-profile")
+def copy_player_profile_field_endpoint(
+    character_id: uuid.UUID,
+    body: CopyPlayerProfileFieldRequest,
+    response: Response,
+    access: Annotated[AccessContext, Depends(_edit_access)],
+    _precheck: Annotated[None, Depends(_copy_player_profile_precheck)],
+    connection: _Conn,
+    idempotency_key: _Key,
+    correlation_id: _Corr,
+) -> Any:
+    idem = start_campaign_idempotency(
+        connection,
+        actor_user_id=access.user_id,
+        campaign_id=access.campaign_id,
+        idempotency_key=idempotency_key,
+        command_name=_COPY_PLAYER_PROFILE_COMMAND,
+        # The path's character, both tokens and the selection are in the fingerprint: a key reused
+        # for another character or field is the non-disclosing conflict, never a replay.
+        payload={"character_id": str(character_id), **body.model_dump(mode="json")},
+        correlation_id=correlation_id,
+    )
+    if idem.replay is not None:
+        return idem.replay
+    result = copy_player_profile_field_to_public_profile_draft(
+        connection,
+        campaign_id=access.campaign_id,
+        character_id=character_id,
+        actor_user_id=access.user_id,
+        expected_row_version=body.expected_row_version,
+        expected_player_profile_row_version=body.expected_player_profile_row_version,
+        source_field=body.source_field,
+        target_field=body.target_field,
+    )
+    record_change_log(
+        connection,
+        change_action_code="created" if result.created else "updated",
+        schema_name="campaign",
+        table_name="character_public_profiles",
+        record_id=result.character_public_profile_id,
+        entity_id=character_id,
+        world_id=timeline_world_id(connection, access.timeline_id),
+        actor_user_id=access.user_id,
+        correlation_id=correlation_id,
+        command_name=_COPY_PLAYER_PROFILE_COMMAND,
+        event_id=None,
+        # Which field, from which profile version: never the copied text.
+        changed_fields={
+            "source_field": result.source_field,
+            "target_field": result.target_field,
+            "origin": "player_profile",
+            "player_profile_row_version": result.player_profile_row_version,
+            "row_version": result.row_version,
+        },
+    )
+    payload: dict[str, Any] = {
+        "character_public_profile_id": str(result.character_public_profile_id),
+        "character_id": str(result.character_id),
+        "row_version": result.row_version,
+        "created": result.created,
+        "changed": True,
+        "player_profile_row_version": result.player_profile_row_version,
+        "source_field": result.source_field,
+        "target_field": result.target_field,
     }
     response.status_code = 201 if result.created else 200
     finish_campaign_idempotency(connection, idem, status_code=response.status_code, body=payload)

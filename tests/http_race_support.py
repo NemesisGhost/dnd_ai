@@ -128,3 +128,38 @@ class Request:
 
 def new_key() -> str:
     return f"race-{uuid.uuid4().hex[:12]}"
+
+
+def wait_until_pid_blocks(engine: Engine, holder_pid: int, *, expected: int = 1) -> None:
+    """Waits until `expected` sessions are blocked by `holder_pid` (a session the test holds open
+    itself, e.g. the fixture helper's transaction, rather than a gated request)."""
+    deadline = time.monotonic() + WAIT_SECONDS
+    while time.monotonic() < deadline:
+        if sessions_blocked_by(engine, holder_pid) >= expected:
+            return
+        time.sleep(0.02)
+    raise AssertionError(
+        f"expected {expected} session(s) blocked by pid {holder_pid}; "
+        f"{sessions_blocked_by(engine, holder_pid)} were"
+    )
+
+
+def deadlock_count(engine: Engine) -> int:
+    """The database's cumulative deadlock counter: a 40P01 abort increments it, so a 5xx loser can
+    be told apart from an arbitrary error."""
+    with engine.connect() as connection:
+        return int(
+            connection.execute(
+                text("SELECT deadlocks FROM pg_stat_database WHERE datname = current_database()")
+            ).scalar_one()
+        )
+
+
+def wait_for_deadlock_count(engine: Engine, at_least: int) -> int:
+    """Polls (the statistics are flushed asynchronously) until the counter reaches `at_least`."""
+    deadline = time.monotonic() + WAIT_SECONDS
+    count = deadlock_count(engine)
+    while count < at_least and time.monotonic() < deadline:
+        time.sleep(0.1)
+        count = deadlock_count(engine)
+    return count

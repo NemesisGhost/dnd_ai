@@ -18,6 +18,12 @@ from sqlalchemy import Connection, text
 
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.domain.npc_authoring import SIZE_CATEGORIES
+from dnd_ai.domain.player_profiles import (
+    COPY_ELIGIBLE_PLAYER_PROFILE_FIELDS,
+    PLAYER_PROFILE_FIELDS,
+    may_read_player_profile,
+    may_read_player_profile_as_gm,
+)
 from dnd_ai.domain.public_profiles import (
     KIND_NPC,
     KIND_PLAYER_CHARACTER,
@@ -279,6 +285,80 @@ def _cited_profile_versions(
     return {row.character_player_profile_version_id: int(row.profile_row_version) for row in found}
 
 
+def _source_changed(
+    connection: Connection,
+    *,
+    access: AccessContext,
+    character_id: uuid.UUID,
+    version_id: uuid.UUID | None,
+    field_code: str | None,
+    withheld: bool,
+) -> bool | None:
+    """A5c, section 9.4: whether the copied field's text in the *cited* profile version differs from
+    that field in the *current* version. Informative only: it blocks nothing. It derives from profile
+    text, so it is computed only for a caller who passes the player-profile read rule and for a field
+    whose text is not withheld; otherwise (and for a field that is not `player_profile`-origin) it is
+    `None`, never a guess. The text is compared inside the database and never returned."""
+    if version_id is None or field_code is None or withheld:
+        return None
+    if not may_read_player_profile(access, character_id) or field_code not in PLAYER_PROFILE_FIELDS:
+        return None
+    changed = connection.execute(
+        text(f"""
+            SELECT (cited.{field_code} IS DISTINCT FROM current.{field_code}) AS changed
+            FROM campaign.character_player_profile_versions cited
+            JOIN campaign.character_player_profiles h
+              ON h.character_player_profile_id = cited.character_player_profile_id
+            JOIN campaign.character_player_profile_versions current
+              ON current.character_player_profile_id = h.character_player_profile_id
+             AND current.profile_row_version = h.row_version
+            WHERE cited.character_player_profile_version_id = :version
+              AND cited.campaign_id = :campaign AND cited.character_id = :character
+        """),  # noqa: S608 - the column is one of the eleven profile field codes (checked above)
+        {"version": version_id, "campaign": access.campaign_id, "character": character_id},
+    ).scalar()
+    return None if changed is None else bool(changed)
+
+
+def _player_profile_copy(
+    connection: Connection,
+    access: AccessContext,
+    character_id: uuid.UUID,
+    character: dict[str, Any],
+) -> dict[str, Any] | None:
+    """What the player-profile copy may take now (A5c, section 9.4): `None` unless the character is
+    active, the caller passes the edit and the player-profile read rules, and a profile exists;
+    otherwise the source token and, for each of the nine eligible fields, only whether it holds text
+    (never the text). One statement, so the token and the flags are one version."""
+    if (
+        not character["active"]
+        or not has_effective_character_canon_edit(access, character_id)
+        or not may_read_player_profile_as_gm(access, character_id)
+    ):
+        return None
+    flags = ", ".join(
+        f"(btrim(coalesce(v.{code}, '')) <> '') AS {code}"
+        for code in COPY_ELIGIBLE_PLAYER_PROFILE_FIELDS
+    )
+    row = connection.execute(
+        text(f"""
+            SELECT h.row_version, {flags}
+            FROM campaign.character_player_profiles h
+            JOIN campaign.character_player_profile_versions v
+              ON v.character_player_profile_id = h.character_player_profile_id
+             AND v.profile_row_version = h.row_version
+            WHERE h.campaign_id = :campaign AND h.character_id = :character
+        """),  # noqa: S608 - the columns are the nine fixed copy-eligible codes
+        {"campaign": access.campaign_id, "character": character_id},
+    ).one_or_none()
+    if row is None:
+        return None
+    return {
+        "player_profile_row_version": int(row.row_version),
+        "fields": {code: bool(getattr(row, code)) for code in COPY_ELIGIBLE_PLAYER_PROFILE_FIELDS},
+    }
+
+
 def _release_json(
     row: Any,
     origins: dict[uuid.UUID, str],
@@ -488,6 +568,15 @@ def read_character_public_profile(
             # D7-f analogue: the origin code, the copied version number and the source field code
             # are disclosed even when the text is withheld; never the text.
             draft.update(_player_profile_provenance(draft_row, field_name, pp_fields, pp_versions))
+            pp_field_id = getattr(draft_row, f"{field_name}_origin_player_profile_field_id")
+            draft[f"{field_name}_player_profile_source_changed"] = _source_changed(
+                connection,
+                access=access,
+                character_id=character_id,
+                version_id=getattr(draft_row, f"{field_name}_origin_player_profile_version_id"),
+                field_code=None if pp_field_id is None else pp_fields[pp_field_id],
+                withheld=is_withheld,
+            )
     unreleased = draft is not None and (
         latest is None or int(latest.from_draft_row_version) != draft["row_version"]
     )
@@ -552,6 +641,7 @@ def read_character_public_profile(
         "identity_preview_withheld": preview_withheld,
         "identity_differs_from_latest_release": differs,
         "legacy_copy": _legacy_copy(connection, access, character_id, character),
+        "player_profile_copy": _player_profile_copy(connection, access, character_id, character),
     }
 
 

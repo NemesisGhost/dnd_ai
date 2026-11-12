@@ -86,6 +86,7 @@ EXPECTED_CAMPAIGN_ONLY_SCOPES: frozenset[tuple[str, str]] = frozenset(
         ("item_instances.py", "update_item_instance"),
         ("_operations.py", "lock_operation_scope"),
         ("character_public_profile.py", "save_character_public_profile_draft"),
+        ("character_public_profile.py", "copy_player_profile_field_to_public_profile_draft"),
     }
 )
 

@@ -60,7 +60,19 @@ a first save). The copy replaces the whole target field, keeps the other field, 
 the source `row_version` and a restriction watermark equal to the draft's new `row_version`, and
 always changes the draft, even when the text is identical: every copy starts new restricted content.
 
-Both commands raise only classified errors, write nothing on a refusal, and leave the audit row to
+**Player-profile copy** (`copy_player_profile_field_to_public_profile_draft`, A5c, design section 9.3).
+Copies one of the nine copy-eligible player-profile fields (never `boundaries` or `profile_notes`) of
+the *version the caller read* into a draft field, as `player_profile`-origin restricted text with its
+provenance pair and a watermark equal to the draft's new `row_version`. Lock order (design section
+10.1): `lock_authoring_scope` (no world capability: the player-profile read rule is the role's
+`canon.edit`), the `AccessContext` re-resolved for the D8 edit rule and the GM read rule, the
+character's `core.entities` row `FOR SHARE`, the profile head `FOR SHARE` (source freshness is judged
+there: a moved head is `player_profile_source_changed`, nothing written), the immutable version read
+(no lock), then the draft `FOR UPDATE` or the unique-index race of a first copy. It never writes the
+profile and publishes nothing: release and revelation remain separate steps. The result, and what the
+route audits and stores as the receipt, carry ids, codes and versions, never the copied text.
+
+Both legacy commands raise only classified errors, write nothing on a refusal, and leave the audit row to
 the route (one row per real change, never carrying profile text). The copy's result, receipt and
 audit row carry ids, field names, origin code and versions, never the copied text.
 """
@@ -79,6 +91,13 @@ from dnd_ai.domain.authoring import (
     WorldAuthorityRequiredError,
 )
 from dnd_ai.domain.organization_authoring import normalize_optional_text
+from dnd_ai.domain.player_profiles import (
+    COPY_ELIGIBLE_PLAYER_PROFILE_FIELDS,
+    PlayerProfileFieldEmptyError,
+    PlayerProfileMissingError,
+    PlayerProfileSourceChangedError,
+    may_read_player_profile_as_gm,
+)
 from dnd_ai.domain.public_profiles import (
     AUTHORITY_DELEGATION,
     AUTHORITY_OWNER,
@@ -89,6 +108,7 @@ from dnd_ai.domain.public_profiles import (
     KIND_PLAYER_CHARACTER,
     LEGACY_COPY_SOURCES,
     ORIGIN_AUTHORED,
+    ORIGIN_PLAYER_PROFILE,
     PUBLIC_PROFILE_IDENTITY_FLAGS,
     PUBLIC_PROFILE_NOTE_MAX_LENGTH,
     PUBLIC_PROFILE_SAVEABLE_FIELDS,
@@ -462,6 +482,198 @@ def copy_legacy_text_to_public_profile_draft(
         source_field=source_field,
         origin_code=origin_code,
         origin_entity_row_version=int(source_version),
+    )
+
+
+@dataclass(frozen=True)
+class CopyPlayerProfileFieldResult:
+    character_public_profile_id: uuid.UUID
+    character_id: uuid.UUID
+    row_version: int
+    created: bool
+    player_profile_row_version: int
+    source_field: str
+    target_field: str
+
+
+def require_may_copy_player_profile(
+    connection: Connection, *, access: AccessContext, character_id: uuid.UUID
+) -> None:
+    """The player-profile copy route's pre-check, before the idempotency lookup: the D8 edit rule,
+    then the player-profile GM read rule (404). In A5 the second is implied by the first (both are
+    effective character-scoped `canon.edit`; a unit test pins that), but it is the copy's own source
+    authority, so a caller who has lost either right cannot replay a stored copy."""
+    require_may_edit(connection, access=access, character_id=character_id)
+    if not may_read_player_profile_as_gm(access, character_id):
+        raise PublicProfileNotFoundError(f"character {character_id} is not visible")
+
+
+def copy_player_profile_field_to_public_profile_draft(
+    connection: Connection,
+    *,
+    campaign_id: uuid.UUID,
+    character_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    expected_row_version: int | None,
+    expected_player_profile_row_version: int,
+    source_field: str,
+    target_field: str,
+) -> CopyPlayerProfileFieldResult:
+    """Copies the named player-profile field of the version the caller read into `target_field`.
+
+    `expected_row_version` is the draft version the caller read (`None`: no draft yet);
+    `expected_player_profile_row_version` is the profile head version the caller read (the source
+    token). Raises `PlayerProfileMissingError`, `PlayerProfileSourceChangedError`,
+    `PlayerProfileFieldEmptyError`, `PublicProfileDraftMissingError`, `StaleWriteError` and the
+    save's authorization refusals; a refusal writes nothing. Always writes (and bumps `row_version`)
+    when it succeeds, even for identical text: every copy starts new restricted content."""
+    if source_field not in COPY_ELIGIBLE_PLAYER_PROFILE_FIELDS:
+        raise ValueError(f"unsupported player-profile copy source: {source_field!r}")
+    if target_field not in _ORIGIN_COLUMNS:
+        raise ValueError(f"unsupported copy target: {target_field!r}")
+    origin_column, version_column, watermark_column = _ORIGIN_COLUMNS[target_field]
+    pp_version_column, pp_field_column = _PLAYER_PROFILE_COLUMNS[target_field]
+    other = FIELD_BACKGROUND if target_field == FIELD_APPEARANCE else FIELD_APPEARANCE
+    other_origin_column = _ORIGIN_COLUMNS[other][0]
+
+    scope = lock_authoring_scope(
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, world_capability=None
+    )
+    access = resolve_access_context(connection, user_id=actor_user_id, campaign_id=campaign_id)
+    if access is None:
+        raise CampaignNotAuthorizedError(f"user {actor_user_id} has no access to {campaign_id}")
+    character = _character_row(
+        connection, world_id=scope.world_id, character_id=character_id, lock_clause="FOR SHARE"
+    )
+    require_may_edit(connection, access=access, character_id=character_id)
+    if not may_read_player_profile_as_gm(access, character_id):
+        raise PublicProfileNotFoundError(f"character {character_id} is not visible")
+    _require_canon_and_active(character, character_id)
+
+    # The head is held FOR SHARE: a profile edit (head FOR UPDATE) cannot commit between this check
+    # and the end of the copy, so the version read below is still the one the caller read.
+    head = connection.execute(
+        text("""
+            SELECT character_player_profile_id, row_version
+            FROM campaign.character_player_profiles
+            WHERE campaign_id = :campaign AND character_id = :character
+            FOR SHARE
+        """),
+        {"campaign": campaign_id, "character": character_id},
+    ).one_or_none()
+    if head is None:
+        raise PlayerProfileMissingError(f"{character_id} has no player profile")
+    if int(head.row_version) != expected_player_profile_row_version:
+        raise PlayerProfileSourceChangedError(
+            f"the player profile of {character_id} is at {head.row_version}"
+        )
+    # A separate statement: the versions are immutable, so no lock is needed.
+    version = connection.execute(
+        text(f"""
+            SELECT character_player_profile_version_id, {source_field} AS source_text
+            FROM campaign.character_player_profile_versions
+            WHERE character_player_profile_id = :profile AND campaign_id = :campaign
+              AND character_id = :character AND profile_row_version = :version
+        """),  # noqa: S608 - the column is one of the nine copy-eligible codes (checked above)
+        {
+            "profile": head.character_player_profile_id,
+            "campaign": campaign_id,
+            "character": character_id,
+            "version": expected_player_profile_row_version,
+        },
+    ).one()
+    clean = normalize_optional_text(
+        version.source_text, field=source_field, max_length=PUBLIC_PROFILE_TEXT_MAX_LENGTH
+    )
+    if clean is None:
+        raise PlayerProfileFieldEmptyError(f"{character_id} has no {source_field} text")
+    source_field_id = connection.execute(
+        text("SELECT player_profile_field_id FROM campaign.player_profile_fields WHERE code = :c"),
+        {"c": source_field},
+    ).scalar_one()
+    authored = lookup_id(
+        connection,
+        "campaign",
+        "public_profile_field_origins",
+        "public_profile_field_origin_id",
+        ORIGIN_AUTHORED,
+    )
+    copied = lookup_id(
+        connection,
+        "campaign",
+        "public_profile_field_origins",
+        "public_profile_field_origin_id",
+        ORIGIN_PLAYER_PROFILE,
+    )
+    params: dict[str, object] = {
+        "campaign": campaign_id,
+        "character": character_id,
+        "membership": access.campaign_membership_id,
+        "authored": authored,
+        "copied": copied,
+        "text": clean,
+        "pp_version": version.character_player_profile_version_id,
+        "pp_field": source_field_id,
+    }
+    if expected_row_version is None:
+        inserted = connection.execute(
+            text(f"""
+                INSERT INTO campaign.character_public_profiles (
+                    campaign_id, character_id, {target_field}, {origin_column},
+                    {pp_version_column}, {pp_field_column}, {watermark_column},
+                    {other_origin_column}, created_by_membership_id, updated_by_membership_id
+                )
+                VALUES (:campaign, :character, :text, :copied, :pp_version, :pp_field, 1,
+                        :authored, :membership, :membership)
+                ON CONFLICT (campaign_id, character_id) DO NOTHING
+                RETURNING character_public_profile_id, row_version
+            """),  # noqa: S608 - the column names come from the fixed two-field tables
+            params,
+        ).one_or_none()
+        if inserted is None:
+            raise StaleWriteError(f"the draft of {character_id} already exists")
+        profile_id, new_version, created = (
+            inserted.character_public_profile_id,
+            int(inserted.row_version),
+            True,
+        )
+    else:
+        draft = connection.execute(
+            text("""
+                SELECT character_public_profile_id, row_version
+                FROM campaign.character_public_profiles
+                WHERE campaign_id = :campaign AND character_id = :character
+                FOR UPDATE
+            """),
+            {"campaign": campaign_id, "character": character_id},
+        ).one_or_none()
+        if draft is None:
+            raise PublicProfileDraftMissingError(f"{character_id} has no draft")
+        if int(draft.row_version) != expected_row_version:
+            raise StaleWriteError(f"the draft of {character_id} is at {draft.row_version}")
+        profile_id = draft.character_public_profile_id
+        new_version = int(draft.row_version) + 1  # what `core.bump_row_version()` gives the row
+        connection.execute(
+            text(f"""
+                UPDATE campaign.character_public_profiles
+                SET {target_field} = :text, {origin_column} = :copied,
+                    {version_column} = NULL,
+                    {pp_version_column} = :pp_version, {pp_field_column} = :pp_field,
+                    {watermark_column} = :new_version,
+                    updated_by_membership_id = :membership
+                WHERE character_public_profile_id = :profile
+            """),  # noqa: S608 - the column names come from the fixed two-field tables
+            {**params, "profile": profile_id, "new_version": new_version},
+        )
+        created = False
+    return CopyPlayerProfileFieldResult(
+        character_public_profile_id=profile_id,
+        character_id=character_id,
+        row_version=new_version,
+        created=created,
+        player_profile_row_version=expected_player_profile_row_version,
+        source_field=source_field,
+        target_field=target_field,
     )
 
 

@@ -54,6 +54,9 @@ TABLE_MODULES = {
     # `row_version` number and the source field's code (design section 9.4). The audience readers in
     # the same module still read no profile table (see the audience-tier test below).
     "queries/character_public_profile.py",
+    # A5c: the copy command reads the character's profile (the head `FOR SHARE`, then one immutable
+    # version) to copy one field. It never writes either table (the no-writer test below).
+    "commands/character_public_profile.py",
 }
 PROFILE_MODULES = (
     "api/player_profiles.py",
@@ -503,3 +506,63 @@ def test_the_player_profile_provenance_never_reuses_the_legacy_source_version_co
     assert "origin_player_profile_version_id" in migration
     assert 'revision = "148_player_profile_provenance"' in migration
     assert 'down_revision = "147_character_player_profiles"' in migration
+
+
+# --- A5c: the copy route's pre-check and the command's lock order --------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("roles", "whole_deny", "edit_deny", "edit_allow_grant", "other_character_deny"),
+    list(itertools.product(_ROLE_SETS, (False, True), (False, True), (False, True), (False, True))),
+)
+def test_the_copy_prechecks_second_step_is_implied_by_the_edit_rule(
+    roles: frozenset[str],
+    whole_deny: bool,
+    edit_deny: bool,
+    edit_allow_grant: bool,
+    other_character_deny: bool,
+) -> None:
+    """Design 9.3: in A5 the player-profile GM read rule is implied by the D8 edit rule, because both
+    are effective character-scoped `canon.edit`. The route still checks both, so a P03-B controller
+    branch (which adds a read branch, never an edit branch) cannot widen who may copy."""
+    from dnd_ai.domain.player_profiles import may_read_player_profile_as_gm
+
+    character = uuid.uuid4()
+    access = _access(
+        character,
+        roles=roles,
+        whole_deny=whole_deny,
+        edit_deny=edit_deny,
+        edit_allow_grant=edit_allow_grant,
+        other_character_deny=other_character_deny,
+    )
+    if has_effective_character_canon_edit(access, character):
+        assert may_read_player_profile_as_gm(access, character)
+
+
+def test_the_copy_command_locks_in_the_designed_order_and_never_writes_the_profile() -> None:
+    """World/role/campaign scope, then the character entity `FOR SHARE`, then the profile head `FOR
+    SHARE`, then the immutable version read (no lock), then the public draft `FOR UPDATE` or the
+    unique-index insert (design 10.1). The profile tables appear only in SELECTs."""
+    source = (SRC / "commands/character_public_profile.py").read_text(encoding="utf-8")
+    start = source.index("def copy_player_profile_field_to_public_profile_draft(")
+    end = source.index("def save_character_public_profile_draft(")
+    body = source[start:end]
+    order = [
+        body.index("lock_authoring_scope("),
+        body.index("resolve_access_context("),
+        body.index('lock_clause="FOR SHARE"'),
+        body.index("FROM campaign.character_player_profiles"),
+        body.index("FROM campaign.character_player_profile_versions"),
+        body.index("INSERT INTO campaign.character_public_profiles"),
+        body.rindex("FOR UPDATE"),
+    ]
+    assert order == sorted(order), order
+    head = body[body.index("FROM campaign.character_player_profiles") :]
+    assert "FOR SHARE" in head[: head.index("one_or_none()")]
+    # The profile head is only ever locked FOR SHARE (a profile edit takes it FOR UPDATE).
+    assert body.count("FOR SHARE") >= 2 and "FROM campaign.character_player_profiles" in body
+    assert not re.search(r"character_player_profiles[^\"]*FOR UPDATE", body)
+    assert not RAW_WRITE.search(body)
+    # World capability is not required (the player-profile read rule is the role's canon.edit only).
+    assert "world_capability=None" in body

@@ -27,6 +27,7 @@ import uuid
 from typing import Final
 
 from .access import AccessContext
+from .errors import SafeMessageError
 from .public_profiles import (
     LEGACY_ORIGINS,
     ORIGIN_PLAYER_PROFILE,
@@ -88,3 +89,32 @@ def source_rule_for_origin(origin_code: str) -> str | None:
     if origin_code == ORIGIN_PLAYER_PROFILE:
         return SOURCE_RULE_PLAYER_PROFILE
     return None
+
+
+# --- the copy's refusals (A5c, section 9.3) -------------------------------------------------------------
+# Reached only after the read rule passed, so each says only what the caller was already allowed to see.
+# Messages are fixed text: no message is built from profile content.
+
+
+class PlayerProfileMissingError(SafeMessageError):
+    """The character has no player profile in this campaign (409)."""
+
+    safe_status_code = 409
+    safe_error_code = "player_profile_missing"
+    safe_message = "This character has no player profile in this campaign."
+
+
+class PlayerProfileSourceChangedError(SafeMessageError):
+    """The profile moved past the version the caller read (409). Nothing was written."""
+
+    safe_status_code = 409
+    safe_error_code = "player_profile_source_changed"
+    safe_message = "The player profile changed. Reload it and try again."
+
+
+class PlayerProfileFieldEmptyError(SafeMessageError):
+    """The named player-profile field holds no text in the version the caller read (409)."""
+
+    safe_status_code = 409
+    safe_error_code = "player_profile_field_empty"
+    safe_message = "That player-profile field is empty."

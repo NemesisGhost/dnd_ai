@@ -538,6 +538,9 @@ _REPLAY_CODE_KEYS = frozenset(
         "side",
         "detail_level",
         "entity_type_code",
+        # A5c: the player-profile copy's source and target field codes (closed vocabularies).
+        "source_field",
+        "target_field",
     }
 )
 _REPLAY_CODE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
