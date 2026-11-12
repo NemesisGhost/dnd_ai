@@ -7,6 +7,12 @@ dispositions, and the [ledger](PHASE14_15_ACCEPTANCE_LEDGER.md) owns acceptance.
 R01–R18 are preserved cross-references to the November 9 reviews, mapped to existing
 packages below; they do not admit every enhancement into Phase 15.
 
+Supplemented 2026-11-11 with Fable’s documentation-drift report against `main`
+`b0910c4` (PR #68 merge). The original reconciliation evidence above remains tied
+to its stated baseline; the supplemental report does not refresh those tests.
+See **Fable documentation-drift follow-ups (2026-11-11)** for C1–C4/D1–D11,
+including links to existing September findings 1, 14 and 15.
+
 ## Current package disposition
 
 | Work | Current state / next obligation |
@@ -44,6 +50,7 @@ against subsequent changes; they are not new browser reproductions.
 4. Finish membership acceptance and settle travel time policy (R04). Establish shared recovery (R05), then adopt it with each affected form family.
 5. Group bounded work by shared workflows: Campaign Home/events (R06/R09), sessions (R09/R10), administration/sharing/invitations (R07/R08/admitted R11), Knowledge (R05/R15), locations/dungeon areas (R09/R16), quests (R13/R14). These groups need not form a strict chain.
 6. Admit and design new search, duration arithmetic, evaluators, consequences and session links separately. Existing repairs need not wait for them. Final integrated exit is R18.
+7. Triage Fable C1 first within the documentation-drift work: branch typed-state inheritance contradicts an architectural promise. Confirm current behavior and choose implementation or explicit deferral/limitation. Carry C2/C3 through existing September findings 1/14; assess C4’s actual reader exposure before grading. Correct D1’s status contradictions promptly; group D2–D11 into the documentation repair pass below. These recommendations do not replace accepted delivery gates or assign new Phase 15 scope.
 
 ## Other open defects and acceptance obligations
 
@@ -435,7 +442,7 @@ Keep unresolved findings visible without importing its old severity labels as a 
 
 | Original ID | Finding | Disposition at documentation cleanup |
 |---|---|---|
-| 1 | `httpx` missing from production dependencies | Reconfirmed at `d51e38a`: dev optional group, runtime provider imports, Docker install without dev extras. Production-image validation/correction remains; no image run here. |
+| 1 | `httpx` missing from production dependencies | Reconfirmed at `d51e38a` and reported again by Fable C2 at `b0910c4`: dev-only dependency, runtime provider imports (`domain/ai_provider.py:52,324,397`), Docker install with `--no-dev`. Correct runtime dependency declaration/lock and validate the production dependency set and OpenAI-compatible provider in the production image. Neither review built the image. |
 | 2 | No world-authoring commands | Superseded by Phase 14/15 command delivery. Original scope gap is historical; current authoring acceptance remains separate. |
 | 3 | Production operational envelope absent | Phase 17/runbook still owns ingress/TLS/portal/worker/operations acceptance. Base recovery delivery does not close all packaging. |
 | 4 | Audit history UI unreachable | Superseded by the Access audit route recorded in AUDIT_HISTORY_API and portal source. No new browser test claimed. |
@@ -446,13 +453,85 @@ Keep unresolved findings visible without importing its old severity labels as a 
 | 9 | Tests not type-checked | Review scope/cost under ISSUE_GRADING_RUBRIC; current CI mypy targets src and the CI helper, not all tests. |
 | 10 | CI type-checks only one script | Still a limited script scope in CI at baseline; decide proportionate follow-up. |
 | 11 | Portal flake under coverage/load | Old reproduction, not proven current cause. Retain alongside later unattributed intermittencies; no passing rerun establishes a cause. |
-| 12 | Stale PROJECT_STATUS | Documentation summary replaced by this consolidation; no test results refreshed. |
+| 12 | Stale PROJECT_STATUS | Earlier summary consolidation does not close later drift: Fable D1 reports stale PR #68/A4 status in PROJECT_STATUS, docs index and context-navigation plan at `b0910c4`. Reconcile with the already-current P03-A row above; no test results refreshed. |
 | 13 | Old PLAN AWS-CI contradiction | Superseded operational prose retired; DEVELOPMENT/ADR 0012 govern CI. |
-| 14 | AI feature flag differs from boundary behavior | Reconcile config, route enforcement and feature manifest before any behavior change; not closed here. |
-| 15 | Built/planned schema labels mixed | Accepted R19 architecture remains distinct from implemented tables. Review each affected schema entry when implementing it. |
+| 14 | AI feature flag differs from boundary behavior | Expanded by Fable C3: the three `feature_*` settings are used only in config startup validation, no route checks them, and the Discord flag has no consumer. `.env.example` promises AI NPC dialogue is disabled by default. Reconcile intended gates, request enforcement and feature manifest; verify disabled/enabled behavior on affected entry points. Do not claim startup validation enforces requests or fabricate a Discord consumer. |
+| 15 | Built/planned schema labels mixed | Expanded by Fable D4 (schema inventory) and D7 (architecture labels). Reconcile DATABASE_MODEL against imported metadata, label absent tables planned/deferred, document built omissions, and separate current architecture from target architecture. Accepted R19 design is not implemented tables or workers. See supplemental scope and acceptance below. |
 | 16 | Token rules content/creature model | R19/ADRs 0022–0023 own expansion and provenance; acceptance of design is not seed/content delivery. |
 | 17 | Conditional migration-test skips | Reconcile actual skip preconditions under current verification policy; not closed here. |
 | 18 | Foundry live/AI smoke exit evidence missing | Carried explicitly in PROJECT_STATUS; not executed by cleanup. |
+
+## Fable documentation-drift follow-ups (2026-11-11)
+
+### Evidence, scope and triage
+
+**Source:** user-supplied Claude Code (Fable) report for `dnd_ai` at `main`
+`b0910c4` (2026-11-11). Fable read source, imported metadata for **225 tables**,
+enumerated **349 FastAPI operations**, and scripted checks of documentation links,
+paths, symbols, endpoints and commands. It did **not** run tests or migrations:
+its container had PostgreSQL 16, no Docker daemon, and the project requires
+PostgreSQL 18. No repository files were changed by that review. This backlog update
+records the report; it is not an independent code review or runtime reproduction.
+
+C1–C4 and D1–D11 below preserve Fable’s identifiers within this section only. They
+are distinct from the existing C1–C10 refactoring labels and D1–D7 historical
+references elsewhere in this register. No new DEF ID, rubric grade, waiver,
+owner decision or phase admission is assigned. Fable recommends prioritizing C1
+and describes C4 as low severity; those are reviewer recommendations pending
+current-path evidence and the maintained grading process. Existing accepted
+P03/R19 policies and pre-A6 gates continue to govern delivery.
+
+### Code and behavior findings
+
+| Report ID | Disposition / evidence | Remaining work and acceptance |
+|---|---|---|
+| C1 | **New: branch timelines do not inherit dungeon/quest typed state.** ENTITY_LIFECYCLE §9 promises parent history through the branch point and local state only on divergence. Fable reports `queries/dungeon.py:177–318` and `queries/quest.py` join `campaign.*_state` only on the branch timeline; `commands/timelines.py` copies no state. Events, campaign clocks and active character builds already resolve through ancestors. Existing tests branch before the state change, missing the reported failure. | Reproduce a branch created **after** a parent vault opens and after quest state changes; inventory the affected typed-state readers and applicable state/progress tables against §9. Resolve through ancestry with branch-point caps and local divergence under the accepted contract, or explicitly defer implementation and add a precise limitation to §9. Cover parent state before/at/after the branch point, later parent changes, local divergence, nested branches and effective-time reads. Check projected state and API behavior; retain audience filtering. Do not infer that membership rows inherit: their explicit non-inheritance rule remains separate (DEF-007/R04). No implementation or deferral approval is recorded here. |
+| C2 | **Existing September finding 1; no duplicate implementation item.** `httpx` is dev-only but runtime AI provider imports it; the production image installs with `--no-dev`. | Use finding 1 for dependency/lock correction and production-image/provider verification. A development-environment import is insufficient acceptance. |
+| C3 | **Existing September finding 14; expanded scope.** Three feature settings are startup-validation inputs only; no request gates, and no Discord consumer. `.env.example` describes NPC dialogue as disabled by default. | Inventory intended supported entry points and approved flag semantics. Enforce promised request gates where applicable and align config/manifest/docs; explicitly label unbuilt integrations. Verify disabled and enabled requests, startup behavior and relevant authorization. A flag is not an authorization substitute. |
+| C4 | **New: interaction roll visibility intent is not consumed.** `interaction.check_results.is_visible_to_players` is written by `api/interactions.py` / `commands/interactions.py`; Fable found no reader consulting it. Also conflicts with the per-object visibility-boolean guidance in DATABASE_CONVENTIONS §15.4. | Trace all roll-result readers and audience projections before asserting disclosure: unused metadata alone does not prove a player can retrieve a secret roll. If results are exposed, apply the approved audience policy and cover GM/member reads and indirect references. Otherwise document the current limitation/intent and decide whether to retain a narrowly documented convention exception or replace/remove the field through an approved design. Cover hidden/visible behavior on supported readers; preserve authorized GM access. Fable’s suggested exception addresses the convention, not an unverified visibility guarantee. |
+
+### Documentation repair work
+
+The rows below are documentation repairs or contract-coverage work. They do not
+approve implementing every planned table, integration or endpoint feature. Use the
+current checkout as the source of truth when executing them, preserving accepted
+future architecture with explicit built/planned/deferred labels.
+
+| Report ID | Document / reported drift | Required correction and closure evidence |
+|---|---|---|
+| D1 | PROJECT_STATUS, `docs/README.md`, context-navigation plan: PR #68 shown draft/unmerged; correction awaiting review; A4 shown not started despite accepted/CI-green plan. Plan link to UI_DESIGN §4.8.12 has a broken anchor. | Reconcile all summaries with current history and review records. This backlog already records PR #68 merged as `b0910c4`, A0–A4 delivered and post-merge CI 43113470050 green; preserve that evidence and all remaining browser/owner obligations. Repair the anchor to the actual heading. Do not mark all of P03-A complete or assume the correction’s browser acceptance is complete. Cross-check status/plan/index consistency. Also updates September finding 12. |
+| D2 | DEVELOPMENT §2 lists absent `database/functions/`, `src/dnd_ai/ai/`, `src/dnd_ai/integrations/` and old `ui/`; misstates persistence responsibilities and lists 8 table modules where 15 exist. | Reflect the actual tree: AI code in `domain/` and `commands/`; persistence contains `seeds.py` and `tables/`. Recount modules and verify every listed path; distinguish any intended future directories explicitly. |
+| D3 | DEVELOPMENT: TOC lists 10 sections versus 12; “six jobs” followed by seven; portal claimed fixture-only/no backend requests and REST deferred; seed guidance inconsistent with migrations (9 using `apply_seed()`, about 36 inline lookup inserts). | Refresh TOC/job descriptions against current headings/workflow and document live portal/API integration. Clarify authored-content seed policy versus lookup/reference-data migrations, using the current policy and actual revisions. Do not relax authored-content protections merely to fit inline lookup inserts. Verify cited commands and examples. |
+| D4 | DATABASE_MODEL: Fable reports 24 absent tables without not-built labels, including eight `character.npc_*`, `character.character_controllers`, `campaign.npc_goal_state`, `campaign.npc_emotional_state`, `campaign.entity_overrides`, four `audit.*`, and nine `import.*`; 16 built lookup tables and `ai.reference_retrieval_results` omitted. | Extend September finding 15: reconcile every documented table against current metadata/migrations; mark absent designs planned/deferred and add built omissions. **Reconcile the report’s total before publishing counts:** its listed categories sum to 25, rather than the stated 24. Retain accepted character/control architecture while distinguishing planned schema from installed schema. Closure needs an exact named inventory and disposition for each discrepancy. |
+| D5 | ENTITY_LIFECYCLE §21.1 final row marks sessions, events, state, progress, reveal and relationships not built, contradicting earlier built rows. | Replace the blanket row with accurate per-capability status and links to current commands/limitations; verify against the same inventory. Keep C1’s branch inheritance limitation separately visible until resolved. |
+| D6 | LOCAL_DEPLOYMENT: world memberships said to have no portal control; actual Sharing route `/worlds/:worldId/sharing`. Renamed test cited incorrectly. Service table `proxy/ui/postgres/worker/ddns` is target topology; Compose contains `db/migrate/api`. | Document current Sharing controls and authority boundaries; cite `test_scripts_no_authored_content_direct_inserts.py`; distinguish runnable Compose services from target deployment services. Validate paths, service names and setup instructions against the supported environment. This does not close Phase 17’s operational envelope. |
+| D7 | SYSTEM_ARCHITECTURE §§10/12/16 leave outbox, rules engine, import pipeline, Discord and MCP without built/planned labels; no outbox table/worker. §17 already marks worker/Discord unbuilt. | Apply consistent implementation labels throughout, aligned with §17, PLANv2 and accepted R19 ADRs; retain target architecture as planned. Cross-reference September finding 15 rather than create a competing architecture implementation package. |
+| D8 | Layering prose says commands are the only mutation path and `domain/` is framework-free; `api/idempotency.py` and `api/audit.py` write directly, and four domain modules perform SQL reads. | Identify all four modules and document the actual, bounded infrastructure-write and domain-read exceptions after checking intent. Distinguish framework independence from persistence independence. Describe transaction/authority ownership without broad permission for arbitrary API/domain writes; do not undertake a layering refactor merely to satisfy old wording. |
+| D9 | DATABASE_CONVENTIONS §18.1 requires `_jsonb` suffix but only 3 of 17 JSON columns use it; §4.2 plural naming conflicts with `*_state`, `item_ownership`, `item_identification`, etc. | Revise convention wording to describe approved naming patterns and exceptions; confirm counts on the execution head. Prefer accurate conventions over schema churn solely for naming consistency. Keep C4’s visibility-policy question separate. |
+| D10 | About 120 retired-file/section labels (`PLAN.md §…`, `CONTRIBUTING.md`, `PHASEn_VERIFICATION.md`) point to an index rather than the cited section. `.env.example` cites scoped-system ADR 0019 instead of 0020. Root README labels docs index “Project Plan”; portal README has a machine-specific Windows path. | Map each retired reference to its maintained semantic destination/section or clearly label a historical reference; do not merely repoint every link to an index. Correct ADR number, index label and portable setup paths. Check fragment anchors as well as file existence, including D1’s UI_DESIGN anchor. |
+| D11 | API contract coverage: all named endpoints exist, but about 225 of 334 route paths (mostly authoring/mutation) appear in no contract document. | Inventory operations versus distinct paths (Fable’s 349 operations and 334 paths use different units); map undocumented routes to maintained contract owners. Add proportionate method/path, authority/audience, request/response, refusal/conflict and idempotency/transaction semantics where applicable, reusing shared contracts. Agree any intentionally OpenAPI-only scope explicitly. Validate the final map against runtime routes/OpenAPI; missing prose alone is not a missing endpoint or runtime defect. |
+
+### Preserved positive evidence and completion boundary
+
+Fable reported matches for the toolchain, `postgres:18.4` in Compose/CI,
+environment-variable declarations, SQLAlchemy Core usage, all 13 schemas/six
+roles and sampled database rules/core columns, all 122 documented endpoints,
+eight engine-backed routes, every lifecycle command named in §21.1, the portal
+route table, cookie/Argon2 settings and AI auto-approval policy. The query layer
+contained no writes. Two unresolved code-symbol references were attributed to
+line wrapping. These are source/static observations, not runtime or full-suite
+acceptance, and do not cancel C1–C4 or existing security/acceptance obligations.
+
+**Suggested bounded execution:** reconcile urgent status/anchor drift (D1), then
+repair current-state documentation (D2–D10, sharing schema/architecture work with
+September finding 15); inventory API contract gaps separately (D11). Triage C1
+first among the new behavior findings; carry C2/C3 under their existing IDs and
+resolve C4 from actual audience paths. Record the chosen scope and execution head
+before implementation. Use supported PostgreSQL 18 and focused integration tests
+for behavior changes, production-image validation for C2, and link/anchor,
+metadata and route checks for documentation repairs. Refresh only evidence
+actually executed; do not claim that this backlog edit ran tests/migrations or
+corrected the referenced repository documents.
 
 ## Checkpoint evidence and source retirement
 
