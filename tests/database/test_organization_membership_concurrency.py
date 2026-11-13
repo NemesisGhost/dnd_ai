@@ -28,6 +28,7 @@ from tests.builders import make_authored_campaign, make_authored_world
 from tests.database.test_authoring_concurrency import _purge_user_worlds
 from tests.database.test_content_authoring_concurrency import race
 from tests.factories import make_user
+from tests.r01_support import fixture_plan
 
 pytestmark = pytest.mark.database
 
@@ -56,6 +57,7 @@ class Fixture:
             ],
             started_world_time_id=self.years[year],
             typed={"role": f"Stint {year}"},
+            plan=fixture_plan(connection, self.campaign_id),
         )
 
     def count(self) -> int:
@@ -78,6 +80,7 @@ def _publish(setup, campaign_id, owner, entity_id, version):  # type: ignore[no-
             entity_id=entity_id,
             actor_user_id=owner,
             expected_row_version=version,
+            plan=fixture_plan(setup, campaign_id),
         ).row_version
     return version
 
@@ -96,6 +99,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             name="Race Guild",
             summary=None,
             typed_fields={"organization_type": "guild"},
+            plan=fixture_plan(setup, campaign_id),
         )
         _publish(setup, campaign_id, owner, organization.entity_id, organization.row_version)
         species = list_species_options(setup, world_id=world.world_id)[0].species_id
@@ -107,6 +111,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             summary=None,
             species_id=species,
             size_category="medium",
+            plan=fixture_plan(setup, campaign_id),
         )
         _publish(setup, campaign_id, owner, member.entity_id, member.row_version)
         calendar = create_calendar(

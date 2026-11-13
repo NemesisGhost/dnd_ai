@@ -63,6 +63,7 @@ from tests.database.test_authoring_concurrency import (
 )
 from tests.factories import make_campaign_party, make_party, make_user, make_world_time
 from tests.lock_race_support import LockRace
+from tests.r01_support import fixture_plan
 
 pytestmark = pytest.mark.database
 
@@ -89,6 +90,7 @@ class Fixture:
                 name=name,
                 summary=None,
                 parent_location_id=parent,
+                plan=fixture_plan(connection, self.campaign_id),
             )
         return result.entity_id, result.row_version
 
@@ -132,6 +134,7 @@ class Fixture:
             name=name,
             summary=None,
             parent_location_id=parent,
+            plan=fixture_plan(connection, self.campaign_id),
         )
 
 
@@ -236,6 +239,7 @@ def test_an_edit_waits_for_an_in_flight_archive_and_is_then_stale(fx: Fixture) -
             entity_id=place,
             actor_user_id=fx.owner,
             expected_row_version=version,
+            plan=fixture_plan(c, fx.campaign_id),
         ),
         lambda c: fx.update(c, place, version),
         ENTITY_LOCK,
@@ -258,6 +262,7 @@ def test_an_archive_waits_for_an_in_flight_edit_and_is_then_stale(fx: Fixture) -
             entity_id=place,
             actor_user_id=fx.owner,
             expected_row_version=version,
+            plan=fixture_plan(c, fx.campaign_id),
         ),
         ENTITY_LOCK,
     )
@@ -274,6 +279,7 @@ def test_an_edit_waits_for_an_in_flight_publish_and_is_then_stale(fx: Fixture) -
                 entity_id=place,
                 actor_user_id=fx.owner,
                 expected_row_version=version,
+                plan=fixture_plan(connection, fx.campaign_id),
             )
         version = fx.version(place)
     out = race(
@@ -284,6 +290,7 @@ def test_an_edit_waits_for_an_in_flight_publish_and_is_then_stale(fx: Fixture) -
             entity_id=place,
             actor_user_id=fx.owner,
             expected_row_version=version,
+            plan=fixture_plan(c, fx.campaign_id),
         ),
         lambda c: fx.update(c, place, version),
         ENTITY_LOCK,
@@ -302,6 +309,7 @@ def test_a_submit_for_review_waits_for_an_in_flight_edit_and_is_then_stale(fx: F
             entity_id=place,
             actor_user_id=fx.owner,
             expected_row_version=version,
+            plan=fixture_plan(c, fx.campaign_id),
         ),
         ENTITY_LOCK,
     )
@@ -370,6 +378,7 @@ def test_a_child_waits_for_an_in_flight_parent_archive_and_is_refused(fx: Fixtur
             entity_id=parent,
             actor_user_id=fx.owner,
             expected_row_version=parent_version,
+            plan=fixture_plan(c, fx.campaign_id),
         ),
         lambda c: create_location(
             c,
@@ -379,6 +388,7 @@ def test_a_child_waits_for_an_in_flight_parent_archive_and_is_refused(fx: Fixtur
             name="Orphan",
             summary=None,
             parent_location_id=parent,
+            plan=fixture_plan(c, fx.campaign_id),
         ),
         ENTITY_LOCK,
     )
@@ -398,6 +408,7 @@ def test_a_parent_archive_waits_for_an_in_flight_child_and_leaves_it_intact(fx: 
             name="Child",
             summary=None,
             parent_location_id=parent,
+            plan=fixture_plan(c, fx.campaign_id),
         ),
         lambda c: archive_entity(
             c,
@@ -405,6 +416,7 @@ def test_a_parent_archive_waits_for_an_in_flight_child_and_leaves_it_intact(fx: 
             entity_id=parent,
             actor_user_id=fx.owner,
             expected_row_version=parent_version,
+            plan=fixture_plan(c, fx.campaign_id),
         ),
         ENTITY_LOCK,
     )
@@ -433,6 +445,7 @@ def test_a_child_waits_for_an_in_flight_draft_delete_and_is_refused(fx: Fixture)
             actor_user_id=fx.owner,
             expected_row_version=parent_version,
             reason="mistake",
+            plan=fixture_plan(c, fx.campaign_id),
         ),
         lambda c: create_location(
             c,
@@ -442,6 +455,7 @@ def test_a_child_waits_for_an_in_flight_draft_delete_and_is_refused(fx: Fixture)
             name="Child of nothing",
             summary=None,
             parent_location_id=parent,
+            plan=fixture_plan(c, fx.campaign_id),
         ),
         ENTITY_LOCK,
     )
@@ -460,6 +474,7 @@ def test_a_draft_delete_waits_for_an_in_flight_child_and_is_then_blocked(fx: Fix
             name="Late child",
             summary=None,
             parent_location_id=parent,
+            plan=fixture_plan(c, fx.campaign_id),
         ),
         lambda c: delete_draft_entity(
             c,
@@ -468,6 +483,7 @@ def test_a_draft_delete_waits_for_an_in_flight_child_and_is_then_blocked(fx: Fix
             actor_user_id=fx.owner,
             expected_row_version=parent_version,
             reason="mistake",
+            plan=fixture_plan(c, fx.campaign_id),
         ),
         ENTITY_LOCK,
     )
@@ -529,6 +545,7 @@ def _create_as(fx: Fixture, user: uuid.UUID, name: str) -> Callable[[Connection]
         category_code="region",
         name=name,
         summary=None,
+        plan=fixture_plan(c, fx.campaign_id),
     )
 
 
@@ -667,6 +684,7 @@ def test_creations_with_different_keys_and_the_same_name_both_succeed(fx: Fixtur
                 category_code="region",
                 name="Twin",
                 summary=None,
+                plan=fixture_plan(connection, fx.campaign_id),
             ).entity_id
 
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -688,6 +706,7 @@ def _organization(fx: Fixture, name: str, parent: uuid.UUID | None = None) -> tu
             summary=None,
             parent_organization_id=parent,
             typed_fields={},
+            plan=fixture_plan(connection, fx.campaign_id),
         )
     return result.entity_id, result.row_version
 
@@ -705,6 +724,7 @@ def _reparent_organization(
         summary=None,
         parent_organization_id=parent,
         typed_fields={},
+        plan=fixture_plan(connection, fx.campaign_id),
     )
 
 
@@ -730,6 +750,7 @@ def test_an_organization_headquarters_archive_wins_over_a_waiting_assignment(fx:
             entity_id=hq,
             actor_user_id=fx.owner,
             expected_row_version=hq_version,
+            plan=fixture_plan(c, fx.campaign_id),
         ),
         lambda c: create_organization(
             c,
@@ -740,6 +761,7 @@ def test_an_organization_headquarters_archive_wins_over_a_waiting_assignment(fx:
             summary=None,
             headquarters_location_id=hq,
             typed_fields={},
+            plan=fixture_plan(c, fx.campaign_id),
         ),
         ENTITY_LOCK,
     )
@@ -763,7 +785,12 @@ class CommittedQuest:
 def _published_quest(fx: Fixture) -> CommittedQuest:
     with fx.engine.begin() as c:
         quest = create_quest(
-            c, campaign_id=fx.campaign_id, actor_user_id=fx.owner, name="Race quest", summary=None
+            c,
+            campaign_id=fx.campaign_id,
+            actor_user_id=fx.owner,
+            name="Race quest",
+            summary=None,
+            plan=fixture_plan(c, fx.campaign_id),
         )
         stage = add_quest_stage(
             c,
@@ -774,6 +801,7 @@ def _published_quest(fx: Fixture) -> CommittedQuest:
             name="Stage",
             description=None,
             stage_type="sequential",
+            plan=fixture_plan(c, fx.campaign_id),
         )
         assert stage.record_id is not None
         objective = add_quest_objective(
@@ -791,6 +819,7 @@ def _published_quest(fx: Fixture) -> CommittedQuest:
             visibility_policy="visible",
             quantity_required=None,
             target_entity_id=None,
+            plan=fixture_plan(c, fx.campaign_id),
         )
         assert objective.record_id is not None
         timeline = c.execute(
@@ -806,6 +835,7 @@ def _published_quest(fx: Fixture) -> CommittedQuest:
                 entity_id=quest.entity_id,
                 actor_user_id=fx.owner,
                 expected_row_version=fx.version(quest.entity_id),
+                plan=fixture_plan(c, fx.campaign_id),
             )
     return CommittedQuest(
         quest_id=quest.entity_id,
@@ -837,6 +867,7 @@ def _remove_objective(fx: Fixture, q: CommittedQuest) -> Callable[[Connection], 
         quest_objective_id=q.objective_id,
         actor_user_id=fx.owner,
         expected_row_version=q.version,
+        plan=fixture_plan(c, fx.campaign_id),
     )
 
 
@@ -896,6 +927,7 @@ def test_two_editors_of_the_same_quest_serialize_and_the_second_is_stale(fx: Fix
             name="Renamed",
             description=None,
             stage_type="sequential",
+            plan=fixture_plan(c, fx.campaign_id),
         )
 
     out = race(fx.engine, rename, rename, ENTITY_LOCK)
@@ -924,6 +956,7 @@ def _published_claim(fx: Fixture) -> CommittedClaim:
             knowledge_type="secret",
             truth_status="true",
             sensitivity="secret",
+            plan=fixture_plan(c, fx.campaign_id),
         )
         timeline = c.execute(
             text("SELECT timeline_id FROM campaign.campaigns WHERE campaign_id = :c"),
@@ -940,6 +973,7 @@ def _published_claim(fx: Fixture) -> CommittedClaim:
                 entity_id=claim.entity_id,
                 actor_user_id=fx.owner,
                 expected_row_version=fx.version(claim.entity_id),
+                plan=fixture_plan(c, fx.campaign_id),
             )
     return CommittedClaim(
         knowledge_item_id=claim.entity_id,
@@ -972,6 +1006,7 @@ def _reword(fx: Fixture, c: CommittedClaim) -> Callable[[Connection], Any]:
         knowledge_type="secret",
         truth_status="true",
         sensitivity="secret",
+        plan=fixture_plan(conn, fx.campaign_id),
     )
 
 
@@ -1040,6 +1075,7 @@ def _move_through(fx: Fixture, entity_id: uuid.UUID, commands: tuple[Any, ...]) 
                 entity_id=entity_id,
                 actor_user_id=fx.owner,
                 expected_row_version=fx.version(entity_id),
+                plan=fixture_plan(c, fx.campaign_id),
             )
 
 
@@ -1061,6 +1097,7 @@ def _supersession_pair(fx: Fixture) -> SupersessionPair:
                 species_id=species,
                 size_category="medium",
                 origin_location_id=place,
+                plan=fixture_plan(c, fx.campaign_id),
             ).entity_id
 
         old, replacement = npc("Race old npc", None), npc("Race new npc", origin)
@@ -1080,6 +1117,7 @@ def _supersede(fx: Fixture, p: SupersessionPair) -> Callable[[Connection], Any]:
         expected_row_version=p.old_version,
         replacement_entity_id=p.replacement,
         replacement_expected_row_version=p.replacement_version,
+        plan=fixture_plan(c, fx.campaign_id),
     )
 
 
@@ -1090,6 +1128,7 @@ def _archive_origin(fx: Fixture, p: SupersessionPair) -> Callable[[Connection], 
         entity_id=p.origin,
         actor_user_id=fx.owner,
         expected_row_version=p.origin_version,
+        plan=fixture_plan(c, fx.campaign_id),
     )
 
 

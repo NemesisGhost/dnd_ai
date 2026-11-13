@@ -28,6 +28,7 @@ from tests.builders import make_authored_campaign, make_authored_world
 from tests.database.test_authoring_concurrency import _purge_user_worlds
 from tests.database.test_content_authoring_concurrency import race
 from tests.factories import make_user
+from tests.r01_support import fixture_plan
 
 pytestmark = pytest.mark.database
 
@@ -56,6 +57,7 @@ class Fixture:
             kind=kind,
             child_type="thing",
             description=None,
+            plan=fixture_plan(connection, self.campaign_id),
         )
 
     def state(self, connection, status: str):  # type: ignore[no-untyped-def]
@@ -83,6 +85,7 @@ def _publish(setup, campaign_id, owner, entity_id, version):  # type: ignore[no-
             entity_id=entity_id,
             actor_user_id=owner,
             expected_row_version=version,
+            plan=fixture_plan(setup, campaign_id),
         ).row_version
     return version
 
@@ -94,7 +97,12 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
         world = make_authored_world(setup, owner_user_id=owner, name="Dungeon Race World")
         campaign_id = make_authored_campaign(setup, world, name="Dungeon Race Campaign")
         dungeon = create_dungeon(
-            setup, campaign_id=campaign_id, actor_user_id=owner, name="Race Vault", summary=None
+            setup,
+            campaign_id=campaign_id,
+            actor_user_id=owner,
+            name="Race Vault",
+            summary=None,
+            plan=fixture_plan(setup, campaign_id),
         )
         area = create_dungeon_area(
             setup,
@@ -103,6 +111,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             dungeon_id=dungeon.entity_id,
             name="Race Hall",
             summary=None,
+            plan=fixture_plan(setup, campaign_id),
         )
         calendar = create_calendar(
             setup,
@@ -168,6 +177,7 @@ def test_an_archive_that_wins_makes_adding_an_area_fail(fx: Fixture) -> None:
             entity_id=fx.area_id,
             actor_user_id=fx.owner,
             expected_row_version=area_version,
+            plan=fixture_plan(connection, fx.campaign_id),
         )
     out = race(
         fx.engine,
@@ -177,6 +187,7 @@ def test_an_archive_that_wins_makes_adding_an_area_fail(fx: Fixture) -> None:
             entity_id=fx.dungeon_id,
             actor_user_id=fx.owner,
             expected_row_version=fx.dungeon_version,
+            plan=fixture_plan(c, fx.campaign_id),
         ),
         lambda c: create_dungeon_area(
             c,
@@ -185,6 +196,7 @@ def test_an_archive_that_wins_makes_adding_an_area_fail(fx: Fixture) -> None:
             dungeon_id=fx.dungeon_id,
             name="Too late",
             summary=None,
+            plan=fixture_plan(c, fx.campaign_id),
         ),
         ENTITY_LOCK,
     )

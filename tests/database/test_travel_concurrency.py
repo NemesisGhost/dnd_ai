@@ -27,6 +27,7 @@ from tests.builders import make_authored_campaign, make_authored_world
 from tests.database.test_authoring_concurrency import _purge_user_worlds
 from tests.database.test_content_authoring_concurrency import race
 from tests.factories import make_user
+from tests.r01_support import fixture_plan
 
 pytestmark = pytest.mark.database
 
@@ -72,6 +73,7 @@ def _publish(setup, campaign_id, owner, entity_id, version):  # type: ignore[no-
             entity_id=entity_id,
             actor_user_id=owner,
             expected_row_version=version,
+            plan=fixture_plan(setup, campaign_id),
         ).row_version
     return version
 
@@ -91,6 +93,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
                 category_code="settlement",
                 name=name,
                 summary=None,
+                plan=fixture_plan(setup, campaign_id),
             )
             _publish(setup, campaign_id, owner, created.entity_id, created.row_version)
             places.append(created.entity_id)
@@ -103,6 +106,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             summary=None,
             species_id=species,
             size_category="medium",
+            plan=fixture_plan(setup, campaign_id),
         )
         _publish(setup, campaign_id, owner, traveler.entity_id, traveler.row_version)
         calendar = create_calendar(

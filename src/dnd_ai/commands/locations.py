@@ -29,7 +29,7 @@ from dnd_ai.domain.authoring import (
     ParentLocationInvalidError,
     normalize_reason,
 )
-from dnd_ai.domain.authorization import R01_PENDING
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.content_authoring import (
     AUTHORABLE_LOCATION_CATEGORIES,
     diff_fields,
@@ -111,6 +111,7 @@ def create_location(
     parent_location_id: uuid.UUID | None = None,
     population: int | None = None,
     building_use: str | None = None,
+    plan: AuthorizationPlan,
 ) -> ContentWriteResult:
     """Create a Location draft: source, `core.entities` root, `world.locations`,
     and the category's subtype row, in the caller's transaction."""
@@ -127,7 +128,7 @@ def create_location(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
-        plan=R01_PENDING,
+        plan=plan,
     )
     if parent_location_id is not None:
         _lock_parent(connection, world_id=scope.world_id, parent_location_id=parent_location_id)
@@ -240,6 +241,7 @@ def update_location(
     population: int | None = None,
     building_use: str | None = None,
     change_note: str | None = None,
+    plan: AuthorizationPlan,
 ) -> ContentWriteResult:
     """Replace a Location's editable fields (name, summary, parent, and the
     category's typed fields). Category is immutable. An identical resubmission
@@ -250,7 +252,7 @@ def update_location(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
-        plan=R01_PENDING,
+        plan=plan,
     )
 
     current_parent_hint = connection.execute(

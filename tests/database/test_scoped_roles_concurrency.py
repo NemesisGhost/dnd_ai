@@ -32,6 +32,7 @@ from tests.factories import (
     make_membership_role,
     make_user,
 )
+from tests.r01_support import fixture_plan
 
 pytestmark = pytest.mark.database
 
@@ -88,6 +89,7 @@ def _edit(fx: RelationshipFixture, editor: Editor, connection, description: str)
         expected_row_version=fx.version,
         description=description,
         started_world_time_id=None,
+        plan=fixture_plan(connection, fx.campaign_id),
     )
 
 
@@ -121,6 +123,7 @@ def test_a_world_role_ended_mid_command_is_honoured_by_a_relationship_writer(
             expected_row_version=before.row_version,
             description="Edited after the role ended",
             started_world_time_id=None,
+            plan=fixture_plan(racer, fx.campaign_id),
         ),
         WORLD_SHARE_LOCK,
     )

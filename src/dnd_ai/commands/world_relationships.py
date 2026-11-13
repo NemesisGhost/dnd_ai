@@ -24,7 +24,7 @@ from sqlalchemy import Connection, text
 from sqlalchemy.exc import IntegrityError
 
 from dnd_ai.domain.authoring import StaleWriteError, normalize_reason
-from dnd_ai.domain.authorization import R01_PENDING
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.content_authoring import diff_fields, initial_fields
 from dnd_ai.domain.relationship_authoring import (
     KIND_EMPLOYMENT,
@@ -194,13 +194,14 @@ def _lock_relationship(
     relationship_id: uuid.UUID,
     expected_row_version: int,
     allow_archived: bool = False,
+    plan: AuthorizationPlan,
 ) -> _Locked:
     scope = lock_authoring_scope(
         connection,
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
-        plan=R01_PENDING,
+        plan=plan,
     )
     participants = connection.execute(
         text(
@@ -254,6 +255,7 @@ def create_relationship(
     description: str | None = None,
     started_world_time_id: uuid.UUID | None = None,
     typed: dict[str, Any] | None = None,
+    plan: AuthorizationPlan,
 ) -> RelationshipResult:
     shape = relationship_kind(kind)
     validate_shape(shape, relationship_type, [p.role for p in participants])
@@ -273,7 +275,7 @@ def create_relationship(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
-        plan=R01_PENDING,
+        plan=plan,
     )
     locked = lock_entities(connection, world_id=scope.world_id, share_ids=entity_ids)
     for entity_id in set(entity_ids):
@@ -508,6 +510,7 @@ def update_relationship(
     started_world_time_id: uuid.UUID | None,
     typed: dict[str, Any] | None = None,
     change_note: str | None = None,
+    plan: AuthorizationPlan,
 ) -> RelationshipResult:
     normalize_reason(change_note)
     clean_description = normalize_text(description, field="description")
@@ -517,6 +520,7 @@ def update_relationship(
         actor_user_id=actor_user_id,
         relationship_id=relationship_id,
         expected_row_version=expected_row_version,
+        plan=plan,
     )
     clean_typed = _clean_typed(locked.kind, typed or {})
     start_key = _world_time_sort_key(connection, locked.world_id, started_world_time_id)
@@ -612,6 +616,7 @@ def end_relationship(
     relationship_id: uuid.UUID,
     expected_row_version: int,
     ended_world_time_id: uuid.UUID,
+    plan: AuthorizationPlan,
 ) -> RelationshipResult:
     locked = _lock_relationship(
         connection,
@@ -619,6 +624,7 @@ def end_relationship(
         actor_user_id=actor_user_id,
         relationship_id=relationship_id,
         expected_row_version=expected_row_version,
+        plan=plan,
     )
     if locked.row.ended_world_time_id is not None:
         raise RelationshipAlreadyEndedError(f"relationship {relationship_id} already ended")
@@ -693,6 +699,7 @@ def change_membership_office(
     role: str | None,
     rank: str | None,
     is_public: bool,
+    plan: AuthorizationPlan,
 ) -> OfficeChangeResult:
     """An in-world change of office or rank: the current stint ends at the effective time and a
     new stint of the same member in the same organization starts at it, in one transaction.
@@ -706,6 +713,7 @@ def change_membership_office(
         actor_user_id=actor_user_id,
         relationship_id=relationship_id,
         expected_row_version=expected_row_version,
+        plan=plan,
     )
     if locked.kind != KIND_MEMBERSHIP:
         raise RelationshipInvalidError("only a membership can change office")
@@ -724,6 +732,7 @@ def change_membership_office(
         relationship_id=relationship_id,
         expected_row_version=expected_row_version,
         ended_world_time_id=effective_world_time_id,
+        plan=plan,
     )
     successor = create_relationship(
         connection,
@@ -735,6 +744,7 @@ def change_membership_office(
         description=locked.row.description,
         started_world_time_id=effective_world_time_id,
         typed=typed,
+        plan=plan,
     )
     return OfficeChangeResult(ended=ended, successor=successor)
 
@@ -746,6 +756,7 @@ def archive_relationship(
     actor_user_id: uuid.UUID,
     relationship_id: uuid.UUID,
     expected_row_version: int,
+    plan: AuthorizationPlan,
 ) -> RelationshipResult:
     locked = _lock_relationship(
         connection,
@@ -753,6 +764,7 @@ def archive_relationship(
         actor_user_id=actor_user_id,
         relationship_id=relationship_id,
         expected_row_version=expected_row_version,
+        plan=plan,
     )
     connection.execute(
         text(
@@ -786,6 +798,7 @@ def restore_relationship(
     actor_user_id: uuid.UUID,
     relationship_id: uuid.UUID,
     expected_row_version: int,
+    plan: AuthorizationPlan,
 ) -> RelationshipResult:
     locked = _lock_relationship(
         connection,
@@ -794,6 +807,7 @@ def restore_relationship(
         relationship_id=relationship_id,
         expected_row_version=expected_row_version,
         allow_archived=True,
+        plan=plan,
     )
     if lifecycle_code(connection, locked.row.lifecycle_status_id) != "archived":
         raise RelationshipNotArchivedError(f"relationship {relationship_id} is not archived")
@@ -840,6 +854,7 @@ def set_relationship_perspective(
     obligation: int | None = None,
     emotional_tone: str | None = None,
     private_interpretation: str | None = None,
+    plan: AuthorizationPlan,
 ) -> RelationshipResult:
     values: dict[str, object] = {
         "affinity": normalize_stance(affinity, field="affinity"),
@@ -860,6 +875,7 @@ def set_relationship_perspective(
         actor_user_id=actor_user_id,
         relationship_id=relationship_id,
         expected_row_version=expected_row_version,
+        plan=plan,
     )
     if holder_entity_id not in {p.entity_id for p in locked.participants}:
         raise PerspectiveHolderInvalidError(f"{holder_entity_id} is not a participant")

@@ -50,7 +50,7 @@ from dnd_ai.domain.authoring import (
     SupersessionTargetInvalidError,
     normalize_reason,
 )
-from dnd_ai.domain.authorization import R01_PENDING
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.dungeon_authoring import DungeonHasActiveAreasError
 from dnd_ai.domain.entity_lifecycle import (
     APPROVE,
@@ -316,6 +316,7 @@ def _prepare(
     actor_user_id: uuid.UUID,
     expected_row_version: int,
     action: str,
+    plan: AuthorizationPlan,
 ) -> tuple[uuid.UUID, LockedContent]:
     """Lock and authorize (scope, then entities in `entity_id` order: the target
     `FOR UPDATE`, and for publish the records it refers to `FOR SHARE`), bind the
@@ -327,7 +328,7 @@ def _prepare(
         world_capability=_lifecycle_world_capability(
             connection, entity_id=entity_id, action=action
         ),
-        plan=R01_PENDING,
+        plan=plan,
     )
     world_id = scope.world_id
     reference_ids = (
@@ -458,6 +459,7 @@ def _canon_transition(
     actor_user_id: uuid.UUID,
     expected_row_version: int,
     reason: str | None = None,
+    plan: AuthorizationPlan,
 ) -> EntityTransitionResult:
     normalize_reason(reason)
     _world_id, entity = _prepare(
@@ -467,6 +469,7 @@ def _canon_transition(
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
         action=action,
+        plan=plan,
     )
     require_transition(action, entity.canon_status, entity.lifecycle_status)
     target = target_canon_status(action, entity.canon_status)
@@ -498,6 +501,7 @@ def submit_entity_for_review(
     entity_id: uuid.UUID,
     actor_user_id: uuid.UUID,
     expected_row_version: int,
+    plan: AuthorizationPlan,
 ) -> EntityTransitionResult:
     """draft -> proposed."""
     return _canon_transition(
@@ -507,6 +511,7 @@ def submit_entity_for_review(
         entity_id=entity_id,
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
+        plan=plan,
     )
 
 
@@ -518,6 +523,7 @@ def return_entity_to_draft(
     actor_user_id: uuid.UUID,
     expected_row_version: int,
     reason: str | None = None,
+    plan: AuthorizationPlan,
 ) -> EntityTransitionResult:
     """proposed | approved | rejected -> draft."""
     return _canon_transition(
@@ -528,6 +534,7 @@ def return_entity_to_draft(
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
         reason=reason,
+        plan=plan,
     )
 
 
@@ -538,6 +545,7 @@ def approve_entity(
     entity_id: uuid.UUID,
     actor_user_id: uuid.UUID,
     expected_row_version: int,
+    plan: AuthorizationPlan,
 ) -> EntityTransitionResult:
     """proposed -> approved, bound to the reviewed `row_version`."""
     return _canon_transition(
@@ -547,6 +555,7 @@ def approve_entity(
         entity_id=entity_id,
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
+        plan=plan,
     )
 
 
@@ -558,6 +567,7 @@ def reject_entity(
     actor_user_id: uuid.UUID,
     expected_row_version: int,
     reason: str | None = None,
+    plan: AuthorizationPlan,
 ) -> EntityTransitionResult:
     """draft | proposed -> rejected."""
     return _canon_transition(
@@ -568,6 +578,7 @@ def reject_entity(
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
         reason=reason,
+        plan=plan,
     )
 
 
@@ -578,6 +589,7 @@ def publish_entity_as_canon(
     entity_id: uuid.UUID,
     actor_user_id: uuid.UUID,
     expected_row_version: int,
+    plan: AuthorizationPlan,
 ) -> EntityTransitionResult:
     """approved -> canon; the subtype chain must be complete."""
     return _canon_transition(
@@ -587,6 +599,7 @@ def publish_entity_as_canon(
         entity_id=entity_id,
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
+        plan=plan,
     )
 
 
@@ -599,6 +612,7 @@ def supersede_entity(
     expected_row_version: int,
     replacement_entity_id: uuid.UUID,
     replacement_expected_row_version: int,
+    plan: AuthorizationPlan,
 ) -> EntityTransitionResult:
     """canon -> superseded, atomically linking the replacement. The replacement
     must be an active `approved` or `canon` entity of the same world and type
@@ -613,7 +627,7 @@ def supersede_entity(
         world_capability=_lifecycle_world_capability(
             connection, entity_id=entity_id, action=SUPERSEDE
         ),
-        plan=R01_PENDING,
+        plan=plan,
     )
     # The replacement may be published by this call, so the records it refers to
     # are locked `FOR SHARE` together with the pair, in ascending id order, exactly
@@ -732,6 +746,7 @@ def archive_entity(
     actor_user_id: uuid.UUID,
     expected_row_version: int,
     reason: str | None = None,
+    plan: AuthorizationPlan,
 ) -> EntityTransitionResult:
     """Archive an active entity that is not in review. Canon status is kept."""
     normalize_reason(reason)
@@ -742,6 +757,7 @@ def archive_entity(
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
         action=ARCHIVE,
+        plan=plan,
     )
     require_transition(ARCHIVE, entity.canon_status, entity.lifecycle_status)
     blocked = archive_blocked_reason(
@@ -768,6 +784,7 @@ def restore_entity(
     actor_user_id: uuid.UUID,
     expected_row_version: int,
     reason: str,
+    plan: AuthorizationPlan,
 ) -> EntityTransitionResult:
     """Restore an archived entity to active. A reason is required; canon status
     is unchanged (a superseded entity restores to superseded); the subtype chain
@@ -780,6 +797,7 @@ def restore_entity(
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
         action=RESTORE,
+        plan=plan,
     )
     require_transition(RESTORE, entity.canon_status, entity.lifecycle_status)
     _require_subtype_complete(connection, entity_id=entity_id, entity_type_id=entity.entity_type_id)
@@ -797,6 +815,7 @@ def delete_draft_entity(
     actor_user_id: uuid.UUID,
     expected_row_version: int,
     reason: str,
+    plan: AuthorizationPlan,
 ) -> EntityTransitionResult:
     """Physically delete a never-canon (`draft`/`rejected`), unreferenced draft.
     A reason is required. Only the reviewed owned rows (subtype chain, names,
@@ -811,6 +830,7 @@ def delete_draft_entity(
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
         action=DELETE_DRAFT,
+        plan=plan,
     )
     require_transition(DELETE_DRAFT, entity.canon_status, entity.lifecycle_status)
     if _has_blocking_references(connection, entity_id=entity_id):

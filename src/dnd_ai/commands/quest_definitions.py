@@ -35,7 +35,7 @@ from dnd_ai.domain.authoring import (
     normalize_name,
     normalize_reason,
 )
-from dnd_ai.domain.authorization import R01_PENDING
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.content_authoring import diff_fields, initial_fields
 from dnd_ai.domain.quest_authoring import (
     OBJECTIVE_TARGET_TYPE_CODES,
@@ -111,13 +111,14 @@ def _lock_quest(
     actor_user_id: uuid.UUID,
     expected_row_version: int,
     target_ids: tuple[uuid.UUID | None, ...] = (),
+    plan: AuthorizationPlan,
 ) -> tuple[AuthoringScope, LockedContent, dict[uuid.UUID, LockedContent]]:
     scope = lock_authoring_scope(
         connection,
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
-        plan=R01_PENDING,
+        plan=plan,
     )
     locked = lock_entities(
         connection,
@@ -223,6 +224,7 @@ def create_quest(
     actor_user_id: uuid.UUID,
     name: str | None,
     summary: str | None,
+    plan: AuthorizationPlan,
 ) -> ContentWriteResult:
     clean_name = normalize_name(name)
     clean_summary = normalize_description(summary)
@@ -231,7 +233,7 @@ def create_quest(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
-        plan=R01_PENDING,
+        plan=plan,
     )
     source_id = insert_gm_source(connection, world_id=scope.world_id, actor_user_id=actor_user_id)
     entity_id, row_version = insert_draft_entity(
@@ -269,6 +271,7 @@ def update_quest(
     summary: str | None,
     change_note: str | None = None,
     gm_notes: str | None | _Unset = UNSET,
+    plan: AuthorizationPlan,
 ) -> ContentWriteResult:
     normalize_reason(change_note)
     scope, quest, _ = _lock_quest(
@@ -277,6 +280,7 @@ def update_quest(
         quest_id=quest_id,
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
+        plan=plan,
     )
     clean_name = normalize_name(name)
     clean_summary = normalize_description(summary)
@@ -323,6 +327,7 @@ def add_quest_stage(
     name: str | None,
     description: str | None,
     stage_type: str | None,
+    plan: AuthorizationPlan,
 ) -> ContentWriteResult:
     fields = normalize_stage_fields(name=name, description=description, stage_type=stage_type)
     scope, quest, _ = _lock_quest(
@@ -331,6 +336,7 @@ def add_quest_stage(
         quest_id=quest_id,
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
+        plan=plan,
     )
     count, highest = connection.execute(
         text(
@@ -386,6 +392,7 @@ def update_quest_stage(
     name: str | None,
     description: str | None,
     stage_type: str | None,
+    plan: AuthorizationPlan,
 ) -> ContentWriteResult:
     fields = normalize_stage_fields(name=name, description=description, stage_type=stage_type)
     scope, quest, _ = _lock_quest(
@@ -394,6 +401,7 @@ def update_quest_stage(
         quest_id=quest_id,
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
+        plan=plan,
     )
     _require_stage(connection, quest_id, quest_stage_id)
     current = connection.execute(
@@ -447,6 +455,7 @@ def reorder_quest_stages(
     actor_user_id: uuid.UUID,
     expected_row_version: int,
     ordered_stage_ids: list[uuid.UUID],
+    plan: AuthorizationPlan,
 ) -> ContentWriteResult:
     scope, quest, _ = _lock_quest(
         connection,
@@ -454,6 +463,7 @@ def reorder_quest_stages(
         quest_id=quest_id,
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
+        plan=plan,
     )
     current = list(
         connection.execute(
@@ -505,6 +515,7 @@ def remove_quest_stage(
     quest_stage_id: uuid.UUID,
     actor_user_id: uuid.UUID,
     expected_row_version: int,
+    plan: AuthorizationPlan,
 ) -> ContentWriteResult:
     scope, quest, _ = _lock_quest(
         connection,
@@ -512,6 +523,7 @@ def remove_quest_stage(
         quest_id=quest_id,
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
+        plan=plan,
     )
     _require_stage(connection, quest_id, quest_stage_id)
     if quest_has_progress(connection, quest_id):
@@ -570,6 +582,7 @@ def add_quest_objective(
     visibility_policy: str | None,
     quantity_required: int | None,
     target_entity_id: uuid.UUID | None,
+    plan: AuthorizationPlan,
 ) -> ContentWriteResult:
     fields = normalize_objective_fields(
         name=name,
@@ -587,6 +600,7 @@ def add_quest_objective(
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
         target_ids=(target_entity_id,),
+        plan=plan,
     )
     _require_stage(connection, quest_id, quest_stage_id)
     _validate_target(locked, target_entity_id)
@@ -660,6 +674,7 @@ def update_quest_objective(
     visibility_policy: str | None,
     quantity_required: int | None,
     target_entity_id: uuid.UUID | None,
+    plan: AuthorizationPlan,
 ) -> ContentWriteResult:
     fields = normalize_objective_fields(
         name=name,
@@ -683,6 +698,7 @@ def update_quest_objective(
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
         target_ids=(target_entity_id if target_entity_id != current_target else None,),
+        plan=plan,
     )
     _require_stage(connection, quest_id, quest_stage_id)
     _require_objective(connection, quest_id, quest_stage_id, quest_objective_id)
@@ -767,6 +783,7 @@ def remove_quest_objective(
     quest_objective_id: uuid.UUID,
     actor_user_id: uuid.UUID,
     expected_row_version: int,
+    plan: AuthorizationPlan,
 ) -> ContentWriteResult:
     scope, quest, _ = _lock_quest(
         connection,
@@ -774,6 +791,7 @@ def remove_quest_objective(
         quest_id=quest_id,
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
+        plan=plan,
     )
     _require_stage(connection, quest_id, quest_stage_id)
     _require_objective(connection, quest_id, quest_stage_id, quest_objective_id)

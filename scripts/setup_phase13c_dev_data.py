@@ -440,6 +440,7 @@ from dnd_ai.commands.world_time import create_calendar, create_world_time
 from dnd_ai.commands.worlds import create_world
 from dnd_ai.config import settings
 from dnd_ai.domain.access import is_platform_administrator, resolve_access_context
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.character_builds import (
     BuildInput,
     ClassLevelInput,
@@ -459,6 +460,18 @@ from dnd_ai.queries.world_explorer import (
     get_location_view,
     search_world_entities,
 )
+
+
+def _script_plan(
+    connection: Connection, campaign_id: uuid.UUID, actor_user_id: uuid.UUID
+) -> AuthorizationPlan:
+    """A pending plan for this operator script (R01 S3). The script is not a route: it runs as the seeding
+    operator in its own transaction, so the commands record their decisions and nothing is judged. It
+    protects nothing, exactly as `R01_PENDING` did before the commands took a plan."""
+    return AuthorizationPlan.begin(
+        connection, actor_user_id=actor_user_id, campaign_id=campaign_id, pending=True
+    )
+
 
 _COMMAND_NAME = "scripts.setup_phase13c_dev_data"
 
@@ -2077,6 +2090,7 @@ def _get_or_create_character(
         summary=None,
         species_id=species_id,
         size_category=_CHARACTER_SIZE_CATEGORY,
+        plan=_script_plan(connection, campaign_id, owner_user_id),
     )
     entity_id = created.entity_id
     version = created.row_version
@@ -2087,6 +2101,7 @@ def _get_or_create_character(
             entity_id=entity_id,
             actor_user_id=owner_user_id,
             expected_row_version=version,
+            plan=_script_plan(connection, campaign_id, owner_user_id),
         ).row_version
     summary.add(created=True, label=f"character {name!r} ({species_code})", record_id=entity_id)
     return entity_id

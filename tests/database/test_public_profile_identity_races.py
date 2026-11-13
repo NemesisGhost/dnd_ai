@@ -127,8 +127,15 @@ def edit_identity(
             "notes": cur.notes,
         }
         if kind == "npc":
-            return update_npc(connection, npc_id=character, **common)
-        return update_player_character(connection, player_character_id=character, **common)
+            return update_npc(
+                connection, npc_id=character, plan=fixture_plan(connection, g.campaign_id), **common
+            )
+        return update_player_character(
+            connection,
+            player_character_id=character,
+            plan=fixture_plan(connection, g.campaign_id),
+            **common,
+        )
 
     return run
 

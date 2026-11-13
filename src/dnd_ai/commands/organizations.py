@@ -33,7 +33,7 @@ from dnd_ai.domain.authoring import (
     normalize_name,
     normalize_reason,
 )
-from dnd_ai.domain.authorization import R01_PENDING
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.content_authoring import (
     AUTHORABLE_LOCATION_CATEGORIES,
     diff_fields,
@@ -180,6 +180,7 @@ def create_organization(
     headquarters_location_id: uuid.UUID | None = None,
     religion_id: uuid.UUID | None = None,
     typed_fields: Mapping[str, object] | None = None,
+    plan: AuthorizationPlan,
 ) -> ContentWriteResult:
     """Create an Organization draft of one of the six kinds, with its complete
     subtype chain, in the caller's transaction."""
@@ -196,7 +197,7 @@ def create_organization(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
-        plan=R01_PENDING,
+        plan=plan,
     )
     reference_ids = [
         r for r in (parent_organization_id, headquarters_location_id, religion_id) if r is not None
@@ -352,6 +353,7 @@ def update_organization(
     religion_id: uuid.UUID | None = None,
     typed_fields: Mapping[str, object] | None = None,
     change_note: str | None = None,
+    plan: AuthorizationPlan,
 ) -> ContentWriteResult:
     """Replace an Organization's editable fields. The kind (entity type) is
     immutable; an identical resubmission is a no-op."""
@@ -361,7 +363,7 @@ def update_organization(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
-        plan=R01_PENDING,
+        plan=plan,
     )
 
     hint = connection.execute(

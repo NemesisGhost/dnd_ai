@@ -13,6 +13,8 @@ import uuid
 
 from sqlalchemy import Connection
 
+from dnd_ai.domain.authorization import AuthorizationPlan
+
 from ._content import ContentWriteResult
 from .npcs import create_character_identity, update_character_identity
 
@@ -30,6 +32,7 @@ def create_player_character(
     background: str | None = None,
     appearance: str | None = None,
     notes: str | None = None,
+    plan: AuthorizationPlan,
 ) -> ContentWriteResult:
     return create_character_identity(
         connection,
@@ -44,6 +47,7 @@ def create_player_character(
         background=background,
         appearance=appearance,
         notes=notes,
+        plan=plan,
     )
 
 
@@ -63,6 +67,7 @@ def update_player_character(
     appearance: str | None = None,
     notes: str | None = None,
     change_note: str | None = None,
+    plan: AuthorizationPlan,
 ) -> ContentWriteResult:
     return update_character_identity(
         connection,
@@ -80,4 +85,5 @@ def update_player_character(
         appearance=appearance,
         notes=notes,
         change_note=change_note,
+        plan=plan,
     )

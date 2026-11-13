@@ -39,6 +39,7 @@ from dnd_ai.commands.entity_lifecycle import (
     supersede_entity,
 )
 from dnd_ai.domain.access import AccessContext
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.record_authoring import CAMPAIGN_ORIGINATED_TYPES, authorized_record_actions
 from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.entity_lifecycle import get_entity_lifecycle, list_replacement_candidates
@@ -59,6 +60,7 @@ from .idempotency import (
     complete_idempotent_request,
 )
 from .pagination import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, build_page, decode_typed_cursor
+from .r01_route_plans import get_authorization_plan
 
 router = APIRouter(tags=["entity-lifecycle"])
 
@@ -277,6 +279,7 @@ def _run(
     run: Callable[[], EntityTransitionResult],
     reason: str | None = None,
     lifecycle_action: str | None = None,
+    plan: AuthorizationPlan,
 ) -> Any:
     reservation_id: uuid.UUID | None = None
     if idempotency_key is not None:
@@ -290,6 +293,9 @@ def _run(
             correlation_id=correlation_id,
         )
         if isinstance(outcome, IdempotentReplay):
+            # R01 plan 6.6 (R-D4): the stored receipt leaves only after the plan's requirements hold
+            # in a fresh snapshot; a replay writes nothing, so the finalize is its last statement.
+            plan.finalize(connection)
             return JSONResponse(
                 status_code=outcome.response_status_code, content=outcome.response_body
             )
@@ -331,6 +337,7 @@ def _run(
             response_status_code=200,
             response_body=response,
         )
+    plan.finalize(connection)  # R01: the last statement
     return response
 
 
@@ -347,6 +354,7 @@ _PrivateRead = Annotated[
     Depends(require_campaign_capability(_CAPABILITY, world_capability=WORLD_CANON_READ_PRIVATE)),
 ]
 _Conn = Annotated[Connection, Depends(get_connection)]
+_Plan = Annotated[AuthorizationPlan, Depends(get_authorization_plan)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
 
@@ -356,6 +364,7 @@ def submit_for_review_endpoint(
     entity_id: uuid.UUID,
     body: VersionOnlyRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -374,7 +383,9 @@ def submit_for_review_endpoint(
             entity_id=entity_id,
             actor_user_id=access.user_id,
             expected_row_version=body.expected_row_version,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -383,6 +394,7 @@ def return_to_draft_endpoint(
     entity_id: uuid.UUID,
     body: ReasonRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -403,7 +415,9 @@ def return_to_draft_endpoint(
             actor_user_id=access.user_id,
             expected_row_version=body.expected_row_version,
             reason=body.reason,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -412,6 +426,7 @@ def approve_endpoint(
     entity_id: uuid.UUID,
     body: VersionOnlyRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -430,7 +445,9 @@ def approve_endpoint(
             entity_id=entity_id,
             actor_user_id=access.user_id,
             expected_row_version=body.expected_row_version,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -439,6 +456,7 @@ def reject_endpoint(
     entity_id: uuid.UUID,
     body: ReasonRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -459,7 +477,9 @@ def reject_endpoint(
             actor_user_id=access.user_id,
             expected_row_version=body.expected_row_version,
             reason=body.reason,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -468,6 +488,7 @@ def publish_endpoint(
     entity_id: uuid.UUID,
     body: VersionOnlyRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -486,7 +507,9 @@ def publish_endpoint(
             entity_id=entity_id,
             actor_user_id=access.user_id,
             expected_row_version=body.expected_row_version,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -495,6 +518,7 @@ def supersede_endpoint(
     entity_id: uuid.UUID,
     body: SupersedeRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -515,7 +539,9 @@ def supersede_endpoint(
             expected_row_version=body.expected_row_version,
             replacement_entity_id=body.replacement_entity_id,
             replacement_expected_row_version=body.replacement_expected_row_version,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -524,6 +550,7 @@ def archive_endpoint(
     entity_id: uuid.UUID,
     body: ReasonRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -545,7 +572,9 @@ def archive_endpoint(
             actor_user_id=access.user_id,
             expected_row_version=body.expected_row_version,
             reason=body.reason,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -554,6 +583,7 @@ def restore_endpoint(
     entity_id: uuid.UUID,
     body: RequiredReasonRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -575,7 +605,9 @@ def restore_endpoint(
             actor_user_id=access.user_id,
             expected_row_version=body.expected_row_version,
             reason=body.reason,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -584,6 +616,7 @@ def delete_draft_endpoint(
     entity_id: uuid.UUID,
     body: RequiredReasonRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -604,5 +637,7 @@ def delete_draft_endpoint(
             actor_user_id=access.user_id,
             expected_row_version=body.expected_row_version,
             reason=body.reason,
+            plan=plan,
         ),
+        plan=plan,
     )

@@ -28,6 +28,7 @@ from tests.builders import make_authored_campaign, make_authored_world
 from tests.database.test_authoring_concurrency import _purge_user_worlds
 from tests.database.test_content_authoring_concurrency import ENTITY_LOCK, race
 from tests.factories import make_campaign_membership, make_user
+from tests.r01_support import fixture_plan
 
 pytestmark = [pytest.mark.database, pytest.mark.real_relationship_policy]
 
@@ -50,6 +51,7 @@ class Fixture:
             entity_id=self.character_id,
             actor_user_id=self.owner,
             expected_row_version=self.version,
+            plan=fixture_plan(connection, self.campaign_id),
         )
 
     def grant(self, connection):  # type: ignore[no-untyped-def]
@@ -113,6 +115,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             summary=None,
             species_id=species,
             size_category="medium",
+            plan=fixture_plan(setup, campaign_id),
         )
         version = created.row_version
         for step in (submit_entity_for_review, approve_entity, publish_entity_as_canon):
@@ -122,6 +125,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
                 entity_id=created.entity_id,
                 actor_user_id=owner,
                 expected_row_version=version,
+                plan=fixture_plan(setup, campaign_id),
             ).row_version
     yield Fixture(
         postgres_engine,

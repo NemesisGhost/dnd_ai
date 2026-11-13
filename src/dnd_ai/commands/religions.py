@@ -11,7 +11,7 @@ import uuid
 from sqlalchemy import Connection, text
 
 from dnd_ai.domain.authoring import normalize_description, normalize_name, normalize_reason
-from dnd_ai.domain.authorization import R01_PENDING
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.content_authoring import diff_fields, initial_fields
 from dnd_ai.domain.organization_authoring import (
     DESCRIPTION_FIELD_MAX_LENGTH,
@@ -46,6 +46,7 @@ def create_religion(
     name: str | None,
     summary: str | None,
     pantheon_structure: str | None = None,
+    plan: AuthorizationPlan,
 ) -> ContentWriteResult:
     clean_name = normalize_name(name)
     clean_summary = normalize_description(summary)
@@ -55,7 +56,7 @@ def create_religion(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
-        plan=R01_PENDING,
+        plan=plan,
     )
     source_id = insert_gm_source(connection, world_id=scope.world_id, actor_user_id=actor_user_id)
     entity_id, row_version = insert_draft_entity(
@@ -96,6 +97,7 @@ def update_religion(
     summary: str | None,
     pantheon_structure: str | None = None,
     change_note: str | None = None,
+    plan: AuthorizationPlan,
 ) -> ContentWriteResult:
     normalize_reason(change_note)
     scope = lock_authoring_scope(
@@ -103,7 +105,7 @@ def update_religion(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
-        plan=R01_PENDING,
+        plan=plan,
     )
     locked = lock_entities(connection, world_id=scope.world_id, update_ids=[religion_id])
     target = editable_target(

@@ -23,6 +23,7 @@ from sqlalchemy import Connection, text
 from sqlalchemy.exc import IntegrityError
 
 from dnd_ai.domain.authoring import AuthoringValidationError, QuestHasProgressError
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.content_authoring import diff_fields, initial_fields
 from dnd_ai.domain.quest_authoring import (
     MAX_DEPENDENCIES,
@@ -114,6 +115,7 @@ def add_objective_dependency(
     objective_id: uuid.UUID,
     depends_on_objective_id: uuid.UUID,
     dependency_type: str | None,
+    plan: AuthorizationPlan,
 ) -> ContentWriteResult:
     kind = normalize_dependency_type(dependency_type)
     scope, quest, _ = _lock_quest(
@@ -122,6 +124,7 @@ def add_objective_dependency(
         quest_id=quest_id,
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
+        plan=plan,
     )
     if quest_has_progress(connection, quest_id):
         raise QuestHasProgressError(f"quest {quest_id} has progress")
@@ -185,6 +188,7 @@ def remove_objective_dependency(
     actor_user_id: uuid.UUID,
     expected_row_version: int,
     objective_dependency_id: uuid.UUID,
+    plan: AuthorizationPlan,
 ) -> ContentWriteResult:
     scope, quest, _ = _lock_quest(
         connection,
@@ -192,6 +196,7 @@ def remove_objective_dependency(
         quest_id=quest_id,
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
+        plan=plan,
     )
     if quest_has_progress(connection, quest_id):
         raise QuestHasProgressError(f"quest {quest_id} has progress")
@@ -235,6 +240,7 @@ def add_quest_participant(
     expected_row_version: int,
     participant_entity_id: uuid.UUID,
     participant_role: str | None,
+    plan: AuthorizationPlan,
 ) -> ContentWriteResult:
     role = normalize_participant_role(participant_role)
     scope, quest, locked = _lock_quest(
@@ -244,6 +250,7 @@ def add_quest_participant(
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
         target_ids=(participant_entity_id,),
+        plan=plan,
     )
     usable_reference(
         locked,
@@ -291,6 +298,7 @@ def remove_quest_participant(
     actor_user_id: uuid.UUID,
     expected_row_version: int,
     quest_participant_id: uuid.UUID,
+    plan: AuthorizationPlan,
 ) -> ContentWriteResult:
     scope, quest, _ = _lock_quest(
         connection,
@@ -298,6 +306,7 @@ def remove_quest_participant(
         quest_id=quest_id,
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
+        plan=plan,
     )
     row = connection.execute(
         text(
@@ -348,6 +357,7 @@ def add_quest_outcome(
     name: str | None,
     description: str | None,
     outcome_category: str | None,
+    plan: AuthorizationPlan,
 ) -> ContentWriteResult:
     fields = normalize_outcome_fields(
         code=code, name=name, description=description, outcome_category=outcome_category
@@ -358,6 +368,7 @@ def add_quest_outcome(
         quest_id=quest_id,
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
+        plan=plan,
     )
     count = connection.execute(
         text("SELECT count(*) FROM narrative.quest_outcomes WHERE quest_id = :q"), {"q": quest_id}
@@ -413,6 +424,7 @@ def update_quest_outcome(
     name: str | None,
     description: str | None,
     outcome_category: str | None,
+    plan: AuthorizationPlan,
 ) -> ContentWriteResult:
     scope, quest, _ = _lock_quest(
         connection,
@@ -420,6 +432,7 @@ def update_quest_outcome(
         quest_id=quest_id,
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
+        plan=plan,
     )
     current = connection.execute(
         text(
@@ -482,6 +495,7 @@ def remove_quest_outcome(
     quest_outcome_id: uuid.UUID,
     actor_user_id: uuid.UUID,
     expected_row_version: int,
+    plan: AuthorizationPlan,
 ) -> ContentWriteResult:
     scope, quest, _ = _lock_quest(
         connection,
@@ -489,6 +503,7 @@ def remove_quest_outcome(
         quest_id=quest_id,
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
+        plan=plan,
     )
     row = connection.execute(
         text(
@@ -525,6 +540,7 @@ def add_quest_reward(
     reward_type: str | None,
     description: str | None,
     reward_knowledge_item_id: uuid.UUID | None,
+    plan: AuthorizationPlan,
 ) -> ContentWriteResult:
     fields = normalize_reward_fields(reward_type=reward_type, description=description)
     if (fields.reward_type == "knowledge") != (reward_knowledge_item_id is not None):
@@ -536,6 +552,7 @@ def add_quest_reward(
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
         target_ids=(reward_knowledge_item_id,),
+        plan=plan,
     )
     if not _outcome_in_quest(connection, quest_id, quest_outcome_id):
         raise EntityNotFoundError(f"outcome {quest_outcome_id} is not in quest {quest_id}")
@@ -593,6 +610,7 @@ def remove_quest_reward(
     quest_reward_id: uuid.UUID,
     actor_user_id: uuid.UUID,
     expected_row_version: int,
+    plan: AuthorizationPlan,
 ) -> ContentWriteResult:
     scope, quest, _ = _lock_quest(
         connection,
@@ -600,6 +618,7 @@ def remove_quest_reward(
         quest_id=quest_id,
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
+        plan=plan,
     )
     row = connection.execute(
         text("""

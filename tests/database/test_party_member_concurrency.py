@@ -28,6 +28,7 @@ from tests.builders import make_authored_campaign, make_authored_world
 from tests.database.test_authoring_concurrency import _purge_user_worlds
 from tests.database.test_content_authoring_concurrency import race
 from tests.factories import make_user
+from tests.r01_support import fixture_plan
 
 pytestmark = pytest.mark.database
 
@@ -104,6 +105,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             summary=None,
             species_id=species,
             size_category="medium",
+            plan=fixture_plan(setup, campaign_id),
         )
         version = created.row_version
         for step in (submit_entity_for_review, approve_entity, publish_entity_as_canon):
@@ -113,6 +115,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
                 entity_id=created.entity_id,
                 actor_user_id=owner,
                 expected_row_version=version,
+                plan=fixture_plan(setup, campaign_id),
             ).row_version
         calendar = create_calendar(
             setup,

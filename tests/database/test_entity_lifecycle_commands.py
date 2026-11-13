@@ -25,6 +25,7 @@ from tests.factories import (
     make_world,
     status_id,
 )
+from tests.r01_support import fixture_plan
 
 pytestmark = pytest.mark.database
 
@@ -75,6 +76,7 @@ class Ctx:
             campaign_id=self.campaign,
             entity_id=entity_id,
             actor_user_id=kw.pop("actor", self.owner),
+            plan=fixture_plan(self.connection, self.campaign),
             **kw,
         )
 

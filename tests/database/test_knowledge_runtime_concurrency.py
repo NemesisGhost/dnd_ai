@@ -32,6 +32,7 @@ from tests.builders import make_authored_campaign, make_authored_world
 from tests.database.test_authoring_concurrency import _purge_user_worlds
 from tests.database.test_content_authoring_concurrency import race
 from tests.factories import make_user
+from tests.r01_support import fixture_plan
 
 pytestmark = pytest.mark.database
 
@@ -92,6 +93,7 @@ def _publish(setup, campaign_id, owner, entity_id, version):  # type: ignore[no-
             entity_id=entity_id,
             actor_user_id=owner,
             expected_row_version=version,
+            plan=fixture_plan(setup, campaign_id),
         ).row_version
     return version
 
@@ -111,6 +113,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             summary=None,
             species_id=species,
             size_category="medium",
+            plan=fixture_plan(setup, campaign_id),
         )
         _publish(setup, campaign_id, owner, knower.entity_id, knower.row_version)
         claim = create_knowledge_item(
@@ -121,6 +124,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             knowledge_type="secret",
             truth_status="true",
             sensitivity="secret",
+            plan=fixture_plan(setup, campaign_id),
         )
         claim_version = _publish(setup, campaign_id, owner, claim.entity_id, claim.row_version)
         calendar = create_calendar(
@@ -203,6 +207,7 @@ def test_a_statement_edit_that_loses_to_the_first_learning_is_refused(fx: Fixtur
             knowledge_type="secret",
             truth_status="true",
             sensitivity="secret",
+            plan=fixture_plan(c, fx.campaign_id),
         ),
         ENTITY_LOCK,
     )

@@ -24,6 +24,9 @@ from dnd_ai.api.app import create_app
 from dnd_ai.api.r01_pending_routes import R01_FINALIZED_ROUTES, R01_PENDING_ROUTES
 from dnd_ai.api.r01_route_plans import UnclassifiedRouteError, route_is_pending
 from tests.r01_manifest import (
+    _S3_ROUTES as S3_ROUTES,
+)
+from tests.r01_manifest import (
     MANIFEST_PATH,
     MIGRATED_ROUTES,
     OUTSIDE_R01,
@@ -59,14 +62,18 @@ def test_every_route_inside_r01s_bound_is_pending_or_finalized_exactly_once() ->
     assert finalized == set(MIGRATED_ROUTES)
 
 
-def test_s2_finalizes_exactly_the_six_profile_and_revelation_routes() -> None:
-    """S2 migrates the public-profile save, legacy copy, player-profile copy and release, and the
-    revelation create and revoke: 6 of the 192 routes inside R01's bound. The other 186 stay pending."""
-    assert len(R01_FINALIZED_ROUTES) == 6
-    assert len(R01_PENDING_ROUTES) == 186
+def test_s2_finalizes_the_six_profile_and_revelation_routes_and_s3_the_71_authoring_routes() -> (
+    None
+):
+    """S2 migrated the public-profile save, legacy copy, player-profile copy and release, and the
+    revelation create and revoke: 6 of the 192 routes inside R01's bound. S3 migrates the 71
+    definition authoring and lifecycle routes of the `authoring_scope` family. 77 are finalized; the
+    other 115 stay pending."""
+    assert len(R01_FINALIZED_ROUTES) == 77
+    assert len(R01_PENDING_ROUTES) == 115
+    s2 = {route for route in R01_FINALIZED_ROUTES if route not in S3_ROUTES}
     assert {
-        path.rsplit("/campaigns/{campaign_id}/characters/{character_id}/", 1)[-1]
-        for _, path in R01_FINALIZED_ROUTES
+        path.rsplit("/campaigns/{campaign_id}/characters/{character_id}/", 1)[-1] for _, path in s2
     } == {
         "public-profile/draft",
         "public-profile/draft/copy-legacy",
@@ -75,14 +82,15 @@ def test_s2_finalizes_exactly_the_six_profile_and_revelation_routes() -> None:
         "revelations",
         "revelations/{character_revelation_id}/revoke",
     }
+    assert len(S3_ROUTES) == 71
+    assert set(R01_FINALIZED_ROUTES) >= S3_ROUTES
     assert {method for method, _ in R01_FINALIZED_ROUTES} == {"POST"}
 
 
 def test_the_pending_counts_by_family_are_pinned() -> None:
-    """186 distinct pending routes (192 at S1 less S2's six). The manifest has 193 inside records: one
-    (method, path) is registered twice."""
+    """115 distinct pending routes (192 at S1 less S2's six and S3's 71). The manifest has 193 inside
+    records: one (method, path) is registered twice."""
     assert dict(Counter(R01_PENDING_ROUTES.values())) == {
-        "authoring_scope": 71,
         "operation_scope": 54,
         "route_capability_only": 21,
         "access_management": 32,

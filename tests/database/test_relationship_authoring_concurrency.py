@@ -38,6 +38,7 @@ from tests.builders import make_authored_campaign, make_authored_world
 from tests.database.test_authoring_concurrency import _purge_user_worlds
 from tests.database.test_content_authoring_concurrency import race
 from tests.factories import make_user
+from tests.r01_support import fixture_plan
 
 pytestmark = pytest.mark.database
 
@@ -66,6 +67,7 @@ class Fixture:
             expected_row_version=version,
             description=description,
             started_world_time_id=None,
+            plan=fixture_plan(connection, self.campaign_id),
         )
 
     def scalar(self, sql: str, **params: object):  # type: ignore[no-untyped-def]
@@ -81,6 +83,7 @@ def _publish(setup, campaign_id, owner, entity_id, version):  # type: ignore[no-
             entity_id=entity_id,
             actor_user_id=owner,
             expected_row_version=version,
+            plan=fixture_plan(setup, campaign_id),
         ).row_version
     return version
 
@@ -100,6 +103,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
                 category_code="settlement",
                 name=name,
                 summary=None,
+                plan=fixture_plan(setup, campaign_id),
             )
             _publish(setup, campaign_id, owner, created.entity_id, created.row_version)
             places.append(created.entity_id)
@@ -113,6 +117,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
                 ParticipantInput(places[0], "subject"),  # type: ignore[arg-type]
                 ParticipantInput(places[1], "object"),  # type: ignore[arg-type]
             ],
+            plan=fixture_plan(setup, campaign_id),
         )
         calendar = create_calendar(
             setup,
@@ -182,6 +187,7 @@ def test_a_state_change_that_loses_to_an_archive_is_refused(fx: Fixture) -> None
             actor_user_id=fx.owner,
             relationship_id=fx.relationship_id,
             expected_row_version=fx.version,
+            plan=fixture_plan(c, fx.campaign_id),
         ),
         lambda c: _evolve_relationship_reaction_impl(
             c,
@@ -212,6 +218,7 @@ def test_creating_with_a_participant_that_was_just_archived_is_refused(fx: Fixtu
             entity_id=fx.south,
             actor_user_id=fx.owner,
             expected_row_version=version,
+            plan=fixture_plan(c, fx.campaign_id),
         ),
         lambda c: create_relationship(
             c,
@@ -223,6 +230,7 @@ def test_creating_with_a_participant_that_was_just_archived_is_refused(fx: Fixtu
                 ParticipantInput(fx.north, "subject"),
                 ParticipantInput(fx.south, "object"),
             ],
+            plan=fixture_plan(c, fx.campaign_id),
         ),
         ENTITY_LOCK,
     )

@@ -36,6 +36,7 @@ from tests.builders import make_authored_campaign, make_authored_world
 from tests.database.test_authoring_concurrency import _purge_user_worlds
 from tests.database.test_content_authoring_concurrency import race
 from tests.factories import make_user
+from tests.r01_support import fixture_plan
 
 pytestmark = pytest.mark.database
 
@@ -60,6 +61,7 @@ class Fixture:
                 entity_id=entity_id,
                 actor_user_id=self.owner,
                 expected_row_version=version,
+                plan=fixture_plan(connection, self.campaign_id),
             ).row_version
 
     def item(self, connection, name: str, definition: uuid.UUID) -> uuid.UUID:  # type: ignore[no-untyped-def]
@@ -70,6 +72,7 @@ class Fixture:
             name=name,
             summary=None,
             item_definition_id=definition,
+            plan=fixture_plan(connection, self.campaign_id),
         )
         self.publish(connection, made.entity_id, made.row_version)
         return made.entity_id  # type: ignore[return-value]
@@ -83,6 +86,7 @@ class Fixture:
             category="wondrous_item",
             requires_attunement=attunement,
             canon_status="canon",
+            plan=fixture_plan(connection, self.campaign_id),
         ).item_definition_id
 
     def award(self, connection, item: uuid.UUID, token=None):  # type: ignore[no-untyped-def]
@@ -129,6 +133,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             summary=None,
             species_id=species,
             size_category="medium",
+            plan=fixture_plan(setup, campaign_id),
         )
         holder = npc.entity_id
         fixture = Fixture(postgres_engine, owner, campaign_id, world.world_id, timeline_id, holder)  # type: ignore[arg-type]

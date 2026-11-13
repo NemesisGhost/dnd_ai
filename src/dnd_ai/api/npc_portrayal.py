@@ -25,6 +25,7 @@ from dnd_ai.commands.npc_portrayal import (
     update_npc_detail_level,
 )
 from dnd_ai.domain.access import AccessContext
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.npc_portrayal import (
     DETAIL_LEVELS,
     FIELD_MAX_LENGTH,
@@ -46,6 +47,7 @@ from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .errors import NotFoundError
+from .r01_route_plans import get_authorization_plan
 
 router = APIRouter(tags=["npc-portrayal"])
 
@@ -59,6 +61,7 @@ _PrivateRead = Annotated[
     Depends(require_campaign_capability("canon.edit", world_capability=WORLD_CANON_READ_PRIVATE)),
 ]
 _Conn = Annotated[Connection, Depends(get_connection)]
+_Plan = Annotated[AuthorizationPlan, Depends(get_authorization_plan)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
 
@@ -144,6 +147,7 @@ def save_portrayal_endpoint(
     npc_id: uuid.UUID,
     body: SavePortrayalRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -156,6 +160,7 @@ def save_portrayal_endpoint(
         command_name="save_npc_portrayal_profile",
         payload={"npc_id": str(npc_id), **body.model_dump(mode="json")},
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -168,6 +173,7 @@ def save_portrayal_endpoint(
         expected_version=body.expected_version,
         fields=fields,
         change_note=body.change_note,
+        plan=plan,
     )
     if result.changed:
         record_change_log(
@@ -189,6 +195,7 @@ def save_portrayal_endpoint(
         raise NotFoundError()
     response = {**_view_json(view), "changed": result.changed}
     finish_campaign_idempotency(connection, idem, status_code=200, body=response)
+    plan.finalize(connection)  # R01: the last statement
     return JSONResponse(status_code=200, content=response)
 
 
@@ -197,6 +204,7 @@ def detail_level_endpoint(
     npc_id: uuid.UUID,
     body: DetailLevelRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -209,6 +217,7 @@ def detail_level_endpoint(
         command_name="update_npc_detail_level",
         payload={"npc_id": str(npc_id), **body.model_dump(mode="json")},
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -219,6 +228,7 @@ def detail_level_endpoint(
         npc_id=npc_id,
         expected_row_version=body.expected_row_version,
         detail_level=body.detail_level,
+        plan=plan,
     )
     if result.changed:
         audit_content_write(
@@ -234,4 +244,5 @@ def detail_level_endpoint(
         raise NotFoundError()
     response = {**_view_json(view), "changed": result.changed}
     finish_campaign_idempotency(connection, idem, status_code=200, body=response)
+    plan.finalize(connection)  # R01: the last statement
     return JSONResponse(status_code=200, content=response)

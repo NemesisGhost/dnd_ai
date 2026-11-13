@@ -23,6 +23,7 @@ from dnd_ai.commands._content import ContentWriteResult
 from dnd_ai.commands.player_characters import create_player_character, update_player_character
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.domain.authoring import DESCRIPTION_MAX_LENGTH, NAME_MAX_LENGTH, REASON_MAX_LENGTH
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.npc_authoring import NPC_TEXT_MAX_LENGTH, SIZE_CATEGORIES
 from dnd_ai.queries.npc_authoring import (
     CharacterAuthoringView,
@@ -41,6 +42,7 @@ from .access import require_campaign_capability
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .errors import NotFoundError
+from .r01_route_plans import get_authorization_plan
 
 router = APIRouter(tags=["player-character-authoring"])
 
@@ -49,6 +51,7 @@ _CAPABILITY = "canon.edit"
 
 _Access = Annotated[AccessContext, Depends(require_campaign_capability(_CAPABILITY))]
 _Conn = Annotated[Connection, Depends(get_connection)]
+_Plan = Annotated[AuthorizationPlan, Depends(get_authorization_plan)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
 
@@ -140,6 +143,7 @@ def player_character_options_endpoint(access: _Access, connection: _Conn) -> dic
 def create_player_character_endpoint(
     body: CreatePlayerCharacterRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -153,6 +157,7 @@ def create_player_character_endpoint(
         command_name=command_name,
         payload=body.model_dump(mode="json"),
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -168,6 +173,7 @@ def create_player_character_endpoint(
         background=body.background,
         appearance=body.appearance,
         notes=body.notes,
+        plan=plan,
     )
     audit_content_write(
         connection,
@@ -185,6 +191,7 @@ def create_player_character_endpoint(
     )
     response = _response(connection, result, changed=True)
     finish_campaign_idempotency(connection, idem, status_code=201, body=response)
+    plan.finalize(connection)  # R01: the last statement
     return JSONResponse(status_code=201, content=response)
 
 
@@ -206,6 +213,7 @@ def update_player_character_endpoint(
     player_character_id: uuid.UUID,
     body: UpdatePlayerCharacterRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -219,6 +227,7 @@ def update_player_character_endpoint(
         command_name=command_name,
         payload={"player_character_id": str(player_character_id), **body.model_dump(mode="json")},
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -237,6 +246,7 @@ def update_player_character_endpoint(
         appearance=body.appearance,
         notes=body.notes,
         change_note=body.change_note,
+        plan=plan,
     )
     if result.changed:
         audit_content_write(
@@ -255,4 +265,5 @@ def update_player_character_endpoint(
         )
     response = _response(connection, result, changed=result.changed)
     finish_campaign_idempotency(connection, idem, status_code=200, body=response)
+    plan.finalize(connection)  # R01: the last statement
     return response

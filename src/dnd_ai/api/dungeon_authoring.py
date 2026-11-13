@@ -44,6 +44,7 @@ from dnd_ai.commands.dungeons import (
 )
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.domain.authoring import DESCRIPTION_MAX_LENGTH, NAME_MAX_LENGTH, REASON_MAX_LENGTH
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.content_authoring import SHORT_TEXT_MAX_LENGTH
 from dnd_ai.domain.dungeon_authoring import (
     ALARM_LEVEL_MAX,
@@ -77,6 +78,7 @@ from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .errors import NotFoundError
+from .r01_route_plans import get_authorization_plan
 
 router = APIRouter(tags=["dungeon-authoring"])
 
@@ -91,6 +93,7 @@ _PrivateRead = Annotated[
     Depends(require_campaign_capability("canon.edit", world_capability=WORLD_CANON_READ_PRIVATE)),
 ]
 _Conn = Annotated[Connection, Depends(get_connection)]
+_Plan = Annotated[AuthorizationPlan, Depends(get_authorization_plan)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
 
@@ -327,6 +330,7 @@ def _run(
     created: bool = False,
     reason: str | None = None,
     area_view: bool = False,
+    plan: AuthorizationPlan,
 ) -> Any:
     idem = start_campaign_idempotency(
         connection,
@@ -336,6 +340,7 @@ def _run(
         command_name=command_name,
         payload=payload,
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -375,6 +380,7 @@ def _run(
         response["record_id"] = str(result.record_id)
     status = 201 if created else 200
     finish_campaign_idempotency(connection, idem, status_code=status, body=response)
+    plan.finalize(connection)  # R01: the last statement
     return JSONResponse(status_code=status, content=response) if created else response
 
 
@@ -443,6 +449,7 @@ def get_area_endpoint(dungeon_area_id: uuid.UUID, access: _PrivateRead, connecti
 def create_dungeon_endpoint(
     body: CreateDungeonRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -463,7 +470,9 @@ def create_dungeon_endpoint(
             summary=body.summary,
             danger_level=body.danger_level,
             parent_location_id=body.parent_location_id,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -472,6 +481,7 @@ def update_dungeon_endpoint(
     dungeon_id: uuid.UUID,
     body: UpdateDungeonRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -495,7 +505,9 @@ def update_dungeon_endpoint(
             danger_level=body.danger_level,
             parent_location_id=body.parent_location_id,
             change_note=body.change_note,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -504,6 +516,7 @@ def create_area_endpoint(
     dungeon_id: uuid.UUID,
     body: CreateAreaRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -527,7 +540,9 @@ def create_area_endpoint(
             area_type=body.area_type,
             dimensions=body.dimensions,
             environmental_properties=body.environmental_properties,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -536,6 +551,7 @@ def update_area_endpoint(
     dungeon_area_id: uuid.UUID,
     body: UpdateAreaRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -561,7 +577,9 @@ def update_area_endpoint(
             dimensions=body.dimensions,
             environmental_properties=body.environmental_properties,
             change_note=body.change_note,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -573,6 +591,7 @@ def add_connection_endpoint(
     dungeon_id: uuid.UUID,
     body: AddConnectionRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -599,7 +618,9 @@ def add_connection_endpoint(
             description=body.description,
             is_conditional=body.is_conditional,
             condition_description=body.condition_description,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -609,6 +630,7 @@ def update_connection_endpoint(
     area_connection_id: uuid.UUID,
     body: UpdateConnectionRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -637,7 +659,9 @@ def update_connection_endpoint(
             description=body.description,
             is_conditional=body.is_conditional,
             condition_description=body.condition_description,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -647,6 +671,7 @@ def remove_connection_endpoint(
     area_connection_id: uuid.UUID,
     body: RemoveRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -669,7 +694,9 @@ def remove_connection_endpoint(
             actor_user_id=access.user_id,
             expected_row_version=body.expected_row_version,
             area_connection_id=area_connection_id,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -680,6 +707,7 @@ def _child_routes() -> None:
             dungeon_id: uuid.UUID,
             body: AddChildRequest,
             access: _Access,
+            plan: _Plan,
             connection: _Conn,
             idempotency_key: _Key,
             correlation_id: _Corr,
@@ -705,7 +733,9 @@ def _child_routes() -> None:
                     description=body.description,
                     is_hidden=body.is_hidden,
                     severity=body.severity,
+                    plan=plan,
                 ),
+                plan=plan,
             )
 
         def update(
@@ -713,6 +743,7 @@ def _child_routes() -> None:
             child_id: uuid.UUID,
             body: UpdateChildRequest,
             access: _Access,
+            plan: _Plan,
             connection: _Conn,
             idempotency_key: _Key,
             correlation_id: _Corr,
@@ -741,7 +772,9 @@ def _child_routes() -> None:
                     description=body.description,
                     is_hidden=body.is_hidden,
                     severity=body.severity,
+                    plan=plan,
                 ),
+                plan=plan,
             )
 
         def remove(
@@ -749,6 +782,7 @@ def _child_routes() -> None:
             child_id: uuid.UUID,
             body: RemoveRequest,
             access: _Access,
+            plan: _Plan,
             connection: _Conn,
             idempotency_key: _Key,
             correlation_id: _Corr,
@@ -773,7 +807,9 @@ def _child_routes() -> None:
                     expected_row_version=body.expected_row_version,
                     kind=kind,
                     child_id=child_id,
+                    plan=plan,
                 ),
+                plan=plan,
             )
 
         base = _BASE + "/{dungeon_id}/" + path

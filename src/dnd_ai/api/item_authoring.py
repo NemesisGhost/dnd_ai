@@ -43,6 +43,7 @@ from dnd_ai.commands.item_operations import (
 )
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.domain.authoring import DESCRIPTION_MAX_LENGTH, NAME_MAX_LENGTH, REASON_MAX_LENGTH
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.item_runtime import ORIGIN_NOTES_MAX_LENGTH, QUANTITY_MAX
 from dnd_ai.queries.inventory import get_inventory_view
 from dnd_ai.queries.item_authoring import (
@@ -68,6 +69,7 @@ from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .errors import NotFoundError
+from .r01_route_plans import get_authorization_plan
 from .world_explorer import item_origin_notes_visible
 
 router = APIRouter(tags=["items"])
@@ -76,6 +78,7 @@ _AUTHORING = "/campaigns/{campaign_id}/authoring/items"
 _RUNTIME = "/campaigns/{campaign_id}/items/{item_instance_id}"
 _Access = Annotated[AccessContext, Depends(require_campaign_capability("canon.edit"))]
 _Conn = Annotated[Connection, Depends(get_connection)]
+_Plan = Annotated[AuthorizationPlan, Depends(get_authorization_plan)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
 
@@ -262,6 +265,7 @@ def _authoring_write(
     created: bool,
     reason: str | None,
     command: Callable[[], Any],
+    plan: AuthorizationPlan,
 ) -> Any:
     idem = start_campaign_idempotency(
         connection,
@@ -271,6 +275,7 @@ def _authoring_write(
         command_name=command_name,
         payload=payload,
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -288,6 +293,7 @@ def _authoring_write(
     response = _view_json(_load_view(connection, access, result.entity_id), changed=result.changed)
     status = 201 if created else 200
     finish_campaign_idempotency(connection, idem, status_code=status, body=response)
+    plan.finalize(connection)  # R01: the last statement
     return JSONResponse(status_code=status, content=response) if created else response
 
 
@@ -295,6 +301,7 @@ def _authoring_write(
 def create_item_endpoint(
     body: CreateItemRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -316,7 +323,9 @@ def create_item_endpoint(
             summary=body.summary,
             item_definition_id=body.item_definition_id,
             origin_notes=body.origin_notes,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -325,6 +334,7 @@ def update_item_endpoint(
     item_instance_id: uuid.UUID,
     body: UpdateItemRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -349,7 +359,9 @@ def update_item_endpoint(
             origin_notes=body.origin_notes,
             keep_origin_notes=_origin_notes_hidden(connection, access, item_instance_id),
             change_note=body.change_note,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 

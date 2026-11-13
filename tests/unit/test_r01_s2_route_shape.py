@@ -31,9 +31,12 @@ from dnd_ai.domain.public_profiles import (
     PublicProfileNotFoundError,
 )
 from dnd_ai.domain.world_authority import WorldAuthority
-from tests.r01_manifest import _iter_api_routes
+from tests.r01_manifest import _S3_ROUTES, _iter_api_routes
 
 pytestmark = pytest.mark.unit
+
+#: S2's six routes. S3's 71 are checked by `test_r01_s3_route_shape.py`.
+S2_ROUTES = frozenset(R01_FINALIZED_ROUTES) - _S3_ROUTES
 
 DB_CALLS = {
     "record_change_log",
@@ -49,7 +52,7 @@ def _handlers() -> dict[tuple[str, str], Any]:
     for route in _iter_api_routes(list(app.routes)):
         assert isinstance(route, APIRoute)
         for method in route.methods:
-            if (method, route.path) in R01_FINALIZED_ROUTES:
+            if (method, route.path) in S2_ROUTES:
                 found[(method, route.path)] = route.endpoint
     return found
 
@@ -68,10 +71,10 @@ def _name(call: ast.Call) -> str:
 
 
 def test_the_finalized_routes_resolve_to_handlers() -> None:
-    assert set(_handlers()) == set(R01_FINALIZED_ROUTES)
+    assert set(_handlers()) == set(S2_ROUTES)
 
 
-@pytest.mark.parametrize("route", sorted(R01_FINALIZED_ROUTES))
+@pytest.mark.parametrize("route", sorted(S2_ROUTES))
 def test_a_finalized_handler_takes_the_plan_and_finalizes_it_last_exactly_once(
     route: tuple[str, str],
 ) -> None:

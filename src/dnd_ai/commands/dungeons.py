@@ -32,7 +32,7 @@ from dnd_ai.domain.authoring import (
     normalize_name,
     normalize_reason,
 )
-from dnd_ai.domain.authorization import R01_PENDING
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.content_authoring import (
     AUTHORABLE_LOCATION_CATEGORIES,
     content_edit_blocked_reason,
@@ -94,6 +94,7 @@ def create_dungeon(
     summary: str | None,
     danger_level: int | None = None,
     parent_location_id: uuid.UUID | None = None,
+    plan: AuthorizationPlan,
 ) -> ContentWriteResult:
     clean_name = normalize_name(name)
     clean_summary = normalize_description(summary)
@@ -103,7 +104,7 @@ def create_dungeon(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
-        plan=R01_PENDING,
+        plan=plan,
     )
     if parent_location_id is not None:
         locked = lock_entities(connection, world_id=scope.world_id, share_ids=[parent_location_id])
@@ -162,6 +163,7 @@ def update_dungeon(
     danger_level: int | None = None,
     parent_location_id: uuid.UUID | None = None,
     change_note: str | None = None,
+    plan: AuthorizationPlan,
 ) -> ContentWriteResult:
     normalize_reason(change_note)
     scope = lock_authoring_scope(
@@ -169,7 +171,7 @@ def update_dungeon(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
-        plan=R01_PENDING,
+        plan=plan,
     )
     current = connection.execute(
         text(
@@ -262,6 +264,7 @@ def create_dungeon_area(
     area_type: str | None = None,
     dimensions: str | None = None,
     environmental_properties: str | None = None,
+    plan: AuthorizationPlan,
 ) -> ContentWriteResult:
     clean_name = normalize_name(name)
     clean_summary = normalize_description(summary)
@@ -275,7 +278,7 @@ def create_dungeon_area(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
-        plan=R01_PENDING,
+        plan=plan,
     )
     locked = lock_entities(connection, world_id=scope.world_id, share_ids=[dungeon_id])
     usable_reference(locked, dungeon_id, type_codes=_DUNGEON, error=ParentLocationInvalidError)
@@ -341,6 +344,7 @@ def update_dungeon_area(
     dimensions: str | None = None,
     environmental_properties: str | None = None,
     change_note: str | None = None,
+    plan: AuthorizationPlan,
 ) -> ContentWriteResult:
     normalize_reason(change_note)
     scope = lock_authoring_scope(
@@ -348,7 +352,7 @@ def update_dungeon_area(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
-        plan=R01_PENDING,
+        plan=plan,
     )
     current = connection.execute(
         text(
@@ -448,13 +452,14 @@ def _lock_aggregate(
     actor_user_id: uuid.UUID,
     expected_row_version: int,
     area_ids: tuple[uuid.UUID, ...],
+    plan: AuthorizationPlan,
 ) -> _Aggregate:
     scope = lock_authoring_scope(
         connection,
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
-        plan=R01_PENDING,
+        plan=plan,
     )
     locked = lock_entities(
         connection,
@@ -564,6 +569,7 @@ def add_connection(
     description: str | None = None,
     is_conditional: bool = False,
     condition_description: str | None = None,
+    plan: AuthorizationPlan,
 ) -> ContentWriteResult:
     if from_area_id == to_area_id:
         raise ConnectionInvalidError("a connection joins two different areas")
@@ -576,6 +582,7 @@ def add_connection(
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
         area_ids=(from_area_id, to_area_id),
+        plan=plan,
     )
     type_id = _connection_type_id(connection, connection_type)
     row_id = connection.execute(
@@ -652,6 +659,7 @@ def update_connection(
     description: str | None = None,
     is_conditional: bool = False,
     condition_description: str | None = None,
+    plan: AuthorizationPlan,
 ) -> ContentWriteResult:
     """Endpoints never change; to rewire, remove the connection (while draft) and add another."""
     clean_description = normalize_long_text(description, field="description")
@@ -663,6 +671,7 @@ def update_connection(
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
         area_ids=(),
+        plan=plan,
     )
     row = _connection_row(connection, dungeon_id, area_connection_id)
     before = {
@@ -720,6 +729,7 @@ def remove_connection(
     actor_user_id: uuid.UUID,
     expected_row_version: int,
     area_connection_id: uuid.UUID,
+    plan: AuthorizationPlan,
 ) -> ContentWriteResult:
     aggregate = _lock_aggregate(
         connection,
@@ -728,6 +738,7 @@ def remove_connection(
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
         area_ids=(),
+        plan=plan,
     )
     _require_draft(aggregate)
     row = _connection_row(connection, dungeon_id, area_connection_id)
@@ -781,6 +792,7 @@ def add_area_child(
     description: str | None,
     is_hidden: bool = False,
     severity: int | None = None,
+    plan: AuthorizationPlan,
 ) -> ContentWriteResult:
     table, id_column, type_column, rating = _CHILD_TABLES[kind]
     fields = _child_fields(
@@ -797,6 +809,7 @@ def add_area_child(
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
         area_ids=(dungeon_area_id,),
+        plan=plan,
     )
     count = connection.execute(
         text(f"SELECT count(*) FROM world.{table} WHERE dungeon_area_id = :a"),  # noqa: S608
@@ -867,6 +880,7 @@ def update_area_child(
     description: str | None,
     is_hidden: bool = False,
     severity: int | None = None,
+    plan: AuthorizationPlan,
 ) -> ContentWriteResult:
     table, id_column, type_column, rating = _CHILD_TABLES[kind]
     after = _child_fields(
@@ -883,6 +897,7 @@ def update_area_child(
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
         area_ids=(),
+        plan=plan,
     )
     row = _child_row(connection, dungeon_id, kind, child_id)
     area = aggregate.locked.get(row["dungeon_area_id"])
@@ -924,6 +939,7 @@ def remove_area_child(
     expected_row_version: int,
     kind: str,
     child_id: uuid.UUID,
+    plan: AuthorizationPlan,
 ) -> ContentWriteResult:
     table, id_column, _, _ = _CHILD_TABLES[kind]
     aggregate = _lock_aggregate(
@@ -933,6 +949,7 @@ def remove_area_child(
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
         area_ids=(),
+        plan=plan,
     )
     _require_draft(aggregate)
     row = _child_row(connection, dungeon_id, kind, child_id)

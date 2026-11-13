@@ -377,19 +377,107 @@ def render(manifest: list[dict[str, Any]]) -> str:
 
 
 #: Routes whose handlers have been migrated to a final `AuthorizationPlan` (R01 S2 onwards). Empty in
-#: S1. S2 migrates the six profile and revelation routes. A route moves here from the pending set,
+#: S1. S2 migrates the six profile and revelation routes; S3 the 71 definition authoring and lifecycle routes. A route moves here from the pending set,
 #: never silently.
 _PROFILE = "/campaigns/{campaign_id}/characters/{character_id}/public-profile"
 _REVELATIONS = "/campaigns/{campaign_id}/characters/{character_id}/revelations"
-MIGRATED_ROUTES: frozenset[tuple[str, str]] = frozenset(
+#: S3 migrates the 71 definition authoring and lifecycle routes (manifest family `authoring_scope`).
+_CAMPAIGN = "/campaigns/{campaign_id}"
+_AUTHORING = _CAMPAIGN + "/authoring"
+_S3_ROUTES: frozenset[tuple[str, str]] = frozenset(
     {
-        ("POST", _PROFILE + "/draft"),
-        ("POST", _PROFILE + "/draft/copy-legacy"),
-        ("POST", _PROFILE + "/draft/copy-player-profile"),
-        ("POST", _PROFILE + "/releases"),
-        ("POST", _REVELATIONS),
-        ("POST", _REVELATIONS + "/{character_revelation_id}/revoke"),
+        ("POST", _AUTHORING + "/dungeon-areas/{dungeon_area_id}/update"),
+        ("POST", _AUTHORING + "/dungeons"),
+        ("POST", _AUTHORING + "/dungeons/{dungeon_id}/areas"),
+        ("POST", _AUTHORING + "/dungeons/{dungeon_id}/connections"),
+        ("POST", _AUTHORING + "/dungeons/{dungeon_id}/connections/{area_connection_id}/remove"),
+        ("POST", _AUTHORING + "/dungeons/{dungeon_id}/connections/{area_connection_id}/update"),
+        ("POST", _AUTHORING + "/dungeons/{dungeon_id}/features"),
+        ("POST", _AUTHORING + "/dungeons/{dungeon_id}/features/{child_id}/remove"),
+        ("POST", _AUTHORING + "/dungeons/{dungeon_id}/features/{child_id}/update"),
+        ("POST", _AUTHORING + "/dungeons/{dungeon_id}/hazards"),
+        ("POST", _AUTHORING + "/dungeons/{dungeon_id}/hazards/{child_id}/remove"),
+        ("POST", _AUTHORING + "/dungeons/{dungeon_id}/hazards/{child_id}/update"),
+        ("POST", _AUTHORING + "/dungeons/{dungeon_id}/interactables"),
+        ("POST", _AUTHORING + "/dungeons/{dungeon_id}/interactables/{child_id}/remove"),
+        ("POST", _AUTHORING + "/dungeons/{dungeon_id}/interactables/{child_id}/update"),
+        ("POST", _AUTHORING + "/dungeons/{dungeon_id}/update"),
+        ("POST", _AUTHORING + "/item-definitions"),
+        ("POST", _AUTHORING + "/item-definitions/{definition_id}/update"),
+        ("POST", _AUTHORING + "/items"),
+        ("POST", _AUTHORING + "/items/{item_instance_id}/update"),
+        ("POST", _AUTHORING + "/knowledge"),
+        ("POST", _AUTHORING + "/knowledge/{knowledge_item_id}/update"),
+        ("POST", _AUTHORING + "/locations"),
+        ("POST", _AUTHORING + "/locations/{location_id}/update"),
+        ("POST", _AUTHORING + "/npcs"),
+        ("POST", _AUTHORING + "/npcs/{npc_id}/detail-level"),
+        ("POST", _AUTHORING + "/npcs/{npc_id}/portrayal"),
+        ("POST", _AUTHORING + "/npcs/{npc_id}/update"),
+        ("POST", _AUTHORING + "/organizations"),
+        ("POST", _AUTHORING + "/organizations/{organization_id}/update"),
+        ("POST", _AUTHORING + "/player-characters"),
+        ("POST", _AUTHORING + "/player-characters/{player_character_id}/update"),
+        ("POST", _AUTHORING + "/quests"),
+        ("POST", _AUTHORING + "/quests/{quest_id}/dependencies"),
+        ("POST", _AUTHORING + "/quests/{quest_id}/dependencies/{dependency_id}/remove"),
+        ("POST", _AUTHORING + "/quests/{quest_id}/outcomes"),
+        ("POST", _AUTHORING + "/quests/{quest_id}/outcomes/{outcome_id}/remove"),
+        ("POST", _AUTHORING + "/quests/{quest_id}/outcomes/{outcome_id}/rewards"),
+        ("POST", _AUTHORING + "/quests/{quest_id}/outcomes/{outcome_id}/update"),
+        ("POST", _AUTHORING + "/quests/{quest_id}/participants"),
+        ("POST", _AUTHORING + "/quests/{quest_id}/participants/{participant_id}/remove"),
+        ("POST", _AUTHORING + "/quests/{quest_id}/rewards/{reward_id}/remove"),
+        ("POST", _AUTHORING + "/quests/{quest_id}/stages"),
+        ("POST", _AUTHORING + "/quests/{quest_id}/stages/reorder"),
+        ("POST", _AUTHORING + "/quests/{quest_id}/stages/{stage_id}/objectives"),
+        (
+            "POST",
+            _AUTHORING + "/quests/{quest_id}/stages/{stage_id}/objectives/{objective_id}/remove",
+        ),
+        (
+            "POST",
+            _AUTHORING + "/quests/{quest_id}/stages/{stage_id}/objectives/{objective_id}/update",
+        ),
+        ("POST", _AUTHORING + "/quests/{quest_id}/stages/{stage_id}/remove"),
+        ("POST", _AUTHORING + "/quests/{quest_id}/stages/{stage_id}/update"),
+        ("POST", _AUTHORING + "/quests/{quest_id}/update"),
+        ("POST", _AUTHORING + "/relationships"),
+        ("POST", _AUTHORING + "/relationships/{relationship_id}/archive"),
+        ("POST", _AUTHORING + "/relationships/{relationship_id}/change-office"),
+        ("POST", _AUTHORING + "/relationships/{relationship_id}/end"),
+        ("POST", _AUTHORING + "/relationships/{relationship_id}/perspectives"),
+        ("POST", _AUTHORING + "/relationships/{relationship_id}/restore"),
+        ("POST", _AUTHORING + "/relationships/{relationship_id}/update"),
+        ("POST", _AUTHORING + "/religions"),
+        ("POST", _AUTHORING + "/religions/{religion_id}/update"),
+        ("POST", _CAMPAIGN + "/entities/{entity_id}/lifecycle/approve"),
+        ("POST", _CAMPAIGN + "/entities/{entity_id}/lifecycle/archive"),
+        ("POST", _CAMPAIGN + "/entities/{entity_id}/lifecycle/delete-draft"),
+        ("POST", _CAMPAIGN + "/entities/{entity_id}/lifecycle/publish"),
+        ("POST", _CAMPAIGN + "/entities/{entity_id}/lifecycle/reject"),
+        ("POST", _CAMPAIGN + "/entities/{entity_id}/lifecycle/restore"),
+        ("POST", _CAMPAIGN + "/entities/{entity_id}/lifecycle/return-to-draft"),
+        ("POST", _CAMPAIGN + "/entities/{entity_id}/lifecycle/submit-for-review"),
+        ("POST", _CAMPAIGN + "/entities/{entity_id}/lifecycle/supersede"),
+        ("POST", _CAMPAIGN + "/entities/{entity_id}/sources/attach"),
+        ("POST", _CAMPAIGN + "/entities/{entity_id}/sources/detach"),
+        ("POST", _CAMPAIGN + "/sources"),
     }
+)
+
+MIGRATED_ROUTES: frozenset[tuple[str, str]] = (
+    frozenset(
+        {
+            ("POST", _PROFILE + "/draft"),
+            ("POST", _PROFILE + "/draft/copy-legacy"),
+            ("POST", _PROFILE + "/draft/copy-player-profile"),
+            ("POST", _PROFILE + "/releases"),
+            ("POST", _REVELATIONS),
+            ("POST", _REVELATIONS + "/{character_revelation_id}/revoke"),
+        }
+    )
+    | _S3_ROUTES
 )
 
 #: The one family outside R01's bound: account, authentication, Foundry pairing, world and timeline

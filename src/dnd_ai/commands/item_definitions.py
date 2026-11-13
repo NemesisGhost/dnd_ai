@@ -17,7 +17,7 @@ from decimal import Decimal
 from sqlalchemy import Connection, text
 
 from dnd_ai.domain.authoring import AuthoringValidationError, StaleWriteError
-from dnd_ai.domain.authorization import R01_PENDING
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.content_authoring import diff_fields, initial_fields
 from dnd_ai.domain.item_definition_authoring import (
     CODE_MAX_LENGTH,
@@ -117,6 +117,7 @@ def create_item_definition(
     weight: Amount = None,
     base_cost_gp: Amount = None,
     canon_status: str = "draft",
+    plan: AuthorizationPlan,
 ) -> DefinitionResult:
     values = _clean(
         name=name,
@@ -133,7 +134,7 @@ def create_item_definition(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
-        plan=R01_PENDING,
+        plan=plan,
     )
     category_id = _category_id(connection, values.category)
     version_id = connection.execute(
@@ -208,6 +209,7 @@ def update_item_definition(
     weight: Amount = None,
     base_cost_gp: Amount = None,
     canon_status: str = "draft",
+    plan: AuthorizationPlan,
 ) -> DefinitionResult:
     values = _clean(
         name=name,
@@ -224,7 +226,7 @@ def update_item_definition(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
-        plan=R01_PENDING,
+        plan=plan,
     )
     category_id = _category_id(connection, values.category)
     row = (

@@ -22,7 +22,7 @@ from dnd_ai.domain.authoring import (
     StaleWriteError,
     normalize_reason,
 )
-from dnd_ai.domain.authorization import R01_PENDING
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.content_authoring import content_edit_blocked_reason, diff_fields
 from dnd_ai.domain.npc_portrayal import (
     PROFILE_FIELD_NAMES,
@@ -61,6 +61,7 @@ def update_npc_detail_level(
     npc_id: uuid.UUID,
     expected_row_version: int,
     detail_level: str,
+    plan: AuthorizationPlan,
 ) -> ContentWriteResult:
     level = normalize_detail_level(detail_level)
     scope = lock_authoring_scope(
@@ -68,7 +69,7 @@ def update_npc_detail_level(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
-        plan=R01_PENDING,
+        plan=plan,
     )
     locked = lock_entities(connection, world_id=scope.world_id, update_ids=[npc_id])
     target = editable_target(
@@ -117,6 +118,7 @@ def save_npc_portrayal_profile(
     expected_version: int,
     fields: dict[str, Any],
     change_note: str | None = None,
+    plan: AuthorizationPlan,
 ) -> ProfileResult:
     unknown = set(fields) - set(PROFILE_FIELD_NAMES)
     if unknown:
@@ -130,7 +132,7 @@ def save_npc_portrayal_profile(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
-        plan=R01_PENDING,
+        plan=plan,
     )
     locked = lock_entities(connection, world_id=scope.world_id, update_ids=[npc_id])
     npc = locked.get(npc_id)

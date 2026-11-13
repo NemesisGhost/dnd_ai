@@ -24,7 +24,7 @@ pytestmark = pytest.mark.unit
 SRC = Path(__file__).resolve().parents[2] / "src" / "dnd_ai"
 HELPERS = {"lock_authoring_scope", "lock_operation_scope"}
 
-#: (module relative to src/dnd_ai, enclosing function, helper called). 67 sites at S1, 64 after S2 migrated the three public-profile commands.
+#: (module relative to src/dnd_ai, enclosing function, helper called). 67 sites at S1, 64 after S2 migrated the three public-profile commands, 35 after S3 migrated the definition authoring and lifecycle commands.
 PINNED: frozenset[tuple[str, str, str]] = frozenset(
     {
         ("commands/campaign_clock.py", "advance_campaign_clock", "lock_operation_scope"),
@@ -33,50 +33,25 @@ PINNED: frozenset[tuple[str, str, str]] = frozenset(
         ("commands/character_builds.py", "create_character_build", "lock_operation_scope"),
         ("commands/character_builds.py", "initialize_character_state", "lock_operation_scope"),
         ("commands/dungeon_state.py", "set_dungeon_state", "lock_operation_scope"),
-        ("commands/dungeons.py", "_lock_aggregate", "lock_authoring_scope"),
-        ("commands/dungeons.py", "create_dungeon", "lock_authoring_scope"),
-        ("commands/dungeons.py", "create_dungeon_area", "lock_authoring_scope"),
-        ("commands/dungeons.py", "update_dungeon", "lock_authoring_scope"),
-        ("commands/dungeons.py", "update_dungeon_area", "lock_authoring_scope"),
         ("commands/encounter_operations.py", "abort_encounter", "lock_operation_scope"),
         ("commands/encounter_operations.py", "start_prepared_encounter", "lock_operation_scope"),
         ("commands/encounter_preparation.py", "_prepare", "lock_operation_scope"),
         ("commands/encounter_preparation.py", "create_encounter", "lock_operation_scope"),
-        ("commands/entity_lifecycle.py", "_prepare", "lock_authoring_scope"),
-        ("commands/entity_lifecycle.py", "supersede_entity", "lock_authoring_scope"),
         ("commands/event_corrections.py", "correct_event", "lock_operation_scope"),
         ("commands/event_corrections.py", "void_event", "lock_operation_scope"),
-        ("commands/item_definitions.py", "create_item_definition", "lock_authoring_scope"),
-        ("commands/item_definitions.py", "update_item_definition", "lock_authoring_scope"),
-        ("commands/item_instances.py", "create_item_instance", "lock_authoring_scope"),
-        ("commands/item_instances.py", "update_item_instance", "lock_authoring_scope"),
         ("commands/item_operations.py", "_scope_and_time", "lock_operation_scope"),
-        ("commands/knowledge_definitions.py", "create_knowledge_item", "lock_authoring_scope"),
-        ("commands/knowledge_definitions.py", "update_knowledge_item", "lock_authoring_scope"),
         ("commands/knowledge_runtime.py", "change_belief", "lock_operation_scope"),
         ("commands/knowledge_runtime.py", "make_knowledge_public", "lock_operation_scope"),
         ("commands/knowledge_runtime.py", "record_character_knowledge", "lock_operation_scope"),
         ("commands/knowledge_runtime.py", "record_knowledge_transfer", "lock_operation_scope"),
         ("commands/knowledge_runtime.py", "reveal_knowledge_to_party", "lock_operation_scope"),
-        ("commands/locations.py", "create_location", "lock_authoring_scope"),
-        ("commands/locations.py", "update_location", "lock_authoring_scope"),
-        ("commands/npc_portrayal.py", "save_npc_portrayal_profile", "lock_authoring_scope"),
-        ("commands/npc_portrayal.py", "update_npc_detail_level", "lock_authoring_scope"),
-        ("commands/npcs.py", "create_character_identity", "lock_authoring_scope"),
-        ("commands/npcs.py", "update_character_identity", "lock_authoring_scope"),
-        ("commands/organizations.py", "create_organization", "lock_authoring_scope"),
-        ("commands/organizations.py", "update_organization", "lock_authoring_scope"),
         ("commands/parties.py", "_transition", "lock_operation_scope"),
         ("commands/parties.py", "create_party", "lock_operation_scope"),
         ("commands/parties.py", "update_party", "lock_operation_scope"),
         ("commands/party_members.py", "add_party_member", "lock_operation_scope"),
         ("commands/party_members.py", "end_party_membership", "lock_operation_scope"),
-        ("commands/quest_definitions.py", "_lock_quest", "lock_authoring_scope"),
-        ("commands/quest_definitions.py", "create_quest", "lock_authoring_scope"),
         ("commands/quest_runtime.py", "change_quest_status", "lock_operation_scope"),
         ("commands/quest_runtime.py", "set_objective_status", "lock_operation_scope"),
-        ("commands/religions.py", "create_religion", "lock_authoring_scope"),
-        ("commands/religions.py", "update_religion", "lock_authoring_scope"),
         ("commands/session_authoring.py", "_transition", "lock_operation_scope"),
         ("commands/session_authoring.py", "schedule_session", "lock_operation_scope"),
         ("commands/session_authoring.py", "update_session", "lock_operation_scope"),
@@ -85,11 +60,7 @@ PINNED: frozenset[tuple[str, str, str]] = frozenset(
         ("commands/session_play.py", "record_session_log_entry", "lock_operation_scope"),
         ("commands/session_play.py", "remove_session_participant", "lock_operation_scope"),
         ("commands/session_play.py", "start_session", "lock_operation_scope"),
-        ("commands/sources.py", "_lock_pair", "lock_authoring_scope"),
-        ("commands/sources.py", "create_source", "lock_authoring_scope"),
         ("commands/travel.py", "record_travel", "lock_operation_scope"),
-        ("commands/world_relationships.py", "_lock_relationship", "lock_authoring_scope"),
-        ("commands/world_relationships.py", "create_relationship", "lock_authoring_scope"),
         ("commands/world_time.py", "create_world_time", "lock_operation_scope"),
     }
 )
@@ -155,8 +126,9 @@ def test_the_r01_pending_call_sites_are_exactly_the_pinned_set() -> None:
     assert PINNED - found == frozenset(), "a pinned call site is gone: remove it from PINNED"
 
 
-#: The call sites that pass a REAL plan: S2's three public-profile commands, and the one place
-#: `lock_operation_scope` forwards its own `plan`. Each later slice adds its commands here.
+#: The call sites that pass a REAL plan: S2's three public-profile commands, S3's definition authoring
+#: and lifecycle commands, and the one place `lock_operation_scope` forwards its own `plan`. Each later
+#: slice adds its commands here.
 REAL_PLAN_SITES = [
     ("commands/_operations.py", "lock_operation_scope", "lock_authoring_scope"),
     (
@@ -174,13 +146,42 @@ REAL_PLAN_SITES = [
         "save_character_public_profile_draft",
         "lock_authoring_scope",
     ),
+    ("commands/dungeons.py", "_lock_aggregate", "lock_authoring_scope"),
+    ("commands/dungeons.py", "create_dungeon", "lock_authoring_scope"),
+    ("commands/dungeons.py", "create_dungeon_area", "lock_authoring_scope"),
+    ("commands/dungeons.py", "update_dungeon", "lock_authoring_scope"),
+    ("commands/dungeons.py", "update_dungeon_area", "lock_authoring_scope"),
+    ("commands/entity_lifecycle.py", "_prepare", "lock_authoring_scope"),
+    ("commands/entity_lifecycle.py", "supersede_entity", "lock_authoring_scope"),
+    ("commands/item_definitions.py", "create_item_definition", "lock_authoring_scope"),
+    ("commands/item_definitions.py", "update_item_definition", "lock_authoring_scope"),
+    ("commands/item_instances.py", "create_item_instance", "lock_authoring_scope"),
+    ("commands/item_instances.py", "update_item_instance", "lock_authoring_scope"),
+    ("commands/knowledge_definitions.py", "create_knowledge_item", "lock_authoring_scope"),
+    ("commands/knowledge_definitions.py", "update_knowledge_item", "lock_authoring_scope"),
+    ("commands/locations.py", "create_location", "lock_authoring_scope"),
+    ("commands/locations.py", "update_location", "lock_authoring_scope"),
+    ("commands/npc_portrayal.py", "save_npc_portrayal_profile", "lock_authoring_scope"),
+    ("commands/npc_portrayal.py", "update_npc_detail_level", "lock_authoring_scope"),
+    ("commands/npcs.py", "create_character_identity", "lock_authoring_scope"),
+    ("commands/npcs.py", "update_character_identity", "lock_authoring_scope"),
+    ("commands/organizations.py", "create_organization", "lock_authoring_scope"),
+    ("commands/organizations.py", "update_organization", "lock_authoring_scope"),
+    ("commands/quest_definitions.py", "_lock_quest", "lock_authoring_scope"),
+    ("commands/quest_definitions.py", "create_quest", "lock_authoring_scope"),
+    ("commands/religions.py", "create_religion", "lock_authoring_scope"),
+    ("commands/religions.py", "update_religion", "lock_authoring_scope"),
+    ("commands/sources.py", "_lock_pair", "lock_authoring_scope"),
+    ("commands/sources.py", "create_source", "lock_authoring_scope"),
+    ("commands/world_relationships.py", "_lock_relationship", "lock_authoring_scope"),
+    ("commands/world_relationships.py", "create_relationship", "lock_authoring_scope"),
 ]
 
 
 def test_the_real_plan_call_sites_are_exactly_the_migrated_ones() -> None:
-    """After S2 the only call sites that pass a real plan are the forwarding in
-    `lock_operation_scope` and the three migrated public-profile commands; every other call site passes
-    the pending marker (pinned above)."""
+    """After S3 the call sites that pass a real plan are the forwarding in `lock_operation_scope`, the
+    three S2 public-profile commands and the S3 definition authoring and lifecycle commands; every other
+    call site passes the pending marker (pinned above)."""
     real = sorted(
         (module, function, callee)
         for module, function, callee, call in _walk()

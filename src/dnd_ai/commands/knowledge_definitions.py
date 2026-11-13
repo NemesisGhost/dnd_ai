@@ -29,7 +29,7 @@ from dnd_ai.domain.authoring import (
     KnowledgeSubjectInvalidError,
     normalize_reason,
 )
-from dnd_ai.domain.authorization import R01_PENDING
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.content_authoring import diff_fields, initial_fields
 from dnd_ai.domain.knowledge_authoring import (
     KNOWLEDGE_SUBJECT_TYPE_CODES,
@@ -95,6 +95,7 @@ def create_knowledge_item(
     truth_status: str | None,
     sensitivity: str | None,
     subject_entity_id: uuid.UUID | None = None,
+    plan: AuthorizationPlan,
 ) -> ContentWriteResult:
     fields = normalize_knowledge_fields(statement=statement, sensitivity=sensitivity)
     scope = lock_authoring_scope(
@@ -102,7 +103,7 @@ def create_knowledge_item(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
-        plan=R01_PENDING,
+        plan=plan,
     )
     locked = lock_entities(
         connection,
@@ -181,6 +182,7 @@ def update_knowledge_item(
     sensitivity: str | None,
     subject_entity_id: uuid.UUID | None = None,
     change_note: str | None = None,
+    plan: AuthorizationPlan,
 ) -> ContentWriteResult:
     normalize_reason(change_note)
     scope = lock_authoring_scope(
@@ -188,7 +190,7 @@ def update_knowledge_item(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
-        plan=R01_PENDING,
+        plan=plan,
     )
     current_subject = connection.execute(
         text(

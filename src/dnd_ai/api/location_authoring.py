@@ -28,6 +28,7 @@ from dnd_ai.commands._content import ContentWriteResult
 from dnd_ai.commands.locations import create_location, update_location
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.domain.authoring import DESCRIPTION_MAX_LENGTH, NAME_MAX_LENGTH, REASON_MAX_LENGTH
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.content_authoring import (
     POPULATION_MAX,
     SHORT_TEXT_MAX_LENGTH,
@@ -53,6 +54,7 @@ from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .errors import InvalidCursorError, NotFoundError
 from .pagination import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, build_page, decode_typed_cursor
+from .r01_route_plans import get_authorization_plan
 
 router = APIRouter(tags=["location-authoring"])
 
@@ -69,6 +71,7 @@ _PrivateRead = Annotated[
     Depends(require_campaign_capability(_CAPABILITY, world_capability=WORLD_CANON_READ_PRIVATE)),
 ]
 _Conn = Annotated[Connection, Depends(get_connection)]
+_Plan = Annotated[AuthorizationPlan, Depends(get_authorization_plan)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
 
@@ -197,6 +200,7 @@ def location_parent_options_endpoint(
 def create_location_endpoint(
     body: CreateLocationRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -210,6 +214,7 @@ def create_location_endpoint(
         command_name=command_name,
         payload=body.model_dump(mode="json"),
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -223,6 +228,7 @@ def create_location_endpoint(
         parent_location_id=body.parent_location_id,
         population=body.population,
         building_use=body.building_use,
+        plan=plan,
     )
     audit_content_write(
         connection,
@@ -237,6 +243,7 @@ def create_location_endpoint(
     )
     response = _response(connection, result, changed=True)
     finish_campaign_idempotency(connection, idem, status_code=201, body=response)
+    plan.finalize(connection)  # R01: the last statement
     return JSONResponse(status_code=201, content=response)
 
 
@@ -256,6 +263,7 @@ def update_location_endpoint(
     location_id: uuid.UUID,
     body: UpdateLocationRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -269,6 +277,7 @@ def update_location_endpoint(
         command_name=command_name,
         payload={"location_id": str(location_id), **body.model_dump(mode="json")},
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -284,6 +293,7 @@ def update_location_endpoint(
         population=body.population,
         building_use=body.building_use,
         change_note=body.change_note,
+        plan=plan,
     )
     if result.changed:
         audit_content_write(
@@ -299,6 +309,7 @@ def update_location_endpoint(
         )
     response = _response(connection, result, changed=result.changed)
     finish_campaign_idempotency(connection, idem, status_code=200, body=response)
+    plan.finalize(connection)  # R01: the last statement
     return response
 
 
