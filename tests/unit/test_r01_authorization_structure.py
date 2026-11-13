@@ -148,3 +148,135 @@ def test_a_pending_plan_is_a_flag_and_the_marker_is_not_a_plan() -> None:
     assert authorization.R01_PENDING is authorization.R01_PENDING
     assert not isinstance(authorization.R01_PENDING, authorization.AuthorizationPlan)
     assert repr(authorization.R01_PENDING) == "R01_PENDING"
+
+
+# --- S1-C structural guarantees (plan 6.11.9, PW-20) ---------------------------------------------
+
+_GUARDED_EVENTS = {
+    "before_execute",
+    "after_execute",
+    "before_cursor_execute",
+    "after_cursor_execute",
+    "do_execute",
+    "do_executemany",
+    "do_execute_no_params",
+    "handle_error",
+    "rollback_savepoint",
+    "commit",
+    "rollback",
+}
+
+
+def _listen_calls() -> list[tuple[str, int, ast.Call]]:
+    found: list[tuple[str, int, ast.Call]] = []
+    for module, tree in _modules():
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = getattr(node.func, "attr", getattr(node.func, "id", ""))
+            if name in ("listen", "listens_for", "listen_for", "contains"):
+                found.append((module, node.lineno, node))
+    return found
+
+
+def test_the_guard_is_the_only_listener_of_every_guarded_event_and_none_uses_retval() -> None:
+    offenders: list[str] = []
+    registered: set[str] = set()
+    for module, line, call in _listen_calls():
+        events = set(_string_args(call)) & _GUARDED_EVENTS
+        if not events:
+            continue
+        if module != "domain/authorization.py":
+            offenders.append(f"{module}:{line}: listener outside the guard")
+        if getattr(call.func, "attr", "") == "listen":
+            registered |= events
+            target = call.args[0]
+            if not (isinstance(target, ast.Name) and target.id == "engine"):
+                offenders.append(f"{module}:{line}: not registered on the engine instance")
+        for keyword in call.keywords:
+            if keyword.arg == "retval":
+                offenders.append(f"{module}:{line}: retval")
+    assert offenders == []
+    assert registered == _GUARDED_EVENTS
+
+
+def test_no_class_level_listener_and_no_retval_anywhere_in_src() -> None:
+    for module, tree in _modules():
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and any(k.arg == "retval" for k in node.keywords):
+                pytest.fail(f"{module}:{node.lineno}: retval listener")
+    for module, line, call in _listen_calls():
+        target = call.args[0] if call.args else None
+        if isinstance(target, ast.Name) and target.id in {"Engine", "Connection", "Dialect"}:
+            pytest.fail(f"{module}:{line}: class-level listener")
+
+
+def test_raw_dbapi_execution_is_limited_to_the_reviewed_seams() -> None:
+    """Raw DBAPI use fires no SQLAlchemy event (plan 6.9.6). The only uses in `src` are T0's
+    rollback/status seams in `api/deps.py` and the guard's own rollback."""
+    allowed = {"api/deps.py", "domain/authorization.py"}
+    pattern = re.compile(r"driver_connection|dbapi_connection|\.cursor\(|exec_driver_sql")
+    offenders = [
+        module
+        for module, _ in _modules()
+        if module not in allowed and pattern.search((SRC / module).read_text(encoding="utf-8"))
+    ]
+    assert offenders == []
+    guard_source = Path(authorization.__file__).read_text(encoding="utf-8")
+    assert (
+        ".execute(" not in re.findall(r"driver\.[a-z_]+\(", guard_source)
+        and "driver.rollback()" in guard_source
+    )
+    deps_source = (SRC / "api" / "deps.py").read_text(encoding="utf-8")
+    assert not re.search(r"driver\.(execute|cursor)\(", deps_source)
+
+
+def test_declarations_are_built_only_as_module_level_constants() -> None:
+    names = {"PreLock", "WriteStep", "PreWriteDeclaration"}
+    offenders: list[str] = []
+    for module, tree in _modules():
+        if module == "domain/authorization_steps.py":
+            continue
+        module_level = {
+            id(call)
+            for stmt in tree.body  # type: ignore[attr-defined]
+            if isinstance(stmt, ast.Assign)
+            and all(isinstance(t, ast.Name) and t.id.isupper() for t in stmt.targets)
+            for call in ast.walk(stmt)
+            if isinstance(call, ast.Call)
+        }
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and getattr(node.func, "id", getattr(node.func, "attr", "")) in names
+                and id(node) not in module_level
+            ):
+                offenders.append(f"{module}:{node.lineno}")
+    assert offenders == []
+
+
+def test_the_declared_surface_has_no_widening_api() -> None:
+    import dataclasses
+
+    from dnd_ai.domain import authorization_steps as steps
+
+    forbidden = re.compile(r"add|append|extend|declare|allow|widen|ignore|wildcard|skip", re.I)
+    for cls in (steps.PreWriteDeclaration, steps.WriteStep, steps.PreLock):
+        assert dataclasses.is_dataclass(cls) and cls.__dataclass_params__.frozen  # type: ignore[attr-defined]
+        assert [
+            n
+            for n in dir(cls)
+            if not n.startswith("_") and callable(getattr(cls, n)) and forbidden.search(n)
+        ] == []
+    public = [
+        n
+        for n in dir(authorization.AuthorizationPlan)
+        if not n.startswith("_") and callable(getattr(authorization.AuthorizationPlan, n))
+    ]
+    assert [n for n in public if forbidden.search(n)] == []
+    assert not hasattr(authorization, "PostAuthorizationStep")
+
+
+def test_the_guard_dispatches_only_through_the_dialects_own_do_execute() -> None:
+    source = Path(authorization.__file__).read_text(encoding="utf-8")
+    assert source.count("context.dialect.do_execute(") == 1

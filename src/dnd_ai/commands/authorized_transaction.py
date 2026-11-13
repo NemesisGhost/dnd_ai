@@ -22,9 +22,9 @@ from dnd_ai.api.deps import finish_connection_transaction
 from dnd_ai.domain.authorization import (
     AuthorizationPlan,
     PlanMode,
-    PostAuthorizationSteps,
     install_authorization_guard,
 )
+from dnd_ai.domain.authorization_steps import PreWriteDeclaration
 
 
 @contextmanager
@@ -34,7 +34,7 @@ def authorized_transaction(
     campaign_id: uuid.UUID,
     *,
     mode: PlanMode = PlanMode.POST_WRITE,
-    post_authorization_steps: PostAuthorizationSteps | None = None,
+    pre_write: PreWriteDeclaration | None = None,
 ) -> Iterator[tuple[Connection, AuthorizationPlan]]:
     install_authorization_guard(engine)
     connection = engine.connect()
@@ -45,7 +45,7 @@ def authorized_transaction(
             actor_user_id=actor_user_id,
             campaign_id=campaign_id,
             mode=mode,
-            post_authorization_steps=post_authorization_steps,
+            pre_write=pre_write,
         )
     except BaseException:
         connection.close()

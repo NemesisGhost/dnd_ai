@@ -7,15 +7,14 @@ guard leaves in a transaction would be reused by the next request.
 
 Covered here: open, violated, cross-transaction and cross-connection plans; the registry cleared by a
 rollback; post-write enforcement (a `SELECT`, a write, `SET`, an advisory call, `executemany`,
-`RETURNING`, a second `finalize`); pre-write enforcement with a synthetic step list; the fixed mode; a
+`RETURNING`, a second `finalize`); the fixed mode (pre-write enforcement lives in test_authorization_pre_write.py); a
 pending plan; the refusal's error class and sanitized 5xx; T0's refusal/reuse verification with the
 REAL guard, through a request and through `authorized_transaction`.
 """
 
-import re
 import uuid
 from collections.abc import Iterator
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 import pytest
 from fastapi import Depends, FastAPI
@@ -32,9 +31,8 @@ from dnd_ai.domain.authorization import (
     AuthorizationPlanBindingError,
     AuthorizationPlanNotFinalizedError,
     AuthorizationPlanStateError,
+    AuthorizationPlanViolationError,
     PlanMode,
-    PostAuthorizationStep,
-    PostAuthorizationSteps,
 )
 from tests.database.test_campaign_owner_gate import Gate, drop_gate, g  # noqa: F401
 
@@ -116,6 +114,12 @@ def test_the_guard_error_is_a_direct_runtime_error_subclass_and_never_a_4xx_clas
     from dnd_ai.api.errors import ApiError
     from dnd_ai.domain.errors import SafeMessageError
 
+    assert AuthorizationPlanViolationError.__mro__[1:] == (
+        RuntimeError,
+        Exception,
+        BaseException,
+        object,
+    )
     assert AuthorizationPlanNotFinalizedError.__mro__[1:] == (
         RuntimeError,
         Exception,
@@ -124,6 +128,7 @@ def test_the_guard_error_is_a_direct_runtime_error_subclass_and_never_a_4xx_clas
     )
     for cls in (
         AuthorizationPlanNotFinalizedError,
+        AuthorizationPlanViolationError,
         AuthorizationPlanBindingError,
         AuthorizationPlanStateError,
     ):
@@ -273,13 +278,13 @@ def test_the_mode_is_fixed_when_the_plan_is_created(one: Engine, g: Gate) -> Non
             plan.mode = PlanMode.PRE_WRITE  # type: ignore[misc]
         with pytest.raises(AttributeError):
             plan.nonexistent = 1  # type: ignore[attr-defined]  # __slots__: no new attributes
-        with pytest.raises(ValueError, match="no post-authorization steps"):
+        with pytest.raises(ValueError, match="no pre-write steps"):
             AuthorizationPlan.begin(
                 connection,
                 actor_user_id=g.o1_user_id,
                 campaign_id=g.campaign_id,
                 mode=PlanMode.POST_WRITE,
-                post_authorization_steps=PostAuthorizationSteps(steps=()),
+                pre_write=cast(Any, object()),
             )
         with pytest.raises(ValueError, match="must declare"):
             AuthorizationPlan.begin(
@@ -304,6 +309,8 @@ _AFTER_FINALIZE = {
     ),
     "returning": lambda c: c.execute(text(f"INSERT INTO {SCHEMA}.marker VALUES (3) RETURNING n")),
     "for_update": lambda c: c.execute(text(f"SELECT n FROM {SCHEMA}.marker FOR UPDATE")),
+    "exec_driver_sql": lambda c: c.exec_driver_sql("SELECT 1"),
+    "begin_nested": lambda c: c.begin_nested(),
 }
 
 
@@ -368,148 +375,6 @@ def test_finalize_is_exactly_one_statement(scratch: Engine, one: Engine, g: Gate
         assert len(seen) == 1
     finally:
         deps._discard(connection)
-
-
-# --- pre-write: only the reviewed step list may follow -------------------------------------------
-
-_INSERT = f"INSERT INTO {SCHEMA}.marker VALUES (:n)"
-_OTHER = f"INSERT INTO {SCHEMA}.other VALUES (:n)"
-_UPDATE = f"UPDATE {SCHEMA}.marker SET n = n + 1000"
-
-
-def _prewrite(
-    engine: Engine, g: Gate, steps: tuple[PostAuthorizationStep, ...], *, ordered: bool = True
-) -> tuple[Connection, AuthorizationPlan]:
-    connection, plan = _begin(
-        engine,
-        g,
-        mode=PlanMode.PRE_WRITE,
-        post_authorization_steps=PostAuthorizationSteps(steps=steps, ordered=ordered),
-    )
-    _require_canon_edit(connection, plan, g)
-    plan.finalize(connection)
-    return connection, plan
-
-
-_STEPS = (
-    PostAuthorizationStep(_INSERT, max_count=2),
-    PostAuthorizationStep(_OTHER),
-    PostAuthorizationStep(_UPDATE),
-)
-
-
-def test_declared_steps_within_their_counts_and_order_commit(
-    scratch: Engine, one: Engine, g: Gate
-) -> None:
-    connection, plan = _prewrite(one, g, _STEPS)
-    connection.execute(text(_INSERT), {"n": 1})
-    connection.execute(text(_INSERT), {"n": 2})
-    connection.execute(text(_OTHER), {"n": 7})
-    connection.execute(text(_UPDATE))  # the last declared step; a step may also be skipped
-    assert not plan.violated
-    deps.finish_connection_transaction(connection, commit=True)
-    assert _rows(scratch) == [1001, 1002]
-    assert _rows(scratch, "other") == [7]
-
-
-def test_an_ordered_list_may_skip_a_step(scratch: Engine, one: Engine, g: Gate) -> None:
-    connection, plan = _prewrite(one, g, _STEPS)
-    connection.execute(text(_OTHER), {"n": 7})
-    assert not plan.violated
-    deps.finish_connection_transaction(connection, commit=True)
-    assert _rows(scratch, "other") == [7]
-
-
-_VIOLATIONS = {
-    "undeclared_write": [lambda c: c.execute(text(f"DELETE FROM {SCHEMA}.marker"))],
-    "select": [lambda c: c.execute(text("SELECT 1"))],
-    "for_update": [lambda c: c.execute(text(f"SELECT n FROM {SCHEMA}.marker FOR UPDATE"))],
-    "advisory": [lambda c: c.execute(text("SELECT pg_advisory_xact_lock(7)"))],
-    "set": [lambda c: c.execute(text("SET LOCAL lock_timeout = '5s'"))],
-    "beyond_count": [
-        lambda c: c.execute(text(_OTHER), {"n": 1}),
-        lambda c: c.execute(text(_OTHER), {"n": 2}),
-    ],
-    "out_of_order": [
-        lambda c: c.execute(text(_UPDATE)),
-        lambda c: c.execute(text(_INSERT), {"n": 3}),
-    ],
-    "differing_text": [lambda c: c.execute(text(_INSERT + " "), {"n": 1}) and None],
-}
-
-
-@pytest.mark.parametrize("kind", sorted(_VIOLATIONS))
-def test_a_statement_outside_the_declared_list_violates_a_pre_write_plan(
-    scratch: Engine, one: Engine, g: Gate, kind: str
-) -> None:
-    connection, plan = _prewrite(one, g, _STEPS)
-    try:
-        if kind == "differing_text":
-            # The same statement with different text is a different statement.
-            connection.execute(text(_INSERT.replace("marker", "marker ") + " /* x */"), {"n": 1})
-        else:
-            for run in _VIOLATIONS[kind]:
-                run(connection)
-        assert plan.violated, kind
-        with pytest.raises(AuthorizationPlanNotFinalizedError):
-            connection.commit()
-    finally:
-        deps._discard(connection)
-    assert _rows(scratch) == []
-
-
-def test_an_unordered_list_admits_declared_steps_in_any_order_within_counts(
-    scratch: Engine, one: Engine, g: Gate
-) -> None:
-    connection, plan = _prewrite(one, g, _STEPS, ordered=False)
-    connection.execute(text(_UPDATE))
-    connection.execute(text(_INSERT), {"n": 1})
-    assert not plan.violated
-    connection.execute(text(_UPDATE))  # beyond its count of one
-    assert plan.violated
-    deps._discard(connection)
-
-
-@pytest.mark.parametrize(
-    "sql",
-    [
-        "SELECT 1",
-        "select n from t",
-        "SET LOCAL x = 1",
-        f"UPDATE {SCHEMA}.marker SET n = 1 WHERE n IN (SELECT n FROM {SCHEMA}.other FOR UPDATE)",
-        "SELECT pg_advisory_xact_lock(1)",
-        "UPDATE t SET n = pg_try_advisory_lock(1)::int",
-        "LOCK TABLE t",
-        "",
-    ],
-)
-def test_a_declaration_that_could_read_or_wait_is_refused_at_construction(sql: str) -> None:
-    with pytest.raises(ValueError):
-        PostAuthorizationStep(sql)
-
-
-def test_a_step_runs_at_least_once() -> None:
-    with pytest.raises(ValueError):
-        PostAuthorizationStep(_INSERT, max_count=0)
-
-
-def test_there_is_no_api_to_widen_a_step_list_at_runtime() -> None:
-    import dataclasses
-
-    steps = PostAuthorizationSteps(steps=(PostAuthorizationStep(_INSERT),))
-    with pytest.raises(dataclasses.FrozenInstanceError):
-        steps.steps = ()  # type: ignore[misc]
-    with pytest.raises(dataclasses.FrozenInstanceError):
-        steps.steps[0].max_count = 9  # type: ignore[misc]
-    assert isinstance(steps.steps, tuple)
-    forbidden = re.compile(r"add|append|extend|declare|allow|widen|ignore|wildcard|skip", re.I)
-    public = [
-        name
-        for cls in (AuthorizationPlan, PostAuthorizationSteps, PostAuthorizationStep)
-        for name in dir(cls)
-        if not name.startswith("_") and callable(getattr(cls, name))
-    ]
-    assert [name for name in public if forbidden.search(name)] == []
 
 
 # --- the real guard in a request (T0.1, T0.2 and T0.6 with the real guard) -----------------------
