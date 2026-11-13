@@ -1438,8 +1438,8 @@ def test_lock_evidence_is_real_and_only_a_successful_lock_records_it(synthetic: 
             R.PARAMETERS,
             lambda: plan.lock(connection, kit.lock_one, {"k": str(d.t2)}),
             "target",
-            driver=1,
-        )  # fmt: skip  (driver +1: the session check; the lock itself never reached the driver)
+            driver=2,
+        )  # fmt: skip  (driver +2: the session and compared-type checks; the lock never reached the driver)
         assert plan.evidence(kit.lock_one) == before and plan._flight is None
         with pytest.raises(AuthorizationPlanNotFinalizedError):
             connection.commit()

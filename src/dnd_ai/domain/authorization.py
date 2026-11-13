@@ -235,9 +235,13 @@ def _canon_for(subject: WriteStep | PreLock, dialect: Any, names: tuple[str, ...
         compiled = subject.statement.compile(dialect=dialect, column_keys=list(names))
         canon = _Canon(
             string=compiled.string,
-            keys=frozenset(compiled.binds),
+            keys=frozenset(compiled.bind_names.values()),
             embedded=MappingProxyType(
-                {k: b.value for k, b in compiled.binds.items() if not b.required}
+                {
+                    name: bind.value
+                    for bind, name in compiled.bind_names.items()
+                    if not bind.required
+                }
             ),
         )
         cache[key] = canon
@@ -318,6 +322,25 @@ _SESSION_SQL: Final = text(
     "WHERE n.nspname <> 'pg_catalog' "
     "AND o.oprname IN ('=', '<>', '<', '<=', '>', '>=') "
     f"AND (o.oprleft = ANY ({_COMPARED_ARRAY}) OR o.oprright = ANY ({_COMPARED_ARRAY})))"
+)
+
+
+#: The actual PostgreSQL type of every compared column is the one built-in type its declared class
+#: stands for: not a domain, not a composite, not another type (plan 6.14). Qualified operators only,
+#: so a shadowing operator cannot change this statement.
+_TYPE_SQL: Final = text(
+    "SELECT pg_catalog.count(*) FROM ROWS FROM ("
+    "pg_catalog.unnest(CAST(:rels AS pg_catalog.text[])), "
+    "pg_catalog.unnest(CAST(:cols AS pg_catalog.text[])), "
+    "pg_catalog.unnest(CAST(:types AS pg_catalog.text[]))) AS e(rel, col, typ) "
+    "WHERE NOT EXISTS (SELECT 1 FROM pg_catalog.pg_attribute a "
+    "JOIN pg_catalog.pg_type t ON t.oid OPERATOR(pg_catalog.=) a.atttypid "
+    "WHERE a.attrelid OPERATOR(pg_catalog.=) pg_catalog.to_regclass(e.rel) "
+    "AND a.attname::pg_catalog.text OPERATOR(pg_catalog.=) e.col "
+    "AND a.attnum OPERATOR(pg_catalog.>) 0 AND NOT a.attisdropped "
+    "AND t.typtype OPERATOR(pg_catalog.=) 'b' "
+    "AND t.typnamespace OPERATOR(pg_catalog.=) 'pg_catalog'::pg_catalog.regnamespace "
+    "AND t.typname::pg_catalog.text OPERATOR(pg_catalog.=) e.typ)"
 )
 
 
@@ -542,6 +565,23 @@ class AuthorizationPlan:
             or _search_path_lists_pg_catalog(str(search_path))
             or lookalike is not False
         ):
+            self._refuse(ViolationReason.SESSION)
+        checks = self._declaration.type_checks if self._declaration is not None else ()
+        if not checks:
+            return
+        try:
+            mismatches = connection.execute(
+                _TYPE_SQL,
+                {
+                    "rels": [c[0] for c in checks],
+                    "cols": [c[1] for c in checks],
+                    "types": [c[2] for c in checks],
+                },
+            ).scalar_one()
+        except BaseException:
+            self._latch(ViolationReason.SESSION)
+            raise
+        if mismatches != 0:
             self._refuse(ViolationReason.SESSION)
 
     def _check_listeners(self, connection: Connection) -> None:
@@ -927,7 +967,7 @@ class AuthorizationPlan:
             self._refuse(ViolationReason.EXECUTION_OPTIONS)
         if _topology(connection) != flight.topology:
             self._refuse(ViolationReason.LISTENER_TOPOLOGY)
-        if not self._values_match(flight, params, driver=False):
+        if not self._values_match(flight, params, driver=False, embedded=False):
             self._refuse(ViolationReason.PARAMETERS)
 
     def _on_before_cursor_execute(
@@ -969,16 +1009,19 @@ class AuthorizationPlan:
         if not self._values_match(flight, context.compiled_parameters[0], driver=False):
             self._refuse(ViolationReason.PARAMETERS)
 
-    def _values_match(self, flight: _Flight, mapping: object, *, driver: bool) -> bool:
+    def _values_match(
+        self, flight: _Flight, mapping: object, *, driver: bool, embedded: bool = True
+    ) -> bool:
         """The mapping has exactly the canonical key set, the supplied values equal the snapshot (in the
         extracted or the driver form), and the embedded literals are the declared ones."""
-        if not isinstance(mapping, Mapping) or set(mapping) != flight.canon.keys:
+        keys = flight.canon.keys if embedded else set(flight.names)
+        if not isinstance(mapping, Mapping) or set(mapping) != keys:
             return False
         compare = matches_driver if driver else matches_extracted
         for name in flight.names:
             if not compare(flight.specs[name], flight.frozen[name], mapping[name]):
                 return False
-        for key, expected in flight.canon.embedded.items():
+        for key, expected in flight.canon.embedded.items() if embedded else ():
             actual = mapping[key]
             if type(actual) is not type(expected) or actual != expected:
                 return False

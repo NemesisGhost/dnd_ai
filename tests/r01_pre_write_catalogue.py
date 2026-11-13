@@ -34,7 +34,25 @@ _TAG = re.compile(r"\{([A-Z_]+) ")
 _FUNCID = re.compile(r":(?:funcid|opfuncid) (\d+)")
 _LOCATION = re.compile(r":location -?\d+")
 _SYSTEM_OID = 16384
-_KEY_TYPES = ("uuid", "int2", "int4", "int8")
+_KEY_TYPES = (
+    "uuid",
+    "smallint",
+    "integer",
+    "bigint",
+    "numeric",
+    "boolean",
+    "text",
+    "character varying",
+    "character",
+    "name",
+    "timestamp with time zone",
+    "timestamp without time zone",
+    "date",
+    "pg_catalog.uuid",
+    "pg_catalog.text",
+    "pg_catalog.date",
+    "pg_catalog.name",
+)
 
 
 def _q(connection: Connection, sql: str, **params: object) -> list[tuple[object, ...]]:
@@ -239,11 +257,36 @@ def check_declaration(connection: Connection, declaration: PreWriteDeclaration) 
         k=list(_KEY_TYPES),
     ):
         problems.append(f"lookalike operator {namespace}.{name}({left}, {right})")
+    _check_compared_types(connection, declaration, problems)
     for step in declaration.steps:
         _check_step(connection, step, allowed_functions, problems)
     for lock in declaration.locks:
         _check_table_keys(connection, lock.table, f"lock {lock.name}", problems)
     return problems
+
+
+def _check_compared_types(
+    connection: Connection, declaration: PreWriteDeclaration, problems: list[str]
+) -> None:
+    """Catalogue safeguard (test-side, not a runtime refusal): each compared column's actual type is
+    the built-in PostgreSQL type its declared class stands for: no domain, composite or other type."""
+    for relation_name, column, expected in declaration.type_checks:
+        rows = _q(
+            connection,
+            "SELECT t.typtype::text, n.nspname, t.typname::text FROM pg_catalog.pg_attribute a "
+            "JOIN pg_catalog.pg_type t ON t.oid = a.atttypid "
+            "JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace "
+            "WHERE a.attrelid = pg_catalog.to_regclass(:r) AND a.attname = :c "
+            "AND a.attnum > 0 AND NOT a.attisdropped",
+            r=relation_name,
+            c=column,
+        )
+        if not rows:
+            problems.append(f"compared column {relation_name}.{column} not found")
+        elif rows[0] != ("b", "pg_catalog", expected):
+            problems.append(
+                f"compared column {relation_name}.{column} is {rows[0]}, declared as {expected}"
+            )
 
 
 def _check_table_keys(

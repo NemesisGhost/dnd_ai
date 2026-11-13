@@ -36,7 +36,6 @@ from sqlalchemy import (
     Column,
     Date,
     DateTime,
-    Enum,
     ForeignKeyConstraint,
     Insert,
     Integer,
@@ -52,7 +51,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import INT8RANGE, JSONB, Range
 from sqlalchemy.schema import Index, UniqueConstraint
-from sqlalchemy.sql import elements, functions, operators
+from sqlalchemy.sql import elements, functions, operators, sqltypes
 
 #: Effective execution options a guarded statement must carry (plan 6.10.5). The application engine
 #: shape has none (P-X1); a future engine default is added here as a reviewed change.
@@ -127,42 +126,59 @@ class BindSpec:
     int_range: tuple[int, int] | None = None
 
 
-def kind_of(column: Column[Any]) -> tuple[Kind, tuple[int, int] | None]:
-    """The supported kind of `column`'s type, or `DeclarationError`. Subclassing and decorators are not
-    followed: a `TypeDecorator` could change the value the server sees."""
-    column_type = column.type
+#: The SQLAlchemy type classes a declared column may have, by EXACT class (never `isinstance`: a
+#: subclass or wrapper could change the value or the operator the server sees), with the one
+#: PostgreSQL type each stands for. `kind_of` rejects every other class.
+_EXACT_TYPES: Final[Mapping[type, tuple[Kind, str]]] = MappingProxyType(
+    {
+        Uuid: (Kind.UUID, "uuid"),
+        sqltypes.UUID: (Kind.UUID, "uuid"),
+        Boolean: (Kind.BOOL, "bool"),
+        SmallInteger: (Kind.INT, "int2"),
+        Integer: (Kind.INT, "int4"),
+        BigInteger: (Kind.INT, "int8"),
+        Date: (Kind.DATE, "date"),
+        Text: (Kind.TEXT, "text"),
+        String: (Kind.TEXT, "varchar"),
+        sqltypes.VARCHAR: (Kind.TEXT, "varchar"),
+        sqltypes.TEXT: (Kind.TEXT, "text"),
+        JSONB: (Kind.JSONB, "jsonb"),
+        INT8RANGE: (Kind.INT8RANGE, "int8range"),
+    }
+)
+_EXACT_DATETIME: Final = frozenset({DateTime, sqltypes.TIMESTAMP, postgresql.TIMESTAMP})
+_EXACT_INTS: Final = {SmallInteger: "int2", Integer: "int4", BigInteger: "int8"}
+
+
+def kind_and_pg_type(column: Column[Any]) -> tuple[Kind, tuple[int, int] | None, str]:
+    """The supported kind, integer range and the single PostgreSQL type of `column`'s declared type,
+    or `DeclarationError`. Only the exact classes of `_EXACT_TYPES` (and a timezone-aware DateTime or
+    TIMESTAMP, or ARRAY(Text)) are accepted: subclasses, `TypeDecorator`s and every other class are
+    refused."""
+    column_type: Any = column.type
+    cls = type(column_type)
     if isinstance(column_type, TypeDecorator):
         raise DeclarationError(f"{column}: a TypeDecorator column is not supported")
-    if isinstance(column_type, Uuid):
-        if not column_type.as_uuid:
-            raise DeclarationError(f"{column}: only Uuid(as_uuid=True) is supported")
-        return Kind.UUID, None
-    if isinstance(column_type, Boolean):
-        return Kind.BOOL, None
-    if isinstance(column_type, Integer):  # SmallInteger and BigInteger subclass it
-        for cls in (SmallInteger, BigInteger):
-            if isinstance(column_type, cls):
-                return Kind.INT, _INT_RANGES[cls]
-        return Kind.INT, _INT_RANGES[Integer]
-    if isinstance(column_type, DateTime):
+    if cls in _EXACT_DATETIME:
         if not column_type.timezone:
             raise DeclarationError(f"{column}: only DateTime(timezone=True) is supported")
-        return Kind.DATETIME, None
-    if isinstance(column_type, Date):
-        return Kind.DATE, None
-    if isinstance(column_type, ARRAY):
-        if not isinstance(column_type.item_type, Text):
+        return Kind.DATETIME, None, "timestamptz"
+    if cls is ARRAY or cls is postgresql.ARRAY:
+        if type(column_type.item_type) not in (Text, sqltypes.TEXT):
             raise DeclarationError(f"{column}: only ARRAY(Text) is supported")
-        return Kind.TEXT_ARRAY, None
-    if isinstance(column_type, JSONB):
-        return Kind.JSONB, None
-    if isinstance(column_type, INT8RANGE):
-        return Kind.INT8RANGE, None
-    if isinstance(column_type, Enum):
-        raise DeclarationError(f"{column}: enum columns are not supported")
-    if isinstance(column_type, String):  # String and Text
-        return Kind.TEXT, None
-    raise DeclarationError(f"{column}: column type {column_type!r} is not supported")
+        return Kind.TEXT_ARRAY, None, "_text"
+    entry = _EXACT_TYPES.get(cls)
+    if entry is None:
+        raise DeclarationError(f"{column}: column type {column_type!r} is not supported")
+    kind, pg_type = entry
+    if kind is Kind.UUID and not column_type.as_uuid:
+        raise DeclarationError(f"{column}: only Uuid(as_uuid=True) is supported")
+    return kind, (_INT_RANGES[cls] if cls in _EXACT_INTS else None), pg_type
+
+
+def kind_of(column: Column[Any]) -> tuple[Kind, tuple[int, int] | None]:
+    kind, int_range, _ = kind_and_pg_type(column)
+    return kind, int_range
 
 
 def spec_for(name: str, column: Column[Any]) -> BindSpec:
@@ -498,6 +514,7 @@ class _Collected:
     columns: dict[str, Column[Any]] = field(default_factory=dict)
     counts: dict[str, int] = field(default_factory=dict)
     literal_columns: set[Column[Any]] = field(default_factory=set)
+    compared: set[Column[Any]] = field(default_factory=set)
 
     def add_supplied(self, bind: elements.BindParameter[Any], column: Column[Any]) -> None:
         name = bind.key
@@ -581,7 +598,12 @@ def _comparable_kind(column: Column[Any], what: str) -> Kind:
 
 
 def _check_comparison(
-    left: Column[Any], operator: object, right: object, table: Table, what: str
+    left: Column[Any],
+    operator: object,
+    right: object,
+    table: Table,
+    what: str,
+    collected: _Collected,
 ) -> None:
     """The type allowlist for one comparison: both operands are built-in kinds of the same family
     (mixed integer widths and varchar/text are the same family), so the operators that run are
@@ -589,9 +611,11 @@ def _check_comparison(
     if isinstance(right, elements.Null) and operator in (operators.is_, operators.is_not):
         return
     kind = _comparable_kind(left, what)
+    collected.compared.add(left)
     if isinstance(right, Column):
         if _comparable_kind(_pure_column(right, table, what), what) is not kind:
             raise DeclarationError(f"{what}: {left} and {right} are of different kinds")
+        collected.compared.add(right)
     elif isinstance(right, elements.BindParameter):
         if (
             not right.required
@@ -637,7 +661,7 @@ def _check_predicate_expression(
             or _is_time_function(right)
         ):
             raise DeclarationError(f"{what}: unsupported right operand {type(right).__name__}")
-        _check_comparison(left, expr.operator, right, table, what)
+        _check_comparison(left, expr.operator, right, table, what, collected)
     else:
         raise DeclarationError(f"{what}: unsupported predicate element {type(expr).__name__}")
 
@@ -686,6 +710,7 @@ class PreLock:
     key: tuple[Column[Any], ...] = field(init=False)
     specs: Mapping[str, BindSpec] = field(init=False)
     embedded: Mapping[str, object] = field(init=False)
+    compared: tuple[Column[Any], ...] = field(init=False)
 
     def __post_init__(self) -> None:
         what = f"PreLock {self.name!r}"
@@ -745,6 +770,7 @@ class PreLock:
         object.__setattr__(self, "key", tuple(columns))
         object.__setattr__(self, "specs", MappingProxyType(specs))
         object.__setattr__(self, "embedded", MappingProxyType(embedded))
+        object.__setattr__(self, "compared", tuple(collected.compared))
 
 
 @dataclass(frozen=True)
@@ -807,6 +833,7 @@ class WriteStep:
     pk_kinds: tuple[Kind, ...] = field(init=False)
     pk_binds: tuple[str | None, ...] = field(init=False)
     identity_pk: bool = field(init=False)
+    compared: tuple[Column[Any], ...] = field(init=False)
 
     def __post_init__(self) -> None:  # noqa: C901, PLR0912, PLR0915 - one linear validator
         what = f"WriteStep {self.name!r}"
@@ -902,7 +929,7 @@ class WriteStep:
                     target_binds[right.key] = left
                 else:
                     _walk_value(conjunct.right, left, collected, what=what, key=False)
-                _check_comparison(left, conjunct.operator, conjunct.right, table, what)
+                _check_comparison(left, conjunct.operator, conjunct.right, table, what, collected)
             if equalities != {kb.column: kb.bind for kb in self.target}:
                 raise DeclarationError(f"{what}: WHERE equalities do not match target")
         else:
@@ -1035,6 +1062,7 @@ class WriteStep:
         object.__setattr__(self, "is_update", is_update)
         object.__setattr__(self, "specs", MappingProxyType(specs))
         object.__setattr__(self, "embedded", MappingProxyType(embedded))
+        object.__setattr__(self, "compared", tuple(collected.compared))
         object.__setattr__(self, "pk_kinds", pk_kinds)
         object.__setattr__(self, "pk_binds", tuple(pk_binds) if not is_update else ())
         object.__setattr__(self, "identity_pk", identity)
@@ -1047,6 +1075,7 @@ class PreWriteDeclaration:
     unlocked_fk_targets: frozenset[Table] = frozenset()
     _step_index: Mapping[int, int] = field(init=False, repr=False)
     _lock_ids: frozenset[int] = field(init=False, repr=False)
+    type_checks: tuple[tuple[str, str, str], ...] = field(init=False)
 
     def __post_init__(self) -> None:
         if not self.steps:
@@ -1082,6 +1111,15 @@ class PreWriteDeclaration:
             statement_ids.add(id(lock.statement))
         object.__setattr__(self, "_step_index", MappingProxyType(step_index))
         object.__setattr__(self, "_lock_ids", frozenset(lock_ids))
+        # every compared column, with the one built-in PostgreSQL type its declared class stands for:
+        # the plan verifies these against the live catalogue before lock evidence and finalize
+        preparer = _DIALECT().identifier_preparer
+        checks: dict[tuple[str, str, str], None] = {}
+        for item in cast("tuple[PreLock | WriteStep, ...]", (*self.locks, *self.steps)):
+            for column in item.compared:
+                relation = preparer.format_table(column.table)
+                checks[(relation, column.name, kind_and_pg_type(column)[2])] = None
+        object.__setattr__(self, "type_checks", tuple(sorted(checks)))
 
     def index_of_step(self, step: object) -> int | None:
         index = self._step_index.get(id(step))
@@ -1117,6 +1155,7 @@ __all__ = [
     "UniqueWait",
     "WriteStep",
     "freeze_value",
+    "kind_and_pg_type",
     "kind_of",
     "matches_driver",
     "matches_extracted",
