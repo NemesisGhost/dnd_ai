@@ -352,12 +352,13 @@ def test_prelock_allowed_forms_construct() -> None:
         select(c.c.child_id)
         .where((c.c.v > 1) & (c.c.flag.is_(True) | c.c.flag.is_(None)))
         .with_for_update(),
-        select(c.c.child_id)
-        .where(c.c.v == func.pg_catalog.now())
-        .with_for_update(read=True, nowait=True),
+        select(c.c.child_id).where(c.c.v == 5).with_for_update(read=True, nowait=True),
         select(c.c.child_id).where(~(c.c.v == bindparam("x"))).with_for_update(of=c),
     ):
         PreLock("ok", stmt)
+    # an integer column is not a time comparison (plan 6.13)
+    with pytest.raises(DeclarationError):
+        PreLock("bad", select(c.c.child_id).where(c.c.v == func.pg_catalog.now()).with_for_update())
 
 
 def test_a_deferrable_primary_key_is_rejected_at_construction() -> None:

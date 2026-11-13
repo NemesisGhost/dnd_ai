@@ -107,6 +107,14 @@ _INT_RANGES: Final = {
     BigInteger: (-(2**63), 2**63 - 1),
 }
 _KEY_KINDS: Final = frozenset({Kind.UUID, Kind.INT})
+#: The only column kinds a predicate may compare (PreLock WHERE and UPDATE narrowing). They map to the
+#: built-in types whose comparison operators `_SESSION_SQL` proves are not shadowed: uuid,
+#: int2/int4/int8, bool, text/varchar, timestamptz and date. Arrays, jsonb, ranges, enums,
+#: composites, decorated and user-defined types are refused at declaration (plan 6.13).
+_COMPARABLE_KINDS: Final = frozenset(
+    {Kind.UUID, Kind.INT, Kind.BOOL, Kind.TEXT, Kind.DATETIME, Kind.DATE}
+)
+_LITERAL_KINDS: Final = {bool: Kind.BOOL, int: Kind.INT, str: Kind.TEXT, uuid.UUID: Kind.UUID}
 
 
 @dataclass(frozen=True)
@@ -565,6 +573,39 @@ def _pure_column(expr: object, table: Table, what: str) -> Column[Any]:
     return expr
 
 
+def _comparable_kind(column: Column[Any], what: str) -> Kind:
+    kind = kind_of(column)[0]
+    if kind not in _COMPARABLE_KINDS:
+        raise DeclarationError(f"{what}: {column} has a type that a predicate may not compare")
+    return kind
+
+
+def _check_comparison(
+    left: Column[Any], operator: object, right: object, table: Table, what: str
+) -> None:
+    """The type allowlist for one comparison: both operands are built-in kinds of the same family
+    (mixed integer widths and varchar/text are the same family), so the operators that run are
+    exactly those `_SESSION_SQL` covers. `IS [NOT] NULL` invokes no operator and takes any column."""
+    if isinstance(right, elements.Null) and operator in (operators.is_, operators.is_not):
+        return
+    kind = _comparable_kind(left, what)
+    if isinstance(right, Column):
+        if _comparable_kind(_pure_column(right, table, what), what) is not kind:
+            raise DeclarationError(f"{what}: {left} and {right} are of different kinds")
+    elif isinstance(right, elements.BindParameter):
+        if (
+            not right.required
+            and right.value is not None
+            and _LITERAL_KINDS.get(type(right.value)) is not kind
+        ):
+            raise DeclarationError(f"{what}: a literal of the wrong kind for {left}")
+    elif isinstance(right, (elements.True_, elements.False_)):
+        if kind is not Kind.BOOL:
+            raise DeclarationError(f"{what}: TRUE/FALSE needs a boolean column")
+    elif _is_time_function(right) and kind is not Kind.DATETIME:
+        raise DeclarationError(f"{what}: a time function needs a timestamptz column")
+
+
 def _check_predicate_expression(
     expr: object, table: Table, collected: _Collected, what: str
 ) -> None:
@@ -596,6 +637,7 @@ def _check_predicate_expression(
             or _is_time_function(right)
         ):
             raise DeclarationError(f"{what}: unsupported right operand {type(right).__name__}")
+        _check_comparison(left, expr.operator, right, table, what)
     else:
         raise DeclarationError(f"{what}: unsupported predicate element {type(expr).__name__}")
 
@@ -860,6 +902,7 @@ class WriteStep:
                     target_binds[right.key] = left
                 else:
                     _walk_value(conjunct.right, left, collected, what=what, key=False)
+                _check_comparison(left, conjunct.operator, conjunct.right, table, what)
             if equalities != {kb.column: kb.bind for kb in self.target}:
                 raise DeclarationError(f"{what}: WHERE equalities do not match target")
         else:

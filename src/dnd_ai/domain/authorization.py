@@ -287,6 +287,29 @@ def _topology(connection: Connection) -> tuple[object, ...]:
     return tuple(parts)
 
 
+#: Built-in types the supported predicates compare (authorization_steps._COMPARABLE_KINDS), plus the
+#: types the driver may send a value as (numeric for an integer, bpchar/name beside text/varchar,
+#: timestamp beside timestamptz). A user-defined comparison operator touching any of them is refused.
+_COMPARED_TYPES: Final = (
+    "uuid",
+    "int2",
+    "int4",
+    "int8",
+    "numeric",
+    "bool",
+    "text",
+    "varchar",
+    "bpchar",
+    "name",
+    "timestamptz",
+    "timestamp",
+    "date",
+)
+_COMPARED_ARRAY: Final = (
+    "ARRAY["
+    + ", ".join(f"'pg_catalog.{name}'::pg_catalog.regtype" for name in _COMPARED_TYPES)
+    + "]"
+)
 _SESSION_SQL: Final = text(
     "SELECT pg_catalog.current_setting('search_path'), "
     "pg_catalog.current_setting('session_replication_role'), "
@@ -294,12 +317,7 @@ _SESSION_SQL: Final = text(
     "JOIN pg_catalog.pg_namespace n ON n.oid = o.oprnamespace "
     "WHERE n.nspname <> 'pg_catalog' "
     "AND o.oprname IN ('=', '<>', '<', '<=', '>', '>=') "
-    "AND (o.oprleft = ANY (ARRAY['pg_catalog.uuid'::pg_catalog.regtype, "
-    "'pg_catalog.int2'::pg_catalog.regtype, 'pg_catalog.int4'::pg_catalog.regtype, "
-    "'pg_catalog.int8'::pg_catalog.regtype]) "
-    "OR o.oprright = ANY (ARRAY['pg_catalog.uuid'::pg_catalog.regtype, "
-    "'pg_catalog.int2'::pg_catalog.regtype, 'pg_catalog.int4'::pg_catalog.regtype, "
-    "'pg_catalog.int8'::pg_catalog.regtype])))"
+    f"AND (o.oprleft = ANY ({_COMPARED_ARRAY}) OR o.oprright = ANY ({_COMPARED_ARRAY})))"
 )
 
 
