@@ -285,14 +285,27 @@ def _publish_reference_ids(
 
 
 def lifecycle_world_capability_of(
-    connection: Connection, *, entity_id: uuid.UUID, action: str
+    connection: Connection,
+    *,
+    entity_id: uuid.UUID,
+    action: str,
+    campaign_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
 ) -> str | None:
     """The world capability `action` needs on `entity_id`, or `None` for the
     campaign-originated exceptions (`dnd_ai.domain.record_authoring`, which the
     read models and the per-record eligibility fields share). The entity type is
     read without a lock: it can never change (entity-type-change protection), and
     an unknown entity falls through to the strict capability and then to the
-    normal not-found error."""
+    normal not-found error.
+
+    One exception to "missing means unknown" (R01 S3-R1). A delete-draft physically removes the row, so a
+    replay of its receipt finds no entity, and the strict capability would refuse a player-character or
+    item-instance replay that needs no world role. The surviving evidence is the audit row the delete
+    wrote: `audit.change_log` (`deleted`, `delete_draft_entity`, `record_id` = the entity, the world of
+    this campaign) carries the entity's type in its server-written `changed_fields`. It is used only for
+    `delete_draft`, only for the same actor (the key's owner, so another caller learns nothing about an id
+    that once existed), and only when it names a type; anything else is the unknown-entity path above."""
     type_code = connection.execute(
         text("""
             SELECT et.code FROM core.entities e
@@ -301,6 +314,26 @@ def lifecycle_world_capability_of(
         """),
         {"e": entity_id},
     ).scalar()
+    if type_code is None and action == DELETE_DRAFT:
+        type_code = connection.execute(
+            text("""
+                SELECT cl.changed_fields ->> 'entity_type_code'
+                FROM audit.change_log cl
+                JOIN audit.change_actions ca ON ca.change_action_id = cl.change_action_id
+                WHERE ca.code = 'deleted'
+                  AND cl.command_name = 'delete_draft_entity'
+                  AND cl.record_id = :e
+                  AND cl.actor_user_id = :a
+                  AND cl.world_id = (
+                      SELECT t.world_id FROM campaign.campaigns c
+                      JOIN campaign.timelines t ON t.timeline_id = c.timeline_id
+                      WHERE c.campaign_id = :c
+                  )
+                ORDER BY cl.change_log_id DESC
+                LIMIT 1
+            """),
+            {"e": entity_id, "a": actor_user_id, "c": campaign_id},
+        ).scalar()
     return (
         lifecycle_world_capability(str(type_code), action)
         if type_code is not None
@@ -326,7 +359,11 @@ def _prepare(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=lifecycle_world_capability_of(
-            connection, entity_id=entity_id, action=action
+            connection,
+            entity_id=entity_id,
+            action=action,
+            campaign_id=campaign_id,
+            actor_user_id=actor_user_id,
         ),
         plan=plan,
     )
@@ -625,7 +662,11 @@ def supersede_entity(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=lifecycle_world_capability_of(
-            connection, entity_id=entity_id, action=SUPERSEDE
+            connection,
+            entity_id=entity_id,
+            action=SUPERSEDE,
+            campaign_id=campaign_id,
+            actor_user_id=actor_user_id,
         ),
         plan=plan,
     )

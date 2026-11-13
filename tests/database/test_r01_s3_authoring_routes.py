@@ -34,11 +34,15 @@ from dnd_ai.api.idempotency import lock_idempotency_key
 from dnd_ai.commands.dungeons import create_dungeon
 from dnd_ai.commands.entity_lifecycle import (
     approve_entity,
+    lifecycle_world_capability_of,
     publish_entity_as_canon,
     submit_entity_for_review,
 )
+from dnd_ai.commands.item_definitions import create_item_definition
+from dnd_ai.commands.item_instances import create_item_instance
 from dnd_ai.commands.locations import create_location
 from dnd_ai.commands.memberships import revoke_membership_role
+from dnd_ai.commands.player_characters import create_player_character
 from dnd_ai.commands.quest_definitions import create_quest
 from dnd_ai.commands.sources import create_source
 from dnd_ai.commands.world_access import end_world_role
@@ -828,3 +832,183 @@ def test_a_replay_judges_the_same_requirements_as_the_fresh_request(
     assert fresh == replayed, (name, fresh, replayed)
     assert len(set(fresh)) == len(fresh), (name, fresh)
     assert fresh[0].startswith("route.") and "campaign.canon.edit" in fresh
+
+
+# --- S3-R1: replay of a delete-draft after the entity is gone ---------------------------------------------------------
+
+
+def _delete_case(kind: str, w: World) -> Case:
+    """A draft of `kind` seeded by its command, and the delete-draft route that physically removes it."""
+    tag = uuid.uuid4().hex[:6]
+    with w.engine.begin() as connection:
+        plan = fixture_plan(connection, w.campaign_id)
+        if kind == "player_character":
+            made = create_player_character(
+                connection,
+                campaign_id=w.campaign_id,
+                actor_user_id=w.gm_user,
+                name=f"S3 PC {tag}",
+                summary=None,
+                species_id=w.species,
+                size_category="medium",
+                plan=plan,
+            )
+        elif kind == "item_instance":
+            definition = create_item_definition(
+                connection,
+                campaign_id=w.campaign_id,
+                actor_user_id=w.owner,
+                name=f"S3 definition {tag}",
+                category="wondrous_item",
+                canon_status="canon",
+                plan=fixture_plan(connection, w.campaign_id),
+            )
+            made = create_item_instance(
+                connection,
+                campaign_id=w.campaign_id,
+                actor_user_id=w.gm_user,
+                name=f"S3 item {tag}",
+                summary=None,
+                item_definition_id=definition.item_definition_id,
+                plan=plan,
+            )
+        else:
+            made = create_location(
+                connection,
+                campaign_id=w.campaign_id,
+                actor_user_id=w.gm_user,
+                category_code="region",
+                name=f"S3 place {tag}",
+                summary=None,
+                plan=plan,
+            )
+    return _delete_route(w, made.entity_id, made.row_version)
+
+
+def _delete_route(w: World, entity_id: uuid.UUID, version: int) -> Case:
+    return Case(
+        f"delete {entity_id}",
+        _post(
+            w,
+            f"/entities/{entity_id}/lifecycle/delete-draft",
+            {"expected_row_version": version, "reason": "S3-R1 delete"},
+        ),
+        ok=200,
+    )
+
+
+def _receipt_ids(response: Any) -> set[str]:
+    return {v for v in response.json().values() if isinstance(v, str) and len(v) >= 32}
+
+
+@pytest.mark.parametrize("kind", ("player_character", "item_instance"))
+def test_a_deleted_campaign_originated_entitys_replay_needs_no_world_role(
+    kind: str, w: World, pooled: Engine, pooled_factory: Factory
+) -> None:
+    """D8: player-character identity and item instances need campaign `canon.edit` alone. After the
+    delete the row is gone; the classification survives in the delete's audit row, so the replay is
+    still judged on campaign authority only: ending the world assignment does not refuse it."""
+    case = _delete_case(kind, w)
+    key = new_key()
+    first = case.call(pooled_factory, key)
+    assert code(first) == 200, first.text
+    stored = state(w, key)
+    _end_world_assignment(w, w.gm_world_membership)
+    replay = case.call(pooled_factory, key)
+    assert (code(replay), replay.json()) == (code(first), replay_body(first.json())), kind
+    assert state(w, key) == stored, "a replay wrote a business, audit or receipt row"
+    assert idle_in_transaction(w.engine) == 0
+
+
+@pytest.mark.parametrize("kind", ("player_character", "item_instance", "location"))
+def test_a_deleted_entitys_replay_is_refused_once_campaign_authority_is_gone(
+    kind: str, w: World, pooled: Engine, pooled_factory: Factory
+) -> None:
+    case = _delete_case(kind, w)
+    key = new_key()
+    first = case.call(pooled_factory, key)
+    assert code(first) == 200, first.text
+    stored = state(w, key)
+    with w.engine.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE security.membership_roles SET revoked_at = now() WHERE membership_role_id = :r"
+            ),
+            {"r": w.gm_role},
+        )
+    refused = case.call(pooled_factory, key)
+    assert code(refused) in (403, 404), refused.text
+    assert not any(v in refused.text for v in _receipt_ids(first)), "a stored receipt leaked"
+    assert state(w, key) == stored
+
+
+def test_a_deleted_world_managed_entitys_replay_follows_the_world_role(
+    w: World, pooled: Engine, pooled_factory: Factory
+) -> None:
+    case = _delete_case("location", w)
+    key = new_key()
+    first = case.call(pooled_factory, key)
+    assert code(first) == 200, first.text
+    replay = case.call(pooled_factory, key)
+    assert (code(replay), replay.json()) == (code(first), replay_body(first.json()))
+    stored = state(w, key)
+    _end_world_assignment(w, w.gm_world_membership)
+    refused = case.call(pooled_factory, key)
+    assert (code(refused), error_of(refused)) == (403, "world_authority_required"), refused.text
+    assert not any(v in refused.text for v in _receipt_ids(first)), "a stored receipt leaked"
+    assert state(w, key) == stored
+    fresh = case.call(pooled_factory, new_key())
+    assert (code(fresh), error_of(fresh)) == (403, "world_authority_required")
+
+
+def test_unknown_ids_keep_their_existing_behavior(
+    w: World, pooled: Engine, pooled_factory: Factory
+) -> None:
+    unknown = _delete_route(w, uuid.uuid4(), 1)
+    # an id that never existed is the existing hidden 404 while the caller holds the world role ...
+    assert code(unknown.call(pooled_factory, new_key())) == 404
+    # ... and the strict world refusal once it is gone (nothing says the id was ever campaign-only)
+    _end_world_assignment(w, w.gm_world_membership)
+    refused = unknown.call(pooled_factory, new_key())
+    assert (code(refused), error_of(refused)) == (403, "world_authority_required")
+
+
+@pytest.mark.parametrize("kind", ("player_character", "location"))
+def test_a_key_reused_for_another_entity_is_still_the_idempotency_conflict(
+    kind: str, w: World, pooled: Engine, pooled_factory: Factory
+) -> None:
+    first_case, other_case = _delete_case(kind, w), _delete_case(kind, w)
+    key = new_key()
+    first = first_case.call(pooled_factory, key)
+    assert code(first) == 200, first.text
+    stored = state(w, key)
+    clash = other_case.call(pooled_factory, key)
+    assert code(clash) == 409, clash.text
+    assert not any(v in clash.text for v in _receipt_ids(first))
+    assert state(w, key) == stored
+
+
+def test_the_audit_evidence_is_not_reused_for_another_actor(
+    w: World, pooled: Engine, pooled_factory: Factory
+) -> None:
+    """Another caller replaying an id the GM deleted learns nothing: the evidence is the same actor's."""
+    case = _delete_case("player_character", w)
+    assert code(case.call(pooled_factory, new_key())) == 200
+    entity_id = uuid.UUID(case.name.removeprefix("delete "))
+    with w.engine.connect() as connection:
+        same = lifecycle_world_capability_of(
+            connection,
+            entity_id=entity_id,
+            action="delete_draft",
+            campaign_id=w.campaign_id,
+            actor_user_id=w.gm_user,
+        )
+        other = lifecycle_world_capability_of(
+            connection,
+            entity_id=entity_id,
+            action="delete_draft",
+            campaign_id=w.campaign_id,
+            actor_user_id=w.owner,
+        )
+    assert same is None, "the deleting actor's replay is campaign-only"
+    assert other == "world.canon.edit", "another actor sees an unknown id"

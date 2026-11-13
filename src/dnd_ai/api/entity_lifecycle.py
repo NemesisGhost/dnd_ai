@@ -303,7 +303,11 @@ def _run(
         plan,
         access,
         world_capability=lifecycle_world_capability_of(
-            connection, entity_id=entity_id, action=action
+            connection,
+            entity_id=entity_id,
+            action=action,
+            campaign_id=access.campaign_id,
+            actor_user_id=access.user_id,
         ),
     )
     reservation_id: uuid.UUID | None = None
