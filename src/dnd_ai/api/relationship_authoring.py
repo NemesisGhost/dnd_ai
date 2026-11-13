@@ -53,7 +53,7 @@ from dnd_ai.domain.relationship_authoring import (
     TypePairing,
     pairs_for,
 )
-from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
+from dnd_ai.domain.world_authority import WORLD_CANON_EDIT, WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.relationship_authoring import (
     Participant,
     RelationshipAuthoringView,
@@ -66,6 +66,7 @@ from dnd_ai.queries.relationship_authoring import (
 from ._authoring import (
     BaseAuthoringRequest,
     finish_campaign_idempotency,
+    require_authoring_decisions,
     start_campaign_idempotency,
 )
 from ._shared import timeline_world_id
@@ -260,6 +261,7 @@ def _run(
     reason: str | None = None,
     plan: AuthorizationPlan,
 ) -> Any:
+    require_authoring_decisions(connection, plan, access, world_capability=WORLD_CANON_EDIT)
     idem = start_campaign_idempotency(
         connection,
         actor_user_id=access.user_id,
@@ -553,6 +555,7 @@ def change_office_endpoint(
 ) -> Any:
     """End the stint and start its successor in one transaction; answers with the successor."""
     payload = {"relationship_id": str(relationship_id), **body.model_dump(mode="json")}
+    require_authoring_decisions(connection, plan, access, world_capability=WORLD_CANON_EDIT)
     idem = start_campaign_idempotency(
         connection,
         actor_user_id=access.user_id,

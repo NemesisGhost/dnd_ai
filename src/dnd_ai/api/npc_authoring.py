@@ -25,12 +25,13 @@ from dnd_ai.domain.access import AccessContext
 from dnd_ai.domain.authoring import DESCRIPTION_MAX_LENGTH, NAME_MAX_LENGTH, REASON_MAX_LENGTH
 from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.npc_authoring import NPC_TEXT_MAX_LENGTH, SIZE_CATEGORIES
-from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
+from dnd_ai.domain.world_authority import WORLD_CANON_EDIT, WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.npc_authoring import NpcAuthoringView, get_npc_authoring, list_species_options
 
 from ._authoring import (
     BaseAuthoringRequest,
     finish_campaign_idempotency,
+    require_authoring_decisions,
     start_campaign_idempotency,
 )
 from ._content_support import audit_content_write, clean_note, write_receipt
@@ -153,6 +154,7 @@ def create_npc_endpoint(
     correlation_id: _Corr,
 ) -> Any:
     command_name = "create_npc"
+    require_authoring_decisions(connection, plan, access, world_capability=WORLD_CANON_EDIT)
     idem = start_campaign_idempotency(
         connection,
         actor_user_id=access.user_id,
@@ -218,6 +220,7 @@ def update_npc_endpoint(
     correlation_id: _Corr,
 ) -> Any:
     command_name = "update_npc"
+    require_authoring_decisions(connection, plan, access, world_capability=WORLD_CANON_EDIT)
     idem = start_campaign_idempotency(
         connection,
         actor_user_id=access.user_id,

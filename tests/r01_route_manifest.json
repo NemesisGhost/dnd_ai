@@ -1315,6 +1315,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.dungeons.update_dungeon_area": [
@@ -1329,6 +1330,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -1339,6 +1341,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.dungeons.update_dungeon_area"
@@ -1374,6 +1377,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.dungeons.create_dungeon": [
@@ -1388,6 +1392,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -1400,6 +1405,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.dungeons.create_dungeon"
@@ -1435,6 +1441,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.dungeons.create_dungeon_area": [
@@ -1449,6 +1456,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -1461,6 +1469,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.dungeons.create_dungeon_area"
@@ -1496,6 +1505,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.dungeons.add_connection": [
@@ -1510,6 +1520,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -1520,6 +1531,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.dungeons.add_connection"
@@ -1555,6 +1567,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.dungeons.remove_connection": [
@@ -1569,6 +1582,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -1579,6 +1593,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.dungeons.remove_connection"
@@ -1614,6 +1629,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.dungeons.update_connection": [
@@ -1628,6 +1644,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -1638,6 +1655,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.dungeons.update_connection"
@@ -1673,6 +1691,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.dungeons.add_area_child": [
@@ -1687,6 +1706,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -1696,6 +1716,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.dungeons.add_area_child"
@@ -1731,6 +1752,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.dungeons.remove_area_child": [
@@ -1745,6 +1767,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -1754,6 +1777,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.dungeons.remove_area_child"
@@ -1789,6 +1813,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.dungeons.update_area_child": [
@@ -1803,6 +1828,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -1812,6 +1838,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.dungeons.update_area_child"
@@ -1847,6 +1874,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.dungeons.add_area_child": [
@@ -1861,6 +1889,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -1870,6 +1899,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.dungeons.add_area_child"
@@ -1905,6 +1935,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.dungeons.remove_area_child": [
@@ -1919,6 +1950,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -1928,6 +1960,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.dungeons.remove_area_child"
@@ -1963,6 +1996,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.dungeons.update_area_child": [
@@ -1977,6 +2011,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -1986,6 +2021,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.dungeons.update_area_child"
@@ -2021,6 +2057,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.dungeons.add_area_child": [
@@ -2035,6 +2072,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -2044,6 +2082,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.dungeons.add_area_child"
@@ -2079,6 +2118,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.dungeons.remove_area_child": [
@@ -2093,6 +2133,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -2102,6 +2143,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.dungeons.remove_area_child"
@@ -2137,6 +2179,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.dungeons.update_area_child": [
@@ -2151,6 +2194,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -2160,6 +2204,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.dungeons.update_area_child"
@@ -2195,6 +2240,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.dungeons.update_dungeon": [
@@ -2209,6 +2255,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -2220,6 +2267,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.dungeons.update_dungeon"
@@ -2255,6 +2303,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands.item_definitions.create_item_definition": [
     "reader:access_context",
     "reader:world_authority",
@@ -2267,11 +2316,13 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands.item_definitions.create_item_definition": [
     "rules.item_definitions"
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands.item_definitions.create_item_definition"
   ],
   "dependencies": [
@@ -2302,6 +2353,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands.item_definitions.update_item_definition": [
     "reader:access_context",
     "reader:world_authority",
@@ -2314,11 +2366,13 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands.item_definitions.update_item_definition": [
     "rules.item_definitions"
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands.item_definitions.update_item_definition"
   ],
   "dependencies": [
@@ -2349,6 +2403,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.item_instances.create_item_instance": [
@@ -2363,6 +2418,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -2374,6 +2430,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.item_instances.create_item_instance"
@@ -2410,6 +2467,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.item_instances.update_item_instance": [
@@ -2424,6 +2482,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -2434,6 +2493,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.item_instances.update_item_instance"
@@ -2470,6 +2530,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.knowledge_definitions.create_knowledge_item": [
@@ -2484,6 +2545,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -2495,6 +2557,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.knowledge_definitions.create_knowledge_item"
@@ -2530,6 +2593,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.knowledge_definitions.update_knowledge_item": [
@@ -2544,6 +2608,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -2554,6 +2619,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.knowledge_definitions.update_knowledge_item"
@@ -2589,6 +2655,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.locations.create_location": [
@@ -2603,6 +2670,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -2616,6 +2684,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.locations.create_location"
@@ -2650,6 +2719,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.locations.update_location": [
@@ -2664,6 +2734,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -2676,6 +2747,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.locations.update_location"
@@ -2710,6 +2782,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.npcs.create_npc": [
@@ -2724,6 +2797,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -2736,6 +2810,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.npcs.create_npc"
@@ -2770,6 +2845,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.npc_portrayal.update_npc_detail_level": [
@@ -2784,6 +2860,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -2794,6 +2871,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.npc_portrayal.update_npc_detail_level"
@@ -2828,6 +2906,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands.npc_portrayal.save_npc_portrayal_profile": [
     "reader:access_context",
     "reader:world_authority",
@@ -2840,11 +2919,13 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands.npc_portrayal.save_npc_portrayal_profile": [
     "character.npc_portrayal_profiles"
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands.npc_portrayal.save_npc_portrayal_profile"
   ],
   "dependencies": [
@@ -2875,6 +2956,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.npcs.update_npc": [
@@ -2889,6 +2971,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -2900,6 +2983,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.npcs.update_npc"
@@ -2934,6 +3018,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.organizations.create_organization": [
@@ -2948,6 +3033,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -2961,6 +3047,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.organizations.create_organization"
@@ -2995,6 +3082,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.organizations.update_organization": [
@@ -3009,6 +3097,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -3020,6 +3109,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.organizations.update_organization"
@@ -3054,6 +3144,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.player_characters.create_player_character": [
@@ -3068,6 +3159,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -3080,6 +3172,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.player_characters.create_player_character"
@@ -3114,6 +3207,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.player_characters.update_player_character": [
@@ -3128,6 +3222,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -3139,6 +3234,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.player_characters.update_player_character"
@@ -3173,6 +3269,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.quest_definitions.create_quest": [
@@ -3188,6 +3285,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -3200,6 +3298,7 @@
    "dnd_ai.commands.quest_definitions.quest_has_progress": []
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.quest_definitions.create_quest",
@@ -3236,6 +3335,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.quest_children.add_objective_dependency": [
@@ -3251,6 +3351,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -3262,6 +3363,7 @@
    "dnd_ai.commands.quest_definitions.quest_has_progress": []
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.quest_children.add_objective_dependency",
@@ -3298,6 +3400,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.quest_children.remove_objective_dependency": [
@@ -3313,6 +3416,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -3324,6 +3428,7 @@
    "dnd_ai.commands.quest_definitions.quest_has_progress": []
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.quest_children.remove_objective_dependency",
@@ -3360,6 +3465,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.quest_children.add_quest_outcome": [
@@ -3375,6 +3481,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -3386,6 +3493,7 @@
    "dnd_ai.commands.quest_definitions.quest_has_progress": []
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.quest_children.add_quest_outcome",
@@ -3422,6 +3530,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.quest_children.remove_quest_outcome": [
@@ -3437,6 +3546,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -3448,6 +3558,7 @@
    "dnd_ai.commands.quest_definitions.quest_has_progress": []
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.quest_children.remove_quest_outcome",
@@ -3484,6 +3595,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.quest_children.add_quest_reward": [
@@ -3499,6 +3611,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -3510,6 +3623,7 @@
    "dnd_ai.commands.quest_definitions.quest_has_progress": []
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.quest_children.add_quest_reward",
@@ -3546,6 +3660,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.quest_children.update_quest_outcome": [
@@ -3561,6 +3676,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -3572,6 +3688,7 @@
    "dnd_ai.commands.quest_definitions.quest_has_progress": []
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.quest_children.update_quest_outcome",
@@ -3608,6 +3725,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.quest_children.add_quest_participant": [
@@ -3623,6 +3741,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -3634,6 +3753,7 @@
    "dnd_ai.commands.quest_definitions.quest_has_progress": []
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.quest_children.add_quest_participant",
@@ -3670,6 +3790,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.quest_children.remove_quest_participant": [
@@ -3685,6 +3806,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -3696,6 +3818,7 @@
    "dnd_ai.commands.quest_definitions.quest_has_progress": []
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.quest_children.remove_quest_participant",
@@ -3732,6 +3855,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.quest_children.remove_quest_reward": [
@@ -3747,6 +3871,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -3758,6 +3883,7 @@
    "dnd_ai.commands.quest_definitions.quest_has_progress": []
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.quest_children.remove_quest_reward",
@@ -3794,6 +3920,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.quest_definitions.add_quest_stage": [
@@ -3809,6 +3936,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -3820,6 +3948,7 @@
    "dnd_ai.commands.quest_definitions.quest_has_progress": []
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.quest_definitions.add_quest_stage",
@@ -3856,6 +3985,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.quest_definitions.quest_has_progress": [],
@@ -3871,6 +4001,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -3882,6 +4013,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.quest_definitions.quest_has_progress",
@@ -3918,6 +4050,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.quest_definitions.add_quest_objective": [
@@ -3933,6 +4066,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -3944,6 +4078,7 @@
    "dnd_ai.commands.quest_definitions.quest_has_progress": []
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.quest_definitions.add_quest_objective",
@@ -3980,6 +4115,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.quest_definitions.quest_has_progress": [],
@@ -3995,6 +4131,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -4006,6 +4143,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.quest_definitions.quest_has_progress",
@@ -4042,6 +4180,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.quest_definitions.quest_has_progress": [],
@@ -4057,6 +4196,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -4068,6 +4208,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.quest_definitions.quest_has_progress",
@@ -4104,6 +4245,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.quest_definitions.quest_has_progress": [],
@@ -4119,6 +4261,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -4130,6 +4273,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.quest_definitions.quest_has_progress",
@@ -4166,6 +4310,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.quest_definitions.quest_has_progress": [],
@@ -4181,6 +4326,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -4192,6 +4338,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.quest_definitions.quest_has_progress",
@@ -4228,6 +4375,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.quest_definitions.quest_has_progress": [],
@@ -4243,6 +4391,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -4254,6 +4403,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.quest_definitions.quest_has_progress",
@@ -4290,6 +4440,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands.world_relationships.create_relationship": [
     "reader:access_context",
     "reader:world_authority",
@@ -4302,6 +4453,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands.world_relationships.create_relationship": [
     "core.sources",
     "world.employment_relationships",
@@ -4315,6 +4467,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands.world_relationships.create_relationship"
   ],
   "dependencies": [
@@ -4347,6 +4500,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands.world_relationships.archive_relationship": [
     "reader:access_context",
     "reader:world_authority",
@@ -4359,11 +4513,13 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands.world_relationships.archive_relationship": [
     "world.relationships"
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands.world_relationships.archive_relationship"
   ],
   "dependencies": [
@@ -4396,6 +4552,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands.world_relationships.change_membership_office": [
     "reader:access_context",
     "reader:world_authority",
@@ -4408,6 +4565,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands.world_relationships.change_membership_office": [
     "core.sources",
     "world.employment_relationships",
@@ -4421,6 +4579,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands.world_relationships.change_membership_office"
   ],
   "dependencies": [
@@ -4451,6 +4610,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands.world_relationships.end_relationship": [
     "reader:access_context",
     "reader:world_authority",
@@ -4463,6 +4623,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands.world_relationships.end_relationship": [
     "world.employment_relationships",
     "world.organization_memberships",
@@ -4471,6 +4632,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands.world_relationships.end_relationship"
   ],
   "dependencies": [
@@ -4503,6 +4665,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands.world_relationships.set_relationship_perspective": [
     "reader:access_context",
     "reader:world_authority",
@@ -4515,12 +4678,14 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands.world_relationships.set_relationship_perspective": [
     "world.relationship_perspectives",
     "world.relationships"
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands.world_relationships.set_relationship_perspective"
   ],
   "dependencies": [
@@ -4553,6 +4718,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands.world_relationships.restore_relationship": [
     "reader:access_context",
     "reader:world_authority",
@@ -4565,11 +4731,13 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands.world_relationships.restore_relationship": [
     "world.relationships"
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands.world_relationships.restore_relationship"
   ],
   "dependencies": [
@@ -4602,6 +4770,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands.world_relationships.update_relationship": [
     "reader:access_context",
     "reader:world_authority",
@@ -4614,11 +4783,13 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands.world_relationships.update_relationship": [
     "world.relationships"
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands.world_relationships.update_relationship"
   ],
   "dependencies": [
@@ -4651,6 +4822,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.religions.create_religion": [
@@ -4665,6 +4837,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -4676,6 +4849,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.religions.create_religion"
@@ -4710,6 +4884,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands._revisions.snapshot_from_view": [],
    "dnd_ai.commands.religions.update_religion": [
@@ -4724,6 +4899,7 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
@@ -4734,6 +4910,7 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
    "dnd_ai.commands._revisions.snapshot_from_view",
    "dnd_ai.commands.religions.update_religion"
@@ -6196,12 +6373,14 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands.entity_lifecycle.approve_entity": [
     "reader:access_context",
     "reader:world_authority",
     "scope:authoring"
-   ]
+   ],
+   "dnd_ai.commands.entity_lifecycle.lifecycle_world_capability_of": []
   },
   "command_scope_markers": [
    "reader:access_context",
@@ -6209,16 +6388,20 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
    "dnd_ai.commands.entity_lifecycle.approve_entity": [
     "core.entities"
-   ]
+   ],
+   "dnd_ai.commands.entity_lifecycle.lifecycle_world_capability_of": []
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
-   "dnd_ai.commands.entity_lifecycle.approve_entity"
+   "dnd_ai.commands.entity_lifecycle.approve_entity",
+   "dnd_ai.commands.entity_lifecycle.lifecycle_world_capability_of"
   ],
   "dependencies": [
    {
@@ -6250,12 +6433,14 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands.entity_lifecycle.archive_entity": [
     "reader:access_context",
     "reader:world_authority",
     "scope:authoring"
-   ]
+   ],
+   "dnd_ai.commands.entity_lifecycle.lifecycle_world_capability_of": []
   },
   "command_scope_markers": [
    "reader:access_context",
@@ -6263,16 +6448,20 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
    "dnd_ai.commands.entity_lifecycle.archive_entity": [
     "core.entities"
-   ]
+   ],
+   "dnd_ai.commands.entity_lifecycle.lifecycle_world_capability_of": []
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
-   "dnd_ai.commands.entity_lifecycle.archive_entity"
+   "dnd_ai.commands.entity_lifecycle.archive_entity",
+   "dnd_ai.commands.entity_lifecycle.lifecycle_world_capability_of"
   ],
   "dependencies": [
    {
@@ -6304,12 +6493,14 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
    "dnd_ai.commands.entity_lifecycle.delete_draft_entity": [
     "reader:access_context",
     "reader:world_authority",
     "scope:authoring"
-   ]
+   ],
+   "dnd_ai.commands.entity_lifecycle.lifecycle_world_capability_of": []
   },
   "command_scope_markers": [
    "reader:access_context",
@@ -6317,16 +6508,20 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
    "dnd_ai.commands.entity_lifecycle.delete_draft_entity": [
     "core.entities"
-   ]
+   ],
+   "dnd_ai.commands.entity_lifecycle.lifecycle_world_capability_of": []
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
-   "dnd_ai.commands.entity_lifecycle.delete_draft_entity"
+   "dnd_ai.commands.entity_lifecycle.delete_draft_entity",
+   "dnd_ai.commands.entity_lifecycle.lifecycle_world_capability_of"
   ],
   "dependencies": [
    {
@@ -6358,7 +6553,9 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
+   "dnd_ai.commands.entity_lifecycle.lifecycle_world_capability_of": [],
    "dnd_ai.commands.entity_lifecycle.publish_entity_as_canon": [
     "reader:access_context",
     "reader:world_authority",
@@ -6371,15 +6568,19 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
+   "dnd_ai.commands.entity_lifecycle.lifecycle_world_capability_of": [],
    "dnd_ai.commands.entity_lifecycle.publish_entity_as_canon": [
     "core.entities"
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
+   "dnd_ai.commands.entity_lifecycle.lifecycle_world_capability_of",
    "dnd_ai.commands.entity_lifecycle.publish_entity_as_canon"
   ],
   "dependencies": [
@@ -6412,7 +6613,9 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
+   "dnd_ai.commands.entity_lifecycle.lifecycle_world_capability_of": [],
    "dnd_ai.commands.entity_lifecycle.reject_entity": [
     "reader:access_context",
     "reader:world_authority",
@@ -6425,15 +6628,19 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
+   "dnd_ai.commands.entity_lifecycle.lifecycle_world_capability_of": [],
    "dnd_ai.commands.entity_lifecycle.reject_entity": [
     "core.entities"
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
+   "dnd_ai.commands.entity_lifecycle.lifecycle_world_capability_of",
    "dnd_ai.commands.entity_lifecycle.reject_entity"
   ],
   "dependencies": [
@@ -6466,7 +6673,9 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
+   "dnd_ai.commands.entity_lifecycle.lifecycle_world_capability_of": [],
    "dnd_ai.commands.entity_lifecycle.restore_entity": [
     "reader:access_context",
     "reader:world_authority",
@@ -6479,15 +6688,19 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
+   "dnd_ai.commands.entity_lifecycle.lifecycle_world_capability_of": [],
    "dnd_ai.commands.entity_lifecycle.restore_entity": [
     "core.entities"
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
+   "dnd_ai.commands.entity_lifecycle.lifecycle_world_capability_of",
    "dnd_ai.commands.entity_lifecycle.restore_entity"
   ],
   "dependencies": [
@@ -6520,7 +6733,9 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
+   "dnd_ai.commands.entity_lifecycle.lifecycle_world_capability_of": [],
    "dnd_ai.commands.entity_lifecycle.return_entity_to_draft": [
     "reader:access_context",
     "reader:world_authority",
@@ -6533,15 +6748,19 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
+   "dnd_ai.commands.entity_lifecycle.lifecycle_world_capability_of": [],
    "dnd_ai.commands.entity_lifecycle.return_entity_to_draft": [
     "core.entities"
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
+   "dnd_ai.commands.entity_lifecycle.lifecycle_world_capability_of",
    "dnd_ai.commands.entity_lifecycle.return_entity_to_draft"
   ],
   "dependencies": [
@@ -6574,7 +6793,9 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
+   "dnd_ai.commands.entity_lifecycle.lifecycle_world_capability_of": [],
    "dnd_ai.commands.entity_lifecycle.submit_entity_for_review": [
     "reader:access_context",
     "reader:world_authority",
@@ -6587,15 +6808,19 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
+   "dnd_ai.commands.entity_lifecycle.lifecycle_world_capability_of": [],
    "dnd_ai.commands.entity_lifecycle.submit_entity_for_review": [
     "core.entities"
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
+   "dnd_ai.commands.entity_lifecycle.lifecycle_world_capability_of",
    "dnd_ai.commands.entity_lifecycle.submit_entity_for_review"
   ],
   "dependencies": [
@@ -6628,7 +6853,9 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [],
+   "dnd_ai.commands.entity_lifecycle.lifecycle_world_capability_of": [],
    "dnd_ai.commands.entity_lifecycle.supersede_entity": [
     "reader:access_context",
     "reader:world_authority",
@@ -6641,15 +6868,19 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands._revisions.capture_revision": [
     "core.entity_revisions"
    ],
+   "dnd_ai.commands.entity_lifecycle.lifecycle_world_capability_of": [],
    "dnd_ai.commands.entity_lifecycle.supersede_entity": [
     "core.entities"
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands._revisions.capture_revision",
+   "dnd_ai.commands.entity_lifecycle.lifecycle_world_capability_of",
    "dnd_ai.commands.entity_lifecycle.supersede_entity"
   ],
   "dependencies": [
@@ -6682,6 +6913,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands.sources.attach_source": [
     "reader:access_context",
     "reader:world_authority",
@@ -6694,11 +6926,13 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands.sources.attach_source": [
     "core.entity_source_links"
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands.sources.attach_source"
   ],
   "dependencies": [
@@ -6733,6 +6967,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands.sources.detach_source": [
     "reader:access_context",
     "reader:world_authority",
@@ -6745,11 +6980,13 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands.sources.detach_source": [
     "core.entity_source_links"
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands.sources.detach_source"
   ],
   "dependencies": [
@@ -10394,6 +10631,7 @@
  {
   "audit": true,
   "command_markers": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands.sources.create_source": [
     "reader:access_context",
     "reader:world_authority",
@@ -10406,11 +10644,13 @@
    "scope:authoring"
   ],
   "command_writes": {
+   "dnd_ai.commands._content.register_authoring_requirements": [],
    "dnd_ai.commands.sources.create_source": [
     "core.sources"
    ]
   },
   "commands": [
+   "dnd_ai.commands._content.register_authoring_requirements",
    "dnd_ai.commands.sources.create_source"
   ],
   "dependencies": [

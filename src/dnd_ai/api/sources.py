@@ -29,7 +29,7 @@ from dnd_ai.domain.source_authoring import (
     SOURCE_TYPES,
     TITLE_MAX_LENGTH,
 )
-from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
+from dnd_ai.domain.world_authority import WORLD_CANON_EDIT, WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.provenance import (
     EntityRef,
     LinkRow,
@@ -41,6 +41,7 @@ from dnd_ai.queries.provenance import (
 from ._authoring import (
     BaseAuthoringRequest,
     finish_campaign_idempotency,
+    require_authoring_decisions,
     start_campaign_idempotency,
 )
 from ._shared import timeline_world_id
@@ -175,6 +176,7 @@ def _write(
     created: bool = False,
     plan: AuthorizationPlan,
 ) -> Any:
+    require_authoring_decisions(connection, plan, access, world_capability=WORLD_CANON_EDIT)
     idem = start_campaign_idempotency(
         connection,
         actor_user_id=access.user_id,

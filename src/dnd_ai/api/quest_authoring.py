@@ -65,7 +65,7 @@ from dnd_ai.domain.quest_authoring import (
     QUANTITY_MAX,
     REWARD_DESCRIPTION_MAX_LENGTH,
 )
-from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
+from dnd_ai.domain.world_authority import WORLD_CANON_EDIT, WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.quest_authoring import (
     QuestAuthoringView,
     get_quest_authoring,
@@ -77,6 +77,7 @@ from dnd_ai.queries.reference_options import list_reference_options
 from ._authoring import (
     BaseAuthoringRequest,
     finish_campaign_idempotency,
+    require_authoring_decisions,
     start_campaign_idempotency,
 )
 from ._content_support import (
@@ -322,6 +323,7 @@ def _run(
     """The one mutation flow every quest command shares: reserve the key (replay
     answers before the command runs), run the command, audit exactly once if it
     changed anything, answer with the whole authoring view, complete the key."""
+    require_authoring_decisions(connection, plan, access, world_capability=WORLD_CANON_EDIT)
     idem = start_campaign_idempotency(
         connection,
         actor_user_id=access.user_id,

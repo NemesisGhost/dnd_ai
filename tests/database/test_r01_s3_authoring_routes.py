@@ -32,12 +32,19 @@ from sqlalchemy import Engine, text
 
 from dnd_ai.api.idempotency import lock_idempotency_key
 from dnd_ai.commands.dungeons import create_dungeon
+from dnd_ai.commands.entity_lifecycle import (
+    approve_entity,
+    publish_entity_as_canon,
+    submit_entity_for_review,
+)
 from dnd_ai.commands.locations import create_location
 from dnd_ai.commands.memberships import revoke_membership_role
 from dnd_ai.commands.quest_definitions import create_quest
 from dnd_ai.commands.sources import create_source
 from dnd_ai.commands.world_access import end_world_role
+from dnd_ai.commands.world_relationships import ParticipantInput, create_relationship
 from dnd_ai.domain.authorization import AuthorizationPlan
+from dnd_ai.domain.data_classification import replay_body
 from dnd_ai.queries.npc_authoring import list_species_options
 from tests.builders import make_authored_campaign, make_authored_world
 from tests.database.test_authoring_concurrency import _purge_user_worlds
@@ -66,11 +73,6 @@ pytestmark = pytest.mark.database
 
 Factory = Callable[[uuid.UUID], TestClient]
 
-#: Seconds from setting the role's `expires_at` to its lapse. S2 uses 10; a request slowed past that
-#: (four shards on one machine) would be refused at its early check and never reach the final statement,
-#: so this module allows more, and warms the pool and the route first (`warm`).
-LAPSE = 15
-
 
 # --- a committed world, its campaign, an owner, and a revocable GM ------------------------------------------------
 
@@ -83,6 +85,7 @@ class World:
     gm_membership: uuid.UUID
     gm_role: uuid.UUID
     gm_world_membership: uuid.UUID
+    gm_reviewer_membership: uuid.UUID
     world_id: uuid.UUID
     campaign_id: uuid.UUID
     species: uuid.UUID
@@ -110,7 +113,7 @@ def w(postgres_engine: Engine) -> Iterator[World]:
             setup, authored.world_id, gm_user, "world_editor", granted_by_user_id=owner
         )
         # archive, restore, approve, publish and supersede need `world.canon.review` (record_authoring)
-        make_world_role_assignment(
+        reviewer_membership = make_world_role_assignment(
             setup, authored.world_id, gm_user, "world_reviewer", granted_by_user_id=owner
         )
         species = list_species_options(setup, world_id=authored.world_id)[0].species_id
@@ -122,20 +125,13 @@ def w(postgres_engine: Engine) -> Iterator[World]:
             membership,
             role,
             world_membership,
+            reviewer_membership,
             authored.world_id,
             campaign_id,
             species,
         )
     finally:
         _purge_user_worlds(postgres_engine, owner)
-
-
-@pytest.fixture
-def warm(w: World, pooled: Engine, pooled_factory: Factory) -> None:
-    """One authorized request first, so the one pooled connection is open and the route code is loaded
-    before any role is made to lapse."""
-    with pooled_factory(w.owner) as client:
-        assert code(client.get(f"{w.base}/authoring/npcs/options")) == 200
 
 
 # --- one case per representative route of each module group -------------------------------------------------------
@@ -188,6 +184,7 @@ CASES = (
     "source_attach",
     "lifecycle_submit",
     "lifecycle_archive",
+    "relationship_archive",
 )
 
 
@@ -292,6 +289,51 @@ def build_case(name: str, w: World) -> Case:
             name,
             _post(w, "/sources", {"source_type": "gm_entry", "title": f"S3 {tag}"}),
         )
+    if name == "relationship_archive":
+        with w.engine.begin() as connection:
+            places = []
+            for label in ("North", "South"):
+                made = create_location(
+                    connection,
+                    campaign_id=w.campaign_id,
+                    actor_user_id=w.owner,
+                    category_code="region",
+                    name=f"S3 {label} {tag}",
+                    summary=None,
+                    plan=fixture_plan(connection, w.campaign_id),
+                )
+                version = made.row_version
+                for step in (submit_entity_for_review, approve_entity, publish_entity_as_canon):
+                    version = step(
+                        connection,
+                        campaign_id=w.campaign_id,
+                        entity_id=made.entity_id,
+                        actor_user_id=w.owner,
+                        expected_row_version=version,
+                        plan=fixture_plan(connection, w.campaign_id),
+                    ).row_version
+                places.append(made.entity_id)
+            relationship = create_relationship(
+                connection,
+                campaign_id=w.campaign_id,
+                actor_user_id=w.owner,
+                kind="general",
+                relationship_type="adjacency",
+                participants=[
+                    ParticipantInput(places[0], "subject"),
+                    ParticipantInput(places[1], "object"),
+                ],
+                plan=fixture_plan(connection, w.campaign_id),
+            )
+        return Case(
+            name,
+            _post(
+                w,
+                f"/authoring/relationships/{relationship.relationship_id}/archive",
+                {"expected_row_version": relationship.row_version},
+            ),
+            ok=200,
+        )
     place, version = _location(w)
     if name == "source_attach":
         with w.engine.begin() as connection:
@@ -344,6 +386,11 @@ def state(w: World, key: str | None = None) -> tuple[Any, ...]:
                 "ON e.entity_id = l.entity_id WHERE e.world_id = :w",
                 w=w.world_id,
             ),
+            scalar(
+                "SELECT count(*) || '/' || COALESCE(sum(row_version), 0) FROM world.relationships "
+                "WHERE world_id = :w",
+                w=w.world_id,
+            ),
             scalar("SELECT count(*) FROM audit.change_log WHERE world_id = :w", w=w.world_id),
             scalar(
                 "SELECT count(*) FROM security.idempotent_requests WHERE idempotency_key = :k",
@@ -365,22 +412,66 @@ def error_of(response: Any) -> str | None:
         return None
 
 
+#: The idempotency key lock: the request's first lock, taken "before any row lock, row write or other
+#: advisory lock of the request" (`lock_idempotency_key`), after the route's early check.
+KEY_LOCK_RE = r"pg_advisory_xact_lock"
+
+
+def run_with_role_expiring_before_final(
+    w: World, app_engine: Engine, call: Callable[[], Any]
+) -> Any:
+    """Runs `call` (an HTTP request) so that the GM's role is valid for every early check and has
+    lapsed by the final authority statement, with no dependence on how fast the request runs.
+
+    1. The request is paused *at its idempotency key lock*, before any row lock. It has passed the
+       route's early check and holds nothing, so the test's `UPDATE` of the role row neither waits for
+       it nor, through the access-manager retention trigger (which takes the campaign row `FOR UPDATE`
+       at commit), waits for the campaign `FOR KEY SHARE` the reservation takes later. A pause after
+       either lock would deadlock the test against the paused request; the update runs under a
+       `lock_timeout`, so an unexpected conflict is an error, not a hang.
+    2. `expires_at` is set to the request's own transaction start (from `pg_stat_activity`) plus one
+       second. Every early check judges at `now()`, which is that start, so it passes however long the
+       request takes; the final check judges at `clock_timestamp()` and fails once the second has gone.
+    3. The request runs on and is paused again at its final authority statement; the test polls the
+       DATABASE condition `expires_at <= clock_timestamp()`, and only then releases it."""
+    with (
+        StatementGate(app_engine, KEY_LOCK_RE) as first,
+        StatementGate(app_engine, FINAL) as final,
+    ):
+        request = run_in_thread("s3-request", call)
+        first.wait_reached()
+        with w.engine.begin() as connection:
+            connection.execute(text("SET LOCAL lock_timeout = '5s'"))
+            moved = connection.execute(
+                text("""
+                    UPDATE security.membership_roles
+                    SET expires_at = (
+                        SELECT xact_start FROM pg_stat_activity WHERE pid = :pid
+                    ) + interval '1 second'
+                    WHERE membership_role_id = :r AND revoked_at IS NULL
+                """),
+                {"pid": first.pid, "r": w.gm_role},
+            ).rowcount
+            assert moved == 1
+        first.release()
+        final.wait_reached()
+        wait_lapsed(w.engine, w.gm_role)
+        final.release()
+        return request.wait("the gated request finishes")
+
+
 # --- freshness: the campaign role lapses between the last lock wait and the final statement ------------------------
 
 
 @pytest.mark.parametrize("name", CASES)
 def test_a_role_that_lapses_before_the_final_statement_refuses_the_route_and_persists_nothing(
-    name: str, w: World, pooled: Engine, pooled_factory: Factory, warm: None
+    name: str, w: World, pooled: Engine, pooled_factory: Factory
 ) -> None:
     case = build_case(name, w)
     key = new_key()
     before = state(w, key)
-    set_lapse(w.engine, w.gm_role, LAPSE)
-    response = run_gated_before_final(
-        w.engine,
-        pooled,
-        lambda: case.call(pooled_factory, key),
-        during=lambda: wait_lapsed(w.engine, w.gm_role),
+    response = run_with_role_expiring_before_final(
+        w, pooled, lambda: case.call(pooled_factory, key)
     )
     refused = (code(response), error_of(response))
     assert refused[0] in (403, 404), (name, refused, response.text)
@@ -405,19 +496,13 @@ def test_a_role_that_lapses_before_the_final_statement_refuses_the_route_and_per
 
 @pytest.mark.parametrize("name", ("location", "quest_stage", "lifecycle_submit"))
 def test_the_key_of_a_refused_request_is_reusable_once_the_actor_is_authorized_again(
-    name: str, w: World, pooled: Engine, pooled_factory: Factory, warm: None
+    name: str, w: World, pooled: Engine, pooled_factory: Factory
 ) -> None:
     case = build_case(name, w)
     key = new_key()
-    set_lapse(w.engine, w.gm_role, LAPSE)
-    refused = run_gated_before_final(
-        w.engine,
-        pooled,
-        lambda: case.call(pooled_factory, key),
-        during=lambda: wait_lapsed(w.engine, w.gm_role),
-    )
+    refused = run_with_role_expiring_before_final(w, pooled, lambda: case.call(pooled_factory, key))
     assert code(refused) in (403, 404)
-    assert state(w, key)[4] == 0
+    assert state(w, key)[5] == 0
     with w.engine.begin() as connection:
         connection.execute(
             text(
@@ -427,7 +512,7 @@ def test_the_key_of_a_refused_request_is_reusable_once_the_actor_is_authorized_a
         )
     again = case.call(pooled_factory, key)
     assert code(again) == case.ok, (name, again.text)
-    assert state(w, key)[4] == 1
+    assert state(w, key)[5] == 1
 
 
 # --- concurrent change (plan 4.2): a revocation requested during the request waits for it ---------------------------
@@ -478,7 +563,7 @@ def test_a_revocation_requested_during_the_request_waits_for_it_and_is_seen_by_t
         response = request.wait("the gated request finishes")
     revocation.wait("the revocation finishes")
     assert code(response) == case.ok, (name, response.text)
-    assert state(w, key)[4] == 1
+    assert state(w, key)[5] == 1
     after = case.call(pooled_factory, new_key())
     assert code(after) in (403, 404), (name, after.text)
     if early_error is not None:
@@ -497,7 +582,7 @@ def test_a_lapse_during_a_replays_key_lock_wait_refuses_it_and_returns_nothing_f
     first = case.call(pooled_factory, key)
     assert code(first) == case.ok, first.text
     stored = state(w, key)
-    assert stored[4] == 1
+    assert stored[5] == 1
     # The test holds the same key lock the request takes inside `begin_idempotent_request`, so the
     # replay genuinely waits there; the role is set to lapse once the replay is observed waiting.
     with w.engine.connect() as holder:
@@ -528,7 +613,7 @@ def test_a_still_authorized_replay_returns_the_receipt_unchanged_after_one_final
     assert code(first) == case.ok
     with Recorder(pooled) as recorded:
         replay = case.call(pooled_factory, key)
-    assert (code(replay), replay.json()) == (code(first), first.json())
+    assert (code(replay), replay.json()) == (code(first), replay_body(first.json()))
     finals = [s for s in recorded.events if FINAL_RE.search(s)]
     assert len(finals) == 1 and recorded.events[-2:] == [finals[0], "COMMIT"]
     # A replay runs no command: no scope lock, no definition write.
@@ -627,3 +712,119 @@ def test_every_dungeon_child_route_finalizes_last_through_the_real_guard(
             )
             assert code(removed) == 200, (kind, removed.text)
             version = removed.json()["row_version"]
+
+
+# --- replay (R-D4): the stored receipt leaves only under the world capability the command needs -----------------------
+
+
+def _end_world_assignment(w: World, membership: uuid.UUID) -> None:
+    with w.engine.begin() as connection:
+        end_world_role(
+            connection,
+            actor_user_id=w.owner,
+            world_id=w.world_id,
+            world_membership_id=membership,
+        )
+
+
+#: (case, the world assignment the route's command needs). `world_editor` carries `world.canon.edit`,
+#: `world_reviewer` carries `world.canon.review` (archive, restore, approve, publish, supersede).
+REPLAY_CASES = (
+    ("location", "editor"),
+    ("npc", "editor"),
+    ("quest_stage", "editor"),
+    ("source", "editor"),
+    ("lifecycle_submit", "editor"),  # the entity lifecycle's own idempotency branch
+    ("lifecycle_archive", "reviewer"),  # ... under the review capability
+    ("relationship_archive", "editor"),  # a closure-built route
+)
+
+
+@pytest.mark.parametrize(("name", "needs"), REPLAY_CASES)
+def test_a_replay_and_a_fresh_request_are_refused_once_the_required_world_role_is_gone(
+    name: str, needs: str, w: World, pooled: Engine, pooled_factory: Factory
+) -> None:
+    """The actor keeps campaign `canon.edit`; only the world capability the command needs is ended. The
+    same key must not return the stored receipt, a fresh key must be refused the same way, and neither
+    changes a definition, audit or receipt row."""
+    case = build_case(name, w)
+    key = new_key()
+    first = case.call(pooled_factory, key)
+    assert code(first) == case.ok, (name, first.text)
+    # still authorized: the replay is the stored receipt, unchanged
+    replay = case.call(pooled_factory, key)
+    assert (code(replay), replay.json()) == (code(first), replay_body(first.json())), name
+    stored = state(w, key)
+    assert stored[5] == 1
+
+    _end_world_assignment(
+        w, w.gm_reviewer_membership if needs == "reviewer" else w.gm_world_membership
+    )
+
+    again = case.call(pooled_factory, key)
+    assert (code(again), error_of(again)) == (403, "world_authority_required"), (name, again.text)
+    receipt_values = {v for v in first.json().values() if isinstance(v, str) and len(v) >= 32}
+    assert receipt_values, "the receipt names no id to look for"
+    assert not any(v in again.text for v in receipt_values), "a stored receipt leaked"
+    fresh_key = new_key()
+    fresh = case.call(pooled_factory, fresh_key)
+    assert (code(fresh), error_of(fresh)) == (403, "world_authority_required"), (name, fresh.text)
+    assert state(w, key) == stored, name
+    assert state(w, fresh_key)[5] == 0
+    assert idle_in_transaction(w.engine) == 0
+
+
+def test_the_other_world_role_does_not_authorize_or_refuse_a_review_replay(
+    w: World, pooled: Engine, pooled_factory: Factory
+) -> None:
+    """Archive needs `world.canon.review`, not `world.canon.edit`: ending only the editor assignment
+    leaves its replay authorized. The replay judges the command's own requirement, no broader."""
+    case = build_case("lifecycle_archive", w)
+    key = new_key()
+    first = case.call(pooled_factory, key)
+    assert code(first) == 200, first.text
+    _end_world_assignment(w, w.gm_world_membership)
+    replay = case.call(pooled_factory, key)
+    assert (code(replay), replay.json()) == (code(first), replay_body(first.json()))
+
+
+@pytest.mark.parametrize("name", ("player_character", "item_definition"))
+def test_a_campaign_originated_replay_needs_no_world_role(
+    name: str, w: World, pooled: Engine, pooled_factory: Factory
+) -> None:
+    """Player-character identity registers no world capability (D8): its replay is unchanged by the
+    end of the GM's world assignment. (The item definition is world canon and is refused.)"""
+    case = build_case(name, w)
+    key = new_key()
+    first = case.call(pooled_factory, key)
+    assert code(first) == 201, first.text
+    _end_world_assignment(w, w.gm_world_membership)
+    replay = case.call(pooled_factory, key)
+    if name == "player_character":
+        assert (code(replay), replay.json()) == (code(first), replay_body(first.json()))
+    else:
+        assert (code(replay), error_of(replay)) == (403, "world_authority_required")
+
+
+@pytest.mark.parametrize("name", CASES)
+def test_a_replay_judges_the_same_requirements_as_the_fresh_request(
+    name: str, w: World, pooled: Engine, pooled_factory: Factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The structural safeguard: whatever a route's command registers on a fresh request is already in
+    the plan, in the same order and without duplicates, when a replay finalizes it."""
+    seen: list[list[str]] = []
+    original = AuthorizationPlan.finalize
+
+    def spy(self: AuthorizationPlan, connection: Any) -> Any:
+        seen.append([r.name for r in self.requirements])
+        return original(self, connection)
+
+    monkeypatch.setattr(AuthorizationPlan, "finalize", spy)
+    case = build_case(name, w)
+    key = new_key()
+    assert code(case.call(pooled_factory, key)) == case.ok
+    assert code(case.call(pooled_factory, key)) == case.ok
+    fresh, replayed = seen
+    assert fresh == replayed, (name, fresh, replayed)
+    assert len(set(fresh)) == len(fresh), (name, fresh)
+    assert fresh[0].startswith("route.") and "campaign.canon.edit" in fresh

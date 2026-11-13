@@ -80,6 +80,34 @@ def world_capability_requirement(
     )
 
 
+def register_authoring_requirements(
+    connection: Connection,
+    plan: AuthorizationPlan,
+    *,
+    actor_user_id: uuid.UUID,
+    campaign_id: uuid.UUID,
+    world_id: uuid.UUID,
+    world_capability: str | None,
+) -> None:
+    """The one place a definition-authoring decision becomes plan requirements (R01 plan 6.6, R-D4).
+
+    Campaign `canon.edit` first, then `world_capability` when one is required, each registered **once**:
+    a requirement already in the plan (by name) is not added again. A route registers these through
+    `dnd_ai.api._authoring.require_authoring_decisions` **before** it asks the idempotency store for a
+    replay, because a replay finalizes the plan before any command runs and so would otherwise judge only
+    the route's own decision; the command's `lock_authoring_scope` then finds them already registered, so a
+    fresh request and a replay judge the same requirements in the same order. It registers only (no
+    statement, so no lock) and so is safe before the idempotency boundary."""
+    names = {requirement.name for requirement in plan.requirements}
+    canon = canon_edit_requirement(actor_user_id, campaign_id)
+    if canon.name not in names:
+        plan.require(connection, canon)
+    if world_capability is not None:
+        world = world_capability_requirement(actor_user_id, world_id, world_capability)
+        if world.name not in names:
+            plan.require(connection, world)
+
+
 @dataclass(frozen=True)
 class AuthoringScope:
     world_id: uuid.UUID
@@ -234,7 +262,14 @@ def lock_authoring_scope(
     if access is None or not access.has_capability(CANON_EDIT):
         raise CampaignNotAuthorizedError(f"user {actor_user_id} lacks canon.edit on {campaign_id}")
     if isinstance(plan, AuthorizationPlan):
-        plan.require(connection, canon_edit_requirement(actor_user_id, campaign_id))
+        register_authoring_requirements(
+            connection,
+            plan,
+            actor_user_id=actor_user_id,
+            campaign_id=campaign_id,
+            world_id=world_id,
+            world_capability=None,
+        )
     if world_capability is not None:
         authority = resolve_world_authority(connection, user_id=actor_user_id, world_id=world_id)
         if authority is None or not authority.has_capability(world_capability):
@@ -242,8 +277,13 @@ def lock_authoring_scope(
                 f"user {actor_user_id} lacks {world_capability} on world {world_id}"
             )
         if isinstance(plan, AuthorizationPlan):
-            plan.require(
-                connection, world_capability_requirement(actor_user_id, world_id, world_capability)
+            register_authoring_requirements(
+                connection,
+                plan,
+                actor_user_id=actor_user_id,
+                campaign_id=campaign_id,
+                world_id=world_id,
+                world_capability=world_capability,
             )
     return AuthoringScope(world_id=world_id, campaign_id=campaign_id)
 

@@ -33,7 +33,7 @@ from dnd_ai.domain.item_definition_authoring import (
     NAME_MAX_LENGTH,
     RARITIES,
 )
-from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
+from dnd_ai.domain.world_authority import WORLD_CANON_EDIT, WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.item_definitions import (
     ItemDefinitionView,
     get_item_definition,
@@ -44,6 +44,7 @@ from dnd_ai.queries.item_definitions import (
 from ._authoring import (
     BaseAuthoringRequest,
     finish_campaign_idempotency,
+    require_authoring_decisions,
     start_campaign_idempotency,
 )
 from ._shared import timeline_world_id
@@ -205,6 +206,7 @@ def create_endpoint(
     idempotency_key: _Key,
     correlation_id: _Corr,
 ) -> Any:
+    require_authoring_decisions(connection, plan, access, world_capability=WORLD_CANON_EDIT)
     idem = start_campaign_idempotency(
         connection,
         actor_user_id=access.user_id,
@@ -253,6 +255,7 @@ def update_endpoint(
     idempotency_key: _Key,
     correlation_id: _Corr,
 ) -> Any:
+    require_authoring_decisions(connection, plan, access, world_capability=WORLD_CANON_EDIT)
     idem = start_campaign_idempotency(
         connection,
         actor_user_id=access.user_id,

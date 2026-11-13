@@ -53,7 +53,7 @@ from dnd_ai.domain.dungeon_authoring import (
     RATING_MIN,
     STATE_KINDS,
 )
-from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
+from dnd_ai.domain.world_authority import WORLD_CANON_EDIT, WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.dungeon_authoring import (
     AreaAuthoringView,
     ChildRow,
@@ -69,6 +69,7 @@ from dnd_ai.queries.entity_lifecycle import lifecycle_hidden_entity_ids
 from ._authoring import (
     BaseAuthoringRequest,
     finish_campaign_idempotency,
+    require_authoring_decisions,
     start_campaign_idempotency,
 )
 from ._content_support import audit_content_write, clean_note
@@ -332,6 +333,7 @@ def _run(
     area_view: bool = False,
     plan: AuthorizationPlan,
 ) -> Any:
+    require_authoring_decisions(connection, plan, access, world_capability=WORLD_CANON_EDIT)
     idem = start_campaign_idempotency(
         connection,
         actor_user_id=access.user_id,

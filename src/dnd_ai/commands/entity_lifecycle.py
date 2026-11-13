@@ -284,7 +284,7 @@ def _publish_reference_ids(
     return publish_reference_ids(connection, entity_id=entity_id, entity_type_code=type_code)
 
 
-def _lifecycle_world_capability(
+def lifecycle_world_capability_of(
     connection: Connection, *, entity_id: uuid.UUID, action: str
 ) -> str | None:
     """The world capability `action` needs on `entity_id`, or `None` for the
@@ -325,7 +325,7 @@ def _prepare(
         connection,
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
-        world_capability=_lifecycle_world_capability(
+        world_capability=lifecycle_world_capability_of(
             connection, entity_id=entity_id, action=action
         ),
         plan=plan,
@@ -624,7 +624,7 @@ def supersede_entity(
         connection,
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
-        world_capability=_lifecycle_world_capability(
+        world_capability=lifecycle_world_capability_of(
             connection, entity_id=entity_id, action=SUPERSEDE
         ),
         plan=plan,

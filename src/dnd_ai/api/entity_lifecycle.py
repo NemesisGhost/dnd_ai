@@ -31,6 +31,7 @@ from dnd_ai.commands.entity_lifecycle import (
     approve_entity,
     archive_entity,
     delete_draft_entity,
+    lifecycle_world_capability_of,
     publish_entity_as_canon,
     reject_entity,
     restore_entity,
@@ -40,10 +41,22 @@ from dnd_ai.commands.entity_lifecycle import (
 )
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.domain.authorization import AuthorizationPlan
+from dnd_ai.domain.entity_lifecycle import (
+    APPROVE,
+    ARCHIVE,
+    DELETE_DRAFT,
+    PUBLISH,
+    REJECT,
+    RESTORE,
+    RETURN_TO_DRAFT,
+    SUBMIT_FOR_REVIEW,
+    SUPERSEDE,
+)
 from dnd_ai.domain.record_authoring import CAMPAIGN_ORIGINATED_TYPES, authorized_record_actions
 from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.entity_lifecycle import get_entity_lifecycle, list_replacement_candidates
 
+from ._authoring import require_authoring_decisions
 from ._shared import timeline_world_id
 from .access import (
     require_campaign_capability,
@@ -280,7 +293,19 @@ def _run(
     reason: str | None = None,
     lifecycle_action: str | None = None,
     plan: AuthorizationPlan,
+    action: str,
 ) -> Any:
+    # R01 plan 6.6 (R-D4): the decisions the command registers (campaign `canon.edit`, then the world
+    # capability this action needs on this entity type) are in the plan before the key is looked up,
+    # because a replay finalizes the plan before any command runs. Unlocked read; no row lock.
+    require_authoring_decisions(
+        connection,
+        plan,
+        access,
+        world_capability=lifecycle_world_capability_of(
+            connection, entity_id=entity_id, action=action
+        ),
+    )
     reservation_id: uuid.UUID | None = None
     if idempotency_key is not None:
         outcome = begin_idempotent_request(
@@ -371,6 +396,7 @@ def submit_for_review_endpoint(
 ) -> Any:
     return _run(
         command_name="submit_entity_for_review",
+        action=SUBMIT_FOR_REVIEW,
         entity_id=entity_id,
         access=access,
         connection=connection,
@@ -401,6 +427,7 @@ def return_to_draft_endpoint(
 ) -> Any:
     return _run(
         command_name="return_entity_to_draft",
+        action=RETURN_TO_DRAFT,
         entity_id=entity_id,
         access=access,
         connection=connection,
@@ -433,6 +460,7 @@ def approve_endpoint(
 ) -> Any:
     return _run(
         command_name="approve_entity",
+        action=APPROVE,
         entity_id=entity_id,
         access=access,
         connection=connection,
@@ -463,6 +491,7 @@ def reject_endpoint(
 ) -> Any:
     return _run(
         command_name="reject_entity",
+        action=REJECT,
         entity_id=entity_id,
         access=access,
         connection=connection,
@@ -495,6 +524,7 @@ def publish_endpoint(
 ) -> Any:
     return _run(
         command_name="publish_entity_as_canon",
+        action=PUBLISH,
         entity_id=entity_id,
         access=access,
         connection=connection,
@@ -525,6 +555,7 @@ def supersede_endpoint(
 ) -> Any:
     return _run(
         command_name="supersede_entity",
+        action=SUPERSEDE,
         entity_id=entity_id,
         access=access,
         connection=connection,
@@ -557,6 +588,7 @@ def archive_endpoint(
 ) -> Any:
     return _run(
         command_name="archive_entity",
+        action=ARCHIVE,
         entity_id=entity_id,
         access=access,
         connection=connection,
@@ -590,6 +622,7 @@ def restore_endpoint(
 ) -> Any:
     return _run(
         command_name="restore_entity",
+        action=RESTORE,
         entity_id=entity_id,
         access=access,
         connection=connection,
@@ -623,6 +656,7 @@ def delete_draft_endpoint(
 ) -> Any:
     return _run(
         command_name="delete_draft_entity",
+        action=DELETE_DRAFT,
         entity_id=entity_id,
         access=access,
         connection=connection,

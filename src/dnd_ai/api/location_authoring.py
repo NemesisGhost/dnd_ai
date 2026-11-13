@@ -34,7 +34,7 @@ from dnd_ai.domain.content_authoring import (
     SHORT_TEXT_MAX_LENGTH,
     LocationCategory,
 )
-from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
+from dnd_ai.domain.world_authority import WORLD_CANON_EDIT, WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.location_authoring import (
     LocationAuthoringView,
     get_location_authoring,
@@ -45,6 +45,7 @@ from dnd_ai.queries.location_authoring import (
 from ._authoring import (
     BaseAuthoringRequest,
     finish_campaign_idempotency,
+    require_authoring_decisions,
     start_campaign_idempotency,
 )
 from ._content_support import audit_content_write, clean_note, write_receipt
@@ -206,6 +207,7 @@ def create_location_endpoint(
     correlation_id: _Corr,
 ) -> Any:
     command_name = "create_location"
+    require_authoring_decisions(connection, plan, access, world_capability=WORLD_CANON_EDIT)
     idem = start_campaign_idempotency(
         connection,
         actor_user_id=access.user_id,
@@ -269,6 +271,7 @@ def update_location_endpoint(
     correlation_id: _Corr,
 ) -> Any:
     command_name = "update_location"
+    require_authoring_decisions(connection, plan, access, world_capability=WORLD_CANON_EDIT)
     idem = start_campaign_idempotency(
         connection,
         actor_user_id=access.user_id,

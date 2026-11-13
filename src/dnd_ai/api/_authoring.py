@@ -20,9 +20,12 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import Connection
 
+from dnd_ai.commands._content import register_authoring_requirements
+from dnd_ai.domain.access import AccessContext
 from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.data_classification import replay_body
 
+from ._shared import timeline_world_id
 from .idempotency import (
     IdempotentReplay,
     begin_actor_idempotent_request,
@@ -34,6 +37,32 @@ from .idempotency import (
 
 class BaseAuthoringRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+
+def require_authoring_decisions(
+    connection: Connection,
+    plan: AuthorizationPlan,
+    access: AccessContext,
+    *,
+    world_capability: str | None,
+) -> None:
+    """Register the route's definition-authoring decisions (campaign `canon.edit`, then
+    `world_capability`) on the plan **before** the idempotency start (R01 plan 6.6, R-D4).
+
+    A replay finalizes the plan before the command runs, so every decision the command would register
+    must already be in it, or a caller who lost the world capability would be handed the stored receipt.
+    `world_capability` is the one the route's command passes to `lock_authoring_scope`: `None` only for
+    the campaign-originated records (player-character identity, item instances). The only statement is
+    the unlocked world lookup; no row lock is taken. The command later registers the same requirements
+    once (`register_authoring_requirements` skips what is present)."""
+    register_authoring_requirements(
+        connection,
+        plan,
+        actor_user_id=access.user_id,
+        campaign_id=access.campaign_id,
+        world_id=timeline_world_id(connection, access.timeline_id),
+        world_capability=world_capability,
+    )
 
 
 def _judge_replay(connection: Connection, plan: AuthorizationPlan | None) -> None:

@@ -47,7 +47,13 @@ DB_CALLS = {
 #: still must not follow the final statement).
 READ_CALLS = {"get_quest_authoring", "get_dungeon_authoring", "get_area_authoring", "_load_view"}
 #: Commands that are reads, not writes: the manifest lists them as callees.
-NOT_COMMANDS = {"quest_has_progress", "capture_revision", "snapshot_from_view"}
+NOT_COMMANDS = {
+    "quest_has_progress",
+    "capture_revision",
+    "snapshot_from_view",
+    "register_authoring_requirements",
+    "lifecycle_world_capability_of",
+}
 
 
 def _routes() -> dict[tuple[str, str], Callable[..., Any]]:
@@ -241,3 +247,35 @@ def test_every_migrated_command_requires_a_keyword_only_plan() -> None:
                     assert parameter.annotation in (AuthorizationPlan, "AuthorizationPlan"), command
                     seen += 1
     assert seen >= 60, "the test lost its subject"
+
+
+@pytest.mark.parametrize("route", sorted(_S3_ROUTES))
+def test_the_authoring_decisions_are_registered_before_any_replay_can_finalize(
+    route: tuple[str, str],
+) -> None:
+    """R-D4: a replay finalizes the plan before the command runs, so every decision the command
+    registers must already be in the plan. In the function of the chain that opens the idempotency key,
+    `require_authoring_decisions(connection, plan, access, world_capability=...)` is called first."""
+    chain = _chain(_routes()[route])
+    openers = [
+        (function, tree)
+        for function, tree in chain
+        if any(
+            _name(c) in ("start_campaign_idempotency", "begin_idempotent_request")
+            for c in _calls(tree)
+        )
+    ]
+    assert len(openers) == 1, "exactly one function of the chain opens the idempotency key"
+    _function, tree = openers[0]
+    calls = sorted(_calls(tree), key=lambda c: (c.lineno, c.col_offset))
+    open_line = next(
+        c.lineno
+        for c in calls
+        if _name(c) in ("start_campaign_idempotency", "begin_idempotent_request")
+    )
+    registered = [c for c in calls if _name(c) == "require_authoring_decisions"]
+    assert len(registered) == 1, "the decisions are registered exactly once, in the opener"
+    assert registered[0].lineno < open_line, (
+        "the decisions are registered after the replay can answer"
+    )
+    assert any(k.arg == "world_capability" for k in registered[0].keywords)

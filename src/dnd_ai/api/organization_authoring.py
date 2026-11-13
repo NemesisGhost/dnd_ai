@@ -42,7 +42,7 @@ from dnd_ai.domain.organization_authoring import (
     OrganizationField,
     OrganizationKind,
 )
-from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
+from dnd_ai.domain.world_authority import WORLD_CANON_EDIT, WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.organization_authoring import (
     OrganizationAuthoringView,
     ReferenceSummary,
@@ -56,6 +56,7 @@ from dnd_ai.queries.reference_options import descendant_ids, list_reference_opti
 from ._authoring import (
     BaseAuthoringRequest,
     finish_campaign_idempotency,
+    require_authoring_decisions,
     start_campaign_idempotency,
 )
 from ._content_support import (
@@ -301,6 +302,7 @@ def create_organization_endpoint(
     correlation_id: _Corr,
 ) -> Any:
     command_name = "create_organization"
+    require_authoring_decisions(connection, plan, access, world_capability=WORLD_CANON_EDIT)
     idem = start_campaign_idempotency(
         connection,
         actor_user_id=access.user_id,
@@ -369,6 +371,7 @@ def update_organization_endpoint(
     correlation_id: _Corr,
 ) -> Any:
     command_name = "update_organization"
+    require_authoring_decisions(connection, plan, access, world_capability=WORLD_CANON_EDIT)
     idem = start_campaign_idempotency(
         connection,
         actor_user_id=access.user_id,
@@ -479,6 +482,7 @@ def create_religion_endpoint(
     correlation_id: _Corr,
 ) -> Any:
     command_name = "create_religion"
+    require_authoring_decisions(connection, plan, access, world_capability=WORLD_CANON_EDIT)
     idem = start_campaign_idempotency(
         connection,
         actor_user_id=access.user_id,
@@ -539,6 +543,7 @@ def update_religion_endpoint(
     correlation_id: _Corr,
 ) -> Any:
     command_name = "update_religion"
+    require_authoring_decisions(connection, plan, access, world_capability=WORLD_CANON_EDIT)
     idem = start_campaign_idempotency(
         connection,
         actor_user_id=access.user_id,

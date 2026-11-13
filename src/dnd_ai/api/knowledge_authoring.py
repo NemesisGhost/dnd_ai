@@ -28,7 +28,7 @@ from dnd_ai.domain.knowledge_authoring import (
     SENSITIVITIES,
     STATEMENT_MAX_LENGTH,
 )
-from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
+from dnd_ai.domain.world_authority import WORLD_CANON_EDIT, WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.knowledge_authoring import (
     KnowledgeAuthoringView,
     get_knowledge_authoring,
@@ -39,6 +39,7 @@ from dnd_ai.queries.reference_options import list_reference_options
 from ._authoring import (
     BaseAuthoringRequest,
     finish_campaign_idempotency,
+    require_authoring_decisions,
     start_campaign_idempotency,
 )
 from ._content_support import (
@@ -184,6 +185,7 @@ def create_knowledge_endpoint(
     correlation_id: _Corr,
 ) -> Any:
     command_name = "create_knowledge_item"
+    require_authoring_decisions(connection, plan, access, world_capability=WORLD_CANON_EDIT)
     idem = start_campaign_idempotency(
         connection,
         actor_user_id=access.user_id,
@@ -249,6 +251,7 @@ def update_knowledge_endpoint(
     correlation_id: _Corr,
 ) -> Any:
     command_name = "update_knowledge_item"
+    require_authoring_decisions(connection, plan, access, world_capability=WORLD_CANON_EDIT)
     idem = start_campaign_idempotency(
         connection,
         actor_user_id=access.user_id,

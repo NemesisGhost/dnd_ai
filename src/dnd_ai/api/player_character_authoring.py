@@ -34,6 +34,7 @@ from dnd_ai.queries.npc_authoring import (
 from ._authoring import (
     BaseAuthoringRequest,
     finish_campaign_idempotency,
+    require_authoring_decisions,
     start_campaign_idempotency,
 )
 from ._content_support import audit_content_write, clean_note, write_receipt
@@ -149,6 +150,7 @@ def create_player_character_endpoint(
     correlation_id: _Corr,
 ) -> Any:
     command_name = "create_player_character"
+    require_authoring_decisions(connection, plan, access, world_capability=None)
     idem = start_campaign_idempotency(
         connection,
         actor_user_id=access.user_id,
@@ -219,6 +221,7 @@ def update_player_character_endpoint(
     correlation_id: _Corr,
 ) -> Any:
     command_name = "update_player_character"
+    require_authoring_decisions(connection, plan, access, world_capability=None)
     idem = start_campaign_idempotency(
         connection,
         actor_user_id=access.user_id,
