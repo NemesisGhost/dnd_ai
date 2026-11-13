@@ -29,6 +29,7 @@ from datetime import datetime
 from sqlalchemy import Connection, text
 
 from dnd_ai.domain.authoring import CampaignArchivedError, CampaignNotAuthorizedError
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.public_profiles import (
     AUDIENCE_ACCESS_GROUP,
     AUDIENCE_CAMPAIGN_CURRENT,
@@ -53,6 +54,7 @@ from .character_public_profile import (
     _database_clock,
     _require_canon_and_active,
     _resolve_membership_access,
+    reveal_held_requirement,
 )
 
 
@@ -207,9 +209,12 @@ def _judge_caller(
     character_id: uuid.UUID,
     actor_membership_id: uuid.UUID,
     source: str,
+    plan: AuthorizationPlan,
 ) -> None:
     """Steps 7 and 8: authority at a fresh instant (the same source the locked read found), then
-    the whole-character deny. Every wait is behind us."""
+    the whole-character deny. Every wait is behind us. The passing decision is registered with `plan`
+    (R01): the route's final check judges it once more over one fresh snapshot, and a replay judges it
+    before a stored receipt is returned."""
     fresh = resolve_reveal_authority(
         connection,
         campaign_id=campaign_id,
@@ -221,6 +226,9 @@ def _judge_caller(
     access = _resolve_membership_access(connection, campaign_id, actor_membership_id)
     if whole_character_denied(access, character_id):
         raise PublicProfileNotFoundError(f"character {character_id} is not visible")
+    plan.require(
+        connection, reveal_held_requirement(actor_membership_id, character_id, source=source)
+    )
 
 
 def _delegation_id(
@@ -250,6 +258,7 @@ def create_character_revelation(
     target_access_group_id: uuid.UUID | None,
     reason: str,
     reserve: Callable[[], bool],
+    plan: AuthorizationPlan,
 ) -> CreateCharacterRevelationResult | None:
     """Creates the revelation, or returns the existing live one (`created=False`).
 
@@ -280,6 +289,7 @@ def create_character_revelation(
         character_id=character_id,
         actor_membership_id=actor_membership_id,
         source=source,
+        plan=plan,
     )
 
     if reserve():  # step 8a
@@ -513,6 +523,7 @@ def revoke_character_revelation(
     actor_membership_id: uuid.UUID,
     reason: str,
     reserve: Callable[[], bool],
+    plan: AuthorizationPlan,
 ) -> RevokeCharacterRevelationResult | None:
     """Closes the revelation (`revoked`), or reports `revoked=False` for one already closed.
     Authority and the whole-character deny are re-judged under the same locks as a create, and
@@ -544,6 +555,7 @@ def revoke_character_revelation(
         character_id=character_id,
         actor_membership_id=actor_membership_id,
         source=source,
+        plan=plan,
     )
     if row is None:
         raise PublicProfileNotFoundError(f"revelation {character_revelation_id} not found")

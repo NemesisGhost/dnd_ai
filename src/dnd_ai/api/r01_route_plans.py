@@ -1,7 +1,8 @@
 """R01 route plans: opening the plan of a write route (plan section 6.5, rule 1b).
 
-S1 provides the mechanism and the inventory; no production route is migrated here. S2 plumbs
-`begin_route_plan` into `require_campaign_capability`.
+S1 provides the mechanism and the inventory. From S2, `require_campaign_capability` opens the plan of
+every non-GET route through `open_request_plan` (rule 1b) and a migrated handler receives it through
+`get_authorization_plan`.
 
 - A route in `R01_PENDING_ROUTES` gets a **pending** plan: the commit guard admits it unfinalized. It
   is **not protected** by the R01 final check, and nothing here presents it as protected.
@@ -13,6 +14,7 @@ S1 provides the mechanism and the inventory; no production route is migrated her
 
 import uuid
 
+from fastapi import Request
 from sqlalchemy import Connection
 
 from dnd_ai.domain.authorization import AuthorizationPlan
@@ -53,3 +55,49 @@ def begin_route_plan(
     return AuthorizationPlan.begin(
         connection, actor_user_id=actor_user_id, campaign_id=campaign_id, pending=pending
     )
+
+
+_STATE_NAME = "authorization_plan"
+
+
+def open_request_plan(
+    request: Request,
+    connection: Connection,
+    *,
+    actor_user_id: uuid.UUID,
+    campaign_id: uuid.UUID,
+) -> AuthorizationPlan | None:
+    """The plan of this request's write route, opened once. A read (`GET`, `HEAD`, `OPTIONS`) has
+    none and returns `None`. A second protected dependency of the same request reuses the plan, so
+    every requirement of the request lands in one plan. A route's identity is its template path, the
+    key of the inventory; a route the inventory does not know fails closed."""
+    if request.method.upper() in _READ_METHODS:
+        return None
+    existing = getattr(request.state, _STATE_NAME, None)
+    if isinstance(existing, AuthorizationPlan):
+        return existing
+    route = request.scope.get("route")
+    route_path = getattr(route, "path", None)
+    if not isinstance(route_path, str):
+        raise UnclassifiedRouteError()
+    plan = begin_route_plan(
+        connection,
+        method=request.method,
+        route_path=route_path,
+        actor_user_id=actor_user_id,
+        campaign_id=campaign_id,
+    )
+    setattr(request.state, _STATE_NAME, plan)
+    return plan
+
+
+def get_authorization_plan(request: Request) -> AuthorizationPlan:
+    """The FastAPI dependency a migrated handler declares **after** its capability dependency. A
+    request whose route opened no plan is a wiring error (the fixed 5xx), never a skipped check."""
+    plan = getattr(request.state, _STATE_NAME, None)
+    if not isinstance(plan, AuthorizationPlan):
+        raise UnclassifiedRouteError()
+    return plan
+
+
+_READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})

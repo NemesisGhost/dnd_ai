@@ -377,8 +377,20 @@ def render(manifest: list[dict[str, Any]]) -> str:
 
 
 #: Routes whose handlers have been migrated to a final `AuthorizationPlan` (R01 S2 onwards). Empty in
-#: S1: no production route is migrated. A route moves here from the pending set, never silently.
-MIGRATED_ROUTES: frozenset[tuple[str, str]] = frozenset()
+#: S1. S2 migrates the six profile and revelation routes. A route moves here from the pending set,
+#: never silently.
+_PROFILE = "/campaigns/{campaign_id}/characters/{character_id}/public-profile"
+_REVELATIONS = "/campaigns/{campaign_id}/characters/{character_id}/revelations"
+MIGRATED_ROUTES: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("POST", _PROFILE + "/draft"),
+        ("POST", _PROFILE + "/draft/copy-legacy"),
+        ("POST", _PROFILE + "/draft/copy-player-profile"),
+        ("POST", _PROFILE + "/releases"),
+        ("POST", _REVELATIONS),
+        ("POST", _REVELATIONS + "/{character_revelation_id}/revoke"),
+    }
+)
 
 #: The one family outside R01's bound: account, authentication, Foundry pairing, world and timeline
 #: routes, none of which carries `{campaign_id}`.
@@ -432,15 +444,19 @@ def render_pending_routes(records: list[dict[str, Any]]) -> str:
         ")",
         "# fmt: on",
         "",
-        "#: (method, route path template) of every route migrated to a final plan. Empty in S1.",
+        "#: (method, route path template) of every route migrated to a final plan.",
     ]
     if not migrated:
         lines.append("R01_FINALIZED_ROUTES: Final[frozenset[tuple[str, str]]] = frozenset()")
     else:
-        lines += ["R01_FINALIZED_ROUTES: Final[frozenset[tuple[str, str]]] = frozenset(", "    {"]
+        lines += [
+            "# fmt: off",
+            "R01_FINALIZED_ROUTES: Final[frozenset[tuple[str, str]]] = frozenset(",
+            "    {",
+        ]
         for method, path in migrated:
             lines.append(f'        ("{method}", "{path}"),')
-        lines += ["    }", ")"]
+        lines += ["    }", ")", "# fmt: on"]
     lines.append("")
     return "\n".join(lines)
 

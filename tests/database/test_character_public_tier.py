@@ -77,6 +77,7 @@ from tests.factories import (
     make_resource_grant,
     make_user,
 )
+from tests.r01_support import fixture_plan
 
 pytestmark = pytest.mark.database
 
@@ -146,6 +147,7 @@ def tier(postgres_engine: Engine, g: Gate, m: Members, rev: Rev, people: People)
             expected_row_version=1,
             fields={"public_background": BACKGROUND},
             identity_flags={"publish_species": True, "publish_size": True},
+            plan=fixture_plan(connection, g.campaign_id),
         )
     live = live_identity(postgres_engine, c)
     with postgres_engine.begin() as connection:
@@ -157,6 +159,7 @@ def tier(postgres_engine: Engine, g: Gate, m: Members, rev: Rev, people: People)
             expected_draft_row_version=2,
             release_note=NOTE,
             expected_character_row_version=entity_row_version(postgres_engine, c),
+            plan=fixture_plan(connection, g.campaign_id),
         )
     with postgres_engine.begin() as connection:
         save_character_public_profile_draft(
@@ -167,6 +170,7 @@ def tier(postgres_engine: Engine, g: Gate, m: Members, rev: Rev, people: People)
             expected_row_version=2,
             fields={"public_appearance": DRAFT_MARKER},
             identity_flags={"publish_size": False},
+            plan=fixture_plan(connection, g.campaign_id),
         )
         connection.execute(
             text("""
@@ -422,6 +426,7 @@ def test_a_later_definition_change_never_alters_the_section_and_a_new_release_sh
             expected_row_version=3,
             fields={},
             identity_flags={"publish_species": True, "publish_size": True},
+            plan=fixture_plan(connection, g.campaign_id),
         )
     with postgres_engine.begin() as connection:
         release_character_public_profile(
@@ -432,6 +437,7 @@ def test_a_later_definition_change_never_alters_the_section_and_a_new_release_sh
             expected_draft_row_version=4,
             release_note=None,
             expected_character_row_version=entity_row_version(postgres_engine, c),
+            plan=fixture_plan(connection, g.campaign_id),
         )
     new = get(f, g.player_user_id, g, c).json()["public_profile"]
     assert new["species"] == {"code": tier.live_code, "label": "Brand New Species"}
@@ -462,6 +468,7 @@ def test_releases_and_revelations_are_per_campaign(
             actor_user_id=people.b_owner.user,
             expected_row_version=None,
             fields={"public_appearance": "B-ONLY-APPEARANCE"},
+            plan=fixture_plan(connection, b),
         )
         save_character_public_profile_draft(
             connection,
@@ -470,6 +477,7 @@ def test_releases_and_revelations_are_per_campaign(
             actor_user_id=people.b_owner.user,
             expected_row_version=None,
             fields={"public_appearance": "B-VERSION-OF-APPEARANCE"},
+            plan=fixture_plan(connection, b),
         )
     for character in (only_b, c):
         with postgres_engine.begin() as connection:
@@ -480,6 +488,7 @@ def test_releases_and_revelations_are_per_campaign(
                 actor_membership_id=people.b_owner.membership,
                 expected_draft_row_version=1,
                 release_note=None,
+                plan=fixture_plan(connection, b),
             )
         with f(people.b_owner.user) as client:
             made = client.post(

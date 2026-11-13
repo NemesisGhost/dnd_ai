@@ -791,22 +791,18 @@ def test_ka4_release_first_the_grant_waits_and_both_commit(
 # --- R01: the actual reachability of time-based expiry during a lock wait ---------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="R01 / DEF-015 F-1: expiry during a lock wait is not re-judged (inherited by every "
-    "authoring write; design 10.5). Remove this marker when R01 is corrected.",
-)
 def test_r01_a_role_that_expires_during_the_copys_lock_wait_must_refuse_the_copy(
     client_factory: Factory, postgres_engine: Engine, g: Gate, m: Members, npc: uuid.UUID,
     source: dict[str, str],
 ) -> None:  # fmt: skip
-    """States the *desired* fresh-authorization behaviour and is a strict xfail today. The copy judges the caller's `canon.edit` in
-    `lock_authoring_scope`, then waits (here on the character's entity row). `resolve_access_context`
-    judges `expires_at` against `now()`, the transaction's *start*, and nothing re-judges after the
-    wait, so a role that lapses while the copy waits still lets it commit (observed: 201). This is the
-    inherited R01 / DEF-015 F-1 gap that every authoring write shares (design 10.5); A5c adds no
-    fresh-instant re-check and does not widen it. The final assertions state the required behaviour,
-    so the strict xfail turns into a failure (and must be removed) the moment R01 is corrected."""
+    """A5c's R01 acceptance condition (design 10.5): a role that lapses while the copy waits refuses it.
+
+    The copy judges the caller's `canon.edit` in `lock_authoring_scope`, then waits (here on the
+    character's entity row). `resolve_access_context` judges `expires_at` against `now()`, the
+    transaction's *start*, so the early checks cannot see a lapse during the wait. Since R01 S2 the
+    route's plan re-judges the decision after the last statement, in one snapshot at a fresh
+    instant, so the copy is refused and nothing is written. This test was a strict `xfail` (observed:
+    201) until S2 migrated the route; its assertions are unchanged."""
     with postgres_engine.begin() as connection:
         connection.execute(
             text(

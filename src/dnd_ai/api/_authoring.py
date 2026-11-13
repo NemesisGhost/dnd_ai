@@ -20,6 +20,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import Connection
 
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.data_classification import replay_body
 
 from .idempotency import (
@@ -33,6 +34,12 @@ from .idempotency import (
 
 class BaseAuthoringRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+
+def _judge_replay(connection: Connection, plan: AuthorizationPlan | None) -> None:
+    """R-D4: judge the plan's requirements, then finalize it, before a stored receipt leaves."""
+    if plan is not None:
+        plan.finalize(connection)
 
 
 @dataclass
@@ -101,12 +108,19 @@ def start_campaign_idempotency(
     command_name: str,
     payload: dict[str, Any],
     correlation_id: str | None,
+    plan: AuthorizationPlan | None = None,
 ) -> CampaignIdempotency:
     """The campaign-scoped twin of `start_actor_idempotency` (content authoring
     has a campaign). No key means no deduplication. The fingerprint covers the
     command name and the normalized payload (route target ids and
     `expected_row_version` included), so the same key with a different body is
-    the existing idempotency conflict, never a silent replay."""
+    the existing idempotency conflict, never a silent replay.
+
+    `plan` (R01 plan section 6.6, R-D4): a migrated route passes its `AuthorizationPlan`. A replay is
+    answered after the key-lock wait, so the stored receipt is returned only after the plan's
+    registered requirements hold in a fresh snapshot: a refusal raises the route's own error and
+    returns nothing from the receipt, and the replay then finalizes the plan (a replay writes no row, so
+    no statement follows). A route not yet migrated passes none and behaves as before."""
     if idempotency_key is None:
         return CampaignIdempotency()
     outcome = begin_idempotent_request(
@@ -119,6 +133,7 @@ def start_campaign_idempotency(
         correlation_id=correlation_id,
     )
     if isinstance(outcome, IdempotentReplay):
+        _judge_replay(connection, plan)
         return CampaignIdempotency(
             replay=JSONResponse(
                 status_code=outcome.response_status_code, content=outcome.response_body

@@ -45,6 +45,7 @@ from tests.database.test_character_reveal_delegation import (  # noqa: F401 - fi
 )
 from tests.database.test_public_profile_identity_api import identity_release
 from tests.lock_race_support import LockRace
+from tests.r01_support import fixture_plan
 
 pytestmark = pytest.mark.database
 
@@ -71,6 +72,7 @@ def seed_flagged_draft(engine: Engine, g: Gate, character: uuid.UUID) -> int:
             expected_row_version=None,
             fields={"public_appearance": "Tall"},
             identity_flags={"publish_species": True, "publish_size": True},
+            plan=fixture_plan(connection, g.campaign_id),
         ).row_version
 
 
@@ -89,6 +91,7 @@ def do_identity_release(
         expected_draft_row_version=version,
         release_note=None,
         expected_character_row_version=character_version,
+        plan=fixture_plan(c, g.campaign_id),
     )
 
 
@@ -238,6 +241,7 @@ def test_a_flag_toggle_that_commits_first_makes_a_release_of_the_previous_draft_
         expected_row_version=version,
         fields={},
         identity_flags={"publish_size": False},
+        plan=fixture_plan(conn, g.campaign_id),
     )
     with LockRace(postgres_engine) as race:
         saving = race.hold(toggling)

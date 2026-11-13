@@ -48,6 +48,7 @@ from tests.factories import (
     make_timeline,
     make_user,
 )
+from tests.r01_support import fixture_plan
 
 pytestmark = pytest.mark.database
 
@@ -79,6 +80,7 @@ def rev(postgres_engine: Engine, g: Gate, m: Members) -> Rev:
             actor_user_id=g.o1_user_id,
             expected_row_version=None,
             fields={"public_appearance": "A weathered face", "public_summary": SUMMARY_MARKER},
+            plan=fixture_plan(connection, g.campaign_id),
         )
     with postgres_engine.begin() as connection:
         release_character_public_profile(
@@ -88,6 +90,7 @@ def rev(postgres_engine: Engine, g: Gate, m: Members) -> Rev:
             actor_membership_id=g.o1,
             expected_draft_row_version=1,
             release_note=None,
+            plan=fixture_plan(connection, g.campaign_id),
         )
     with postgres_engine.begin() as connection:
         group = make_access_group(connection, g.campaign_id, name="Revealed Group")

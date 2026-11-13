@@ -83,21 +83,24 @@ from datetime import datetime
 
 from sqlalchemy import Connection, text
 
-from dnd_ai.domain.access import AccessContext, resolve_access_context
+from dnd_ai.domain.access import AccessContext, AuthoritySnapshot, resolve_access_context
 from dnd_ai.domain.authoring import (
     CampaignArchivedError,
     CampaignNotAuthorizedError,
     StaleWriteError,
     WorldAuthorityRequiredError,
 )
-from dnd_ai.domain.authorization import R01_PENDING
+from dnd_ai.domain.authorization import AuthorizationPlan, Requirement
+from dnd_ai.domain.authorization_requirements import judged_requirement
 from dnd_ai.domain.organization_authoring import normalize_optional_text
 from dnd_ai.domain.player_profiles import (
     COPY_ELIGIBLE_PLAYER_PROFILE_FIELDS,
+    SOURCE_RULE_LEGACY,
     PlayerProfileFieldEmptyError,
     PlayerProfileMissingError,
     PlayerProfileSourceChangedError,
     may_read_player_profile_as_gm,
+    source_rule_for_origin,
 )
 from dnd_ai.domain.public_profiles import (
     AUTHORITY_DELEGATION,
@@ -125,6 +128,7 @@ from dnd_ai.domain.public_profiles import (
     PublicProfileNotFoundError,
     has_effective_character_canon_edit,
     holds_character_view_tier,
+    may_read_legacy_source,
     may_read_profile,
     whole_character_denied,
 )
@@ -132,8 +136,9 @@ from dnd_ai.domain.reveal_authority import resolve_reveal_authority
 from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.public_profile_restrictions import (
     character_kind,
+    fields_withheld,
     may_read_source_now,
-    withheld_fields,
+    restricted_origins,
 )
 
 from ._content import lock_authoring_scope
@@ -251,17 +256,180 @@ def _require_canon_and_active(character: _CharacterRow, character_id: uuid.UUID)
         raise PublicProfileCharacterNotActiveError(f"character {character_id} is not active")
 
 
+# --- R01 requirements (plan sections 6.2 and 6.3) ---------------------------------------------------------
+#
+# Each early check below that passes also registers the same decision as a requirement of the request's
+# `AuthorizationPlan`, judged once more by `plan.finalize` over one fresh snapshot after the last lock
+# wait. A requirement raises exactly what its early check raises. Facts captured under lock earlier
+# (the character's kind, the draft's restricted origins, the reveal source) are closed over; the final
+# check never re-derives them from post-write rows. None of these requirements reads a table the
+# profile commands write (`campaign.character_public_profiles` and its releases; the revelation
+# commands' own tables are the reviewed class of plan section 6.3).
+
+
+def _no_access(actor_user_id: uuid.UUID) -> BaseException:
+    return CampaignNotAuthorizedError(f"user {actor_user_id} has no access")
+
+
+def edit_requirement(actor_user_id: uuid.UUID, character_id: uuid.UUID) -> Requirement:
+    """The D8 edit rule (`require_may_edit`): a whole-character deny removes the character (404); no
+    effective character-scoped `canon.edit` is 403 `public_profile_edit_denied` for a caller who can
+    still read the profile and 404 for anyone else. Needs the reveal authority to tell them apart."""
+
+    def decide(snapshot: AuthoritySnapshot) -> BaseException | None:
+        access = snapshot.access
+        if access is None:
+            return _no_access(actor_user_id)
+        if whole_character_denied(access, character_id):
+            return PublicProfileNotFoundError(f"character {character_id} is not visible")
+        if has_effective_character_canon_edit(access, character_id):
+            return None
+        has_reveal = snapshot.reveal_authority not in (None, "none")
+        if may_read_profile(access, character_id, has_reveal_authority=has_reveal):
+            return PublicProfileEditDeniedError(f"editing {character_id} is denied")
+        return PublicProfileNotFoundError(f"character {character_id} is not visible")
+
+    return judged_requirement("public_profile.edit", decide, reveal=True)
+
+
+def legacy_source_requirement(
+    actor_user_id: uuid.UUID, *, kind: str | None, world_id: uuid.UUID
+) -> Requirement:
+    """The legacy source-read rule for the character's kind (`may_read_source_now`): role
+    `canon.edit`, plus world `world.canon.read_private` for an NPC. `kind` was read under the scope's
+    locks (a character's kind is stable on every application path, `may_read_legacy_source`)."""
+
+    def decide(snapshot: AuthoritySnapshot) -> BaseException | None:
+        access = snapshot.access
+        if access is None:
+            return _no_access(actor_user_id)
+        if may_read_legacy_source(kind, access=access, world_authority=snapshot.world_authority):
+            return None
+        return WorldAuthorityRequiredError(f"{actor_user_id} cannot read a source here")
+
+    return judged_requirement(
+        "public_profile.legacy_source",
+        decide,
+        world_id=world_id if kind == KIND_NPC else None,
+    )
+
+
+def player_profile_gm_requirement(actor_user_id: uuid.UUID, character_id: uuid.UUID) -> Requirement:
+    """The player-profile GM read rule (`may_read_player_profile_as_gm`), 404 when it fails."""
+
+    def decide(snapshot: AuthoritySnapshot) -> BaseException | None:
+        access = snapshot.access
+        if access is None:
+            return _no_access(actor_user_id)
+        if may_read_player_profile_as_gm(access, character_id):
+            return None
+        return PublicProfileNotFoundError(f"character {character_id} is not visible")
+
+    return judged_requirement("public_profile.player_profile_gm", decide)
+
+
+def reveal_held_requirement(
+    actor_membership_id: uuid.UUID, character_id: uuid.UUID, *, source: str | None = None
+) -> Requirement:
+    """`character.reveal` authority, then no whole-character deny (`require_may_release` and the
+    commands' fresh re-judgement). `source` is the authority source the command locked: the final
+    check then requires that same source (a lapsed or replaced owner or delegation row is refused).
+    Without `source` (the route's pre-check) any live authority suffices."""
+
+    def decide(snapshot: AuthoritySnapshot) -> BaseException | None:
+        access = snapshot.access
+        if access is None:
+            return CampaignNotAuthorizedError(f"membership {actor_membership_id} has no access")
+        held = snapshot.reveal_authority
+        if held in (None, "none") or (source is not None and held != source):
+            return CharacterRevealRequiredError(
+                f"membership {actor_membership_id} cannot reveal"
+                if source is None
+                else f"membership {actor_membership_id} cannot reveal now"
+            )
+        if whole_character_denied(access, character_id):
+            return PublicProfileNotFoundError(f"character {character_id} is not visible")
+        return None
+
+    return judged_requirement("public_profile.reveal_held", decide, reveal=True)
+
+
+def view_tier_requirement(actor_membership_id: uuid.UUID, character_id: uuid.UUID) -> Requirement:
+    """The releaser holds a character-view tier (species and size are summary-tier fields, D6)."""
+
+    def decide(snapshot: AuthoritySnapshot) -> BaseException | None:
+        access = snapshot.access
+        if access is None:
+            return CampaignNotAuthorizedError(f"membership {actor_membership_id} has no access")
+        if holds_character_view_tier(access, character_id):
+            return None
+        return PublicProfileFieldWithheldError(
+            f"{character_id} species or size is withheld from membership {actor_membership_id}"
+        )
+
+    return judged_requirement("public_profile.view_tier", decide)
+
+
+def withheld_requirement(
+    actor_membership_id: uuid.UUID,
+    character_id: uuid.UUID,
+    *,
+    restricted: dict[str, str],
+    kind: str | None,
+    world_id: uuid.UUID,
+    only_fields: frozenset[str] | None = None,
+) -> Requirement:
+    """No restricted draft field is withheld from the caller (D7). `restricted` is the draft's
+    restricted fields with their origins, read under the draft's `FOR UPDATE` lock, which every
+    release also takes; each is judged by its own origin's source rule. A release judges every field
+    (`only_fields` is `None`); a save refuses only text written into a withheld field, so it names the
+    fields the request puts text into."""
+    needs_legacy_world = kind == KIND_NPC and any(
+        source_rule_for_origin(origin) == SOURCE_RULE_LEGACY for origin in restricted.values()
+    )
+
+    def decide(snapshot: AuthoritySnapshot) -> BaseException | None:
+        access = snapshot.access
+        if access is None:
+            return CampaignNotAuthorizedError(f"membership {actor_membership_id} has no access")
+        withheld = fields_withheld(
+            restricted,
+            access=access,
+            character_id=character_id,
+            legacy_readable=lambda: may_read_legacy_source(
+                kind, access=access, world_authority=snapshot.world_authority
+            ),
+        )
+        if not withheld or (only_fields is not None and not withheld & only_fields):
+            return None
+        return PublicProfileFieldWithheldError(
+            f"{character_id} holds copied text withheld from membership {actor_membership_id}"
+        )
+
+    return judged_requirement(
+        "public_profile.withheld",
+        decide,
+        world_id=world_id if needs_legacy_world else None,
+    )
+
+
 def require_may_edit(
-    connection: Connection, *, access: AccessContext, character_id: uuid.UUID
+    connection: Connection,
+    *,
+    access: AccessContext,
+    character_id: uuid.UUID,
+    plan: AuthorizationPlan,
 ) -> None:
     """The D8 edit rule against a resolved `AccessContext`: a whole-character deny removes the
     character (404); a `canon.edit` deny on it, or its absence as a role capability, removes editing.
     A caller who can still read the profile (reveal authority) is told 403
     `public_profile_edit_denied`; anyone else finds nothing (404). Also the route's pre-check
-    ahead of the idempotency lookup, so a caller who lost the right cannot replay a stored save."""
+    ahead of the idempotency lookup, so a caller who lost the right cannot replay a stored save.
+    The passing decision is registered with `plan` for the final check."""
     if whole_character_denied(access, character_id):
         raise PublicProfileNotFoundError(f"character {character_id} is not visible")
     if has_effective_character_canon_edit(access, character_id):
+        plan.require(connection, edit_requirement(access.user_id, character_id))
         return
     authority = resolve_reveal_authority(
         connection,
@@ -274,7 +442,11 @@ def require_may_edit(
 
 
 def require_may_release(
-    connection: Connection, *, access: AccessContext, character_id: uuid.UUID
+    connection: Connection,
+    *,
+    access: AccessContext,
+    character_id: uuid.UUID,
+    plan: AuthorizationPlan,
 ) -> None:
     """The release route's pre-check, before the idempotency lookup: `character.reveal` authority
     (403 `character_reveal_required`, which says nothing about the character), then no
@@ -290,6 +462,7 @@ def require_may_release(
         )
     if whole_character_denied(access, character_id):
         raise PublicProfileNotFoundError(f"character {character_id} is not visible")
+    plan.require(connection, reveal_held_requirement(access.campaign_membership_id, character_id))
 
 
 @dataclass(frozen=True)
@@ -319,13 +492,17 @@ def _campaign_world_id(connection: Connection, campaign_id: uuid.UUID) -> uuid.U
 
 
 def require_may_copy(
-    connection: Connection, *, access: AccessContext, character_id: uuid.UUID
+    connection: Connection,
+    *,
+    access: AccessContext,
+    character_id: uuid.UUID,
+    plan: AuthorizationPlan,
 ) -> None:
     """The copy route's pre-check, before the idempotency lookup: the D8 edit rule, then a kind that
     has a legacy source in this campaign's world (else 404), then the source-read rule (403
     `world_authority_required` for an NPC without `world.canon.read_private`). A caller who has lost
     either right cannot replay a stored copy: the source read is the copy's own authority (D7)."""
-    require_may_edit(connection, access=access, character_id=character_id)
+    require_may_edit(connection, access=access, character_id=character_id, plan=plan)
     world_id = _campaign_world_id(connection, access.campaign_id)
     kind = character_kind(connection, character_id, world_id=world_id)
     if kind not in (KIND_NPC, KIND_PLAYER_CHARACTER):
@@ -334,6 +511,10 @@ def require_may_copy(
         connection, access=access, character_id=character_id, world_id=world_id
     ):
         raise WorldAuthorityRequiredError(f"{access.user_id} cannot read a source here")
+    plan.require(
+        connection,
+        legacy_source_requirement(access.user_id, kind=kind, world_id=world_id),
+    )
 
 
 def copy_legacy_text_to_public_profile_draft(
@@ -344,6 +525,7 @@ def copy_legacy_text_to_public_profile_draft(
     actor_user_id: uuid.UUID,
     expected_row_version: int | None,
     source_field: str,
+    plan: AuthorizationPlan,
 ) -> CopyLegacyTextResult:
     """Copies the character's legacy `source_field` text into the draft field of the same name.
 
@@ -370,7 +552,7 @@ def copy_legacy_text_to_public_profile_draft(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_READ_PRIVATE if kind == KIND_NPC else None,
-        plan=R01_PENDING,
+        plan=plan,
     )
     access = resolve_access_context(connection, user_id=actor_user_id, campaign_id=campaign_id)
     if access is None:
@@ -378,11 +560,15 @@ def copy_legacy_text_to_public_profile_draft(
     character = _character_row(
         connection, world_id=scope.world_id, character_id=character_id, lock_clause="FOR SHARE"
     )
-    require_may_edit(connection, access=access, character_id=character_id)
+    require_may_edit(connection, access=access, character_id=character_id, plan=plan)
     if not may_read_source_now(
         connection, access=access, character_id=character_id, world_id=scope.world_id
     ):
         raise WorldAuthorityRequiredError(f"{actor_user_id} cannot read a source here")
+    plan.require(
+        connection,
+        legacy_source_requirement(actor_user_id, kind=kind, world_id=scope.world_id),
+    )
     _require_canon_and_active(character, character_id)
 
     # The entity is held FOR SHARE, so no description write (which holds it FOR UPDATE and bumps its
@@ -499,15 +685,20 @@ class CopyPlayerProfileFieldResult:
 
 
 def require_may_copy_player_profile(
-    connection: Connection, *, access: AccessContext, character_id: uuid.UUID
+    connection: Connection,
+    *,
+    access: AccessContext,
+    character_id: uuid.UUID,
+    plan: AuthorizationPlan,
 ) -> None:
     """The player-profile copy route's pre-check, before the idempotency lookup: the D8 edit rule,
     then the player-profile GM read rule (404). In A5 the second is implied by the first (both are
     effective character-scoped `canon.edit`; a unit test pins that), but it is the copy's own source
     authority, so a caller who has lost either right cannot replay a stored copy."""
-    require_may_edit(connection, access=access, character_id=character_id)
+    require_may_edit(connection, access=access, character_id=character_id, plan=plan)
     if not may_read_player_profile_as_gm(access, character_id):
         raise PublicProfileNotFoundError(f"character {character_id} is not visible")
+    plan.require(connection, player_profile_gm_requirement(access.user_id, character_id))
 
 
 def copy_player_profile_field_to_public_profile_draft(
@@ -520,6 +711,7 @@ def copy_player_profile_field_to_public_profile_draft(
     expected_player_profile_row_version: int,
     source_field: str,
     target_field: str,
+    plan: AuthorizationPlan,
 ) -> CopyPlayerProfileFieldResult:
     """Copies the named player-profile field of the version the caller read into `target_field`.
 
@@ -543,7 +735,7 @@ def copy_player_profile_field_to_public_profile_draft(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=None,
-        plan=R01_PENDING,
+        plan=plan,
     )
     access = resolve_access_context(connection, user_id=actor_user_id, campaign_id=campaign_id)
     if access is None:
@@ -551,9 +743,10 @@ def copy_player_profile_field_to_public_profile_draft(
     character = _character_row(
         connection, world_id=scope.world_id, character_id=character_id, lock_clause="FOR SHARE"
     )
-    require_may_edit(connection, access=access, character_id=character_id)
+    require_may_edit(connection, access=access, character_id=character_id, plan=plan)
     if not may_read_player_profile_as_gm(access, character_id):
         raise PublicProfileNotFoundError(f"character {character_id} is not visible")
+    plan.require(connection, player_profile_gm_requirement(actor_user_id, character_id))
     _require_canon_and_active(character, character_id)
 
     # The head is held FOR SHARE: a profile edit (head FOR UPDATE) cannot commit between this check
@@ -691,6 +884,7 @@ def save_character_public_profile_draft(
     actor_user_id: uuid.UUID,
     expected_row_version: int | None,
     fields: dict[str, str | None],
+    plan: AuthorizationPlan,
     identity_flags: dict[str, bool] | None = None,
 ) -> SaveCharacterPublicProfileDraftResult:
     """Creates or updates the campaign's draft of the character's public profile.
@@ -719,7 +913,7 @@ def save_character_public_profile_draft(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=None,
-        plan=R01_PENDING,
+        plan=plan,
     )
     access = resolve_access_context(connection, user_id=actor_user_id, campaign_id=campaign_id)
     if access is None:
@@ -727,7 +921,7 @@ def save_character_public_profile_draft(
     character = _character_row(
         connection, world_id=scope.world_id, character_id=character_id, lock_clause="FOR SHARE"
     )
-    require_may_edit(connection, access=access, character_id=character_id)
+    require_may_edit(connection, access=access, character_id=character_id, plan=plan)
     _require_canon_and_active(character, character_id)
 
     membership_id = access.campaign_membership_id
@@ -805,15 +999,32 @@ def save_character_public_profile_draft(
     #    no-op comparison so a caller cannot learn whether a guess matched. Clearing (`None`) is
     #    allowed. The draft is held `FOR UPDATE`, which every release also takes, so the releases
     #    this sees cannot change under it.
-    withheld = withheld_fields(
-        connection,
-        profile_id=draft.character_public_profile_id,
-        access=access,
-        character_id=character_id,
-        world_id=scope.world_id,
-    )
-    if any(clean.get(name) is not None for name in withheld):
-        raise PublicProfileFieldWithheldError(f"{character_id} holds copied text withheld from you")
+    restricted = restricted_origins(connection, draft.character_public_profile_id)
+    if restricted:
+        written = frozenset(name for name, value in clean.items() if value is not None)
+        withheld = fields_withheld(
+            restricted,
+            access=access,
+            character_id=character_id,
+            legacy_readable=lambda: may_read_source_now(
+                connection, access=access, character_id=character_id, world_id=scope.world_id
+            ),
+        )
+        if withheld & written:
+            raise PublicProfileFieldWithheldError(
+                f"{character_id} holds copied text withheld from you"
+            )
+        plan.require(
+            connection,
+            withheld_requirement(
+                membership_id,
+                character_id,
+                restricted=restricted,
+                kind=character_kind(connection, character_id, world_id=scope.world_id),
+                world_id=scope.world_id,
+                only_fields=written,
+            ),
+        )
     changed = tuple(
         name
         for name in PUBLIC_PROFILE_SAVEABLE_FIELDS
@@ -904,6 +1115,7 @@ def release_character_public_profile(
     actor_membership_id: uuid.UUID,
     expected_draft_row_version: int,
     release_note: str | None,
+    plan: AuthorizationPlan,
     expected_character_row_version: int | None = None,
 ) -> ReleaseCharacterPublicProfileResult:
     """Publishes an immutable snapshot of the draft at `expected_draft_row_version`.
@@ -1008,6 +1220,10 @@ def release_character_public_profile(
     access = _resolve_membership_access(connection, campaign_id, actor_membership_id)
     if whole_character_denied(access, character_id):
         raise PublicProfileNotFoundError(f"character {character_id} is not visible")
+    # R01: the same decision, judged again over one fresh snapshot after the last statement.
+    plan.require(
+        connection, reveal_held_requirement(actor_membership_id, character_id, source=source)
+    )
 
     if draft is None:
         raise PublicProfileDraftMissingError(f"{character_id} has no draft")
@@ -1066,6 +1282,7 @@ def release_character_public_profile(
             raise PublicProfileFieldWithheldError(
                 f"{character_id} species or size is withheld from membership {actor_membership_id}"
             )
+        plan.require(connection, view_tier_requirement(actor_membership_id, character_id))
         identity = _read_identity(
             connection,
             character_id=character_id,
@@ -1076,15 +1293,29 @@ def release_character_public_profile(
     # A new snapshot would publish every field of this draft version, so the releaser must be able
     # to read each one (D7 item 3). Retries and natural retries returned above, without this check
     # (D7-d).
-    if withheld_fields(
-        connection,
-        profile_id=profile_id,
-        access=access,
-        character_id=character_id,
-        world_id=world_id,
-    ):
-        raise PublicProfileFieldWithheldError(
-            f"{character_id} holds copied text withheld from membership {actor_membership_id}"
+    restricted = restricted_origins(connection, profile_id)
+    if restricted:
+        kind = character_kind(connection, character_id, world_id=world_id)
+        if fields_withheld(
+            restricted,
+            access=access,
+            character_id=character_id,
+            legacy_readable=lambda: may_read_source_now(
+                connection, access=access, character_id=character_id, world_id=world_id
+            ),
+        ):
+            raise PublicProfileFieldWithheldError(
+                f"{character_id} holds copied text withheld from membership {actor_membership_id}"
+            )
+        plan.require(
+            connection,
+            withheld_requirement(
+                actor_membership_id,
+                character_id,
+                restricted=restricted,
+                kind=kind,
+                world_id=world_id,
+            ),
         )
 
     delegation_id: uuid.UUID | None = None

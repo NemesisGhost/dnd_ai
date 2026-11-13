@@ -59,17 +59,31 @@ def test_every_route_inside_r01s_bound_is_pending_or_finalized_exactly_once() ->
     assert finalized == set(MIGRATED_ROUTES)
 
 
-def test_no_production_route_is_finalized_in_s1() -> None:
-    assert frozenset() == R01_FINALIZED_ROUTES
-    assert len(R01_PENDING_ROUTES) == 192
+def test_s2_finalizes_exactly_the_six_profile_and_revelation_routes() -> None:
+    """S2 migrates the public-profile save, legacy copy, player-profile copy and release, and the
+    revelation create and revoke: 6 of the 192 routes inside R01's bound. The other 186 stay pending."""
+    assert len(R01_FINALIZED_ROUTES) == 6
+    assert len(R01_PENDING_ROUTES) == 186
+    assert {
+        path.rsplit("/campaigns/{campaign_id}/characters/{character_id}/", 1)[-1]
+        for _, path in R01_FINALIZED_ROUTES
+    } == {
+        "public-profile/draft",
+        "public-profile/draft/copy-legacy",
+        "public-profile/draft/copy-player-profile",
+        "public-profile/releases",
+        "revelations",
+        "revelations/{character_revelation_id}/revoke",
+    }
+    assert {method for method, _ in R01_FINALIZED_ROUTES} == {"POST"}
 
 
 def test_the_pending_counts_by_family_are_pinned() -> None:
-    """192 distinct routes from 193 manifest records: one (method, path) is registered twice."""
+    """186 distinct pending routes (192 at S1 less S2's six). The manifest has 193 inside records: one
+    (method, path) is registered twice."""
     assert dict(Counter(R01_PENDING_ROUTES.values())) == {
-        "authoring_scope": 74,
+        "authoring_scope": 71,
         "operation_scope": 54,
-        "reveal_authority": 3,
         "route_capability_only": 21,
         "access_management": 32,
         "engine_early_commit": 8,

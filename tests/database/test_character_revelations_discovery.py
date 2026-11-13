@@ -76,6 +76,7 @@ from tests.factories import (
     make_relationship_participant,
     make_user,
 )
+from tests.r01_support import fixture_plan
 
 pytestmark = pytest.mark.database
 
@@ -693,6 +694,7 @@ def test_a_later_release_without_a_summary_shows_null_with_no_fallback(
             actor_user_id=g.o1_user_id,
             expected_row_version=1,
             fields={"public_summary": None},
+            plan=fixture_plan(connection, g.campaign_id),
         )
     with postgres_engine.begin() as connection:
         release_character_public_profile(
@@ -702,6 +704,7 @@ def test_a_later_release_without_a_summary_shows_null_with_no_fallback(
             actor_membership_id=g.o1,
             expected_draft_row_version=2,
             release_note=None,
+            plan=fixture_plan(connection, g.campaign_id),
         )
     card = cards(f, g.player_user_id, g.campaign_id)[str(c)]
     assert card["summary"] is None  # the latest release wins as a whole snapshot
@@ -736,6 +739,7 @@ def released(
             actor_user_id=actor_user or g.o1_user_id,
             expected_row_version=None,
             fields={"public_summary": summary},
+            plan=fixture_plan(connection, campaign or g.campaign_id),
         )
     with engine.begin() as connection:
         release_character_public_profile(
@@ -745,6 +749,7 @@ def released(
             actor_membership_id=actor_membership or g.o1,
             expected_draft_row_version=1,
             release_note=None,
+            plan=fixture_plan(connection, campaign or g.campaign_id),
         )
     return character
 

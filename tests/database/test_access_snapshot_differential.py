@@ -54,6 +54,7 @@ from tests.factories import (
     make_world,
     make_world_role_assignment,
 )
+from tests.r01_support import fixture_plan
 
 pytestmark = [pytest.mark.database, pytest.mark.real_relationship_policy]
 
@@ -340,6 +341,7 @@ def corpus(db_connection: Connection) -> Corpus:
             actor_user_id=spare_owner,
             expected_row_version=None,
             fields={"public_summary": "summary"},
+            plan=fixture_plan(c, campaign_id),
         )
         release_character_public_profile(
             c,
@@ -348,6 +350,7 @@ def corpus(db_connection: Connection) -> Corpus:
             actor_membership_id=spare_membership,
             expected_draft_row_version=1,
             release_note=None,
+            plan=fixture_plan(c, campaign_id),
         )
 
     # revelations: a member one, an access-group one, a campaign-wide one, and one for a draft

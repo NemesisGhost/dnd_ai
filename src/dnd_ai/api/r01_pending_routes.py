@@ -99,13 +99,7 @@ R01_PENDING_ROUTES: Final = MappingProxyType(
         ("POST", "/campaigns/{campaign_id}/characters/{character_id}/conditions/{condition_id}/remove"): "route_capability_only",
         ("POST", "/campaigns/{campaign_id}/characters/{character_id}/hit-points"): "route_capability_only",
         ("POST", "/campaigns/{campaign_id}/characters/{character_id}/location"): "route_capability_only",
-        ("POST", "/campaigns/{campaign_id}/characters/{character_id}/public-profile/draft"): "authoring_scope",
-        ("POST", "/campaigns/{campaign_id}/characters/{character_id}/public-profile/draft/copy-legacy"): "authoring_scope",
-        ("POST", "/campaigns/{campaign_id}/characters/{character_id}/public-profile/draft/copy-player-profile"): "authoring_scope",
-        ("POST", "/campaigns/{campaign_id}/characters/{character_id}/public-profile/releases"): "reveal_authority",
         ("POST", "/campaigns/{campaign_id}/characters/{character_id}/resources"): "route_capability_only",
-        ("POST", "/campaigns/{campaign_id}/characters/{character_id}/revelations"): "reveal_authority",
-        ("POST", "/campaigns/{campaign_id}/characters/{character_id}/revelations/{character_revelation_id}/revoke"): "reveal_authority",
         ("POST", "/campaigns/{campaign_id}/checks/{check_request_id}/resolve"): "route_capability_only",
         ("POST", "/campaigns/{campaign_id}/clock/advance"): "operation_scope",
         ("POST", "/campaigns/{campaign_id}/clock/correct"): "operation_scope",
@@ -213,5 +207,16 @@ R01_PENDING_ROUTES: Final = MappingProxyType(
 )
 # fmt: on
 
-#: (method, route path template) of every route migrated to a final plan. Empty in S1.
-R01_FINALIZED_ROUTES: Final[frozenset[tuple[str, str]]] = frozenset()
+#: (method, route path template) of every route migrated to a final plan.
+# fmt: off
+R01_FINALIZED_ROUTES: Final[frozenset[tuple[str, str]]] = frozenset(
+    {
+        ("POST", "/campaigns/{campaign_id}/characters/{character_id}/public-profile/draft"),
+        ("POST", "/campaigns/{campaign_id}/characters/{character_id}/public-profile/draft/copy-legacy"),
+        ("POST", "/campaigns/{campaign_id}/characters/{character_id}/public-profile/draft/copy-player-profile"),
+        ("POST", "/campaigns/{campaign_id}/characters/{character_id}/public-profile/releases"),
+        ("POST", "/campaigns/{campaign_id}/characters/{character_id}/revelations"),
+        ("POST", "/campaigns/{campaign_id}/characters/{character_id}/revelations/{character_revelation_id}/revoke"),
+    }
+)
+# fmt: on

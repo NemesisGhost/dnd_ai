@@ -58,6 +58,7 @@ from dnd_ai.commands.character_public_profile import (
     save_character_public_profile_draft,
 )
 from dnd_ai.domain.access import AccessContext
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.public_profiles import (
     PUBLIC_PROFILE_IDENTITY_FLAGS,
     PUBLIC_PROFILE_NOTE_MAX_LENGTH,
@@ -79,6 +80,7 @@ from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .errors import NotFoundError
+from .r01_route_plans import get_authorization_plan
 
 router = APIRouter(tags=["character-public-profile"])
 
@@ -88,6 +90,7 @@ _view_access = require_campaign_capability("campaign.view")
 _edit_access = require_campaign_capability("canon.edit")
 
 _Conn = Annotated[Connection, Depends(get_connection)]
+_Plan = Annotated[AuthorizationPlan, Depends(get_authorization_plan)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
 
@@ -157,37 +160,41 @@ def _edit_precheck(
     character_id: uuid.UUID,
     access: Annotated[AccessContext, Depends(_edit_access)],
     connection: _Conn,
+    plan: _Plan,
 ) -> None:
     """Before the idempotency lookup: a caller who can no longer edit cannot replay a save."""
-    require_may_edit(connection, access=access, character_id=character_id)
+    require_may_edit(connection, access=access, character_id=character_id, plan=plan)
 
 
 def _copy_precheck(
     character_id: uuid.UUID,
     access: Annotated[AccessContext, Depends(_edit_access)],
     connection: _Conn,
+    plan: _Plan,
 ) -> None:
     """Before the idempotency lookup and the body: the edit rule and the source-read rule."""
-    require_may_copy(connection, access=access, character_id=character_id)
+    require_may_copy(connection, access=access, character_id=character_id, plan=plan)
 
 
 def _copy_player_profile_precheck(
     character_id: uuid.UUID,
     access: Annotated[AccessContext, Depends(_edit_access)],
     connection: _Conn,
+    plan: _Plan,
 ) -> None:
     """Before the idempotency lookup and the body: the edit rule and the player-profile read rule."""
-    require_may_copy_player_profile(connection, access=access, character_id=character_id)
+    require_may_copy_player_profile(connection, access=access, character_id=character_id, plan=plan)
 
 
 def _release_precheck(
     character_id: uuid.UUID,
     access: Annotated[AccessContext, Depends(_view_access)],
     connection: _Conn,
+    plan: _Plan,
 ) -> None:
     """Before the idempotency lookup, and before the body is read: 403 `character_reveal_required`
     for a caller without reveal authority, 404 for a whole-character deny."""
-    require_may_release(connection, access=access, character_id=character_id)
+    require_may_release(connection, access=access, character_id=character_id, plan=plan)
 
 
 @router.get(_BASE)
@@ -228,6 +235,7 @@ def save_character_public_profile_draft_endpoint(
     response: Response,
     access: Annotated[AccessContext, Depends(_edit_access)],
     _precheck: Annotated[None, Depends(_edit_precheck)],
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -243,6 +251,7 @@ def save_character_public_profile_draft_endpoint(
             **body.model_dump(mode="json", exclude_unset=True),
         },
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -262,6 +271,7 @@ def save_character_public_profile_draft_endpoint(
             for name in PUBLIC_PROFILE_IDENTITY_FLAGS
             if name in body.model_fields_set
         },
+        plan=plan,
     )
     if result.changed:
         record_change_log(
@@ -290,6 +300,7 @@ def save_character_public_profile_draft_endpoint(
     }
     response.status_code = 201 if result.created else 200
     finish_campaign_idempotency(connection, idem, status_code=response.status_code, body=payload)
+    plan.finalize(connection)  # R01: the last statement of the request
     return payload
 
 
@@ -300,6 +311,7 @@ def copy_legacy_text_endpoint(
     response: Response,
     access: Annotated[AccessContext, Depends(_edit_access)],
     _precheck: Annotated[None, Depends(_copy_precheck)],
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -314,6 +326,7 @@ def copy_legacy_text_endpoint(
         # reused for another character or field is the non-disclosing conflict, never a replay.
         payload={"character_id": str(character_id), **body.model_dump(mode="json")},
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -324,6 +337,7 @@ def copy_legacy_text_endpoint(
         actor_user_id=access.user_id,
         expected_row_version=body.expected_row_version,
         source_field=body.field,
+        plan=plan,
     )
     record_change_log(
         connection,
@@ -355,6 +369,7 @@ def copy_legacy_text_endpoint(
     }
     response.status_code = 201 if result.created else 200
     finish_campaign_idempotency(connection, idem, status_code=response.status_code, body=payload)
+    plan.finalize(connection)  # R01: the last statement of the request
     return payload
 
 
@@ -365,6 +380,7 @@ def copy_player_profile_field_endpoint(
     response: Response,
     access: Annotated[AccessContext, Depends(_edit_access)],
     _precheck: Annotated[None, Depends(_copy_player_profile_precheck)],
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -379,6 +395,7 @@ def copy_player_profile_field_endpoint(
         # for another character or field is the non-disclosing conflict, never a replay.
         payload={"character_id": str(character_id), **body.model_dump(mode="json")},
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -391,6 +408,7 @@ def copy_player_profile_field_endpoint(
         expected_player_profile_row_version=body.expected_player_profile_row_version,
         source_field=body.source_field,
         target_field=body.target_field,
+        plan=plan,
     )
     record_change_log(
         connection,
@@ -425,6 +443,7 @@ def copy_player_profile_field_endpoint(
     }
     response.status_code = 201 if result.created else 200
     finish_campaign_idempotency(connection, idem, status_code=response.status_code, body=payload)
+    plan.finalize(connection)  # R01: the last statement of the request
     return payload
 
 
@@ -435,6 +454,7 @@ def release_character_public_profile_endpoint(
     response: Response,
     access: Annotated[AccessContext, Depends(_view_access)],
     _precheck: Annotated[None, Depends(_release_precheck)],
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -455,6 +475,7 @@ def release_character_public_profile_endpoint(
             },
         },
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -466,6 +487,7 @@ def release_character_public_profile_endpoint(
         expected_draft_row_version=body.expected_draft_row_version,
         release_note=body.release_note,
         expected_character_row_version=body.expected_character_row_version,
+        plan=plan,
     )
     if result.created:
         record_change_log(
@@ -505,4 +527,5 @@ def release_character_public_profile_endpoint(
     }
     response.status_code = 201 if result.created else 200
     finish_campaign_idempotency(connection, idem, status_code=response.status_code, body=payload)
+    plan.finalize(connection)  # R01: the last statement of the request
     return payload

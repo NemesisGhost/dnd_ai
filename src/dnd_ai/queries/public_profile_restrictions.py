@@ -18,6 +18,7 @@ release also takes, so the set of releases it sees cannot change under them.
 """
 
 import uuid
+from collections.abc import Callable, Mapping
 
 from sqlalchemy import Connection, text
 
@@ -134,6 +135,35 @@ def may_read_source_now(
     return may_read_legacy_source(kind, access=access, world_authority=authority)
 
 
+def fields_withheld(
+    restricted: Mapping[str, str],
+    *,
+    access: AccessContext,
+    character_id: uuid.UUID,
+    legacy_readable: Callable[[], bool],
+) -> frozenset[str]:
+    """The rule of `withheld_fields` over already-read restricted origins: each restricted field is
+    withheld unless the caller passes the source-read rule of that field's own origin.
+    `legacy_readable` answers the legacy rule (it may resolve world authority); it is called at most
+    once, and only when a legacy field is restricted. Pure: it reads nothing itself, so the final
+    authorization check can run it over a snapshot."""
+    withheld: set[str] = set()
+    legacy: bool | None = None
+    for name, origin in restricted.items():
+        rule = source_rule_for_origin(origin)
+        if rule == SOURCE_RULE_PLAYER_PROFILE:
+            readable = may_read_player_profile(access, character_id)
+        elif rule == SOURCE_RULE_LEGACY:
+            if legacy is None:
+                legacy = legacy_readable()
+            readable = legacy
+        else:  # unreachable: only restricted origins are returned; fail closed
+            readable = False
+        if not readable:
+            withheld.add(name)
+    return frozenset(withheld)
+
+
 def withheld_fields(
     connection: Connection,
     *,
@@ -148,20 +178,11 @@ def withheld_fields(
     restricted = restricted_origins(connection, profile_id)
     if not restricted:
         return frozenset()
-    legacy_readable: bool | None = None
-    withheld: set[str] = set()
-    for name, origin in restricted.items():
-        rule = source_rule_for_origin(origin)
-        if rule == SOURCE_RULE_PLAYER_PROFILE:
-            readable = may_read_player_profile(access, character_id)
-        elif rule == SOURCE_RULE_LEGACY:
-            if legacy_readable is None:
-                legacy_readable = may_read_source_now(
-                    connection, access=access, character_id=character_id, world_id=world_id
-                )
-            readable = legacy_readable
-        else:  # unreachable: only restricted origins are returned; fail closed
-            readable = False
-        if not readable:
-            withheld.add(name)
-    return frozenset(withheld)
+    return fields_withheld(
+        restricted,
+        access=access,
+        character_id=character_id,
+        legacy_readable=lambda: may_read_source_now(
+            connection, access=access, character_id=character_id, world_id=world_id
+        ),
+    )

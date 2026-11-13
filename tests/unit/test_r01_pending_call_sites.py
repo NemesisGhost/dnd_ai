@@ -1,4 +1,4 @@
-"""R01 S1: every scope-helper call site that still passes the explicit `R01_PENDING` marker.
+"""R01 S1, S2: every scope-helper call site that still passes the explicit `R01_PENDING` marker.
 
 `lock_authoring_scope` and `lock_operation_scope` take a REQUIRED keyword `plan` (plan section 6.5,
 rule 1). Until a family is migrated to a real `AuthorizationPlan` its call sites pass `R01_PENDING`,
@@ -24,7 +24,7 @@ pytestmark = pytest.mark.unit
 SRC = Path(__file__).resolve().parents[2] / "src" / "dnd_ai"
 HELPERS = {"lock_authoring_scope", "lock_operation_scope"}
 
-#: (module relative to src/dnd_ai, enclosing function, helper called). 67 sites at S1.
+#: (module relative to src/dnd_ai, enclosing function, helper called). 67 sites at S1, 64 after S2 migrated the three public-profile commands.
 PINNED: frozenset[tuple[str, str, str]] = frozenset(
     {
         ("commands/campaign_clock.py", "advance_campaign_clock", "lock_operation_scope"),
@@ -32,21 +32,6 @@ PINNED: frozenset[tuple[str, str, str]] = frozenset(
         ("commands/character_builds.py", "activate_character_build", "lock_operation_scope"),
         ("commands/character_builds.py", "create_character_build", "lock_operation_scope"),
         ("commands/character_builds.py", "initialize_character_state", "lock_operation_scope"),
-        (
-            "commands/character_public_profile.py",
-            "copy_legacy_text_to_public_profile_draft",
-            "lock_authoring_scope",
-        ),
-        (
-            "commands/character_public_profile.py",
-            "copy_player_profile_field_to_public_profile_draft",
-            "lock_authoring_scope",
-        ),
-        (
-            "commands/character_public_profile.py",
-            "save_character_public_profile_draft",
-            "lock_authoring_scope",
-        ),
         ("commands/dungeon_state.py", "set_dungeon_state", "lock_operation_scope"),
         ("commands/dungeons.py", "_lock_aggregate", "lock_authoring_scope"),
         ("commands/dungeons.py", "create_dungeon", "lock_authoring_scope"),
@@ -170,14 +155,37 @@ def test_the_r01_pending_call_sites_are_exactly_the_pinned_set() -> None:
     assert PINNED - found == frozenset(), "a pinned call site is gone: remove it from PINNED"
 
 
-def test_only_the_helper_forwarding_passes_a_real_plan_in_s1() -> None:
-    """No production command passes a real plan in S1: `lock_operation_scope` forwards its own
-    `plan` to `lock_authoring_scope`, and every other call site passes the pending marker."""
-    real = [
+#: The call sites that pass a REAL plan: S2's three public-profile commands, and the one place
+#: `lock_operation_scope` forwards its own `plan`. Each later slice adds its commands here.
+REAL_PLAN_SITES = [
+    ("commands/_operations.py", "lock_operation_scope", "lock_authoring_scope"),
+    (
+        "commands/character_public_profile.py",
+        "copy_legacy_text_to_public_profile_draft",
+        "lock_authoring_scope",
+    ),
+    (
+        "commands/character_public_profile.py",
+        "copy_player_profile_field_to_public_profile_draft",
+        "lock_authoring_scope",
+    ),
+    (
+        "commands/character_public_profile.py",
+        "save_character_public_profile_draft",
+        "lock_authoring_scope",
+    ),
+]
+
+
+def test_the_real_plan_call_sites_are_exactly_the_migrated_ones() -> None:
+    """After S2 the only call sites that pass a real plan are the forwarding in
+    `lock_operation_scope` and the three migrated public-profile commands; every other call site passes
+    the pending marker (pinned above)."""
+    real = sorted(
         (module, function, callee)
         for module, function, callee, call in _walk()
         for keyword in call.keywords
         if keyword.arg == "plan"
         and not (isinstance(keyword.value, ast.Name) and keyword.value.id == "R01_PENDING")
-    ]
-    assert real == [("commands/_operations.py", "lock_operation_scope", "lock_authoring_scope")]
+    )
+    assert real == sorted(REAL_PLAN_SITES)

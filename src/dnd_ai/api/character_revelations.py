@@ -34,6 +34,7 @@ from dnd_ai.commands.character_revelations import (
     validate_revelation_shape,
 )
 from dnd_ai.domain.access import AccessContext
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.public_profiles import REVELATION_REASON_MAX_LENGTH
 from dnd_ai.queries.character_revelations import list_character_revelations
 
@@ -50,6 +51,7 @@ from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .errors import NotFoundError
 from .idempotency import lock_idempotency_key
+from .r01_route_plans import get_authorization_plan
 
 router = APIRouter(tags=["character-revelations"])
 
@@ -58,6 +60,7 @@ _BASE = "/campaigns/{campaign_id}/characters/{character_id}/revelations"
 _view_access = require_campaign_capability("campaign.view")
 
 _Conn = Annotated[Connection, Depends(get_connection)]
+_Plan = Annotated[AuthorizationPlan, Depends(get_authorization_plan)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
 
@@ -95,10 +98,11 @@ def _reveal_precheck(
     character_id: uuid.UUID,
     access: Annotated[AccessContext, Depends(_view_access)],
     connection: _Conn,
+    plan: _Plan,
 ) -> None:
     """Before the body and the idempotency lookup: 403 `character_reveal_required` for a caller
     without reveal authority, 404 for a whole-character deny."""
-    require_may_release(connection, access=access, character_id=character_id)
+    require_may_release(connection, access=access, character_id=character_id, plan=plan)
 
 
 @router.get(_BASE)
@@ -120,6 +124,7 @@ def create_character_revelation_endpoint(
     response: Response,
     access: Annotated[AccessContext, Depends(_view_access)],
     _precheck: Annotated[None, Depends(_reveal_precheck)],
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -142,6 +147,7 @@ def create_character_revelation_endpoint(
             command_name=_CREATE_COMMAND,
             payload={"character_id": str(character_id), **body.model_dump(mode="json")},
             correlation_id=correlation_id,
+            plan=plan,
         )
         started.append(state)
         return state.replay is not None
@@ -156,6 +162,7 @@ def create_character_revelation_endpoint(
         target_access_group_id=body.target_access_group_id,
         reason=body.reason,
         reserve=reserve,
+        plan=plan,
     )
     if result is None:
         return started[0].replay
@@ -188,6 +195,7 @@ def create_character_revelation_endpoint(
     finish_campaign_idempotency(
         connection, started[0], status_code=response.status_code, body=payload
     )
+    plan.finalize(connection)  # R01: the last statement of the request
     return payload
 
 
@@ -199,6 +207,7 @@ def revoke_character_revelation_endpoint(
     response: Response,
     access: Annotated[AccessContext, Depends(_view_access)],
     _precheck: Annotated[None, Depends(_reveal_precheck)],
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -224,6 +233,7 @@ def revoke_character_revelation_endpoint(
                 **body.model_dump(mode="json"),
             },
             correlation_id=correlation_id,
+            plan=plan,
         )
         started.append(state)
         return state.replay is not None
@@ -236,6 +246,7 @@ def revoke_character_revelation_endpoint(
         actor_membership_id=access.campaign_membership_id,
         reason=body.reason,
         reserve=reserve,
+        plan=plan,
     )
     if result is None:
         return started[0].replay
@@ -262,6 +273,7 @@ def revoke_character_revelation_endpoint(
     }
     response.status_code = 200
     finish_campaign_idempotency(connection, started[0], status_code=200, body=payload)
+    plan.finalize(connection)  # R01: the last statement of the request
     return payload
 
 

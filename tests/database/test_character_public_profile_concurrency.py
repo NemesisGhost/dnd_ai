@@ -54,6 +54,7 @@ from tests.database.test_character_reveal_delegation import (  # noqa: F401 - fi
     m,
 )
 from tests.lock_race_support import LockRace
+from tests.r01_support import fixture_plan
 
 pytestmark = pytest.mark.database
 
@@ -80,6 +81,7 @@ def do_save(
         actor_user_id=user,
         expected_row_version=expected,
         fields=dict(fields),
+        plan=fixture_plan(c, g.campaign_id),
     )
 
 
@@ -93,6 +95,7 @@ def do_release(
         actor_membership_id=membership,
         expected_draft_row_version=version,
         release_note=None,
+        plan=fixture_plan(c, g.campaign_id),
     )
 
 
@@ -105,6 +108,7 @@ def seed(engine: Engine, g: Gate, character: uuid.UUID, text_value: str = APPEAR
             actor_user_id=g.o1_user_id,
             expected_row_version=None,
             fields={"public_appearance": text_value},
+            plan=fixture_plan(connection, g.campaign_id),
         )
 
 

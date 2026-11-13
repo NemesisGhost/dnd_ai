@@ -96,7 +96,7 @@ import uuid
 from collections.abc import Callable
 from typing import Annotated, Literal
 
-from fastapi import Depends
+from fastapi import Depends, Request
 from pydantic import BaseModel
 from sqlalchemy import Connection, text
 
@@ -105,9 +105,12 @@ from dnd_ai.domain.access import (
     FOUNDRY_ACCESS_AUTH_METHOD,
     AccessContext,
     AuthenticatedPrincipal,
+    AuthoritySnapshot,
     resolve_access_context,
 )
 from dnd_ai.domain.authoring import WorldAuthorityRequiredError
+from dnd_ai.domain.authorization import Requirement
+from dnd_ai.domain.authorization_requirements import judged_requirement
 from dnd_ai.domain.errors import DomainAuthorizationError
 from dnd_ai.domain.foundry_pairing import FOUNDRY_SCOPES
 from dnd_ai.domain.public_profiles import may_read_released_profile
@@ -129,6 +132,7 @@ from ._shared import timeline_world_id
 from .auth import get_authenticated_user_id
 from .deps import get_connection
 from .errors import ForbiddenError, NotFoundError
+from .r01_route_plans import open_request_plan
 
 
 def require_world_capability_for_campaign(
@@ -146,6 +150,46 @@ def require_world_capability_for_campaign(
         raise WorldAuthorityRequiredError(
             f"user {access.user_id} lacks {world_capability} on the campaign's world"
         )
+
+
+def route_capability_requirement(
+    *,
+    capability_code: str,
+    allow_archived_campaign: bool,
+    world_capability: str | None,
+    world_id: uuid.UUID | None,
+    actor_user_id: uuid.UUID,
+) -> Requirement:
+    """The route dependency's own decision (campaign capability, campaign lifecycle and, when
+    declared, the world capability) as a requirement for the plan's final check (R01 plan 6.5, rule
+    1b). It raises what the dependency raises at the start of the request: 404 for no access or an
+    archived campaign, 403 for a missing capability, 403 `world_authority_required` for a missing world
+    capability. The Foundry credential's scope and campaign binding are not part of it: a route that
+    accepts a Foundry credential registers those when it is migrated (slice S4b-4); natural
+    credential expiry is excluded by R-D3."""
+
+    def decide(snapshot: AuthoritySnapshot) -> BaseException | None:
+        access = snapshot.access
+        if access is None:
+            return NotFoundError()
+        if not allow_archived_campaign and access.campaign_lifecycle_status in (
+            "archived",
+            "deleted",
+        ):
+            return NotFoundError()
+        if not access.has_capability(capability_code):
+            return ForbiddenError()
+        if world_capability is not None:
+            authority = snapshot.world_authority
+            if authority is None or not authority.has_capability(world_capability):
+                return WorldAuthorityRequiredError(
+                    f"user {actor_user_id} lacks {world_capability} on the campaign's world"
+                )
+        return None
+
+    return judged_requirement(
+        f"route.{capability_code}", decide, world_id=world_id if world_capability else None
+    )
 
 
 class RecordAuthoringResponse(BaseModel):
@@ -214,7 +258,7 @@ def require_campaign_capability(
     foundry_scope: str | None = None,
     allow_archived_campaign: bool = False,
     world_capability: str | None = None,
-) -> Callable[[uuid.UUID, AuthenticatedPrincipal, Connection], AccessContext]:
+) -> Callable[[uuid.UUID, Request, AuthenticatedPrincipal, Connection], AccessContext]:
     """Returns a FastAPI dependency requiring `capability_code` (role- or
     character-relationship-derived, per `AccessContext.has_capability`) in
     the campaign named by the route's own `campaign_id` path parameter.
@@ -277,6 +321,7 @@ def require_campaign_capability(
 
     def _dependency(
         campaign_id: uuid.UUID,
+        request: Request,
         principal: Annotated[AuthenticatedPrincipal, Depends(get_authenticated_user_id)],
         connection: Annotated[Connection, Depends(get_connection)],
     ) -> AccessContext:
@@ -319,6 +364,24 @@ def require_campaign_capability(
         if world_capability is not None:
             require_world_capability_for_campaign(
                 connection, access=access, world_capability=world_capability
+            )
+        # R01 plan 6.5 rule 1b: a write route's plan opens here, and this decision becomes its first
+        # requirement. A read opens none.
+        plan = open_request_plan(
+            request, connection, actor_user_id=principal.user_id, campaign_id=campaign_id
+        )
+        if plan is not None:
+            plan.require(
+                connection,
+                route_capability_requirement(
+                    capability_code=capability_code,
+                    allow_archived_campaign=allow_archived_campaign,
+                    world_capability=world_capability,
+                    world_id=timeline_world_id(connection, access.timeline_id)
+                    if world_capability is not None
+                    else None,
+                    actor_user_id=principal.user_id,
+                ),
             )
         return dataclasses.replace(access, principal=principal)
 
