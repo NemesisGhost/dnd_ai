@@ -171,8 +171,10 @@ def kind_and_pg_type(column: Column[Any]) -> tuple[Kind, tuple[int, int] | None,
     if entry is None:
         raise DeclarationError(f"{column}: column type {column_type!r} is not supported")
     kind, pg_type = entry
-    if kind is Kind.UUID and not column_type.as_uuid:
-        raise DeclarationError(f"{column}: only Uuid(as_uuid=True) is supported")
+    if kind is Kind.UUID and not (column_type.as_uuid and column_type.native_uuid):
+        raise DeclarationError(
+            f"{column}: only a native Uuid(as_uuid=True) is supported (native_uuid=False is CHAR(32))"
+        )
     return kind, (_INT_RANGES[cls] if cls in _EXACT_INTS else None), pg_type
 
 

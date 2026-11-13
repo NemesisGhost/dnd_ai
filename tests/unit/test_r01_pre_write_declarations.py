@@ -29,6 +29,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import JSONB, Range
+from sqlalchemy.sql import sqltypes
 
 from dnd_ai.domain.authorization_steps import (
     DeclarationError,
@@ -528,3 +529,26 @@ def test_json_arrays_ranges_and_exact_types_freeze_and_thaw() -> None:
     with pytest.raises(ParameterError):
         freeze_value(b, 1)
     assert Kind.UUID is u.kind
+
+
+@pytest.mark.parametrize(
+    "column_type,accepted",
+    [
+        (Uuid(), True),
+        (Uuid(as_uuid=True, native_uuid=True), True),
+        (sqltypes.UUID(), True),
+        (postgresql.UUID(as_uuid=True), True),
+        (Uuid(as_uuid=True, native_uuid=False), False),  # compiles to CHAR(32), not uuid
+        (Uuid(as_uuid=False), False),
+        (postgresql.UUID(as_uuid=False), False),
+    ],
+    ids=["default", "native", "sqltypes", "pg", "non_native", "as_str", "pg_as_str"],
+)
+def test_only_native_uuid_as_uuid_columns_are_supported(column_type: Any, accepted: bool) -> None:
+    t = Table("u", MetaData(), Column("k", Uuid, primary_key=True), Column("c", column_type))
+    if accepted:
+        lock = PreLock("l", select(t.c.k).where(t.c.c == bindparam("x")).with_for_update())
+        assert lock.specs["x"].kind.value == "uuid"
+    else:
+        with pytest.raises(DeclarationError):
+            PreLock("l", select(t.c.k).where(t.c.c == bindparam("x")).with_for_update())
