@@ -1364,14 +1364,6 @@ def test_attempting_the_update_for_an_already_revoked_invitation_is_refused_and_
     assert code(ok) == 200
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "KNOWN GAP (plan 6.25.3): the audit INSERT of a genuine revoke is Between(0, 1). An INSERT "
-        "cannot be EachLockedRow and the declaration is chosen only by the reservation outcome, so its "
-        "lower bound cannot depend on the invitation state. Closing it needs a plan redesign (S5-C)."
-    ),
-)
 @pytest.mark.parametrize("keyed", (True, False), ids=("keyed", "unkeyed"))
 def test_omitting_the_required_audit_insert_of_a_genuine_revoke_is_refused_at_commit(
     keyed: bool,
@@ -1381,6 +1373,9 @@ def test_omitting_the_required_audit_insert_of_a_genuine_revoke_is_refused_at_co
     pooled_factory: Factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """*route* (omission mutation, test-side only): the audit insert is `PerEvidence` over the outstanding-row
+    lock, which returned one row, so exactly one is required: the request cannot commit without it. The
+    invitation update, the (absent) audit row and the receipt all roll back and the key is reusable."""
     invitation = _outstanding(w, m, revoked=False)
     key = new_key() if keyed else None
     before = counts(w, key)
@@ -1394,8 +1389,83 @@ def test_omitting_the_required_audit_insert_of_a_genuine_revoke_is_refused_at_co
     monkeypatch.setattr(AuthorizationPlan, "execute", skip)
     response = revoke(pooled_factory, w, m.manager_user, invitation, key=key)
     monkeypatch.undo()
-    assert code(response) == 500
+    assert code(response) == 500 and error_of(response) == "internal_error", response.text
+    assert counts(w, key) == before and invitation_row(w, invitation)[0] is False
+    assert idle_in_transaction(w.engine) == 0
+    again = revoke(pooled_factory, w, m.manager_user, invitation, key=key)
+    assert code(again) == 200 and counts(w, key)["audit"] == 1
+
+
+@pytest.mark.parametrize("keyed", (True, False), ids=("keyed", "unkeyed"))
+def test_an_audit_insert_attempted_for_an_already_revoked_invitation_is_refused_before_the_driver(
+    keyed: bool,
+    w: World,
+    m: Managers,
+    pooled: Engine,
+    pooled_factory: Factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """*route* (commission mutation, test-side only): the invitation is already revoked, so the outstanding-row
+    lock returned no row. The handler is made to claim a genuine revoke but to skip the update, so only the
+    audit insert is attempted: it is refused before the driver call (no audit statement is recorded), and
+    nothing persists."""
+    import dnd_ai.api.campaign_invitations as api_module
+    from dnd_ai.commands.campaign_invitation_plans import PreparedRevoke
+
+    invitation = _outstanding(w, m, revoked=True)
+    key = new_key() if keyed else None
+    before = counts(w, key)
+    real = api_module.prepare_revoke_invitation
+
+    def lie(*args: Any, **kwargs: Any) -> PreparedRevoke:
+        prepared = real(*args, **kwargs)
+        return PreparedRevoke(will_revoke=True, change_action_id=prepared.change_action_id)
+
+    monkeypatch.setattr(api_module, "prepare_revoke_invitation", lie)
+    monkeypatch.setattr(api_module, "write_revoke_invitation", lambda *a, **k: None)
+    with Recorder(pooled) as recorded:
+        response = revoke(pooled_factory, w, m.manager_user, invitation, key=key)
+    monkeypatch.undo()
+    assert code(response) == 500, response.text
+    assert _revoke_statements(recorded.events) == (0, 0), "neither write reached the driver"
     assert counts(w, key) == before
+    assert idle_in_transaction(w.engine) == 0
+
+
+@pytest.mark.parametrize("keyed", (True, False), ids=("keyed", "unkeyed"))
+def test_a_duplicate_audit_insert_is_refused_and_the_whole_request_rolls_back(
+    keyed: bool,
+    w: World,
+    m: Managers,
+    pooled: Engine,
+    pooled_factory: Factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """*route* (commission mutation, test-side only): a second audit insert on one evidence row is refused
+    (`COUNT`, before the driver); the first is rolled back with the invitation update and the receipt."""
+    invitation = _outstanding(w, m, revoked=False)
+    key = new_key() if keyed else None
+    before = counts(w, key)
+    original = AuthorizationPlan.execute
+
+    def twice(self: AuthorizationPlan, connection: Any, step: Any, params: Any) -> StepOutcome:
+        outcome = original(self, connection, step, params)
+        if step.name == "audit_revoked":
+            original(self, connection, step, params)
+        return outcome
+
+    monkeypatch.setattr(AuthorizationPlan, "execute", twice)
+    with Recorder(pooled) as recorded:
+        response = revoke(pooled_factory, w, m.manager_user, invitation, key=key)
+    monkeypatch.undo()
+    assert code(response) == 500, response.text
+    assert _revoke_statements(recorded.events)[1] == 1, (
+        "only the first audit insert reached the driver"
+    )
+    assert counts(w, key) == before and invitation_row(w, invitation)[0] is False
+    assert idle_in_transaction(w.engine) == 0
+    again = revoke(pooled_factory, w, m.manager_user, invitation, key=key)
+    assert code(again) == 200 and counts(w, key)["audit"] == 1
 
 
 def test_a_keyed_no_op_completes_its_receipt_and_replays_it_until_authority_is_lost(

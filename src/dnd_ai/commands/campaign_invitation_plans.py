@@ -46,9 +46,9 @@ Key to modes: KS `FOR KEY SHARE`, U `FOR UPDATE`. "reservation" is `begin_idempo
 6. validation reads (already revoked: a no-op; accepted or expired: refused), then `plan.finalize`
 7. the invitation `UPDATE`, declared `EachLockedRow(complete=True)` over (3a): **required** for an
    outstanding invitation, **refused** (`TARGET_NOT_LOCKED`) for a revoked one; the actor-scope trigger again
-8. `audit.change_log` `INSERT`, `Between(0, 1)`: attempted only for a genuine revocation, but the plan
-   cannot *require* it (an INSERT cannot be `EachLockedRow`, and a declaration is chosen only by the
-   reservation outcome). A recorded gap: plan 6.25.3
+8. `audit.change_log` `INSERT`, declared `PerEvidence(REVOKE_OUTSTANDING_LOCK)` (plan 6.25.5): **exactly one**
+   when (3a) returned its row, **none** when it returned no row; an attempt on empty evidence is refused
+   before the driver call and an omission on positive evidence cannot commit
 9. receipt `UPDATE`
 10. COMMIT: as for create
 
@@ -87,7 +87,6 @@ from sqlalchemy import Connection, bindparam, func, insert, select, text, update
 
 from dnd_ai.domain.authorization import AuthorizationPlan, ReservationDeclarations
 from dnd_ai.domain.authorization_steps import (
-    Between,
     EachLockedRow,
     Event,
     Exactly,
@@ -95,6 +94,7 @@ from dnd_ai.domain.authorization_steps import (
     FunctionPin,
     KeyBind,
     Level,
+    PerEvidence,
     PreLock,
     PreWriteDeclaration,
     Timing,
@@ -292,7 +292,7 @@ REVOKE_AUDIT = WriteStep(
         command_name="revoke_campaign_invitation",
     )
     .returning(change_log.c.change_log_id),
-    cardinality=Between(0, 1),
+    cardinality=PerEvidence(REVOKE_OUTSTANDING_LOCK),
     fks=(CHANGE_LOG_ACTION_FK, CHANGE_LOG_ACTOR_FK),
     value_binds=frozenset({"record", "world", "correlation"}),
 )

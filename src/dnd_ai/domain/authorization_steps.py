@@ -402,7 +402,29 @@ class EachLockedRow:
     complete: bool
 
 
-type Cardinality = Exactly | Between | EachLockedRow
+@dataclass(frozen=True, eq=False)
+class PerEvidence:
+    """An INSERT whose obligation is derived from the evidence of one declared `PreLock` (S5-D amendment,
+    plan section 6.25.5). The lock must have been **successfully executed** through the plan before
+    `finalize`:
+
+    - it returned **one** row: exactly one confirmed INSERT is required at COMMIT, and a second is refused;
+    - it returned **zero** rows: no INSERT is permitted (the attempt is refused before the driver call);
+    - it returned **more than one** row: unsupported (the rule is zero-or-one) and refused;
+    - it was **never successfully executed** (not run, failed, or run in another plan or transaction): that
+      is not empty evidence; nothing is permitted and the plan cannot complete.
+
+    The lock must be one of the declaration's own locks (checked when the declaration is built). Only an
+    INSERT may carry it: an UPDATE already has `EachLockedRow`. Compared by the identity of the lock."""
+
+    lock: "PreLock"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.lock, PreLock):
+            raise DeclarationError("PerEvidence needs a PreLock")
+
+
+type Cardinality = Exactly | Between | EachLockedRow | PerEvidence
 
 
 class RowExpectation(enum.Enum):
@@ -851,8 +873,10 @@ class WriteStep:
         if not isinstance(table, Table):
             raise DeclarationError(f"{what}: the target must be a table")
         _check_deferrable_pk(table, what)
-        if not isinstance(self.cardinality, (Exactly, Between, EachLockedRow)):
+        if not isinstance(self.cardinality, (Exactly, Between, EachLockedRow, PerEvidence)):
             raise DeclarationError(f"{what}: unsupported cardinality")
+        if isinstance(self.cardinality, PerEvidence) and is_update:
+            raise DeclarationError(f"{what}: PerEvidence applies to an INSERT only")
         if not isinstance(self.rows, RowExpectation):
             raise DeclarationError(f"{what}: rows must be a RowExpectation")
         # RETURNING: exactly the primary key, in order.
@@ -1105,6 +1129,12 @@ class PreWriteDeclaration:
                     raise DeclarationError(
                         f"step {step.name!r} uses a PreLock that is not in locks"
                     )
+            if isinstance(step.cardinality, PerEvidence) and (
+                id(step.cardinality.lock) not in lock_ids
+            ):
+                raise DeclarationError(
+                    f"step {step.name!r}: PerEvidence names a PreLock that is not in locks"
+                )
             for binding in step.fks:
                 if (
                     binding.lock is None
@@ -1147,6 +1177,7 @@ REPLAY_DECLARATION: Final = PreWriteDeclaration(locks=(), steps=(), replay=True)
 
 __all__ = [
     "REPLAY_DECLARATION",
+    "PerEvidence",
     "REVIEWED_EXECUTION_OPTIONS",
     "BindSpec",
     "Between",

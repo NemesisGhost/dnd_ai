@@ -30,8 +30,15 @@ from dnd_ai.api.r01_pre_write_routes import R01_KEYED_PRE_WRITE_ROUTES
 from dnd_ai.commands.campaign_invitation_plans import (
     CREATE_DECLARATIONS,
     REVOKE_DECLARATIONS,
+    REVOKE_OUTSTANDING_LOCK,
 )
-from dnd_ai.domain.authorization_steps import Between, EachLockedRow, Exactly, LockMode
+from dnd_ai.domain.authorization_steps import (
+    Between,
+    EachLockedRow,
+    Exactly,
+    LockMode,
+    PerEvidence,
+)
 from tests.r01_manifest import _S5D_ROUTES, _iter_api_routes
 
 pytestmark = pytest.mark.unit
@@ -243,13 +250,26 @@ def test_the_declared_steps_and_bounds() -> None:
         ("receipt", Exactly(1)),
     ]
     assert steps(CREATE_DECLARATIONS.unkeyed) == steps(CREATE_DECLARATIONS.reserved)[:2]
-    # The revoke update is outcome-specific: EachLockedRow(complete=True) over the outstanding-row lock
-    # evidence, so it is required for an outstanding invitation and refused for a revoked one, and it is
-    # never Between(0, 1). The audit insert stays Between(0, 1): a documented gap (plan 6.25.3), because
-    # an INSERT cannot be EachLockedRow. A fresh keyed request always completes its receipt.
-    assert steps(REVOKE_DECLARATIONS.reserved) == [
-        ("revoke_invitation", EachLockedRow(complete=True)),
-        ("audit_revoked", Between(0, 1)),
-        ("receipt", Exactly(1)),
+    # Both revoke writes are outcome-specific, and neither is Between(0, 1): the update is
+    # EachLockedRow(complete=True) and the audit insert is PerEvidence, each over the outstanding-row lock,
+    # so each is required for an outstanding invitation and refused for a revoked one (plan 6.25.3 and
+    # 6.25.5). A fresh keyed request always completes its receipt.
+    reserved = REVOKE_DECLARATIONS.reserved
+    assert [(st.name, type(st.cardinality)) for st in reserved.steps] == [
+        ("revoke_invitation", EachLockedRow),
+        ("audit_revoked", PerEvidence),
+        ("receipt", Exactly),
     ]
-    assert steps(REVOKE_DECLARATIONS.unkeyed) == steps(REVOKE_DECLARATIONS.reserved)[:2]
+    update_step, audit_step, receipt_step = reserved.steps
+    assert update_step.cardinality == EachLockedRow(complete=True)
+    assert update_step.target_lock is REVOKE_OUTSTANDING_LOCK
+    assert isinstance(audit_step.cardinality, PerEvidence)
+    assert audit_step.cardinality.lock is REVOKE_OUTSTANDING_LOCK
+    assert receipt_step.cardinality == Exactly(1)
+    unkeyed = REVOKE_DECLARATIONS.unkeyed
+    assert unkeyed is not None
+    assert [st.name for st in unkeyed.steps] == ["revoke_invitation", "audit_revoked"]
+    assert unkeyed.steps[1].cardinality is audit_step.cardinality or isinstance(
+        unkeyed.steps[1].cardinality, PerEvidence
+    )
+    assert not any(isinstance(st.cardinality, Between) for st in (*reserved.steps, *unkeyed.steps))
