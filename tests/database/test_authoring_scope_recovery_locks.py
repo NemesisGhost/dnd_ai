@@ -51,8 +51,11 @@ pytestmark = pytest.mark.database
 
 # The helper's campaign statement, whichever lock mode it names.
 CAMPAIGN_LOCK = r"FROM campaign\.campaigns WHERE campaign_id = \S+ FOR (KEY )?SHARE"
-# The membership statement of recovery, after it holds the campaign row.
+# The membership statement of recovery. Since R01 S5-B it runs twice: before the campaign lock and
+# again under it. A pause that must hold the campaign row names `CAMPAIGN_NKU` as `after`.
 RECOVERY_MEMBERSHIP = r"FROM security\.campaign_memberships WHERE .* FOR UPDATE"
+# Recovery's campaign statement.
+CAMPAIGN_NKU = r"FROM campaign\.campaigns WHERE campaign_id = \S+ FOR NO KEY UPDATE"
 # The first statement of `lock_authoring_scope` after it holds the campaign row.
 AFTER_CAMPAIGN_LOCK = r"FROM core\.lifecycle_statuses"
 
@@ -218,18 +221,26 @@ def test_recovery_waits_for_an_author_paused_before_its_campaign_lock_and_both_c
     assert _owner_roles(fx, editor) == 1
 
 
-def test_an_author_completes_while_recovery_is_paused_after_its_campaign_lock(
+def test_an_author_queues_at_the_membership_recovery_holds_and_both_commit(
     fx: Fixture, editor: uuid.UUID, stranded: uuid.UUID
 ) -> None:
-    """Recovery holds the campaign `FOR NO KEY UPDATE` and stops before its membership statement.
-    The author must run to completion meanwhile: that is what `FOR KEY SHARE` allows and
-    `FOR SHARE` did not. Then recovery resumes and commits."""
+    """Recovery holds the promoted member's membership `FOR UPDATE` and the campaign `FOR NO KEY
+    UPDATE` and stops before its second membership statement (the pause is `after=CAMPAIGN_NKU`,
+    so it holds both).
+
+    Characterization changed by R01 S5-B. Before it, recovery held only the campaign here, so the
+    author ran to completion meanwhile (`FOR KEY SHARE` does not conflict with `FOR NO KEY
+    UPDATE`). Now recovery took the membership first, so the author's `FOR SHARE` on that
+    membership queues behind recovery's `FOR UPDATE`, observed as blocked by recovery's own
+    session. It holds nothing the recovery wants, so there is no cycle: released, recovery
+    commits, then the author takes the campaign `FOR KEY SHARE` (compatible with recovery's lock
+    in any case) and commits."""
     with LockRace(fx.engine) as race:
-        pause = race.pause(thread_name="recovery", pattern=RECOVERY_MEMBERSHIP)
+        pause = race.pause(thread_name="recovery", pattern=RECOVERY_MEMBERSHIP, after=CAMPAIGN_NKU)
         recovery = _start(race, _recover(fx, stranded, editor), "recovery")
         pause.wait_reached(recovery)
         author = _start(race, _create_as(fx, editor, "During recovery"), "author")
-        race.wait_done(author, why="the author is waiting for recovery's campaign lock")
+        race.wait_blocked_by(pause, author)
         pause.release()
         race.join_all()
     assert author.error is None, author.error

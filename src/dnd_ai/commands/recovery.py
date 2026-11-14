@@ -130,6 +130,23 @@ def recover_world_ownership(
     )
 
 
+def _lock_open_membership(
+    connection: Connection, *, campaign_id: uuid.UUID, user_id: uuid.UUID
+) -> uuid.UUID | None:
+    """The user's open membership in the campaign, locked `FOR UPDATE`, or None. Called twice by
+    campaign recovery (before and under the campaign lock); see there."""
+    value = connection.execute(
+        text("""
+            SELECT campaign_membership_id FROM security.campaign_memberships
+            WHERE campaign_id = :c AND user_id = :u AND ended_at IS NULL
+            FOR UPDATE
+        """),
+        {"c": campaign_id, "u": user_id},
+    ).scalar()
+    assert value is None or isinstance(value, uuid.UUID)
+    return value
+
+
 def recover_campaign_access_manager(
     connection: Connection,
     *,
@@ -143,12 +160,26 @@ def recover_campaign_access_manager(
     clean_reason = normalize_reason(reason, required=True)
     assert clean_reason is not None
     _require_administrator(connection, admin_user_id)
-    # `FOR NO KEY UPDATE`, not `FOR UPDATE`: recovery serializes with another recovery and with
-    # every campaign-row `FOR UPDATE` taker either way, but it takes this lock *before* the
-    # membership it promotes, the reverse of the membership-then-campaign order the other
-    # commands use. `FOR UPDATE` conflicts with the `FOR KEY SHARE` that a reveal-delegation
-    # insert takes on the campaign while it holds that membership, so the two waited on each other;
-    # `FOR NO KEY UPDATE` does not (design section 3).
+    # Lock order (R01 S5-B, owner-approved J-1′; DEF-020): the promoted user's open membership
+    # `FOR UPDATE` first, then the campaign row `FOR NO KEY UPDATE`, then the membership is looked
+    # up again under the campaign lock. Every other command that holds a membership and then wants
+    # the campaign (end, role revoke/change, grants, relationships, group adds) takes them in that
+    # order; recovery used to take the campaign first, so recovery for a member and any of those
+    # commands on the same member waited on each other (a deadlock either way).
+    #
+    # The campaign mode stays `FOR NO KEY UPDATE`, not `FOR UPDATE`: it still serializes with
+    # another recovery and with every campaign-row `FOR UPDATE` taker, but not with the `FOR KEY
+    # SHARE` that a reveal-delegation insert, an author's scope lock or a group add takes on the
+    # campaign while holding a membership (design section 3).
+    #
+    # The first lookup is unlocked in effect for a user with no open membership: a lock on no row
+    # protects nothing, so an open membership created meanwhile is found by the second lookup, which
+    # runs under the campaign lock (every creator that takes the campaign `FOR UPDATE` is excluded
+    # by it, and the open-membership unique index excludes the rest at the insert). A row the first
+    # lookup locked cannot be ended, changed or recreated while this transaction holds it, so the
+    # second lookup returns the same row; it is read anyway so the row acted on is always the one
+    # seen under both locks.
+    _lock_open_membership(connection, campaign_id=campaign_id, user_id=new_user_id)
     locked = connection.execute(
         text("SELECT 1 FROM campaign.campaigns WHERE campaign_id = :c FOR NO KEY UPDATE"),
         {"c": campaign_id},
@@ -163,14 +194,7 @@ def recover_campaign_access_manager(
     active_status = lookup_id(
         connection, "security", "membership_statuses", "membership_status_id", "active"
     )
-    membership_id = connection.execute(
-        text("""
-            SELECT campaign_membership_id FROM security.campaign_memberships
-            WHERE campaign_id = :c AND user_id = :u AND ended_at IS NULL
-            FOR UPDATE
-        """),
-        {"c": campaign_id, "u": new_user_id},
-    ).scalar()
+    membership_id = _lock_open_membership(connection, campaign_id=campaign_id, user_id=new_user_id)
     if membership_id is None:
         membership_id = connection.execute(
             text("""
