@@ -623,8 +623,10 @@ def add_access_group_members(
     **Lock order (DEF-015).** The group `FOR UPDATE`; then each member's
     membership `FOR NO KEY UPDATE`, in ascending id order, in a statement
     without a join; then the acting membership `FOR KEY SHARE`; then the
-    campaign `FOR KEY SHARE`; then, per member, the owning account `FOR
-    UPDATE`. Only then are the members validated, in the same order as
+    campaign `FOR KEY SHARE`; then, per member, the owning account `FOR KEY
+    SHARE` (R01 S5-A: a deactivation, which takes the row `FOR UPDATE`, still conflicts, and a keyed
+    request by that member, which holds the account `FOR KEY SHARE` through the reservation's actor
+    foreign key, no longer makes this add wait while it holds the member's membership). Only then are the members validated, in the same order as
     always (campaign active, then each member in the campaign, open, active,
     on an active account), so the same request raises the same error class.
 
@@ -777,7 +779,7 @@ def add_access_group_members(
                 JOIN core.lifecycle_statuses ls
                     ON ls.lifecycle_status_id = u.lifecycle_status_id
                 WHERE u.user_id = :user
-                FOR UPDATE OF u
+                FOR KEY SHARE OF u
             """),
             {"user": membership_row["user_id"]},
         ).scalar()

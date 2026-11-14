@@ -505,16 +505,28 @@ def assign_membership_role(
     enforced invariants this module deliberately does not duplicate"
     policy.
 
-    Locks the target membership row and, separately, its owning user row
-    (`FOR UPDATE OF cm`/`FOR UPDATE OF u`) before evaluating the membership-
-    eligibility check above, and locks the candidate role row (`FOR
-    UPDATE`) before evaluating its own — so a concurrent ending of this
-    membership, a concurrent deactivation of its owning user account, or a
-    concurrent deactivation of the candidate role cannot slip in between
-    this function's own read and its later `INSERT`: whichever transaction
-    acquires the relevant row lock first forces the other to wait, then
-    re-observes the first's committed effect rather than a stale, moment-
-    of-check snapshot. Locks are always acquired membership-then-role (the
+    Locks the target membership row `FOR UPDATE OF cm` and, separately, its owning user row `FOR KEY
+    SHARE OF u` (R01 S5-A) before evaluating the membership-eligibility check above, and locks the
+    candidate role row (`FOR UPDATE`) before evaluating its own — so a concurrent ending of this
+    membership, a concurrent deactivation of its owning user account, or a concurrent deactivation
+    of the candidate role cannot slip in between this function's own read and its later `INSERT`:
+    whichever transaction acquires the relevant row lock first forces the other to wait, then
+    re-observes the first's committed effect rather than a stale, moment-of-check snapshot.
+
+    Why `KEY SHARE` is enough for the account. The only fact read from it is
+    `security.users.lifecycle_status_id`, and its only in-app writer (`local_auth.
+    _set_local_account_lifecycle_status_impl`) takes the row `FOR UPDATE` before its `UPDATE`, which
+    conflicts with `KEY SHARE`: a deactivation that holds the row first makes this command wait and
+    then see the inactive account, and one that comes later waits for this command's commit. The
+    other `FOR UPDATE` takers of the row (a system-role change, a platform-administrator promotion)
+    conflict the same way. What `KEY SHARE` no longer excludes is another `KEY SHARE` or `SHARE`
+    holder, notably the actor's own account lock that every keyed request takes through the
+    reservation's actor foreign key before any role or membership lock: `FOR UPDATE` here made a
+    command that already held the target's membership wait for a keyed request by that same user,
+    which was itself waiting for the membership (a deadlock; the design review's cycle B1). The
+    statement still reads the status fresh, after the lock, and judges it unchanged; it is not a
+    protection against a bare `UPDATE` of the status that skips `FOR UPDATE`, and no such writer
+    exists (pinned by `tests/unit/test_r01_s5a_account_lock_inventory.py`). Locks are always acquired membership-then-role (the
     same order `change_membership_role()` uses for its own target-row/
     candidate-role pair), so the two commands can never deadlock against
     each other.
@@ -567,7 +579,7 @@ def assign_membership_role(
             FROM security.users u
             JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
             WHERE u.user_id = :user
-            FOR UPDATE OF u
+            FOR KEY SHARE OF u
         """),
         {"user": membership_row["user_id"]},
     ).scalar()
@@ -993,8 +1005,10 @@ def add_campaign_member(
       (`security.users.lifecycle_status_id` -> `core.lifecycle_statuses.
       code = 'active'`) — `AccountNotEligibleError` (404; an ineligible
       account was never a legitimate target, unlike the 409 cases above).
-      Locks the target `security.users` row `FOR UPDATE`, so a concurrent
-      disablement of the account cannot slip in either.
+      Locks the target `security.users` row `FOR KEY SHARE` (R01 S5-A; see `assign_membership_role`
+      for why that is enough and why `FOR UPDATE` deadlocked with a keyed request by the same
+      user), so a concurrent disablement of the account, which takes the row `FOR UPDATE`, cannot
+      slip in either.
     - `user_id` must also hold at least one currently unrevoked local-login
       identity (`security.external_identities`, `issuer = dnd_ai.domain.
       access.LOCAL_AUTH_ISSUER`, `revoked_at IS NULL`) — `AccountNotEligibleError`
@@ -1065,7 +1079,7 @@ def add_campaign_member(
             SELECT ls.code FROM security.users u
             JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
             WHERE u.user_id = :user
-            FOR UPDATE OF u
+            FOR KEY SHARE OF u
         """),
         {"user": user_id},
     ).scalar()
@@ -1481,8 +1495,9 @@ def _lock_for_relinquishing_transfer(
     another key-share lock, which is all the other side of a mutual transfer takes on this row
     (its audit row's foreign key to its own account), nor with a login's `last_login_at` update. An
     earlier version took `FOR UPDATE` here and deadlocked exactly that mutual pair. When the
-    recipient is not yet an owner, `assign_membership_role` later raises this to `FOR UPDATE`
-    under the same membership lock.
+    recipient is not yet an owner, `assign_membership_role` later takes the same row `FOR KEY SHARE`
+    (R01 S5-A; it used to raise this to `FOR UPDATE` under the same membership lock, an upgrade
+    that waited for the other side of a mutual transfer and its keyed request).
 
     Why the campaign row: two owners relinquishing to each other at once each see the other as the
     remaining owner and would both commit, leaving the campaign with no built-in owner (the

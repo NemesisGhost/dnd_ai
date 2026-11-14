@@ -275,7 +275,7 @@ def test_a_role_deactivation_cannot_race_an_add_assigning_it(
 def test_an_account_disablement_cannot_race_an_add_targeting_it(
     postgres_engine: Engine,
 ) -> None:
-    """`add_campaign_member`'s own `FOR UPDATE OF u` lock on the target
+    """`add_campaign_member`'s own `FOR KEY SHARE OF u` lock on the target
     account row must make a concurrent disablement of that account block
     too."""
     engine = postgres_engine
@@ -302,14 +302,10 @@ def test_an_account_disablement_cannot_race_an_add_targeting_it(
             second.execute(text("SET LOCAL lock_timeout = '2s'"))
             with pytest.raises(Exception) as exc:
                 second.execute(
-                    text("""
-                        UPDATE security.users
-                        SET lifecycle_status_id = (
-                            SELECT lifecycle_status_id FROM core.lifecycle_statuses
-                            WHERE code = 'inactive'
-                        )
-                        WHERE user_id = :u
-                    """),
+                    # the first statement of the real writer (`local_auth._set_local_account_lifecycle_status_impl`),
+                    # which takes the row FOR UPDATE before it updates the status; a bare UPDATE takes
+                    # FOR NO KEY UPDATE, which a FOR KEY SHARE holder does not exclude (R01 S5-A)
+                    text("SELECT 1 FROM security.users WHERE user_id = :u FOR UPDATE"),
                     {"u": target_user_id},
                 )
             message = str(exc.value)

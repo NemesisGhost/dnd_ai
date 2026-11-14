@@ -60,7 +60,7 @@ ADD_SECOND_LOCK = (
     r"|FROM campaign\.campaigns c JOIN .* FOR KEY SHARE OF c"
 )
 ADD_INSERT = r"INSERT INTO security\.access_group_memberships"
-ADD_ACCOUNT_LOCK = r"FROM security\.users u JOIN .* FOR UPDATE OF u"
+ADD_ACCOUNT_LOCK = r"FROM security\.users u JOIN .* FOR (UPDATE|KEY SHARE) OF u"
 
 
 # --- fixtures and helpers -------------------------------------------------------------------------
