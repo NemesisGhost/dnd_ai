@@ -1247,3 +1247,172 @@ def test_the_raw_token_reaches_nothing_but_the_creating_response(
             {"w": w.world_id},
         ).scalar_one()
     assert token not in dump
+
+
+# --- S5-D correction: the revoke update is required exactly when the invitation is outstanding -------------------------
+
+
+def _revoke_statements(events: list[str]) -> tuple[int, int]:
+    """(invitation updates, audit inserts) in a recorded request."""
+    updates = [
+        e for e in events if e.startswith("UPDATE security.campaign_invitations SET revoked_at")
+    ]
+    audits = [e for e in events if e.startswith("INSERT INTO audit.change_log")]
+    return len(updates), len(audits)
+
+
+def _outstanding(w: World, m: Managers, *, revoked: bool) -> uuid.UUID:
+    invitation, _ = invite(w, m.manager_membership)
+    if revoked:
+        with w.engine.begin() as c:
+            c.execute(
+                text(
+                    "UPDATE security.campaign_invitations SET revoked_at = now() "
+                    "WHERE campaign_invitation_id = :i"
+                ),
+                {"i": invitation},
+            )
+    return invitation
+
+
+@pytest.mark.parametrize("keyed", (True, False), ids=("keyed", "unkeyed"))
+def test_a_genuine_revoke_runs_exactly_one_update_and_one_audit_insert_and_a_no_op_runs_neither(
+    keyed: bool, w: World, m: Managers, pooled: Engine, pooled_factory: Factory
+) -> None:
+    """*sql*: outcome-specific behavior. The outstanding invitation: one update, one audit insert. The
+    already-revoked one: neither (a keyed no-op still completes its receipt)."""
+    genuine = _outstanding(w, m, revoked=False)
+    with Recorder(pooled) as recorded:
+        response = revoke(
+            pooled_factory, w, m.manager_user, genuine, key=new_key() if keyed else None
+        )
+    assert code(response) == 200
+    assert _revoke_statements(recorded.events) == (1, 1)
+    noop = _outstanding(w, m, revoked=True)
+    with Recorder(pooled) as recorded:
+        response = revoke(pooled_factory, w, m.manager_user, noop, key=new_key() if keyed else None)
+    assert code(response) == 200
+    assert _revoke_statements(recorded.events) == (0, 0)
+    receipts = [e for e in recorded.events if e.startswith("UPDATE security.idempotent_requests")]
+    assert len(receipts) == (1 if keyed else 0)
+
+
+@pytest.mark.parametrize("keyed", (True, False), ids=("keyed", "unkeyed"))
+def test_omitting_the_required_revoke_update_is_refused_at_commit_and_rolls_everything_back(
+    keyed: bool,
+    w: World,
+    m: Managers,
+    pooled: Engine,
+    pooled_factory: Factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """*route* (omission mutation, test-side only): the invitation is outstanding, so the update is
+    `EachLockedRow(complete=True)` over the outstanding-row lock's evidence. A request that never runs it
+    cannot commit: the guard refuses the incomplete plan (sanitized 500); the invitation, the audit row and
+    the receipt all roll back; the key is reusable; the pooled connection is clean."""
+    invitation = _outstanding(w, m, revoked=False)
+    key = new_key() if keyed else None
+    before = counts(w, key)
+    original = AuthorizationPlan.execute
+
+    def skip(self: AuthorizationPlan, connection: Any, step: Any, params: Any) -> StepOutcome:
+        if step.name == "revoke_invitation":
+            return StepOutcome(step="revoke_invitation", keys=())
+        return original(self, connection, step, params)
+
+    monkeypatch.setattr(AuthorizationPlan, "execute", skip)
+    response = revoke(pooled_factory, w, m.manager_user, invitation, key=key)
+    monkeypatch.undo()
+    assert code(response) == 500 and error_of(response) == "internal_error", response.text
+    assert counts(w, key) == before and invitation_row(w, invitation)[0] is False
+    assert idle_in_transaction(w.engine) == 0
+    again = revoke(pooled_factory, w, m.manager_user, invitation, key=key)
+    assert code(again) == 200 and invitation_row(w, invitation)[0] is True
+
+
+@pytest.mark.parametrize("keyed", (True, False), ids=("keyed", "unkeyed"))
+def test_attempting_the_update_for_an_already_revoked_invitation_is_refused_and_persists_nothing(
+    keyed: bool,
+    w: World,
+    m: Managers,
+    pooled: Engine,
+    pooled_factory: Factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """*route* (commission mutation, test-side only): the handler is made to believe the revoked invitation
+    is outstanding. The outstanding-row lock returned no key (database state under the invitation lock), so
+    the update's target is not locked and the guard refuses it: no write, no audit row, no receipt."""
+    import dnd_ai.api.campaign_invitations as api_module
+    from dnd_ai.commands.campaign_invitation_plans import PreparedRevoke
+
+    invitation = _outstanding(w, m, revoked=True)
+    key = new_key() if keyed else None
+    before = counts(w, key)
+    real = api_module.prepare_revoke_invitation
+
+    def lie(*args: Any, **kwargs: Any) -> PreparedRevoke:
+        prepared = real(*args, **kwargs)
+        return PreparedRevoke(will_revoke=True, change_action_id=prepared.change_action_id)
+
+    monkeypatch.setattr(api_module, "prepare_revoke_invitation", lie)
+    response = revoke(pooled_factory, w, m.manager_user, invitation, key=key)
+    monkeypatch.undo()
+    assert code(response) == 500, response.text
+    assert counts(w, key) == before
+    assert idle_in_transaction(w.engine) == 0
+    ok = revoke(pooled_factory, w, m.manager_user, invitation, key=key)
+    assert code(ok) == 200
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "KNOWN GAP (plan 6.25.3): the audit INSERT of a genuine revoke is Between(0, 1). An INSERT "
+        "cannot be EachLockedRow and the declaration is chosen only by the reservation outcome, so its "
+        "lower bound cannot depend on the invitation state. Closing it needs a plan redesign (S5-C)."
+    ),
+)
+@pytest.mark.parametrize("keyed", (True, False), ids=("keyed", "unkeyed"))
+def test_omitting_the_required_audit_insert_of_a_genuine_revoke_is_refused_at_commit(
+    keyed: bool,
+    w: World,
+    m: Managers,
+    pooled: Engine,
+    pooled_factory: Factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    invitation = _outstanding(w, m, revoked=False)
+    key = new_key() if keyed else None
+    before = counts(w, key)
+    original = AuthorizationPlan.execute
+
+    def skip(self: AuthorizationPlan, connection: Any, step: Any, params: Any) -> StepOutcome:
+        if step.name == "audit_revoked":
+            return StepOutcome(step="audit_revoked", keys=())
+        return original(self, connection, step, params)
+
+    monkeypatch.setattr(AuthorizationPlan, "execute", skip)
+    response = revoke(pooled_factory, w, m.manager_user, invitation, key=key)
+    monkeypatch.undo()
+    assert code(response) == 500
+    assert counts(w, key) == before
+
+
+def test_a_keyed_no_op_completes_its_receipt_and_replays_it_until_authority_is_lost(
+    w: World, m: Managers, pooled: Engine, pooled_factory: Factory
+) -> None:
+    """*route*: the already-revoked request's receipt is complete, replays unchanged (no write), and a
+    replay after the manager's role is revoked is refused without returning the stored body."""
+    invitation = _outstanding(w, m, revoked=True)
+    key = new_key()
+    first = revoke(pooled_factory, w, m.manager_user, invitation, key=key)
+    assert code(first) == 200 and receipt(w, key) == (200, first.json(), True)
+    stored = counts(w, key)
+    with Recorder(pooled) as recorded:
+        replay = revoke(pooled_factory, w, m.manager_user, invitation, key=key)
+    assert code(replay) == 200 and replay.json() == first.json()
+    assert _revoke_statements(recorded.events) == (0, 0) and counts(w, key) == stored
+    revoke_role(w.engine, m.manager_role)
+    refused = revoke(pooled_factory, w, m.manager_user, invitation, key=key)
+    assert code(refused) in (403, 404) and "campaign_invitation_id" not in refused.text
+    assert counts(w, key) == stored

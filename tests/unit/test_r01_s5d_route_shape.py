@@ -31,7 +31,7 @@ from dnd_ai.commands.campaign_invitation_plans import (
     CREATE_DECLARATIONS,
     REVOKE_DECLARATIONS,
 )
-from dnd_ai.domain.authorization_steps import Between, Exactly, LockMode
+from dnd_ai.domain.authorization_steps import Between, EachLockedRow, Exactly, LockMode
 from tests.r01_manifest import _S5D_ROUTES, _iter_api_routes
 
 pytestmark = pytest.mark.unit
@@ -219,6 +219,7 @@ def test_the_declared_lock_orders_document_the_one_exception_to_the_global_order
     ]
     assert _lock_order(REVOKE_DECLARATIONS.reserved) == [
         ("invitation_row", "security.campaign_invitations", LockMode.UPDATE),
+        ("invitation_outstanding_row", "security.campaign_invitations", LockMode.UPDATE),
         ("campaign_key_share", "campaign.campaigns", LockMode.KEY_SHARE),
         ("receipt_row", "security.idempotent_requests", LockMode.UPDATE),
     ]
@@ -227,8 +228,9 @@ def test_the_declared_lock_orders_document_the_one_exception_to_the_global_order
         _lock_order(CREATE_DECLARATIONS.unkeyed)[:2]
         == _lock_order(CREATE_DECLARATIONS.reserved)[:2]
     )
-    assert len(CREATE_DECLARATIONS.unkeyed.locks) == len(REVOKE_DECLARATIONS.unkeyed.locks) == 2
-    assert _lock_order(REVOKE_DECLARATIONS.unkeyed) == _lock_order(REVOKE_DECLARATIONS.reserved)[:2]
+    assert len(CREATE_DECLARATIONS.unkeyed.locks) == 2
+    assert len(REVOKE_DECLARATIONS.unkeyed.locks) == 3
+    assert _lock_order(REVOKE_DECLARATIONS.unkeyed) == _lock_order(REVOKE_DECLARATIONS.reserved)[:3]
 
 
 def test_the_declared_steps_and_bounds() -> None:
@@ -241,10 +243,12 @@ def test_the_declared_steps_and_bounds() -> None:
         ("receipt", Exactly(1)),
     ]
     assert steps(CREATE_DECLARATIONS.unkeyed) == steps(CREATE_DECLARATIONS.reserved)[:2]
-    # a revoke that finds the invitation already revoked attempts neither the update nor the audit insert,
-    # but a fresh keyed request always completes its receipt
+    # The revoke update is outcome-specific: EachLockedRow(complete=True) over the outstanding-row lock
+    # evidence, so it is required for an outstanding invitation and refused for a revoked one, and it is
+    # never Between(0, 1). The audit insert stays Between(0, 1): a documented gap (plan 6.25.3), because
+    # an INSERT cannot be EachLockedRow. A fresh keyed request always completes its receipt.
     assert steps(REVOKE_DECLARATIONS.reserved) == [
-        ("revoke_invitation", Between(0, 1)),
+        ("revoke_invitation", EachLockedRow(complete=True)),
         ("audit_revoked", Between(0, 1)),
         ("receipt", Exactly(1)),
     ]

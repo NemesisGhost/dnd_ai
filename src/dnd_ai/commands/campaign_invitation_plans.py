@@ -38,11 +38,17 @@ Key to modes: KS `FOR KEY SHARE`, U `FOR UPDATE`. "reservation" is `begin_idempo
 2. reservation `INSERT`: the actor's account row, KS; the campaign FK deferred
 3. **the invitation row, U** (`plan.lock`, by invitation id *and* campaign id: an invitation of another
    campaign locks nothing and is reported as the same not-in-campaign error as an absent one)
+3a. **the same row again, U, only while outstanding** (`REVOKE_OUTSTANDING_LOCK`: not revoked, not
+   accepted; already held, so no wait and no order change). Its evidence is database state under the
+   invitation lock: one key for a genuine revocation, none for an already-revoked invitation
 4. the campaign row, KS (`plan.lock`; the deferral evidence)
 5. the reservation row, U
 6. validation reads (already revoked: a no-op; accepted or expired: refused), then `plan.finalize`
-7. the invitation `UPDATE` (conditional: not attempted for the no-op), the actor-scope trigger again
-8. `audit.change_log` `INSERT` (not attempted for the no-op)
+7. the invitation `UPDATE`, declared `EachLockedRow(complete=True)` over (3a): **required** for an
+   outstanding invitation, **refused** (`TARGET_NOT_LOCKED`) for a revoked one; the actor-scope trigger again
+8. `audit.change_log` `INSERT`, `Between(0, 1)`: attempted only for a genuine revocation, but the plan
+   cannot *require* it (an INSERT cannot be `EachLockedRow`, and a declaration is chosen only by the
+   reservation outcome). A recorded gap: plan 6.25.3
 9. receipt `UPDATE`
 10. COMMIT: as for create
 
@@ -82,6 +88,7 @@ from sqlalchemy import Connection, bindparam, func, insert, select, text, update
 from dnd_ai.domain.authorization import AuthorizationPlan, ReservationDeclarations
 from dnd_ai.domain.authorization_steps import (
     Between,
+    EachLockedRow,
     Event,
     Exactly,
     FkBinding,
@@ -242,6 +249,22 @@ REVOKE_INVITATION_LOCK = PreLock(
     .where(ci.c.campaign_id == bindparam("campaign"))
     .with_for_update(),
 )
+#: The same row again, `FOR UPDATE`, **only while it is still outstanding** (not revoked, not accepted). It is
+#: taken right after `REVOKE_INVITATION_LOCK`, so the row is already held and no wait or order changes. What
+#: it returns is database state established under the invitation lock, not caller data: one key for a
+#: genuine revocation (or an expired invitation, which is refused before `finalize`), none for an
+#: already-revoked invitation. It is the `target_lock` of the revoke UPDATE, which is `EachLockedRow(
+#: complete=True)`: the update is therefore *required* exactly when this evidence exists, and *refused*
+#: (`TARGET_NOT_LOCKED`) when it does not.
+REVOKE_OUTSTANDING_LOCK = PreLock(
+    "invitation_outstanding_row",
+    select(ci.c.campaign_invitation_id)
+    .where(ci.c.campaign_invitation_id == bindparam("invitation"))
+    .where(ci.c.revoked_at.is_(None))
+    .where(ci.c.accepted_by_user_id.is_(None))
+    .where(ci.c.accepted_at.is_(None))
+    .with_for_update(),
+)
 REVOKE_CAMPAIGN_LOCK = CAMPAIGN_KEY_SHARE_LOCK
 REVOKE_RECEIPT_LOCK = RECEIPT_LOCK
 REVOKE_INVITATION = WriteStep(
@@ -250,9 +273,9 @@ REVOKE_INVITATION = WriteStep(
     .where(ci.c.campaign_invitation_id == bindparam("invitation"))
     .values(revoked_at=func.pg_catalog.now())
     .returning(ci.c.campaign_invitation_id),
-    cardinality=Between(0, 1),
+    cardinality=EachLockedRow(complete=True),
     target=(KeyBind(ci.c.campaign_invitation_id, "invitation"),),
-    target_lock=REVOKE_INVITATION_LOCK,
+    target_lock=REVOKE_OUTSTANDING_LOCK,
     triggers=frozenset({_ACTOR_SCOPE_TRIGGER}),
 )
 REVOKE_AUDIT = WriteStep(
@@ -277,12 +300,17 @@ REVOKE_RECEIPT = RECEIPT_STEP
 
 REVOKE_DECLARATIONS = ReservationDeclarations(
     reserved=PreWriteDeclaration(
-        locks=(REVOKE_INVITATION_LOCK, REVOKE_CAMPAIGN_LOCK, REVOKE_RECEIPT_LOCK),
+        locks=(
+            REVOKE_INVITATION_LOCK,
+            REVOKE_OUTSTANDING_LOCK,
+            REVOKE_CAMPAIGN_LOCK,
+            REVOKE_RECEIPT_LOCK,
+        ),
         steps=(REVOKE_INVITATION, REVOKE_AUDIT, REVOKE_RECEIPT),
         unlocked_fk_targets=CHANGE_LOG_UNLOCKED_FK_TARGETS,
     ),
     unkeyed=PreWriteDeclaration(
-        locks=(REVOKE_INVITATION_LOCK, REVOKE_CAMPAIGN_LOCK),
+        locks=(REVOKE_INVITATION_LOCK, REVOKE_OUTSTANDING_LOCK, REVOKE_CAMPAIGN_LOCK),
         steps=(REVOKE_INVITATION, REVOKE_AUDIT),
         unlocked_fk_targets=CHANGE_LOG_UNLOCKED_FK_TARGETS,
     ),
@@ -376,11 +404,17 @@ def prepare_revoke_invitation(
     """The revoke lock phase and its reads, before `finalize`: **the invitation first, then the campaign**
     (module docstring, "Why revoke takes the invitation before the campaign"), then (keyed) our own
     reservation row. The domain refusals are raised here, as before: not in the campaign (a 404), accepted
-    or expired (a 409); already revoked is a no-op that attempts no write."""
+    or expired (a 409); already revoked is a no-op that attempts no write. Whether the update is required is
+    decided by `REVOKE_OUTSTANDING_LOCK`'s evidence, taken under the invitation lock (see its comment)."""
     locked = plan.lock(
         connection,
         REVOKE_INVITATION_LOCK,
         {"invitation": campaign_invitation_id, "campaign": campaign_id},
+    )
+    outstanding = (
+        plan.lock(connection, REVOKE_OUTSTANDING_LOCK, {"invitation": campaign_invitation_id})
+        if locked
+        else ()
     )
     plan.lock(connection, REVOKE_CAMPAIGN_LOCK, {"campaign": campaign_id})
     if reservation_id is not None:
@@ -411,6 +445,8 @@ def prepare_revoke_invitation(
         raise InvitationNotRevocableError(f"invitation {campaign_invitation_id} is expired")
     else:
         will_revoke = True
+    if will_revoke != bool(outstanding):  # the lock's own evidence and the row read cannot differ
+        raise RuntimeError("the invitation's state changed under its own lock")
     return PreparedRevoke(
         will_revoke=will_revoke,
         change_action_id=lookup_id(
