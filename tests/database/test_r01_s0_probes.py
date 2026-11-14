@@ -462,23 +462,25 @@ def test_the_tables_the_plan_says_have_no_expiry_have_none(postgres_engine: Engi
     assert tables == EXPECTED_AUTHORIZATION_EXPIRY_TABLES | credential_tables
 
 
-def test_there_is_no_deferrable_foreign_key_today_and_the_deferred_triggers_are_pinned(
+def test_the_only_deferrable_constraint_is_the_reservation_campaign_fk_and_the_deferred_triggers_are_pinned(
     postgres_engine: Engine,
 ) -> None:
-    """ESTABLISHES (plan section 5, item 2; section 9.3, item 5): no foreign key, unique or exclusion
-    constraint is deferrable now (so the reservation's campaign FK is checked immediately, and S5's
-    deferral is a real change), and the commit-time constraint triggers are exactly the ten pinned
-    above. Each of these ten runs at COMMIT.
+    """ESTABLISHES (plan section 5, item 2; section 6.21.4, S5-C): since migration 149 exactly one
+    foreign key, unique or exclusion constraint is deferrable, the reservation's campaign foreign key
+    (`DEFERRABLE INITIALLY IMMEDIATE`: checked at once unless a keyed pre-write plan opts in), and the
+    commit-time constraint triggers are exactly the ten pinned above. Each of these ten runs at COMMIT.
 
     DOES NOT ESTABLISH which of them the R01 families can fire: see the manifest-based test below."""
     with postgres_engine.connect() as connection:
         deferrable = connection.execute(
             text(
-                "SELECT conrelid::regclass::text, conname FROM pg_constraint "
+                "SELECT conrelid::regclass::text, conname, condeferred FROM pg_constraint "
                 "WHERE condeferrable AND contype IN ('f', 'u', 'p', 'x')"
             )
         ).all()
-    assert deferrable == []
+    assert [tuple(row) for row in deferrable] == [
+        ("security.idempotent_requests", "idempotent_requests_campaign_id_fkey", False)
+    ]
     deferred = {
         (f"{t['schema_name']}.{t['table_name']}", t["trigger_name"])
         for t in _trigger_catalog(postgres_engine)

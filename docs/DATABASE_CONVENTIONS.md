@@ -1081,6 +1081,18 @@ ex_<table>_<rule>
 
 Use deferrable constraints for transactions that must temporarily pass through an incomplete state, particularly class-table creation and relationship participants.
 
+#### 20.3.1 Deferrable for lock ordering: `DEFERRABLE INITIALLY IMMEDIATE`, opt-in only
+
+*Convention change under §37 (R01 S5-C, migration `149_reservation_fk_deferrable`).*
+
+- **Reason.** A keyed request's reservation INSERT checks its campaign foreign key at once, which takes `FOR KEY SHARE` on the campaign row *before* the request can take its own locks in the access-management order (actor and target rows, then the campaign). Two requests can then wait on each other. The check cannot be removed, but it can be moved to COMMIT.
+- **Rule.** A foreign key may be made deferrable **for lock ordering** only as `DEFERRABLE INITIALLY IMMEDIATE`. It is never `INITIALLY DEFERRED` for that purpose: an initially deferred constraint changes every writer of the table, including those that hold no lock that would make the COMMIT-time re-check non-blocking. Deferral is a per-transaction opt-in (`SET CONSTRAINTS ... DEFERRED`), and the opt-in is issued only by the mechanism that also enforces the obligation below. Application code does not issue `SET CONSTRAINTS` itself.
+- **The one instance.** `security.idempotent_requests_campaign_id_fkey` (reservation to campaign). The actor foreign key, both `ON DELETE CASCADE` actions and the immediate default are unchanged; a request that does not opt in behaves as before.
+- **Obligation.** The COMMIT-time check takes `FOR KEY SHARE` on the campaign row again. It never waits only if the transaction already holds that row at `FOR KEY SHARE` or stronger. A transaction that opts in and inserts a new reservation must therefore hold that lock, taken through its authorization plan and proven by the plan before it reads authority. Plan mechanics: `dnd_ai.domain.authorization` (`defer_reservation_campaign_fk`, `bind_reservation`, `bind_unkeyed`) and `dnd_ai.domain.reservation_outcome`.
+- **Savepoints.** `SET CONSTRAINTS` made inside a rolled-back savepoint is undone, so the opt-in is refused inside one, and rolling a savepoint back once the plan holds the deferral, an outcome or lock evidence refuses the commit.
+- **Catalogue pin.** `tests/database/test_r01_s0_probes.py` pins that this is the only deferrable foreign key, unique or exclusion constraint, and that it is not initially deferred. A second instance needs its own §37 change.
+- **Migration.** `ALTER TABLE ... ALTER CONSTRAINT ... DEFERRABLE INITIALLY IMMEDIATE` (and `NOT DEFERRABLE` to roll back): a catalogue change of the constraint and its RI triggers under `SHARE ROW EXCLUSIVE` on both tables, no scan and no rewrite.
+
 ### 20.4 Triggers
 
 Use triggers sparingly for:

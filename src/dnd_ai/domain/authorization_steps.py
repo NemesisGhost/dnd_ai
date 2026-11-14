@@ -1075,12 +1075,18 @@ class PreWriteDeclaration:
     locks: tuple[PreLock, ...]
     steps: tuple[WriteStep, ...]
     unlocked_fk_targets: frozenset[Table] = frozenset()
+    #: True only for the empty declaration of an idempotent replay (`REPLAY_DECLARATION`). It is the one
+    #: declaration with no step: every other declaration still needs at least one (R01 S5-C).
+    replay: bool = False
     _step_index: Mapping[int, int] = field(init=False, repr=False)
     _lock_ids: frozenset[int] = field(init=False, repr=False)
     type_checks: tuple[tuple[str, str, str], ...] = field(init=False)
 
     def __post_init__(self) -> None:
-        if not self.steps:
+        if self.replay:
+            if self.steps or self.locks or self.unlocked_fk_targets:
+                raise DeclarationError("the replay declaration declares nothing")
+        elif not self.steps:
             raise DeclarationError("a pre-write declaration needs at least one step")
         lock_ids = {id(lock) for lock in self.locks}
         if len(lock_ids) != len(self.locks):
@@ -1133,7 +1139,14 @@ class PreWriteDeclaration:
         return id(lock) in self._lock_ids and any(item is lock for item in self.locks)
 
 
+#: The declaration of an idempotent replay: no lock, no step, no write. The plan accepts replay only
+#: with this object (by identity), so a replay cannot carry a weaker copy of a command's declaration and a
+#: command cannot pass itself off as a replay (R01 S5-C). It does not relax the lower bound of any
+#: declaration that has steps.
+REPLAY_DECLARATION: Final = PreWriteDeclaration(locks=(), steps=(), replay=True)
+
 __all__ = [
+    "REPLAY_DECLARATION",
     "REVIEWED_EXECUTION_OPTIONS",
     "BindSpec",
     "Between",

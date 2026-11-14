@@ -104,10 +104,16 @@ scope (docs/DATABASE_CONVENTIONS.md §26.4).
 import hashlib
 import json
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy import Connection, text
+
+from dnd_ai.domain.reservation_outcome import (
+    ReservationKind,
+    ReservationOutcome,
+    record_reservation_outcome,
+)
 
 from .errors import ConflictError
 
@@ -138,6 +144,9 @@ class IdempotentReservation:
     `complete_idempotent_request()` with its result before returning."""
 
     idempotent_request_id: uuid.UUID
+    #: The database-derived outcome record the authorization plan binds (R01 S5-C). Set only by
+    #: `begin_idempotent_request`; absent on a hand-built value, which the plan refuses.
+    outcome: ReservationOutcome | None = field(default=None, compare=False, repr=False)
 
 
 @dataclass(frozen=True)
@@ -148,6 +157,8 @@ class IdempotentReplay:
 
     response_status_code: int
     response_body: dict[str, Any]
+    #: As on `IdempotentReservation`.
+    outcome: ReservationOutcome | None = field(default=None, compare=False, repr=False)
 
 
 _KEY_LOCK_PREFIX = "dnd_ai.idempotency.campaign_key.v1"
@@ -275,7 +286,15 @@ def begin_idempotent_request(
         },
     ).one_or_none()
     if reserved is not None:
-        return IdempotentReservation(idempotent_request_id=reserved.idempotent_request_id)
+        return IdempotentReservation(
+            idempotent_request_id=reserved.idempotent_request_id,
+            outcome=record_reservation_outcome(
+                connection,
+                ReservationKind.RESERVED,
+                actor_user_id=actor_user_id,
+                campaign_id=campaign_id,
+            ),
+        )
 
     existing = connection.execute(
         text("""
@@ -296,6 +315,12 @@ def begin_idempotent_request(
     return IdempotentReplay(
         response_status_code=existing.response_status_code,
         response_body=existing.response_body,
+        outcome=record_reservation_outcome(
+            connection,
+            ReservationKind.REPLAY,
+            actor_user_id=actor_user_id,
+            campaign_id=campaign_id,
+        ),
     )
 
 

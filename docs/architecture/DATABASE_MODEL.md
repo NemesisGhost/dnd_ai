@@ -1272,6 +1272,8 @@ Key columns:
 - `correlation_id UUID NULL`
 - `response_status_code SMALLINT NULL`, `response_body JSONB NULL`, `completed_at TIMESTAMPTZ NULL` — all three NULL until the command completes, all three set together (`ck_idempotent_requests_completion_consistent`)
 
+The campaign foreign key is `DEFERRABLE INITIALLY IMMEDIATE` (revision 149, R01 S5-C; DATABASE_CONVENTIONS §20.3.1): every request still checks it at the INSERT unless a keyed pre-write authorization plan opts in to deferring it to COMMIT, in which case the plan must hold the campaign row at `FOR KEY SHARE` or stronger before it reads authority. The actor foreign key is unchanged and immediate.
+
 Unique on `(actor_user_id, campaign_id, idempotency_key)`. A row is reserved (`INSERT ... ON CONFLICT DO NOTHING`) before the command runs and completed with its response before the same transaction commits — see `dnd_ai.api.idempotency`'s module docstring for the full concurrency argument (the unique index itself, not application-level locking, serializes concurrent requests for the same key) and for why a rolled-back or failed command never permanently consumes a key.
 
 Deliberately **not** under `audit`: `audit.*` tables are append-only to normal application roles (conventions §24.2) and outlive the records they describe, by design. This table is the opposite on both counts — reserved, updated once, and disposable cache state, not history — so it carries real `ON DELETE CASCADE` foreign keys rather than `audit.change_log`'s deliberately unconstrained columns.
