@@ -556,6 +556,23 @@ _S4B_ROUTES: frozenset[tuple[str, str]] = frozenset(
     }
 )
 
+#: S5-D migrates five campaign access-management routes: the two invitation routes (keyed pre-write; the
+#: only pre-write routes so far, `dnd_ai.api.r01_pre_write_routes`) and the three post-write Foundry routes
+#: (device revocation, connection revocation, identity link). The five world routes stay pending (not
+#: finalized, not reclassified yet).
+_S5D_ROUTES: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("POST", _CAMPAIGN + "/invitations"),
+        ("POST", _CAMPAIGN + "/invitations/{campaign_invitation_id}/revoke"),
+        ("DELETE", _CAMPAIGN + "/foundry/connections/{foundry_connection_id}"),
+        ("DELETE", _CAMPAIGN + "/foundry/devices/{foundry_device_id}"),
+        (
+            "POST",
+            _CAMPAIGN + "/integration/external-systems/{external_system_id}/foundry-identities",
+        ),
+    }
+)
+
 MIGRATED_ROUTES: frozenset[tuple[str, str]] = (
     frozenset(
         {
@@ -570,6 +587,7 @@ MIGRATED_ROUTES: frozenset[tuple[str, str]] = (
     | _S3_ROUTES
     | _S4_ROUTES
     | _S4B_ROUTES
+    | _S5D_ROUTES
 )
 
 #: The one family outside R01's bound: account, authentication, Foundry pairing, world and timeline

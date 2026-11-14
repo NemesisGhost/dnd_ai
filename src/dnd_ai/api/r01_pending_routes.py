@@ -17,8 +17,6 @@ from typing import Final
 # fmt: off
 R01_PENDING_ROUTES: Final = MappingProxyType(
     {
-        ("DELETE", "/campaigns/{campaign_id}/foundry/connections/{foundry_connection_id}"): "access_management",
-        ("DELETE", "/campaigns/{campaign_id}/foundry/devices/{foundry_device_id}"): "access_management",
         ("DELETE", "/campaigns/{campaign_id}/reference-corpus/grants/{reference_source_campaign_id}"): "engine_early_commit",
         ("POST", "/campaigns/{campaign_id}/access-group-memberships/{access_group_membership_id}/remove"): "access_management",
         ("POST", "/campaigns/{campaign_id}/access-groups"): "access_management",
@@ -32,10 +30,7 @@ R01_PENDING_ROUTES: Final = MappingProxyType(
         ("POST", "/campaigns/{campaign_id}/archive"): "access_management",
         ("POST", "/campaigns/{campaign_id}/character-relationships/{membership_character_relationship_id}/change"): "access_management",
         ("POST", "/campaigns/{campaign_id}/character-relationships/{membership_character_relationship_id}/revoke"): "access_management",
-        ("POST", "/campaigns/{campaign_id}/integration/external-systems/{external_system_id}/foundry-identities"): "access_management",
         ("POST", "/campaigns/{campaign_id}/integration/foundry/combat-sync"): "engine_early_commit",
-        ("POST", "/campaigns/{campaign_id}/invitations"): "access_management",
-        ("POST", "/campaigns/{campaign_id}/invitations/{campaign_invitation_id}/revoke"): "access_management",
         ("POST", "/campaigns/{campaign_id}/memberships"): "access_management",
         ("POST", "/campaigns/{campaign_id}/memberships/roles/{membership_role_id}/change"): "access_management",
         ("POST", "/campaigns/{campaign_id}/memberships/roles/{membership_role_id}/revoke"): "access_management",
@@ -65,6 +60,8 @@ R01_PENDING_ROUTES: Final = MappingProxyType(
 # fmt: off
 R01_FINALIZED_ROUTES: Final[frozenset[tuple[str, str]]] = frozenset(
     {
+        ("DELETE", "/campaigns/{campaign_id}/foundry/connections/{foundry_connection_id}"),
+        ("DELETE", "/campaigns/{campaign_id}/foundry/devices/{foundry_device_id}"),
         ("DELETE", "/campaigns/{campaign_id}/reference-corpus/sources/{source_document_id}"),
         ("POST", "/campaigns/{campaign_id}/authoring/characters/{character_id}/builds"),
         ("POST", "/campaigns/{campaign_id}/authoring/characters/{character_id}/builds/{build_id}/activate"),
@@ -169,8 +166,11 @@ R01_FINALIZED_ROUTES: Final[frozenset[tuple[str, str]]] = frozenset(
         ("POST", "/campaigns/{campaign_id}/events/{event_id}/void"),
         ("POST", "/campaigns/{campaign_id}/foundry/pairing-codes"),
         ("POST", "/campaigns/{campaign_id}/integration/external-systems"),
+        ("POST", "/campaigns/{campaign_id}/integration/external-systems/{external_system_id}/foundry-identities"),
         ("POST", "/campaigns/{campaign_id}/integration/external-systems/{external_system_id}/identifiers"),
         ("POST", "/campaigns/{campaign_id}/interactions"),
+        ("POST", "/campaigns/{campaign_id}/invitations"),
+        ("POST", "/campaigns/{campaign_id}/invitations/{campaign_invitation_id}/revoke"),
         ("POST", "/campaigns/{campaign_id}/items/{item_instance_id}/attune"),
         ("POST", "/campaigns/{campaign_id}/items/{item_instance_id}/award"),
         ("POST", "/campaigns/{campaign_id}/items/{item_instance_id}/consume"),

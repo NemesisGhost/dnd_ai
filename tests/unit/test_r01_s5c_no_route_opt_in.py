@@ -2,8 +2,9 @@
 `begin_idempotent_request` records a reservation outcome, and the replay declaration is the one empty
 declaration.
 
-These pins move only with the reviewed slice that adopts the mechanism (S5-D onward): a route must not
-opt in before S5-C has passed its independent review (plan section 6.21.4, item 5).
+These pins move only with the reviewed slice that adopts the mechanism: a route must not opt in before S5-C
+has passed its independent review (plan section 6.21.4, item 5). S5-C passed (plan section 6.25); S5-D, the
+two invitation routes, is the only adopter so far.
 """
 
 import re
@@ -32,25 +33,29 @@ def _sources() -> list[Path]:
     return [p for p in SRC.rglob("*.py") if "__pycache__" not in p.parts]
 
 
-@pytest.mark.parametrize(
-    "pattern",
-    [
-        r"\.defer_reservation_campaign_fk\(",
-        r"\.bind_reservation\(",
-        r"\.bind_unkeyed\(",
-        r"\bby_outcome\s*=",
-        r"\bReservationDeclarations\(",
-        r"SET\s+CONSTRAINTS",
-    ],
-)
-def test_no_production_code_outside_the_mechanism_uses_it(pattern: str) -> None:
+#: Who may use each entry point outside the mechanism. S5-C adopted nothing; S5-D (the two invitation
+#: routes) is the first and, so far, only adopter. A later slice adds its files here, in a reviewed edit.
+_S5D_ADOPTERS = {
+    r"\.defer_reservation_campaign_fk\(": {"api/campaign_invitations.py"},
+    r"\.bind_reservation\(": {"api/campaign_invitations.py"},
+    r"\.bind_unkeyed\(": {"api/campaign_invitations.py"},
+    r"\bby_outcome\s*=": {"api/r01_route_plans.py"},
+    r"\bReservationDeclarations\(": {"commands/campaign_invitation_plans.py"},
+    r"SET\s+CONSTRAINTS": set(),
+}
+
+
+@pytest.mark.parametrize("pattern", list(_S5D_ADOPTERS))
+def test_no_production_code_outside_the_mechanism_and_the_reviewed_adopters_uses_it(
+    pattern: str,
+) -> None:
     regex = re.compile(pattern, re.IGNORECASE)
-    users = [
-        str(path.relative_to(SRC))
+    users = {
+        path.relative_to(SRC).as_posix()
         for path in _sources()
         if path not in _MECHANISM and regex.search(path.read_text(encoding="utf-8"))
-    ]
-    assert users == [], f"{pattern} is used outside the S5-C mechanism: {users}"
+    }
+    assert users == _S5D_ADOPTERS[pattern], f"{pattern} is used outside the reviewed set: {users}"
 
 
 def test_only_begin_idempotent_request_records_an_outcome() -> None:

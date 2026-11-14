@@ -8,6 +8,8 @@ every non-GET route through `open_request_plan` (rule 1b) and a migrated handler
   is **not protected** by the R01 final check, and nothing here presents it as protected.
 - A route in `R01_FINALIZED_ROUTES` gets an ordinary plan, which must be finalized or the guard
   refuses the commit.
+- A route in `R01_KEYED_PRE_WRITE_ROUTES` (S5-D onward) opens a **pre-write** plan with the keyed
+  declarations its handler chooses from by the reservation's server outcome.
 - A route in neither set is unclassified: opening its plan fails closed, so a new campaign write
   route cannot be added without being migrated or listed.
 """
@@ -17,9 +19,10 @@ import uuid
 from fastapi import Request
 from sqlalchemy import Connection
 
-from dnd_ai.domain.authorization import AuthorizationPlan
+from dnd_ai.domain.authorization import AuthorizationPlan, PlanMode
 
 from .r01_pending_routes import R01_FINALIZED_ROUTES, R01_PENDING_ROUTES
+from .r01_pre_write_routes import R01_KEYED_PRE_WRITE_ROUTES
 
 
 class UnclassifiedRouteError(RuntimeError):
@@ -52,6 +55,17 @@ def begin_route_plan(
         pending = False
     else:
         raise UnclassifiedRouteError()
+    declarations = R01_KEYED_PRE_WRITE_ROUTES.get(key)
+    if declarations is not None:
+        if pending:  # a pre-write route is finalized by definition
+            raise UnclassifiedRouteError()
+        return AuthorizationPlan.begin(
+            connection,
+            actor_user_id=actor_user_id,
+            campaign_id=campaign_id,
+            mode=PlanMode.PRE_WRITE,
+            by_outcome=declarations,
+        )
     return AuthorizationPlan.begin(
         connection, actor_user_id=actor_user_id, campaign_id=campaign_id, pending=pending
     )

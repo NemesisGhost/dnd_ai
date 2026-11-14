@@ -527,6 +527,7 @@ def link_foundry_identity_endpoint(
     access: Annotated[
         AccessContext, Depends(require_campaign_capability(_FOUNDRY_IDENTITY_MANAGE_CAPABILITY))
     ],
+    plan: _Plan,
     connection: Annotated[Connection, Depends(get_connection)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
 ) -> LinkFoundryIdentityResponse:
@@ -557,7 +558,9 @@ def link_foundry_identity_endpoint(
         event_id=None,
     )
 
-    return LinkFoundryIdentityResponse(external_identity_id=result.external_identity_id)
+    response = LinkFoundryIdentityResponse(external_identity_id=result.external_identity_id)
+    plan.finalize(connection)  # R01: the last statement (post-write; S5-D)
+    return response
 
 
 @router.post(

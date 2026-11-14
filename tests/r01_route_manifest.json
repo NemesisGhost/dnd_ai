@@ -7526,18 +7526,22 @@
   "unresolved": []
  },
  {
-  "audit": true,
+  "audit": false,
   "command_markers": {
-   "dnd_ai.commands.campaign_invitations.create_campaign_invitation": []
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.campaign_invitation_plans.prepare_create_invitation": [],
+   "dnd_ai.commands.campaign_invitation_plans.write_create_invitation": []
   },
   "command_scope_markers": [],
   "command_writes": {
-   "dnd_ai.commands.campaign_invitations.create_campaign_invitation": [
-    "security.campaign_invitations"
-   ]
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.campaign_invitation_plans.prepare_create_invitation": [],
+   "dnd_ai.commands.campaign_invitation_plans.write_create_invitation": []
   },
   "commands": [
-   "dnd_ai.commands.campaign_invitations.create_campaign_invitation"
+   "dnd_ai.commands._pre_write_steps.receipt_params",
+   "dnd_ai.commands.campaign_invitation_plans.prepare_create_invitation",
+   "dnd_ai.commands.campaign_invitation_plans.write_create_invitation"
   ],
   "dependencies": [
    {
@@ -7559,7 +7563,6 @@
   "path": "/campaigns/{campaign_id}/invitations",
   "precheck_markers": [],
   "route_markers": [
-   "audit:change_log",
    "idempotency:campaign",
    "reader:access_context",
    "reader:world_authority",
@@ -7568,18 +7571,22 @@
   "unresolved": []
  },
  {
-  "audit": true,
+  "audit": false,
   "command_markers": {
-   "dnd_ai.commands.campaign_invitations.revoke_campaign_invitation": []
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.campaign_invitation_plans.prepare_revoke_invitation": [],
+   "dnd_ai.commands.campaign_invitation_plans.write_revoke_invitation": []
   },
   "command_scope_markers": [],
   "command_writes": {
-   "dnd_ai.commands.campaign_invitations.revoke_campaign_invitation": [
-    "security.campaign_invitations"
-   ]
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.campaign_invitation_plans.prepare_revoke_invitation": [],
+   "dnd_ai.commands.campaign_invitation_plans.write_revoke_invitation": []
   },
   "commands": [
-   "dnd_ai.commands.campaign_invitations.revoke_campaign_invitation"
+   "dnd_ai.commands._pre_write_steps.receipt_params",
+   "dnd_ai.commands.campaign_invitation_plans.prepare_revoke_invitation",
+   "dnd_ai.commands.campaign_invitation_plans.write_revoke_invitation"
   ],
   "dependencies": [
    {
@@ -7601,7 +7608,6 @@
   "path": "/campaigns/{campaign_id}/invitations/{campaign_invitation_id}/revoke",
   "precheck_markers": [],
   "route_markers": [
-   "audit:change_log",
    "idempotency:campaign",
    "reader:access_context",
    "reader:world_authority",

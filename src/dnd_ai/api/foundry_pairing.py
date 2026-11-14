@@ -434,6 +434,7 @@ def revoke_campaign_foundry_device_endpoint(
     access: Annotated[
         AccessContext, Depends(require_campaign_capability(_ACCESS_MANAGE_CAPABILITY))
     ],
+    plan: _Plan,
     connection: Annotated[Connection, Depends(get_connection)],
 ) -> None:
     revoke_foundry_device(
@@ -442,6 +443,7 @@ def revoke_campaign_foundry_device_endpoint(
         revoked_by_user_id=access.user_id,
         expected_campaign_id=access.campaign_id,
     )
+    plan.finalize(connection)  # R01: the last statement (post-write; S5-D)
 
 
 @router.delete(
@@ -453,6 +455,7 @@ def revoke_campaign_foundry_connection_endpoint(
     access: Annotated[
         AccessContext, Depends(require_campaign_capability(_ACCESS_MANAGE_CAPABILITY))
     ],
+    plan: _Plan,
     connection: Annotated[Connection, Depends(get_connection)],
 ) -> None:
     revoke_foundry_connection(
@@ -461,3 +464,4 @@ def revoke_campaign_foundry_connection_endpoint(
         revoked_by_user_id=access.user_id,
         expected_campaign_id=access.campaign_id,
     )
+    plan.finalize(connection)  # R01: the last statement (post-write; S5-D)

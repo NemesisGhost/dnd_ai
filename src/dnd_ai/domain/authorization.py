@@ -49,7 +49,8 @@ business-rule lock completeness remain S5 obligations.
 
 **Keyed pre-write plans** (R01 S5-C; plan section 6.21.4; DATABASE_CONVENTIONS section 20.3.1). A plan
 created with `by_outcome=ReservationDeclarations(...)` does not know its declaration until the database has
-answered for the idempotency key. No production route uses this yet; S5-D onward will.
+answered for the idempotency key. The two invitation routes (R01 S5-D, `api/r01_pre_write_routes.py`) are the only
+production users so far.
 
 - `defer_reservation_campaign_fk(connection)`: optional, exactly once, before the reservation and before
   `finalize`, top-level transaction only. The plan checks the catalogue and issues
