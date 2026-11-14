@@ -30,6 +30,7 @@ from dnd_ai.commands.event_corrections import (
 )
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.domain.authoring import REASON_MAX_LENGTH
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.event_corrections import (
     EVENT_DETAILS_MAX_LENGTH,
     EVENT_NAME_MAX_LENGTH,
@@ -49,10 +50,12 @@ from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .errors import NotFoundError
 from .event_explanations import explain_for_caller
+from .r01_route_plans import get_authorization_plan
 
 router = APIRouter(tags=["event-corrections"])
 
 _Conn = Annotated[Connection, Depends(get_connection)]
+_Plan = Annotated[AuthorizationPlan, Depends(get_authorization_plan)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
 _Edit = Annotated[AccessContext, Depends(require_campaign_capability("canon.edit"))]
@@ -173,6 +176,7 @@ def _run(
     correlation_id: str | None,
     payload: dict[str, Any],
     command: Any,
+    plan: AuthorizationPlan,
 ) -> Any:
     idem = start_campaign_idempotency(
         connection,
@@ -182,6 +186,7 @@ def _run(
         command_name=command_name,
         payload=payload,
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -227,6 +232,7 @@ def _run(
     if result.replacement_event_id is not None:
         receipt["replacement_event_id"] = str(result.replacement_event_id)
     finish_campaign_idempotency(connection, idem, status_code=200, body=receipt)
+    plan.finalize(connection)  # R01: the last statement
     return JSONResponse(status_code=200, content=receipt)
 
 
@@ -235,6 +241,7 @@ def void_event_endpoint(
     event_id: uuid.UUID,
     body: VoidEventRequest,
     access: _Edit,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -252,7 +259,9 @@ def void_event_endpoint(
             actor_user_id=access.user_id,
             event_id=event_id,
             reason=body.reason,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -261,6 +270,7 @@ def correct_event_endpoint(
     event_id: uuid.UUID,
     body: CorrectEventRequest,
     access: _Edit,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -285,5 +295,7 @@ def correct_event_endpoint(
                 "world_time_id": body.replacement.world_time_id,
                 "character_ids": tuple(body.replacement.character_ids),
             },
+            plan=plan,
         ),
+        plan=plan,
     )

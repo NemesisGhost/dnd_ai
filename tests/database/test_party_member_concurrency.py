@@ -53,6 +53,7 @@ class Fixture:
             character_id=self.character_id,
             effective_from_world_time_id=self.times[time_index],
             expected_party_row_version=version,
+            plan=fixture_plan(connection, self.campaign_id),
         )
 
     def archive(self, connection, version: int):  # type: ignore[no-untyped-def]
@@ -62,6 +63,7 @@ class Fixture:
             actor_user_id=self.owner,
             party_id=self.party_id,
             expected_row_version=version,
+            plan=fixture_plan(connection, self.campaign_id),
         )
 
     def memberships(self) -> int:
@@ -94,7 +96,11 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
         world = make_authored_world(setup, owner_user_id=owner, name="Member Race World")
         campaign_id = make_authored_campaign(setup, world, name="Member Race Campaign")
         party_id = create_party(
-            setup, campaign_id=campaign_id, actor_user_id=owner, name="Racers"
+            setup,
+            campaign_id=campaign_id,
+            actor_user_id=owner,
+            name="Racers",
+            plan=fixture_plan(setup, campaign_id),
         ).party_id
         species = list_species_options(setup, world_id=world.world_id)[0].species_id
         created = create_player_character(
@@ -134,6 +140,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
                 actor_user_id=owner,
                 calendar_id=calendar.calendar_id,
                 year=year,
+                plan=fixture_plan(setup, campaign_id),
             ).world_time_id
             for year in (1, 2)
         ]

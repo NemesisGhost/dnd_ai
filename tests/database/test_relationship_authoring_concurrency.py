@@ -135,6 +135,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             actor_user_id=owner,
             calendar_id=calendar.calendar_id,
             year=1,
+            plan=fixture_plan(setup, campaign_id),
         ).world_time_id
         advance_campaign_clock(
             setup,
@@ -142,6 +143,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             actor_user_id=owner,
             world_time_id=time_id,
             expected_row_version=0,
+            plan=fixture_plan(setup, campaign_id),
         )
         timeline_id = setup.execute(
             text("SELECT timeline_id FROM campaign.campaigns WHERE campaign_id = :c"),

@@ -97,6 +97,7 @@ class Fixture:
             item_instance_id=item,
             holder_entity_id=self.holder,
             expected_last_event_id=token,
+            plan=fixture_plan(connection, self.campaign_id),
         )
 
     def token(self, item: uuid.UUID) -> uuid.UUID | None:
@@ -154,6 +155,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             actor_user_id=owner,
             calendar_id=calendar.calendar_id,
             year=1,
+            plan=fixture_plan(setup, campaign_id),
         ).world_time_id
         advance_campaign_clock(
             setup,
@@ -161,6 +163,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             actor_user_id=owner,
             world_time_id=time_id,
             expected_row_version=0,
+            plan=fixture_plan(setup, campaign_id),
         )
     yield fixture
     _purge_user_worlds(postgres_engine, owner)
@@ -200,6 +203,7 @@ def test_a_destroy_and_a_transfer_from_one_token_serialize(fx: Fixture) -> None:
             world_time_id=None,
             session_id=None,
             note=None,
+            plan=fixture_plan(c, fx.campaign_id),
         ),
         lambda c: transfer_in_context(
             c,
@@ -251,6 +255,7 @@ def test_two_attunements_cannot_pass_the_three_item_limit(fx: Fixture) -> None:
                 item_instance_id=ring,
                 character_id=fx.holder,
                 expected_last_event_id=_token_in(setup, fx, ring),
+                plan=fixture_plan(setup, fx.campaign_id),
             )
         tokens = [_token_in(setup, fx, ring) for ring in rings[2:]]
 
@@ -262,6 +267,7 @@ def test_two_attunements_cannot_pass_the_three_item_limit(fx: Fixture) -> None:
             item_instance_id=ring,
             character_id=fx.holder,
             expected_last_event_id=token,
+            plan=fixture_plan(connection, fx.campaign_id),
         )
 
     out = race(

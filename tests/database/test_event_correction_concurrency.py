@@ -55,6 +55,7 @@ class Fixture:
             actor_user_id=self.owner,
             event_id=event_id,
             reason="Race",
+            plan=fixture_plan(connection, self.campaign_id),
         )
 
     def hurt(self, connection, delta: int):  # type: ignore[no-untyped-def]
@@ -105,6 +106,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             actor_user_id=owner,
             character_id=created.entity_id,
             maximum_hit_points=30,
+            plan=fixture_plan(setup, campaign_id),
         )
         calendar = create_calendar(
             setup,
@@ -123,6 +125,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
                 actor_user_id=owner,
                 calendar_id=calendar.calendar_id,
                 year=year,
+                plan=fixture_plan(setup, campaign_id),
             ).world_time_id
             for year in (1, 2)
         ]
@@ -132,6 +135,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             actor_user_id=owner,
             world_time_id=times[0],
             expected_row_version=0,
+            plan=fixture_plan(setup, campaign_id),
         )
         timeline_id = setup.execute(
             text("SELECT timeline_id FROM campaign.campaigns WHERE campaign_id = :c"),

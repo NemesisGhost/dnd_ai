@@ -18,6 +18,7 @@ from tests.builders import make_authored_campaign, make_authored_world
 from tests.database.test_authoring_concurrency import _purge_user_worlds
 from tests.database.test_content_authoring_concurrency import race
 from tests.factories import make_user
+from tests.r01_support import fixture_plan
 
 pytestmark = pytest.mark.database
 
@@ -39,6 +40,7 @@ class Fixture:
             party_id=self.party_id,
             expected_row_version=version,
             name=name,
+            plan=fixture_plan(connection, self.campaign_id),
         )
 
     def archive(self, connection, version: int):  # type: ignore[no-untyped-def]
@@ -48,6 +50,7 @@ class Fixture:
             actor_user_id=self.owner,
             party_id=self.party_id,
             expected_row_version=version,
+            plan=fixture_plan(connection, self.campaign_id),
         )
 
     def state(self) -> tuple[str, str]:
@@ -69,7 +72,11 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
         world = make_authored_world(setup, owner_user_id=owner, name="Party Race World")
         campaign_id = make_authored_campaign(setup, world, name="Party Race Campaign")
         party = create_party(
-            setup, campaign_id=campaign_id, actor_user_id=owner, name="Racers"
+            setup,
+            campaign_id=campaign_id,
+            actor_user_id=owner,
+            name="Racers",
+            plan=fixture_plan(setup, campaign_id),
         ).party_id
     yield Fixture(postgres_engine, owner, campaign_id, party)
     _purge_user_worlds(postgres_engine, owner)

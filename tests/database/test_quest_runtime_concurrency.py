@@ -53,6 +53,7 @@ class Fixture:
             quest_id=self.quest_id,
             action=action,
             expected_status=expected,
+            plan=fixture_plan(connection, self.campaign_id),
         )
 
     def objective(self, connection, index: int, status: str, expected: str | None):  # type: ignore[no-untyped-def]
@@ -63,6 +64,7 @@ class Fixture:
             quest_objective_id=self.objectives[index],
             new_status=status,
             expected_status=expected,
+            plan=fixture_plan(connection, self.campaign_id),
         )
 
     def scalar(self, sql: str, **params: object):  # type: ignore[no-untyped-def]
@@ -145,6 +147,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             actor_user_id=owner,
             calendar_id=calendar.calendar_id,
             year=1,
+            plan=fixture_plan(setup, campaign_id),
         ).world_time_id
         advance_campaign_clock(
             setup,
@@ -152,6 +155,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             actor_user_id=owner,
             world_time_id=time_id,
             expected_row_version=0,
+            plan=fixture_plan(setup, campaign_id),
         )
     yield Fixture(
         postgres_engine,

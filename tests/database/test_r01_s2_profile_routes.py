@@ -378,6 +378,45 @@ def run_gated_before_final(
         return request.wait("the gated request finishes")
 
 
+#: The idempotency key lock: the request's first lock, taken after the route's early checks.
+KEY_LOCK_RE = r"pg_advisory_xact_lock"
+
+
+def run_lapsing_before_final(
+    engine: Engine, app_engine: Engine, role: uuid.UUID, call: Callable[[], Any]
+) -> Any:
+    """Runs `call` (an HTTP request) so that `role` is valid for every early check and has lapsed by the
+    final authority statement, however fast or slow the request runs.
+
+    The request is paused at its idempotency key lock (it has passed its early checks and holds no row
+    lock), `expires_at` is set to the request's own transaction start plus one second (every early check
+    judges at `now()`, that start; the final check judges at `clock_timestamp()`), and the request is
+    then paused again at its final statement until the database reports the role lapsed. A window that
+    starts before the request does can expire before the request enters, which refuses it early and never
+    reaches the final statement (the failure mode of the first version of these tests)."""
+    with StatementGate(app_engine, KEY_LOCK_RE) as first, StatementGate(app_engine, FINAL) as final:
+        request = run_in_thread("s2-request", call)
+        first.wait_reached()
+        with engine.begin() as connection:
+            connection.execute(text("SET LOCAL lock_timeout = '5s'"))
+            moved = connection.execute(
+                text("""
+                    UPDATE security.membership_roles
+                    SET expires_at = (
+                        SELECT xact_start FROM pg_stat_activity WHERE pid = :pid
+                    ) + interval '1 second'
+                    WHERE membership_role_id = :r AND revoked_at IS NULL
+                """),
+                {"pid": first.pid, "r": role},
+            ).rowcount
+            assert moved == 1
+        first.release()
+        final.wait_reached()
+        wait_lapsed(engine, role)
+        final.release()
+        return request.wait("the gated request finishes")
+
+
 # --- freshness: the role lapses between the last lock wait and the final statement -----------------------------------
 
 
@@ -394,12 +433,8 @@ def test_a_role_that_lapses_before_the_final_statement_refuses_the_route_and_per
     case = build_case(name, postgres_engine, g, m, npc)
     key = new_key()
     before = state(postgres_engine, g, case.character, key)
-    set_lapse(postgres_engine, case.role)
-    response = run_gated_before_final(
-        postgres_engine,
-        pooled,
-        lambda: case.call(pooled_factory, key),
-        during=lambda: wait_lapsed(postgres_engine, case.role),
+    response = run_lapsing_before_final(
+        postgres_engine, pooled, case.role, lambda: case.call(pooled_factory, key)
     )
     # The refusal is the one the early check gives a caller whose role is gone.
     refused = (code(response), error_code(response))
@@ -439,12 +474,8 @@ def test_the_key_of_a_refused_request_is_reusable_once_the_actor_is_authorized_a
 ) -> None:
     case = build_case(name, postgres_engine, g, m, npc)
     key = new_key()
-    set_lapse(postgres_engine, case.role)
-    refused = run_gated_before_final(
-        postgres_engine,
-        pooled,
-        lambda: case.call(pooled_factory, key),
-        during=lambda: wait_lapsed(postgres_engine, case.role),
+    refused = run_lapsing_before_final(
+        postgres_engine, pooled, case.role, lambda: case.call(pooled_factory, key)
     )
     assert code(refused) in (403, 404)
     assert state(postgres_engine, g, case.character, key)[4] == 0

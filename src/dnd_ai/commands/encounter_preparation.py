@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 
 from sqlalchemy import Connection, text
 
-from dnd_ai.domain.authorization import R01_PENDING
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.content_authoring import diff_fields, initial_fields
 from dnd_ai.domain.encounter_preparation import (
     MAX_PARTICIPANTS,
@@ -121,10 +121,12 @@ def _prepare(
     campaign_id: uuid.UUID,
     actor_user_id: uuid.UUID,
     encounter_id: uuid.UUID,
+    *,
+    plan: AuthorizationPlan,
 ) -> tuple[OperationScope, uuid.UUID | None, str | None]:
     """Scope, the session, then the pending encounter; returns its location and summary."""
     scope = lock_operation_scope(
-        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=R01_PENDING
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=plan
     )
     session_id = connection.execute(
         text("SELECT session_id FROM narrative.encounters WHERE encounter_id = :e"),
@@ -145,10 +147,11 @@ def create_encounter(
     location_id: uuid.UUID | None = None,
     summary: str | None = None,
     world_time_id: uuid.UUID | None = None,
+    plan: AuthorizationPlan,
 ) -> PreparationResult:
     clean_summary = normalize_summary(summary)
     scope = lock_operation_scope(
-        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=R01_PENDING
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=plan
     )
     validate_session_campaign(connection, campaign_id=campaign_id, session_id=session_id)
     _lock_session(connection, session_id)
@@ -198,10 +201,11 @@ def update_encounter(
     encounter_id: uuid.UUID,
     location_id: uuid.UUID | None,
     summary: str | None,
+    plan: AuthorizationPlan,
 ) -> PreparationResult:
     clean_summary = normalize_summary(summary)
     scope, current_location, current_summary = _prepare(
-        connection, campaign_id, actor_user_id, encounter_id
+        connection, campaign_id, actor_user_id, encounter_id, plan=plan
     )
     _require_location(connection, scope, location_id)
     changed = diff_fields(
@@ -240,10 +244,11 @@ def add_encounter_participant(
     participant_entity_id: uuid.UUID,
     side: str = "party",
     initiative: int | None = None,
+    plan: AuthorizationPlan,
 ) -> PreparationResult:
     clean_side = normalize_side(side)
     clean_initiative = normalize_initiative(initiative)
-    scope, _, _ = _prepare(connection, campaign_id, actor_user_id, encounter_id)
+    scope, _, _ = _prepare(connection, campaign_id, actor_user_id, encounter_id, plan=plan)
     _require_character(connection, scope, participant_entity_id)
     existing = connection.execute(
         text("""
@@ -316,9 +321,10 @@ def update_encounter_participant(
     encounter_participant_id: uuid.UUID,
     side: str,
     initiative: int | None | _Keep = KEEP_INITIATIVE,
+    plan: AuthorizationPlan,
 ) -> PreparationResult:
     clean_side = normalize_side(side)
-    scope, _, _ = _prepare(connection, campaign_id, actor_user_id, encounter_id)
+    scope, _, _ = _prepare(connection, campaign_id, actor_user_id, encounter_id, plan=plan)
     current_side, current_initiative = _participant(
         connection, encounter_id, encounter_participant_id
     )
@@ -355,8 +361,9 @@ def remove_encounter_participant(
     actor_user_id: uuid.UUID,
     encounter_id: uuid.UUID,
     encounter_participant_id: uuid.UUID,
+    plan: AuthorizationPlan,
 ) -> PreparationResult:
-    scope, _, _ = _prepare(connection, campaign_id, actor_user_id, encounter_id)
+    scope, _, _ = _prepare(connection, campaign_id, actor_user_id, encounter_id, plan=plan)
     _participant(connection, encounter_id, encounter_participant_id)
     connection.execute(
         text("DELETE FROM narrative.encounter_participants WHERE encounter_participant_id = :p"),

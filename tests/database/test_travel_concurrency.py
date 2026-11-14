@@ -51,6 +51,7 @@ class Fixture:
             destination_location_id=self.places[place],
             character_ids=[self.traveler],
             world_time_id=self.years[year],
+            plan=fixture_plan(connection, self.campaign_id),
         )
 
     def rows(self) -> list[tuple[uuid.UUID, bool]]:
@@ -126,6 +127,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
                 actor_user_id=owner,
                 calendar_id=calendar.calendar_id,
                 year=year,
+                plan=fixture_plan(setup, campaign_id),
             ).world_time_id
             for year in (1, 2)
         ]

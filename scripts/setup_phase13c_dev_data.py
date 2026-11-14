@@ -2161,6 +2161,7 @@ def _ensure_character_state(
             character_id=character_id,
             maximum_hit_points=state.maximum_hit_points,
             current_hit_points=state.current_hit_points,
+            plan=_script_plan(connection, campaign_id, actor_user_id),
         )
         existing = (
             connection.execute(
@@ -2591,6 +2592,7 @@ def _ensure_character_build(
         actor_user_id=actor_user_id,
         character_id=character_id,
         build=build,
+        plan=_script_plan(connection, campaign_id, actor_user_id),
     )
     summary.add(created=True, label=label, record_id=created.character_build_id)
     return created.character_build_id
@@ -2636,6 +2638,7 @@ def _ensure_active_build_selection(
         character_id=character_id,
         character_build_id=character_build_id,
         expected_active_build_id=None,
+        plan=_script_plan(connection, campaign_id, actor_user_id),
     )
     summary.add(created=True, label=label, record_id=character_id)
 
@@ -2710,6 +2713,7 @@ def _create_fixture_world_time(
         hour=hour,
         minute=minute,
         label=label,
+        plan=_script_plan(connection, campaign_id, actor),
     ).world_time_id
 
 
@@ -3203,6 +3207,7 @@ def _get_or_create_party(
         campaign_id=campaign_id,
         actor_user_id=_world_time_actor_user_id,
         name=name,
+        plan=_script_plan(connection, campaign_id, _world_time_actor_user_id),
     ).party_id
     summary.add(created=True, label=f"party {name!r}", record_id=party_id)
     summary.add(
@@ -5532,6 +5537,7 @@ def _ensure_party_membership(
         character_id=member_entity_id,
         effective_from_world_time_id=effective_from_world_time_id,
         expected_party_row_version=version,
+        plan=_script_plan(connection, campaign_id, _world_time_actor_user_id),
     )
     summary.add(created=True, label=label, record_id=member_entity_id)
 

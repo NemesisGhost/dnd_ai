@@ -380,6 +380,7 @@ def _operate(
     correlation_id: str | None,
     payload: dict[str, Any],
     command: Callable[[], ItemOperationResult],
+    plan: AuthorizationPlan,
 ) -> Any:
     idem = start_campaign_idempotency(
         connection,
@@ -389,6 +390,7 @@ def _operate(
         command_name=command_name,
         payload={"item_instance_id": str(item_instance_id), **payload},
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -413,6 +415,7 @@ def _operate(
         "operation": result.operation,
     }
     finish_campaign_idempotency(connection, idem, status_code=200, body=response)
+    plan.finalize(connection)  # R01: the last statement
     return response
 
 
@@ -430,6 +433,7 @@ def award_endpoint(
     item_instance_id: uuid.UUID,
     body: AwardRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -451,7 +455,9 @@ def award_endpoint(
             quantity=body.quantity,
             set_owner=body.set_owner,
             **_common(body),
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -461,6 +467,7 @@ def _simple_route(path: str, name: str, command: Callable[..., ItemOperationResu
         item_instance_id: uuid.UUID,
         body: OperationBase,
         access: _Access,
+        plan: _Plan,
         connection: _Conn,
         idempotency_key: _Key,
         correlation_id: _Corr,
@@ -479,7 +486,9 @@ def _simple_route(path: str, name: str, command: Callable[..., ItemOperationResu
                 actor_user_id=access.user_id,
                 item_instance_id=item_instance_id,
                 **_common(body),
+                plan=plan,
             ),
+            plan=plan,
         )
 
 
@@ -489,6 +498,7 @@ def _amount_route(path: str, name: str, command: Callable[..., ItemOperationResu
         item_instance_id: uuid.UUID,
         body: AmountRequest,
         access: _Access,
+        plan: _Plan,
         connection: _Conn,
         idempotency_key: _Key,
         correlation_id: _Corr,
@@ -508,7 +518,9 @@ def _amount_route(path: str, name: str, command: Callable[..., ItemOperationResu
                 item_instance_id=item_instance_id,
                 amount=body.amount,
                 **_common(body),
+                plan=plan,
             ),
+            plan=plan,
         )
 
 
@@ -526,6 +538,7 @@ def attune_endpoint(
     item_instance_id: uuid.UUID,
     body: AttuneRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -545,7 +558,9 @@ def attune_endpoint(
             item_instance_id=item_instance_id,
             character_id=body.character_id,
             **_common(body),
+            plan=plan,
         ),
+        plan=plan,
     )
 
 

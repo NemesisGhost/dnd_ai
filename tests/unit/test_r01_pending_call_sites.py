@@ -24,46 +24,8 @@ pytestmark = pytest.mark.unit
 SRC = Path(__file__).resolve().parents[2] / "src" / "dnd_ai"
 HELPERS = {"lock_authoring_scope", "lock_operation_scope"}
 
-#: (module relative to src/dnd_ai, enclosing function, helper called). 67 sites at S1, 64 after S2 migrated the three public-profile commands, 35 after S3 migrated the definition authoring and lifecycle commands.
-PINNED: frozenset[tuple[str, str, str]] = frozenset(
-    {
-        ("commands/campaign_clock.py", "advance_campaign_clock", "lock_operation_scope"),
-        ("commands/campaign_clock.py", "correct_campaign_clock", "lock_operation_scope"),
-        ("commands/character_builds.py", "activate_character_build", "lock_operation_scope"),
-        ("commands/character_builds.py", "create_character_build", "lock_operation_scope"),
-        ("commands/character_builds.py", "initialize_character_state", "lock_operation_scope"),
-        ("commands/dungeon_state.py", "set_dungeon_state", "lock_operation_scope"),
-        ("commands/encounter_operations.py", "abort_encounter", "lock_operation_scope"),
-        ("commands/encounter_operations.py", "start_prepared_encounter", "lock_operation_scope"),
-        ("commands/encounter_preparation.py", "_prepare", "lock_operation_scope"),
-        ("commands/encounter_preparation.py", "create_encounter", "lock_operation_scope"),
-        ("commands/event_corrections.py", "correct_event", "lock_operation_scope"),
-        ("commands/event_corrections.py", "void_event", "lock_operation_scope"),
-        ("commands/item_operations.py", "_scope_and_time", "lock_operation_scope"),
-        ("commands/knowledge_runtime.py", "change_belief", "lock_operation_scope"),
-        ("commands/knowledge_runtime.py", "make_knowledge_public", "lock_operation_scope"),
-        ("commands/knowledge_runtime.py", "record_character_knowledge", "lock_operation_scope"),
-        ("commands/knowledge_runtime.py", "record_knowledge_transfer", "lock_operation_scope"),
-        ("commands/knowledge_runtime.py", "reveal_knowledge_to_party", "lock_operation_scope"),
-        ("commands/parties.py", "_transition", "lock_operation_scope"),
-        ("commands/parties.py", "create_party", "lock_operation_scope"),
-        ("commands/parties.py", "update_party", "lock_operation_scope"),
-        ("commands/party_members.py", "add_party_member", "lock_operation_scope"),
-        ("commands/party_members.py", "end_party_membership", "lock_operation_scope"),
-        ("commands/quest_runtime.py", "change_quest_status", "lock_operation_scope"),
-        ("commands/quest_runtime.py", "set_objective_status", "lock_operation_scope"),
-        ("commands/session_authoring.py", "_transition", "lock_operation_scope"),
-        ("commands/session_authoring.py", "schedule_session", "lock_operation_scope"),
-        ("commands/session_authoring.py", "update_session", "lock_operation_scope"),
-        ("commands/session_play.py", "add_session_participant", "lock_operation_scope"),
-        ("commands/session_play.py", "end_session", "lock_operation_scope"),
-        ("commands/session_play.py", "record_session_log_entry", "lock_operation_scope"),
-        ("commands/session_play.py", "remove_session_participant", "lock_operation_scope"),
-        ("commands/session_play.py", "start_session", "lock_operation_scope"),
-        ("commands/travel.py", "record_travel", "lock_operation_scope"),
-        ("commands/world_time.py", "create_world_time", "lock_operation_scope"),
-    }
-)
+#: (module relative to src/dnd_ai, enclosing function, helper called). 67 sites at S1, 64 after S2 migrated the three public-profile commands, 35 after S3 migrated the definition authoring and lifecycle commands, none after S4 migrated the operation commands: no call site passes `R01_PENDING` any more.
+PINNED: frozenset[tuple[str, str, str]] = frozenset()
 
 
 def _walk() -> list[tuple[str, str, str, ast.Call]]:
@@ -127,10 +89,45 @@ def test_the_r01_pending_call_sites_are_exactly_the_pinned_set() -> None:
 
 
 #: The call sites that pass a REAL plan: S2's three public-profile commands, S3's definition authoring
-#: and lifecycle commands, and the one place `lock_operation_scope` forwards its own `plan`. Each later
+#: and lifecycle commands, S4's operation commands, and the one place `lock_operation_scope` forwards its own `plan`. Each later
 #: slice adds its commands here.
 REAL_PLAN_SITES = [
     ("commands/_operations.py", "lock_operation_scope", "lock_authoring_scope"),
+    ("commands/campaign_clock.py", "advance_campaign_clock", "lock_operation_scope"),
+    ("commands/campaign_clock.py", "correct_campaign_clock", "lock_operation_scope"),
+    ("commands/character_builds.py", "activate_character_build", "lock_operation_scope"),
+    ("commands/character_builds.py", "create_character_build", "lock_operation_scope"),
+    ("commands/character_builds.py", "initialize_character_state", "lock_operation_scope"),
+    ("commands/dungeon_state.py", "set_dungeon_state", "lock_operation_scope"),
+    ("commands/encounter_operations.py", "abort_encounter", "lock_operation_scope"),
+    ("commands/encounter_operations.py", "start_prepared_encounter", "lock_operation_scope"),
+    ("commands/encounter_preparation.py", "_prepare", "lock_operation_scope"),
+    ("commands/encounter_preparation.py", "create_encounter", "lock_operation_scope"),
+    ("commands/event_corrections.py", "correct_event", "lock_operation_scope"),
+    ("commands/event_corrections.py", "void_event", "lock_operation_scope"),
+    ("commands/item_operations.py", "_scope_and_time", "lock_operation_scope"),
+    ("commands/knowledge_runtime.py", "change_belief", "lock_operation_scope"),
+    ("commands/knowledge_runtime.py", "make_knowledge_public", "lock_operation_scope"),
+    ("commands/knowledge_runtime.py", "record_character_knowledge", "lock_operation_scope"),
+    ("commands/knowledge_runtime.py", "record_knowledge_transfer", "lock_operation_scope"),
+    ("commands/knowledge_runtime.py", "reveal_knowledge_to_party", "lock_operation_scope"),
+    ("commands/parties.py", "_transition", "lock_operation_scope"),
+    ("commands/parties.py", "create_party", "lock_operation_scope"),
+    ("commands/parties.py", "update_party", "lock_operation_scope"),
+    ("commands/party_members.py", "add_party_member", "lock_operation_scope"),
+    ("commands/party_members.py", "end_party_membership", "lock_operation_scope"),
+    ("commands/quest_runtime.py", "change_quest_status", "lock_operation_scope"),
+    ("commands/quest_runtime.py", "set_objective_status", "lock_operation_scope"),
+    ("commands/session_authoring.py", "_transition", "lock_operation_scope"),
+    ("commands/session_authoring.py", "schedule_session", "lock_operation_scope"),
+    ("commands/session_authoring.py", "update_session", "lock_operation_scope"),
+    ("commands/session_play.py", "add_session_participant", "lock_operation_scope"),
+    ("commands/session_play.py", "end_session", "lock_operation_scope"),
+    ("commands/session_play.py", "record_session_log_entry", "lock_operation_scope"),
+    ("commands/session_play.py", "remove_session_participant", "lock_operation_scope"),
+    ("commands/session_play.py", "start_session", "lock_operation_scope"),
+    ("commands/travel.py", "record_travel", "lock_operation_scope"),
+    ("commands/world_time.py", "create_world_time", "lock_operation_scope"),
     (
         "commands/character_public_profile.py",
         "copy_legacy_text_to_public_profile_draft",
@@ -179,9 +176,9 @@ REAL_PLAN_SITES = [
 
 
 def test_the_real_plan_call_sites_are_exactly_the_migrated_ones() -> None:
-    """After S3 the call sites that pass a real plan are the forwarding in `lock_operation_scope`, the
-    three S2 public-profile commands and the S3 definition authoring and lifecycle commands; every other
-    call site passes the pending marker (pinned above)."""
+    """After S4 the call sites that pass a real plan are the forwarding in `lock_operation_scope`, the
+    three S2 public-profile commands, the S3 definition authoring and lifecycle commands and the S4
+    operation commands; no call site passes the pending marker (pinned above: the set is empty)."""
     real = sorted(
         (module, function, callee)
         for module, function, callee, call in _walk()

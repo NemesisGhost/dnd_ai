@@ -1740,5 +1740,7 @@ def test_the_requirement_flow_still_judges_a_pre_write_plan(synthetic: Synthetic
 def test_pending_inventory_helpers_are_untouched() -> None:
     from dnd_ai.api.r01_pending_routes import R01_PENDING_ROUTES
 
-    assert len(R01_PENDING_ROUTES) == 115  # 192 at S1, less S2's six and S3's 71 migrated routes
+    assert (
+        len(R01_PENDING_ROUTES) == 61
+    )  # 192 at S1, less S2's six, S3's 71 and S4's 54 migrated routes
     assert authorization.R01_PENDING is authorization.R01_PENDING

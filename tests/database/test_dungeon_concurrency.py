@@ -70,6 +70,7 @@ class Fixture:
             target_id=self.area_id,
             changes={"alarm_level": 1 if status == "a" else 2},
             expected_last_event_id=None,
+            plan=fixture_plan(connection, self.campaign_id),
         )
 
     def scalar(self, sql: str, **params: object):  # type: ignore[no-untyped-def]
@@ -129,6 +130,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             actor_user_id=owner,
             calendar_id=calendar.calendar_id,
             year=1,
+            plan=fixture_plan(setup, campaign_id),
         ).world_time_id
         advance_campaign_clock(
             setup,
@@ -136,6 +138,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             actor_user_id=owner,
             world_time_id=time_id,
             expected_row_version=0,
+            plan=fixture_plan(setup, campaign_id),
         )
         dungeon_version = dungeon.row_version
     yield Fixture(

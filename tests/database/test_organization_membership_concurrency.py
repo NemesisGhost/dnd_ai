@@ -131,6 +131,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
                 actor_user_id=owner,
                 calendar_id=calendar.calendar_id,
                 year=year,
+                plan=fixture_plan(setup, campaign_id),
             ).world_time_id
             for year in range(0, 4)
         ]

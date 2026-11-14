@@ -19,6 +19,7 @@ from tests.builders import make_authored_campaign, make_authored_world
 from tests.database.test_authoring_concurrency import _purge_user_worlds
 from tests.database.test_content_authoring_concurrency import race
 from tests.factories import make_user
+from tests.r01_support import fixture_plan
 
 pytestmark = pytest.mark.database
 
@@ -71,6 +72,7 @@ def _two_anchors(fx: Fixture) -> tuple[uuid.UUID, uuid.UUID]:
             actor_user_id=fx.owner,
             calendar_id=calendar.calendar_id,
             year=0,
+            plan=fixture_plan(connection, fx.campaign_id),
         )
         later = create_world_time(
             connection,
@@ -82,6 +84,7 @@ def _two_anchors(fx: Fixture) -> tuple[uuid.UUID, uuid.UUID]:
             day=1,
             hour=16,
             minute=40,
+            plan=fixture_plan(connection, fx.campaign_id),
         )
     assert fx.key(later.world_time_id) - fx.key(first.world_time_id) == 1000
     return first.world_time_id, later.world_time_id
@@ -97,6 +100,7 @@ def test_two_placements_in_one_gap_serialize_and_stay_ordered(fx: Fixture) -> No
             actor_user_id=fx.owner,
             label=label,
             after_world_time_id=anchor,
+            plan=fixture_plan(connection, fx.campaign_id),
         )
 
     held: dict[str, object] = {}
@@ -136,6 +140,7 @@ def test_a_closed_gap_is_refused_under_the_same_race(fx: Fixture) -> None:
             day=1,
             hour=0,
             minute=1,
+            plan=fixture_plan(connection, fx.campaign_id),
         )
     with fx.engine.begin() as connection, pytest.raises(WorldTimeNoGapError):
         create_world_time(
@@ -144,4 +149,5 @@ def test_a_closed_gap_is_refused_under_the_same_race(fx: Fixture) -> None:
             actor_user_id=fx.owner,
             label="No room",
             after_world_time_id=anchor,
+            plan=fixture_plan(connection, fx.campaign_id),
         )

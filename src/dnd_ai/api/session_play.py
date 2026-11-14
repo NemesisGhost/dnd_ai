@@ -32,6 +32,7 @@ from dnd_ai.commands.session_play import (
 )
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.domain.authoring import DESCRIPTION_MAX_LENGTH
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.session_authoring import (
     LOG_DETAILS_MAX_LENGTH,
     LOG_ENTRY_MAX_LENGTH,
@@ -47,10 +48,12 @@ from .access import require_campaign_capability
 from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
+from .r01_route_plans import get_authorization_plan
 
 router = APIRouter(tags=["session-play"])
 
 _Conn = Annotated[Connection, Depends(get_connection)]
+_Plan = Annotated[AuthorizationPlan, Depends(get_authorization_plan)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
 _Edit = Annotated[AccessContext, Depends(require_campaign_capability("canon.edit"))]
@@ -100,6 +103,7 @@ def _run(
     table: str,
     action: str,
     record_of: Any,
+    plan: AuthorizationPlan,
 ) -> Any:
     idem = start_campaign_idempotency(
         connection,
@@ -109,6 +113,7 @@ def _run(
         command_name=command_name,
         payload=payload,
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -137,6 +142,7 @@ def _run(
     if result.event_id is not None:
         receipt["event_id"] = str(result.event_id)
     finish_campaign_idempotency(connection, idem, status_code=status_code, body=receipt)
+    plan.finalize(connection)  # R01: the last statement
     return JSONResponse(status_code=status_code, content=receipt)
 
 
@@ -145,6 +151,7 @@ def start_session_endpoint(
     session_id: uuid.UUID,
     body: StartSessionRequest,
     access: _Edit,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -167,7 +174,9 @@ def start_session_endpoint(
             session_id=session_id,
             expected_row_version=body.expected_row_version,
             start_world_time_id=body.start_world_time_id,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -176,6 +185,7 @@ def end_session_endpoint(
     session_id: uuid.UUID,
     body: EndSessionRequest,
     access: _Edit,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -199,7 +209,9 @@ def end_session_endpoint(
             expected_row_version=body.expected_row_version,
             end_world_time_id=body.end_world_time_id,
             summary=body.summary,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -208,6 +220,7 @@ def add_participant_endpoint(
     session_id: uuid.UUID,
     body: AddParticipantRequest,
     access: _Edit,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -231,7 +244,9 @@ def add_participant_endpoint(
             expected_row_version=body.expected_row_version,
             character_id=body.character_id,
             participation_role=body.participation_role,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -241,6 +256,7 @@ def remove_participant_endpoint(
     session_participant_id: uuid.UUID,
     body: RemoveParticipantRequest,
     access: _Edit,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -267,7 +283,9 @@ def remove_participant_endpoint(
             session_id=session_id,
             expected_row_version=body.expected_row_version,
             session_participant_id=session_participant_id,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -276,6 +294,7 @@ def log_entry_endpoint(
     session_id: uuid.UUID,
     body: LogEntryRequest,
     access: _Edit,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -300,5 +319,7 @@ def log_entry_endpoint(
             details=body.details,
             world_time_id=body.world_time_id,
             character_ids=tuple(body.character_ids),
+            plan=plan,
         ),
+        plan=plan,
     )

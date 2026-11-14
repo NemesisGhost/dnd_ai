@@ -377,7 +377,7 @@ def render(manifest: list[dict[str, Any]]) -> str:
 
 
 #: Routes whose handlers have been migrated to a final `AuthorizationPlan` (R01 S2 onwards). Empty in
-#: S1. S2 migrates the six profile and revelation routes; S3 the 71 definition authoring and lifecycle routes. A route moves here from the pending set,
+#: S1. S2 migrates the six profile and revelation routes; S3 the 71 definition authoring and lifecycle routes; S4 the 54 campaign operation routes. A route moves here from the pending set,
 #: never silently.
 _PROFILE = "/campaigns/{campaign_id}/characters/{character_id}/public-profile"
 _REVELATIONS = "/campaigns/{campaign_id}/characters/{character_id}/revelations"
@@ -466,6 +466,66 @@ _S3_ROUTES: frozenset[tuple[str, str]] = frozenset(
     }
 )
 
+#: S4 migrates the 54 campaign operation routes (manifest family `operation_scope`, plan section 7.1).
+_S4_ROUTES: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("POST", _CAMPAIGN + "/authoring/characters/{character_id}/builds"),
+        ("POST", _CAMPAIGN + "/authoring/characters/{character_id}/builds/{build_id}/activate"),
+        ("POST", _CAMPAIGN + "/authoring/characters/{character_id}/state/initialize"),
+        ("POST", _CAMPAIGN + "/clock/advance"),
+        ("POST", _CAMPAIGN + "/clock/correct"),
+        ("POST", _CAMPAIGN + "/dungeon-areas/{dungeon_area_id}/state"),
+        ("POST", _CAMPAIGN + "/encounters/prepare"),
+        ("POST", _CAMPAIGN + "/encounters/{encounter_id}/abort"),
+        ("POST", _CAMPAIGN + "/encounters/{encounter_id}/participants"),
+        ("POST", _CAMPAIGN + "/encounters/{encounter_id}/participants/{participant_id}/remove"),
+        ("POST", _CAMPAIGN + "/encounters/{encounter_id}/participants/{participant_id}/update"),
+        ("POST", _CAMPAIGN + "/encounters/{encounter_id}/start"),
+        ("POST", _CAMPAIGN + "/encounters/{encounter_id}/update"),
+        ("POST", _CAMPAIGN + "/events/{event_id}/correct"),
+        ("POST", _CAMPAIGN + "/events/{event_id}/void"),
+        ("POST", _CAMPAIGN + "/items/{item_instance_id}/attune"),
+        ("POST", _CAMPAIGN + "/items/{item_instance_id}/award"),
+        ("POST", _CAMPAIGN + "/items/{item_instance_id}/consume"),
+        ("POST", _CAMPAIGN + "/items/{item_instance_id}/damage"),
+        ("POST", _CAMPAIGN + "/items/{item_instance_id}/destroy"),
+        ("POST", _CAMPAIGN + "/items/{item_instance_id}/end-attunement"),
+        ("POST", _CAMPAIGN + "/items/{item_instance_id}/equip"),
+        ("POST", _CAMPAIGN + "/items/{item_instance_id}/repair"),
+        ("POST", _CAMPAIGN + "/items/{item_instance_id}/unequip"),
+        ("POST", _CAMPAIGN + "/knowledge/knowers/{entity_knowledge_id}/belief"),
+        ("POST", _CAMPAIGN + "/knowledge/{knowledge_item_id}/learn"),
+        ("POST", _CAMPAIGN + "/knowledge/{knowledge_item_id}/make-public"),
+        ("POST", _CAMPAIGN + "/knowledge/{knowledge_item_id}/reveal-to-party"),
+        ("POST", _CAMPAIGN + "/knowledge/{knowledge_item_id}/transfer"),
+        ("POST", _CAMPAIGN + "/parties"),
+        ("POST", _CAMPAIGN + "/parties/{party_id}/archive"),
+        ("POST", _CAMPAIGN + "/parties/{party_id}/members"),
+        ("POST", _CAMPAIGN + "/parties/{party_id}/members/{party_membership_id}/end"),
+        ("POST", _CAMPAIGN + "/parties/{party_id}/restore"),
+        ("POST", _CAMPAIGN + "/parties/{party_id}/update"),
+        ("POST", _CAMPAIGN + "/quests/objectives/{quest_objective_id}/status"),
+        ("POST", _CAMPAIGN + "/quests/{quest_id}/abandon"),
+        ("POST", _CAMPAIGN + "/quests/{quest_id}/activate"),
+        ("POST", _CAMPAIGN + "/quests/{quest_id}/complete"),
+        ("POST", _CAMPAIGN + "/quests/{quest_id}/fail"),
+        ("POST", _CAMPAIGN + "/quests/{quest_id}/resume"),
+        ("POST", _CAMPAIGN + "/quests/{quest_id}/suspend"),
+        ("POST", _CAMPAIGN + "/sessions"),
+        ("POST", _CAMPAIGN + "/sessions/{session_id}/archive"),
+        ("POST", _CAMPAIGN + "/sessions/{session_id}/end"),
+        ("POST", _CAMPAIGN + "/sessions/{session_id}/log"),
+        ("POST", _CAMPAIGN + "/sessions/{session_id}/participants"),
+        ("POST", _CAMPAIGN + "/sessions/{session_id}/participants/{session_participant_id}/remove"),
+        ("POST", _CAMPAIGN + "/sessions/{session_id}/restore"),
+        ("POST", _CAMPAIGN + "/sessions/{session_id}/start"),
+        ("POST", _CAMPAIGN + "/sessions/{session_id}/travel"),
+        ("POST", _CAMPAIGN + "/sessions/{session_id}/update"),
+        ("POST", _CAMPAIGN + "/travel"),
+        ("POST", _CAMPAIGN + "/world-times"),
+    }
+)
+
 MIGRATED_ROUTES: frozenset[tuple[str, str]] = (
     frozenset(
         {
@@ -478,6 +538,7 @@ MIGRATED_ROUTES: frozenset[tuple[str, str]] = (
         }
     )
     | _S3_ROUTES
+    | _S4_ROUTES
 )
 
 #: The one family outside R01's bound: account, authentication, Foundry pairing, world and timeline

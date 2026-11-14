@@ -55,6 +55,7 @@ class Fixture:
             character_id=self.character_id,
             character_build_id=self.builds[index],
             expected_active_build_id=expected,
+            plan=fixture_plan(connection, self.campaign_id),
         )
 
     def active(self) -> uuid.UUID | None:
@@ -117,6 +118,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
                 actor_user_id=owner,
                 character_id=created.entity_id,
                 build=BuildInput(label=label),
+                plan=fixture_plan(setup, campaign_id),
             ).character_build_id
             for label in ("One", "Two", "Three")
         ]
@@ -126,6 +128,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             actor_user_id=owner,
             character_id=created.entity_id,
             maximum_hit_points=10,
+            plan=fixture_plan(setup, campaign_id),
         )
         calendar = create_calendar(
             setup,
@@ -143,6 +146,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             actor_user_id=owner,
             calendar_id=calendar.calendar_id,
             year=1,
+            plan=fixture_plan(setup, campaign_id),
         ).world_time_id
         advance_campaign_clock(
             setup,
@@ -150,6 +154,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             actor_user_id=owner,
             world_time_id=year,
             expected_row_version=0,
+            plan=fixture_plan(setup, campaign_id),
         )
         fixture = Fixture(postgres_engine, owner, campaign_id, created.entity_id, builds)
         fixture.activate(setup, 0, None)  # administrative baseline

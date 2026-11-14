@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from sqlalchemy import Connection, text
 
 from dnd_ai.domain.authoring import StaleWriteError
-from dnd_ai.domain.authorization import R01_PENDING
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.campaign_clock import (
     CLOCK_COMPONENT,
     CLOCK_EVENT_ADVANCED,
@@ -229,13 +229,14 @@ def advance_campaign_clock(
     cause_event_id: uuid.UUID | None = None,
     explanation: str | None = None,
     denied_event_ids: frozenset[uuid.UUID] = frozenset(),
+    plan: AuthorizationPlan,
 ) -> ClockResult:
     if explanation is not None:
         explanation = explanation.strip() or None
     if explanation is not None and len(explanation) > CLOCK_EXPLANATION_MAX_LENGTH:
         raise ValueError("clock advance explanation is too long")
     scope = lock_operation_scope(
-        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=R01_PENDING
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=plan
     )
     own = _lock_own_clock(connection, scope.timeline_id)
     current_version = 0 if own is None else own[1]
@@ -276,9 +277,10 @@ def correct_campaign_clock(
     world_time_id: uuid.UUID,
     expected_row_version: int,
     corrects_event_id: uuid.UUID,
+    plan: AuthorizationPlan,
 ) -> ClockResult:
     scope = lock_operation_scope(
-        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=R01_PENDING
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=plan
     )
     own = _lock_own_clock(connection, scope.timeline_id)
     if own is None:

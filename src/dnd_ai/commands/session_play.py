@@ -29,7 +29,7 @@ from sqlalchemy import Connection, Row, text
 from sqlalchemy.exc import IntegrityError
 
 from dnd_ai.domain.authoring import StaleWriteError
-from dnd_ai.domain.authorization import R01_PENDING
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.data_classification import audit_change, audit_initial
 from dnd_ai.domain.session_authoring import (
     PARTICIPATION_ROLES,
@@ -130,9 +130,10 @@ def start_session(
     session_id: uuid.UUID,
     expected_row_version: int,
     start_world_time_id: uuid.UUID | None = None,
+    plan: AuthorizationPlan,
 ) -> PlayResult:
     scope = lock_operation_scope(
-        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=R01_PENDING
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=plan
     )
     connection.execute(
         text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
@@ -200,11 +201,12 @@ def add_session_participant(
     expected_row_version: int,
     character_id: uuid.UUID,
     participation_role: str,
+    plan: AuthorizationPlan,
 ) -> PlayResult:
     if participation_role not in PARTICIPATION_ROLES:
         raise ParticipantInvalidError(f"unknown role {participation_role!r}")
     scope = lock_operation_scope(
-        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=R01_PENDING
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=plan
     )
     current = lock_campaign_session(connection, campaign_id=campaign_id, session_id=session_id)
     _require_version_and_active(
@@ -251,9 +253,10 @@ def remove_session_participant(
     session_id: uuid.UUID,
     expected_row_version: int,
     session_participant_id: uuid.UUID,
+    plan: AuthorizationPlan,
 ) -> PlayResult:
     scope = lock_operation_scope(
-        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=R01_PENDING
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=plan
     )
     current = lock_campaign_session(connection, campaign_id=campaign_id, session_id=session_id)
     _require_version_and_active(
@@ -333,11 +336,12 @@ def record_session_log_entry(
     details: str | None = None,
     world_time_id: uuid.UUID | None = None,
     character_ids: tuple[uuid.UUID, ...] = (),
+    plan: AuthorizationPlan,
 ) -> PlayResult:
     clean_entry = normalize_log_entry(entry)
     clean_details = normalize_log_details(details)
     scope = lock_operation_scope(
-        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=R01_PENDING
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=plan
     )
     row = lock_session_in_progress(connection, campaign_id=campaign_id, session_id=session_id)
     time_id = _time_or_clock(connection, scope, world_time_id)
@@ -377,10 +381,11 @@ def end_session(
     expected_row_version: int,
     end_world_time_id: uuid.UUID | None = None,
     summary: str | None = None,
+    plan: AuthorizationPlan,
 ) -> PlayResult:
     clean_summary = normalize_description(summary)
     scope = lock_operation_scope(
-        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=R01_PENDING
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=plan
     )
     current = lock_campaign_session(connection, campaign_id=campaign_id, session_id=session_id)
     _require_version_and_active(

@@ -924,6 +924,7 @@ def set_state_endpoint(
     dungeon_area_id: uuid.UUID,
     body: SetStateRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -936,6 +937,7 @@ def set_state_endpoint(
         command_name="set_dungeon_state",
         payload={"dungeon_area_id": str(dungeon_area_id), **body.model_dump(mode="json")},
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -951,6 +953,7 @@ def set_state_endpoint(
         expected_last_event_id=body.expected_last_event_id,
         world_time_id=body.world_time_id,
         note=body.note,
+        plan=plan,
     )
     if result.changed:
         record_change_log(
@@ -976,4 +979,5 @@ def set_state_endpoint(
     if result.event_id is not None:
         receipt["event_id"] = str(result.event_id)
     finish_campaign_idempotency(connection, idem, status_code=200, body=receipt)
+    plan.finalize(connection)  # R01: the last statement
     return JSONResponse(status_code=200, content=receipt)

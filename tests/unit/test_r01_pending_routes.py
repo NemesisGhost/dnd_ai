@@ -27,6 +27,9 @@ from tests.r01_manifest import (
     _S3_ROUTES as S3_ROUTES,
 )
 from tests.r01_manifest import (
+    _S4_ROUTES as S4_ROUTES,
+)
+from tests.r01_manifest import (
     MANIFEST_PATH,
     MIGRATED_ROUTES,
     OUTSIDE_R01,
@@ -62,16 +65,14 @@ def test_every_route_inside_r01s_bound_is_pending_or_finalized_exactly_once() ->
     assert finalized == set(MIGRATED_ROUTES)
 
 
-def test_s2_finalizes_the_six_profile_and_revelation_routes_and_s3_the_71_authoring_routes() -> (
-    None
-):
+def test_the_finalized_routes_are_s2s_six_s3s_71_and_s4s_54() -> None:
     """S2 migrated the public-profile save, legacy copy, player-profile copy and release, and the
     revelation create and revoke: 6 of the 192 routes inside R01's bound. S3 migrates the 71
-    definition authoring and lifecycle routes of the `authoring_scope` family. 77 are finalized; the
-    other 115 stay pending."""
-    assert len(R01_FINALIZED_ROUTES) == 77
-    assert len(R01_PENDING_ROUTES) == 115
-    s2 = {route for route in R01_FINALIZED_ROUTES if route not in S3_ROUTES}
+    definition authoring and lifecycle routes of the `authoring_scope` family. S4 migrates the 54 campaign
+    operation routes of the `operation_scope` family. 131 are finalized; the other 61 stay pending."""
+    assert len(R01_FINALIZED_ROUTES) == 131
+    assert len(R01_PENDING_ROUTES) == 61
+    s2 = {route for route in R01_FINALIZED_ROUTES if route not in S3_ROUTES | S4_ROUTES}
     assert {
         path.rsplit("/campaigns/{campaign_id}/characters/{character_id}/", 1)[-1] for _, path in s2
     } == {
@@ -84,14 +85,16 @@ def test_s2_finalizes_the_six_profile_and_revelation_routes_and_s3_the_71_author
     }
     assert len(S3_ROUTES) == 71
     assert set(R01_FINALIZED_ROUTES) >= S3_ROUTES
+    assert len(S4_ROUTES) == 54
+    assert set(R01_FINALIZED_ROUTES) >= S4_ROUTES
+    assert not S3_ROUTES & S4_ROUTES
     assert {method for method, _ in R01_FINALIZED_ROUTES} == {"POST"}
 
 
 def test_the_pending_counts_by_family_are_pinned() -> None:
-    """115 distinct pending routes (192 at S1 less S2's six and S3's 71). The manifest has 193 inside
-    records: one (method, path) is registered twice."""
+    """61 distinct pending routes (192 at S1 less S2's six, S3's 71 and S4's 54). The manifest has 193
+    inside records: one (method, path) is registered twice."""
     assert dict(Counter(R01_PENDING_ROUTES.values())) == {
-        "operation_scope": 54,
         "route_capability_only": 21,
         "access_management": 32,
         "engine_early_commit": 8,

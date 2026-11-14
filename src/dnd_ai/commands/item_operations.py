@@ -32,7 +32,7 @@ from typing import Any, Final
 from sqlalchemy import Connection, text
 
 from dnd_ai.domain.authoring import StaleWriteError, normalize_description
-from dnd_ai.domain.authorization import R01_PENDING
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.content_authoring import diff_fields
 from dnd_ai.domain.item_runtime import (
     HOLDER_TYPE_CODES,
@@ -639,9 +639,10 @@ def _scope_and_time(
     actor_user_id: uuid.UUID,
     world_time_id: uuid.UUID | None,
     session_id: uuid.UUID | None,
+    plan: AuthorizationPlan,
 ) -> tuple[OperationScope, uuid.UUID]:
     scope = lock_operation_scope(
-        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=R01_PENDING
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=plan
     )
     validate_session_campaign(connection, campaign_id=campaign_id, session_id=session_id)
     return scope, time_or_clock(connection, scope, world_time_id)
@@ -660,6 +661,7 @@ def award_item(
     world_time_id: uuid.UUID | None = None,
     session_id: uuid.UUID | None = None,
     note: str | None = None,
+    plan: AuthorizationPlan,
 ) -> ItemOperationResult:
     amount = normalize_quantity(quantity)
     details = normalize_description(note)
@@ -669,6 +671,7 @@ def award_item(
         actor_user_id=actor_user_id,
         world_time_id=world_time_id,
         session_id=session_id,
+        plan=plan,
     )
     ctx = _begin(
         connection,
@@ -719,6 +722,7 @@ def _state_operation(
     session_id: uuid.UUID | None,
     note: str | None,
     amount: int | None = None,
+    plan: AuthorizationPlan,
 ) -> ItemOperationResult:
     details = normalize_description(note)
     count = normalize_quantity(amount) if operation == "consume" and amount is not None else None
@@ -733,6 +737,7 @@ def _state_operation(
         actor_user_id=actor_user_id,
         world_time_id=world_time_id,
         session_id=session_id,
+        plan=plan,
     )
     ctx = _begin(
         connection,
@@ -794,28 +799,40 @@ def _state_operation(
     return _result(ctx, event_id, operation, dict(before), dict(s.snapshot()))
 
 
-def equip_item(connection: Connection, **kwargs: Any) -> ItemOperationResult:
-    return _state_operation(connection, operation="equip", **kwargs)
+def equip_item(
+    connection: Connection, *, plan: AuthorizationPlan, **kwargs: Any
+) -> ItemOperationResult:
+    return _state_operation(connection, operation="equip", **kwargs, plan=plan)
 
 
-def unequip_item(connection: Connection, **kwargs: Any) -> ItemOperationResult:
-    return _state_operation(connection, operation="unequip", **kwargs)
+def unequip_item(
+    connection: Connection, *, plan: AuthorizationPlan, **kwargs: Any
+) -> ItemOperationResult:
+    return _state_operation(connection, operation="unequip", **kwargs, plan=plan)
 
 
-def consume_item(connection: Connection, **kwargs: Any) -> ItemOperationResult:
-    return _state_operation(connection, operation="consume", **kwargs)
+def consume_item(
+    connection: Connection, *, plan: AuthorizationPlan, **kwargs: Any
+) -> ItemOperationResult:
+    return _state_operation(connection, operation="consume", **kwargs, plan=plan)
 
 
-def damage_item(connection: Connection, **kwargs: Any) -> ItemOperationResult:
-    return _state_operation(connection, operation="damage", **kwargs)
+def damage_item(
+    connection: Connection, *, plan: AuthorizationPlan, **kwargs: Any
+) -> ItemOperationResult:
+    return _state_operation(connection, operation="damage", **kwargs, plan=plan)
 
 
-def repair_item(connection: Connection, **kwargs: Any) -> ItemOperationResult:
-    return _state_operation(connection, operation="repair", **kwargs)
+def repair_item(
+    connection: Connection, *, plan: AuthorizationPlan, **kwargs: Any
+) -> ItemOperationResult:
+    return _state_operation(connection, operation="repair", **kwargs, plan=plan)
 
 
-def destroy_item(connection: Connection, **kwargs: Any) -> ItemOperationResult:
-    return _state_operation(connection, operation="destroy", **kwargs)
+def destroy_item(
+    connection: Connection, *, plan: AuthorizationPlan, **kwargs: Any
+) -> ItemOperationResult:
+    return _state_operation(connection, operation="destroy", **kwargs, plan=plan)
 
 
 def attune_item(
@@ -829,6 +846,7 @@ def attune_item(
     world_time_id: uuid.UUID | None = None,
     session_id: uuid.UUID | None = None,
     note: str | None = None,
+    plan: AuthorizationPlan,
 ) -> ItemOperationResult:
     details = normalize_description(note)
     scope, time_id = _scope_and_time(
@@ -837,6 +855,7 @@ def attune_item(
         actor_user_id=actor_user_id,
         world_time_id=world_time_id,
         session_id=session_id,
+        plan=plan,
     )
     # Serialize one character's attunements (the three-item limit) before any row lock.
     connection.execute(
@@ -918,6 +937,7 @@ def end_item_attunement(
     world_time_id: uuid.UUID | None = None,
     session_id: uuid.UUID | None = None,
     note: str | None = None,
+    plan: AuthorizationPlan,
 ) -> ItemOperationResult:
     details = normalize_description(note)
     scope, time_id = _scope_and_time(
@@ -926,6 +946,7 @@ def end_item_attunement(
         actor_user_id=actor_user_id,
         world_time_id=world_time_id,
         session_id=session_id,
+        plan=plan,
     )
     ctx = _begin(
         connection,
