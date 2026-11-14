@@ -14,8 +14,10 @@ Where a scenario deadlocks on the parent commit it says so. R1, R2, R3, R4 and R
 P03-A plan section 10.8.1; no committed test pinned them before (their evidence was a scratch run).
 
 Not covered here, on purpose: the future J-1′ commands (they are not implemented), so these tests prove
-nothing about the proposed D1 pairs beyond the current commands; and the invitation-acceptance pair,
-pinned separately below because it goes the other way.
+nothing about the proposed D1 pairs beyond the current commands; and invitation acceptance, which takes
+the same membership-then-campaign order since the S5-B acceptance correction and is covered, against
+recovery, the end and the grant, in `test_r01_s5b_invitation_acceptance_lock_order.py` (that module
+replaced the strict `xfail` this one carried while acceptance still took the campaign first).
 
 Pause statements are chosen to mean the same thing on the parent and after the change:
 `CAMPAIGN_NKU` is recovery's campaign statement, and the pause named `after=CAMPAIGN_NKU` stops before
@@ -436,65 +438,3 @@ def test_a_second_recovery_for_the_same_user_is_refused_as_not_needed(
     assert isinstance(second.error, RecoveryNotNeededError), second.describe()
     assert _open_memberships(fx, user) == 1
     assert _owner_roles(fx, user) == 1
-
-
-# --- 5. the one pair S5-B turns the wrong way round: invitation acceptance --------------------------------------
-
-
-def _accept_own_campaign_invitation(
-    fx: Fixture, user: uuid.UUID, token: str
-) -> Callable[[Connection], Any]:
-    from dnd_ai.commands.campaign_invitations import accept_campaign_invitation
-
-    return lambda c: accept_campaign_invitation(c, token=token, accepting_user_id=user)
-
-
-def _invite(fx: Fixture) -> str:
-    from dnd_ai.commands.campaign_invitations import _hash_invitation_token
-    from tests.factories import make_campaign_invitation
-
-    token = f"s5b-{uuid.uuid4().hex}"
-    with fx.engine.begin() as setup:
-        make_campaign_invitation(
-            setup,
-            fx.campaign_id,
-            _membership_of(fx, fx.owner),
-            token_hash=_hash_invitation_token(token),
-        )
-    return token
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "R01 S5-B finding, owner decision needed: invitation acceptance takes the campaign `FOR SHARE` and "
-        "then the member's membership `FOR UPDATE` (`campaign_invitations._activate_or_create_membership`), "
-        "the order recovery used to take. A member redeeming an invitation to their own campaign while "
-        "recovery promotes them now deadlocks (it serialized before). Closing it means giving acceptance "
-        "the membership-first order, which is outside S5-B's bound. Strict: this test must start passing "
-        "when acceptance is reordered."
-    ),
-)
-def test_an_open_member_redeeming_an_invitation_while_recovery_promotes_them_serializes(
-    fx: Fixture, editor: uuid.UUID, stranded: uuid.UUID
-) -> None:
-    """Acceptance holds the campaign `FOR SHARE` and stops before locking the member's membership.
-    Recovery for the same member locks the membership first, then wants the campaign `FOR NO KEY UPDATE`,
-    which conflicts with `FOR SHARE`. Released, acceptance asks for the membership recovery holds:
-    SQLSTATE 40P01. On the parent recovery took the campaign first, waited behind acceptance's `FOR
-    SHARE` holding nothing, and the pair serialized."""
-    token = _invite(fx)
-    with LockRace(fx.engine) as race:
-        pause = race.pause(
-            thread_name="accept",
-            pattern=r"FROM security\.campaign_memberships WHERE campaign_id = \S+ AND user_id = \S+ "
-            r"ORDER BY created_at DESC LIMIT 1 FOR UPDATE",
-        )
-        accept = race.start("accept", _accept_own_campaign_invitation(fx, editor, token))
-        pause.wait_reached(accept)
-        recovery = race.start("recovery", _recover(fx, stranded, editor))
-        race.wait_blocked_by(pause, recovery)
-        pause.release()
-        race.join_all()
-    _ok(accept, recovery)
-    assert _owner_roles(fx, editor) == 1

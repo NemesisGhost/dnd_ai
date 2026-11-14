@@ -36,6 +36,39 @@ fast hash's usual weakness (brute-forcing weak inputs) does not apply —
 this mirrors how `dnd_ai.api.idempotency`/`dnd_ai.api.correlation` already
 treat other server-generated random values in this codebase.
 
+## Lock order (R01 S5-B; DEF-020)
+
+A first acceptance takes, in this order: the invitation row (`FOR UPDATE`, by the caller; the
+onboarding flows take their session row before it), the accepting user's membership in the
+invitation's campaign (`FOR NO KEY UPDATE`; the open one, otherwise the latest ended one, otherwise
+none), the campaign row (`FOR SHARE`), then the same membership lookup again under the campaign lock,
+and only that second result is acted on (open: nothing to write; none: insert; ended: reopen in
+place). This is the membership-then-campaign order `end_campaign_membership`, the grant and
+relationship commands, the group add and campaign recovery use, so acceptance no longer waits for a
+campaign lock while holding nothing and then asks for a membership another command holds while it
+waits for that campaign (the order that deadlocked with recovery once recovery was reordered).
+
+- *Why `FOR NO KEY UPDATE`, not `FOR UPDATE`.* It conflicts with every other membership locker that
+  matters here (`FOR UPDATE` of the end, the grants and the group add; `FOR SHARE` of an author's
+  scope lock) but not with `FOR KEY SHARE`, which the foreign keys of a role, grant or delegation
+  row written by the same member take on that membership. The reopening `UPDATE` changes no key.
+- *Why look twice.* A lock on no row protects nothing, and the first lookup runs before the campaign
+  lock. A membership created, ended or reopened while this acceptance waited for the campaign is
+  seen by the second lookup, which runs under the campaign lock; the first result is discarded.
+  When the first lookup locked a row, nothing can end, reopen or recreate it while it is held.
+- *Residual (unchanged from before this change, not new).* A membership that did not exist at the
+  first lookup and is created and then locked by another command (an end, a grant) before the
+  second lookup is locked by this acceptance after the campaign, and the end's campaign `FOR UPDATE`
+  (its own, or the retention trigger's at COMMIT) can cycle with this acceptance's campaign `FOR
+  SHARE`. The parent order had the same cycle with a wider window (every membership lookup).
+- *Reopening, at COMMIT.* The reopening `UPDATE` queues `tr_campaign_memberships_retain_access_
+  manager`, which takes the campaign `FOR UPDATE` at COMMIT: an upgrade of this acceptance's `FOR
+  SHARE`. Two acceptances in one campaign that both reopen (different users) can each hold `FOR SHARE`
+  and wait for the other's to end. Inserting a new membership queues no such trigger. Unchanged by
+  this ordering; recorded in the plan (R01 §6.22).
+- *Replay* (the invitation is already accepted by this user) takes the campaign `FOR SHARE` and
+  reads the open membership without locking it: no row lock to order, no change.
+
 ## Acceptance semantics
 
 `accept_campaign_invitation` folds every rejection reason — a token that
@@ -70,7 +103,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import timedelta
 
-from sqlalchemy import Connection, text
+from sqlalchemy import Connection, RowMapping, text
 
 from dnd_ai.domain.errors import DomainAuthorizationError
 
@@ -195,24 +228,39 @@ def _require_campaign_accepts_members(connection: Connection, *, campaign_id: uu
         raise InvitationNotAcceptableError(f"campaign {campaign_id} is {code}")
 
 
-def _activate_or_create_membership(
+def _lock_latest_membership(
     connection: Connection, *, campaign_id: uuid.UUID, user_id: uuid.UUID
-) -> uuid.UUID:
-    existing = (
+) -> RowMapping | None:
+    """The user's membership in the campaign that acceptance acts on, locked `FOR NO KEY UPDATE`, or
+    None: the open membership if there is one, otherwise the latest ended one. Called twice by a first
+    acceptance (before and under the campaign lock); see this module's docstring, "Lock order".
+
+    Ordering: open first, then newest `created_at`, then the id, so the choice is deterministic and an
+    open membership is never passed over for an ended row that happens to be newer."""
+    return (
         connection.execute(
             text("""
                 SELECT campaign_membership_id, ended_at
                 FROM security.campaign_memberships
                 WHERE campaign_id = :campaign AND user_id = :user
-                ORDER BY created_at DESC
+                ORDER BY (ended_at IS NULL) DESC, created_at DESC, campaign_membership_id DESC
                 LIMIT 1
-                FOR UPDATE
+                FOR NO KEY UPDATE
             """),
             {"campaign": campaign_id, "user": user_id},
         )
         .mappings()
         .one_or_none()
     )
+
+
+def _activate_or_create_membership(
+    connection: Connection, *, campaign_id: uuid.UUID, user_id: uuid.UUID
+) -> uuid.UUID:
+    """Runs under the campaign `FOR SHARE` lock, after `_accept_locked_invitation`'s first, discarded
+    lookup. The lookup is repeated here and this result alone decides: an open membership is reused, none
+    means insert, an ended one is reopened in place."""
+    existing = _lock_latest_membership(connection, campaign_id=campaign_id, user_id=user_id)
 
     if existing is not None and existing["ended_at"] is None:
         # Already an open member — accepting is a no-op on the membership
@@ -278,7 +326,12 @@ def _accept_locked_invitation(
     different validation shape, such as `dnd_ai.commands.
     invitation_onboarding`'s onboarding-session lock chain, without
     re-deriving `accept_campaign_invitation`'s own token-lookup and
-    rejection logic."""
+    rejection logic.
+
+    Lock order (module docstring, "Lock order"): the accepting user's membership first, the campaign
+    `FOR SHARE` next, the membership looked up again under it. The first result is discarded: it only
+    takes the lock that orders this acceptance before a command holding the same membership."""
+    _lock_latest_membership(connection, campaign_id=campaign_id, user_id=accepting_user_id)
     _require_campaign_accepts_members(connection, campaign_id=campaign_id)
     membership_id = _activate_or_create_membership(
         connection, campaign_id=campaign_id, user_id=accepting_user_id

@@ -26,8 +26,16 @@ own `invitation_token_hash` already covers that token.
 ## Lock order
 
 `invitation_onboarding_sessions` -> `campaign_invitations` ->
-`campaign_memberships` -> `users`, matching `PHASE13E_REMAINING_
-IMPLEMENTATION_PLAN.md` §6.2/§8.1's documented ordering. `begin_invitation_
+`campaign_memberships` -> `campaigns` -> `campaign_memberships` -> `users`,
+matching `PHASE13E_REMAINING_IMPLEMENTATION_PLAN.md` §6.2/§8.1's documented
+ordering. The two membership steps are one lock taken twice (R01 S5-B): the
+accepting user's membership in the invitation's campaign `FOR NO KEY UPDATE`
+before the campaign `FOR SHARE` (the order every membership-holding command
+uses, so acceptance and campaign recovery of the same member serialize), then
+looked up again under the campaign lock, and only the second result is acted
+on; `dnd_ai.commands.campaign_invitations`'s own docstring, "Lock order", has
+the reasoning and the residual. A visitor who registers has no membership
+yet, so the first lookup locks nothing for them and the second decides. `begin_invitation_
 onboarding` takes no lock on the invitation row at all (P-1): it is a
 read-only validation, and holding that lock across a human-paced flow
 would block a GM's concurrent revoke. `_lock_and_validate_onboarding_

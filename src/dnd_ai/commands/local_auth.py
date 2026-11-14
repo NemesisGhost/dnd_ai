@@ -1482,7 +1482,12 @@ def _register_invited_local_account_impl(
     `campaign_invitations` -> `campaign_memberships` -> `users`, this
     module's own docstring's lock order — so a concurrent revoke or a
     competing acceptance of the same invitation is observed before this
-    function commits to creating an account for it.
+    function commits to creating an account for it. The membership step is
+    `dnd_ai.commands.campaign_invitations`'s acceptance (R01 S5-B): the new
+    account's membership `FOR NO KEY UPDATE` (none exists yet, so it locks
+    nothing), the campaign `FOR SHARE`, the same lookup again under the
+    campaign lock; the account's own row is taken earlier, by its creation
+    and activation, so it precedes those locks here.
 
     This POST is itself the explicit, human-initiated action that both
     creates the account and accepts the invitation (`PHASE13E_REMAINING_
