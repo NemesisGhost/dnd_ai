@@ -36,6 +36,9 @@ from tests.r01_manifest import (
     _S5D_ROUTES as S5D_ROUTES,
 )
 from tests.r01_manifest import (
+    _S5E1_ROUTES as S5E1_ROUTES,
+)
+from tests.r01_manifest import (
     MANIFEST_PATH,
     MIGRATED_ROUTES,
     OUTSIDE_R01,
@@ -71,20 +74,21 @@ def test_every_route_inside_r01s_bound_is_pending_or_finalized_exactly_once() ->
     assert finalized == set(MIGRATED_ROUTES)
 
 
-def test_the_finalized_routes_are_s2s_six_s3s_71_s4s_54_s4bs_21_and_s5ds_5() -> None:
+def test_the_finalized_routes_are_s2s_six_s3s_71_s4s_54_s4bs_21_s5ds_5_and_s5e1s_3() -> None:
     """S2 migrated the public-profile save, legacy copy, player-profile copy and release, and the
     revelation create and revoke: 6 of the 192 routes inside R01's bound. S3 migrates the 71
     definition authoring and lifecycle routes of the `authoring_scope` family. S4 migrates the 54 campaign
     operation routes of the `operation_scope` family. S4b migrates the 21 routes of the
     `route_capability_only` family. S5-D migrates five access-management routes: the two invitation routes
-    (keyed pre-write) and the three post-write Foundry routes. 157 are finalized; the other 35 (27
+    (keyed pre-write) and the three post-write Foundry routes. S5-E1 migrates the three campaign lifecycle
+    routes (update, archive, reactivate; keyed-optional pre-write). 160 are finalized; the other 32 (24
     access-management, of which five are the planned-exclusion world routes, and 8 engine) stay pending."""
-    assert len(R01_FINALIZED_ROUTES) == 157
-    assert len(R01_PENDING_ROUTES) == 35
+    assert len(R01_FINALIZED_ROUTES) == 160
+    assert len(R01_PENDING_ROUTES) == 32
     s2 = {
         route
         for route in R01_FINALIZED_ROUTES
-        if route not in S3_ROUTES | S4_ROUTES | S4B_ROUTES | S5D_ROUTES
+        if route not in S3_ROUTES | S4_ROUTES | S4B_ROUTES | S5D_ROUTES | S5E1_ROUTES
     }
     assert {
         path.rsplit("/campaigns/{campaign_id}/characters/{character_id}/", 1)[-1] for _, path in s2
@@ -104,9 +108,13 @@ def test_the_finalized_routes_are_s2s_six_s3s_71_s4s_54_s4bs_21_and_s5ds_5() -> 
     assert set(R01_FINALIZED_ROUTES) >= S4B_ROUTES
     assert len(S5D_ROUTES) == 5
     assert set(R01_FINALIZED_ROUTES) >= S5D_ROUTES
+    assert len(S5E1_ROUTES) == 3
+    assert set(R01_FINALIZED_ROUTES) >= S5E1_ROUTES
+    assert not S5D_ROUTES & S5E1_ROUTES
     assert not S3_ROUTES & S4_ROUTES
     assert not (S3_ROUTES | S4_ROUTES) & S4B_ROUTES
     assert not (S3_ROUTES | S4_ROUTES | S4B_ROUTES) & S5D_ROUTES
+    assert not (S3_ROUTES | S4_ROUTES | S4B_ROUTES | S5D_ROUTES) & S5E1_ROUTES
     # the DELETE routes are the reference-corpus source removal (S4b-5) and S5-D's two Foundry revocations
     assert {method for method, _ in R01_FINALIZED_ROUTES} == {"POST", "DELETE"}
     assert {route for route in R01_FINALIZED_ROUTES if route[0] == "DELETE"} == {
@@ -117,11 +125,11 @@ def test_the_finalized_routes_are_s2s_six_s3s_71_s4s_54_s4bs_21_and_s5ds_5() -> 
 
 
 def test_the_pending_counts_by_family_are_pinned() -> None:
-    """35 distinct pending routes (192 at S1 less S2's six, S3's 71, S4's 54, S4b's 21 and S5-D's 5). The manifest
+    """32 distinct pending routes (192 at S1 less S2's six, S3's 71, S4's 54, S4b's 21, S5-D's 5 and S5-E1's 3). The manifest
     has 193 inside records: one (method, path) is registered twice. No route-capability-only route is
     pending any more."""
     assert dict(Counter(R01_PENDING_ROUTES.values())) == {
-        "access_management": 27,
+        "access_management": 24,
         "engine_early_commit": 8,
     }
     records = Counter(str(r["family"]) for r in _inside())

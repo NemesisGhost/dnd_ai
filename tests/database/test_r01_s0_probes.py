@@ -539,7 +539,10 @@ def test_the_post_write_families_write_no_deferred_trigger_table_but_events(
         "operation_scope": {"narrative.events"},
         "route_capability_only": {"narrative.events"},
     }
-    assert {"campaign.campaigns", "security.membership_roles"} <= written["access_management"]
+    # `campaign.campaigns` left this trace with S5-E1: update, archive and reactivate write it through
+    # declared `WriteStep` statements (SQLAlchemy constructs, not SQL literals the trace reads); their
+    # declarations pin its five triggers (`tests/database/test_r01_s5e1_lifecycle_routes.py`).
+    assert {"security.membership_roles"} <= written["access_management"]
 
 
 # --- transaction isolation --------------------------------------------------------------------------

@@ -573,6 +573,16 @@ _S5D_ROUTES: frozenset[tuple[str, str]] = frozenset(
     }
 )
 
+#: S5-E1 migrates the three campaign lifecycle routes (update, archive, reactivate), all keyed-optional
+#: pre-write plans (`dnd_ai.commands.campaign_lifecycle_plans`).
+_S5E1_ROUTES: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("POST", _CAMPAIGN + "/update"),
+        ("POST", _CAMPAIGN + "/archive"),
+        ("POST", _CAMPAIGN + "/reactivate"),
+    }
+)
+
 MIGRATED_ROUTES: frozenset[tuple[str, str]] = (
     frozenset(
         {
@@ -588,6 +598,7 @@ MIGRATED_ROUTES: frozenset[tuple[str, str]] = (
     | _S4_ROUTES
     | _S4B_ROUTES
     | _S5D_ROUTES
+    | _S5E1_ROUTES
 )
 
 #: The one family outside R01's bound: account, authentication, Foundry pairing, world and timeline

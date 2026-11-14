@@ -34,13 +34,17 @@ def _sources() -> list[Path]:
 
 
 #: Who may use each entry point outside the mechanism. S5-C adopted nothing; S5-D (the two invitation
-#: routes) is the first and, so far, only adopter. A later slice adds its files here, in a reviewed edit.
+#: routes) is the first adopter and S5-E1 (the three campaign lifecycle routes) the second. A later slice
+#: adds its files here, in a reviewed edit.
 _S5D_ADOPTERS = {
-    r"\.defer_reservation_campaign_fk\(": {"api/campaign_invitations.py"},
-    r"\.bind_reservation\(": {"api/campaign_invitations.py"},
-    r"\.bind_unkeyed\(": {"api/campaign_invitations.py"},
+    r"\.defer_reservation_campaign_fk\(": {"api/campaign_invitations.py", "api/campaigns.py"},
+    r"\.bind_reservation\(": {"api/campaign_invitations.py", "api/campaigns.py"},
+    r"\.bind_unkeyed\(": {"api/campaign_invitations.py", "api/campaigns.py"},
     r"\bby_outcome\s*=": {"api/r01_route_plans.py"},
-    r"\bReservationDeclarations\(": {"commands/campaign_invitation_plans.py"},
+    r"\bReservationDeclarations\(": {
+        "commands/campaign_invitation_plans.py",
+        "commands/campaign_lifecycle_plans.py",
+    },
     r"SET\s+CONSTRAINTS": set(),
 }
 

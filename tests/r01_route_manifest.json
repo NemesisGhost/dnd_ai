@@ -1097,24 +1097,26 @@
   "unresolved": []
  },
  {
-  "audit": true,
+  "audit": false,
   "command_markers": {
-   "dnd_ai.commands.campaigns.archive_campaign": [
-    "reader:access_context",
-    "scope:campaign_manage"
-   ]
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.campaign_lifecycle_plans.prepare_archive_campaign": [
+    "reader:access_context"
+   ],
+   "dnd_ai.commands.campaign_lifecycle_plans.write_archive_campaign": []
   },
   "command_scope_markers": [
-   "reader:access_context",
-   "scope:campaign_manage"
+   "reader:access_context"
   ],
   "command_writes": {
-   "dnd_ai.commands.campaigns.archive_campaign": [
-    "campaign.campaigns"
-   ]
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.campaign_lifecycle_plans.prepare_archive_campaign": [],
+   "dnd_ai.commands.campaign_lifecycle_plans.write_archive_campaign": []
   },
   "commands": [
-   "dnd_ai.commands.campaigns.archive_campaign"
+   "dnd_ai.commands._pre_write_steps.receipt_params",
+   "dnd_ai.commands.campaign_lifecycle_plans.prepare_archive_campaign",
+   "dnd_ai.commands.campaign_lifecycle_plans.write_archive_campaign"
   ],
   "dependencies": [
    {
@@ -1136,15 +1138,12 @@
   "path": "/campaigns/{campaign_id}/archive",
   "precheck_markers": [],
   "route_markers": [
-   "audit:change_log",
    "idempotency:campaign",
    "reader:access_context",
    "reader:world_authority",
    "reader:world_capability"
   ],
-  "unresolved": [
-   "run"
-  ]
+  "unresolved": []
  },
  {
   "audit": true,
@@ -9618,24 +9617,26 @@
   ]
  },
  {
-  "audit": true,
+  "audit": false,
   "command_markers": {
-   "dnd_ai.commands.campaigns.reactivate_campaign": [
-    "reader:access_context",
-    "scope:campaign_manage"
-   ]
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.campaign_lifecycle_plans.prepare_reactivate_campaign": [
+    "reader:access_context"
+   ],
+   "dnd_ai.commands.campaign_lifecycle_plans.write_reactivate_campaign": []
   },
   "command_scope_markers": [
-   "reader:access_context",
-   "scope:campaign_manage"
+   "reader:access_context"
   ],
   "command_writes": {
-   "dnd_ai.commands.campaigns.reactivate_campaign": [
-    "campaign.campaigns"
-   ]
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.campaign_lifecycle_plans.prepare_reactivate_campaign": [],
+   "dnd_ai.commands.campaign_lifecycle_plans.write_reactivate_campaign": []
   },
   "commands": [
-   "dnd_ai.commands.campaigns.reactivate_campaign"
+   "dnd_ai.commands._pre_write_steps.receipt_params",
+   "dnd_ai.commands.campaign_lifecycle_plans.prepare_reactivate_campaign",
+   "dnd_ai.commands.campaign_lifecycle_plans.write_reactivate_campaign"
   ],
   "dependencies": [
    {
@@ -9657,15 +9658,12 @@
   "path": "/campaigns/{campaign_id}/reactivate",
   "precheck_markers": [],
   "route_markers": [
-   "audit:change_log",
    "idempotency:campaign",
    "reader:access_context",
    "reader:world_authority",
    "reader:world_capability"
   ],
-  "unresolved": [
-   "run"
-  ]
+  "unresolved": []
  },
  {
   "audit": false,
@@ -10743,24 +10741,26 @@
   "unresolved": []
  },
  {
-  "audit": true,
+  "audit": false,
   "command_markers": {
-   "dnd_ai.commands.campaigns.update_campaign": [
-    "reader:access_context",
-    "scope:campaign_manage"
-   ]
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.campaign_lifecycle_plans.prepare_update_campaign": [
+    "reader:access_context"
+   ],
+   "dnd_ai.commands.campaign_lifecycle_plans.write_update_campaign": []
   },
   "command_scope_markers": [
-   "reader:access_context",
-   "scope:campaign_manage"
+   "reader:access_context"
   ],
   "command_writes": {
-   "dnd_ai.commands.campaigns.update_campaign": [
-    "campaign.campaigns"
-   ]
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.campaign_lifecycle_plans.prepare_update_campaign": [],
+   "dnd_ai.commands.campaign_lifecycle_plans.write_update_campaign": []
   },
   "commands": [
-   "dnd_ai.commands.campaigns.update_campaign"
+   "dnd_ai.commands._pre_write_steps.receipt_params",
+   "dnd_ai.commands.campaign_lifecycle_plans.prepare_update_campaign",
+   "dnd_ai.commands.campaign_lifecycle_plans.write_update_campaign"
   ],
   "dependencies": [
    {
@@ -10782,15 +10782,12 @@
   "path": "/campaigns/{campaign_id}/update",
   "precheck_markers": [],
   "route_markers": [
-   "audit:change_log",
    "idempotency:campaign",
    "reader:access_context",
    "reader:world_authority",
    "reader:world_capability"
   ],
-  "unresolved": [
-   "run"
-  ]
+  "unresolved": []
  },
  {
   "audit": true,

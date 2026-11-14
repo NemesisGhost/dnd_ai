@@ -9,10 +9,21 @@ has to be cleaned up afterward.
 Each request still gets request-transaction semantics: the harness wraps it
 in a SAVEPOINT that is rolled back when the handler raises (so a failed
 command leaves no partial writes, which is exactly what the "no hidden
-half-objects" tests assert), and runs `SET CONSTRAINTS ALL IMMEDIATE`
-before releasing it, so deferred constraint triggers (owner retention,
-access-manager retention) are evaluated per request just as they would be at
-the real commit.
+half-objects" tests assert), and runs `SET CONSTRAINTS <every deferrable
+constraint but one> IMMEDIATE` before releasing it, so deferred constraint
+triggers (owner retention, access-manager retention) are evaluated per
+request just as they would be at the real commit.
+
+Two things differ from a real request since the keyed pre-write routes (R01
+S5-D and S5-E1). The savepoint is a raw `SAVEPOINT` statement, not a
+SQLAlchemy nested transaction, because a keyed plan refuses to defer the
+reservation's campaign foreign key inside one. And the flush excludes that
+foreign key (and never says `ALL`), because the plan guard refuses every
+statement that may change its mode other than the plan's own deferral. The
+plan's deferral therefore outlives its request in the one shared
+transaction, and this harness does not evaluate the reservation's campaign
+check; nothing here depends on it. Tests of what a plan guarantees (locks,
+order, completeness, deferral) use real connections, never this harness.
 
 Tests that need *real* concurrency across separate connections do not use
 this harness; they commit and clean up explicitly
@@ -42,6 +53,7 @@ from dnd_ai.api.local_auth import (
 )
 from dnd_ai.commands.local_auth import _create_local_account_impl
 from dnd_ai.domain.access import AuthenticatedPrincipal
+from dnd_ai.domain.authorization import _forget as forget_bound_plans  # harness: end of request
 from dnd_ai.domain.rate_limit import RateLimiter
 from tests.builders import make_world_creator
 from tests.factories import make_platform_administrator, make_system_role_assignment
@@ -179,20 +191,54 @@ class AuthoringHarness:
 
     def _connection(self) -> Iterator[Connection]:
         reset_idempotency_key_lock(self.connection)  # one outer transaction serves many requests
-        savepoint = self.connection.begin_nested()
+        # A raw SAVEPOINT, not `begin_nested()`: a keyed pre-write plan (R01 S5-D, S5-E1) defers the
+        # reservation's campaign foreign key and refuses to do so inside a SQLAlchemy nested transaction
+        # (`connection.in_nested_transaction()`), because a rolled-back savepoint silently undoes the
+        # deferral. Here the savepoint is only the harness's own per-request rollback boundary.
+        self.connection.exec_driver_sql("SAVEPOINT harness_request")
         try:
             yield self.connection
+            # The request is over, as a COMMIT would end it: its plan is no longer bound (a finalized
+            # pre-write plan refuses every later statement not declared by the plan).
+            forget_bound_plans(self.connection)
             # Evaluate deferred constraint triggers now (as the real commit would),
             # then put them back to deferred: SET CONSTRAINTS IMMEDIATE persists
             # for the rest of the transaction and would otherwise make the next
             # request's multi-statement writes trip them mid-command.
-            self.connection.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
-            self.connection.execute(text("SET CONSTRAINTS ALL DEFERRED"))
+            #
+            # Not `ALL`: the plan guard remembers any statement that may change the reservation FK's
+            # mode (`SET CONSTRAINTS ALL` included) for the whole outer transaction this harness
+            # shares, and refuses every later keyed pre-write plan in it. The explicit list is every
+            # other deferrable constraint and constraint trigger. A plan's own deferral of the
+            # reservation FK is left in place after the request: this harness never commits, and
+            # nothing in it relies on the reservation's campaign check (tests of the lock behaviour
+            # use real connections).
+            flush = self._deferrable_constraints()
+            self.connection.execute(text(f"SET CONSTRAINTS {flush} IMMEDIATE"))
+            self.connection.execute(text(f"SET CONSTRAINTS {flush} DEFERRED"))
         except BaseException:
-            savepoint.rollback()
+            forget_bound_plans(self.connection)
+            self.connection.exec_driver_sql("ROLLBACK TO SAVEPOINT harness_request")
+            self.connection.exec_driver_sql("RELEASE SAVEPOINT harness_request")
             raise
         else:
-            savepoint.commit()
+            self.connection.exec_driver_sql("RELEASE SAVEPOINT harness_request")
+
+    def _deferrable_constraints(self) -> str:
+        names = (
+            self.connection.execute(
+                text(
+                    "SELECT format('%I.%I', n.nspname, c.conname) FROM pg_catalog.pg_constraint c "
+                    "JOIN pg_catalog.pg_namespace n ON n.oid = c.connamespace "
+                    "WHERE c.condeferrable "
+                    "AND c.conname <> 'idempotent_requests_campaign_id_fkey' "
+                    "ORDER BY 1"
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return ", ".join(names)
 
     def new_actor(
         self,
