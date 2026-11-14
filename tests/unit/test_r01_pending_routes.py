@@ -30,6 +30,9 @@ from tests.r01_manifest import (
     _S4_ROUTES as S4_ROUTES,
 )
 from tests.r01_manifest import (
+    _S4B_ROUTES as S4B_ROUTES,
+)
+from tests.r01_manifest import (
     MANIFEST_PATH,
     MIGRATED_ROUTES,
     OUTSIDE_R01,
@@ -65,14 +68,18 @@ def test_every_route_inside_r01s_bound_is_pending_or_finalized_exactly_once() ->
     assert finalized == set(MIGRATED_ROUTES)
 
 
-def test_the_finalized_routes_are_s2s_six_s3s_71_and_s4s_54() -> None:
+def test_the_finalized_routes_are_s2s_six_s3s_71_s4s_54_and_s4bs_21() -> None:
     """S2 migrated the public-profile save, legacy copy, player-profile copy and release, and the
     revelation create and revoke: 6 of the 192 routes inside R01's bound. S3 migrates the 71
     definition authoring and lifecycle routes of the `authoring_scope` family. S4 migrates the 54 campaign
-    operation routes of the `operation_scope` family. 131 are finalized; the other 61 stay pending."""
-    assert len(R01_FINALIZED_ROUTES) == 131
-    assert len(R01_PENDING_ROUTES) == 61
-    s2 = {route for route in R01_FINALIZED_ROUTES if route not in S3_ROUTES | S4_ROUTES}
+    operation routes of the `operation_scope` family. S4b migrates the 21 routes of the
+    `route_capability_only` family. 152 are finalized; the other 40 (32 access-management, 8 engine) stay
+    pending."""
+    assert len(R01_FINALIZED_ROUTES) == 152
+    assert len(R01_PENDING_ROUTES) == 40
+    s2 = {
+        route for route in R01_FINALIZED_ROUTES if route not in S3_ROUTES | S4_ROUTES | S4B_ROUTES
+    }
     assert {
         path.rsplit("/campaigns/{campaign_id}/characters/{character_id}/", 1)[-1] for _, path in s2
     } == {
@@ -87,15 +94,22 @@ def test_the_finalized_routes_are_s2s_six_s3s_71_and_s4s_54() -> None:
     assert set(R01_FINALIZED_ROUTES) >= S3_ROUTES
     assert len(S4_ROUTES) == 54
     assert set(R01_FINALIZED_ROUTES) >= S4_ROUTES
+    assert len(S4B_ROUTES) == 21
+    assert set(R01_FINALIZED_ROUTES) >= S4B_ROUTES
     assert not S3_ROUTES & S4_ROUTES
-    assert {method for method, _ in R01_FINALIZED_ROUTES} == {"POST"}
+    assert not (S3_ROUTES | S4_ROUTES) & S4B_ROUTES
+    # the one DELETE route is the reference-corpus source removal (S4b-5)
+    assert {method for method, _ in R01_FINALIZED_ROUTES} == {"POST", "DELETE"}
+    assert {route for route in R01_FINALIZED_ROUTES if route[0] == "DELETE"} == {
+        ("DELETE", "/campaigns/{campaign_id}/reference-corpus/sources/{source_document_id}")
+    }
 
 
 def test_the_pending_counts_by_family_are_pinned() -> None:
-    """61 distinct pending routes (192 at S1 less S2's six, S3's 71 and S4's 54). The manifest has 193
-    inside records: one (method, path) is registered twice."""
+    """40 distinct pending routes (192 at S1 less S2's six, S3's 71, S4's 54 and S4b's 21). The manifest
+    has 193 inside records: one (method, path) is registered twice. No route-capability-only route is
+    pending any more."""
     assert dict(Counter(R01_PENDING_ROUTES.values())) == {
-        "route_capability_only": 21,
         "access_management": 32,
         "engine_early_commit": 8,
     }
@@ -111,11 +125,15 @@ def test_the_pending_counts_by_family_are_pinned() -> None:
     ]
 
 
-def test_routes_without_a_scope_helper_are_pending_and_pinned() -> None:
+def test_routes_without_a_scope_helper_are_pinned_by_route() -> None:
     """The 21 route-capability-only routes call no scope helper (S0 finding F-1): rule 1's call-site
-    pin cannot see them, so each is listed here instead. The eight early-commit engine routes too."""
+    pin cannot see them, so the route inventory carries them. S4b migrated all 21, so none is pending
+    and the manifest's pinned set is exactly S4b's. The eight early-commit engine routes are still
+    pending."""
     for route in ROUTE_CAPABILITY_ONLY:
-        assert R01_PENDING_ROUTES[route] == "route_capability_only", route
+        assert route not in R01_PENDING_ROUTES, route
+        assert route in R01_FINALIZED_ROUTES, route
+    assert ROUTE_CAPABILITY_ONLY == S4B_ROUTES
     for route in ENGINE_EARLY_COMMIT:
         assert R01_PENDING_ROUTES[route] == "engine_early_commit", route
     assert len(ROUTE_CAPABILITY_ONLY) == 21
@@ -124,10 +142,11 @@ def test_routes_without_a_scope_helper_are_pending_and_pinned() -> None:
 
 def test_pending_routes_are_not_presented_as_protected() -> None:
     """The only thing a route's presence in `R01_PENDING_ROUTES` says is that it is unmigrated."""
-    assert route_is_pending("POST", "/campaigns/{campaign_id}/events") is True
-    assert route_is_pending("post", "/campaigns/{campaign_id}/events") is True
+    assert route_is_pending("POST", "/campaigns/{campaign_id}/memberships") is True
+    assert route_is_pending("post", "/campaigns/{campaign_id}/memberships") is True
+    assert route_is_pending("POST", "/campaigns/{campaign_id}/events") is False  # S4b
     assert route_is_pending("POST", "/admin/accounts") is False  # outside R01's bound
-    assert ("POST", "/campaigns/{campaign_id}/events") not in R01_FINALIZED_ROUTES
+    assert ("POST", "/campaigns/{campaign_id}/memberships") not in R01_FINALIZED_ROUTES
 
 
 def test_every_campaign_scoped_write_route_is_inside_r01s_bound() -> None:

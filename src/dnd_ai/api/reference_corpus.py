@@ -47,13 +47,17 @@ from dnd_ai.commands.reference_corpus import (
     revoke_source_campaign_grant,
 )
 from dnd_ai.domain.access import AccessContext
+from dnd_ai.domain.authorization import AuthorizationPlan
 
 from .access import require_campaign_capability
 from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import end_request_transaction, get_connection, get_engine
+from .r01_route_plans import get_authorization_plan
 
 router = APIRouter(tags=["reference-corpus"])
+
+_Plan = Annotated[AuthorizationPlan, Depends(get_authorization_plan)]
 
 _MANAGE_CAPABILITY = "rules_source.manage"
 _VIEW_CAPABILITY = "campaign.view"
@@ -159,6 +163,7 @@ def register_source_document_endpoint(
     campaign_id: uuid.UUID,  # noqa: ARG001
     body: RegisterSourceDocumentRequest,
     access: Annotated[AccessContext, Depends(require_campaign_capability(_MANAGE_CAPABILITY))],
+    plan: _Plan,
     connection: Annotated[Connection, Depends(get_connection)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
 ) -> RegisterSourceDocumentResponse:
@@ -196,7 +201,9 @@ def register_source_document_endpoint(
         command_name=_REGISTER_COMMAND_NAME,
         event_id=None,
     )
-    return RegisterSourceDocumentResponse(source_document_id=source_document_id)
+    response = RegisterSourceDocumentResponse(source_document_id=source_document_id)
+    plan.finalize(connection)  # R01: the last statement
+    return response
 
 
 @router.post(
@@ -277,6 +284,7 @@ def remove_source_document_endpoint(
     campaign_id: uuid.UUID,  # noqa: ARG001
     source_document_id: uuid.UUID,
     access: Annotated[AccessContext, Depends(require_campaign_capability(_MANAGE_CAPABILITY))],
+    plan: _Plan,
     connection: Annotated[Connection, Depends(get_connection)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
 ) -> None:
@@ -296,6 +304,7 @@ def remove_source_document_endpoint(
         command_name=_REMOVE_COMMAND_NAME,
         event_id=None,
     )
+    plan.finalize(connection)  # R01: the last statement
 
 
 @router.post(

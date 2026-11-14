@@ -526,6 +526,36 @@ _S4_ROUTES: frozenset[tuple[str, str]] = frozenset(
     }
 )
 
+#: S4b migrates the 21 route-capability-only write routes (manifest family `route_capability_only`, plan
+#: section 7.3): S4b-1 character state, S4b-2 interactions and encounters, S4b-3 item, organization, quest
+#: and relationship runtime state, S4b-4 integration, S4b-5 the reference-corpus source register and remove,
+#: S4b-6 the Foundry pairing code's creation.
+_S4B_ROUTES: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("POST", _CAMPAIGN + "/characters/{character_id}/conditions"),
+        ("POST", _CAMPAIGN + "/characters/{character_id}/conditions/{condition_id}/remove"),
+        ("POST", _CAMPAIGN + "/characters/{character_id}/hit-points"),
+        ("POST", _CAMPAIGN + "/characters/{character_id}/location"),
+        ("POST", _CAMPAIGN + "/characters/{character_id}/resources"),
+        ("POST", _CAMPAIGN + "/checks/{check_request_id}/resolve"),
+        ("POST", _CAMPAIGN + "/encounters"),
+        ("POST", _CAMPAIGN + "/encounters/{encounter_id}/end"),
+        ("POST", _CAMPAIGN + "/encounters/{encounter_id}/turns"),
+        ("POST", _CAMPAIGN + "/events"),
+        ("POST", _CAMPAIGN + "/foundry/pairing-codes"),
+        ("POST", _CAMPAIGN + "/integration/external-systems"),
+        ("POST", _CAMPAIGN + "/integration/external-systems/{external_system_id}/identifiers"),
+        ("POST", _CAMPAIGN + "/interactions"),
+        ("POST", _CAMPAIGN + "/items/{item_instance_id}/identify"),
+        ("POST", _CAMPAIGN + "/items/{item_instance_id}/transfer"),
+        ("POST", _CAMPAIGN + "/organizations/{organization_id}/status"),
+        ("POST", _CAMPAIGN + "/quests/objectives/{quest_objective_id}/advance"),
+        ("POST", _CAMPAIGN + "/reference-corpus/sources"),
+        ("DELETE", _CAMPAIGN + "/reference-corpus/sources/{source_document_id}"),
+        ("POST", _CAMPAIGN + "/relationships/{relationship_id}/evolve"),
+    }
+)
+
 MIGRATED_ROUTES: frozenset[tuple[str, str]] = (
     frozenset(
         {
@@ -539,6 +569,7 @@ MIGRATED_ROUTES: frozenset[tuple[str, str]] = (
     )
     | _S3_ROUTES
     | _S4_ROUTES
+    | _S4B_ROUTES
 )
 
 #: The one family outside R01's bound: account, authentication, Foundry pairing, world and timeline

@@ -152,6 +152,19 @@ def require_world_capability_for_campaign(
         )
 
 
+@dataclasses.dataclass(frozen=True)
+class FoundryRouteFacts:
+    """The facts of a Foundry-authenticated request that a route requirement judges (plan S4b-4): the
+    campaign in the route, the campaign the credential is bound to, the scope the route requires and the
+    scopes the credential was granted. All are read from the authenticated principal at the start of the
+    request and are immutable."""
+
+    route_campaign_id: uuid.UUID
+    bound_campaign_id: uuid.UUID | None
+    route_scope: str
+    granted_scopes: frozenset[str]
+
+
 def route_capability_requirement(
     *,
     capability_code: str,
@@ -159,14 +172,22 @@ def route_capability_requirement(
     world_capability: str | None,
     world_id: uuid.UUID | None,
     actor_user_id: uuid.UUID,
+    foundry: FoundryRouteFacts | None = None,
 ) -> Requirement:
     """The route dependency's own decision (campaign capability, campaign lifecycle and, when
     declared, the world capability) as a requirement for the plan's final check (R01 plan 6.5, rule
     1b). It raises what the dependency raises at the start of the request: 404 for no access or an
     archived campaign, 403 for a missing capability, 403 `world_authority_required` for a missing world
-    capability. The Foundry credential's scope and campaign binding are not part of it: a route that
-    accepts a Foundry credential registers those when it is migrated (slice S4b-4); natural
-    credential expiry is excluded by R-D3."""
+    capability.
+
+    `foundry` (slice S4b-4): for a request authenticated by a Foundry access token on a route that
+    accepts one, the credential's campaign binding (404 when it names another campaign) and the
+    route's scope (403 when the token's granted scopes lack it), judged in the dependency's own order,
+    after the campaign's existence and lifecycle and before the capability. They are facts of the
+    authenticated principal, captured at the start of the request. They are not database inputs of
+    the final statement: explicit device or connection revocation follows plan section 2.1's
+    recommended decision (judged at the start of the request) and natural token expiry is excluded by
+    R-D3."""
 
     def decide(snapshot: AuthoritySnapshot) -> BaseException | None:
         access = snapshot.access
@@ -177,6 +198,11 @@ def route_capability_requirement(
             "deleted",
         ):
             return NotFoundError()
+        if foundry is not None:
+            if foundry.route_campaign_id != foundry.bound_campaign_id:
+                return NotFoundError()
+            if foundry.route_scope not in foundry.granted_scopes:
+                return ForbiddenError()
         if not access.has_capability(capability_code):
             return ForbiddenError()
         if world_capability is not None:
@@ -187,9 +213,8 @@ def route_capability_requirement(
                 )
         return None
 
-    return judged_requirement(
-        f"route.{capability_code}", decide, world_id=world_id if world_capability else None
-    )
+    name = f"route.{capability_code}" if foundry is None else f"route.{capability_code}.foundry"
+    return judged_requirement(name, decide, world_id=world_id if world_capability else None)
 
 
 class RecordAuthoringResponse(BaseModel):
@@ -249,6 +274,21 @@ def can_create_definitions(connection: Connection, *, access: AccessContext) -> 
     return resolve_record_authoring(
         connection, access=access, entity_type_code="definition"
     ).can_edit
+
+
+def _foundry_facts(
+    principal: AuthenticatedPrincipal, campaign_id: uuid.UUID, foundry_scope: str | None
+) -> FoundryRouteFacts | None:
+    """The Foundry facts of this request's route requirement: none for any other authentication."""
+    if principal.auth_method != FOUNDRY_ACCESS_AUTH_METHOD or foundry_scope is None:
+        return None
+    assert principal.foundry_scopes is not None  # guaranteed by AuthenticatedPrincipal
+    return FoundryRouteFacts(
+        route_campaign_id=campaign_id,
+        bound_campaign_id=principal.campaign_id,
+        route_scope=foundry_scope,
+        granted_scopes=frozenset(principal.foundry_scopes),
+    )
 
 
 def require_campaign_capability(
@@ -381,6 +421,7 @@ def require_campaign_capability(
                     if world_capability is not None
                     else None,
                     actor_user_id=principal.user_id,
+                    foundry=_foundry_facts(principal, campaign_id, foundry_scope),
                 ),
             )
         return dataclasses.replace(access, principal=principal)

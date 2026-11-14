@@ -39,6 +39,7 @@ from sqlalchemy import Connection
 
 from dnd_ai.commands.movement import _enter_location_impl
 from dnd_ai.domain.access import AccessContext
+from dnd_ai.domain.authorization import AuthorizationPlan
 
 from ._shared import timeline_world_id
 from .access import require_campaign_capability
@@ -46,8 +47,11 @@ from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .idempotency import IdempotentReplay, begin_idempotent_request, complete_idempotent_request
+from .r01_route_plans import get_authorization_plan
 
 router = APIRouter(tags=["movement"])
+
+_Plan = Annotated[AuthorizationPlan, Depends(get_authorization_plan)]
 
 # Canon-affecting mutation, same first-cut scoping every other command
 # router in this codebase chose — see this module's own docstring.
@@ -80,6 +84,7 @@ def enter_location_endpoint(
     character_id: uuid.UUID,
     body: EnterLocationRequest,
     access: Annotated[AccessContext, Depends(require_campaign_capability(_CANON_EDIT_CAPABILITY))],
+    plan: _Plan,
     connection: Annotated[Connection, Depends(get_connection)],
     idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
@@ -100,6 +105,7 @@ def enter_location_endpoint(
             correlation_id=correlation_id,
         )
         if isinstance(outcome, IdempotentReplay):
+            plan.finalize(connection)  # R01: a replay is judged before the receipt leaves
             return EnterLocationResponse.model_validate(outcome.response_body)
         reservation_id = outcome.idempotent_request_id
 
@@ -143,4 +149,5 @@ def enter_location_endpoint(
             response_body=response.model_dump(mode="json"),
         )
 
+    plan.finalize(connection)  # R01: the last statement
     return response

@@ -79,6 +79,7 @@ from dnd_ai.commands.foundry_pairing import (
     revoke_foundry_device,
 )
 from dnd_ai.domain.access import AccessContext
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.rate_limit import RateLimiter
 
 from ._shared import timeline_world_id
@@ -87,8 +88,11 @@ from .auth import require_human_user_id
 from .client_address import resolve_client_ip
 from .deps import get_connection
 from .errors import RateLimitedError, UnauthorizedError
+from .r01_route_plans import get_authorization_plan
 
 router = APIRouter(tags=["foundry_pairing"])
+
+_Plan = Annotated[AuthorizationPlan, Depends(get_authorization_plan)]
 
 _CAMPAIGN_VIEW_CAPABILITY = "campaign.view"
 _ACCESS_MANAGE_CAPABILITY = "access.manage"
@@ -168,6 +172,7 @@ def create_foundry_pairing_code_endpoint(
     access: Annotated[
         AccessContext, Depends(require_campaign_capability(_CAMPAIGN_VIEW_CAPABILITY))
     ],
+    plan: _Plan,
     connection: Annotated[Connection, Depends(get_connection)],
 ) -> CreatePairingCodeResponse:
     """docs/PLAN.md §23.5 steps 1-2: any active campaign member — not only
@@ -181,12 +186,14 @@ def create_foundry_pairing_code_endpoint(
         requested_scopes=set(body.requested_scopes),
         expected_world_id=timeline_world_id(connection, access.timeline_id),
     )
-    return CreatePairingCodeResponse(
+    response = CreatePairingCodeResponse(
         foundry_pairing_code_id=result.foundry_pairing_code_id,
         raw_code=result.raw_code,
         requested_scopes=list(result.requested_scopes),
         expires_at=result.expires_at.isoformat(),
     )
+    plan.finalize(connection)  # R01: the last statement
+    return response
 
 
 # ---------------------------------------------------------------------------

@@ -31,12 +31,13 @@ from dnd_ai.domain.public_profiles import (
     PublicProfileNotFoundError,
 )
 from dnd_ai.domain.world_authority import WorldAuthority
-from tests.r01_manifest import _S3_ROUTES, _S4_ROUTES, _iter_api_routes
+from tests.r01_manifest import _S3_ROUTES, _S4_ROUTES, _S4B_ROUTES, _iter_api_routes
 
 pytestmark = pytest.mark.unit
 
-#: S2's six routes. S3's 71 are checked by `test_r01_s3_route_shape.py`, S4's 54 by `test_r01_s4_route_shape.py`.
-S2_ROUTES = frozenset(R01_FINALIZED_ROUTES) - _S3_ROUTES - _S4_ROUTES
+#: S2's six routes. S3's 71 are checked by `test_r01_s3_route_shape.py`, S4's 54 by `test_r01_s4_route_shape.py`,
+#: S4b's 21 by `test_r01_s4b_route_shape.py`.
+S2_ROUTES = frozenset(R01_FINALIZED_ROUTES) - _S3_ROUTES - _S4_ROUTES - _S4B_ROUTES
 
 DB_CALLS = {
     "record_change_log",

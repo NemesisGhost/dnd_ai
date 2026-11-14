@@ -396,7 +396,18 @@ def run_lapsing_before_final(
     reaches the final statement (the failure mode of the first version of these tests)."""
     with StatementGate(app_engine, KEY_LOCK_RE) as first, StatementGate(app_engine, FINAL) as final:
         request = run_in_thread("s2-request", call)
-        first.wait_reached()
+        try:
+            first.wait_reached()
+        except AssertionError as missed:
+            # say what the request did instead of reaching its key lock (a refusal before it, an error)
+            outcome = (
+                f"{request.result.status_code} {request.result.text}"
+                if request.finished() and request.result is not None
+                else repr(request.error)
+                if request.finished()
+                else "still running"
+            )
+            raise AssertionError(f"{missed}; the request: {outcome}") from None
         with engine.begin() as connection:
             connection.execute(text("SET LOCAL lock_timeout = '5s'"))
             moved = connection.execute(

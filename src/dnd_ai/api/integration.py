@@ -205,6 +205,7 @@ from dnd_ai.commands.integration import (
     apply_foundry_combat_sync,
 )
 from dnd_ai.domain.access import AccessContext, assert_foundry_system_matches
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.queries.integration import InvalidSyncStateTargetError, get_sync_state_view
 
 from ._shared import timeline_world_id
@@ -214,8 +215,11 @@ from .correlation import get_request_correlation_id
 from .deps import end_request_transaction, get_connection, get_engine, get_idempotency_key
 from .errors import NotFoundError
 from .idempotency import IdempotentReplay, begin_idempotent_request, complete_idempotent_request
+from .r01_route_plans import get_authorization_plan
 
 router = APIRouter(tags=["integration"])
+
+_Plan = Annotated[AuthorizationPlan, Depends(get_authorization_plan)]
 
 # Registering an external system, mapping an entity to it, or resolving a
 # Foundry combat turn are all treated as GM/adapter-level administrative
@@ -378,6 +382,7 @@ def register_external_system_endpoint(
     access: Annotated[
         AccessContext, Depends(require_campaign_capability(_INTEGRATION_MANAGE_CAPABILITY))
     ],
+    plan: _Plan,
     connection: Annotated[Connection, Depends(get_connection)],
     idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
@@ -395,6 +400,7 @@ def register_external_system_endpoint(
             correlation_id=correlation_id,
         )
         if isinstance(outcome, IdempotentReplay):
+            plan.finalize(connection)  # R01: a replay is judged before the receipt leaves
             return RegisterExternalSystemResponse.model_validate(outcome.response_body)
         reservation_id = outcome.idempotent_request_id
 
@@ -434,6 +440,7 @@ def register_external_system_endpoint(
             response_body=response.model_dump(mode="json"),
         )
 
+    plan.finalize(connection)  # R01: the last statement
     return response
 
 
@@ -460,6 +467,7 @@ def map_external_identifier_endpoint(
             )
         ),
     ],
+    plan: _Plan,
     connection: Annotated[Connection, Depends(get_connection)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
 ) -> MapExternalIdentifierResponse:
@@ -498,7 +506,9 @@ def map_external_identifier_endpoint(
         acting_foundry_device_id=access.principal.foundry_device_id,
     )
 
-    return MapExternalIdentifierResponse(external_identifier_id=result.external_identifier_id)
+    response = MapExternalIdentifierResponse(external_identifier_id=result.external_identifier_id)
+    plan.finalize(connection)  # R01: the last statement
+    return response
 
 
 @router.post(

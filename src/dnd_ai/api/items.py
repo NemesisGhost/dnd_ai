@@ -80,6 +80,7 @@ from sqlalchemy import Connection
 from dnd_ai.commands.item_operations import UNSET
 from dnd_ai.commands.items import _identify_item_impl, _transfer_item_possession_impl
 from dnd_ai.domain.access import AccessContext
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.session_authoring import SessionTimeRequiredError
 from dnd_ai.queries.campaign_clock import resolve_effective_clock
 
@@ -88,8 +89,11 @@ from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .idempotency import IdempotentReplay, begin_idempotent_request, complete_idempotent_request
+from .r01_route_plans import get_authorization_plan
 
 router = APIRouter(tags=["items"])
+
+_Plan = Annotated[AuthorizationPlan, Depends(get_authorization_plan)]
 
 # Item possession/identification are canon-affecting mutations (docs/
 # architecture/DATABASE_MODEL.md §12.3) — see this module's docstring for
@@ -182,6 +186,7 @@ def transfer_item_possession_endpoint(
     item_instance_id: uuid.UUID,
     body: TransferItemPossessionRequest,
     access: Annotated[AccessContext, Depends(require_campaign_capability(_ITEM_MANAGE_CAPABILITY))],
+    plan: _Plan,
     connection: Annotated[Connection, Depends(get_connection)],
     idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
@@ -202,6 +207,7 @@ def transfer_item_possession_endpoint(
             correlation_id=correlation_id,
         )
         if isinstance(outcome, IdempotentReplay):
+            plan.finalize(connection)  # R01: a replay is judged before the receipt leaves
             return TransferItemPossessionResponse.model_validate(outcome.response_body)
         reservation_id = outcome.idempotent_request_id
 
@@ -253,6 +259,7 @@ def transfer_item_possession_endpoint(
             response_body=response.model_dump(mode="json"),
         )
 
+    plan.finalize(connection)  # R01: the last statement
     return response
 
 
@@ -266,6 +273,7 @@ def identify_item_endpoint(
     item_instance_id: uuid.UUID,
     body: IdentifyItemRequest,
     access: Annotated[AccessContext, Depends(require_campaign_capability(_ITEM_MANAGE_CAPABILITY))],
+    plan: _Plan,
     connection: Annotated[Connection, Depends(get_connection)],
     idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
@@ -286,6 +294,7 @@ def identify_item_endpoint(
             correlation_id=correlation_id,
         )
         if isinstance(outcome, IdempotentReplay):
+            plan.finalize(connection)  # R01: a replay is judged before the receipt leaves
             return IdentifyItemResponse.model_validate(outcome.response_body)
         reservation_id = outcome.idempotent_request_id
 
@@ -332,4 +341,5 @@ def identify_item_endpoint(
             response_body=response.model_dump(mode="json"),
         )
 
+    plan.finalize(connection)  # R01: the last statement
     return response
