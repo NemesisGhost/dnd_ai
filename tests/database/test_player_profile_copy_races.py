@@ -140,7 +140,10 @@ def run_gated(
         a = run_in_thread("first", first)
         gate.wait_reached()
         b = run_in_thread("second", second)
-        wait_until_blocked(engine, gate)  # the second request is waiting on the first's session
+        try:
+            wait_until_blocked(engine, gate)  # the second request is waiting on the first's session
+        except AssertionError as missed:
+            raise AssertionError(f"{missed}\n{a.describe()}\n{b.describe()}") from None
         assert not b.finished()
         gate.release()
         ra, rb = a.wait("first"), b.wait("second")

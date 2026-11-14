@@ -67,6 +67,7 @@ from tests.database.test_player_profile_copy import copy_pp
 from tests.factories import make_access_group, make_access_group_membership, oidc_principal
 from tests.http_race_support import (
     StatementGate,
+    activity_report,
     new_key,
     run_in_thread,
     wait_until_pid_blocks,
@@ -407,7 +408,10 @@ def run_lapsing_before_final(
                 if request.finished()
                 else "still running"
             )
-            raise AssertionError(f"{missed}; the request: {outcome}") from None
+            raise AssertionError(
+                f"{missed}; the request: {outcome}; {request.describe()}; {first.describe()}\n"
+                f"{activity_report(app_engine)}"
+            ) from None
         with engine.begin() as connection:
             connection.execute(text("SET LOCAL lock_timeout = '5s'"))
             moved = connection.execute(

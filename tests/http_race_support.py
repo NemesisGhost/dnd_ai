@@ -23,6 +23,33 @@ from sqlalchemy import Engine, event, text
 WAIT_SECONDS = 15.0
 
 
+def activity_report(engine: Engine) -> str:
+    """What every non-idle backend of this database is doing, for a failed wait's message: pid, state,
+    wait event, transaction and state age, blockers and the statement. A diagnostic only; a failure to
+    take it is reported, never raised."""
+    try:
+        with engine.connect() as connection:
+            rows = connection.execute(
+                text(
+                    "SELECT pid, state, wait_event_type, wait_event, "
+                    "round(extract(epoch FROM now() - xact_start)::numeric, 2) AS xact_s, "
+                    "round(extract(epoch FROM now() - state_change)::numeric, 2) AS state_s, "
+                    "pg_blocking_pids(pid) AS blockers, "
+                    "left(regexp_replace(query, '[[:space:]]+', ' ', 'g'), 150) AS q "
+                    "FROM pg_stat_activity WHERE datname = current_database() "
+                    "AND pid <> pg_backend_pid() AND state <> 'idle' ORDER BY xact_start NULLS LAST"
+                )
+            ).all()
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not mask the failure
+        return f"[activity report unavailable: {exc!r}]"
+    lines = [
+        f"  pid={r.pid} {r.state} wait={r.wait_event_type}/{r.wait_event} xact={r.xact_s}s "
+        f"state={r.state_s}s blockers={list(r.blockers)} q={r.q!r}"
+        for r in rows
+    ]
+    return "backends:\n" + ("\n".join(lines) if lines else "  (none non-idle)")
+
+
 class StatementGate:
     def __init__(self, engine: Engine, pattern: str) -> None:
         import re
@@ -32,13 +59,26 @@ class StatementGate:
         self.reached = threading.Event()
         self.resume = threading.Event()
         self.pid: int | None = None
+        self.matched: str | None = None
+        self.armed_at = time.monotonic()
+        self.reached_at: float | None = None
         self._fired = False
+
+    def describe(self) -> str:
+        reached = (
+            f"reached after {self.reached_at - self.armed_at:.2f}s on pid {self.pid}"
+            if self.reached_at is not None
+            else f"not reached after {time.monotonic() - self.armed_at:.2f}s"
+        )
+        return f"gate {self.pattern.pattern!r}: {reached}; statement={self.matched!r}"
 
     def _hook(self, conn: Any, cursor: Any, statement: Any, *_: Any) -> None:
         if self._fired or not self.pattern.search(" ".join(str(statement).split())):
             return
         self._fired = True
         self.pid = conn.connection.driver_connection.info.backend_pid
+        self.matched = " ".join(str(statement).split())[:150]
+        self.reached_at = time.monotonic()
         self.reached.set()
         self.resume.wait(WAIT_SECONDS)
 
@@ -51,7 +91,10 @@ class StatementGate:
         event.remove(self.engine, "before_cursor_execute", self._hook)
 
     def wait_reached(self) -> None:
-        assert self.reached.wait(WAIT_SECONDS), "the request never reached the gated statement"
+        assert self.reached.wait(WAIT_SECONDS), (
+            "the request never reached the gated statement; "
+            f"{self.describe()}\n{activity_report(self.engine)}"
+        )
 
     def release(self) -> None:
         self.resume.set()
@@ -88,7 +131,7 @@ def wait_until_blocked(engine: Engine, gate: StatementGate, *, expected: int = 1
         time.sleep(0.02)
     raise AssertionError(
         f"expected {expected} session(s) blocked by pid {gate.pid}; "
-        f"{sessions_blocked_by(engine, gate.pid)} were"
+        f"{sessions_blocked_by(engine, gate.pid)} were; {gate.describe()}\n{activity_report(engine)}"
     )
 
 
@@ -102,6 +145,7 @@ def run_in_thread(name: str, operation: Callable[[], Any]) -> "Request":
         except BaseException as exc:  # noqa: BLE001 - surfaced to the test
             request.error = exc
         finally:
+            request.ended = time.monotonic()
             request.done.set()
 
     request.thread = threading.Thread(target=run, name=name, daemon=True)
@@ -110,7 +154,20 @@ def run_in_thread(name: str, operation: Callable[[], Any]) -> "Request":
 
 
 class Request:
+    def describe(self) -> str:
+        """The request's outcome so far, for a failed wait's message."""
+        if not self.done.is_set():
+            return f"{self.name}: still running after {time.monotonic() - self.started:.2f}s"
+        took = (self.ended or time.monotonic()) - self.started
+        if self.error is not None:
+            return f"{self.name}: raised {self.error!r} after {took:.2f}s"
+        status = getattr(self.result, "status_code", None)
+        text_ = str(getattr(self.result, "text", self.result))[:200]
+        return f"{self.name}: finished {status} {text_!r} after {took:.2f}s"
+
     def __init__(self, name: str) -> None:
+        self.started = time.monotonic()
+        self.ended: float | None = None
         self.name = name
         self.result: Any = None
         self.error: BaseException | None = None
@@ -140,7 +197,7 @@ def wait_until_pid_blocks(engine: Engine, holder_pid: int, *, expected: int = 1)
         time.sleep(0.02)
     raise AssertionError(
         f"expected {expected} session(s) blocked by pid {holder_pid}; "
-        f"{sessions_blocked_by(engine, holder_pid)} were"
+        f"{sessions_blocked_by(engine, holder_pid)} were\n{activity_report(engine)}"
     )
 
 

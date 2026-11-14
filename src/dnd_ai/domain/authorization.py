@@ -65,6 +65,20 @@ answered for the idempotency key. No production route uses this yet; S5-D onward
   `campaign.campaigns` row at `KEY SHARE` or stronger. It is checked in `finalize` before the snapshot is
   read, and again by the COMMIT guard; a deferral with no bound outcome never commits. Replay inserts no
   row, queues no campaign check and needs no evidence; it is judged by the route's requirements alone.
+- **Who may change the reservation FK's constraint mode (enforced at run time).** Only the plan's own
+  `defer_reservation_campaign_fk`. The guard classifies every statement of the application engine that
+  mentions CONSTRAINTS (`changes_reservation_fk_mode`: `SET CONSTRAINTS ALL`, the FK by bare, schema-
+  qualified or quoted name, either mode; comments between the keywords, several statements in one string
+  or unparseable names are treated as affecting it). Any such statement other than the plan's own is
+  refused before it reaches the driver and latches every keyed plan on the connection
+  (`CONSTRAINT_MODE`); a refusal caught by the caller stays latched. A change made before a keyed plan
+  exists cannot be refused, so it marks the transaction and a keyed plan opened in it starts latched.
+  Supported-code contract: statements go through the application engine, and the guard is installed
+  when the engine is created (`api/deps.py`). Not covered: a raw DBAPI cursor, `SET CONSTRAINTS` assembled
+  by dynamic SQL, hostile in-process code. `SET CONSTRAINTS` on other constraints is untouched.
+- `bind_unkeyed` is refused (and latches) when the server has already recorded a reservation outcome
+  for this plan's connection, transaction, actor and campaign, even before `bind_reservation`; the record
+  is left in place.
 - A savepoint rollback once the plan holds the deferral, an outcome or evidence latches
   `SAVEPOINT_ROLLBACK`. `SET CONSTRAINTS` is transaction-scoped: the next transaction on a pooled
   connection is immediate again. Not covered: code that issues `SET CONSTRAINTS` itself before
@@ -80,6 +94,7 @@ a plan yet. Passing it protects nothing; a unit test pins the exact call sites t
 """
 
 import enum
+import re
 import threading
 import uuid
 import weakref
@@ -193,6 +208,7 @@ class ViolationReason(enum.Enum):
     BINDING = "binding"
     SEQUENCE = "sequence"
     DEFERRAL = "deferral"
+    CONSTRAINT_MODE = "constraint_mode"
     OUTCOME = "outcome"
     DECLARATION = "declaration"
     CAMPAIGN_EVIDENCE = "campaign_evidence"
@@ -266,6 +282,95 @@ _DEFERRAL_SQL: Final = text(
     "AND c.connamespace OPERATOR(pg_catalog.=) 'security'::pg_catalog.regnamespace"
 )
 _SET_DEFERRED: Final = text(f"SET CONSTRAINTS security.{_CAMPAIGN_FK} DEFERRED")
+_SET_DEFERRED_STRING: Final = f"SET CONSTRAINTS security.{_CAMPAIGN_FK} DEFERRED"
+
+# -- who may change the reservation FK's constraint mode (R01 S5-C correction) ----------------------
+#
+# `SET CONSTRAINTS` is transaction state the plan's deferral obligation depends on. The guard sees every
+# statement the application engine executes (`before_cursor_execute`: `text()`, `exec_driver_sql`, ORM) and
+# classifies the ones that mention the word CONSTRAINTS:
+#
+# - a clean single statement `SET CONSTRAINTS <names> DEFERRED|IMMEDIATE` is parsed; it affects the
+#   reservation FK when the list is `ALL` or any name, qualified or quoted or not, ends in the FK's name;
+# - anything else that mentions CONSTRAINTS (comments between the keywords, several statements in one
+#   string, dynamic SQL spelled out, unparseable names) is treated as affecting it: the guard fails closed.
+#
+# A statement that affects it is allowed only as the plan's own `_SET_DEFERRED`, issued inside
+# `defer_reservation_campaign_fk`. Anything else latches every keyed plan on the connection
+# (`CONSTRAINT_MODE`) and is refused before it reaches the driver. When no keyed plan exists yet the
+# statement cannot be refused (there is nothing to protect), so the transaction is marked and a keyed plan
+# opened later in that transaction starts latched. Statements that do not mention CONSTRAINTS, and
+# SET CONSTRAINTS on other constraints, are untouched.
+_CONSTRAINTS_WORD: Final = re.compile(r"\bconstraints\b", re.IGNORECASE)
+_SET_CONSTRAINTS: Final = re.compile(
+    r"\A\s*SET\s+CONSTRAINTS\s+(?P<names>.+?)\s+(?:DEFERRED|IMMEDIATE)\s*;?\s*\Z",
+    re.IGNORECASE | re.DOTALL,
+)
+_FK_MODE_MARK: Final = "reservation_fk_mode_changed"
+
+
+def _split_names(names: str) -> list[list[str]] | None:
+    """The comma-separated, dot-qualified, optionally double-quoted identifiers of a `SET CONSTRAINTS`
+    list, case-folded as PostgreSQL does; `None` when anything is not a plain identifier."""
+    result: list[list[str]] = []
+    position = 0
+    length = len(names)
+    while True:
+        parts: list[str] = []
+        while True:
+            while position < length and names[position].isspace():
+                position += 1
+            if position >= length:
+                return None
+            if names[position] == '"':
+                end = position + 1
+                buffer: list[str] = []
+                while True:
+                    if end >= length:
+                        return None
+                    if names[end] == '"':
+                        if end + 1 < length and names[end + 1] == '"':
+                            buffer.append('"')
+                            end += 2
+                            continue
+                        break
+                    buffer.append(names[end])
+                    end += 1
+                parts.append("".join(buffer))
+                position = end + 1
+            else:
+                match = re.compile(r"[A-Za-z_\u0080-\uffff][A-Za-z0-9_$\u0080-\uffff]*").match(
+                    names, position
+                )
+                if match is None:
+                    return None
+                parts.append(match.group(0).lower())
+                position = match.end()
+            while position < length and names[position].isspace():
+                position += 1
+            if position < length and names[position] == ".":
+                position += 1
+                continue
+            break
+        result.append(parts)
+        if position >= length:
+            return result
+        if names[position] != ",":
+            return None
+        position += 1
+
+
+def changes_reservation_fk_mode(statement: str) -> bool:
+    """Whether `statement` may change the constraint mode of the reservation's campaign FK (see above)."""
+    if _CONSTRAINTS_WORD.search(statement) is None:
+        return False
+    match = _SET_CONSTRAINTS.match(statement)
+    if match is None:
+        return True
+    names = _split_names(match.group("names"))
+    if names is None:
+        return True
+    return any(parts == ["all"] or parts[-1] == _CAMPAIGN_FK for parts in names)
 
 
 def _is_campaign_lock(lock: PreLock) -> bool:
@@ -504,6 +609,7 @@ class AuthorizationPlan:
         "_pending",
         "_reading",
         "_requirements",
+        "_set_flight",
         "_snapshot",
         "_transaction",
         "_violated",
@@ -542,6 +648,7 @@ class AuthorizationPlan:
         self._by_outcome = by_outcome
         self._bound: _Bound | None = None
         self._deferred = False
+        self._set_flight = False
         self._pending = pending
         self._requirements: list[Requirement] = []
         self._finalised = False
@@ -598,6 +705,9 @@ class AuthorizationPlan:
         )
         if mode is PlanMode.PRE_WRITE:
             plan._baseline = _topology(connection)
+        if by_outcome is not None and connection.info.get(_FK_MODE_MARK) is plan._transaction:
+            # the reservation FK's mode was changed by other code earlier in this transaction
+            plan._latch(ViolationReason.CONSTRAINT_MODE)
         with _LOCK:
             _BOUND.setdefault(connection, []).append(plan)
         return plan
@@ -832,7 +942,11 @@ class AuthorizationPlan:
         try:
             if connection.execute(_DEFERRAL_SQL).scalar_one() is not True:
                 self._refuse(ViolationReason.DEFERRAL)
-            connection.execute(_SET_DEFERRED)
+            self._set_flight = True  # the guard authorizes exactly this statement object, only now
+            try:
+                connection.execute(_SET_DEFERRED)
+            finally:
+                self._set_flight = False
         except BaseException:
             self._latch(ViolationReason.DEFERRAL)
             raise
@@ -878,11 +992,31 @@ class AuthorizationPlan:
         follow a deferral (nothing would be reserved to defer), a bound outcome or `finalize`, and the
         plan must have been created with an unkeyed declaration."""
         declarations = self._keyed_entry(connection, ViolationReason.OUTCOME)
+        pending = recorded_reservation_outcome(connection)
+        if (
+            pending is not None
+            and pending.transaction is self._transaction
+            and pending.actor_user_id == self._actor_user_id
+            and pending.campaign_id == self._campaign_id
+        ):
+            # the server already answered for a key in this plan's transaction: the request is keyed.
+            # The record is left in place (never cleared to make room for this call).
+            self._latch(ViolationReason.OUTCOME)
+            raise AuthorizationPlanStateError()
         if self._deferred or declarations.unkeyed is None:
             self._latch(ViolationReason.OUTCOME)
             raise AuthorizationPlanStateError()
         self._bound = _Bound.UNKEYED
         self._install_declaration(declarations.unkeyed)
+
+    def _authorizes_fk_mode(self, statement: str, context: Any) -> bool:
+        """Whether this plan is, right now, issuing its own deferral statement."""
+        return (
+            self._set_flight
+            and context is not None
+            and context.invoked_statement is _SET_DEFERRED
+            and statement == _SET_DEFERRED_STRING
+        )
 
     def _has_campaign_evidence(self) -> bool:
         """Actual `plan.lock` evidence, taken through this plan (hence on its connection and in its
@@ -1427,8 +1561,25 @@ def _on_before_cursor_execute(
     context: Any,
     executemany: bool,
 ) -> None:
-    for plan in _plans_for(connection):
+    plans = _plans_for(connection)
+    if changes_reservation_fk_mode(statement):
+        _on_fk_mode_statement(connection, plans, statement, context)
+    for plan in plans:
         plan._on_before_cursor_execute(connection, statement, context, executemany)
+
+
+def _on_fk_mode_statement(
+    connection: Connection, plans: list[AuthorizationPlan], statement: str, context: Any
+) -> None:
+    """A statement that may change the reservation FK's mode: only a plan's own deferral passes."""
+    if any(plan._authorizes_fk_mode(statement, context) for plan in plans):
+        return
+    connection.info[_FK_MODE_MARK] = connection.get_transaction()
+    keyed = [plan for plan in plans if plan._by_outcome is not None]
+    for plan in keyed:
+        plan._latch(ViolationReason.CONSTRAINT_MODE)
+    if keyed:
+        raise AuthorizationPlanViolationError()
 
 
 def _on_do_execute(cursor: Any, statement: str, parameters: object, context: Any) -> bool:
@@ -1521,6 +1672,7 @@ __all__ = [
     "AuthorizationPlanViolationError",
     "PlanMode",
     "REPLAY_DECLARATION",
+    "changes_reservation_fk_mode",
     "Requirement",
     "ReservationDeclarations",
     "StepOutcome",
