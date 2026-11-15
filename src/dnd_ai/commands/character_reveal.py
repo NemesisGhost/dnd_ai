@@ -9,14 +9,24 @@ assignment or the membership ends), so a regained GM status needs a fresh grant.
 
 Both commands re-read the caller's owner assignment under lock and again at a fresh database
 instant after their last lock wait and before the write (DEF-013), reusing the D3 gate and the
-shared live-owner predicate. Lock order (design section 3, never inverted): the caller's owner
-assignment (`FOR SHARE`); the grantee's built-in `gm` assignment rows (`FOR UPDATE`); the grantee's
-membership (`FOR NO KEY UPDATE`); the grantee's delegation rows (`FOR UPDATE`); then, only for the
-foreign keys of the row about to be written, the caller's membership and then the campaign row
-(`FOR KEY SHARE`, in that order; `_lock_foreign_key_targets`). Revoking takes the owner assignment, the delegation row and the
-caller's membership (`FOR KEY SHARE`). This is the order `revoke_membership_role`, `change_membership_role` and
-`end_campaign_membership` reach the same rows in: role rows, then the membership, then the
-delegation, then the campaign (the retention trigger takes it at commit).
+shared live-owner predicate.
+
+Lock order of a grant (R01 S5-E2 lock-order correction C1, docs/R01_S5E2_LOCK_ORDER_CORRECTION_DESIGN_
+2026-11-15.md): **each lock class in one ascending-id pass, every row at the mode it needs.** The rows are
+discovered first by one unlocked read (the caller's live owner row and the grantee's unrevoked built-in `gm`
+rows of this campaign, ordered by `membership_role_id`) and then locked one statement per row, each bound to a
+discovered id, so a row that appears later is never picked up by a locking statement: the role class (the owner
+row `FOR SHARE`, a `gm` row `FOR UPDATE`, in id order, so the grant and the S5-E2 change/revoke/transfer routes,
+which lock role rows in id order too, never wait in a cycle); the membership class (the grantee `FOR NO KEY
+UPDATE` and the caller `FOR KEY SHARE`, in id order; one membership is locked once, at `FOR NO KEY UPDATE`); the
+grantee's delegation rows (`FOR UPDATE`); the campaign (`FOR KEY SHARE`). After the last wait the caller is
+re-judged and the live `gm` row must be one of the rows locked in the role pass, otherwise the grant is refused
+409 `reveal_delegation_recipient_changed` (a `gm` row inserted after discovery would be a delegation target nobody
+holds). Refusal precedence is unchanged: 403 (no live owner row, at discovery or at the lock), 404 (grantee of
+another campaign), 403 (the caller's row lapsed during the waits), 409 (no live `gm` row). Revoking takes the
+owner assignment, the delegation row and the caller's membership (`FOR KEY SHARE`). The order is the one
+`revoke_membership_role`, `change_membership_role` and `end_campaign_membership` reach the same rows in: role rows,
+then the membership, then the delegation, then the campaign (the retention trigger takes it at commit).
 
 Why these modes (the two deadlocks found in review):
 
@@ -38,11 +48,16 @@ from dataclasses import dataclass
 
 from sqlalchemy import Connection, text
 
-from dnd_ai.domain.access import find_live_builtin_gm_assignment
+from dnd_ai.domain.access import (
+    BUILTIN_CAMPAIGN_GM_ROLE_CODE,
+    BUILTIN_CAMPAIGN_OWNER_ROLE_CODE,
+    find_live_builtin_gm_assignment,
+)
 from dnd_ai.domain.authoring import normalize_reason
 from dnd_ai.domain.errors import SafeMessageError
 
 from .memberships import (
+    CampaignOwnerRequiredError,
     MembershipNotInCampaignError,
     _database_clock,
     _recheck_caller_is_live_owner,
@@ -65,6 +80,19 @@ class RevealDelegationRecipientNotGmError(SafeMessageError):
     safe_message = (
         "Reveal authority can be delegated only to a member who currently holds the GM role. "
         "Nothing was changed."
+    )
+
+
+class RevealDelegationRecipientChangedError(SafeMessageError):
+    """The grantee's live built-in `gm` assignment appeared after the grant had chosen the rows to lock (C1,
+    docs/R01_S5E2_LOCK_ORDER_CORRECTION_DESIGN_2026-11-15.md BA-1): the delegation would have bound to a row the
+    grant never held. Nothing was written; a retry locks the new row first. 409."""
+
+    safe_status_code = 409
+    safe_error_code = "reveal_delegation_recipient_changed"
+    safe_message = (
+        "The member's GM assignment changed while the delegation was being made. "
+        "Nothing was changed; try again."
     )
 
 
@@ -130,6 +158,97 @@ def _lock_foreign_key_targets(
         ).all()
 
 
+_OWNER_KIND = "owner"
+_GM_KIND = "gm"
+
+# The caller's live built-in owner row: exactly `find_live_builtin_owner_assignment`'s predicate at `now()` (the
+# transaction's start), repeated here so that a *locking* statement can be bound to a discovered row id.
+_LIVE_OWNER_FROM = """
+    FROM security.membership_roles mr
+    JOIN security.roles r ON r.role_id = mr.role_id
+    JOIN security.campaign_memberships cm ON cm.campaign_membership_id = mr.campaign_membership_id
+    JOIN security.membership_statuses ms ON ms.membership_status_id = cm.membership_status_id
+    JOIN security.users u ON u.user_id = cm.user_id
+    JOIN core.lifecycle_statuses uls ON uls.lifecycle_status_id = u.lifecycle_status_id
+    WHERE mr.campaign_membership_id = :caller
+      AND cm.campaign_id = :campaign
+      AND r.campaign_id IS NULL
+      AND r.code = :owner
+      AND r.is_active
+      AND mr.revoked_at IS NULL
+      AND (mr.expires_at IS NULL OR mr.expires_at > now())
+      AND cm.ended_at IS NULL
+      AND ms.code = 'active'
+      AND ms.is_active
+      AND uls.code = 'active'
+"""
+_LIVE_OWNER_ROW_SQL = "SELECT mr.membership_role_id " + _LIVE_OWNER_FROM
+# The grantee's unrevoked built-in gm rows (the rows the delegation binds to and the lifecycle closes).
+_GM_ROW_SQL = """
+    SELECT mr.membership_role_id
+    FROM security.membership_roles mr
+    JOIN security.roles r ON r.role_id = mr.role_id
+    WHERE mr.campaign_membership_id = :grantee
+      AND r.campaign_id IS NULL AND r.code = :gm AND mr.revoked_at IS NULL
+"""
+_DISCOVERY_SQL = f"""
+    SELECT d.membership_role_id, d.kind FROM (
+        SELECT mr.membership_role_id, '{_OWNER_KIND}' AS kind {_LIVE_OWNER_FROM}
+        UNION ALL
+        SELECT mr.membership_role_id, '{_GM_KIND}' AS kind
+        FROM security.membership_roles mr
+        JOIN security.roles r ON r.role_id = mr.role_id
+        JOIN security.campaign_memberships cm ON cm.campaign_membership_id = mr.campaign_membership_id
+        WHERE mr.campaign_membership_id = :grantee
+          AND cm.campaign_id = :campaign
+          AND r.campaign_id IS NULL AND r.code = :gm AND mr.revoked_at IS NULL
+    ) d
+    ORDER BY d.membership_role_id
+"""  # noqa: S608 - the interpolated names are module constants
+
+
+def _owner_binds(
+    campaign_id: uuid.UUID, caller_membership_id: uuid.UUID, *, row: uuid.UUID
+) -> dict[str, object]:
+    return {
+        "caller": caller_membership_id,
+        "campaign": campaign_id,
+        "owner": BUILTIN_CAMPAIGN_OWNER_ROLE_CODE,
+        "row": row,
+    }
+
+
+def _owner_required(
+    campaign_id: uuid.UUID, caller_membership_id: uuid.UUID
+) -> CampaignOwnerRequiredError:
+    return CampaignOwnerRequiredError(
+        f"membership {caller_membership_id} holds no live campaign_owner assignment in "
+        f"campaign {campaign_id}"
+    )
+
+
+def _discover_role_rows(
+    connection: Connection,
+    *,
+    campaign_id: uuid.UUID,
+    caller_membership_id: uuid.UUID,
+    grantee_membership_id: uuid.UUID,
+) -> list[tuple[uuid.UUID, str]]:
+    """The caller's live owner row and the grantee's unrevoked gm rows of this campaign, **unlocked**, ascending by
+    id: the order the role class is then locked in. A grantee of another campaign matches no gm row."""
+    found = connection.execute(
+        text(_DISCOVERY_SQL),
+        {
+            "caller": caller_membership_id,
+            "grantee": grantee_membership_id,
+            "campaign": campaign_id,
+            "owner": BUILTIN_CAMPAIGN_OWNER_ROLE_CODE,
+            "gm": BUILTIN_CAMPAIGN_GM_ROLE_CODE,
+        },
+    ).all()
+    return [(row.membership_role_id, row.kind) for row in found]
+
+
 def grant_character_reveal_delegation(
     connection: Connection,
     *,
@@ -149,36 +268,63 @@ def grant_character_reveal_delegation(
     (`gm_assignment_lapsed`) and a new row is bound to the current assignment."""
     clean_reason = normalize_reason(reason, required=True)
     assert clean_reason is not None
-    _require_builtin_campaign_owner(
-        connection, campaign_id=campaign_id, actor_membership_id=actor_membership_id
+    # 1. Discovery (unlocked, one statement, ascending by id): the caller's live owner row and the grantee's
+    #    unrevoked built-in gm rows. A caller with no live owner row is refused before anything is locked.
+    discovered = _discover_role_rows(
+        connection,
+        campaign_id=campaign_id,
+        caller_membership_id=actor_membership_id,
+        grantee_membership_id=grantee_campaign_membership_id,
     )
+    if not any(kind == _OWNER_KIND for _, kind in discovered):
+        raise _owner_required(campaign_id, actor_membership_id)
+    # 2. Role class, one ascending pass, each row once at the mode it needs, each statement bound to a
+    #    discovered id (a row inserted after discovery is never picked up by a locking statement):
+    #    the owner row FOR SHARE (a revocation, an end or a relinquishment waits for this transaction),
+    #    the gm rows FOR UPDATE (they are the delegation's foreign key and its lifecycle).
+    locked_gm_rows: set[uuid.UUID] = set()
+    for row_id, kind in discovered:
+        if kind == _OWNER_KIND:
+            if (
+                connection.execute(
+                    text(_LIVE_OWNER_ROW_SQL + " AND mr.membership_role_id = :row FOR SHARE OF mr"),
+                    _owner_binds(campaign_id, actor_membership_id, row=row_id),
+                ).first()
+                is None
+            ):
+                raise _owner_required(campaign_id, actor_membership_id)
+        elif (
+            connection.execute(
+                text(_GM_ROW_SQL + " AND mr.membership_role_id = :row FOR UPDATE OF mr"),
+                {
+                    "grantee": grantee_campaign_membership_id,
+                    "row": row_id,
+                    "gm": BUILTIN_CAMPAIGN_GM_ROLE_CODE,
+                },
+            ).first()
+            is not None
+        ):
+            locked_gm_rows.add(row_id)
+    # 3. Unlocked, as before (the membership's campaign never changes): the 404 keeps its place after the
+    #    owner refusal.
     _require_grantee_in_campaign(
         connection,
         campaign_id=campaign_id,
         grantee_campaign_membership_id=grantee_campaign_membership_id,
     )
-    # Only the grantee's built-in gm rows are locked, not every role row: two owners granting to
-    # each other would otherwise each hold the other's owner assignment `FOR SHARE` and want it
-    # `FOR UPDATE`.
-    connection.execute(
-        text("""
-            SELECT mr.membership_role_id
-            FROM security.membership_roles mr
-            JOIN security.roles r ON r.role_id = mr.role_id
-            WHERE mr.campaign_membership_id = :grantee
-              AND r.campaign_id IS NULL AND r.code = 'gm' AND mr.revoked_at IS NULL
-            ORDER BY mr.membership_role_id
-            FOR UPDATE OF mr
-        """),
-        {"grantee": grantee_campaign_membership_id},
-    ).all()
-    connection.execute(
-        text(
-            "SELECT 1 FROM security.campaign_memberships "
-            "WHERE campaign_membership_id = :grantee FOR NO KEY UPDATE"
-        ),
-        {"grantee": grantee_campaign_membership_id},
-    ).all()
+    # 4. Membership class, one ascending pass: the grantee `FOR NO KEY UPDATE`, the caller `FOR KEY SHARE`
+    #    (the delegation insert's foreign keys need nothing stronger); one membership, one lock.
+    memberships: dict[uuid.UUID, str] = {actor_membership_id: "FOR KEY SHARE"}
+    memberships[grantee_campaign_membership_id] = "FOR NO KEY UPDATE"
+    for membership_id in sorted(memberships):
+        connection.execute(
+            text(
+                "SELECT 1 FROM security.campaign_memberships "
+                f"WHERE campaign_membership_id = :membership {memberships[membership_id]}"  # noqa: S608
+            ),
+            {"membership": membership_id},
+        ).all()
+    # 5. The grantee's delegation rows, then the campaign (`FOR KEY SHARE`, the mode the insert needs).
     existing = (
         connection.execute(
             text("""
@@ -193,12 +339,10 @@ def grant_character_reveal_delegation(
         .mappings()
         .all()
     )
-    _lock_foreign_key_targets(
-        connection,
-        campaign_id=campaign_id,
-        actor_membership_id=actor_membership_id,
-        include_campaign=True,
-    )
+    connection.execute(
+        text("SELECT 1 FROM campaign.campaigns WHERE campaign_id = :campaign FOR KEY SHARE"),
+        {"campaign": campaign_id},
+    ).all()
 
     # Every lock wait is behind us: judge the caller and the grantee at a fresh database instant.
     now = _database_clock(connection)
@@ -215,6 +359,13 @@ def grant_character_reveal_delegation(
         raise RevealDelegationRecipientNotGmError(
             f"membership {grantee_campaign_membership_id} holds no live built-in gm assignment "
             f"in campaign {campaign_id}"
+        )
+    if gm_assignment not in locked_gm_rows:
+        # The live gm row was not among the rows locked in step 2 (it appeared after discovery): the
+        # delegation would bind to a row nobody holds. Retryable; nothing has been written.
+        raise RevealDelegationRecipientChangedError(
+            f"membership {grantee_campaign_membership_id}'s live gm assignment {gm_assignment} "
+            "appeared while the grant waited"
         )
 
     for row in existing:

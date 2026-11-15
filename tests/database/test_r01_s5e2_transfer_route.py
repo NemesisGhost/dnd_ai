@@ -39,6 +39,7 @@ from dnd_ai.domain.authorization import (
     install_authorization_guard,
 )
 from tests.builders import make_authored_campaign, make_authored_world
+from tests.database.test_authoring_concurrency import _purge_user_worlds
 from tests.database.test_r01_s2_profile_routes import (  # noqa: F401 - fixtures used by name
     FINAL,
     Recorder,
@@ -81,14 +82,15 @@ Factory = Callable[[uuid.UUID], TestClient]
 
 ACTOR_ROWS = (
     r"membership_roles\.campaign_membership_id = %\(membership\)s::UUID AND "
-    r"security\.membership_roles\.revoked_at IS NULL ORDER BY .* FOR NO KEY UPDATE$"
+    r"security\.membership_roles\.revoked_at IS NULL AND .* ORDER BY .* FOR NO KEY UPDATE$"
 )
 EXPIRED_ROW = r"expires_at <= pg_catalog\.clock_timestamp\(\) .*FOR NO KEY UPDATE$"
 LIVE_ROW = r"FROM security\.membership_roles WHERE .*FOR KEY SHARE$"
 OWN_ROW = (
     r"membership_roles\.role_id = %\(role\)s::UUID AND (?!.*clock_timestamp).*FOR NO KEY UPDATE$"
 )
-MEMBERSHIPS_U = r"FROM security\.campaign_memberships WHERE .* ORDER BY .* FOR UPDATE$"
+#: Either membership statement of the C4 pass (the actor's `FOR SHARE`, the recipient's `FOR UPDATE`; ascending id order).
+MEMBERSHIPS_ANY = r"FROM security\.campaign_memberships WHERE .* FOR (SHARE|UPDATE)$"
 ACCOUNT_S = r"FROM security\.users WHERE .* FOR SHARE$"
 ACCOUNT_KS = r"FROM security\.users WHERE .* FOR KEY SHARE$"
 CAMPAIGN_U = r"FROM campaign\.campaigns WHERE campaign\.campaigns\.campaign_id = %\(campaign\)s::UUID FOR UPDATE$"
@@ -407,7 +409,9 @@ def _refusal_cases() -> dict[str, Callable[[T], dict[str, Any]]]:
             authored = make_authored_world(c, owner_user_id=owner, name="TR Other World")
             other = make_authored_campaign(c, authored, name="TR Other Campaign")
             foreign = make_campaign_membership(c, other, make_user(c, "TR Foreign"))
-        return {"target": foreign}
+        # the second world is committed and has an owner and so an access manager; the test purges it (a leftover
+        # campaign made `test_security_access_control_invariants` fail when it ran later in the same database)
+        return {"target": foreign, "purge_owner": owner}
 
     def nonexistent(t: T) -> dict[str, Any]:
         return {"target": uuid.uuid4()}
@@ -494,21 +498,25 @@ def test_each_refusal_matches_the_direct_command_in_status_and_code_and_persists
     same state says which refusal wins; the route returns the same status and code, nothing persists, no key is
     consumed, the connection returns clean."""
     knobs = _refusal_cases()[case](t)
-    if knobs.get("skip"):
-        pytest.skip("no second campaign in the database")
-    actor = knobs.get("actor", t.a_user)
-    actor_membership = knobs.get("actor_membership", t.a_membership)
-    target = knobs.get("target", t.c_membership)
-    relinquish = knobs.get("relinquish", False)
-    expected = legacy(t, actor=actor_membership, target=target, relinquish=relinquish)
-    assert expected[0] == "error", expected
-    before = snapshot(t)
-    response = post(pooled_factory, t, actor=actor, target=target, relinquish=relinquish)
-    assert code(response) == expected[1], (response.text, expected)
-    if expected[2] not in ("ValueError",):
-        assert error_of(response) == expected[2] or code(response) in (400, 404)
-    assert snapshot(t) == before
-    assert idle_in_transaction(t.w.engine) == 0
+    try:
+        if knobs.get("skip"):
+            pytest.skip("no second campaign in the database")
+        actor = knobs.get("actor", t.a_user)
+        actor_membership = knobs.get("actor_membership", t.a_membership)
+        target = knobs.get("target", t.c_membership)
+        relinquish = knobs.get("relinquish", False)
+        expected = legacy(t, actor=actor_membership, target=target, relinquish=relinquish)
+        assert expected[0] == "error", expected
+        before = snapshot(t)
+        response = post(pooled_factory, t, actor=actor, target=target, relinquish=relinquish)
+        assert code(response) == expected[1], (response.text, expected)
+        if expected[2] not in ("ValueError",):
+            assert error_of(response) == expected[2] or code(response) in (400, 404)
+        assert snapshot(t) == before
+        assert idle_in_transaction(t.w.engine) == 0
+    finally:
+        if "purge_owner" in knobs:
+            _purge_user_worlds(t.w.engine, knobs["purge_owner"])
 
 
 def test_an_idempotency_key_is_ignored_and_no_receipt_is_written(
@@ -541,7 +549,8 @@ def test_the_statement_order_is_the_documented_lock_order_and_nothing_but_declar
         EXPIRED_ROW,
         LIVE_ROW,
         OWN_ROW,
-        MEMBERSHIPS_U,
+        MEMBERSHIPS_ANY,
+        MEMBERSHIPS_ANY,
         ACCOUNT_S,
         ACCOUNT_KS,
         CAMPAIGN_U,
@@ -821,7 +830,7 @@ def test_mutual_relinquishing_transfers_serialize_at_the_memberships_without_a_d
             second_live.release()  # the second starts to take its locks
             with LockRace(t.w.engine) as race:
                 race.wait_blocked_by(first_final, expected=1)
-            assert re.search(MEMBERSHIPS_U, waiting_statement(t.w.engine, first_final.pid or 0))
+            assert re.search(MEMBERSHIPS_ANY, waiting_statement(t.w.engine, first_final.pid or 0))
             first_final.release()
             final_a.release()
             final_c.release()
@@ -906,7 +915,7 @@ def test_a_concurrent_owner_assignment_to_the_recipient_is_a_classified_409_in_b
         two = run_in_thread("two", second)
         with LockRace(t.w.engine) as race:
             race.wait_blocked_by(gate, expected=1)
-        assert re.search(MEMBERSHIPS_U, waiting_statement(t.w.engine, gate.pid or 0))
+        assert re.search(MEMBERSHIPS_ANY, waiting_statement(t.w.engine, gate.pid or 0))
         gate.release()
         done_one, done_two = one.wait("first"), two.wait("second")
     if assign_first:
@@ -942,20 +951,37 @@ def test_two_owners_transferring_to_the_same_ownerless_recipient_insert_one_owne
     assert wait_for_deadlock_count(t.w.engine, deadlocks) == deadlocks
 
 
+@pytest.mark.parametrize("order", ("gA_below_rC", "rC_below_gA"))
 @pytest.mark.parametrize("grant_first", (True, False))
 def test_the_legacy_reveal_delegation_grant_and_a_transfer_never_wait_in_a_cycle(
-    grant_first: bool, t: T, pooled2: Engine, pooled2_factory: Factory
+    order: str, grant_first: bool, t: T, pooled2: Engine, pooled2_factory: Factory
 ) -> None:
     """*race* E4 (F-3). C is a live owner and the grantor; A, the transferring owner, also holds `gm` and is the
     grantee. The grant locks the grantor's owner row `FOR SHARE`, then the grantee's `gm` rows `FOR UPDATE`.
     The transfer's `KEY SHARE` on the grantor's row is compatible with the grant's `SHARE`, and its
     `NO KEY UPDATE` on A's rows conflicts only with the grant's second lock. (1) the grant parked after its first
     lock: the transfer runs to its final statement without waiting; (2) the transfer parked at its final statement:
-    the grant queues on A's `gm` row. Neither order deadlocks."""
-    give_owner(t)
+    the grant queues on A's `gm` row. Neither order deadlocks, and the result is pinned for **both** id orders of
+    C's owner row and A's `gm` row (the 2026-11-15 correction C1: the grant locks them in id order)."""
+    low = uuid.UUID("00000000-0000-4000-8000-" + uuid.uuid4().hex[:12])
+    high = uuid.UUID("ffffffff-ffff-4fff-bfff-" + uuid.uuid4().hex[:12])
+    r_c, g_a = (high, low) if order == "gA_below_rC" else (low, high)
     with t.w.engine.begin() as c:
-        make_membership_role(c, t.a_membership, t.gm)
-    gm_lock = r"r\.code = 'gm' AND mr\.revoked_at IS NULL ORDER BY mr\.membership_role_id FOR UPDATE OF mr"
+        for row, membership, role in (
+            (r_c, t.c_membership, t.owner),
+            (g_a, t.a_membership, system_role_id(c, "gm")),
+        ):
+            c.execute(
+                text(
+                    "INSERT INTO security.membership_roles "
+                    "(membership_role_id, campaign_membership_id, role_id) VALUES (:r, :m, :role)"
+                ),
+                {"r": row, "m": membership, "role": role},
+            )
+    gm_lock = (
+        r"FROM security\.membership_roles mr JOIN security\.roles r ON r\.role_id = mr\.role_id "
+        r"WHERE .* FOR UPDATE OF mr$"
+    )
     deadlocks = deadlock_count(t.w.engine)
 
     def grant() -> Any:
@@ -1043,7 +1069,7 @@ def test_a_recipient_assignment_that_lapses_while_the_transfer_waits_is_refused_
     memberships are taken, so the drift/liveness check refuses it 409 with nothing written."""
     row = give_owner(t, expires="2 seconds")
     before = snapshot(t)
-    with StatementGate(pooled, MEMBERSHIPS_U) as gate:
+    with StatementGate(pooled, MEMBERSHIPS_ANY) as gate:
         request = run_in_thread("transfer", lambda: post(pooled_factory, t))
         gate.wait_reached()
         with t.w.engine.connect() as c:

@@ -129,7 +129,8 @@ def test_the_lock_order_is_roles_memberships_accounts_campaign_catalogue_targets
         ],
         "assign": [
             plans.ACTOR_ROLES_LOCK,
-            plans.MEMBERSHIPS_ACTOR_TARGET,
+            plans.ACTOR_MEMBERSHIP_LOCK,
+            plans.TARGET_MEMBERSHIP_LOCK,
             plans.ACTOR_ACCOUNT_LOCK,
             plans.TARGET_ACCOUNT_LOCK,
             plans.CAMPAIGN_KEY_SHARE_LOCK,
@@ -138,7 +139,8 @@ def test_the_lock_order_is_roles_memberships_accounts_campaign_catalogue_targets
         "change": [
             plans.ROLE_ROWS_WITH_TARGET,
             plans.DELEGATION_LOCK,
-            plans.MEMBERSHIPS_ACTOR_TARGET,
+            plans.ACTOR_MEMBERSHIP_LOCK,
+            plans.TARGET_MEMBERSHIP_LOCK,
             plans.ACTOR_ACCOUNT_LOCK,
             plans.CAMPAIGN_ROW_LOCK,
             plans.ROLE_CATALOGUE_LOCK,
@@ -155,10 +157,13 @@ def test_the_lock_order_is_roles_memberships_accounts_campaign_catalogue_targets
     assert list(d.unkeyed.locks) == expected
     assert list(d.reserved.locks) == [*expected, plans.RECEIPT_LOCK]
     modes = {lock.name: lock.mode for lock in d.reserved.locks}
-    # a class that contains a target is one ordered FOR UPDATE statement over actor and target rows
-    for name in ("role_rows_with_target", "memberships_actor_target"):
-        if name in modes:
-            assert modes[name] is LockMode.UPDATE
+    # the role class that contains a target is one ordered FOR UPDATE statement over actor and target rows; the
+    # membership class (C4) is the actor's open membership FOR SHARE and the target's FOR UPDATE, two statements
+    if "role_rows_with_target" in modes:
+        assert modes["role_rows_with_target"] is LockMode.UPDATE
+    if route in ("assign", "change"):
+        assert modes["actor_membership_share"] is LockMode.SHARE
+        assert modes["target_membership_update"] is LockMode.UPDATE
     assert modes.get("target_account_key_share", LockMode.KEY_SHARE) is LockMode.KEY_SHARE
     campaign = "campaign_key_share" if route == "assign" else "campaign_row_update"
     assert modes[campaign] is (LockMode.KEY_SHARE if route == "assign" else LockMode.UPDATE)

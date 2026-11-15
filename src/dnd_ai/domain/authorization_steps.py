@@ -439,9 +439,12 @@ class PerAbsence:
       or transaction): that is missing evidence, not empty evidence. Nothing is permitted and the plan cannot
       complete.
 
-    Trust: the lock's predicate expresses the condition, and the declaration also holds a lock that protects the
-    absence (for the ownership transfer, the INSERT's own FK binding to the membership lock). The mechanism does
-    not prove that every other writer is excluded. Only an INSERT may carry it; compared by the lock's identity."""
+    Trust: the lock's predicate expresses the condition (for the ownership transfer it is bound to a *candidate*
+    row found by an earlier unlocked read, so an empty run means "the candidate is not live", not "no live row
+    exists"), and the declaration also holds a lock that protects the absence of any other row (for the transfer,
+    the INSERT's own FK binding to the membership lock) and a revalidation under it (the transfer's drift check).
+    The mechanism proves none of that: it proves the lock ran and returned the evidence. Only an INSERT may carry
+    it; compared by the lock's identity."""
 
     lock: "PreLock"
 

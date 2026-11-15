@@ -558,7 +558,7 @@ def test_a_creation_waits_for_an_in_flight_role_revocation_and_is_refused(fx: Fi
                 c, membership_role_id=role, campaign_id=fx.campaign_id
             ),
             _create_as(fx, deputy, "After revocation"),
-            "query LIKE '%FOR SHARE OF mr, cm%'",
+            "query LIKE '%FOR SHARE OF mr%'",
         )
         assert isinstance(out["error"], CampaignNotAuthorizedError)
         assert (

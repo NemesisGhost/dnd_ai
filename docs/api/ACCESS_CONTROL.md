@@ -1198,7 +1198,7 @@ closed it — except the handful that are deliberately out of scope for Phase
 | `POST /campaigns/{id}/reveal-delegations/{grantee_campaign_membership_id}/revoke` | `reason` | 200 `{grantee_campaign_membership_id, revoked}`; `revoked` is false when none was live |
 
 - **Authorization:** the route requires `access.manage` (a coarse filter); the command requires a live built-in owner, `403 campaign_owner_required`, re-read under lock and again at a fresh instant before the write. A refused call writes nothing and no audit row.
-- **Recipient:** a member of the campaign holding a live built-in `gm` assignment; otherwise `409 reveal_delegation_recipient_not_gm`. A membership of another campaign is `404`.
+- **Recipient:** a member of the campaign holding a live built-in `gm` assignment; otherwise `409 reveal_delegation_recipient_not_gm`. A membership of another campaign is `404`. A `gm` assignment that appears after the request chose the rows to lock is refused `409 reveal_delegation_recipient_changed` (nothing is written; retry).
 - **Binding:** a delegation is bound to the grantee's specific `gm` assignment and authorizes only while it is live. Revoking or changing that assignment, ending the membership or changing its status closes the delegation; regaining GM status needs a fresh grant. A lapsed (expired) assignment leaves no authority and does not block a fresh grant.
 - **Transfer:** delegations survive an ownership transfer. A former owner keeps only a separate delegation bound to their own live `gm` assignment.
 - **Audit:** one `audit.change_log` row per actual change (`grant_character_reveal_delegation`, `revoke_character_reveal_delegation`).

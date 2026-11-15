@@ -83,9 +83,9 @@ pytestmark = pytest.mark.database
 ACCOUNT_LOCK = (
     r"FROM security\.users u JOIN core\.lifecycle_statuses ls .* FOR (UPDATE|KEY SHARE) OF u"
 )
-# The first statement of `lock_authoring_scope` after the reservation: the actor's role rows and
-# membership, `FOR SHARE`.
-AUTHORING_SCOPE = r"FOR SHARE OF mr, cm"
+# The first statement of `lock_authoring_scope` after the reservation: the actor's role rows, `FOR SHARE`
+# (C3: the membership is a second statement, only after every role row is held).
+AUTHORING_SCOPE = r"FOR SHARE OF mr$"
 EXPECT_KEY_SHARE = "FOR KEY SHARE"
 
 

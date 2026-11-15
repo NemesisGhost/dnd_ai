@@ -85,7 +85,7 @@ KEY_LOCK = r"pg_advisory_xact_lock"
 ROLES_S = r"FROM security\.membership_roles WHERE .* FOR SHARE$"
 ROLE_ROWS_U = r"FROM security\.membership_roles WHERE .* ORDER BY .* FOR UPDATE$"
 MEMBERSHIP_S = r"FROM security\.campaign_memberships WHERE .* FOR SHARE$"
-MEMBERSHIPS_U = r"FROM security\.campaign_memberships WHERE .* ORDER BY .* FOR UPDATE$"
+MEMBERSHIPS_ANY = r"FROM security\.campaign_memberships WHERE .* FOR (SHARE|UPDATE)$"
 ACCOUNT_S = r"FROM security\.users WHERE .* FOR SHARE$"
 CAMPAIGN_U = r"FROM campaign\.campaigns WHERE campaign\.campaigns\.campaign_id = %\(campaign\)s::UUID FOR UPDATE$"
 CAMPAIGN_KS = r"FROM campaign\.campaigns WHERE .* FOR KEY SHARE$"
@@ -768,7 +768,14 @@ def test_the_keyed_route_runs_its_statements_in_the_documented_order(
         index(e, r"^INSERT INTO security\.idempotent_requests"),
         index(e, FIRST_LOCK[route]),
     ]
-    chain.append(index(e, MEMBERSHIPS_U if route in ("assign", "change") else MEMBERSHIP_S))
+    if route in (
+        "assign",
+        "change",
+    ):  # C4: the actor's FOR SHARE and the target's FOR UPDATE, two statements
+        first_membership = index(e, MEMBERSHIPS_ANY)
+        chain += [first_membership, index(e, MEMBERSHIPS_ANY, first_membership + 1)]
+    else:
+        chain.append(index(e, MEMBERSHIP_S))
     chain.append(index(e, ACCOUNT_S))
     chain.append(index(e, CAMPAIGN_KS if route == "assign" else CAMPAIGN_U))
     if route != "revoke":

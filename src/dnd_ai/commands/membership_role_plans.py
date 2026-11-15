@@ -6,21 +6,25 @@ declarations and the lock, read and write phases below, so that **every lock is 
 every read the command's refusals depend on happens before it, and every write is a declared step after it.
 (Ownership transfer is **not** migrated here: plan 6.27, "The gap".)
 
-## The one deliberate reading of the global order
+## The reading of the global order (J-1', amended by the 2026-11-15 lock-order correction, TA-1 and C4)
 
 The review's order is world, role rows, delegation rows, memberships, accounts, campaign, catalogue rows,
 targets. Its rule is "each class ascending by id; a row that is both the actor's and the target's is taken
-once, at the stronger mode". Two managers revoking or assigning *each other's* rows would cycle if the actor's
-rows (`FOR SHARE`) and the target's rows (`FOR UPDATE`) were taken by separate statements: A holds its own
-rows and wants B's, B holds its own and wants A's. A single ordered statement per class cannot do that
-either unless it covers actor and target together, and one statement has one lock mode. So **a class that
-contains a target is locked by one ordered statement over actor and target rows `FOR UPDATE`**: the role rows
-for change and revoke (the actor's unrevoked roles and the target role), the memberships for assign and
-change (the actor's open membership and the target's). The actor's rows are therefore locked at the stronger
-mode than the review's table says, and only for these commands; a class with no target keeps `FOR SHARE`.
-That is a cost (an actor's concurrent authoring requests, which hold the same rows `FOR SHARE`, queue behind
-the command, and the reverse), not a new cycle: every locker takes roles before memberships before accounts
-before the campaign.
+once, at the stronger mode". **Each lock class is taken in one ascending-id pass, each row once at the mode it
+needs, no upgrades.** A pass is one ordered statement (one mode) or several statements issued in ascending
+order (a mode per row), and a locking statement is bound to ids found by an unlocked discovery read, so a row
+that appears later is caught by the revalidation, not by the lock.
+
+- **Role class.** Change and revoke lock the actor's unrevoked role rows and the target role in one ordered
+  statement `FOR UPDATE` (two managers changing *each other's* rows must not take them in separate statements:
+  A holds its own and wants B's, B the reverse). The reveal-delegation grant, the transfer and the authoring
+  scope lock their role rows in id order too, so no two of them can wait in a cycle.
+- **Membership class** (C4, replacing one statement `FOR UPDATE` over both rows). Assign, change and transfer take the
+  actor's open membership `FOR SHARE` and the target membership `FOR UPDATE`, as two statements in ascending id
+  order; when they are the same row the target lock (the stronger) is taken first and the actor lock lands on the
+  held row. `FOR SHARE` still protects the actor's authority (ending or deactivating the actor needs `FOR NO KEY
+  UPDATE`/`UPDATE`), and it does not conflict with the `FOR KEY SHARE` the end route and the grant take, which
+  is what removes the M-1 cycles.
 
 ## Lock sequences (implicit foreign-key locks and triggers included)
 
@@ -35,13 +39,14 @@ role row U, the target's unrevoked local-login identity rows U, [receipt U], rea
 `ux_campaign_memberships_open` is a unique wait), `INSERT membership_roles` (FKs: the **new** membership of
 this transaction, the role, the actor's membership), two `audit.change_log` inserts, [receipt UPDATE].
 
-**Assign role.** actor's unrevoked role rows S, then actor's and target's memberships U (one statement), the
-actor's account S, the target's account KS, the campaign KS (it inserts; the retention trigger does not fire
+**Assign role.** actor's unrevoked role rows S, then the actor's open membership S and the target's membership U
+(two statements, ascending id order), the actor's account S, the target's account KS, the campaign KS (it inserts; the retention trigger does not fire
 on an insert), the role row U, [receipt U], reads, `finalize`, `INSERT membership_roles` (`ux_membership_roles_
 active` is a unique wait), audit, [receipt].
 
 **Change role.** actor's unrevoked role rows and the target role U (one statement), the open reveal delegation
-bound to the target role U, actor's and target's memberships U, the actor's account S, the campaign U (the
+bound to the target role U, the actor's open membership S and the target's membership U (ascending id order), the
+actor's account S, the campaign U (the
 deferred retention trigger fires on the update and re-acquires it), the current and new role rows U (one
 statement), [receipt U], reads, the retention pre-check, `finalize`, then `UPDATE` the old assignment,
 `UPDATE` the delegation (each locked row), `INSERT` the new assignment, audit, [receipt].
@@ -303,19 +308,14 @@ DELEGATION_LOCK = PreLock(
     .order_by(dl.c.character_reveal_delegation_id)
     .with_for_update(),
 )
-#: The actor's open membership and the target membership, one ordered statement, `FOR UPDATE`. Bound
-#: `campaign`, `actor`, `target`. A target of another campaign matches nothing.
-MEMBERSHIPS_ACTOR_TARGET = PreLock(
-    "memberships_actor_target",
+#: The target membership, `FOR UPDATE` (C4; bound `campaign`, `target`). A target of another campaign matches
+#: nothing. The actor's open membership is `ACTOR_MEMBERSHIP_LOCK` (`FOR SHARE`); the two are taken in ascending
+#: id order, the target first when they are the same row (`lock_memberships`).
+TARGET_MEMBERSHIP_LOCK = PreLock(
+    "target_membership_update",
     select(cm.c.campaign_membership_id)
     .where(cm.c.campaign_id == bindparam("campaign"))
-    .where(
-        or_(
-            and_(cm.c.campaign_membership_id == bindparam("actor"), cm.c.ended_at.is_(None)),
-            cm.c.campaign_membership_id == bindparam("target"),
-        )
-    )
-    .order_by(cm.c.campaign_membership_id)
+    .where(cm.c.campaign_membership_id == bindparam("target"))
     .with_for_update(),
 )
 #: The target's account, `FOR KEY SHARE` (S5-A; bound `target_user`).
@@ -451,13 +451,13 @@ INSERT_ROLE_ASSIGN = WriteStep(
         FkBinding(
             fk_of(mr, "campaign_membership_id"),
             (KeyBind(mr.c.campaign_membership_id, "membership"),),
-            MEMBERSHIPS_ACTOR_TARGET,
+            TARGET_MEMBERSHIP_LOCK,
         ),
         FkBinding(fk_of(mr, "role_id"), (KeyBind(mr.c.role_id, "role"),), ROLE_CATALOGUE_LOCK),
         FkBinding(
             fk_of(mr, "granted_by_membership_id"),
             (KeyBind(mr.c.granted_by_membership_id, "granted_by"),),
-            MEMBERSHIPS_ACTOR_TARGET,
+            ACTOR_MEMBERSHIP_LOCK,
         ),
     ),
     value_binds=frozenset({"expires"}),
@@ -478,13 +478,13 @@ INSERT_ROLE_CHANGE = WriteStep(
         FkBinding(
             fk_of(mr, "campaign_membership_id"),
             (KeyBind(mr.c.campaign_membership_id, "membership"),),
-            MEMBERSHIPS_ACTOR_TARGET,
+            TARGET_MEMBERSHIP_LOCK,
         ),
         FkBinding(fk_of(mr, "role_id"), (KeyBind(mr.c.role_id, "role"),), ROLE_CATALOGUE_LOCK),
         FkBinding(
             fk_of(mr, "granted_by_membership_id"),
             (KeyBind(mr.c.granted_by_membership_id, "granted_by"),),
-            MEMBERSHIPS_ACTOR_TARGET,
+            ACTOR_MEMBERSHIP_LOCK,
         ),
     ),
     unique_waits=INSERT_ROLE_FOR_NEW_MEMBER.unique_waits,
@@ -646,7 +646,8 @@ ADD_DECLARATIONS = ReservationDeclarations(
 )
 _ASSIGN_LOCKS = (
     ACTOR_ROLES_LOCK,
-    MEMBERSHIPS_ACTOR_TARGET,
+    ACTOR_MEMBERSHIP_LOCK,
+    TARGET_MEMBERSHIP_LOCK,
     ACTOR_ACCOUNT_LOCK,
     TARGET_ACCOUNT_LOCK,
     CAMPAIGN_KEY_SHARE_LOCK,
@@ -667,7 +668,8 @@ ASSIGN_DECLARATIONS = ReservationDeclarations(
 _CHANGE_LOCKS = (
     ROLE_ROWS_WITH_TARGET,
     DELEGATION_LOCK,
-    MEMBERSHIPS_ACTOR_TARGET,
+    ACTOR_MEMBERSHIP_LOCK,
+    TARGET_MEMBERSHIP_LOCK,
     ACTOR_ACCOUNT_LOCK,
     CAMPAIGN_ROW_LOCK,
     ROLE_CATALOGUE_LOCK,
@@ -867,6 +869,28 @@ def _lock_actor_roles_and_membership(
     )
 
 
+def lock_memberships(
+    connection: Connection,
+    plan: AuthorizationPlan,
+    *,
+    campaign_id: uuid.UUID,
+    actor_membership_id: uuid.UUID,
+    target_membership_id: uuid.UUID,
+) -> None:
+    """The membership class of assign, change and transfer (C4): the actor's open membership `FOR SHARE` and the
+    target membership `FOR UPDATE`, one statement each, in ascending id order. When they are the same row the
+    target (the stronger) lock is taken first and the actor lock then lands on the row already held (no wait, no
+    upgrade)."""
+    actor = {"membership": actor_membership_id, "campaign": campaign_id}
+    target = {"campaign": campaign_id, "target": target_membership_id}
+    if target_membership_id <= actor_membership_id:
+        plan.lock(connection, TARGET_MEMBERSHIP_LOCK, target)
+        plan.lock(connection, ACTOR_MEMBERSHIP_LOCK, actor)
+    else:
+        plan.lock(connection, ACTOR_MEMBERSHIP_LOCK, actor)
+        plan.lock(connection, TARGET_MEMBERSHIP_LOCK, target)
+
+
 def _scope_world(connection: Connection, campaign_id: uuid.UUID) -> uuid.UUID:
     world = connection.execute(
         text(
@@ -963,10 +987,12 @@ def prepare_assign_role(
     reservation_id: uuid.UUID | None,
 ) -> Prepared:
     plan.lock(connection, ACTOR_ROLES_LOCK, {"membership": actor_membership_id})
-    plan.lock(
+    lock_memberships(
         connection,
-        MEMBERSHIPS_ACTOR_TARGET,
-        {"campaign": campaign_id, "actor": actor_membership_id, "target": target_membership_id},
+        plan,
+        campaign_id=campaign_id,
+        actor_membership_id=actor_membership_id,
+        target_membership_id=target_membership_id,
     )
     plan.lock(connection, ACTOR_ACCOUNT_LOCK, {"actor": actor_user_id})
     membership = (
@@ -1149,14 +1175,14 @@ def prepare_change_role(
         if row is not None
         else ()
     )
-    plan.lock(
+    lock_memberships(
         connection,
-        MEMBERSHIPS_ACTOR_TARGET,
-        {
-            "campaign": campaign_id,
-            "actor": actor_membership_id,
-            "target": row["campaign_membership_id"] if row is not None else actor_membership_id,
-        },
+        plan,
+        campaign_id=campaign_id,
+        actor_membership_id=actor_membership_id,
+        target_membership_id=(
+            row["campaign_membership_id"] if row is not None else actor_membership_id
+        ),
     )
     plan.lock(connection, ACTOR_ACCOUNT_LOCK, {"actor": actor_user_id})
     plan.lock(connection, CAMPAIGN_ROW_LOCK, {"campaign": campaign_id})
@@ -1393,13 +1419,17 @@ def write_change_role(
 #
 # Lock sequence (every lock before `plan.finalize`; modes as T5 of the design):
 #
-#   1. unlocked reads of lock-stable facts: the owner template id, the recipient membership's campaign;
-#   2. role class: the actor's unrevoked role rows NO KEY UPDATE (one ordered statement), the recipient's
-#      EXPIRED owner row NO KEY UPDATE, then (strictly after) the recipient's LIVE owner row KEY SHARE, then,
-#      only when relinquishing, the actor's owner row NO KEY UPDATE (already held, no wait);
+#   1. unlocked reads of lock-stable facts: the owner template id, the recipient membership's campaign, and the
+#      recipient's unrevoked owner row (the *candidate*, at most one);
+#   2. role class, **one ascending-id pass** (C2): the actor's unrevoked role rows NO KEY UPDATE below the
+#      candidate, the recipient's EXPIRED candidate NO KEY UPDATE, then (strictly after) its LIVE candidate KEY
+#      SHARE, then the actor's rows above the candidate; no candidate or a self-transfer: all the actor's rows,
+#      then the (empty or already held) recipient locks. Then, only when relinquishing, the actor's owner row NO KEY
+#      UPDATE (already held, no wait);
 #   3. delegations bound to each of those role keys, FOR UPDATE (always empty: trigger 141 binds them to `gm`);
-#   4. the actor's open membership and the recipient's, FOR UPDATE, one ordered statement. **Absence and
-#      positive evidence become stable here**, not at the role-class SELECTs;
+#   4. the actor's open membership FOR SHARE and the recipient's FOR UPDATE, ascending id order (C4). **Absence
+#      and positive evidence become stable here**, not at the role-class SELECTs: a recipient owner row inserted
+#      after discovery is caught by the drift check under this lock (409), never by a locking statement;
 #   5. the actor's account FOR SHARE, the recipient's account FOR KEY SHARE (S5-A);
 #   6. the campaign FOR UPDATE; 7. the owner template FOR UPDATE.
 #
@@ -1415,21 +1445,37 @@ def write_change_role(
 # own owner row (`EachLockedRow(complete)` over the actor-owner lock, which only a relinquishing request runs);
 # S5 one audit row (`AnyConfirmed((S2, S3))`). S1 must precede S2 (the partial unique index), so it is
 # declared first; S4 is declared before S2 as well, so that every closure precedes the INSERT.
+#
+# What the PerAbsence evidence means (TA-2). The live lock is candidate-bound, so an empty run proves only that
+# *the candidate is not a live row*. "The recipient has no live owner row at all" rests on three things together:
+# (1) the successful empty run of the candidate-bound lock, (2) the recipient's membership lock (U), which every
+# writer of an owner row for the recipient needs for its foreign key and therefore waits on, and (3) the drift
+# check made under that lock: the recipient's unrevoked owner rows must equal the locked expired and live
+# candidates, otherwise 409 `ownership_transfer_recipient_changed`. The INSERT's own foreign key to the
+# membership lock (`FkBinding`) ties the write to (2).
 
 OWNER_TRANSFER_COMMAND_NAME = "transfer_campaign_ownership"
 
-#: The actor's unrevoked role rows, one ordered statement, FOR NO KEY UPDATE (bound `membership`).
+#: The actor's unrevoked role rows strictly between two ids, one ordered statement, FOR NO KEY UPDATE (bound
+#: `membership`, `after`, `before`). The whole set is `after` = the nil id, `before` = the all-ones id (neither
+#: is a valid v4 id). The transfer runs it once, or twice around the recipient's owner row (C2): the actor's rows
+#: below the recipient's candidate, the candidate's locks, the actor's rows above it, so the role class is one
+#: ascending pass. The calls accumulate evidence on this one lock object (union of keys).
 TRANSFER_ACTOR_ROLE_ROWS = PreLock(
     "transfer_actor_role_rows",
     select(mr.c.membership_role_id)
     .where(mr.c.campaign_membership_id == bindparam("membership"))
     .where(mr.c.revoked_at.is_(None))
+    .where(mr.c.membership_role_id > bindparam("after"))
+    .where(mr.c.membership_role_id < bindparam("before"))
     .order_by(mr.c.membership_role_id)
     .with_for_update(key_share=True),
 )
-#: The recipient's unrevoked owner rows already expired at this statement's clock, FOR NO KEY UPDATE (bound
-#: `membership`, `role`). Run **before** `RECIPIENT_LIVE_OWNER`: a row expiring between the two is in neither
-#: set, and the later drift check refuses it (fail closed).
+#: The recipient's unrevoked owner row already expired at this statement's clock, FOR NO KEY UPDATE (bound
+#: `membership`, `role`, `candidate`). **Candidate-bound** (C2): it can lock only the row the unlocked discovery read
+#: found, so a row inserted after discovery is never picked up by a locking statement (the drift check refuses it);
+#: the nil id is "no candidate" and locks nothing. Run **before** `RECIPIENT_LIVE_OWNER`: a row expiring between the
+#: two is in neither set, and the later drift check refuses it (fail closed).
 RECIPIENT_EXPIRED_OWNER = PreLock(
     "recipient_expired_owner",
     select(mr.c.membership_role_id)
@@ -1438,11 +1484,15 @@ RECIPIENT_EXPIRED_OWNER = PreLock(
     .where(mr.c.revoked_at.is_(None))
     .where(mr.c.expires_at.is_not(None))
     .where(mr.c.expires_at <= func.pg_catalog.clock_timestamp())
+    .where(mr.c.membership_role_id == bindparam("candidate"))
     .order_by(mr.c.membership_role_id)
     .with_for_update(key_share=True),
 )
-#: The recipient's unrevoked, not-yet-expired owner row, FOR KEY SHARE (bound `membership`, `role`). Its
-#: evidence is a *positive* observation; the protection of absence comes from the membership lock.
+#: The recipient's unrevoked, not-yet-expired owner row, FOR KEY SHARE (bound `membership`, `role`, `candidate`;
+#: candidate-bound like `RECIPIENT_EXPIRED_OWNER`). Its evidence is a *positive* observation, and an empty run
+#: means only "the candidate is not a live row" (TA-2): the absence of any *other* owner row is protected by the
+#: membership lock, which blocks every writer of an owner row for the recipient (the INSERT's foreign key and the
+#: unique index wait on it), and is then verified by the drift check below under that lock.
 RECIPIENT_LIVE_OWNER = PreLock(
     "recipient_live_owner",
     select(mr.c.membership_role_id)
@@ -1450,6 +1500,7 @@ RECIPIENT_LIVE_OWNER = PreLock(
     .where(mr.c.role_id == bindparam("role"))
     .where(mr.c.revoked_at.is_(None))
     .where(or_(mr.c.expires_at.is_(None), mr.c.expires_at > func.pg_catalog.clock_timestamp()))
+    .where(mr.c.membership_role_id == bindparam("candidate"))
     .order_by(mr.c.membership_role_id)
     .with_for_update(read=True, key_share=True),
 )
@@ -1509,13 +1560,13 @@ INSERT_OWNER_ROLE = WriteStep(
         FkBinding(
             fk_of(mr, "campaign_membership_id"),
             (KeyBind(mr.c.campaign_membership_id, "membership"),),
-            MEMBERSHIPS_ACTOR_TARGET,
+            TARGET_MEMBERSHIP_LOCK,
         ),
         FkBinding(fk_of(mr, "role_id"), (KeyBind(mr.c.role_id, "role"),), ROLE_CATALOGUE_LOCK),
         FkBinding(
             fk_of(mr, "granted_by_membership_id"),
             (KeyBind(mr.c.granted_by_membership_id, "granted_by"),),
-            MEMBERSHIPS_ACTOR_TARGET,
+            ACTOR_MEMBERSHIP_LOCK,
         ),
     ),
     unique_waits=_TRANSFER_UNIQUE_WAITS,
@@ -1551,7 +1602,8 @@ TRANSFER_LOCKS = (
     RECIPIENT_LIVE_OWNER,
     ACTOR_OWNER_ROW,
     DELEGATION_LOCK,
-    MEMBERSHIPS_ACTOR_TARGET,
+    ACTOR_MEMBERSHIP_LOCK,
+    TARGET_MEMBERSHIP_LOCK,
     ACTOR_ACCOUNT_LOCK,
     TARGET_ACCOUNT_LOCK,
     CAMPAIGN_ROW_LOCK,
@@ -1598,6 +1650,12 @@ def _database_clock(connection: Connection) -> datetime:
     value = connection.execute(text("SELECT clock_timestamp()")).scalar()
     assert isinstance(value, datetime)
     return value
+
+
+#: "No candidate" for the candidate-bound recipient locks and the open lower bound of the actor-row ranges (never
+#: a valid v4 id), and the open upper bound.
+_NO_CANDIDATE = uuid.UUID(int=0)
+_LAST_ID = uuid.UUID(int=(1 << 128) - 1)
 
 
 def _unrevoked_owner_rows(
@@ -1650,14 +1708,53 @@ def prepare_transfer(  # noqa: C901, PLR0912, PLR0915 - one linear lock and refu
         {"m": target_membership_id},
     ).scalar()
     in_campaign = recipient_campaign == campaign_id
-    # 2. role class
-    plan.lock(connection, TRANSFER_ACTOR_ROLE_ROWS, {"membership": actor_membership_id})
+    # 2. role class, one ascending pass (C2). The recipient's unrevoked owner row (at most one: the partial unique
+    #    index on membership and role) is *discovered* by an unlocked read; the locking statements are then bound to
+    #    that id and interleaved with the actor's rows in id order: actor rows below it, its expired lock, its live
+    #    lock, actor rows above it. No candidate (or a self-transfer, where the candidate is the actor's own row):
+    #    all the actor's rows first, then the recipient locks (empty, or on rows already held, no wait, no upgrade).
+    candidates: list[uuid.UUID] = []
+    if in_campaign:
+        candidates = list(
+            connection.execute(
+                text(
+                    "SELECT membership_role_id FROM security.membership_roles "
+                    "WHERE campaign_membership_id = :m AND role_id = :r AND revoked_at IS NULL "
+                    "ORDER BY membership_role_id"
+                ),
+                {"m": target_membership_id, "r": owner_role_id},
+            ).scalars()
+        )
+    if len(candidates) > 1:  # the unique index forbids it; refuse rather than lock an unordered set
+        raise _recipient_changed(
+            target_membership_id, "the recipient holds several owner assignments"
+        )
+    candidate = candidates[0] if candidates else _NO_CANDIDATE
+
+    def actor_rows(after: uuid.UUID, before: uuid.UUID) -> None:
+        plan.lock(
+            connection,
+            TRANSFER_ACTOR_ROLE_ROWS,
+            {"membership": actor_membership_id, "after": after, "before": before},
+        )
+
     expired: tuple[tuple[Any, ...], ...] = ()
     live: tuple[tuple[Any, ...], ...] = ()
-    if in_campaign:
-        recipient_binds = {"membership": target_membership_id, "role": owner_role_id}
+    recipient_binds = {
+        "membership": target_membership_id,
+        "role": owner_role_id,
+        "candidate": candidate,
+    }
+    if in_campaign and candidate != _NO_CANDIDATE and target_membership_id != actor_membership_id:
+        actor_rows(_NO_CANDIDATE, candidate)
         expired = plan.lock(connection, RECIPIENT_EXPIRED_OWNER, recipient_binds)
         live = plan.lock(connection, RECIPIENT_LIVE_OWNER, recipient_binds)
+        actor_rows(candidate, _LAST_ID)
+    else:
+        actor_rows(_NO_CANDIDATE, _LAST_ID)
+        if in_campaign:
+            expired = plan.lock(connection, RECIPIENT_EXPIRED_OWNER, recipient_binds)
+            live = plan.lock(connection, RECIPIENT_LIVE_OWNER, recipient_binds)
     own: tuple[tuple[Any, ...], ...] = ()
     if relinquishing:
         own = plan.lock(
@@ -1670,11 +1767,14 @@ def prepare_transfer(  # noqa: C901, PLR0912, PLR0915 - one linear lock and refu
     for key in (*expired, *own):
         for found in plan.lock(connection, DELEGATION_LOCK, {"role": key[0]}):
             delegations.append(found[0])
-    # 4. memberships: absence and positive evidence are stable from here
-    plan.lock(
+    # 4. memberships (C4): the actor's open membership S and the recipient's U, ascending id order. Absence and
+    #    positive evidence are stable from here
+    lock_memberships(
         connection,
-        MEMBERSHIPS_ACTOR_TARGET,
-        {"campaign": campaign_id, "actor": actor_membership_id, "target": target_membership_id},
+        plan,
+        campaign_id=campaign_id,
+        actor_membership_id=actor_membership_id,
+        target_membership_id=target_membership_id,
     )
     # 5. accounts
     plan.lock(connection, ACTOR_ACCOUNT_LOCK, {"actor": actor_user_id})

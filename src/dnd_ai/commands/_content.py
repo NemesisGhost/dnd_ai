@@ -206,14 +206,20 @@ def lock_authoring_scope(
     # Hold the actor's open membership and unrevoked role rows so a concurrent
     # `revoke_membership_role` / `end_campaign_membership` (which take FOR UPDATE
     # on these rows) serializes against this command. `mr` before `cm`, the same
-    # order `change_membership_role` uses.
+    # order `change_membership_role` uses, and **two statements, not one**: a
+    # single `FOR SHARE OF mr, cm` join locked the membership together with the
+    # *first* role row and then waited for the remaining role rows while holding
+    # it, so a writer that held a later role row and wanted the membership
+    # (reveal-delegation grant, S5-E2 change, ownership transfer) deadlocked with
+    # it (R01 S5-E2 lock-order correction C3, P-1). Role rows first, in id order;
+    # the membership only after every role row is held.
     #
     # These are locked BEFORE the campaign row, not after: a role revocation
     # writes the membership-role row and then, at commit, its deferred
     # access-manager retention trigger takes the campaign row FOR UPDATE. A
     # command holding the campaign lock while waiting on the revoked row would
     # deadlock with it (found by the real-PostgreSQL race test).
-    connection.execute(
+    held_roles = connection.execute(
         text("""
             SELECT mr.membership_role_id
             FROM security.membership_roles mr
@@ -222,10 +228,22 @@ def lock_authoring_scope(
             WHERE cm.campaign_id = :c AND cm.user_id = :u
               AND cm.ended_at IS NULL AND mr.revoked_at IS NULL
             ORDER BY mr.membership_role_id
-            FOR SHARE OF mr, cm
+            FOR SHARE OF mr
         """),
         {"c": campaign_id, "u": actor_user_id},
     ).all()
+    if held_roles:
+        # Only an actor holding a role row needed the membership held (a membership with no role grants no
+        # authority and the checks below refuse it): the same rows the joined statement used to lock.
+        connection.execute(
+            text("""
+                SELECT cm.campaign_membership_id
+                FROM security.campaign_memberships cm
+                WHERE cm.campaign_id = :c AND cm.user_id = :u AND cm.ended_at IS NULL
+                FOR SHARE
+            """),
+            {"c": campaign_id, "u": actor_user_id},
+        ).all()
     user = connection.execute(
         text("SELECT lifecycle_status_id FROM security.users WHERE user_id = :u FOR SHARE"),
         {"u": actor_user_id},
