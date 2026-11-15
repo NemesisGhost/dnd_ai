@@ -10,8 +10,7 @@ What it does. `deadline_message()` is called at every harness deadline *before* 
 parked requests, the gate listeners and the pool are all still alive, before any teardown), and returns the text that
 goes into the assertion message. It captures, each in its own best-effort collector:
 
-* request completion and exception state (`Request`), per-request progress markers (checkout, last statements, commit,
-  rollback) recorded by class-level SQLAlchemy listeners installed by `install()`;
+* request completion and exception state (`Request`), per-request progress markers (checkout, checkin, last statements) recorded by class-level SQLAlchemy listeners installed by `install()`;
 * every thread's stack (test threads, the TestClient portal, anyio workers) and, where reachable, every asyncio
   task's stack;
 * the connection pool's status, which connections are checked out and by which thread, and the recent event tail;
@@ -102,14 +101,6 @@ def _on_execute(conn: Any, cursor: Any, statement: Any, *rest: Any) -> None:
     _record("execute", pid, head)
 
 
-def _on_commit(conn: Any) -> None:
-    _record("commit", None)
-
-
-def _on_rollback(conn: Any) -> None:
-    _record("rollback", None)
-
-
 def install() -> None:
     """Install the class-level progress listeners once per process (idempotent; cheap: bounded ring buffer)."""
     global _INSTALLED
@@ -119,8 +110,9 @@ def install() -> None:
     event.listen(_PoolClass, "checkout", _on_checkout)
     event.listen(_PoolClass, "checkin", _on_checkin)
     event.listen(Engine, "before_cursor_execute", _on_execute)
-    event.listen(Engine, "commit", _on_commit)
-    event.listen(Engine, "rollback", _on_rollback)
+    # No class-level `commit`/`rollback` listeners: they would add an entry to every engine's `dispatch.commit`, which
+    # tests/database/test_authorization_plan_guard.py counts (exactly one: the authorization guard's). A checkin marks
+    # the end of a connection's transaction instead.
 
 
 # -- collectors (each returns text; any exception is caught by `deadline_report`) -----------------------------------
