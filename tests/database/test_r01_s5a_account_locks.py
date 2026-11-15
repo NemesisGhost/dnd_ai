@@ -723,11 +723,14 @@ def _wait_for(condition: Callable[[], bool], seconds: float = 15.0) -> bool:
 # --- 4 (HTTP, both sides). The assignment route against the authoring route --------------------------------
 
 
+PLAN_TARGET_ACCOUNT_LOCK = r"FROM security\.users WHERE .* FOR KEY SHARE$"
+
+
 def test_http_evidence_both_sides_through_routes_the_assignment_route_against_a_keyed_authoring_request(
     scene: Scene, app_engine: Engine
 ) -> None:
-    """HTTP evidence on both sides. The owner's assignment route (no key) is parked before the account
-    statement of `assign_membership_role`; U's keyed authoring request queues behind its membership lock;
+    """HTTP evidence on both sides. The owner's assignment route (no key) is parked before the target-account
+    lock of its plan (`membership_role_plans`, S5-E2); U's keyed authoring request queues behind its membership lock;
     released, both commit with 201."""
     w = scene.w
     assign_engine = create_engine(
@@ -736,7 +739,9 @@ def test_http_evidence_both_sides_through_routes_the_assignment_route_against_a_
     install_authorization_guard(assign_engine)
     before = _deadlock_total(scene.engine)
     try:
-        with StatementGate(assign_engine, ACCOUNT_LOCK) as gate:
+        # R01 S5-E2: the assignment route is a pre-write plan; its target-account lock is the plan's own
+        # `FOR KEY SHARE` statement (no join), taken after the actor's and target's memberships.
+        with StatementGate(assign_engine, PLAN_TARGET_ACCOUNT_LOCK) as gate:
 
             def assign() -> Any:
                 with _client(assign_engine, w.owner) as client:

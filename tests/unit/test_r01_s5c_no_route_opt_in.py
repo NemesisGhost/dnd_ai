@@ -44,6 +44,7 @@ _S5D_ADOPTERS = {
     r"\bReservationDeclarations\(": {
         "commands/campaign_invitation_plans.py",
         "commands/campaign_lifecycle_plans.py",
+        "commands/membership_role_plans.py",
     },
     r"SET\s+CONSTRAINTS": set(),
 }

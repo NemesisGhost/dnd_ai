@@ -39,6 +39,9 @@ from tests.r01_manifest import (
     _S5E1_ROUTES as S5E1_ROUTES,
 )
 from tests.r01_manifest import (
+    _S5E2_ROUTES as S5E2_ROUTES,
+)
+from tests.r01_manifest import (
     MANIFEST_PATH,
     MIGRATED_ROUTES,
     OUTSIDE_R01,
@@ -74,21 +77,24 @@ def test_every_route_inside_r01s_bound_is_pending_or_finalized_exactly_once() ->
     assert finalized == set(MIGRATED_ROUTES)
 
 
-def test_the_finalized_routes_are_s2s_six_s3s_71_s4s_54_s4bs_21_s5ds_5_and_s5e1s_3() -> None:
+def test_the_finalized_routes_are_s2s_six_s3s_71_s4s_54_s4bs_21_s5ds_5_s5e1s_3_and_s5e2s_4() -> (
+    None
+):
     """S2 migrated the public-profile save, legacy copy, player-profile copy and release, and the
     revelation create and revoke: 6 of the 192 routes inside R01's bound. S3 migrates the 71
     definition authoring and lifecycle routes of the `authoring_scope` family. S4 migrates the 54 campaign
     operation routes of the `operation_scope` family. S4b migrates the 21 routes of the
     `route_capability_only` family. S5-D migrates five access-management routes: the two invitation routes
     (keyed pre-write) and the three post-write Foundry routes. S5-E1 migrates the three campaign lifecycle
-    routes (update, archive, reactivate; keyed-optional pre-write). 160 are finalized; the other 32 (24
+    routes (update, archive, reactivate; keyed-optional pre-write). S5-E2 migrates four membership routes (add member; assign, change and revoke a role); ownership
+    transfer stays pending (plan 6.27). 164 are finalized; the other 28 (20
     access-management, of which five are the planned-exclusion world routes, and 8 engine) stay pending."""
-    assert len(R01_FINALIZED_ROUTES) == 160
-    assert len(R01_PENDING_ROUTES) == 32
+    assert len(R01_FINALIZED_ROUTES) == 164
+    assert len(R01_PENDING_ROUTES) == 28
     s2 = {
         route
         for route in R01_FINALIZED_ROUTES
-        if route not in S3_ROUTES | S4_ROUTES | S4B_ROUTES | S5D_ROUTES | S5E1_ROUTES
+        if route not in S3_ROUTES | S4_ROUTES | S4B_ROUTES | S5D_ROUTES | S5E1_ROUTES | S5E2_ROUTES
     }
     assert {
         path.rsplit("/campaigns/{campaign_id}/characters/{character_id}/", 1)[-1] for _, path in s2
@@ -108,6 +114,9 @@ def test_the_finalized_routes_are_s2s_six_s3s_71_s4s_54_s4bs_21_s5ds_5_and_s5e1s
     assert set(R01_FINALIZED_ROUTES) >= S4B_ROUTES
     assert len(S5D_ROUTES) == 5
     assert set(R01_FINALIZED_ROUTES) >= S5D_ROUTES
+    assert len(S5E2_ROUTES) == 4
+    assert set(R01_FINALIZED_ROUTES) >= S5E2_ROUTES
+    assert not (S5D_ROUTES | S5E1_ROUTES) & S5E2_ROUTES
     assert len(S5E1_ROUTES) == 3
     assert set(R01_FINALIZED_ROUTES) >= S5E1_ROUTES
     assert not S5D_ROUTES & S5E1_ROUTES
@@ -125,11 +134,11 @@ def test_the_finalized_routes_are_s2s_six_s3s_71_s4s_54_s4bs_21_s5ds_5_and_s5e1s
 
 
 def test_the_pending_counts_by_family_are_pinned() -> None:
-    """32 distinct pending routes (192 at S1 less S2's six, S3's 71, S4's 54, S4b's 21, S5-D's 5 and S5-E1's 3). The manifest
+    """28 distinct pending routes (192 at S1 less S2's six, S3's 71, S4's 54, S4b's 21, S5-D's 5, S5-E1's 3 and S5-E2's 4). The manifest
     has 193 inside records: one (method, path) is registered twice. No route-capability-only route is
     pending any more."""
     assert dict(Counter(R01_PENDING_ROUTES.values())) == {
-        "access_management": 24,
+        "access_management": 20,
         "engine_early_commit": 8,
     }
     records = Counter(str(r["family"]) for r in _inside())
@@ -161,11 +170,11 @@ def test_routes_without_a_scope_helper_are_pinned_by_route() -> None:
 
 def test_pending_routes_are_not_presented_as_protected() -> None:
     """The only thing a route's presence in `R01_PENDING_ROUTES` says is that it is unmigrated."""
-    assert route_is_pending("POST", "/campaigns/{campaign_id}/memberships") is True
-    assert route_is_pending("post", "/campaigns/{campaign_id}/memberships") is True
+    assert route_is_pending("POST", "/campaigns/{campaign_id}/ownership-transfer") is True
+    assert route_is_pending("post", "/campaigns/{campaign_id}/ownership-transfer") is True
     assert route_is_pending("POST", "/campaigns/{campaign_id}/events") is False  # S4b
     assert route_is_pending("POST", "/admin/accounts") is False  # outside R01's bound
-    assert ("POST", "/campaigns/{campaign_id}/memberships") not in R01_FINALIZED_ROUTES
+    assert ("POST", "/campaigns/{campaign_id}/ownership-transfer") not in R01_FINALIZED_ROUTES
 
 
 def test_every_campaign_scoped_write_route_is_inside_r01s_bound() -> None:

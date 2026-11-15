@@ -75,24 +75,33 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy import Connection
 
-from dnd_ai.commands.memberships import (
-    add_campaign_member,
-    assign_membership_role,
-    change_membership_role,
-    end_campaign_membership,
-    revoke_membership_role,
-    transfer_campaign_ownership,
+from dnd_ai.commands._pre_write_steps import receipt_params
+from dnd_ai.commands.membership_role_plans import (
+    MEMBERSHIP_RECEIPT,
+    prepare_add_member,
+    prepare_assign_role,
+    prepare_change_role,
+    prepare_revoke_role,
+    write_add_member,
+    write_assign_role,
+    write_change_role,
+    write_revoke_role,
 )
-from dnd_ai.domain.access import AccessContext
+from dnd_ai.commands.memberships import end_campaign_membership, transfer_campaign_ownership
+from dnd_ai.domain.access import LOCAL_AUTH_ISSUER, AccessContext
+from dnd_ai.domain.authorization import AuthorizationPlan
 
 from ._shared import timeline_world_id
 from .access import require_campaign_capability
 from .audit import record_change_log
+from .campaigns import _begin_lifecycle_request
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .idempotency import IdempotentReplay, begin_idempotent_request, complete_idempotent_request
+from .r01_route_plans import get_authorization_plan
 
 router = APIRouter(tags=["memberships"])
+_Plan = Annotated[AuthorizationPlan, Depends(get_authorization_plan)]
 
 # Access/role administration is distinct from canon mutation — see this
 # module's docstring for why every route here requires it instead of
@@ -142,6 +151,21 @@ class ChangeMembershipRoleRequest(BaseModel):
     new_role_id: uuid.UUID
 
 
+def _complete_receipt_with(
+    connection: Connection,
+    plan: AuthorizationPlan,
+    reservation_id: uuid.UUID | None,
+    status: int,
+    response: BaseModel,
+) -> None:
+    if reservation_id is not None:
+        plan.execute(
+            connection,
+            MEMBERSHIP_RECEIPT,
+            receipt_params(reservation_id, status, response.model_dump(mode="json")),
+        )
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -158,97 +182,51 @@ def create_campaign_membership_endpoint(
     access: Annotated[
         AccessContext, Depends(require_campaign_capability(_ACCESS_MANAGE_CAPABILITY))
     ],
+    plan: _Plan,
     connection: Annotated[Connection, Depends(get_connection)],
     idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
-) -> CampaignMembershipResponse:
-    """Adds an existing, eligible account to `campaign_id` with one initial
-    role — the portal Access page's "Add campaign member" action (Phase
-    13E-B checkpoint 3, `dnd_ai.commands.memberships.add_campaign_member`).
-    `role_id` (new this checkpoint) is required, not optional: this route
-    was previously reserved/unused (docs/PHASE13E_ACCESS_CONTRACT.md §2)
-    with no real caller to preserve compatibility for, so hardening its
-    request contract to require an initial role — never a roleless
-    membership a second call would have to complete — costs nothing. See
-    that command's own docstring for the full eligibility/concurrency
-    contract (campaign must be active, target account must be platform-
-    active, target role must be scoped to this campaign and active; a
-    duplicate-open-membership race is left to `ux_campaign_memberships_
-    open`'s own 409, not pre-checked)."""
-    reservation_id: uuid.UUID | None = None
-    if idempotency_key is not None:
-        fingerprint_payload: dict[str, Any] = {
-            "campaign_id": str(campaign_id),
-            **body.model_dump(mode="json"),
-        }
-        outcome = begin_idempotent_request(
-            connection,
-            actor_user_id=access.user_id,
-            campaign_id=campaign_id,
-            idempotency_key=idempotency_key,
-            command_name=_ADD_MEMBER_COMMAND_NAME,
-            payload=fingerprint_payload,
-            correlation_id=correlation_id,
-        )
-        if isinstance(outcome, IdempotentReplay):
-            return CampaignMembershipResponse.model_validate(outcome.response_body)
-        reservation_id = outcome.idempotent_request_id
-
-    result = add_campaign_member(
+) -> Any:
+    """Adds an existing, eligible account to `campaign_id` with one initial role (Phase 13E-B checkpoint 3,
+    `dnd_ai.commands.memberships.add_campaign_member`). A keyed-optional pre-write route (R01 S5-E2;
+    `dnd_ai.commands.membership_role_plans`): the eligibility rules and their errors are the command's own."""
+    replay, reservation_id = _begin_lifecycle_request(
+        plan=plan,
+        connection=connection,
+        access=access,
+        idempotency_key=idempotency_key,
+        correlation_id=correlation_id,
+        command_name=_ADD_MEMBER_COMMAND_NAME,
+        payload={"campaign_id": str(campaign_id), **body.model_dump(mode="json")},
+    )
+    if replay is not None:
+        return replay
+    prepared = prepare_add_member(
         connection,
+        plan,
         campaign_id=campaign_id,
+        actor_user_id=access.user_id,
+        actor_membership_id=access.campaign_membership_id,
         user_id=body.user_id,
         role_id=body.role_id,
-        added_by_membership_id=access.campaign_membership_id,
+        local_issuer=LOCAL_AUTH_ISSUER,
+        reservation_id=reservation_id,
     )
-
-    world_id = timeline_world_id(connection, access.timeline_id)
-
-    # Two rows, one per table this call inserted into — matching each
-    # table's own pre-existing single-row audit convention
-    # (create_campaign_membership_endpoint's/assign_membership_role_
-    # endpoint's own, now combined into this one atomic call) rather than
-    # inventing a new "one row describes two tables" shape.
-    record_change_log(
+    plan.finalize(connection)
+    membership_id, role_assignment_id = write_add_member(
         connection,
-        change_action_code=_CREATED_CHANGE_ACTION,
-        schema_name="security",
-        table_name="campaign_memberships",
-        record_id=result.campaign_membership_id,
-        entity_id=None,
-        world_id=world_id,
+        plan,
+        prepared,
+        campaign_id=campaign_id,
         actor_user_id=access.user_id,
+        actor_membership_id=access.campaign_membership_id,
+        user_id=body.user_id,
         correlation_id=correlation_id,
-        command_name=_ADD_MEMBER_COMMAND_NAME,
-        event_id=None,
     )
-    record_change_log(
-        connection,
-        change_action_code=_CREATED_CHANGE_ACTION,
-        schema_name="security",
-        table_name="membership_roles",
-        record_id=result.membership_role_id,
-        entity_id=None,
-        world_id=world_id,
-        actor_user_id=access.user_id,
-        correlation_id=correlation_id,
-        command_name=_ADD_MEMBER_COMMAND_NAME,
-        event_id=None,
-    )
-
     response = CampaignMembershipResponse(
-        campaign_membership_id=result.campaign_membership_id,
-        membership_role_id=result.membership_role_id,
+        campaign_membership_id=membership_id, membership_role_id=role_assignment_id
     )
-
-    if reservation_id is not None:
-        complete_idempotent_request(
-            connection,
-            idempotent_request_id=reservation_id,
-            response_status_code=201,
-            response_body=response.model_dump(mode="json"),
-        )
-
+    _complete_receipt_with(connection, plan, reservation_id, 201, response)
     return response
 
 
@@ -264,62 +242,49 @@ def assign_membership_role_endpoint(
     access: Annotated[
         AccessContext, Depends(require_campaign_capability(_ACCESS_MANAGE_CAPABILITY))
     ],
+    plan: _Plan,
     connection: Annotated[Connection, Depends(get_connection)],
     idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
-) -> MembershipRoleResponse:
-    reservation_id: uuid.UUID | None = None
-    if idempotency_key is not None:
-        fingerprint_payload: dict[str, Any] = {
-            "campaign_membership_id": str(campaign_membership_id),
-            **body.model_dump(mode="json"),
-        }
-        outcome = begin_idempotent_request(
-            connection,
-            actor_user_id=access.user_id,
-            campaign_id=campaign_id,
-            idempotency_key=idempotency_key,
-            command_name=_ASSIGN_ROLE_COMMAND_NAME,
-            payload=fingerprint_payload,
-            correlation_id=correlation_id,
-        )
-        if isinstance(outcome, IdempotentReplay):
-            return MembershipRoleResponse.model_validate(outcome.response_body)
-        reservation_id = outcome.idempotent_request_id
-
-    result = assign_membership_role(
-        connection,
-        campaign_membership_id=campaign_membership_id,
-        role_id=body.role_id,
-        campaign_id=campaign_id,
-        granted_by_membership_id=access.campaign_membership_id,
-        expires_at=body.expires_at,
-    )
-
-    record_change_log(
-        connection,
-        change_action_code=_CREATED_CHANGE_ACTION,
-        schema_name="security",
-        table_name="membership_roles",
-        record_id=result.membership_role_id,
-        entity_id=None,
-        world_id=timeline_world_id(connection, access.timeline_id),
-        actor_user_id=access.user_id,
+) -> Any:
+    """A keyed-optional pre-write route (R01 S5-E2). Self-assignment is judged against the pre-command
+    authority: `finalize` runs before the insert."""
+    replay, reservation_id = _begin_lifecycle_request(
+        plan=plan,
+        connection=connection,
+        access=access,
+        idempotency_key=idempotency_key,
         correlation_id=correlation_id,
         command_name=_ASSIGN_ROLE_COMMAND_NAME,
-        event_id=None,
+        payload={
+            "campaign_membership_id": str(campaign_membership_id),
+            **body.model_dump(mode="json"),
+        },
     )
-
-    response = MembershipRoleResponse(membership_role_id=result.membership_role_id)
-
-    if reservation_id is not None:
-        complete_idempotent_request(
-            connection,
-            idempotent_request_id=reservation_id,
-            response_status_code=201,
-            response_body=response.model_dump(mode="json"),
-        )
-
+    if replay is not None:
+        return replay
+    prepared = prepare_assign_role(
+        connection,
+        plan,
+        campaign_id=campaign_id,
+        actor_user_id=access.user_id,
+        actor_membership_id=access.campaign_membership_id,
+        target_membership_id=campaign_membership_id,
+        role_id=body.role_id,
+        reservation_id=reservation_id,
+    )
+    plan.finalize(connection)
+    new_id = write_assign_role(
+        connection,
+        plan,
+        prepared,
+        actor_user_id=access.user_id,
+        actor_membership_id=access.campaign_membership_id,
+        expires_at=body.expires_at,
+        correlation_id=correlation_id,
+    )
+    response = MembershipRoleResponse(membership_role_id=new_id)
+    _complete_receipt_with(connection, plan, reservation_id, 201, response)
     return response
 
 
@@ -334,83 +299,46 @@ def revoke_membership_role_endpoint(
     access: Annotated[
         AccessContext, Depends(require_campaign_capability(_ACCESS_MANAGE_CAPABILITY))
     ],
+    plan: _Plan,
     connection: Annotated[Connection, Depends(get_connection)],
     idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
-) -> MembershipRoleResponse:
-    """Revokes one existing, currently-active role assignment — the portal
-    Access page's "revoke role" action (Phase 13E-B checkpoint 2). Self-
-    revocation is permitted, with no special-case check here or in the
-    command: the campaign's own retention invariant is what actually
-    protects an active campaign from ending up with no `access.manage`
-    holder, exactly as it already does for `change_membership_role_
-    endpoint`. `200`, not the pre-checkpoint-2 `204`: this route's response
-    now carries a body — see "Response contract change" below.
-
-    Response contract change (Phase 13E-B checkpoint 2 correction): this
-    route previously returned a bare `204 No Content` and accepted no
-    `Idempotency-Key`, on the theory that `revoke_membership_role`'s own
-    state-idempotency (a retry against an already-revoked row is a harmless
-    no-op) made a durable key unnecessary. That reasoning covered *state*
-    but not the *audit trail*: every call — including a plain retry with no
-    key at all — wrote its own `audit.change_log` row unconditionally, so
-    an ordinary network retry (the exact "unknown outcome, retry" case this
-    application's own idempotency story exists for) could durably record
-    two revocation events for one real revocation. Fixed two ways, matching
-    every other mutating endpoint in this module: (1) an `Idempotency-Key`
-    replay returns the original cached response verbatim, never re-running
-    the command at all; (2) even *without* a matching key, the audit write
-    below is now conditioned on `RevokeMembershipRoleResult.revoked`, so a
-    second call that lands on an already-revoked row (whether or not it
-    reuses a key) writes no second row. A `MembershipRoleResponse` echoing
-    `membership_role_id` back (reusing the existing assign-role response
-    shape) gives `begin_idempotent_request`/`complete_idempotent_request`
-    something to cache, which a bodyless `204` could not."""
-    reservation_id: uuid.UUID | None = None
-    if idempotency_key is not None:
-        fingerprint_payload: dict[str, Any] = {"membership_role_id": str(membership_role_id)}
-        outcome = begin_idempotent_request(
-            connection,
-            actor_user_id=access.user_id,
-            campaign_id=campaign_id,
-            idempotency_key=idempotency_key,
-            command_name=_REVOKE_ROLE_COMMAND_NAME,
-            payload=fingerprint_payload,
-            correlation_id=correlation_id,
-        )
-        if isinstance(outcome, IdempotentReplay):
-            return MembershipRoleResponse.model_validate(outcome.response_body)
-        reservation_id = outcome.idempotent_request_id
-
-    result = revoke_membership_role(
-        connection, membership_role_id=membership_role_id, campaign_id=campaign_id
+) -> Any:
+    """Revokes one existing role assignment (Phase 13E-B checkpoint 2); a keyed-optional pre-write route
+    (R01 S5-E2). Self-revocation is permitted and judged against the pre-command authority. An
+    already-revoked assignment is the documented no-op: no write and no audit row (a fresh keyed one
+    still completes its receipt). The "a manager survives" check runs before `finalize`."""
+    replay, reservation_id = _begin_lifecycle_request(
+        plan=plan,
+        connection=connection,
+        access=access,
+        idempotency_key=idempotency_key,
+        correlation_id=correlation_id,
+        command_name=_REVOKE_ROLE_COMMAND_NAME,
+        payload={"membership_role_id": str(membership_role_id)},
     )
-
-    if result.revoked:
-        record_change_log(
-            connection,
-            change_action_code=_UPDATED_CHANGE_ACTION,
-            schema_name="security",
-            table_name="membership_roles",
-            record_id=membership_role_id,
-            entity_id=None,
-            world_id=timeline_world_id(connection, access.timeline_id),
-            actor_user_id=access.user_id,
-            correlation_id=correlation_id,
-            command_name=_REVOKE_ROLE_COMMAND_NAME,
-            event_id=None,
-        )
-
+    if replay is not None:
+        return replay
+    prepared = prepare_revoke_role(
+        connection,
+        plan,
+        campaign_id=campaign_id,
+        actor_user_id=access.user_id,
+        actor_membership_id=access.campaign_membership_id,
+        membership_role_id=membership_role_id,
+        reservation_id=reservation_id,
+    )
+    plan.finalize(connection)
+    write_revoke_role(
+        connection,
+        plan,
+        prepared,
+        membership_role_id=membership_role_id,
+        actor_user_id=access.user_id,
+        correlation_id=correlation_id,
+    )
     response = MembershipRoleResponse(membership_role_id=membership_role_id)
-
-    if reservation_id is not None:
-        complete_idempotent_request(
-            connection,
-            idempotent_request_id=reservation_id,
-            response_status_code=200,
-            response_body=response.model_dump(mode="json"),
-        )
-
+    _complete_receipt_with(connection, plan, reservation_id, 200, response)
     return response
 
 
@@ -426,77 +354,47 @@ def change_membership_role_endpoint(
     access: Annotated[
         AccessContext, Depends(require_campaign_capability(_ACCESS_MANAGE_CAPABILITY))
     ],
+    plan: _Plan,
     connection: Annotated[Connection, Depends(get_connection)],
     idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
-) -> MembershipRoleResponse:
-    """Changes one existing, currently-active role assignment to a
-    different role — the portal Access page's single "change role" action
-    (Phase 13E-B). Self-change is permitted (no special-case check here or
-    in the command): the campaign's own retention invariant, re-evaluated
-    on current PostgreSQL state after both the revoke and the new
-    assignment apply, is what actually protects an active campaign from
-    ending up with no `access.manage` holder — including when the caller
-    is changing their own last such assignment. 201, not 200: this both
-    revokes the old assignment and creates a new `security.membership_roles`
-    row, matching `assign_membership_role_endpoint`'s own status code for
-    "a new row now exists," even though an existing row also changed."""
-    reservation_id: uuid.UUID | None = None
-    if idempotency_key is not None:
-        fingerprint_payload: dict[str, Any] = {
-            "membership_role_id": str(membership_role_id),
-            **body.model_dump(mode="json"),
-        }
-        outcome = begin_idempotent_request(
-            connection,
-            actor_user_id=access.user_id,
-            campaign_id=campaign_id,
-            idempotency_key=idempotency_key,
-            command_name=_CHANGE_ROLE_COMMAND_NAME,
-            payload=fingerprint_payload,
-            correlation_id=correlation_id,
-        )
-        if isinstance(outcome, IdempotentReplay):
-            return MembershipRoleResponse.model_validate(outcome.response_body)
-        reservation_id = outcome.idempotent_request_id
-
-    result = change_membership_role(
-        connection,
-        membership_role_id=membership_role_id,
-        campaign_id=campaign_id,
-        new_role_id=body.new_role_id,
-        granted_by_membership_id=access.campaign_membership_id,
-    )
-
-    record_change_log(
-        connection,
-        change_action_code=_UPDATED_CHANGE_ACTION,
-        schema_name="security",
-        table_name="membership_roles",
-        record_id=result.membership_role_id,
-        entity_id=None,
-        world_id=timeline_world_id(connection, access.timeline_id),
-        actor_user_id=access.user_id,
+) -> Any:
+    """Changes one active role assignment to a different role (Phase 13E-B); a keyed-optional pre-write
+    route (R01 S5-E2). Self-change is permitted: the retention pre-check (before `finalize`) counts the
+    new assignment, and authority is judged before either write."""
+    replay, reservation_id = _begin_lifecycle_request(
+        plan=plan,
+        connection=connection,
+        access=access,
+        idempotency_key=idempotency_key,
         correlation_id=correlation_id,
         command_name=_CHANGE_ROLE_COMMAND_NAME,
-        event_id=None,
-        previous_status=result.previous_role_code,
-        new_status=result.new_role_code,
-        changed_fields={
-            "previous_membership_role_id": str(result.previous_membership_role_id),
-        },
+        payload={"membership_role_id": str(membership_role_id), **body.model_dump(mode="json")},
     )
-
-    response = MembershipRoleResponse(membership_role_id=result.membership_role_id)
-
-    if reservation_id is not None:
-        complete_idempotent_request(
-            connection,
-            idempotent_request_id=reservation_id,
-            response_status_code=201,
-            response_body=response.model_dump(mode="json"),
-        )
-
+    if replay is not None:
+        return replay
+    prepared = prepare_change_role(
+        connection,
+        plan,
+        campaign_id=campaign_id,
+        actor_user_id=access.user_id,
+        actor_membership_id=access.campaign_membership_id,
+        membership_role_id=membership_role_id,
+        new_role_id=body.new_role_id,
+        reservation_id=reservation_id,
+    )
+    plan.finalize(connection)
+    new_id = write_change_role(
+        connection,
+        plan,
+        prepared,
+        membership_role_id=membership_role_id,
+        actor_user_id=access.user_id,
+        actor_membership_id=access.campaign_membership_id,
+        correlation_id=correlation_id,
+    )
+    response = MembershipRoleResponse(membership_role_id=new_id)
+    _complete_receipt_with(connection, plan, reservation_id, 201, response)
     return response
 
 

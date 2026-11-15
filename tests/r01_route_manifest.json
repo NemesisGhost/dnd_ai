@@ -8510,19 +8510,22 @@
   ]
  },
  {
-  "audit": true,
+  "audit": false,
   "command_markers": {
-   "dnd_ai.commands.memberships.add_campaign_member": []
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.membership_role_plans.prepare_add_member": [],
+   "dnd_ai.commands.membership_role_plans.write_add_member": []
   },
   "command_scope_markers": [],
   "command_writes": {
-   "dnd_ai.commands.memberships.add_campaign_member": [
-    "security.campaign_memberships",
-    "security.membership_roles"
-   ]
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.membership_role_plans.prepare_add_member": [],
+   "dnd_ai.commands.membership_role_plans.write_add_member": []
   },
   "commands": [
-   "dnd_ai.commands.memberships.add_campaign_member"
+   "dnd_ai.commands._pre_write_steps.receipt_params",
+   "dnd_ai.commands.membership_role_plans.prepare_add_member",
+   "dnd_ai.commands.membership_role_plans.write_add_member"
   ],
   "dependencies": [
    {
@@ -8544,7 +8547,6 @@
   "path": "/campaigns/{campaign_id}/memberships",
   "precheck_markers": [],
   "route_markers": [
-   "audit:change_log",
    "idempotency:campaign",
    "reader:access_context",
    "reader:world_authority",
@@ -8553,19 +8555,22 @@
   "unresolved": []
  },
  {
-  "audit": true,
+  "audit": false,
   "command_markers": {
-   "dnd_ai.commands.memberships.change_membership_role": []
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.membership_role_plans.prepare_change_role": [],
+   "dnd_ai.commands.membership_role_plans.write_change_role": []
   },
   "command_scope_markers": [],
   "command_writes": {
-   "dnd_ai.commands.memberships.change_membership_role": [
-    "security.character_reveal_delegations",
-    "security.membership_roles"
-   ]
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.membership_role_plans.prepare_change_role": [],
+   "dnd_ai.commands.membership_role_plans.write_change_role": []
   },
   "commands": [
-   "dnd_ai.commands.memberships.change_membership_role"
+   "dnd_ai.commands._pre_write_steps.receipt_params",
+   "dnd_ai.commands.membership_role_plans.prepare_change_role",
+   "dnd_ai.commands.membership_role_plans.write_change_role"
   ],
   "dependencies": [
    {
@@ -8587,7 +8592,6 @@
   "path": "/campaigns/{campaign_id}/memberships/roles/{membership_role_id}/change",
   "precheck_markers": [],
   "route_markers": [
-   "audit:change_log",
    "idempotency:campaign",
    "reader:access_context",
    "reader:world_authority",
@@ -8596,19 +8600,22 @@
   "unresolved": []
  },
  {
-  "audit": true,
+  "audit": false,
   "command_markers": {
-   "dnd_ai.commands.memberships.revoke_membership_role": []
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.membership_role_plans.prepare_revoke_role": [],
+   "dnd_ai.commands.membership_role_plans.write_revoke_role": []
   },
   "command_scope_markers": [],
   "command_writes": {
-   "dnd_ai.commands.memberships.revoke_membership_role": [
-    "security.character_reveal_delegations",
-    "security.membership_roles"
-   ]
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.membership_role_plans.prepare_revoke_role": [],
+   "dnd_ai.commands.membership_role_plans.write_revoke_role": []
   },
   "commands": [
-   "dnd_ai.commands.memberships.revoke_membership_role"
+   "dnd_ai.commands._pre_write_steps.receipt_params",
+   "dnd_ai.commands.membership_role_plans.prepare_revoke_role",
+   "dnd_ai.commands.membership_role_plans.write_revoke_role"
   ],
   "dependencies": [
    {
@@ -8630,7 +8637,6 @@
   "path": "/campaigns/{campaign_id}/memberships/roles/{membership_role_id}/revoke",
   "precheck_markers": [],
   "route_markers": [
-   "audit:change_log",
    "idempotency:campaign",
    "reader:access_context",
    "reader:world_authority",
@@ -8730,18 +8736,22 @@
   "unresolved": []
  },
  {
-  "audit": true,
+  "audit": false,
   "command_markers": {
-   "dnd_ai.commands.memberships.assign_membership_role": []
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.membership_role_plans.prepare_assign_role": [],
+   "dnd_ai.commands.membership_role_plans.write_assign_role": []
   },
   "command_scope_markers": [],
   "command_writes": {
-   "dnd_ai.commands.memberships.assign_membership_role": [
-    "security.membership_roles"
-   ]
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.membership_role_plans.prepare_assign_role": [],
+   "dnd_ai.commands.membership_role_plans.write_assign_role": []
   },
   "commands": [
-   "dnd_ai.commands.memberships.assign_membership_role"
+   "dnd_ai.commands._pre_write_steps.receipt_params",
+   "dnd_ai.commands.membership_role_plans.prepare_assign_role",
+   "dnd_ai.commands.membership_role_plans.write_assign_role"
   ],
   "dependencies": [
    {
@@ -8763,7 +8773,6 @@
   "path": "/campaigns/{campaign_id}/memberships/{campaign_membership_id}/roles",
   "precheck_markers": [],
   "route_markers": [
-   "audit:change_log",
    "idempotency:campaign",
    "reader:access_context",
    "reader:world_authority",

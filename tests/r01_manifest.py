@@ -583,6 +583,18 @@ _S5E1_ROUTES: frozenset[tuple[str, str]] = frozenset(
     }
 )
 
+#: S5-E2 migrates four membership routes (add member; assign, change and revoke a role), all keyed-optional
+#: pre-write plans (`dnd_ai.commands.membership_role_plans`). Ownership transfer is **not** migrated: it needs
+#: two obligations the accepted mechanisms cannot express (plan 6.27) and stays pending.
+_S5E2_ROUTES: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("POST", _CAMPAIGN + "/memberships"),
+        ("POST", _CAMPAIGN + "/memberships/{campaign_membership_id}/roles"),
+        ("POST", _CAMPAIGN + "/memberships/roles/{membership_role_id}/change"),
+        ("POST", _CAMPAIGN + "/memberships/roles/{membership_role_id}/revoke"),
+    }
+)
+
 MIGRATED_ROUTES: frozenset[tuple[str, str]] = (
     frozenset(
         {
@@ -599,6 +611,7 @@ MIGRATED_ROUTES: frozenset[tuple[str, str]] = (
     | _S4B_ROUTES
     | _S5D_ROUTES
     | _S5E1_ROUTES
+    | _S5E2_ROUTES
 )
 
 #: The one family outside R01's bound: account, authentication, Foundry pairing, world and timeline
