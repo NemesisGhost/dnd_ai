@@ -25,6 +25,15 @@ that appears later is caught by the revalidation, not by the lock.
   held row. `FOR SHARE` still protects the actor's authority (ending or deactivating the actor needs `FOR NO KEY
   UPDATE`/`UPDATE`), and it does not conflict with the `FOR KEY SHARE` the end route and the grant take, which
   is what removes the M-1 cycles.
+- **Ownership transfer's two conditional modes** (plan 6.29, TA-E10-1 / TA-E10-2). A transfer that owes no role-row
+  UPDATE (it does not relinquish and its candidate-bound expired-owner lock returned no row) locks the actor's role
+  rows `FOR KEY SHARE` and the campaign `FOR KEY SHARE`; one that relinquishes or replaces an expired owner row keeps
+  the actor's rows `FOR NO KEY UPDATE` and the campaign `FOR UPDATE`. This is what lets a transfer and a keyed
+  authoring request (role rows `FOR SHARE`, campaign `FOR KEY SHARE` from its reservation) run without a cycle.
+  A role UPDATE fires the deferred retention trigger, whose COMMIT-time campaign `FOR UPDATE` would be a `KEY SHARE`
+  -> `UPDATE` upgrade, so the weaker campaign mode is chosen only from held lock evidence and re-asserted before
+  `finalize` (`require_campaign_mode_covers_role_updates`). Relinquishing transfers and the replacement of an
+  author's own expired row still conflict with keyed authoring: deferred to the authoring opt-in slice (DEF-019).
 
 ## Lock sequences (implicit foreign-key locks and triggers included)
 
@@ -81,6 +90,7 @@ of their own (the owner assignment is among the actor's locked role rows).
 """
 
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -986,6 +996,15 @@ def prepare_assign_role(
     role_id: uuid.UUID,
     reservation_id: uuid.UUID | None,
 ) -> Prepared:
+    # BA-404: one unlocked snapshot of the target's status before any lock. It is trusted for nothing but the
+    # classification of a membership that turns ineligible *while this request waited* (below).
+    status_before = connection.execute(
+        text(
+            "SELECT membership_status_id FROM security.campaign_memberships "
+            "WHERE campaign_membership_id = :m"
+        ),
+        {"m": target_membership_id},
+    ).scalar()
     plan.lock(connection, ACTOR_ROLES_LOCK, {"membership": actor_membership_id})
     lock_memberships(
         connection,
@@ -998,7 +1017,7 @@ def prepare_assign_role(
     membership = (
         connection.execute(
             text("""
-                SELECT cm.campaign_id, cm.ended_at, cm.user_id,
+                SELECT cm.campaign_id, cm.ended_at, cm.user_id, cm.membership_status_id,
                        ms.code AS status_code, ms.is_active AS status_is_active
                 FROM security.campaign_memberships cm
                 JOIN security.membership_statuses ms
@@ -1032,6 +1051,13 @@ def prepare_assign_role(
         and membership["status_code"] == "active"
         and membership["status_is_active"]
     ):
+        if membership["membership_status_id"] != status_before:
+            # BA-404: the membership became ineligible while this request waited (a concurrent end). The
+            # baseline's joined `FOR UPDATE OF cm` statement re-checked the join and found no row there, so it
+            # answered "not in campaign" (404); an already-ineligible membership still answers 409.
+            raise MembershipNotInCampaignError(
+                f"membership {target_membership_id} ended while the assignment waited"
+            )
         raise MembershipNotActiveError(
             f"membership {target_membership_id} is not currently an eligible, open "
             "membership to assign a role to"
@@ -1421,9 +1447,10 @@ def write_change_role(
 #
 #   1. unlocked reads of lock-stable facts: the owner template id, the recipient membership's campaign, and the
 #      recipient's unrevoked owner row (the *candidate*, at most one);
-#   2. role class, **one ascending-id pass** (C2): the actor's unrevoked role rows NO KEY UPDATE below the
-#      candidate, the recipient's EXPIRED candidate NO KEY UPDATE, then (strictly after) its LIVE candidate KEY
-#      SHARE, then the actor's rows above the candidate; no candidate or a self-transfer: all the actor's rows,
+#   2. role class, **one ascending-id pass** (C2): the actor's unrevoked role rows (NO KEY UPDATE when
+#      relinquishing, KEY SHARE otherwise: TA-E10-1) below the candidate, the recipient's EXPIRED candidate NO KEY
+#      UPDATE, then (strictly after) its LIVE candidate KEY SHARE, then the actor's rows above the candidate; no
+#      candidate or a self-transfer: all the actor's rows,
 #      then the (empty or already held) recipient locks. Then, only when relinquishing, the actor's owner row NO KEY
 #      UPDATE (already held, no wait);
 #   3. delegations bound to each of those role keys, FOR UPDATE (always empty: trigger 141 binds them to `gm`);
@@ -1431,7 +1458,15 @@ def write_change_role(
 #      and positive evidence become stable here**, not at the role-class SELECTs: a recipient owner row inserted
 #      after discovery is caught by the drift check under this lock (409), never by a locking statement;
 #   5. the actor's account FOR SHARE, the recipient's account FOR KEY SHARE (S5-A);
-#   6. the campaign FOR UPDATE; 7. the owner template FOR UPDATE.
+#   6. the campaign: FOR UPDATE when the request relinquishes or its candidate-bound expired-owner lock returned a
+#      row (a role-row UPDATE is owed), FOR KEY SHARE otherwise (TA-E10-2); 7. the owner template FOR UPDATE.
+#
+# E10 (docs/R01_S5E2_E10_CORRECTION_DESIGN_2026-11-15.md, plan 6.29): a request that owes no role-row UPDATE must
+# not conflict with a keyed authoring request's `FOR SHARE` on the actor's role rows, nor take the campaign row
+# stronger than the KEY SHARE the authoring reservation's foreign key already holds. Hence the two weaker modes
+# above; both depend on the request, and the campaign mode on held lock evidence. A KEY SHARE campaign admits no
+# role UPDATE, so the deferred retention trigger never fires and nothing upgrades the campaign lock at COMMIT
+# (`require_campaign_mode_covers_role_updates`).
 #
 # Why the modes: NO KEY UPDATE does not conflict with the other side's KEY SHARE, so two owners transferring to
 # each other do not wait in the role class and serialize at the memberships; FOR UPDATE would deadlock them. A
@@ -1470,6 +1505,19 @@ TRANSFER_ACTOR_ROLE_ROWS = PreLock(
     .where(mr.c.membership_role_id < bindparam("before"))
     .order_by(mr.c.membership_role_id)
     .with_for_update(key_share=True),
+)
+#: The same statement at FOR KEY SHARE, run instead of `TRANSFER_ACTOR_ROLE_ROWS` by a request that is **not
+#: relinquishing** (TA-E10-1 / M2): such a request writes no row of the actor's, so it needs only to block every
+#: `FOR UPDATE` revoker of the actor's rows (and not to conflict with a keyed authoring request's `FOR SHARE`).
+TRANSFER_ACTOR_ROLE_ROWS_KEY_SHARE = PreLock(
+    "transfer_actor_role_rows_key_share",
+    select(mr.c.membership_role_id)
+    .where(mr.c.campaign_membership_id == bindparam("membership"))
+    .where(mr.c.revoked_at.is_(None))
+    .where(mr.c.membership_role_id > bindparam("after"))
+    .where(mr.c.membership_role_id < bindparam("before"))
+    .order_by(mr.c.membership_role_id)
+    .with_for_update(read=True, key_share=True),
 )
 #: The recipient's unrevoked owner row already expired at this statement's clock, FOR NO KEY UPDATE (bound
 #: `membership`, `role`, `candidate`). **Candidate-bound** (C2): it can lock only the row the unlocked discovery read
@@ -1598,6 +1646,7 @@ TRANSFER_AUDIT = WriteStep(
 )
 TRANSFER_LOCKS = (
     TRANSFER_ACTOR_ROLE_ROWS,
+    TRANSFER_ACTOR_ROLE_ROWS_KEY_SHARE,
     RECIPIENT_EXPIRED_OWNER,
     RECIPIENT_LIVE_OWNER,
     ACTOR_OWNER_ROW,
@@ -1607,6 +1656,7 @@ TRANSFER_LOCKS = (
     ACTOR_ACCOUNT_LOCK,
     TARGET_ACCOUNT_LOCK,
     CAMPAIGN_ROW_LOCK,
+    CAMPAIGN_KEY_SHARE_LOCK,
     ROLE_CATALOGUE_LOCK,
 )
 TRANSFER_STEPS = (
@@ -1678,6 +1728,19 @@ def _unrevoked_owner_rows(
     return {row.membership_role_id: bool(row.is_expired) for row in rows}
 
 
+def require_campaign_mode_covers_role_updates(
+    *, role_update_owed: bool, expired: Sequence[uuid.UUID], own: Sequence[uuid.UUID]
+) -> None:
+    """Internal invariant (unreachable in production): a transfer that took the campaign `FOR KEY SHARE` owes no
+    role-row UPDATE. A role UPDATE fires the deferred retention trigger, whose COMMIT-time campaign `FOR UPDATE`
+    would be a KEY SHARE -> UPDATE upgrade."""
+    if not role_update_owed and (expired or own):
+        raise RuntimeError(
+            "transfer took the campaign FOR KEY SHARE but owes a role-row UPDATE "
+            f"(expired={list(expired)}, own={list(own)})"
+        )
+
+
 def _recipient_changed(recipient: uuid.UUID, detail: str) -> OwnershipTransferRecipientChangedError:
     return OwnershipTransferRecipientChangedError(f"membership {recipient}: {detail}")
 
@@ -1734,7 +1797,7 @@ def prepare_transfer(  # noqa: C901, PLR0912, PLR0915 - one linear lock and refu
     def actor_rows(after: uuid.UUID, before: uuid.UUID) -> None:
         plan.lock(
             connection,
-            TRANSFER_ACTOR_ROLE_ROWS,
+            TRANSFER_ACTOR_ROLE_ROWS if relinquishing else TRANSFER_ACTOR_ROLE_ROWS_KEY_SHARE,
             {"membership": actor_membership_id, "after": after, "before": before},
         )
 
@@ -1795,8 +1858,14 @@ def prepare_transfer(  # noqa: C901, PLR0912, PLR0915 - one linear lock and refu
     )
     if membership is not None and membership["campaign_id"] == campaign_id:
         plan.lock(connection, TARGET_ACCOUNT_LOCK, {"target_user": membership["user_id"]})
-    # 6. campaign, 7. catalogue
-    plan.lock(connection, CAMPAIGN_ROW_LOCK, {"campaign": campaign_id})
+    # 6. campaign (M1 / TA-E10-2): FOR UPDATE when this request can owe a role-row UPDATE (it relinquishes, or its
+    #    candidate-bound expired-owner lock *returned a row*), otherwise FOR KEY SHARE. The mode rests on held lock
+    #    evidence, never on a prediction. 7. catalogue
+    role_update_owed = relinquishing or bool(expired)
+    if role_update_owed:
+        plan.lock(connection, CAMPAIGN_ROW_LOCK, {"campaign": campaign_id})
+    else:
+        plan.lock(connection, CAMPAIGN_KEY_SHARE_LOCK, {"campaign": campaign_id})
     plan.lock(connection, ROLE_CATALOGUE_LOCK, {"role_a": owner_role_id, "role_b": owner_role_id})
     # 8. reads and refusals (no lock, no wait), in the legacy order
     #   1. the gate, at the transaction's start (D3): first, so a non-owner learns nothing
@@ -1918,7 +1987,12 @@ def prepare_transfer(  # noqa: C901, PLR0912, PLR0915 - one linear lock and refu
                     f"{campaign_id} with no membership holding access.manage"
                 ),
             )
-    #   9. the world and the audit action
+    #   9. invariant: the weaker campaign mode admits no role-row UPDATE (the deferred retention trigger would
+    #      otherwise upgrade the campaign lock at COMMIT)
+    require_campaign_mode_covers_role_updates(
+        role_update_owed=role_update_owed, expired=sorted(expired_keys), own=own_keys
+    )
+    #   10. the world and the audit action
     return TransferPrepared(
         world_id=_scope_world(connection, campaign_id),
         action_id=lookup_id(connection, "audit", "change_actions", "change_action_id", "updated"),

@@ -233,3 +233,59 @@ def test_a_handler_defers_binds_judges_a_replay_and_then_runs_only_declared_step
         assert _name(call) not in {"execute", "begin_idempotent_request", "record_change_log"}, (
             route
         )
+
+
+# -- the ownership transfer's two conditional lock modes (R01 S5-E2 E10 correction, plan 6.29) -----------------------
+
+
+def test_the_transfer_declares_both_role_row_modes_and_both_campaign_modes() -> None:
+    """TA-E10-1 / TA-E10-2: the actor's role rows are NO KEY UPDATE (relinquishing) or KEY SHARE (not), the campaign
+    row FOR UPDATE (a role UPDATE is owed) or FOR KEY SHARE (none is). All four locks are declared, each at the mode
+    that is its name, so `plan.lock` accepts either branch and the declaration still lists every lock exactly once."""
+    locks = plans.TRANSFER_DECLARATION.locks
+    modes = {lock.name: lock.mode for lock in locks}
+    assert modes["transfer_actor_role_rows"] is LockMode.NO_KEY_UPDATE
+    assert modes["transfer_actor_role_rows_key_share"] is LockMode.KEY_SHARE
+    assert modes["campaign_row_update"] is LockMode.UPDATE
+    assert modes["campaign_key_share"] is LockMode.KEY_SHARE
+    assert len({lock.name for lock in locks}) == len(locks)
+    # the recipient's expired candidate stays NO KEY UPDATE and its live candidate KEY SHARE (unchanged)
+    assert modes["recipient_expired_owner"] is LockMode.NO_KEY_UPDATE
+    assert modes["recipient_live_owner"] is LockMode.KEY_SHARE
+
+
+def test_prepare_transfer_chooses_each_mode_from_the_request_and_from_held_evidence() -> None:
+    """The weaker campaign mode must depend on successful lock evidence (the expired-owner lock's result) and on the
+    validated request flag, never on a caller assertion: read the source of `prepare_transfer`."""
+    source = textwrap.dedent(inspect.getsource(plans.prepare_transfer))
+    assert (
+        "TRANSFER_ACTOR_ROLE_ROWS if relinquishing else TRANSFER_ACTOR_ROLE_ROWS_KEY_SHARE"
+        in source
+    )
+    assert "role_update_owed = relinquishing or bool(expired)" in source
+    assert source.index("role_update_owed = relinquishing or bool(expired)") < source.index(
+        "CAMPAIGN_KEY_SHARE_LOCK"
+    )
+    assert "require_campaign_mode_covers_role_updates(" in source
+    # the owed-update evidence is the *locked* expired rows (the result of `plan.lock`), not an unlocked read
+    assert "expired = plan.lock(connection, RECIPIENT_EXPIRED_OWNER" in source
+
+
+def test_a_key_share_campaign_with_a_role_update_owed_is_an_internal_invariant_error() -> None:
+    """Unreachable in production (the mode is chosen from the same facts): constructed here. A transfer that took the
+    campaign KEY SHARE but owes a close of an expired owner row, or a relinquish, would queue the retention trigger,
+    which takes the campaign FOR UPDATE at COMMIT (a KEY SHARE -> UPDATE upgrade)."""
+    import uuid
+
+    row = uuid.uuid4()
+    plans.require_campaign_mode_covers_role_updates(role_update_owed=False, expired=[], own=[])
+    plans.require_campaign_mode_covers_role_updates(role_update_owed=True, expired=[row], own=[row])
+    plans.require_campaign_mode_covers_role_updates(role_update_owed=True, expired=[], own=[])
+    with pytest.raises(RuntimeError, match="FOR KEY SHARE but owes a role-row UPDATE"):
+        plans.require_campaign_mode_covers_role_updates(
+            role_update_owed=False, expired=[row], own=[]
+        )
+    with pytest.raises(RuntimeError, match="FOR KEY SHARE but owes a role-row UPDATE"):
+        plans.require_campaign_mode_covers_role_updates(
+            role_update_owed=False, expired=[], own=[row]
+        )

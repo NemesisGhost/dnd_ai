@@ -40,6 +40,7 @@ from tests.database.test_r01_s3_authoring_routes import (  # noqa: F401 - fixtur
     error_of,
     w,
 )
+from tests.deadline_diagnostics import deadline_message
 from tests.factories import make_campaign_membership, make_user, oidc_principal, system_role_id
 from tests.http_race_support import (
     StatementGate,
@@ -84,6 +85,12 @@ MEMBERSHIP_LOCK = (
     r"WHERE .* FOR (SHARE|UPDATE)$"
 )
 ACTOR_ACCOUNT = r"SELECT security\.users\.user_id FROM security\.users WHERE security\.users\.user_id = \S+ FOR SHARE$"
+#: The transfer's role-catalogue statement: the first statement after its campaign lock, so every lock of the
+#: transfer, including the campaign row, is held when it is parked here.
+ROLE_CATALOGUE = (
+    r"^SELECT security\.roles\.role_id FROM security\.roles WHERE security\.roles\.role_id = \S+ "
+    r"OR security\.roles\.role_id = \S+ ORDER BY security\.roles\.role_id FOR UPDATE$"
+)
 END_ACTOR_KEY_SHARE = (
     r"FROM security\.campaign_memberships WHERE campaign_membership_id = \S+ FOR KEY SHARE$"
 )
@@ -124,7 +131,10 @@ class NthGate(StatementGate):
 
 def finish(request: Any, why: str) -> Any:
     """`Request.wait` with this module's patience."""
-    assert request.done.wait(PATIENCE), f"{request.name} did not finish: {why}"
+    assert request.done.wait(PATIENCE), (
+        f"{request.name} did not finish: {why}"
+        f"{deadline_message(f'{request.name} did not finish: {why}', requests=[request])}"
+    )
     assert request.error is None, f"{request.name} raised {request.error!r}"
     return request.result
 
@@ -271,6 +281,7 @@ def wait_blocked_or_finished(
         time.sleep(0.02)
     raise AssertionError(
         f"the competitor neither queued behind pid {gate.pid} nor finished\n{activity_report(admin)}"
+        f"{deadline_message(f'competitor neither queued behind pid {gate.pid} nor finished', engine=admin)}"
     )
 
 
@@ -818,8 +829,10 @@ def test_e_membership_locks_never_wait_in_a_cycle(
             ),
         )
         assert_clean(o)
-        # the assign-after-end response (HEAD answers 409 `conflict`; the pre-S5-E2 baseline answered 404)
-        assert (o.status("parked"), o.status("second")) == (OK200, (409, "conflict")), o.summary()
+        # BA-404: assign to a membership that ended while the assign waited answers 404 `not_found`, as the
+        # pre-S5-E2 baseline did (HEAD `45dab7d` answered 409). An already-ended membership still answers 409 and a
+        # membership of another campaign 404: tests/database/test_r01_s5e2_assign_after_end.py
+        assert (o.status("parked"), o.status("second")) == (OK200, (404, "not_found")), o.summary()
         assert "observer" not in live_roles(w.engine, [cast.x_m])
     else:
         cast = membership_pair(w, order, "E4", c_roles=("campaign_owner",), x_roles=("player",))
@@ -853,33 +866,21 @@ def author_request(pool: Pool, w: World) -> Any:
     )
 
 
-_CAMPAIGN_ROW_CYCLE = pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "OPEN CONFLICT with the design (reported, not fixed): C3 removes the membership edge, but an authoring request "
-        "already holds the campaign row FOR KEY SHARE (its idempotency reservation's foreign key) when it waits for a "
-        "role row, and `change` and `transfer` want that row FOR UPDATE after their role rows. The residual cycle is not "
-        "introduced by S5-E2 or by C1-C4: the 0edb94d tree with C3 applied deadlocks the same way (plan "
-        "6.28.5)."
-    ),
-)
+# The `change` and `transfer_to_expired_owner` peers hold the author's role row and then want the campaign row
+# `FOR UPDATE`, while the authoring request already holds it `FOR KEY SHARE` (its reservation's foreign key): a
+# pre-existing cycle (0edb94d), deferred to the authoring opt-in slice (DEF-019). They are characterized, positively and
+# exactly (one 40P01, on a cycle-edge statement, victim rollback and retry), by `test_f_the_deferred_cycle_is_
+# characterized` in tests/database/test_r01_s5e2_authoring_transfer_cycles.py. They are not `xfail`s here: an `xfail`
+# passes on *any* failure, including an unrelated one.
 
 
 @pytest.mark.parametrize("other_row", ("below_gX", "above_gX"))
-@pytest.mark.parametrize(
-    "peer",
-    (
-        "grant",
-        pytest.param("change", marks=_CAMPAIGN_ROW_CYCLE),
-        pytest.param("transfer_to_expired_owner", marks=_CAMPAIGN_ROW_CYCLE),
-    ),
-)
-def test_f_authoring_never_waits_in_a_cycle_with_a_role_writer(
-    peer: str, other_row: str, w: World, pool: Pool
+def test_f_authoring_never_waits_in_a_cycle_with_the_reveal_delegation_grant(
+    other_row: str, w: World, pool: Pool
 ) -> None:
-    """X (`w.gm_user`) authors while another request holds one of X's role rows and wants X's membership. Authoring
-    takes its role rows, then the membership: it holds only role rows while it waits."""
-    m = make_managers(w.engine, w.campaign_id, label="F")
+    """X (`w.gm_user`) authors while the grant holds one of X's role rows and wants X's membership. Authoring takes
+    its role rows, then the membership: it holds only role rows while it waits."""
+    make_managers(w.engine, w.campaign_id, label="F")
     other = tag("low" if other_row == "below_gX" else "high", "01")
     assert (other < w.gm_role) == (other_row == "below_gX")
     with w.engine.begin() as c:
@@ -887,61 +888,19 @@ def test_f_authoring_never_waits_in_a_cycle_with_a_role_writer(
         c_m = make_campaign_membership(c, w.campaign_id, c_user)
         insert_role(c, None, c_m, system_role_id(c, "campaign_owner"))
         insert_role(c, other, w.gm_membership, system_role_id(c, "player"))
-        observer = system_role_id(c, "observer")
-        if peer == "transfer_to_expired_owner":
-            c.execute(
-                text(
-                    "INSERT INTO security.membership_roles (membership_role_id, campaign_membership_id, "
-                    "role_id, granted_at, expires_at) VALUES (:r, :m, :role, "
-                    "now() - interval '2 hours', now() - interval '1 hour')"
-                ),
-                {
-                    "r": tag("high", "e1"),
-                    "m": w.gm_membership,
-                    "role": system_role_id(c, "campaign_owner"),
-                },
-            )
-    if peer == "grant":
-        o = race(
-            w,
-            pool,
-            gate_pattern=GRANT_GRANTEE_NKU,
-            parked=lambda: post(
-                pool, c_user, f"{w.base}/reveal-delegations", grant_body(w.gm_membership)
-            ),
-            second=lambda: author_request(pool, w),
-        )
-        assert o.status("parked") == OK200, o.summary()
-    elif peer == "change":
-        o = race(
-            w,
-            pool,
-            gate_pattern=MEMBERSHIP_LOCK,
-            parked=lambda: post(
-                pool,
-                m.manager_user,
-                f"{w.base}/memberships/roles/{w.gm_role}/change",
-                {"new_role_id": str(observer)},
-            ),
-            second=lambda: author_request(pool, w),
-        )
-        assert o.status("parked") == OK201, o.summary()
-    else:
-        o = race(
-            w,
-            pool,
-            gate_pattern=MEMBERSHIP_LOCK,
-            parked=lambda: post(
-                pool, c_user, f"{w.base}/ownership-transfer", transfer_body(w.gm_membership, False)
-            ),
-            second=lambda: author_request(pool, w),
-        )
-        assert o.status("parked") == OK200, o.summary()
+    o = race(
+        w,
+        pool,
+        gate_pattern=GRANT_GRANTEE_NKU,
+        parked=lambda: post(
+            pool, c_user, f"{w.base}/reveal-delegations", grant_body(w.gm_membership)
+        ),
+        second=lambda: author_request(pool, w),
+    )
+    assert o.status("parked") == OK200, o.summary()
     assert_clean(o)
     assert_waited_on_parked(o, r"membership_roles")
-    # after a `change` the author lost `gm` (and so `canon.edit`): its request is refused after the wait
-    if peer != "change":
-        assert o.status("second") == OK201, o.summary()
+    assert o.status("second") == OK201, o.summary()
 
 
 # ======================================================================================================================
@@ -1048,10 +1007,17 @@ def test_g_grant_holds_each_row_at_the_mode_it_needs(w: World, pool: Pool) -> No
     }
 
 
+CAMPAIGN_ROW = ("campaign.campaigns", "campaign_id")
+
+
+@pytest.mark.parametrize("relinquish", (False, True))
 @pytest.mark.parametrize("recipient_row", ("live", "expired"))
 def test_g_transfer_holds_each_row_at_the_mode_it_needs(
-    recipient_row: str, w: World, pool: Pool
+    recipient_row: str, relinquish: bool, w: World, pool: Pool
 ) -> None:
+    """TA-E10-1 / TA-E10-2: the actor's role rows are NO KEY UPDATE only when relinquishing (KEY SHARE otherwise);
+    the campaign row is FOR KEY SHARE exactly when no role UPDATE is owed (not relinquishing and no expired owner
+    row to close). Probed with the transfer parked after its campaign lock, so every lock is held."""
     make_managers(w.engine, w.campaign_id, label="G2")
     cast = owners(w, "G2")
     if recipient_row == "expired":
@@ -1066,24 +1032,51 @@ def test_g_transfer_holds_each_row_at_the_mode_it_needs(
     response, modes = park_and_probe(
         w,
         pool,
-        gate_pattern=ACTOR_ACCOUNT,
+        gate_pattern=ROLE_CATALOGUE,
         request=lambda: post(
-            pool, cast.c_user, f"{w.base}/ownership-transfer", transfer_body(cast.x_m, False)
+            pool, cast.c_user, f"{w.base}/ownership-transfer", transfer_body(cast.x_m, relinquish)
         ),
         probes={
             "actor owner row": (ROLE_ROW, cast.ids["r_c"]),
             "recipient owner row": (ROLE_ROW, cast.ids["r_a"]),
             "actor membership": (MEMBERSHIP_ROW, cast.c_m),
             "recipient membership": (MEMBERSHIP_ROW, cast.x_m),
+            "campaign": (CAMPAIGN_ROW, w.campaign_id),
         },
     )
     assert code(response) == 200
     assert modes == {
-        "actor owner row": "NKU",
+        "actor owner row": "NKU" if relinquish else "KS",
         "recipient owner row": "KS" if recipient_row == "live" else "NKU",
         "actor membership": "S",
         "recipient membership": "U",
+        "campaign": "U" if (relinquish or recipient_row == "expired") else "KS",
     }
+
+
+def test_g_insert_branch_takes_the_campaign_key_share(w: World, pool: Pool) -> None:
+    """The recipient has no owner row: nothing to close, nothing to relinquish, campaign FOR KEY SHARE."""
+    make_managers(w.engine, w.campaign_id, label="G2i")
+    cast = cast_two(
+        w,
+        label="G2i",
+        roles={"r_c": ("c", "campaign_owner", "high:c1"), "p_x": ("x", "player", "low:b1")},
+    )
+    response, modes = park_and_probe(
+        w,
+        pool,
+        gate_pattern=ROLE_CATALOGUE,
+        request=lambda: post(
+            pool, cast.c_user, f"{w.base}/ownership-transfer", transfer_body(cast.x_m, False)
+        ),
+        probes={
+            "actor owner row": (ROLE_ROW, cast.ids["r_c"]),
+            "recipient membership": (MEMBERSHIP_ROW, cast.x_m),
+            "campaign": (CAMPAIGN_ROW, w.campaign_id),
+        },
+    )
+    assert code(response) == 200
+    assert modes == {"actor owner row": "KS", "recipient membership": "U", "campaign": "KS"}
 
 
 @pytest.mark.parametrize("route", ("assign", "change"))
@@ -1323,14 +1316,19 @@ def test_i_self_transfer_changes_nothing_and_does_not_upgrade_any_lock(
     response, modes = park_and_probe(
         w,
         pool,
-        gate_pattern=ACTOR_ACCOUNT,
+        gate_pattern=ROLE_CATALOGUE,
         request=lambda: post(
             pool, user, f"{w.base}/ownership-transfer", transfer_body(m, relinquish)
         ),
-        probes={"owner row": (ROLE_ROW, r_c), "membership": (MEMBERSHIP_ROW, m)},
+        probes={
+            "owner row": (ROLE_ROW, r_c),
+            "membership": (MEMBERSHIP_ROW, m),
+            "campaign": (CAMPAIGN_ROW, w.campaign_id),
+        },
     )
     assert (code(response), error_of(response)) == OK200
-    assert modes == {"owner row": "NKU", "membership": "U"}
+    # a self-transfer is never relinquishing (the flag is ignored): the owner row stays KEY SHARE, the campaign too
+    assert modes == {"owner row": "KS", "membership": "U", "campaign": "KS"}
     assert live_roles(w.engine, [m])["campaign_owner"] == [r_c]
     assert transfer_audits(w.engine) == audits
 
@@ -1371,8 +1369,8 @@ def test_i_self_assign_and_self_change_take_the_membership_once_exclusively(
 
 # ======================================================================================================================
 # J. The transfer against other lifecycle operations of the design review (E6, E7, E10)
-#    (E8 recovery promoting the recipient, E9 invitation acceptance reopening the recipient and E11 campaign archive
-#    are NOT executed against this route here; they stay source-traced, see plan 6.28.)
+#    (E8 recovery, E9 invitation acceptance and E11 campaign archive against the transfer route are executed in
+#    tests/database/test_r01_s5e2_transfer_interactions.py, plan 6.29.)
 # ======================================================================================================================
 
 
@@ -1451,33 +1449,9 @@ def test_e7_deactivating_the_recipients_account_before_the_transfers_account_che
     assert "campaign_owner" not in live_roles(w.engine, [cast.x_m])
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "OPEN CONFLICT with the design (reported, not fixed): the actor's own authoring request holds the campaign "
-        "row FOR KEY SHARE (its reservation) while it waits for a role row the transfer holds, and the transfer wants "
-        "that row FOR UPDATE: the same residual cycle as the `change` and `transfer` cases of test_f."
-    ),
-)
-def test_e10_the_actors_authoring_request_against_its_own_transfer(w: World, pool: Pool) -> None:
-    make_managers(w.engine, w.campaign_id, label="E10")
-    with w.engine.begin() as c:
-        insert_role(c, None, w.gm_membership, system_role_id(c, "campaign_owner"))
-    recipient = owners(w, "E10")
-    o = race(
-        w,
-        pool,
-        gate_pattern=ACTOR_ACCOUNT,
-        parked=lambda: post(
-            pool,
-            w.gm_user,
-            f"{w.base}/ownership-transfer",
-            transfer_body(recipient.x_m, False),
-        ),
-        second=lambda: author_request(pool, w),
-    )
-    assert_clean(o)
-    assert (o.status("parked"), o.status("second")) == (OK200, OK201), o.summary()
+# E10 (the actor's own keyed authoring request against its transfer) and its 13 siblings, the baseline cycles and the
+# recovery, invitation-acceptance, archive and same-owner pair interactions are in
+# tests/database/test_r01_s5e2_authoring_transfer_cycles.py and tests/database/test_r01_s5e2_transfer_interactions.py.
 
 
 # ======================================================================================================================

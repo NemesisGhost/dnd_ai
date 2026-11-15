@@ -46,12 +46,22 @@ def test_a_shard_is_given_ci_s_partition_its_own_database_and_private_directorie
     assert environment["PYTHONPATH"] == str(tmp_path / "isolation")  # nothing else is importable
     assert environment["RUNNER_SHARD_PGDATA"] == str(tmp_path / "shard-2" / "pgdata")
     assert environment["RUNNER_SHARD_URL"] == environment["DATABASE_URL"]
+    # deadline reports land inside the kept run directory, one directory per shard (never removed with `tmp`)
+    assert environment["RUNNER_DEADLINE_DIAG_DIR"] == str(
+        tmp_path / "shard-2" / "deadline-diagnostics"
+    )
 
 
 def test_two_shards_share_no_directory_port_or_application_name(tmp_path: Path) -> None:
     first = runner.shard_environment(_shard(tmp_path, 1), tmp_path / "isolation")
     second = runner.shard_environment(_shard(tmp_path, 2), tmp_path / "isolation")
-    for variable in ("DATABASE_URL", "PGAPPNAME", "TEMP", "CI_TEST_SHARD"):
+    for variable in (
+        "DATABASE_URL",
+        "PGAPPNAME",
+        "TEMP",
+        "CI_TEST_SHARD",
+        "RUNNER_DEADLINE_DIAG_DIR",
+    ):
         assert first[variable] != second[variable], variable
 
 

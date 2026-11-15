@@ -580,6 +580,9 @@ def shard_environment(shard: Shard, isolation: Path) -> dict[str, str]:
         TMPDIR=str(scratch),
         PYTHONPATH=str(isolation),
         PYTHONUNBUFFERED="1",
+        # Race-harness deadline reports (tests/deadline_diagnostics.py) go inside the kept run directory, so a
+        # stall that leaves no other trace is still diagnosable after the shard's tmp directory is removed.
+        RUNNER_DEADLINE_DIAG_DIR=str(shard.root / "deadline-diagnostics"),
     )
     return environment
 
@@ -918,6 +921,9 @@ def report(
             f"{shard.name}: exit {shard.returncode}  {detail}  ({shard.collected} collected, "
             f"{fmt(elapsed)}){note}"
         )
+        diagnostics = sorted((shard.root / "deadline-diagnostics").glob("*.txt"))
+        if diagnostics:
+            print(f"    {len(diagnostics)} deadline report(s) in {diagnostics[0].parent}")
         if shard.returncode != 0:
             failed = True
             for line in failure_lines(shard.pytest_log):

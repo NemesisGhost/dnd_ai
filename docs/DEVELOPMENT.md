@@ -558,6 +558,18 @@ Everything a run creates is in `.tmp/shards/run-<stamp>-<pid>/` (gitignored): ea
 the clusters, temp and basetemp directories are removed at the end (`--keep-data` keeps them). On
 Ctrl+C the shards and servers are stopped and only that run's own directories are cleaned.
 
+**Deadline reports.** When an HTTP race test's harness deadline expires (`tests/http_race_support.py`: a gate never
+reached, a request that does not finish, sessions that never block), `tests/deadline_diagnostics.py` writes a report
+**before** the assertion is raised and before any teardown, and the assertion message names the file. The runner points
+each shard's `RUNNER_DEADLINE_DIAG_DIR` at `shard-<n>/deadline-diagnostics/`, which is kept with the logs (a run that
+produced reports prints their count and directory). A report holds the requests' completion and exception state, every
+thread's stack and asyncio task, the pool's checkout state, every live gate and its listener, and *all* backends of the
+test database (idle and idle-in-transaction included, with locks, blockers and the deadlock counter) read over a separate
+connection, plus machine context. It never extends the deadline, retries, skips or masks the assertion, and a failing
+collector is reported as failed while the others still run. `faulthandler_timeout = 600` additionally dumps all stacks
+of a test that makes no progress at all. A past stall whose cause was not found is **not** a flake: if one recurs, read
+its report; if it does not recur, its cause is still unresolved.
+
 On Windows the four servers and the four pytest processes are put in a Job Object that kills
 them when the runner's handle closes. The coverage is partial, and this is what it is:
 

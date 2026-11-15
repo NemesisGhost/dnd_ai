@@ -12,6 +12,7 @@ stuck. Arm one gate, wait for it to be reached, then start the competing request
 not match the pattern.
 """
 
+import contextlib
 import threading
 import time
 import uuid
@@ -20,7 +21,12 @@ from typing import Any
 
 from sqlalchemy import Engine, event, text
 
+from tests import deadline_diagnostics as diagnostics
+
 WAIT_SECONDS = 15.0
+
+# Progress listeners (checkout/checkin, statements, commit/rollback) for the deadline report; idempotent.
+diagnostics.install()
 
 
 def activity_report(engine: Engine) -> str:
@@ -63,6 +69,7 @@ class StatementGate:
         self.armed_at = time.monotonic()
         self.reached_at: float | None = None
         self._fired = False
+        diagnostics.LIVE_GATES.add(self)
 
     def describe(self) -> str:
         reached = (
@@ -87,13 +94,19 @@ class StatementGate:
         return self
 
     def __exit__(self, *_: object) -> None:
+        # release first, so a parked request is never left stuck; then remove the listener, and never let a failed
+        # removal mask the exception that is already propagating
         self.resume.set()
-        event.remove(self.engine, "before_cursor_execute", self._hook)
+        with contextlib.suppress(Exception):  # already removed, or the engine was disposed
+            event.remove(self.engine, "before_cursor_execute", self._hook)
 
     def wait_reached(self) -> None:
+        # The deadline report is taken here, inside the `with`, before this assertion is raised: the parked requests,
+        # the listener and the pool are all still alive (no teardown has run). The deadline itself is unchanged.
         assert self.reached.wait(WAIT_SECONDS), (
             "the request never reached the gated statement; "
             f"{self.describe()}\n{activity_report(self.engine)}"
+            f"{diagnostics.deadline_message('gate never reached: ' + self.describe(), engine=self.engine)}"
         )
 
     def release(self) -> None:
@@ -132,6 +145,7 @@ def wait_until_blocked(engine: Engine, gate: StatementGate, *, expected: int = 1
     raise AssertionError(
         f"expected {expected} session(s) blocked by pid {gate.pid}; "
         f"{sessions_blocked_by(engine, gate.pid)} were; {gate.describe()}\n{activity_report(engine)}"
+        f"{diagnostics.deadline_message('sessions never blocked: ' + gate.describe(), engine=engine)}"
     )
 
 
@@ -150,6 +164,7 @@ def run_in_thread(name: str, operation: Callable[[], Any]) -> "Request":
 
     request.thread = threading.Thread(target=run, name=name, daemon=True)
     request.thread.start()
+    request.thread_ident = request.thread.ident
     return request
 
 
@@ -173,9 +188,14 @@ class Request:
         self.error: BaseException | None = None
         self.done = threading.Event()
         self.thread = threading.Thread()
+        self.thread_ident: int | None = None
+        diagnostics.LIVE_REQUESTS.add(self)
 
     def wait(self, why: str) -> Any:
-        assert self.done.wait(WAIT_SECONDS), f"{self.name} did not finish: {why}"
+        assert self.done.wait(WAIT_SECONDS), (
+            f"{self.name} did not finish: {why}"
+            f"{diagnostics.deadline_message(f'{self.name} did not finish: {why}')}"
+        )
         assert self.error is None, f"{self.name} raised {self.error!r}"
         return self.result
 
@@ -198,6 +218,7 @@ def wait_until_pid_blocks(engine: Engine, holder_pid: int, *, expected: int = 1)
     raise AssertionError(
         f"expected {expected} session(s) blocked by pid {holder_pid}; "
         f"{sessions_blocked_by(engine, holder_pid)} were\n{activity_report(engine)}"
+        f"{diagnostics.deadline_message(f'sessions never blocked by pid {holder_pid}', engine=engine)}"
     )
 
 
