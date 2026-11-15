@@ -8828,19 +8828,19 @@
   "unresolved": []
  },
  {
-  "audit": true,
+  "audit": false,
   "command_markers": {
-   "dnd_ai.commands.memberships.transfer_campaign_ownership": []
+   "dnd_ai.commands.membership_role_plans.prepare_transfer": [],
+   "dnd_ai.commands.membership_role_plans.write_transfer": []
   },
   "command_scope_markers": [],
   "command_writes": {
-   "dnd_ai.commands.memberships.transfer_campaign_ownership": [
-    "security.character_reveal_delegations",
-    "security.membership_roles"
-   ]
+   "dnd_ai.commands.membership_role_plans.prepare_transfer": [],
+   "dnd_ai.commands.membership_role_plans.write_transfer": []
   },
   "commands": [
-   "dnd_ai.commands.memberships.transfer_campaign_ownership"
+   "dnd_ai.commands.membership_role_plans.prepare_transfer",
+   "dnd_ai.commands.membership_role_plans.write_transfer"
   ],
   "dependencies": [
    {
@@ -8860,7 +8860,6 @@
   "path": "/campaigns/{campaign_id}/ownership-transfer",
   "precheck_markers": [],
   "route_markers": [
-   "audit:change_log",
    "reader:access_context",
    "reader:world_authority",
    "reader:world_capability"

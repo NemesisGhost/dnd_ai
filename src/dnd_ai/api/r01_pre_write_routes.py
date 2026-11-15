@@ -6,7 +6,12 @@ outcome (`ReservationDeclarations`). Every lock of the request is taken before `
 is a declared `plan.execute` step after it, and the reservation's campaign foreign key is deferred.
 
 The set grows only with a reviewed slice (S5-D: the two invitation routes; S5-E1: the three campaign
-lifecycle routes; S5-E2: add member and the three role operations; S5-E3 onward: the rest).
+lifecycle routes; S5-E2: add member and the four role operations; S5-E3 onward: the rest).
+
+`R01_UNKEYED_PRE_WRITE_ROUTES` (S5-E2 ownership-transfer amendment, T4) is the registry of routes that open a
+pre-write plan with **one** declaration and no reservation: they are not idempotent, an `Idempotency-Key`
+header is ignored, and they have no receipt step. It is disjoint from the keyed registry and holds finalized
+routes only (`begin_route_plan` refuses a route that is in both, or is not finalized).
 """
 
 from collections.abc import Mapping
@@ -23,11 +28,13 @@ from dnd_ai.commands.membership_role_plans import (
     ADD_DECLARATIONS,
     ASSIGN_DECLARATIONS,
     CHANGE_DECLARATIONS,
+    TRANSFER_DECLARATION,
 )
 from dnd_ai.commands.membership_role_plans import (
     REVOKE_DECLARATIONS as REVOKE_ROLE_DECLARATIONS,
 )
 from dnd_ai.domain.authorization import ReservationDeclarations
+from dnd_ai.domain.authorization_steps import PreWriteDeclaration
 
 R01_KEYED_PRE_WRITE_ROUTES: Final[Mapping[tuple[str, str], ReservationDeclarations]] = (
     MappingProxyType(
@@ -54,5 +61,11 @@ R01_KEYED_PRE_WRITE_ROUTES: Final[Mapping[tuple[str, str], ReservationDeclaratio
                 "/campaigns/{campaign_id}/memberships/roles/{membership_role_id}/revoke",
             ): REVOKE_ROLE_DECLARATIONS,
         }
+    )
+)
+
+R01_UNKEYED_PRE_WRITE_ROUTES: Final[Mapping[tuple[str, str], PreWriteDeclaration]] = (
+    MappingProxyType(
+        {("POST", "/campaigns/{campaign_id}/ownership-transfer"): TRANSFER_DECLARATION}
     )
 )

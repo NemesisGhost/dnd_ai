@@ -432,8 +432,11 @@ def test_two_owners_relinquishing_to_each_other_leave_exactly_one_owner(
     client_factory: Callable[[uuid.UUID], TestClient], postgres_engine: Engine, g: Gate
 ) -> None:
     """Parked on the owner template so both requests hold their own owner assignment and the
-    other's membership before either reads the owners; the campaign row then serializes them, and
-    the second re-reads the first's committed result."""
+    other's membership before either reads the owners; the memberships and then the campaign row
+    serialize them. R01 S5-E2 amendment (approved behavior, plan 6.27.4): the second transfer re-reads the
+    first's committed result, sees that the recipient's owner assignment changed and is refused with 409
+    `ownership_transfer_recipient_changed` (it used to assign back and return 200); a retry gives the legacy
+    result. Exactly one owner remains and one audit row was written."""
     urls = _urls(g)
     hold = _lock_owner_template(postgres_engine, g)
     first = _post(
@@ -451,11 +454,11 @@ def test_two_owners_relinquishing_to_each_other_leave_exactly_one_owner(
     _wait_until_waiting(postgres_engine, 2)
     hold.release()
     statuses = sorted([_status(first.join()), _status(second.join())])
-    assert statuses == [200, 200]
+    assert statuses == [200, 409]
 
     assert len(_owners(postgres_engine, g)) == 1
     assert _ended(postgres_engine, g) == set()
-    assert _audit(postgres_engine, g).get("transfer_campaign_ownership") == 2
+    assert _audit(postgres_engine, g).get("transfer_campaign_ownership") == 1
 
 
 def test_two_identical_relinquishing_transfers_apply_once(

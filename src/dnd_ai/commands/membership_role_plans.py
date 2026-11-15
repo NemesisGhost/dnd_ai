@@ -85,6 +85,7 @@ from sqlalchemy import Connection, and_, bindparam, func, insert, or_, select, t
 from dnd_ai.domain.access import find_live_builtin_owner_assignment, is_builtin_campaign_owner_role
 from dnd_ai.domain.authorization import AuthorizationPlan, ReservationDeclarations
 from dnd_ai.domain.authorization_steps import (
+    AnyConfirmed,
     EachLockedRow,
     Event,
     Exactly,
@@ -92,6 +93,7 @@ from dnd_ai.domain.authorization_steps import (
     FunctionPin,
     KeyBind,
     Level,
+    PerAbsence,
     PerEvidence,
     PreLock,
     PreWriteDeclaration,
@@ -135,6 +137,8 @@ from .memberships import (
     MembershipNotActiveError,
     MembershipNotInCampaignError,
     MembershipRoleNotActiveError,
+    OwnershipTransferRecipientAssignmentExpiresError,
+    OwnershipTransferRecipientChangedError,
     RoleNotUsableByCampaignError,
 )
 from .reveal_delegation_lifecycle import END_REASON_GM_ROLE_CHANGED, END_REASON_GM_ROLE_REVOKED
@@ -1378,3 +1382,514 @@ def write_change_role(
         },
     )
     return new_id
+
+
+# =====================================================================================================
+# Ownership transfer (R01 S5-E2 amendment; plan 6.27.4-6.27.5; design review 2026-11-14, section 6)
+# =====================================================================================================
+#
+# An **unkeyed** pre-write plan (`R01_UNKEYED_PRE_WRITE_ROUTES`): transfer stays non-idempotent and an
+# `Idempotency-Key` header is ignored. `memberships.transfer_campaign_ownership` stays as the direct command.
+#
+# Lock sequence (every lock before `plan.finalize`; modes as T5 of the design):
+#
+#   1. unlocked reads of lock-stable facts: the owner template id, the recipient membership's campaign;
+#   2. role class: the actor's unrevoked role rows NO KEY UPDATE (one ordered statement), the recipient's
+#      EXPIRED owner row NO KEY UPDATE, then (strictly after) the recipient's LIVE owner row KEY SHARE, then,
+#      only when relinquishing, the actor's owner row NO KEY UPDATE (already held, no wait);
+#   3. delegations bound to each of those role keys, FOR UPDATE (always empty: trigger 141 binds them to `gm`);
+#   4. the actor's open membership and the recipient's, FOR UPDATE, one ordered statement. **Absence and
+#      positive evidence become stable here**, not at the role-class SELECTs;
+#   5. the actor's account FOR SHARE, the recipient's account FOR KEY SHARE (S5-A);
+#   6. the campaign FOR UPDATE; 7. the owner template FOR UPDATE.
+#
+# Why the modes: NO KEY UPDATE does not conflict with the other side's KEY SHARE, so two owners transferring to
+# each other do not wait in the role class and serialize at the memberships; FOR UPDATE would deadlock them. A
+# separate FOR SHARE on the actor's own row followed by NO KEY UPDATE would be an upgrade that deadlocks two
+# identical requests. KEY SHARE on the recipient's live row blocks every FOR UPDATE revoker (S5-E2 revoke and
+# change, the legacy revoke, end) and is compatible with the legacy reveal-delegation grant's FOR SHARE.
+#
+# Declared writes: S1 close the recipient's expired owner row(s) (`EachLockedRow(complete)` over the expired
+# lock); S4 close delegations of S1/S3's roles (`EachLockedRow(complete)`; always empty); S2 insert the owner
+# assignment (`PerAbsence(live lock)`: owed exactly when no live owner row exists); S3 relinquish the actor's
+# own owner row (`EachLockedRow(complete)` over the actor-owner lock, which only a relinquishing request runs);
+# S5 one audit row (`AnyConfirmed((S2, S3))`). S1 must precede S2 (the partial unique index), so it is
+# declared first; S4 is declared before S2 as well, so that every closure precedes the INSERT.
+
+OWNER_TRANSFER_COMMAND_NAME = "transfer_campaign_ownership"
+
+#: The actor's unrevoked role rows, one ordered statement, FOR NO KEY UPDATE (bound `membership`).
+TRANSFER_ACTOR_ROLE_ROWS = PreLock(
+    "transfer_actor_role_rows",
+    select(mr.c.membership_role_id)
+    .where(mr.c.campaign_membership_id == bindparam("membership"))
+    .where(mr.c.revoked_at.is_(None))
+    .order_by(mr.c.membership_role_id)
+    .with_for_update(key_share=True),
+)
+#: The recipient's unrevoked owner rows already expired at this statement's clock, FOR NO KEY UPDATE (bound
+#: `membership`, `role`). Run **before** `RECIPIENT_LIVE_OWNER`: a row expiring between the two is in neither
+#: set, and the later drift check refuses it (fail closed).
+RECIPIENT_EXPIRED_OWNER = PreLock(
+    "recipient_expired_owner",
+    select(mr.c.membership_role_id)
+    .where(mr.c.campaign_membership_id == bindparam("membership"))
+    .where(mr.c.role_id == bindparam("role"))
+    .where(mr.c.revoked_at.is_(None))
+    .where(mr.c.expires_at.is_not(None))
+    .where(mr.c.expires_at <= func.pg_catalog.clock_timestamp())
+    .order_by(mr.c.membership_role_id)
+    .with_for_update(key_share=True),
+)
+#: The recipient's unrevoked, not-yet-expired owner row, FOR KEY SHARE (bound `membership`, `role`). Its
+#: evidence is a *positive* observation; the protection of absence comes from the membership lock.
+RECIPIENT_LIVE_OWNER = PreLock(
+    "recipient_live_owner",
+    select(mr.c.membership_role_id)
+    .where(mr.c.campaign_membership_id == bindparam("membership"))
+    .where(mr.c.role_id == bindparam("role"))
+    .where(mr.c.revoked_at.is_(None))
+    .where(or_(mr.c.expires_at.is_(None), mr.c.expires_at > func.pg_catalog.clock_timestamp()))
+    .order_by(mr.c.membership_role_id)
+    .with_for_update(read=True, key_share=True),
+)
+#: The actor's unrevoked owner row, FOR NO KEY UPDATE; run only by a relinquishing request (already held by
+#: `TRANSFER_ACTOR_ROLE_ROWS`, so no wait). Bound `membership`, `role`.
+ACTOR_OWNER_ROW = PreLock(
+    "transfer_actor_owner_row",
+    select(mr.c.membership_role_id)
+    .where(mr.c.campaign_membership_id == bindparam("membership"))
+    .where(mr.c.role_id == bindparam("role"))
+    .where(mr.c.revoked_at.is_(None))
+    .order_by(mr.c.membership_role_id)
+    .with_for_update(key_share=True),
+)
+
+_TRANSFER_UNIQUE_WAITS = frozenset(
+    {
+        UniqueWait(
+            "security.ux_membership_roles_active",
+            "tests/database/test_r01_s5e2_transfer_route.py::"
+            "test_a_competing_owner_assignment_of_the_recipient_is_a_unique_wait_or_a_classified_409",
+        )
+    }
+)
+_TRANSFER_LEAVES_ACTIVE_ASSIGNMENT_INDEX = frozenset(
+    {
+        UniqueWait(
+            "security.ux_membership_roles_active",
+            "tests/database/test_r01_s5e2_transfer_route.py::"
+            "test_an_update_leaving_the_active_assignment_index_never_waits_for_a_competing_insert",
+        )
+    }
+)
+CLOSE_EXPIRED_OWNER = WriteStep(
+    name="close_expired_owner",
+    statement=update(mr)
+    .where(mr.c.membership_role_id == bindparam("target"))
+    .values(revoked_at=func.pg_catalog.now())
+    .returning(mr.c.membership_role_id),
+    cardinality=EachLockedRow(complete=True),
+    target=(KeyBind(mr.c.membership_role_id, "target"),),
+    target_lock=RECIPIENT_EXPIRED_OWNER,
+    unique_waits=_TRANSFER_LEAVES_ACTIVE_ASSIGNMENT_INDEX,
+    triggers=REVOKE_ROLE.triggers,
+)
+INSERT_OWNER_ROLE = WriteStep(
+    name="insert_owner_role",
+    statement=insert(mr)
+    .values(
+        campaign_membership_id=bindparam("membership"),
+        role_id=bindparam("role"),
+        granted_by_membership_id=bindparam("granted_by"),
+    )
+    .returning(mr.c.membership_role_id),
+    cardinality=PerAbsence(RECIPIENT_LIVE_OWNER),
+    fks=(
+        FkBinding(
+            fk_of(mr, "campaign_membership_id"),
+            (KeyBind(mr.c.campaign_membership_id, "membership"),),
+            MEMBERSHIPS_ACTOR_TARGET,
+        ),
+        FkBinding(fk_of(mr, "role_id"), (KeyBind(mr.c.role_id, "role"),), ROLE_CATALOGUE_LOCK),
+        FkBinding(
+            fk_of(mr, "granted_by_membership_id"),
+            (KeyBind(mr.c.granted_by_membership_id, "granted_by"),),
+            MEMBERSHIPS_ACTOR_TARGET,
+        ),
+    ),
+    unique_waits=_TRANSFER_UNIQUE_WAITS,
+    triggers=INSERT_ROLE_FOR_NEW_MEMBER.triggers,
+)
+RELINQUISH_OWNER = WriteStep(
+    name="relinquish_owner",
+    statement=update(mr)
+    .where(mr.c.membership_role_id == bindparam("target"))
+    .values(revoked_at=func.pg_catalog.now())
+    .returning(mr.c.membership_role_id),
+    cardinality=EachLockedRow(complete=True),
+    target=(KeyBind(mr.c.membership_role_id, "target"),),
+    target_lock=ACTOR_OWNER_ROW,
+    unique_waits=_TRANSFER_LEAVES_ACTIVE_ASSIGNMENT_INDEX,
+    triggers=REVOKE_ROLE.triggers,
+)
+TRANSFER_AUDIT = WriteStep(
+    name="audit_transferred",
+    statement=insert(change_log)
+    .values(
+        **_audit_values("membership_roles", OWNER_TRANSFER_COMMAND_NAME),
+        changed_fields=bindparam("changed"),
+    )
+    .returning(change_log.c.change_log_id),
+    cardinality=AnyConfirmed((INSERT_OWNER_ROLE, RELINQUISH_OWNER)),
+    fks=(CHANGE_LOG_ACTION_FK, CHANGE_LOG_ACTOR_FK),
+    value_binds=_AUDIT_BINDS | {"changed"},
+)
+TRANSFER_LOCKS = (
+    TRANSFER_ACTOR_ROLE_ROWS,
+    RECIPIENT_EXPIRED_OWNER,
+    RECIPIENT_LIVE_OWNER,
+    ACTOR_OWNER_ROW,
+    DELEGATION_LOCK,
+    MEMBERSHIPS_ACTOR_TARGET,
+    ACTOR_ACCOUNT_LOCK,
+    TARGET_ACCOUNT_LOCK,
+    CAMPAIGN_ROW_LOCK,
+    ROLE_CATALOGUE_LOCK,
+)
+TRANSFER_STEPS = (
+    CLOSE_EXPIRED_OWNER,
+    CLOSE_DELEGATION_ON_REVOKE,
+    INSERT_OWNER_ROLE,
+    RELINQUISH_OWNER,
+    TRANSFER_AUDIT,
+)
+TRANSFER_DECLARATION = PreWriteDeclaration(
+    locks=TRANSFER_LOCKS,
+    steps=TRANSFER_STEPS,
+    unlocked_fk_targets=CHANGE_LOG_UNLOCKED_FK_TARGETS,
+)
+
+
+@dataclass(frozen=True)
+class TransferPrepared:
+    """What the transfer's lock and read phase established, all before `finalize`."""
+
+    world_id: uuid.UUID
+    action_id: uuid.UUID
+    owner_role_id: uuid.UUID
+    relinquishing: bool
+    expired: tuple[uuid.UUID, ...]
+    own: tuple[uuid.UUID, ...]
+    delegations: tuple[uuid.UUID, ...]
+    inserting: bool
+    recipient_membership_id: uuid.UUID
+
+
+@dataclass(frozen=True)
+class TransferWritten:
+    target_campaign_membership_id: uuid.UUID
+    assigned_membership_role_id: uuid.UUID | None
+    revoked_membership_role_ids: tuple[uuid.UUID, ...]
+    replaced_expired_membership_role_ids: tuple[uuid.UUID, ...]
+
+
+def _database_clock(connection: Connection) -> datetime:
+    value = connection.execute(text("SELECT clock_timestamp()")).scalar()
+    assert isinstance(value, datetime)
+    return value
+
+
+def _unrevoked_owner_rows(
+    connection: Connection,
+    *,
+    membership_id: uuid.UUID,
+    owner_role_id: uuid.UUID,
+    checked_at: datetime,
+) -> dict[uuid.UUID, bool]:
+    """The membership's unrevoked owner rows, each with whether it is expired at `checked_at`."""
+    rows = connection.execute(
+        text("""
+            SELECT membership_role_id,
+                   (expires_at IS NOT NULL AND expires_at <= :checked_at) AS is_expired
+            FROM security.membership_roles
+            WHERE campaign_membership_id = :m AND role_id = :r AND revoked_at IS NULL
+        """),
+        {"m": membership_id, "r": owner_role_id, "checked_at": checked_at},
+    ).all()
+    return {row.membership_role_id: bool(row.is_expired) for row in rows}
+
+
+def _recipient_changed(recipient: uuid.UUID, detail: str) -> OwnershipTransferRecipientChangedError:
+    return OwnershipTransferRecipientChangedError(f"membership {recipient}: {detail}")
+
+
+def prepare_transfer(  # noqa: C901, PLR0912, PLR0915 - one linear lock and refusal sequence
+    connection: Connection,
+    plan: AuthorizationPlan,
+    *,
+    campaign_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    actor_membership_id: uuid.UUID,
+    target_membership_id: uuid.UUID,
+    relinquish_own_ownership: bool,
+) -> TransferPrepared:
+    """Every lock, read and refusal of the transfer, in the design's order (section 6), before `finalize`."""
+    relinquishing = relinquish_own_ownership and actor_membership_id != target_membership_id
+    # 1. unlocked reads of lock-stable facts
+    owner_role_id = connection.execute(
+        text(
+            "SELECT role_id FROM security.roles WHERE code = 'campaign_owner' AND campaign_id IS NULL"
+        )
+    ).scalar()
+    assert isinstance(owner_role_id, uuid.UUID)
+    recipient_campaign = connection.execute(
+        text(
+            "SELECT campaign_id FROM security.campaign_memberships WHERE campaign_membership_id = :m"
+        ),
+        {"m": target_membership_id},
+    ).scalar()
+    in_campaign = recipient_campaign == campaign_id
+    # 2. role class
+    plan.lock(connection, TRANSFER_ACTOR_ROLE_ROWS, {"membership": actor_membership_id})
+    expired: tuple[tuple[Any, ...], ...] = ()
+    live: tuple[tuple[Any, ...], ...] = ()
+    if in_campaign:
+        recipient_binds = {"membership": target_membership_id, "role": owner_role_id}
+        expired = plan.lock(connection, RECIPIENT_EXPIRED_OWNER, recipient_binds)
+        live = plan.lock(connection, RECIPIENT_LIVE_OWNER, recipient_binds)
+    own: tuple[tuple[Any, ...], ...] = ()
+    if relinquishing:
+        own = plan.lock(
+            connection,
+            ACTOR_OWNER_ROW,
+            {"membership": actor_membership_id, "role": owner_role_id},
+        )
+    # 3. delegations bound to the role rows this request will close
+    delegations: list[uuid.UUID] = []
+    for key in (*expired, *own):
+        for found in plan.lock(connection, DELEGATION_LOCK, {"role": key[0]}):
+            delegations.append(found[0])
+    # 4. memberships: absence and positive evidence are stable from here
+    plan.lock(
+        connection,
+        MEMBERSHIPS_ACTOR_TARGET,
+        {"campaign": campaign_id, "actor": actor_membership_id, "target": target_membership_id},
+    )
+    # 5. accounts
+    plan.lock(connection, ACTOR_ACCOUNT_LOCK, {"actor": actor_user_id})
+    membership = (
+        connection.execute(
+            text("""
+                SELECT cm.campaign_id, cm.ended_at, cm.user_id,
+                       ms.code AS status_code, ms.is_active AS status_is_active
+                FROM security.campaign_memberships cm
+                JOIN security.membership_statuses ms
+                    ON ms.membership_status_id = cm.membership_status_id
+                WHERE cm.campaign_membership_id = :m
+            """),
+            {"m": target_membership_id},
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if membership is not None and membership["campaign_id"] == campaign_id:
+        plan.lock(connection, TARGET_ACCOUNT_LOCK, {"target_user": membership["user_id"]})
+    # 6. campaign, 7. catalogue
+    plan.lock(connection, CAMPAIGN_ROW_LOCK, {"campaign": campaign_id})
+    plan.lock(connection, ROLE_CATALOGUE_LOCK, {"role_a": owner_role_id, "role_b": owner_role_id})
+    # 8. reads and refusals (no lock, no wait), in the legacy order
+    #   1. the gate, at the transaction's start (D3): first, so a non-owner learns nothing
+    if (
+        find_live_builtin_owner_assignment(
+            connection, campaign_id=campaign_id, campaign_membership_id=actor_membership_id
+        )
+        is None
+    ):
+        raise CampaignOwnerRequiredError(
+            f"membership {actor_membership_id} holds no live campaign_owner assignment in "
+            f"campaign {campaign_id}"
+        )
+    checked_at = _database_clock(connection)
+    expired_keys = {key[0] for key in expired}
+    live_keys = {key[0] for key in live}
+    #   2. drift and liveness (safety-critical, not only classification: a concurrent relinquishing transfer
+    #      by the recipient could otherwise leave the campaign without a built-in owner)
+    if in_campaign:
+        now_rows = _unrevoked_owner_rows(
+            connection,
+            membership_id=target_membership_id,
+            owner_role_id=owner_role_id,
+            checked_at=checked_at,
+        )
+        if (
+            expired_keys & live_keys
+            or set(now_rows) != expired_keys | live_keys
+            or any(now_rows[key] for key in live_keys)
+        ):
+            raise _recipient_changed(
+                target_membership_id, "the owner assignment changed while the transfer waited"
+            )
+    #   3. DEF-013: the caller again, at a fresh instant, after the last lock wait
+    _recheck_owner(connection, campaign_id=campaign_id, actor_membership_id=actor_membership_id)
+    #   4. the legacy retention assert on closing the recipient's expired row, before any replacement (F-9)
+    for expired_key in sorted(expired_keys):
+        _require_manager_survives(
+            connection,
+            campaign_id=campaign_id,
+            revoked_role_id=expired_key,
+            new_role_id=None,
+            detail=(
+                f"revoking membership role {expired_key} would leave active campaign "
+                f"{campaign_id} with no membership holding access.manage"
+            ),
+        )
+    #   5. the shared live-owner definition at the fresh instant
+    already = find_live_builtin_owner_assignment(
+        connection,
+        campaign_id=campaign_id,
+        campaign_membership_id=target_membership_id,
+        as_of=checked_at,
+    )
+    #   6. approved policy (b): a handoff needs a non-expiring recipient assignment
+    if relinquishing and already is not None:
+        finite = connection.execute(
+            text(
+                "SELECT expires_at IS NOT NULL FROM security.membership_roles "
+                "WHERE membership_role_id = :r"
+            ),
+            {"r": already},
+        ).scalar_one()
+        if finite:
+            raise OwnershipTransferRecipientAssignmentExpiresError(
+                f"membership {target_membership_id}'s live owner assignment {already} has an expiry"
+            )
+    #   7. the assignment branch's eligibility refusals, in `assign_membership_role`'s order
+    if already is None:
+        if membership is None or membership["campaign_id"] != campaign_id:
+            raise MembershipNotInCampaignError(
+                f"membership {target_membership_id} does not belong to campaign {campaign_id} "
+                f"(actual campaign: {membership['campaign_id'] if membership is not None else None})"
+            )
+        if not (
+            membership["ended_at"] is None
+            and membership["status_code"] == "active"
+            and membership["status_is_active"]
+        ):
+            raise MembershipNotActiveError(
+                f"membership {target_membership_id} is not currently an eligible, open "
+                "membership to assign a role to"
+            )
+        account = connection.execute(
+            text(
+                "SELECT ls.code FROM security.users u "
+                "JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id "
+                "WHERE u.user_id = :u"
+            ),
+            {"u": membership["user_id"]},
+        ).scalar()
+        if account != "active":
+            raise MembershipNotActiveError(
+                f"membership {target_membership_id}'s user {membership['user_id']} is not "
+                "currently an active platform account"
+            )
+        _usable_role(connection, role_id=owner_role_id, campaign_id=campaign_id)
+        _recheck_owner(connection, campaign_id=campaign_id, actor_membership_id=actor_membership_id)
+        if live_keys:
+            raise _recipient_changed(
+                target_membership_id, "an owner assignment appeared while the transfer waited"
+            )
+    elif live_keys != {already}:
+        raise _recipient_changed(
+            target_membership_id, "the owner assignment changed while the transfer waited"
+        )
+    #   8. relinquishing: the caller again, then the retention assert for the caller's own row
+    own_keys = sorted(key[0] for key in own)
+    if relinquishing:
+        _recheck_owner(connection, campaign_id=campaign_id, actor_membership_id=actor_membership_id)
+        for own_key in own_keys:
+            _require_manager_survives(
+                connection,
+                campaign_id=campaign_id,
+                revoked_role_id=own_key,
+                new_role_id=owner_role_id if already is None else None,
+                detail=(
+                    f"revoking membership role {own_key} would leave active campaign "
+                    f"{campaign_id} with no membership holding access.manage"
+                ),
+            )
+    #   9. the world and the audit action
+    return TransferPrepared(
+        world_id=_scope_world(connection, campaign_id),
+        action_id=lookup_id(connection, "audit", "change_actions", "change_action_id", "updated"),
+        owner_role_id=owner_role_id,
+        relinquishing=relinquishing,
+        expired=tuple(sorted(expired_keys)),
+        own=tuple(own_keys),
+        delegations=tuple(delegations),
+        inserting=already is None,
+        recipient_membership_id=target_membership_id,
+    )
+
+
+def write_transfer(
+    connection: Connection,
+    plan: AuthorizationPlan,
+    prepared: TransferPrepared,
+    *,
+    actor_user_id: uuid.UUID,
+    actor_membership_id: uuid.UUID,
+    correlation_id: str | None,
+) -> TransferWritten:
+    """The declared writes, after `finalize`: close, close delegations, insert, relinquish, one audit row."""
+    for expired_key in prepared.expired:
+        plan.execute(connection, CLOSE_EXPIRED_OWNER, {"target": expired_key})
+    for delegation in prepared.delegations:
+        plan.execute(connection, CLOSE_DELEGATION_ON_REVOKE, {"delegation": delegation})
+    assigned: uuid.UUID | None = None
+    if prepared.inserting:
+        outcome = plan.execute(
+            connection,
+            INSERT_OWNER_ROLE,
+            {
+                "membership": prepared.recipient_membership_id,
+                "role": prepared.owner_role_id,
+                "granted_by": actor_membership_id,
+            },
+        )
+        assigned = outcome.keys[0][0]
+        assert isinstance(assigned, uuid.UUID)
+    revoked: list[uuid.UUID] = []
+    if prepared.relinquishing:
+        for own_key in prepared.own:
+            plan.execute(connection, RELINQUISH_OWNER, {"target": own_key})
+            revoked.append(own_key)
+    if assigned is not None or revoked:
+        plan.execute(
+            connection,
+            TRANSFER_AUDIT,
+            {
+                **_audit(
+                    prepared_as_audit(prepared),
+                    record=assigned or revoked[0],
+                    actor_user_id=actor_user_id,
+                    correlation_id=correlation_id,
+                ),
+                "changed": {
+                    "assigned": assigned is not None,
+                    "relinquished": bool(revoked),
+                    "replaced_expired_assignment": bool(prepared.expired),
+                },
+            },
+        )
+    return TransferWritten(
+        target_campaign_membership_id=prepared.recipient_membership_id,
+        assigned_membership_role_id=assigned,
+        revoked_membership_role_ids=tuple(revoked),
+        replaced_expired_membership_role_ids=prepared.expired,
+    )
+
+
+def prepared_as_audit(prepared: TransferPrepared) -> Prepared:
+    """The transfer's world and action in the shape `_audit` reads."""
+    return Prepared(world_id=prepared.world_id, action_id=prepared.action_id)

@@ -1,8 +1,8 @@
 """R01 S5-E2: the shape of the four migrated membership routes and of their declarations (inventory safeguards;
 the runtime proof is `tests/database/test_r01_s5e2_membership_routes.py`).
 
-- The registry names the four routes, they are finalized, and ownership transfer is **still pending** and still
-  runs the direct command (plan 6.27.1: the obligations it needs cannot be declared yet).
+- The registry names the four routes and they are finalized; ownership transfer is finalized too, an **unkeyed**
+  pre-write route (plan 6.27.4: `PerAbsence`, `AnyConfirmed` and the unkeyed registry made it declarable).
 - Lock orders, with the one reading of the global order (one ordered `FOR UPDATE` statement per class that
   contains a target): roles, delegations, memberships, accounts, campaign, catalogue rows, targets, receipt last.
 - Obligations by outcome: no `Between`; the revoke update, delegation closure and audit are conditioned on lock
@@ -22,7 +22,10 @@ from fastapi.routing import APIRoute
 
 from dnd_ai.api.app import create_app
 from dnd_ai.api.r01_pending_routes import R01_FINALIZED_ROUTES, R01_PENDING_ROUTES
-from dnd_ai.api.r01_pre_write_routes import R01_KEYED_PRE_WRITE_ROUTES
+from dnd_ai.api.r01_pre_write_routes import (
+    R01_KEYED_PRE_WRITE_ROUTES,
+    R01_UNKEYED_PRE_WRITE_ROUTES,
+)
 from dnd_ai.commands import membership_role_plans as plans
 from dnd_ai.domain.authorization_steps import (
     Between,
@@ -31,7 +34,7 @@ from dnd_ai.domain.authorization_steps import (
     LockMode,
     PerEvidence,
 )
-from tests.r01_manifest import _S5E2_ROUTES, _iter_api_routes
+from tests.r01_manifest import _S5E2_ROUTES, _S5E2_TRANSFER_ROUTES, _iter_api_routes
 
 pytestmark = pytest.mark.unit
 
@@ -89,16 +92,21 @@ def _calls(node: ast.AST) -> list[ast.Call]:
     return [n for n in ast.walk(node) if isinstance(n, ast.Call)]
 
 
-def test_the_four_routes_are_finalized_pre_write_and_transfer_is_still_pending() -> None:
+def test_the_four_routes_are_keyed_pre_write_and_transfer_is_unkeyed_pre_write() -> None:
     assert set(ROUTE.values()) == _S5E2_ROUTES and len(_S5E2_ROUTES) == 4
     assert set(R01_FINALIZED_ROUTES) >= _S5E2_ROUTES
     assert not _S5E2_ROUTES & set(R01_PENDING_ROUTES)
     for name, key in ROUTE.items():
         assert R01_KEYED_PRE_WRITE_ROUTES[key] is DECLARATIONS[name]
-    assert TRANSFER in R01_PENDING_ROUTES and TRANSFER not in R01_FINALIZED_ROUTES
+    # ownership transfer: finalized, an unkeyed pre-write route (T4), in the unkeyed registry only
+    assert TRANSFER in _S5E2_TRANSFER_ROUTES
+    assert TRANSFER in R01_FINALIZED_ROUTES and TRANSFER not in R01_PENDING_ROUTES
     assert TRANSFER not in R01_KEYED_PRE_WRITE_ROUTES
+    assert R01_UNKEYED_PRE_WRITE_ROUTES[TRANSFER] is plans.TRANSFER_DECLARATION
+    assert not set(R01_UNKEYED_PRE_WRITE_ROUTES) & set(R01_KEYED_PRE_WRITE_ROUTES)
+    assert set(R01_UNKEYED_PRE_WRITE_ROUTES) <= set(R01_FINALIZED_ROUTES)
     names = {_name(c) for c in _calls(_tree(_handlers()[TRANSFER]))}
-    assert "transfer_campaign_ownership" in names and not (names & set(PREPARE.values()))
+    assert "prepare_transfer" in names and "transfer_campaign_ownership" not in names
     end = ("POST", CAMPAIGN + "/memberships/{campaign_membership_id}/end")
     assert end in R01_PENDING_ROUTES, "end membership is S5-E3"
 

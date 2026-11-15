@@ -423,30 +423,39 @@ def test_a_recipient_whose_owner_row_belongs_to_another_campaign_is_refused(
     assert _transfer_audit(postgres_engine, g) == []
 
 
-def test_a_recipient_revocation_committed_during_the_wait_is_seen_and_replaced(
+def test_a_recipient_revocation_during_the_wait_queues_behind_the_transfer_and_applies_after_it(
     client_factory: Callable[[uuid.UUID], TestClient], postgres_engine: Engine, g: Gate
 ) -> None:
-    """A revocation of the recipient's owner row that commits while the transfer waits for the
-    recipient's membership is read by the check after the wait: the recipient gets a fresh live
-    row and only then does the caller relinquish."""
+    """R01 S5-E2 amendment (ownership transfer is an unkeyed pre-write plan; plan 6.27.4): the transfer takes the
+    recipient's live owner row `FOR KEY SHARE` in its role class, *before* it waits for the recipient's
+    membership. A revocation of that row (`FOR UPDATE`) therefore can no longer commit during the wait, which the
+    legacy command allowed (the transfer then replaced the revoked row). It queues behind the transfer instead
+    and applies after it: the transfer sees the recipient as the live owner it was, relinquishes, and the
+    revocation then removes the recipient's row (the serial order, as in the in-flight test below)."""
     hold = _hold_membership(postgres_engine, g.o2)
     transfer = _transfer_to(client_factory, g, g.o2)
     _wait_until_waiting(postgres_engine, 1)
-    with postgres_engine.begin() as connection:
-        revoke_membership_role(connection, membership_role_id=g.o2_role, campaign_id=g.campaign_id)
+    revoke = _post(
+        client_factory,
+        g.manager_user_id,
+        f"/campaigns/{g.campaign_id}/memberships/roles/{g.o2_role}/revoke",
+        {},
+    )
+    _wait_until_waiting(postgres_engine, 2)
+    assert not revoke.done, "the revocation must queue behind the transfer's key-share lock"
     hold.release()
     response = transfer.join()
 
     assert _status(response) == 200, response.text  # type: ignore[attr-defined]
     assert response.json() == {  # type: ignore[attr-defined]
         "target_campaign_membership_id": str(g.o2),
-        "assigned": True,
+        "assigned": False,
         "relinquished": True,
     }
-    assert _live_owners(postgres_engine, g) == {g.o2}
+    assert _status(revoke.join()) == 200
     assert _row_state(postgres_engine, g.o2_role) == (True, False)
     assert _transfer_audit(postgres_engine, g) == [
-        {"assigned": True, "relinquished": True, "replaced_expired_assignment": False}
+        {"assigned": False, "relinquished": True, "replaced_expired_assignment": False}
     ]
 
 

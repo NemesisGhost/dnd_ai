@@ -10,6 +10,8 @@ every non-GET route through `open_request_plan` (rule 1b) and a migrated handler
   refuses the commit.
 - A route in `R01_KEYED_PRE_WRITE_ROUTES` (S5-D onward) opens a **pre-write** plan with the keyed
   declarations its handler chooses from by the reservation's server outcome.
+- A route in `R01_UNKEYED_PRE_WRITE_ROUTES` (S5-E2 ownership transfer) opens a pre-write plan with its one
+  declaration and no reservation. The two registries are disjoint and a pre-write route is finalized.
 - A route in neither set is unclassified: opening its plan fails closed, so a new campaign write
   route cannot be added without being migrated or listed.
 """
@@ -22,7 +24,7 @@ from sqlalchemy import Connection
 from dnd_ai.domain.authorization import AuthorizationPlan, PlanMode
 
 from .r01_pending_routes import R01_FINALIZED_ROUTES, R01_PENDING_ROUTES
-from .r01_pre_write_routes import R01_KEYED_PRE_WRITE_ROUTES
+from .r01_pre_write_routes import R01_KEYED_PRE_WRITE_ROUTES, R01_UNKEYED_PRE_WRITE_ROUTES
 
 
 class UnclassifiedRouteError(RuntimeError):
@@ -55,7 +57,20 @@ def begin_route_plan(
         pending = False
     else:
         raise UnclassifiedRouteError()
+    unkeyed = R01_UNKEYED_PRE_WRITE_ROUTES.get(key)
     declarations = R01_KEYED_PRE_WRITE_ROUTES.get(key)
+    if unkeyed is not None:
+        if (
+            pending or declarations is not None
+        ):  # finalized by definition, and never in both registries
+            raise UnclassifiedRouteError()
+        return AuthorizationPlan.begin(
+            connection,
+            actor_user_id=actor_user_id,
+            campaign_id=campaign_id,
+            mode=PlanMode.PRE_WRITE,
+            pre_write=unkeyed,
+        )
     if declarations is not None:
         if pending:  # a pre-write route is finalized by definition
             raise UnclassifiedRouteError()

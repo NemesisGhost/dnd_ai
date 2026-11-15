@@ -104,6 +104,22 @@ Any refusal latches. A savepoint rollback after *any* lock call, including one t
 `Exactly`, `Between` and `EachLockedRow` bounds are unchanged. The condition is the lock's *evidence*, never a
 caller-supplied flag, and the declaration is still chosen once, by the reservation outcome.
 
+**Absence- and change-conditioned INSERTs** (`PerAbsence`, `AnyConfirmed`; R01 S5-E2 ownership-transfer amendment,
+T1-T3; plan section 6.27.4). Both apply to an INSERT only and are validated per declaration.
+
+- `PerAbsence(lock)`: the converse of `PerEvidence`. The lock must have been successfully executed before `finalize`.
+  **Zero rows**: exactly one INSERT is required (omission is refused at COMMIT; a second is refused, `COUNT`).
+  **One row**: the INSERT is refused (`EVIDENCE`) and none is owed. **More than one row** (also as a union of calls)
+  or a lock that **never ran**, failed or ran through another plan, lock object or transaction: missing, not empty,
+  evidence; nothing is permitted and the plan cannot complete. The mechanism trusts that the declaration also holds a
+  lock that protects the absence; it does not prove every other writer is excluded.
+- `AnyConfirmed(steps)`: exactly one INSERT is owed iff any named step has confirmed a returned key; otherwise it is
+  forbidden (`EVIDENCE`); a second is `COUNT`. A named step attempted but unconfirmed (`ZERO_OR_ONE`) does not count.
+  The named steps are distinct, strictly earlier, by identity, not the receipt and not `AnyConfirmed`; as they lie
+  earlier they can no longer run once the cursor reaches this step, so the set is final then.
+- A savepoint rollback also latches once any step has been attempted (T3), because a confirmed key is an
+  obligation input.
+
 `AuthorizationPlanNotFinalizedError` and `AuthorizationPlanViolationError` are **direct** `RuntimeError`
 subclasses. They must never derive from `ValueError`, `SafeMessageError` or `ApiError`: those map to a 4xx,
 and a refused commit is a 5xx.
@@ -129,12 +145,14 @@ from .access import FRESH_INSTANT, AuthoritySnapshot, read_authority_snapshot
 from .authorization_steps import (
     REPLAY_DECLARATION,
     REVIEWED_EXECUTION_OPTIONS,
+    AnyConfirmed,
     Between,
     BindSpec,
     Exactly,
     Kind,
     LockMode,
     ParameterError,
+    PerAbsence,
     PerEvidence,
     PreLock,
     PreWriteDeclaration,
@@ -1207,6 +1225,12 @@ class AuthorizationPlan:
             # skippable only on *proven* empty evidence: a lock that never ran is not empty evidence
             keys = self._evidence.get(cardinality.lock)
             return keys is not None and not keys
+        if isinstance(cardinality, PerAbsence):
+            # skippable only on *proven* single-row evidence: missing or multi-row evidence is never skippable
+            keys = self._evidence.get(cardinality.lock)
+            return keys is not None and len(keys) == 1
+        if isinstance(cardinality, AnyConfirmed):
+            return not self._any_confirmed(cardinality)
         if cardinality.complete:
             return not self._evidence.get(step.target_lock, ()) if step.target_lock else True
         return True
@@ -1223,11 +1247,26 @@ class AuthorizationPlan:
         if isinstance(cardinality, PerEvidence):
             keys = self._evidence.get(cardinality.lock)
             return keys is not None and len(keys) <= 1 and len(confirmed) == len(keys)
+        if isinstance(cardinality, PerAbsence):
+            keys = self._evidence.get(cardinality.lock)
+            return keys is not None and len(keys) <= 1 and len(confirmed) == 1 - len(keys)
+        if isinstance(cardinality, AnyConfirmed):
+            return len(confirmed) == (1 if self._any_confirmed(cardinality) else 0)
         if not cardinality.complete:
             return True
         assert step.target_lock is not None
         required = self._evidence.get(step.target_lock, set())
         return len(confirmed) == len(set(confirmed)) and set(confirmed) == required
+
+    def _any_confirmed(self, cardinality: AnyConfirmed) -> bool:
+        """Whether any step named by an `AnyConfirmed` INSERT has confirmed a returned key."""
+        assert self._declaration is not None
+        for named in cardinality.steps:
+            index = self._declaration.index_of_step(named)
+            assert index is not None  # validated when the declaration was built
+            if self._confirmed[index]:
+                return True
+        return False
 
     def _incomplete(self) -> bool:
         if self._mode is not PlanMode.PRE_WRITE or not self._finalised or self._declaration is None:
@@ -1304,6 +1343,20 @@ class AuthorizationPlan:
             # rule is zero-or-one) or a lock that never ran permits nothing. Refused before the driver call.
             keys = self._evidence.get(cardinality.lock)
             if keys is None or len(keys) != 1:
+                self._refuse(ViolationReason.EVIDENCE)
+            if attempts >= 1:
+                self._refuse(ViolationReason.COUNT)
+        if isinstance(cardinality, PerAbsence):
+            # zero rows of successfully executed evidence owe and permit exactly one INSERT; one row forbids it;
+            # more than one (the rule is zero-or-one) or a lock that never ran permits nothing.
+            keys = self._evidence.get(cardinality.lock)
+            if keys is None or len(keys) != 0:
+                self._refuse(ViolationReason.EVIDENCE)
+            if attempts >= 1:
+                self._refuse(ViolationReason.COUNT)
+        if isinstance(cardinality, AnyConfirmed):
+            # owed once iff a named (strictly earlier, therefore final) step confirmed a key; else forbidden
+            if not self._any_confirmed(cardinality):
                 self._refuse(ViolationReason.EVIDENCE)
             if attempts >= 1:
                 self._refuse(ViolationReason.COUNT)
@@ -1526,8 +1579,10 @@ class AuthorizationPlan:
         # (a `PerEvidence` INSERT is forbidden on that, so it must not survive a rollback unnoticed), and, were it
         # allowed inside one, the deferral or the outcome. Once the plan holds any of them, a savepoint rollback cannot be told apart
         # from losing them silently, so it latches.
+        # (T3, S5-E2 transfer amendment) An attempted step also latches: `AnyConfirmed` reads confirmed keys, and a
+        # rolled-back savepoint could have discarded the write behind one.
         if self._mode is PlanMode.PRE_WRITE and (
-            bool(self._evidence) or self._deferred or self._bound is not None
+            bool(self._evidence) or self._deferred or self._bound is not None or any(self._attempts)
         ):
             self._latch(ViolationReason.SAVEPOINT_ROLLBACK)
 

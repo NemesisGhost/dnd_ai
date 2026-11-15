@@ -424,7 +424,56 @@ class PerEvidence:
             raise DeclarationError("PerEvidence needs a PreLock")
 
 
-type Cardinality = Exactly | Between | EachLockedRow | PerEvidence
+@dataclass(frozen=True, eq=False)
+class PerAbsence:
+    """An INSERT owed on *proven-empty* evidence of one declared `PreLock` (S5-E2 transfer amendment, T1; plan
+    section 6.27.4). The converse of `PerEvidence`. The lock must have been **successfully executed** through the
+    plan before `finalize`:
+
+    - it returned **zero** rows: exactly one confirmed INSERT is required at COMMIT, and a second is refused
+      (`COUNT`);
+    - it returned **one** row: the INSERT is forbidden (refused before the driver call, `EVIDENCE`) and none is owed;
+    - it returned **more than one** row, also as the union of several calls: unsupported (the rule is zero-or-one);
+      the INSERT is refused and the plan cannot complete;
+    - it was **never successfully executed** (not run, refused or failed, or run through another plan, lock object
+      or transaction): that is missing evidence, not empty evidence. Nothing is permitted and the plan cannot
+      complete.
+
+    Trust: the lock's predicate expresses the condition, and the declaration also holds a lock that protects the
+    absence (for the ownership transfer, the INSERT's own FK binding to the membership lock). The mechanism does
+    not prove that every other writer is excluded. Only an INSERT may carry it; compared by the lock's identity."""
+
+    lock: "PreLock"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.lock, PreLock):
+            raise DeclarationError("PerAbsence needs a PreLock")
+
+
+@dataclass(frozen=True, eq=False)
+class AnyConfirmed:
+    """An INSERT owed exactly once iff **any** of the named earlier steps of the same declaration has confirmed a
+    returned key (S5-E2 transfer amendment, T2). Several qualifying steps still owe one INSERT. A named step
+    that was attempted but confirmed nothing (`ZERO_OR_ONE`) does not count. When none confirmed anything the
+    INSERT is forbidden (`EVIDENCE`). It is fixed when the cursor reaches this step: a named step lies strictly
+    earlier, so it can never run afterwards (`ORDER`). Only an INSERT may carry it. The named steps are compared
+    by identity, must be distinct, strictly earlier in the declaration, not the receipt and not themselves
+    `AnyConfirmed`; the declaration checks this."""
+
+    steps: tuple["WriteStep", ...]
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.steps, tuple)
+            or not self.steps
+            or not all(isinstance(step, WriteStep) for step in self.steps)
+        ):
+            raise DeclarationError("AnyConfirmed needs a non-empty tuple of WriteSteps")
+        if len({id(step) for step in self.steps}) != len(self.steps):
+            raise DeclarationError("AnyConfirmed names a step twice")
+
+
+type Cardinality = Exactly | Between | EachLockedRow | PerEvidence | PerAbsence | AnyConfirmed
 
 
 class RowExpectation(enum.Enum):
@@ -873,10 +922,15 @@ class WriteStep:
         if not isinstance(table, Table):
             raise DeclarationError(f"{what}: the target must be a table")
         _check_deferrable_pk(table, what)
-        if not isinstance(self.cardinality, (Exactly, Between, EachLockedRow, PerEvidence)):
+        if not isinstance(
+            self.cardinality,
+            (Exactly, Between, EachLockedRow, PerEvidence, PerAbsence, AnyConfirmed),
+        ):
             raise DeclarationError(f"{what}: unsupported cardinality")
-        if isinstance(self.cardinality, PerEvidence) and is_update:
-            raise DeclarationError(f"{what}: PerEvidence applies to an INSERT only")
+        if isinstance(self.cardinality, (PerEvidence, PerAbsence, AnyConfirmed)) and is_update:
+            raise DeclarationError(
+                f"{what}: {type(self.cardinality).__name__} applies to an INSERT only"
+            )
         if not isinstance(self.rows, RowExpectation):
             raise DeclarationError(f"{what}: rows must be a RowExpectation")
         # RETURNING: exactly the primary key, in order.
@@ -1094,6 +1148,10 @@ class WriteStep:
         object.__setattr__(self, "identity_pk", identity)
 
 
+def _is_receipt_table(table: Table) -> bool:
+    return table.schema == "security" and table.name == "idempotent_requests"
+
+
 @dataclass(frozen=True, eq=False)
 class PreWriteDeclaration:
     locks: tuple[PreLock, ...]
@@ -1135,6 +1193,30 @@ class PreWriteDeclaration:
                 raise DeclarationError(
                     f"step {step.name!r}: PerEvidence names a PreLock that is not in locks"
                 )
+            if isinstance(step.cardinality, PerAbsence) and (
+                id(step.cardinality.lock) not in lock_ids
+            ):
+                raise DeclarationError(
+                    f"step {step.name!r}: PerAbsence names a PreLock that is not in locks"
+                )
+            if isinstance(step.cardinality, AnyConfirmed):
+                for named in step.cardinality.steps:
+                    named_index = step_index.get(id(named))
+                    if named_index is None or self.steps[named_index] is not named:
+                        raise DeclarationError(
+                            f"step {step.name!r}: AnyConfirmed names a step that is not earlier "
+                            "in this declaration"
+                        )
+                    if isinstance(named.cardinality, AnyConfirmed):
+                        raise DeclarationError(
+                            f"step {step.name!r}: AnyConfirmed may not name an AnyConfirmed step"
+                        )
+                    if _is_receipt_table(named.table):
+                        raise DeclarationError(
+                            f"step {step.name!r}: AnyConfirmed may not name the receipt"
+                        )
+                if _is_receipt_table(step.table):
+                    raise DeclarationError("the receipt step cannot be AnyConfirmed")
             for binding in step.fks:
                 if (
                     binding.lock is None
@@ -1178,6 +1260,8 @@ REPLAY_DECLARATION: Final = PreWriteDeclaration(locks=(), steps=(), replay=True)
 __all__ = [
     "REPLAY_DECLARATION",
     "PerEvidence",
+    "PerAbsence",
+    "AnyConfirmed",
     "REVIEWED_EXECUTION_OPTIONS",
     "BindSpec",
     "Between",

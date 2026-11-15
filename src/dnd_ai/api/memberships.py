@@ -82,12 +82,14 @@ from dnd_ai.commands.membership_role_plans import (
     prepare_assign_role,
     prepare_change_role,
     prepare_revoke_role,
+    prepare_transfer,
     write_add_member,
     write_assign_role,
     write_change_role,
     write_revoke_role,
+    write_transfer,
 )
-from dnd_ai.commands.memberships import end_campaign_membership, transfer_campaign_ownership
+from dnd_ai.commands.memberships import end_campaign_membership
 from dnd_ai.domain.access import LOCAL_AUTH_ISSUER, AccessContext
 from dnd_ai.domain.authorization import AuthorizationPlan
 
@@ -536,41 +538,36 @@ def transfer_campaign_ownership_endpoint(
     access: Annotated[
         AccessContext, Depends(require_campaign_capability(_ACCESS_MANAGE_CAPABILITY))
     ],
+    plan: _Plan,
     connection: Annotated[Connection, Depends(get_connection)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
 ) -> TransferCampaignOwnershipResponse:
     """Makes an existing member a campaign owner and optionally relinquishes the
     caller's own ownership (docs/adr/0020-scoped-system-world-and-campaign-roles.md).
-    One transaction and one audit row; a repeat that changes nothing writes none."""
-    result = transfer_campaign_ownership(
+    One transaction and one audit row; a repeat that changes nothing writes none.
+
+    An **unkeyed** pre-write route (R01 S5-E2 amendment; `dnd_ai.commands.membership_role_plans`,
+    `R01_UNKEYED_PRE_WRITE_ROUTES`): it stays non-idempotent and an `Idempotency-Key` header is
+    ignored. Every lock and refusal precedes `plan.finalize`; the writes and the single audit row
+    are declared steps after it."""
+    prepared = prepare_transfer(
         connection,
+        plan,
         campaign_id=campaign_id,
+        actor_user_id=access.user_id,
         actor_membership_id=access.campaign_membership_id,
-        target_campaign_membership_id=body.target_campaign_membership_id,
+        target_membership_id=body.target_campaign_membership_id,
         relinquish_own_ownership=body.relinquish_own_ownership,
     )
-    changed = result.assigned_membership_role_id is not None or bool(
-        result.revoked_membership_role_ids
+    plan.finalize(connection)
+    result = write_transfer(
+        connection,
+        plan,
+        prepared,
+        actor_user_id=access.user_id,
+        actor_membership_id=access.campaign_membership_id,
+        correlation_id=correlation_id,
     )
-    if changed:
-        record_change_log(
-            connection,
-            change_action_code=_UPDATED_CHANGE_ACTION,
-            schema_name="security",
-            table_name="membership_roles",
-            record_id=result.assigned_membership_role_id or result.revoked_membership_role_ids[0],
-            entity_id=None,
-            world_id=timeline_world_id(connection, access.timeline_id),
-            actor_user_id=access.user_id,
-            correlation_id=correlation_id,
-            command_name=_TRANSFER_OWNERSHIP_COMMAND_NAME,
-            event_id=None,
-            changed_fields={
-                "assigned": result.assigned_membership_role_id is not None,
-                "relinquished": bool(result.revoked_membership_role_ids),
-                "replaced_expired_assignment": bool(result.replaced_expired_membership_role_ids),
-            },
-        )
     return TransferCampaignOwnershipResponse(
         target_campaign_membership_id=result.target_campaign_membership_id,
         assigned=result.assigned_membership_role_id is not None,
